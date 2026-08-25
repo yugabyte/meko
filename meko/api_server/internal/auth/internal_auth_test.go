@@ -82,3 +82,61 @@ func TestRequireInternalSecret_RejectsLengthMismatchPrefix(t *testing.T) {
 		t.Error("downstream handler should not be invoked on prefix match")
 	}
 }
+
+// runAPIKeyID drives RequireAPIKeyID with the given header value ("" = absent)
+// and reports the response plus the id the handler saw in context.
+func runAPIKeyID(t *testing.T, header string) (*httptest.ResponseRecorder, string, bool) {
+	t.Helper()
+	e := echo.New()
+	called := false
+	seen := ""
+	h := RequireAPIKeyID()(func(c echo.Context) error {
+		called = true
+		seen = GetAPIKeyID(c)
+		return c.NoContent(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/status", nil)
+	if header != "" {
+		req.Header.Set(APIKeyIDHeader, header)
+	}
+	rec := httptest.NewRecorder()
+	if err := h(e.NewContext(req, rec)); err != nil {
+		t.Fatalf("middleware: %v", err)
+	}
+	return rec, seen, called
+}
+
+// An absent key id is an unauthenticated agent call: 401, not 400 — the header IS
+// the caller's identity on the agent surface.
+func TestRequireAPIKeyID_MissingIs401(t *testing.T) {
+	rec, _, called := runAPIKeyID(t, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
+	}
+	if called {
+		t.Error("downstream handler should not run without a key id")
+	}
+}
+
+// api_key_id is a UUID column, so a garbled header is refused at the edge (400)
+// rather than reaching the query as a 500.
+func TestRequireAPIKeyID_MalformedIs400(t *testing.T) {
+	rec, _, called := runAPIKeyID(t, "not-a-uuid")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+	if called {
+		t.Error("downstream handler should not run on a malformed key id")
+	}
+}
+
+func TestRequireAPIKeyID_StoresIDInContext(t *testing.T) {
+	const id = "b0000000-0000-0000-0000-00000000000a"
+	rec, seen, called := runAPIKeyID(t, id)
+	if rec.Code != http.StatusNoContent || !called {
+		t.Fatalf("expected the handler to run, got %d", rec.Code)
+	}
+	if seen != id {
+		t.Errorf("GetAPIKeyID = %q, want %q", seen, id)
+	}
+}

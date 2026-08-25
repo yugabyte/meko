@@ -17,8 +17,7 @@ import (
 var envRowColsK = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
-	"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
-	"status_token_hash", "created_at", "kind", "resources",
+	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
 }
 
 // Get reads the kind and the reported inventory back off the row.
@@ -35,7 +34,7 @@ func TestEnvironmentRepo_Get_ScansKindAndResources(t *testing.T) {
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows(envRowColsK).AddRow(
 			envUUID, "amp-acme", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "amp", inventory,
+			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", inventory,
 		))
 
 	e, err := repo.GetByUUID(envUUID)
@@ -66,7 +65,7 @@ func (a argContainsK) Match(v driver.Value) bool {
 	}
 }
 
-// Insert writes the kind ($21) and the resources inventory ($22).
+// Insert writes the kind ($19) and the resources inventory ($20).
 func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -75,17 +74,20 @@ func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	anyArgs := make([]driver.Value, 20) // $1..$20
+	anyArgs := make([]driver.Value, 18) // $1..$18
 	for i := range anyArgs {
 		anyArgs[i] = sqlmock.AnyArg()
 	}
-	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $21 kind, $22 resources
+	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $19 kind, $20 resources
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs(args...).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(envUUID, ""))
+	mock.ExpectCommit()
 
-	err = repo.Insert(&models.Environment{
-		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY",
+	_, err = repo.Insert(&models.Environment{
+		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY", APIKeyID: keyA,
 		Resources: json.RawMessage(`[{"kind":"storage_pool","id":"pool-1"}]`),
 	})
 	if err != nil {

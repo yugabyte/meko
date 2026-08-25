@@ -46,11 +46,9 @@ byte-identically to the pre-mode chart.
 {{- if eq $mode "ycp" }}
 - "--mcp-internal-secret=$(MCP_INTERNAL_SECRET)"
 - "--control-plane-mode"
-{{- /* Without this the fleet/console routes (GET/POST /environments and friends)
-       all return 503: they sit behind RequireAdminSecret, which disables itself
-       when the secret is empty. The agent routes are unaffected -- they use the
-       enrollment and status tokens -- so the symptom is an agent happily enrolled
-       into a control plane whose console is dead. */}}
+{{- /* Without this every gated route -- fleet, console, and the agent surface,
+       which sits behind the same admin secret plus the api-key-id header --
+       returns 503: RequireAdminSecret disables itself when the secret is empty. */}}
 - "--admin-api-key=$(ADMIN_API_KEY)"
 {{- if $c.requireAccountHeader }}
 {{- /* Rendered only when true: the flag's own default is false, so passing it

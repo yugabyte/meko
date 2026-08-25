@@ -212,10 +212,11 @@ reconcile-agent image (`ycp/Dockerfile.reconcile-agent` →
 (`api_server --control-plane-mode` + a throwaway `emptyDir` Postgres, from
 [`ycp/controlplane.yaml`](ycp/controlplane.yaml); set `YCP_POSTGRES_PVC_SIZE` to back
 it with a PVC for a long-lived dev control plane instead) in the same `ci-pr-<n>` namespace,
-registers a `kind=amp` environment, and drops the enrollment token into the
-`amp-reconcile-agent-enrollment` Secret. `up-gke.sh` is then run with `YCP_ENABLED=1`,
-which deploys the reconcile-agent (`agent.*` — `ycpUrl` to the in-cluster Service,
-`envName` to the registered id, `reconcileInterval=5s`, and the enrollment secret).
+registers a `kind=amp` environment bound to a generated api key id, and drops the
+dev-mode credentials into the `amp-agent-api-key` Secret. `up-gke.sh` is then run with
+`YCP_ENABLED=1`, which deploys the reconcile-agent (`agent.*` — `ycpUrl` to the
+in-cluster Service, `envName` to the registered id, `reconcileInterval=5s`, and the
+api-key secret).
 Instead of the API-driven smoke, [`ycp-reconcile-smoke.sh`](ycp-reconcile-smoke.sh)
 runs: it declares a pool→cluster→branch→endpoint through YCP desired state and asserts
 the authoritative agent creates the tree, reports it `READY` in

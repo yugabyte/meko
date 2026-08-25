@@ -46,11 +46,26 @@ spec:
             - name: ENV_REGION
               value: {{ . | quote }}
             {{- end }}
-            - name: ENROLLMENT_TOKEN
+            - name: YCP_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $c.secrets.existing.enrollment }}
-                  key: enrollment-token
+                  name: {{ $c.secrets.existing.apiKey }}
+                  key: api-key
+                  # Optional so the same Secret can instead carry the dev-mode
+                  # pair below; the agent enforces that one of the two is set.
+                  optional: true
+            - name: YCP_DEV_ADMIN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.secrets.existing.apiKey }}
+                  key: dev-admin-secret
+                  optional: true
+            - name: YCP_DEV_API_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.secrets.existing.apiKey }}
+                  key: dev-api-key-id
+                  optional: true
             - name: AGENT_VERSION
               value: {{ $c.agentVersion | quote }}
           resources:

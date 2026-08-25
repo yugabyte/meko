@@ -1,9 +1,11 @@
-// Package ycpclient is the reconcile agent's client for the YCP control plane
-// (meko api_server --control-plane-mode): enroll for an env-scoped status token,
-// pull desired state, and post status heartbeats. It speaks the same
-// /api/v1/agent/* protocol and {"data","error"} envelope as the meko-agent, and
-// implements the reconcile engine's Source and Reporter so the engine can drive
-// its loop directly.
+// Package ycpclient is the reconcile agent's client for the YCP control plane:
+// enroll as the first check-in, pull desired state, and post status heartbeats.
+// Every call authenticates with the environment's YBM API key, sent as a bearer;
+// the base URL is YBM's agent pass-through
+// (https://<ybm>/api/public/v1/accounts/<id>/ycp) or, in dev, the control plane's
+// own /api/v1 (see SetDevHeaders). It speaks the same /agent/* protocol and
+// {"data","error"} envelope as the meko-agent, and implements the reconcile
+// engine's Source and Reporter so the engine can drive its loop directly.
 package ycpclient
 
 import (
@@ -13,60 +15,74 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"meko/ycp/internal/api"
 )
 
-// ErrUnauthorized is returned when the control plane rejects the status token
-// (HTTP 401), so the caller can re-enroll.
+// ErrUnauthorized is returned when the control plane rejects the API key (HTTP
+// 401): the key was revoked, or its environment was re-registered onto a new one.
+// Not retryable with the credentials the agent holds -- the caller logs loudly
+// and keeps ticking, so a re-issued key (a redeploy with a fresh Secret) recovers.
 var ErrUnauthorized = fmt.Errorf("ycp: unauthorized")
 
-// Client talks to one YCP control plane. Set Token after enrolling (or from
-// persisted state) to authenticate desired-state/status calls.
+// Client talks to one YCP control plane.
 type Client struct {
-	base  string
-	http  *http.Client
-	token string
+	base   string
+	http   *http.Client
+	apiKey string
+	// Dev mode: sent instead of the bearer, for an agent pointed straight at a
+	// standalone control plane (no YBM to validate a key). See SetDevHeaders.
+	devAdminSecret string
+	devAPIKeyID    string
 }
 
-// New builds a client against baseURL (trailing slash trimmed, so a subpath like
-// https://host/ycp works). A nil httpClient gets a 15s-timeout default.
-func New(baseURL string, httpClient *http.Client) *Client {
+// New builds a client against baseURL (trailing slash trimmed), authenticating
+// every call with apiKey as a bearer. baseURL carries the full API base -- agent
+// routes are appended as /agent/*. A nil httpClient gets a 15s-timeout default.
+func New(baseURL, apiKey string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &Client{base: strings.TrimRight(baseURL, "/"), http: httpClient}
+	return &Client{base: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient}
 }
 
-// SetToken sets the env-scoped status token used for desired-state and status.
-func (c *Client) SetToken(t string) { c.token = t }
+// SetDevHeaders switches the client to dev mode: instead of the bearer it sends
+// the control plane's admin secret plus a chosen key id -- the headers YBM would
+// have stamped after validating a real key. This is what lets an agent run
+// against a standalone control plane, where no YBM exists to mint or validate
+// keys (the e2e, the local scripts, an operator's dev loop).
+func (c *Client) SetDevHeaders(adminSecret, apiKeyID string) {
+	c.devAdminSecret, c.devAPIKeyID = adminSecret, apiKeyID
+}
 
-// Enroll performs the enrollment-token handshake for an amp environment and
-// returns the environment id + status token. The caller persists the token; the
-// enrollment token is not needed again until it expires.
+// Enroll is the agent's first check-in: it binds the live agent to the
+// environment its API key was registered with and returns the environment id and
+// the stack to run. Called at every startup -- it is idempotent, so there is
+// nothing to persist between restarts.
 func (c *Client) Enroll(ctx context.Context, req api.EnrollRequest) (api.EnrollResponse, error) {
 	var out api.EnrollResponse
-	code, err := c.do(ctx, http.MethodPost, "/api/v1/agent/enroll", req, &out)
+	code, err := c.do(ctx, http.MethodPost, "/agent/enroll", req, &out)
 	if err != nil {
 		return api.EnrollResponse{}, err
+	}
+	if code == http.StatusUnauthorized {
+		return api.EnrollResponse{}, ErrUnauthorized
 	}
 	if code != http.StatusOK {
 		return api.EnrollResponse{}, fmt.Errorf("ycp: enroll -> HTTP %d", code)
 	}
-	if out.EnvironmentID == "" || out.StatusToken == "" {
-		return api.EnrollResponse{}, fmt.Errorf("ycp: enroll response missing environment_id/status_token")
+	if out.EnvironmentID == "" {
+		return api.EnrollResponse{}, fmt.Errorf("ycp: enroll response missing environment_id")
 	}
-	c.token = out.StatusToken
 	return out, nil
 }
 
-// DesiredFor fetches desired state for envID. Returns ErrUnauthorized on a 401.
-func (c *Client) DesiredFor(ctx context.Context, envID string) (api.DesiredState, error) {
+// Desired fetches the environment's desired state. Returns ErrUnauthorized on a 401.
+func (c *Client) Desired(ctx context.Context) (api.DesiredState, error) {
 	var ds api.DesiredState
-	code, err := c.do(ctx, http.MethodGet, "/api/v1/agent/desired-state?envId="+url.QueryEscape(envID), nil, &ds)
+	code, err := c.do(ctx, http.MethodGet, "/agent/desired-state", nil, &ds)
 	if err != nil {
 		return api.DesiredState{}, err
 	}
@@ -79,10 +95,9 @@ func (c *Client) DesiredFor(ctx context.Context, envID string) (api.DesiredState
 	return ds, nil
 }
 
-// PostStatusFor posts a status heartbeat for envID. Returns ErrUnauthorized on
-// a 401.
-func (c *Client) PostStatusFor(ctx context.Context, envID string, r api.StatusReport) error {
-	code, err := c.do(ctx, http.MethodPost, "/api/v1/agent/status?envId="+url.QueryEscape(envID), r, nil)
+// PostStatus posts a status heartbeat. Returns ErrUnauthorized on a 401.
+func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) error {
+	code, err := c.do(ctx, http.MethodPost, "/agent/status", r, nil)
 	if err != nil {
 		return err
 	}
@@ -113,8 +128,11 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (in
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.devAdminSecret != "" && c.devAPIKeyID != "" {
+		req.Header.Set("X-Meko-Admin-Secret", c.devAdminSecret)
+		req.Header.Set("X-Meko-Api-Key-ID", c.devAPIKeyID)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

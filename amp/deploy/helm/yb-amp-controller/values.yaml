@@ -131,7 +131,7 @@ controller:
 
 # reconcile-agent: the standalone YCP client that converges this environment to
 # YCP's desired state, driving the controller over its REST API. Off by default.
-# It is the SOLE YCP client for the environment (YCP allows one status token per
+# It is the SOLE YCP client for the environment (one API key drives one
 # environment); the controller itself no longer talks to YCP.
 agent:
   # -- Deploy the reconcile-agent (Deployment + ServiceAccount + RBAC).
@@ -161,17 +161,18 @@ agent:
   controllerUrl: ""
   # -- Reconcile loop interval (RECONCILE_INTERVAL). Empty => the binary's default (10s).
   reconcileInterval: ""
-  # The one-time enrollment token is read from a Secret, not set inline, so it
-  # never lands in the release values. Create it before install, e.g.:
-  #   kubectl -n <ns> create secret generic <name> \
-  #     --from-literal=enrollment-token=<ycp_enr_...>
-  # A restart after the token is consumed still works: the agent resumes from the
-  # status token it persisted in its state Secret, and the env var is optional.
-  enrollTokenSecret:
-    # -- Secret name holding the enrollment token. Empty => "amp-reconcile-agent-enrollment".
+  # The YBM API key every YCP call authenticates with is read from a Secret, not
+  # set inline, so it never lands in the release values. Create it before install:
+  #   kubectl -n <ns> create secret generic amp-agent-api-key \
+  #     --from-literal=api-key=<the key YBM showed once>
+  # Dev mode (a standalone control plane, no YBM): put dev-admin-secret and
+  # dev-api-key-id keys in the same Secret instead of api-key; the agent then
+  # sends them as the X-Meko-Admin-Secret / X-Meko-Api-Key-ID headers.
+  apiKeySecret:
+    # -- Secret name holding the API key. Empty => "amp-agent-api-key".
     name: ""
-    # -- Key within the Secret holding the token.
-    key: "enrollment-token"
+    # -- Key within the Secret holding the API key.
+    key: "api-key"
 
   # -- Compute resources for the agent container.
   resources: {}

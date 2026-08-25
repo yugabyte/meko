@@ -328,7 +328,7 @@ HELM_SET=(
 
 # YCP reconciliation (off by default). When YCP_ENABLED=1, deploy the
 # reconcile-agent: it enrolls with the control plane at YCP_URL as environment
-# YCP_ENV_ID (using the enrollment token in the Secret YCP_ENROLL_SECRET), then
+# YCP_ENV_ID (authenticating every call from the Secret YCP_AGENT_SECRET), then
 # converges the environment to YCP's desired state over the controller's REST API
 # and reports its inventory back. amp/deploy/ycp-up.sh creates the control plane,
 # the environment, and the secret. The amp_deploy_gke_ycp smoke forces a fast
@@ -342,7 +342,7 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   : "${YCP_URL:?YCP_ENABLED=1 requires YCP_URL}"
   : "${YCP_ENV_ID:?YCP_ENABLED=1 requires YCP_ENV_ID}"
   YCP_RECONCILE_INTERVAL="${YCP_RECONCILE_INTERVAL:-${YCP_REPORT_INTERVAL:-5s}}"
-  YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-reconcile-agent-enrollment}"
+  YCP_AGENT_SECRET="${YCP_AGENT_SECRET:-amp-agent-api-key}"
   YCP_PLACEMENT="${YCP_PLACEMENT:-cloud}"
   say "YCP reconcile-agent enabled (url=${YCP_URL} env=${YCP_ENV_ID} interval=${YCP_RECONCILE_INTERVAL} image=${REGISTRY}/${AGENT_IMAGE_REPO}:${TAG})"
   HELM_SET+=(
@@ -353,7 +353,7 @@ if [ "${YCP_ENABLED}" = "1" ]; then
     "agent.envName=${YCP_ENV_ID}"
     "agent.placement=${YCP_PLACEMENT}"
     "agent.reconcileInterval=${YCP_RECONCILE_INTERVAL}"
-    "agent.enrollTokenSecret.name=${YCP_ENROLL_SECRET}"
+    "agent.apiKeySecret.name=${YCP_AGENT_SECRET}"
   )
 fi
 

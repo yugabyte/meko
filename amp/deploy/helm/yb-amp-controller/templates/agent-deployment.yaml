@@ -49,13 +49,26 @@ spec:
             - name: RECONCILE_INTERVAL
               value: {{ . | quote }}
             {{- end }}
-            - name: ENROLLMENT_TOKEN
+            {{- $keySecret := .Values.agent.apiKeySecret.name | default "amp-agent-api-key" }}
+            - name: YCP_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agent.enrollTokenSecret.name | default (printf "%s-enrollment" (include "yb-amp-controller.agentName" .)) | quote }}
-                  key: {{ .Values.agent.enrollTokenSecret.key | quote }}
-                  # Optional so a restart resumes from the persisted status token
-                  # even after the one-time enrollment token has been removed.
+                  name: {{ $keySecret | quote }}
+                  key: {{ .Values.agent.apiKeySecret.key | quote }}
+                  # Optional so the same Secret can instead carry the dev-mode
+                  # pair below; the agent enforces that one of the two is set.
+                  optional: true
+            - name: YCP_DEV_ADMIN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $keySecret | quote }}
+                  key: dev-admin-secret
+                  optional: true
+            - name: YCP_DEV_API_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $keySecret | quote }}
+                  key: dev-api-key-id
                   optional: true
           {{- with .Values.agent.resources }}
           resources:

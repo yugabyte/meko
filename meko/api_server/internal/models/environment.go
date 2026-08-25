@@ -14,10 +14,15 @@ type Environment struct {
 	// what an operator and an agent use, so it stays in the API unchanged; this is
 	// what survives when two accounts pick the same one.
 	UUID string `json:"uuid"`
-	// ID is slug(name): the id in the API path, in the agent's ?envId=, and in the
-	// install hint's --set agent.envName=. Unique per account, not globally.
+	// ID is slug(name): the id in the API path and in the install hint's
+	// --set agent.envName=. Unique per account, not globally.
 	ID        string `json:"id"`
 	AccountID string `json:"account_id,omitempty"`
+	// APIKeyID is the id of the YBM API key this environment's agent authenticates
+	// with. Unique fleet-wide (one key drives one environment), so it is what agent
+	// calls resolve the environment by. An id, not the key itself -- YBM holds the
+	// credential -- so serializing it leaks nothing.
+	APIKeyID string `json:"api_key_id"`
 	// Kind distinguishes an amp environment (the amp controller) from a meko one
 	// (the datapack/stack agent). It is fixed at registration. A meko id is a bare
 	// slug(name) (unchanged, backward compatible); an amp id is prefixed "amp-",
@@ -52,13 +57,6 @@ type Environment struct {
 	// a shipped twenty-parameter upsert, where an off-by-one is silent data corruption,
 	// and that is worth its own change rather than riding along here.
 	Datapacks int `json:"-"`
-
-	// Auth material -- persisted hashed, never serialized to clients. The enrollment
-	// token is TTL-based and reusable until it expires (kubeadm-style bootstrap
-	// token), so an agent restart can re-enroll within the window.
-	EnrollTokenHash      string     `json:"-"`
-	EnrollTokenExpiresAt *time.Time `json:"-"`
-	StatusTokenHash      string     `json:"-"`
 }
 
 // DesiredResource is one typed item of an environment's desired state. Kind-agnostic

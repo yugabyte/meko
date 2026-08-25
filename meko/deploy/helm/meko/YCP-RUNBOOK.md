@@ -189,33 +189,35 @@ knowing before you set it:
   console is now at `:8080/ycp/`, and `/` returns 404. Every `curl` in this runbook
   needs the prefix too.
 
-Agents must point at the prefixed URL — `--set agent.ycpUrl=https://…/ycp`. It must
-be a plain path prefix, not a URL; the api-server refuses to start otherwise rather
-than mounting somewhere unreachable.
+Agents must point at the prefixed URL — `--set agent.ycpUrl=https://…/ycp/api/v1`.
+The base path itself must be a plain path prefix, not a URL; the api-server
+refuses to start otherwise rather than mounting somewhere unreachable.
 
 ## 4. Register an environment and attach an agent
 
 ```bash
-TOK=$(curl -sX POST localhost:8080/api/v1/environments \
+KEY_ID=$(uuidgen | tr 'A-Z' 'a-z')
+curl -sX POST localhost:8080/api/v1/environments \
   -H "X-Meko-Admin-Secret: $K" -H 'content-type: application/json' \
-  -d '{"name":"meko-dev","account_id":"yugabyte","placement":"cloud","region":"us-east-2"}' \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['enrollment_token'])")
+  -d '{"name":"meko-dev","account_id":"yugabyte","placement":"cloud","region":"us-east-2","api_key_id":"'$KEY_ID'"}'
 ```
 
-**Use it within 30 minutes.** Enrollment tokens expire, and an expired one gives
-`enroll -> 401` forever — recovery means minting another and updating the Secret. See
-[meko/issues/401](https://github.com/yugabyte/meko/issues/401).
+The environment is bound to that `api_key_id`. Through YBM the id belongs to a real
+YBM API key the agent sends as a bearer; direct against the control plane (this
+runbook's shape) the agent runs in dev mode, sending the admin secret + the id as
+headers.
 
 ```bash
 ANS=ycp-agent
 kubectl create namespace $ANS
-kubectl -n $ANS create secret generic meko-agent-enrollment --from-literal=enrollment-token="$TOK"
+kubectl -n $ANS create secret generic meko-agent-api-key \
+  --from-literal=dev-admin-secret="$K" --from-literal=dev-api-key-id="$KEY_ID"
 
 helm upgrade --install meko-agent charts/meko -n $ANS \
   -f charts/meko/values-aws.yaml \
   -f charts/meko/values-dev.yaml \
   -f charts/meko/values-agent.yaml \
-  --set agent.ycpUrl=http://meko-api-server-service.$NS.svc.cluster.local:80 \
+  --set agent.ycpUrl=http://meko-api-server-service.$NS.svc.cluster.local:80/api/v1 \
   --set agent.envName=meko-dev \
   --set agent.provider=aws --set agent.region=us-east-2 \
   --set-string agent.image.tag=$AGENT_TAG \
@@ -238,7 +240,7 @@ registered.
 Success:
 
 ```
-enrolled: environment_id=meko-dev (status token acquired)
+enrolled: environment_id=meko-dev
 status: state=PROVISIONING … -> 204
 status: state=READY        … -> 204
 ```
@@ -304,13 +306,12 @@ wants the old one, so api-server authenticates against it and fails — with a h
 looking Postgres pod. Reuse the same `dbPassword`, or delete the PVC
 (`kubectl -n $NS delete pvc data-ycp-postgres-0`) and start clean.
 
-**Delete the namespaces, not just the releases.** The agent creates its own
-`meko-agent-state` Secret holding a live `mko_sts_` status token, and Helm does not
-own it — `helm uninstall` alone leaves that credential in the cluster. The control
-plane is never told, so it keeps honouring it: anything that can read Secrets in
-that namespace can post status for the environment indefinitely. Deregistering the
-environment (`DELETE /api/v1/environments/{id}`) is the other half, since that is
-what stops the token being accepted.
+**Delete the namespaces, not just the releases.** The agent's credential is the
+operator-created `meko-agent-api-key` Secret, and Helm does not own it —
+`helm uninstall` alone leaves it in the cluster, and the control plane keeps
+honouring the identity. Deregistering the environment
+(`DELETE /api/v1/environments/{id}`) is the other half: it drops the binding and
+returns the `api_key_id` so the key can be revoked in YBM.
 
 ## Troubleshooting
 
@@ -341,8 +342,9 @@ console that loads and then refuses every call.
 
 **Fleet endpoints return 401** — wrong admin secret in the request.
 
-**Agent logs `enroll -> 401` repeatedly** — the enrollment token is expired or does
-not match. Mint a new one and update the Secret.
+**Agent logs `ENROLL REJECTED (401)` repeatedly** — no environment is bound to the
+agent's key id (revoked, or re-registered onto a new one). Re-register, or update
+the `meko-agent-api-key` Secret and restart the agent.
 
 **Agent logs `enroll -> 500`** — a server-side error; `kubectl logs
 deploy/meko-api-server` shows the cause on an `enroll failed:` line.

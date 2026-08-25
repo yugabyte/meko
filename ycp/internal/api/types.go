@@ -69,15 +69,10 @@ type Environment struct {
 	Live            bool             `json:"live"`                // true = driven by a real agent
 	CreatedAt       time.Time        `json:"created_at"`
 
-	// EnrollmentToken is set only on the create response (returned once, never persisted).
-	EnrollmentToken string `json:"enrollment_token,omitempty"`
-	// Persisted auth material (never serialized to clients). The enrollment token is
-	// TTL-based and reusable until it expires (kubeadm-style bootstrap token), so an
-	// agent restart can re-enroll within the window; the status token is the
-	// long-lived env-scoped credential.
-	EnrollTokenHash string     `json:"-"`
-	EnrollExpiresAt *time.Time `json:"-"`
-	StatusTokenHash string     `json:"-"`
+	// APIKeyID is the id of the YBM API key this environment's agent authenticates
+	// with -- an id, not the key itself, so it is not secret. Unique fleet-wide:
+	// one key drives one environment.
+	APIKeyID string `json:"api_key_id,omitempty"`
 }
 
 // ClusterSpec requests a brand-new cluster (provision mode, §7.1).
@@ -96,29 +91,36 @@ type EnvironmentCreate struct {
 	Placement   string       `json:"placement"`
 	Region      string       `json:"region"`
 	ClusterSpec *ClusterSpec `json:"cluster_spec,omitempty"`
+	// APIKeyID binds the environment to the YBM API key its agent will
+	// authenticate with. Required.
+	APIKeyID string `json:"api_key_id"`
+	// AgentBaseURL, when set, is the YBM pass-through base the install hint points
+	// the agent at; empty falls back to the address the register call arrived on.
+	AgentBaseURL string `json:"agent_base_url,omitempty"`
 }
 
-// EnrollRequest is what the agent posts to /agent/enroll.
+// EnrollRequest is what the agent posts to /agent/enroll. Identity comes from the
+// API key the call authenticated with, not the body.
 type EnrollRequest struct {
-	Name            string       `json:"name"`
-	EnrollmentToken string       `json:"enrollment_token,omitempty"`
-	Placement       string       `json:"placement,omitempty"`
-	Kind            string       `json:"kind,omitempty"` // amp | meko; checked against the environment's kind
-	ClusterFacts    ClusterFacts `json:"cluster_facts"`
+	Name         string       `json:"name"`
+	Placement    string       `json:"placement,omitempty"`
+	Kind         string       `json:"kind,omitempty"` // amp | meko; checked against the environment's kind
+	ClusterFacts ClusterFacts `json:"cluster_facts"`
 }
 
 // EnrollResponse hands the agent its identity, its endpoints, and the stack to run.
 type EnrollResponse struct {
 	EnvironmentID string `json:"environment_id"`
-	StatusToken   string `json:"status_token"`
-	MCPBaseURL    string `json:"mcp_base_url"`
+	// EnvironmentUUID is the environment's row key. The id above is a slug, unique
+	// only within an account, so this is the identity to prefer where one is needed.
+	EnvironmentUUID string `json:"environment_uuid"`
+	MCPBaseURL      string `json:"mcp_base_url"`
 	// Stack is the meko-stack spec this environment runs, resolved by the control plane
 	// when the environment was registered.
 	//
 	// It comes back with enrollment rather than being fetched, so bringing Meko up needs
 	// no second call and no command: an agent that enrolls has, in that one response,
-	// everything it needs to deploy the whole data plane. The agent persists it beside
-	// its status token, which means a restart does not need the control plane either.
+	// everything it needs to deploy the whole data plane.
 	//
 	// json.RawMessage on purpose — the agent owns the shape of the spec (see
 	// cmd/agent/mekostack.go), so a newer control plane can send richer fields to an

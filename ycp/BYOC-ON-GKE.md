@@ -84,7 +84,7 @@ Four flags worth understanding rather than copying:
   `itest-mcs`.
 
 **Re-running is safe.** It refreshes the ECR token, re-registers, and restarts the agent so
-it picks up the freshly minted enrollment token. That last part is load-bearing — see
+it picks up the freshly bound api key id. That last part is load-bearing — see
 [re-running](#re-running-and-why-the-agent-has-to-restart).
 
 It takes about 4 minutes on a warm node and prints, at the end, the admin secret, the
@@ -242,17 +242,15 @@ after that lands in `ImagePullBackOff`. Re-run the script to refresh
 
 ### Re-running, and why the agent has to restart
 
-Registering an environment is an **upsert**: it mints a fresh enrollment token and clears
-the stored status-token hash. So a second run invalidates the credentials the running
-agent holds. The Deployment spec is unchanged, so `helm upgrade` restarts nothing, and a
-`secretKeyRef` env var is read once at start — leaving the agent 401ing on every call with
-a token that no longer matches, its re-enrol failing silently.
+Registering an environment is an **upsert** that rebinds it to the run's freshly
+generated api key id, so a second run invalidates the identity the running agent
+holds. The Deployment spec is unchanged, so `helm upgrade` restarts nothing, and a
+`secretKeyRef` env var is read once at start — leaving the agent 401ing on every call
+with an id that is no longer bound.
 
-The script now deletes `meko-agent-state` and restarts the agent after installing, so this
-is handled. Worth knowing anyway, because there is **no endpoint to re-issue an enrollment
-token**: an agent that gets into this state can only be recovered by deregistering and
-re-registering its environment (tracked in
-[meko#401](https://github.com/yugabyte/meko/issues/401)).
+The script restarts the agent after installing, so this is handled: the restarted
+agent checks in with the fresh id, since enrollment is an idempotent key-authenticated
+check-in it repeats at every startup.
 
 ### A StatefulSet blocks its own replacement
 

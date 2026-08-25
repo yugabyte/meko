@@ -21,9 +21,9 @@ the response envelope (`{"data":…}` vs flat), which broke the agent
 green — because the e2e was testing the copy nobody deploys.
 
 `test/e2e/run.sh` now stands up `api_server --control-plane-mode` on a plain
-Postgres in kind and drives register → enroll → READY → **restart without
-re-enrolling** → **command → bootstrap → GC**. The restart assertion is the one
-that would have caught [meko#401](https://github.com/yugabyte/meko/issues/401).
+Postgres in kind and drives register → enroll → READY → **restart, re-enrolling
+and reporting again** → **command → bootstrap → GC**. The restart assertion is the
+one that would have caught [meko#401](https://github.com/yugabyte/meko/issues/401).
 
 What it deliberately does not cover: the full stack **running**. Every image in the
 pinned release is private and the kind cluster has no registry credentials, so the e2e
@@ -37,14 +37,14 @@ actually runs at a public database image. Standing the real stack up is
 The newest change, and the one that moves the most: **a data plane is deployed from its
 enrollment, not from a command.**
 
-- `POST /api/v1/environments` takes a **name**. The control plane resolves the whole
-  Meko release itself — six images pinned in
-  `meko/api_server/internal/service/dataplane_release.go` — and stores it as that
-  environment's stack.
+- `POST /api/v1/environments` takes a **name** and the **`api_key_id`** the agent
+  authenticates with. The control plane resolves the whole Meko release itself — six
+  images pinned in `meko/api_server/internal/service/dataplane_release.go` — and
+  stores it as that environment's stack.
 - The **enroll response carries the stack**. An agent that enrolls has everything it
   needs in that one reply, so it deploys the data plane on its first tick with no
-  second call. It persists the stack beside its status token, so a restart needs the
-  control plane for nothing at all.
+  second call. It persists the stack in its state Secret, so a restart mid-outage
+  needs the control plane for nothing at all.
 - **Desired state is no longer in the bring-up path.** It stays authoritative whenever
   the agent can read it — that is where registration wrote the stack, and where an
   operator's changes go, so `POST /desired` still replaces or withdraws it. What changed
@@ -86,7 +86,7 @@ Two of these were found the hard way and are fixed rather than documented:
 
 - **An outage must not rewind the data plane.** The agent reconciles toward the last
   desired state it *read*, not the stack it was registered with, and that value is
-  persisted beside the status token so a restart mid-outage keeps it. Verified by
+  persisted in the state Secret so a restart mid-outage keeps it. Verified by
   accident: a control plane's namespace was deleted and its agent held six components up
   for two and a half days, logging `holding what we last read` every tick. Before the
   fix, one eviction in that window would have reverted the environment to its
@@ -215,7 +215,7 @@ pull-secret setup — the same reason the control plane ships on Quay.
 | | |
 |---|---|
 | meko-devops#42 | Chart ergonomics, remainder. `mode: agent`, the mode presets and the runbook landed (#40, #41, #43, #47); Secrets are still out-of-band and the storage class is still per-cluster |
-| meko#401 follow-ups | Closed for the lockout itself (the agent persists its status token, #403). Still open in the design: no CA pinning, no status-token rotation, and `cert_fingerprint` is decorative |
+| meko#401 follow-ups | The lockout class is gone outright: the agent authenticates every call with a YBM API key and enrollment is an idempotent check-in, so there is no earned credential to lose and nothing to rotate. Still open in the design: no CA pinning, and `cert_fingerprint` is decorative |
 | [meko#572](https://github.com/yugabyte/meko/issues/572) | Nothing publishes `meko/meko-api-server`. The control plane is the one YCP component whose image is hand-built — and the pinned data-plane release now names a commit build of it, so every registered environment depends on a tag no CI job produced |
 
 Known gaps not yet filed:

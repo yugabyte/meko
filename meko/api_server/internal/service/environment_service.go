@@ -2,7 +2,6 @@ package service
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +28,11 @@ var ErrKindMismatch = errors.New("environment kind mismatch")
 // without importing the storage layer. Raised when an unscoped caller names an id
 // two accounts both hold (mapped to 409) -- send an account to disambiguate.
 var ErrAmbiguousID = repository.ErrAmbiguousID
+
+// ErrAPIKeyBound re-exports the repository's for the same reason. Raised when a
+// registration names an api key another environment already holds (mapped to 409):
+// one key drives one environment.
+var ErrAPIKeyBound = repository.ErrAPIKeyBound
 
 // AccountScope limits an operation to one account's environments. The zero value
 // is unscoped and reaches every environment; --require-account-header stops such a
@@ -66,12 +70,8 @@ func normalizeKind(kind string) (string, error) {
 	}
 }
 
-// enrollTokenTTL is how long a minted enrollment token stays valid. It is reusable
-// within this window (kubeadm-style bootstrap token) so agent restarts can re-enroll.
-const enrollTokenTTL = 30 * time.Minute
-
-// EnvironmentService owns the YCP fleet-registry logic: enrollment-token
-// handshake, status ingestion, and generic desired-state. Control-plane mode only.
+// EnvironmentService owns the YCP fleet-registry logic: the api-key identity
+// binding, status ingestion, and generic desired-state. Control-plane mode only.
 type EnvironmentService struct {
 	repo      *repository.EnvironmentRepo
 	bootstrap BootstrapDefaults
@@ -152,7 +152,8 @@ type ClusterSpec struct {
 	Region   string `json:"region"`
 }
 
-// RegisterEnvironmentRequest is the console's register-environment body.
+// RegisterEnvironmentRequest is the register-environment body (YBM's or the
+// console's).
 type RegisterEnvironmentRequest struct {
 	Name string `json:"name"`
 	// Kind is "amp" (the amp controller) or "meko" (the datapack/stack agent);
@@ -164,17 +165,27 @@ type RegisterEnvironmentRequest struct {
 	Region      string       `json:"region"`
 	ClusterSpec *ClusterSpec `json:"cluster_spec,omitempty"`
 
+	// APIKeyID is the id of the YBM API key the environment's agent will
+	// authenticate with. Required: an environment with no key binding is one no
+	// agent can ever attach to.
+	APIKeyID string `json:"api_key_id"`
+	// AgentBaseURL is the public base the agent should dial YBM's pass-through on
+	// (e.g. "https://cloud.yugabyte.com/api/public/v1"). Used only to render the
+	// install hint; empty falls back to the address this register call arrived on,
+	// which is the direct-to-meko dev shape.
+	AgentBaseURL string `json:"agent_base_url,omitempty"`
+
 	// Desired overrides the desired state this environment starts with. An explicit
 	// empty array registers an environment that runs nothing until commanded; omitted,
 	// the server's bootstrap defaults apply.
 	Desired *[]models.DesiredResource `json:"desired,omitempty"`
 }
 
-// EnrollRequest is the agent's enrollment body.
+// EnrollRequest is the agent's enrollment body. Identity comes from the api-key
+// headers, not the body; Name rides along for logs only.
 type EnrollRequest struct {
-	Name            string `json:"name"`
-	EnrollmentToken string `json:"enrollment_token"`
-	Placement       string `json:"placement"`
+	Name      string `json:"name"`
+	Placement string `json:"placement"`
 	// Kind is the kind the agent believes it is (amp | meko). It is checked
 	// against the environment's registered kind so an amp controller cannot
 	// attach to a meko environment or vice versa; empty is treated as meko.
@@ -214,20 +225,6 @@ type StatusReport struct {
 	Resources []ResourceStatus `json:"resources,omitempty"`
 }
 
-// ---- token helpers ----
-
-func hashToken(t string) string {
-	sum := sha256.Sum256([]byte(t))
-	return hex.EncodeToString(sum[:])
-}
-
-func newToken(prefix string) (plain, hash string) {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	plain = prefix + hex.EncodeToString(b)
-	return plain, hashToken(plain)
-}
-
 func slug(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	return strings.NewReplacer(" ", "-", "_", "-", "/", "-").Replace(s)
@@ -247,8 +244,10 @@ func (s *EnvironmentService) Get(id string, scope AccountScope) (*models.Environ
 	return s.repo.Get(string(scope), id)
 }
 
-// Register mints a single-use enrollment token and stores a PENDING environment,
-// returning the plaintext token once.
+// Register stores a PENDING environment bound to the given API key. The returned
+// replacedAPIKeyID is non-empty when a re-registration rebound an existing row to
+// a different key -- YBM revokes the old one, since nothing authenticates with it
+// any more.
 //
 // A scoped registration is stamped with the scope's account and ignores the body's
 // account_id: the scope comes from the account YBM authenticated, the body from
@@ -257,7 +256,7 @@ func (s *EnvironmentService) Get(id string, scope AccountScope) (*models.Environ
 // which is how the console has always set it.
 func (s *EnvironmentService) Register(
 	req RegisterEnvironmentRequest, scope AccountScope,
-) (*models.Environment, string, error) {
+) (e *models.Environment, replacedAPIKeyID string, err error) {
 	accountID := req.AccountID
 	if scope != "" {
 		accountID = string(scope)
@@ -266,9 +265,21 @@ func (s *EnvironmentService) Register(
 	// database error on insert. Rejected here instead, and empty stays legal: an
 	// unaccounted environment is stored under a sentinel.
 	if accountID != "" {
-		if _, err := uuid.Parse(accountID); err != nil {
+		if _, perr := uuid.Parse(accountID); perr != nil {
 			return nil, "", fmt.Errorf("%w: account_id %q is not a uuid", ErrValidation, accountID)
 		}
+	}
+	// Required: the key binding is the environment's only agent credential, so an
+	// environment registered without one could never be attached to.
+	//
+	// Stored in the parsed form, not as sent. uuid.Parse also accepts uppercase,
+	// {braces}, urn:uuid: and bare hex, while the upsert compares the value against
+	// the stored api_key_id rendered as canonical text -- so a re-registration of the
+	// same key in another spelling would otherwise read as a rebind and have YBM
+	// revoke the live key.
+	apiKey, perr := uuid.Parse(strings.TrimSpace(req.APIKeyID))
+	if perr != nil {
+		return nil, "", fmt.Errorf("%w: api_key_id %q is not a uuid", ErrValidation, req.APIKeyID)
 	}
 	name := strings.TrimSpace(req.Name)
 	if len(name) < 3 || len(name) > 60 {
@@ -286,8 +297,6 @@ func (s *EnvironmentService) Register(
 	if req.ClusterSpec != nil {
 		state = "CLUSTER_PROVISIONING"
 	}
-	plain, hash := newToken("ycp_enr_")
-	exp := time.Now().UTC().Add(enrollTokenTTL)
 	// A meko environment keeps a bare slug id — that is the id the existing meko
 	// agent, e2e, and console already use, so prefixing it would silently break
 	// them. An amp environment is prefixed "amp-", so an amp and a meko
@@ -297,29 +306,29 @@ func (s *EnvironmentService) Register(
 	if kind == KindAmp {
 		id = KindAmp + "-" + id
 	}
-	e := &models.Environment{
+	e = &models.Environment{
 		ID: id, Kind: kind, AccountID: accountID, Placement: placement, Region: req.Region,
 		State: state, MaxDatapacks: 400, CreatedAt: time.Now().UTC(),
 		Components: json.RawMessage("[]"), Resources: json.RawMessage("[]"),
-		EnrollTokenHash: hash, EnrollTokenExpiresAt: &exp,
+		APIKeyID: apiKey.String(),
 	}
 	// Insert stamps e.UUID, which the desired-state write below is keyed on. A name
 	// another account already holds is not a conflict: (account_id, id) is what is
 	// unique, so this registers that account's own environment.
-	if err := s.repo.Insert(e); err != nil {
+	replacedAPIKeyID, err = s.repo.Insert(e)
+	if err != nil {
 		return nil, "", err
 	}
 	// Desired state comes with the registration, so the agent has something to do the
 	// moment it enrolls. Failing to write it must not fail the registration: the
-	// enrollment token has already been minted and is returned exactly once, so
-	// discarding it here would leave an environment nobody can attach an agent to.
-	// A desired-state write can always be retried; a token cannot.
+	// environment and its key binding are already stored, and a desired-state write
+	// can always be retried or replaced by the operator.
 	if res := s.initialDesired(req, kind); res != nil {
 		if err := s.repo.ReplaceDesired(e.UUID, res); err != nil {
-			return e, plain, nil //nolint:nilerr // see above: the token must survive
+			return e, replacedAPIKeyID, nil //nolint:nilerr // see above: the registration stands
 		}
 	}
-	return e, plain, nil
+	return e, replacedAPIKeyID, nil
 }
 
 // initialDesired resolves what a newly registered environment should be running:
@@ -358,35 +367,29 @@ func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest, kind
 	return []models.DesiredResource{{Kind: "meko-stack", Name: "meko", Spec: spec}}
 }
 
-// EnrollWithToken validates and consumes an enrollment token, mints a status token,
-// merges facts, and returns the environment. ok=false ⇒ invalid/consumed token.
+// EnrollByKey is the agent's key-authenticated first check-in: it resolves the
+// environment bound to the key, merges facts, and moves it to ATTESTING. (nil,
+// nil) means no environment is bound to the key -- the handler answers 401.
 //
 // declaredKind is the kind the enrolling agent believes it is; empty is treated
 // as meko. It must match the kind the environment was registered with, so an amp
 // controller cannot attach to a meko environment (or vice versa) and start
 // reporting or reconciling the wrong thing — a mismatch returns ErrKindMismatch.
-func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement, declaredKind string, f ClusterFacts) (*models.Environment, string, bool, error) {
-	if tokenPlain == "" {
-		return nil, "", false, fmt.Errorf("%w: enrollment_token required", ErrValidation)
-	}
+func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind string, f ClusterFacts) (*models.Environment, error) {
 	kind, err := normalizeKind(declaredKind)
 	if err != nil {
-		return nil, "", false, err
+		return nil, err
 	}
-	envUUID, found, err := s.repo.EnrollLookup(hashToken(tokenPlain))
-	if err != nil || !found {
-		return nil, "", false, err
-	}
-	e, err := s.repo.GetByUUID(envUUID)
+	e, err := s.repo.GetByAPIKeyID(apiKeyID)
 	if err != nil || e == nil {
-		return nil, "", false, err
+		return nil, err
 	}
 	envKind := e.Kind
 	if envKind == "" {
 		envKind = KindMeko
 	}
 	if kind != envKind {
-		return nil, "", false, fmt.Errorf("%w: environment %q is kind %q, agent declared %q", ErrKindMismatch, e.ID, envKind, kind)
+		return nil, fmt.Errorf("%w: environment %q is kind %q, agent declared %q", ErrKindMismatch, e.ID, envKind, kind)
 	}
 	e.Live = true
 	if placement != "" {
@@ -403,41 +406,20 @@ func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement, declaredKind
 		e.MCPBaseURL = e.ID + ".mcp.mekodata.ai"
 		e.CertFingerprint = "sha256:" + randHex(6)
 	}
-	statusPlain, statusHash := newToken("ycp_sts_")
-	e.StatusTokenHash = statusHash
-	// The enrollment token is deliberately NOT burned here, even though the agent
-	// now persists the status token and so does not need to enroll again in normal
-	// operation.
-	//
-	// Burning it makes every failure mode permanent instead of TTL-bounded:
-	// EnrollLookup requires a non-empty hash, so once cleared the agent's
-	// re-enroll-on-401 path can never succeed, and an agent that failed to persist
-	// its state — or whose status token was rotated or invalidated — is locked out
-	// with no recovery short of re-registering the environment, which resets its
-	// state and datapack counts. Leaving it reusable for the rest of its 30-minute
-	// window keeps that window as a genuine recovery budget.
-	//
-	// Single-use is still the right end state, but it needs a re-issue path first
-	// (an endpoint that mints a fresh enrollment token for a known environment, or
-	// status-token rotation authenticated by the current token). Until then the
-	// TTL is the only bound, which is what it was designed to be.
 	if err := s.repo.Update(e); err != nil {
-		return nil, "", false, err
+		return nil, err
 	}
-	return e, statusPlain, true, nil
+	return e, nil
 }
 
-// ResolveAgent returns the environment an agent's (id, status token) pair names,
-// or nil when the pair matches nothing -- an unknown id and an invalid token are
-// deliberately the same answer, so neither can be probed for.
-//
-// The token does the identifying, not the id: an id is unique only within an
-// account, and an agent knows nothing about accounts.
-func (s *EnvironmentService) ResolveAgent(envID, tokenPlain string) (*models.Environment, error) {
-	if envID == "" || tokenPlain == "" {
+// ResolveAgent returns the environment bound to the API key an agent call
+// authenticated with, or nil when the key is bound to nothing -- a revoked key
+// and a never-registered one are deliberately the same answer.
+func (s *EnvironmentService) ResolveAgent(apiKeyID string) (*models.Environment, error) {
+	if apiKeyID == "" {
 		return nil, nil
 	}
-	return s.repo.GetByAgentToken(envID, hashToken(tokenPlain))
+	return s.repo.GetByAPIKeyID(apiKeyID)
 }
 
 // ApplyStatus merges an agent status report. ok=false ⇒ unknown environment.
@@ -522,17 +504,19 @@ func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []
 }
 
 // Desired returns the environment's desired resources, by key -- callers have
-// already resolved the environment, whether by scope or by agent token.
+// already resolved the environment, whether by scope or by api key id.
 func (s *EnvironmentService) Desired(envUUID string) ([]models.DesiredResource, error) {
 	return s.repo.ListDesired(envUUID)
 }
 
-// Action applies a lifecycle action (suspend|resume|drain|deregister). ok=false ⇒
-// unknown environment, or one the scope does not own.
-func (s *EnvironmentService) Action(envID string, scope AccountScope, action string) (bool, error) {
+// Action applies a lifecycle action (suspend|resume|drain|deregister) and returns
+// the environment it acted on. nil ⇒ unknown environment, or one the scope does
+// not own. The environment comes back rather than a bool because deregistration's
+// response carries the api_key_id binding, so YBM can revoke the key.
+func (s *EnvironmentService) Action(envID string, scope AccountScope, action string) (*models.Environment, error) {
 	e, err := s.Get(envID, scope)
 	if err != nil || e == nil {
-		return false, err
+		return nil, err
 	}
 	switch action {
 	case "suspend":
@@ -544,9 +528,9 @@ func (s *EnvironmentService) Action(envID string, scope AccountScope, action str
 	case "deregister":
 		e.State = "DEREGISTERED"
 	default:
-		return false, fmt.Errorf("%w: unknown action %q", ErrValidation, action)
+		return nil, fmt.Errorf("%w: unknown action %q", ErrValidation, action)
 	}
-	return true, s.repo.Update(e)
+	return e, s.repo.Update(e)
 }
 
 func mergeFacts(e *models.Environment, f ClusterFacts) {

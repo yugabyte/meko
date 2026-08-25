@@ -43,8 +43,11 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 		SecretRef:       "meko-data-plane",
 	})
 
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+		WillReturnRows(insertReturns(envUUID, ""))
+	mock.ExpectCommit()
 	// ReplaceDesired upserts-and-prunes: read existing keys (none on a fresh
 	// register), upsert the seeded meko-stack, prune nothing.
 	mock.ExpectBegin()
@@ -55,12 +58,12 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"}, "")
+	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1", APIKeyID: keyA}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if e == nil || token == "" {
-		t.Fatal("Register returned no environment or no token")
+	if e == nil {
+		t.Fatal("Register returned no environment")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -141,10 +144,9 @@ func TestRegister_BootstrapDisabled(t *testing.T) {
 	}
 }
 
-// A failed desired-state write must not fail the registration. The enrollment token
-// is minted and returned exactly once, so discarding it here would leave an
-// environment no agent can ever attach to — while the desired-state write can simply
-// be retried, or replaced by the operator.
+// A failed desired-state write must not fail the registration: the environment and
+// its key binding are already stored, and the desired-state write can simply be
+// retried, or replaced by the operator.
 func TestRegister_SurvivesDesiredStateWriteFailure(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -153,15 +155,18 @@ func TestRegister_SurvivesDesiredStateWriteFailure(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true})
 
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+		WillReturnRows(insertReturns(envUUID, ""))
+	mock.ExpectCommit()
 	mock.ExpectBegin().WillReturnError(errTest)
 
-	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"}, "")
+	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1", APIKeyID: keyA}, "")
 	if err != nil {
-		t.Fatalf("Register err = %v, want nil: a desired-state failure must not lose the token", err)
+		t.Fatalf("Register err = %v, want nil: a desired-state failure must not fail the registration", err)
 	}
-	if e == nil || token == "" {
-		t.Fatal("Register returned no environment or no token")
+	if e == nil {
+		t.Fatal("Register returned no environment")
 	}
 }

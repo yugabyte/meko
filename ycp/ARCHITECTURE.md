@@ -75,24 +75,25 @@ agent → YCP. YCP never dials into a customer cluster.
 
 ## The pull loop
 
-1. **Register** — an operator `POST`s `/api/v1/environments` with a **name**. That is
-   the whole input. YCP resolves the Meko release the data plane should run (six image
-   references, pinned in `meko/api_server/internal/service/dataplane_release.go`), stores it
-   as that environment's desired state, mints an **enrollment token** (kubeadm-style
-   bootstrap token, 30-min TTL) and returns it once with an install hint. Only the
-   token *hash* is persisted.
+1. **Register** — YBM (or an operator) `POST`s `/api/v1/environments` with a **name**
+   and the **`api_key_id`** of the YBM API key the environment's agent will
+   authenticate with. YCP resolves the Meko release the data plane should run (six image
+   references, pinned in `meko/api_server/internal/service/dataplane_release.go`), stores
+   it as that environment's desired state, and returns the environment with an install
+   hint. The key id is unique fleet-wide: one key drives one environment.
 2. **Enroll** — `meko-agent` starts in the customer cluster, reads its
-   service-account token + cluster facts, and `POST`s `/api/v1/agent/enroll`
-   with the enrollment token. YCP validates it, mints a long-lived env-scoped
-   **status token**, and returns it **together with the stack** the environment runs.
-   The environment moves to `ATTESTING`.
+   service-account token + cluster facts, and `POST`s `/agent/enroll` — like every
+   agent call, authenticated with the API key. YCP resolves the environment bound to
+   the key and returns its identity **together with the stack** the environment runs.
+   The environment moves to `ATTESTING`. Enrollment is an idempotent check-in the
+   agent repeats at every startup.
 3. **Deploy** — the agent has everything it needs in that one response, so it deploys
-   the whole data plane on its first tick. It persists the stack beside the status
-   token, which means a restart brings Meko back with no control-plane call in the path
-   at all. Nothing has to be commanded, and a control plane that is down cannot stop an
-   already-enrolled agent from reconciling.
-4. **Reconcile** — on each tick the agent `GET`s `/api/v1/agent/desired-state` (bearer:
-   status token). Desired state is a generic, resource-typed set (`{kind, name, spec,
+   the whole data plane on its first tick. It persists the stack in its state Secret,
+   which means a restart during a control-plane outage brings Meko back with no
+   successful control-plane call in the path. Nothing has to be commanded, and a
+   control plane that is down cannot stop an already-enrolled agent from reconciling.
+4. **Reconcile** — on each tick the agent `GET`s `/agent/desired-state`. Desired
+   state is a generic, resource-typed set (`{kind, name, spec,
    generation}`, where the control plane bumps `generation` only when a resource's spec
    changes, so an agent can skip an unchanged resource without keeping its own store);
    it is where registration wrote the stack and where an operator's later changes go, so
@@ -102,7 +103,7 @@ agent → YCP. YCP never dials into a customer cluster.
    data plane untouched. Garbage collection is the one thing that needs a desired state
    that was actually read — the agent cannot know what an operator withdrew from a
    response it never got.
-5. **Report** — the agent `POST`s `/api/v1/agent/status` with real facts,
+5. **Report** — the agent `POST`s `/agent/status` with real facts,
    component health. This drives the fleet registry and the console's live view.
 
 Because desired state is resource-typed, adding a new managed resource needs
@@ -197,27 +198,29 @@ READY → DRAINING (drain) → DEREGISTERED (deregister)
 
 ## Authentication
 
-Two token types, both stored only as SHA-256 hashes (`hashToken` in
-`api_server/internal/service/environment_service.go`):
+The agent's credential is a **YBM-minted API key**, shown once by YBM and
+revocable there. Registration binds its id (`api_key_id`, a uuid — not the key
+itself) to the environment, uniquely fleet-wide. Every agent → YCP call carries
+the key as a bearer; YBM's agent pass-through validates it and forwards the call
+to meko with `X-Meko-Admin-Secret` + `X-Meko-Api-Key-ID`, and meko resolves the
+environment from the key id alone. Against a standalone control plane (dev, the
+e2e — no YBM), the agent sends that header pair itself
+(`YCP_DEV_ADMIN_SECRET` + `YCP_DEV_API_KEY_ID`).
 
-- **Enrollment token** (`ycp_enr_…`) — a bootstrap credential with a 30-minute
-  TTL, reusable within that window. Validated by matching hash + non-expiry.
-- **Status token** (`ycp_sts_…`) — long-lived, env-scoped. Sent as a bearer on
-  every agent → YCP call.
+There is no bootstrap credential and nothing minted at enroll time: enrollment is
+an idempotent check-in the agent repeats at every startup, so a restart can never
+lock an agent out. A 401 means the key was revoked or the environment
+re-registered onto a new key; the agent logs it loudly and keeps reconciling what
+it last read — recovery is a redeploy with a fresh key Secret, or a
+re-registration, neither of which needs the agent process to have stopped. A
+check-in that fails at startup falls back to the persisted identity when there is
+one, for the same reason: a control plane that cannot be reached must not take the
+data plane down with it.
 
-Plaintext tokens are returned to the caller exactly once and never persisted.
-
-**The agent persists its status token**, in a `meko-agent-state` Secret in its
-own namespace, and resumes from it on restart. That is what keeps the enrollment
-token a genuine first-contact-only credential: an agent that re-enrolled on
-every restart would work for 30 minutes and then lock itself out. `test/e2e`
-asserts the restart path for exactly this reason.
-
-The same Secret holds the **stack** the agent enrolled with, for the same reason: an
-agent that had to re-enroll in order to remember what to run would depend on a
-30-minute bootstrap credential forever. With it persisted, a restarted agent begins
-reconciling before its first request succeeds. Remaining gaps — CA pinning,
-status-token rotation — are tracked in
+The `meko-agent-state` Secret holds no credential: only the identity the last
+check-in confirmed, the **stack** the agent enrolled with, and the last desired
+state — so a restart during a control-plane outage begins reconciling before its
+first request succeeds. The remaining gap — CA pinning — is tracked in
 [meko#401](https://github.com/yugabyte/meko/issues/401).
 
 ## Testing

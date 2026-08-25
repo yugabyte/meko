@@ -1,4 +1,11 @@
 <title>Yugabyte Control Plane — Console</title>
+<!--
+  Superseded in one respect: the enrollment-token snippets below are the original
+  design. There is no enrollment token — the agent authenticates every call with a
+  YBM-minted API key whose id is bound to the environment at registration. The
+  shipped console is meko/api_server/internal/handlers/web/console.html; see
+  ycp/ARCHITECTURE.md for the model.
+-->
 <style>
   :root {
     color-scheme: light;

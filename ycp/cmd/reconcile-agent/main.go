@@ -1,8 +1,14 @@
 // Command reconcile-agent is the standalone agent that converges an amp
 // environment to YCP's desired state. It is the sole YCP client for its
-// environment: it enrolls (kind=amp), pulls desired state, and drives the
-// generic reconcile engine against the amp controller's REST API (the amp
-// backend), reporting inventory back on each status heartbeat.
+// environment: it enrolls (kind=amp) as its first check-in, pulls desired state,
+// and drives the generic reconcile engine against the amp controller's REST API
+// (the amp backend), reporting inventory back on each status heartbeat.
+//
+// Every YCP call authenticates with the environment's YBM API key (YCP_API_KEY),
+// so the agent holds no earned credential: enrollment is idempotent and repeated
+// at every startup as the first check-in. The state Secret keeps only the
+// identity that check-in confirmed, so a restart that cannot reach the control
+// plane still knows which environment it is.
 //
 // The name is deliberately backend-neutral: a later phase adds a meko backend
 // selected by the environment's kind, so one binary/image serves both and the
@@ -32,15 +38,6 @@ import (
 	"meko/ycp/reconcile/ampbackend"
 )
 
-// errNoEnrollToken is returned when a (re-)enroll is needed but no enrollment
-// token is configured — the operator must re-issue one for the bound env.
-var errNoEnrollToken = errors.New("no enrollment token configured (set ENROLLMENT_TOKEN)")
-
-// stateSecret holds the env-scoped status token + identity between restarts.
-// Separate from the operator-supplied enrollment Secret: that is a short-lived
-// bootstrap credential, this is the long-lived one the agent earns by using it.
-const stateSecret = "reconcile-agent-state"
-
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -49,13 +46,15 @@ func env(k, def string) string {
 }
 
 func main() {
-	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080"), "/")
+	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080/api/v1"), "/")
 	// AMP_CONTROLLER_URL must include the API base path (the controller mounts
 	// its REST API at /api/v1).
 	ampURL := strings.TrimRight(env("AMP_CONTROLLER_URL", "http://amp-controller:8080/api/v1"), "/")
 	envName := env("ENV_NAME", "")
 	placement := env("ENV_PLACEMENT", "cloud")
-	enrollToken := os.Getenv("ENROLLMENT_TOKEN")
+	apiKey := os.Getenv("YCP_API_KEY")
+	devAdminSecret := os.Getenv("YCP_DEV_ADMIN_SECRET")
+	devAPIKeyID := os.Getenv("YCP_DEV_API_KEY_ID")
 	agentVer := env("AGENT_VERSION", "dev")
 	interval := 10 * time.Second
 	if d, err := time.ParseDuration(os.Getenv("RECONCILE_INTERVAL")); err == nil && d > 0 {
@@ -66,6 +65,10 @@ func main() {
 	if envName == "" {
 		log.Fatalf("ENV_NAME is required")
 	}
+	devMode := devAdminSecret != "" && devAPIKeyID != ""
+	if apiKey == "" && !devMode {
+		log.Fatalf("YCP_API_KEY is required (or both YCP_DEV_ADMIN_SECRET and YCP_DEV_API_KEY_ID for a standalone control plane)")
+	}
 
 	kc, err := newK8s()
 	if err != nil {
@@ -73,36 +76,48 @@ func main() {
 	}
 	st, err := kc.readState(stateSecret)
 	if err != nil {
-		log.Fatalf("read state: %v", err)
+		// Not fatal: the state is a resume nicety, not a credential. The check-in
+		// below re-establishes identity from the API key regardless.
+		log.Printf("WARNING could not read agent state: %v", err)
+		st = state{}
+	}
+	if st.EnvID != "" && st.EnvName != envName {
+		// The operator re-pointed this agent; the persisted identity is for a
+		// different environment, so it must not be resumed.
+		log.Printf("ENV_NAME changed (%q -> %q) — discarding persisted identity", st.EnvName, envName)
+		st = state{}
 	}
 
-	ycp := ycpclient.New(ycpURL, &http.Client{Timeout: 15 * time.Second})
+	ycp := ycpclient.New(ycpURL, apiKey, &http.Client{Timeout: 15 * time.Second})
+	if devMode {
+		log.Printf("dev mode: authenticating with the admin secret + api key id headers")
+		ycp.SetDevHeaders(devAdminSecret, devAPIKeyID)
+	}
 	backend, err := ampbackend.New(ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), nil)
 	if err != nil {
 		log.Fatalf("amp backend: %v", err)
 	}
 
 	a := &agent{
-		ycp:         ycp,
-		kc:          kc,
-		envName:     envName,
-		placement:   placement,
-		enrollToken: enrollToken,
-		agentVer:    agentVer,
-		st:          st,
+		ycp:       ycp,
+		kc:        kc,
+		envName:   envName,
+		placement: placement,
+		agentVer:  agentVer,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Resume with a persisted token, or enroll for a fresh one.
-	if st.StatusToken != "" && st.EnvID != "" {
-		ycp.SetToken(st.StatusToken)
-		log.Printf("resumed env=%s id=%s from state", st.EnvName, st.EnvID)
-	} else {
-		if err := a.enroll(ctx); err != nil {
-			log.Fatalf("enroll: %v", err)
-		}
+	// First check-in. Enrollment is idempotent and key-authenticated, so every
+	// startup enrolls. Transient failures (control plane not up yet) are retried
+	// with capped backoff — falling back to the persisted identity when there is
+	// one, so an outage does not hold the reconcile loop hostage. A 401 cannot be
+	// fixed from here — the key was revoked or never bound — so it is logged
+	// loudly on every attempt; a redeploy with a fresh key Secret recovers.
+	if err := a.enrollWithRetry(ctx, st); err != nil {
+		log.Printf("shutting down before enrolling: %v", err)
+		return
 	}
 
 	// Pin the controller to this YCP environment before driving it. The binding
@@ -110,7 +125,7 @@ func main() {
 	// this controller, and we must not fight the agent that bound it. Anything
 	// else (controller not up yet on a fresh install, transient network) is
 	// retried with backoff rather than crash-looping the pod.
-	if err := bindControllerWithRetry(ctx, ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), ycpURL, a.st.EnvID, log.Printf); err != nil {
+	if err := bindControllerWithRetry(ctx, ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), ycpURL, a.envID, log.Printf); err != nil {
 		if ctx.Err() != nil {
 			log.Printf("shutting down before controller bound: %v", err)
 			return
@@ -183,55 +198,88 @@ func bindController(ctx context.Context, ampURL, token, ycpURL, envID string) er
 	}
 }
 
-// agent adapts the YCP client to the engine's Source + Reporter and owns the
-// enroll/re-enroll and last-good-desired logic.
-type agent struct {
-	ycp         *ycpclient.Client
-	kc          *k8s
-	envName     string
-	placement   string
-	enrollToken string
-	agentVer    string
+// stateSecret persists the environment id the check-in confirmed, so a restart
+// that cannot reach the control plane still knows which environment it is. No
+// credential lives in it: the API key is operator-provided.
+const stateSecret = "reconcile-agent-state"
 
-	st       state
+// agent adapts the YCP client to the engine's Source + Reporter and owns the
+// enrollment and last-good-desired logic.
+type agent struct {
+	ycp       *ycpclient.Client
+	kc        *k8s
+	envName   string
+	placement string
+	agentVer  string
+
+	envID    string
+	envUUID  string
 	lastGood api.DesiredState
 	haveGood bool
 }
 
-func (a *agent) enroll(ctx context.Context) error {
-	if a.enrollToken == "" {
-		return errNoEnrollToken
+// enrollWithRetry performs the startup check-in, falling back to the persisted
+// identity when the control plane is unreachable and one exists.
+func (a *agent) enrollWithRetry(ctx context.Context, st state) error {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		resp, err := a.ycp.Enroll(ctx, api.EnrollRequest{
+			Name:      a.envName,
+			Placement: a.placement,
+			Kind:      "amp",
+		})
+		if err == nil {
+			a.envID = resp.EnvironmentID
+			a.envUUID = resp.EnvironmentUUID
+			log.Printf("enrolled env=%s id=%s uuid=%s", a.envName, a.envID, a.envUUID)
+			if werr := a.kc.writeState(stateSecret,
+				state{EnvID: a.envID, EnvUUID: a.envUUID, EnvName: a.envName}); werr != nil {
+				// Not fatal: the agent works for this lifetime; it just cannot
+				// resume through an outage that spans a restart.
+				log.Printf("WARNING could not persist agent state: %v", werr)
+			}
+			return nil
+		}
+		if errors.Is(err, ycpclient.ErrUnauthorized) {
+			log.Printf("ENROLL REJECTED (401): the API key is revoked or bound to no environment; "+
+				"re-register the environment or redeploy with a fresh key (retrying in %s)", backoff)
+		} else {
+			log.Printf("enroll: %v (retrying in %s)", err, backoff)
+		}
+		// Resume from persisted identity whichever way the check-in failed, so the
+		// reconcile loop can hold the environment up while the cause is fixed --
+		// the same shape as a mid-run failure, which keeps reconciling the last
+		// desired state it read.
+		if st.EnvID != "" {
+			log.Printf("resuming as persisted env id=%s; the loop retries on its own", st.EnvID)
+			a.envID = st.EnvID
+			a.envUUID = st.EnvUUID
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
-	resp, err := a.ycp.Enroll(ctx, api.EnrollRequest{
-		Name:            a.envName,
-		EnrollmentToken: a.enrollToken,
-		Placement:       a.placement,
-		Kind:            "amp",
-	})
-	if err != nil {
-		return err
-	}
-	a.st = state{EnvID: resp.EnvironmentID, EnvName: a.envName, StatusToken: resp.StatusToken}
-	if err := a.kc.writeState(stateSecret, a.st); err != nil {
-		return err
-	}
-	log.Printf("enrolled env=%s id=%s", a.envName, a.st.EnvID)
-	return nil
 }
 
 // Desired implements reconcile.Source. A successful fetch is fresh (deletes
 // allowed); on error it falls back to the last-good set with fresh=false so the
 // engine converges creates/updates but never garbage-collects on stale data. A
-// 401 triggers a re-enroll and a retry.
+// 401 is logged loudly and not retried within the tick: the key the agent holds
+// is the only credential it has, so re-asking cannot change the answer.
 func (a *agent) Desired(ctx context.Context) (api.DesiredState, bool, error) {
-	ds, err := a.ycp.DesiredFor(ctx, a.st.EnvID)
-	if err == ycpclient.ErrUnauthorized {
-		if rerr := a.enroll(ctx); rerr != nil {
-			return a.fallback(err)
-		}
-		ds, err = a.ycp.DesiredFor(ctx, a.st.EnvID)
-	}
+	ds, err := a.ycp.Desired(ctx)
 	if err != nil {
+		if errors.Is(err, ycpclient.ErrUnauthorized) {
+			log.Printf("DESIRED-STATE REJECTED (401): the API key is revoked or bound to no environment; " +
+				"holding the last desired state and changing nothing")
+		}
 		return a.fallback(err)
 	}
 	a.lastGood, a.haveGood = ds, true
@@ -260,12 +308,9 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 		AppliedRevision:  ds.Revision,
 		Resources:        inventory(res),
 	}
-	err := a.ycp.PostStatusFor(ctx, a.st.EnvID, report)
-	if err == ycpclient.ErrUnauthorized {
-		if rerr := a.enroll(ctx); rerr != nil {
-			return rerr
-		}
-		return a.ycp.PostStatusFor(ctx, a.st.EnvID, report)
+	err := a.ycp.PostStatus(ctx, report)
+	if errors.Is(err, ycpclient.ErrUnauthorized) {
+		log.Printf("STATUS REJECTED (401): the API key is revoked or bound to no environment")
 	}
 	return err
 }

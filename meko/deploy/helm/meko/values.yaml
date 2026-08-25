@@ -149,8 +149,8 @@ apiServer:
   # secret alone and have no account to send, so they get 400 from a control plane
   # running with it on.
   #
-  # The agent API is unaffected either way — it authenticates with the enrollment
-  # and status tokens, not the admin secret.
+  # The agent API is unaffected either way — it resolves the environment from the
+  # api-key-id header, so it never needs an account header.
   #
   # Needs an image built with --require-account-header; Go's flag package exits on
   # an unknown flag, so an older image will not start rather than ignoring it.
@@ -595,18 +595,17 @@ mekoMcpServer:
 # enrolls this environment into an YCP control plane and reconciles/report its
 # state over OUTBOUND HTTPS only (agent -> YCP, agent -> in-cluster k8s API).
 # Data-plane only: suppressed in `ycp` mode. OFF by default — a data-plane
-# install opts in by setting agent.enabled=true + agent.ycpUrl + an enrollment
-# token Secret. This is how "an actual meko" registers itself with the control
+# install opts in by setting agent.enabled=true + agent.ycpUrl + an agent API key
+# Secret. This is how "an actual meko" registers itself with the control
 # plane, without a separate chart.
 # ---------------------------------------------------------------------------
 agent:
   enabled: false
   namespace: meko-system
-  # Keep this at 1. The agent is a singleton per environment: enrollment mints a
-  # status token and overwrites the environment's stored hash, so a second replica
-  # invalidates the first one's credential, and both then race on the shared
-  # meko-agent-state Secret. There is no leader election. Scaling this does not
-  # give redundancy, it gives two agents fighting over one identity.
+  # Keep this at 1. The agent is a singleton per environment: replicas share one
+  # API-key identity and race on the shared meko-agent-state Secret. There is no
+  # leader election. Scaling this does not give redundancy, it gives two agents
+  # fighting over one identity.
   replicas: 1
   image:
     repository: meko/meko-agent
@@ -624,11 +623,13 @@ agent:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 250m, memory: 256Mi }
-  # Pre-created Secret holding the one-time enrollment token minted by YCP.
-  # Key: enrollment-token. (No secret material lives in the chart.)
+  # Pre-created Secret holding the YBM API key every YCP call authenticates with.
+  # Key: api-key. (No secret material lives in the chart.) Dev mode against a
+  # standalone control plane (no YBM): put dev-admin-secret and dev-api-key-id
+  # keys in the same Secret instead of api-key.
   secrets:
     existing:
-      enrollment: meko-agent-enrollment
+      apiKey: meko-agent-api-key
 
 # ---------------------------------------------------------------------------
 # inference-gateway

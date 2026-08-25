@@ -355,12 +355,11 @@ fi
 # ----------------------------------------------------------------------- register
 
 log "registering environment $ENV_NAME"
+API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\"}")" ||
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\",\"api_key_id\":\"$API_KEY_ID\"}")" ||
   die "registration failed"
-TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
 ENV_ID="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["environment"]["id"])')"
-[ -n "$TOKEN" ] || die "no enrollment token in the register response"
 
 echo
 echo "--------- the install command YCP printed ---------"
@@ -389,13 +388,14 @@ if not stack["spec"].get("image_pull_secret"):
 # --------------------------------------------------------------------------- agent
 
 log "installing the agent into $MEKO_NS"
-k -n "$MEKO_NS" create secret generic meko-agent-enrollment \
-  --from-literal=enrollment-token="$TOKEN" --dry-run=client -o yaml | k apply -f - >/dev/null
+k -n "$MEKO_NS" create secret generic meko-agent-api-key \
+  --from-literal=dev-admin-secret="$ADMIN_KEY" \
+  --from-literal=dev-api-key-id="$API_KEY_ID" --dry-run=client -o yaml | k apply -f - >/dev/null
 
 # In-cluster Service DNS, absolute (trailing dot). Both releases are in the same
 # cluster, so the agent needs no external address — and the dot matters: ndots:5
 # makes the four-dot relative form walk the search list first and stall.
-YCP_URL="http://meko-api-server-service.$YCP_NS.svc.cluster.local.:80"
+YCP_URL="http://meko-api-server-service.$YCP_NS.svc.cluster.local.:80/api/v1"
 h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-agent.yaml" \
   --set agent.ycpUrl="$YCP_URL" \
@@ -406,16 +406,11 @@ h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   --wait --timeout "$TIMEOUT" >/dev/null ||
   die "the agent install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS)"
 
-# Force the agent to pick up the token just minted, and to enroll rather than resume.
-#
-# Registering above is an upsert: it mints a fresh enrollment token and clears the
-# environment's status-token hash. On a RE-RUN the Deployment spec is identical, so helm
-# changes nothing and the pod keeps the previous token in its environment — a secretKeyRef
-# env var is read once, at start. The agent then 401s on every call, silently fails to
-# re-enroll because its token no longer matches what was stored, and stays there. Deleting
-# the state Secret stops the new pod resuming with the status token registration just
-# invalidated.
-k -n "$MEKO_NS" delete secret meko-agent-state --ignore-not-found >/dev/null
+# Force the agent to pick up the identity just registered. Registering above is an
+# upsert that rebinds the environment to this run's api_key_id; on a RE-RUN the
+# Deployment spec is identical, so helm changes nothing and the pod keeps the
+# previous run's id in its environment — a secretKeyRef env var is read once, at
+# start. The restart makes the new pod check in with the fresh binding.
 k -n "$MEKO_NS" rollout restart deploy/meko-agent >/dev/null
 k -n "$MEKO_NS" rollout status deploy/meko-agent --timeout="$TIMEOUT"
 

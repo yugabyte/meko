@@ -39,8 +39,8 @@ func TestRouter_BasePath_MountsWholeSurface(t *testing.T) {
 		"/ycp/api/v1/environments",
 		"/ycp/api/v1/agent/enroll",
 		"/ycp/api/v1/agent/desired-state",
-		// The operator's half of the same state: the agent GET is authed with an
-		// env-scoped status token nobody at a console has.
+		// The operator's half of the same state: the agent GET resolves by a key id
+		// bound to the environment, which nobody at a console holds.
 		"/ycp/api/v1/environments/:id/desired",
 		"/ycp/api/v1/admin/metrics",
 		"/ycp/success",

@@ -6,9 +6,12 @@ metadata:
   labels:
     {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 4 }}
 ---
-# The agent persists its status token + identity in a Secret in its own namespace
-# (create on first enroll, merge-patch after) so a restart resumes without
-# re-enrolling. That Secret is all it touches through the k8s API.
+# The agent persists its identity (environment id, uuid and name) in its own state
+# Secret in its own namespace (create on first check-in, merge-patch after) so a
+# restart that cannot reach the control plane still knows which environment it
+# is. Its credential lives in a separate, operator-planted Secret
+# (amp-agent-api-key) that the agent never writes; this Role's get/create/patch
+# grant is for the state Secret only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

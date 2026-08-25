@@ -1,9 +1,14 @@
 // Command agent is a minimal meko-agent. It reads real cluster facts from the
 // in-cluster Kubernetes API (no client-go — just the service-account token),
-// completes the enrollment-token handshake with YCP, then on each tick:
-//   - pulls desired state (bearer-authed),
+// checks in with YCP by enrolling at every startup, then on each tick:
+//   - pulls desired state,
 //   - reconciles the desired Meko stack into its own namespace,
 //   - reports status (real cluster facts + observed component health).
+//
+// Every YCP call authenticates with the environment's YBM API key (YCP_API_KEY),
+// so the agent holds no earned credential: enrollment is idempotent, and the
+// state Secret keeps only identity and the last stack/desired state, so a
+// restart during a control-plane outage still knows what to run.
 //
 // All traffic is outbound: agent -> k8s API, agent -> YCP.
 package main
@@ -15,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,26 +44,23 @@ const (
 	// managedLabel marks namespaces this agent provisions for datapacks.
 	managedLabel = "meko.dev/datapack"
 
-	// stateSecret holds the env-scoped status token between restarts, and
-	// statusTokenKey is its key. Separate from the operator-supplied enrollment
-	// Secret: that one is a short-lived bootstrap credential, this one is the
-	// long-lived credential the agent earns by using it. Without persisting it the
-	// agent must re-enroll on every restart, and the enrollment token has usually
-	// expired by then — an unrecoverable pod restart.
-	stateSecret    = "meko-agent-state"
-	statusTokenKey = "status-token"
+	// stateSecret holds the agent's identity and outage caches between restarts.
+	// No credential lives in it: the API key is operator-provided (the
+	// meko-agent-api-key Secret), so what is worth remembering is which
+	// environment the key was bound to and what it was last told to run.
+	stateSecret = "meko-agent-state"
 	// envIDKey stores the environment id the control plane assigned. It is NOT
-	// derivable from ENV_NAME: the server slugs the name (lowercase, spaces and
-	// underscores to hyphens), so "Acme Prod" becomes "acme-prod". Guessing it
-	// client-side would duplicate server logic and send the wrong ?envId= on every
-	// call after a restart.
+	// derivable from ENV_NAME: the server only lowercases the name (already
+	// restricted to letters, digits and hyphens), so "Acme-Prod" becomes
+	// "acme-prod". Guessing it client-side would duplicate server logic.
 	envIDKey = "environment-id"
-	// envNameKey records the ENV_NAME the state was enrolled under, so a changed
+	// envNameKey records the ENV_NAME the state was saved under, so a changed
 	// ENV_NAME is detectable — otherwise the persisted id silently wins and
 	// re-pointing an agent at another environment does nothing.
 	envNameKey = "environment-name"
-	// stackKey stores the meko-stack spec the agent enrolled with, so a restart can
-	// bring the data plane back without asking the control plane anything.
+	// stackKey stores the meko-stack spec the agent last enrolled with, so a restart
+	// during a control-plane outage can bring the data plane back without asking the
+	// control plane anything.
 	stackKey = "stack"
 	// desiredKey stores the last desired state the agent read, so an outage that spans a
 	// restart still reconciles toward what it was last told rather than what it was
@@ -253,17 +256,15 @@ func ownNamespace() string {
 
 // agentState is what the agent remembers across restarts.
 type agentState struct {
-	// envName is the ENV_NAME this state was enrolled under. Kept so a changed
+	// envName is the ENV_NAME this state was saved under. Kept so a changed
 	// ENV_NAME can be detected: without it, re-pointing an agent at a different
 	// environment silently does nothing, because the persisted id wins.
 	envName string
-	token   string
 	envID   string
-	// stack is the meko-stack spec this agent enrolled with. Persisted alongside the
-	// token for the same reason the token is: an agent that had to re-enrol to remember
-	// what to run would depend on a 30-minute bootstrap credential forever. With it
-	// here, a restart brings the whole data plane back with no control-plane call in the
-	// path at all — the reconcile loop can begin before the first successful request.
+	// stack is the meko-stack spec this agent last enrolled with. Persisted so a
+	// restart during a control-plane outage brings the whole data plane back with no
+	// control-plane call in the path at all — the reconcile loop can begin before
+	// the first successful request.
 	stack json.RawMessage
 	// desired is the last desired state the agent successfully read, as the JSON array
 	// of resources. It is what the agent reconciles toward when the control plane is
@@ -277,16 +278,9 @@ type agentState struct {
 	desired json.RawMessage
 }
 
-// loadState reads the persisted state. The three cases are deliberately distinct:
-//
-//	(nil, nil)   no state yet — a fresh install, so enroll
-//	(nil, err)   the state could not be read — do NOT enroll
-//	(state, nil) usable state
-//
-// Collapsing the middle case into "no state" is what makes a transient API error
-// look like a fresh install: the agent would re-enroll on a credential it may no
-// longer be able to use, having thrown away a perfectly good one it just could not
-// read. A 404 is the only "no state" answer.
+// loadState reads the persisted state. (nil, nil) means no usable state — a
+// fresh install; a read error is the caller's to log, since the state is a
+// resume nicety rather than a credential.
 func (k *k8s) loadState(ns string) (*agentState, error) {
 	if ns == "" {
 		return nil, fmt.Errorf("own namespace unknown (no %s)", nsPath)
@@ -315,7 +309,7 @@ func (k *k8s) loadState(ns string) (*agentState, error) {
 		}
 		return strings.TrimSpace(string(raw))
 	}
-	st := &agentState{envName: dec(envNameKey), token: dec(statusTokenKey), envID: dec(envIDKey)}
+	st := &agentState{envName: dec(envNameKey), envID: dec(envIDKey)}
 	if raw := dec(desiredKey); raw != "" && json.Valid([]byte(raw)) {
 		st.desired = json.RawMessage(raw)
 	}
@@ -329,25 +323,24 @@ func (k *k8s) loadState(ns string) (*agentState, error) {
 			log.Printf("persisted stack in %s/%s is not valid JSON — ignoring it", ns, stateSecret)
 		}
 	}
-	// A token without the id it is scoped to is unusable — every agent call carries
-	// ?envId=. Treat a partial write as absent rather than half-trusting it.
-	if st.token == "" || st.envID == "" {
-		log.Printf("state secret %s/%s is incomplete — ignoring it and enrolling", ns, stateSecret)
+	if st.envID == "" {
+		log.Printf("state secret %s/%s carries no environment id — ignoring it", ns, stateSecret)
 		return nil, nil
 	}
 	return st, nil
 }
 
-// saveState writes the status token and environment id to the state Secret,
-// creating it or replacing its contents. Failure is logged, not fatal — the agent
-// still works for this lifetime; it just cannot survive a restart, which is the
-// behaviour before any of this existed.
+// saveState writes the identity and outage caches to the state Secret, creating
+// it or replacing its contents. Replacing also sheds the status-token key an
+// older agent may have left behind. Failure is logged, not fatal — the agent
+// still works for this lifetime; it just cannot resume through an outage that
+// spans a restart.
 func (k *k8s) saveState(ns string, st agentState) error {
 	if ns == "" {
 		return fmt.Errorf("own namespace unknown (no %s)", nsPath)
 	}
 	data := map[string]string{
-		envNameKey: st.envName, statusTokenKey: st.token, envIDKey: st.envID,
+		envNameKey: st.envName, envIDKey: st.envID,
 	}
 	if len(st.stack) > 0 {
 		data[stackKey] = string(st.stack)
@@ -372,7 +365,7 @@ func (k *k8s) saveState(ns string, st agentState) error {
 		return nil
 	}
 	// Already there — PUT over it. A PUT rather than delete-then-create so there is
-	// no window where the token is absent.
+	// no window where the state is absent.
 	if code == 409 {
 		code, b, err = k.do("PUT", "/api/v1/namespaces/"+ns+"/secrets/"+stateSecret, body)
 		if err != nil {
@@ -388,9 +381,13 @@ func (k *k8s) saveState(ns string, st agentState) error {
 // ---- YCP client ----
 
 type ycp struct {
-	base  string
-	http  *http.Client
-	token string // env-scoped status token (set after enroll)
+	base   string
+	http   *http.Client
+	apiKey string
+	// Dev mode: sent instead of the bearer, for an agent pointed straight at a
+	// standalone control plane (no YBM to validate a key).
+	devAdminSecret string
+	devAPIKeyID    string
 }
 
 func (m *ycp) req(method, path string, body, out any) (int, error) {
@@ -403,8 +400,11 @@ func (m *ycp) req(method, path string, body, out any) (int, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if m.token != "" {
-		req.Header.Set("Authorization", "Bearer "+m.token)
+	if m.devAdminSecret != "" && m.devAPIKeyID != "" {
+		req.Header.Set("X-Meko-Admin-Secret", m.devAdminSecret)
+		req.Header.Set("X-Meko-Api-Key-ID", m.devAPIKeyID)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	}
 	resp, err := m.http.Do(req)
 	if err != nil {
@@ -424,8 +424,7 @@ func (m *ycp) req(method, path string, body, out any) (int, error) {
 // api_server wraps payloads as {"data":…,"error":…}, but "error" is omitempty:
 // on success it is dropped, so the body is {"data":…} with no "error" key.
 // Decoding that straight into the payload struct silently yields zero values —
-// which meant an empty environment_id and status_token, so every following
-// status report was rejected with 400 while enrollment had already succeeded
+// which meant an empty enroll response while enrollment had already succeeded
 // server-side. So an envelope is identified by the "data" key ALONE (requiring
 // "error" too missed every success response). A flat payload — what the retired
 // reference control plane returned — has no "data" key and is decoded as-is.
@@ -469,21 +468,28 @@ func decodeBody(r io.Reader, out any) error {
 	return json.Unmarshal(env.Data, out)
 }
 
-// enroll performs the token handshake and records the returned status token. It
-// returns the environment id and the stack the control plane says this environment
-// runs — everything needed to bring Meko up, in one response.
-func (m *ycp) enroll(name, placement, enrollToken string, f api.ClusterFacts) (string, json.RawMessage, error) {
+// errUnauthorized is the control plane rejecting the agent's credential (HTTP
+// 401): the API key was revoked, or the environment was re-registered onto a new
+// one. A sentinel rather than a status code the callers re-derive from a message.
+var errUnauthorized = errors.New("unauthorized: the api key is revoked or bound to no environment")
+
+// enroll is the key-authenticated first check-in. It returns the environment id
+// and the stack the control plane says this environment runs — everything needed
+// to bring Meko up, in one response. Idempotent, so it runs at every startup.
+func (m *ycp) enroll(name, placement string, f api.ClusterFacts) (string, json.RawMessage, error) {
 	var er api.EnrollResponse
-	code, err := m.req("POST", "/api/v1/agent/enroll", api.EnrollRequest{
-		Name: name, Placement: placement, EnrollmentToken: enrollToken, ClusterFacts: f,
+	code, err := m.req("POST", "/agent/enroll", api.EnrollRequest{
+		Name: name, Placement: placement, ClusterFacts: f,
 	}, &er)
 	if err != nil {
 		return "", nil, err
 	}
+	if code == 401 {
+		return "", nil, errUnauthorized
+	}
 	if code != 200 {
 		return "", nil, fmt.Errorf("enroll -> %d", code)
 	}
-	m.token = er.StatusToken
 	return er.EnvironmentID, er.Stack, nil
 }
 
@@ -491,20 +497,24 @@ func main() {
 	// These defaults are demo residue and none of them are right for a real
 	// deployment; the chart sets every one. ENV_NAME especially: unset, an agent
 	// enrolls as some other environment's name rather than failing.
-	// YCP_URL may carry a subpath (https://devcloud.yugabyte.com/ycp) now that
-	// the control plane can be mounted under one. Every request appends
-	// "/api/v1/…", so a trailing slash here would ask for "//api/v1/…" — a path
-	// no route matches.
-	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080"), "/")
+	// YCP_URL carries the full API base the agent-facing routes hang off:
+	// ".../api/public/v1/accounts/<account>/ycp" through YBM's pass-through, or
+	// "http://<meko host>[/<base path>]/api/v1" straight at a control plane.
+	// Every request appends "/agent/…", so a trailing slash here would ask for
+	// "//agent/…" — a path no route matches.
+	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080/api/v1"), "/")
 	envName := env("ENV_NAME", "itest-mcs")
 	placement := env("ENV_PLACEMENT", "cloud")
-	enrollToken := os.Getenv("ENROLLMENT_TOKEN")
+	apiKey := os.Getenv("YCP_API_KEY")
+	devAdminSecret := os.Getenv("YCP_DEV_ADMIN_SECRET")
+	devAPIKeyID := os.Getenv("YCP_DEV_API_KEY_ID")
 	agentVer := env("AGENT_VERSION", "v1.4.2")
 	interval := 10 * time.Second
 
 	log.Printf("meko-agent starting: env=%s ycp=%s", envName, ycpURL)
-	if enrollToken == "" {
-		log.Printf("WARNING: ENROLLMENT_TOKEN empty — enrollment will be rejected")
+	devMode := devAdminSecret != "" && devAPIKeyID != ""
+	if apiKey == "" && !devMode {
+		log.Fatalf("YCP_API_KEY is required (or both YCP_DEV_ADMIN_SECRET and YCP_DEV_API_KEY_ID for a standalone control plane)")
 	}
 
 	kc, err := newK8s()
@@ -516,7 +526,11 @@ func main() {
 	dpPool := &dbPool{}
 	defer dpPool.close()
 
-	m := &ycp{base: ycpURL, http: &http.Client{Timeout: 15 * time.Second}}
+	m := &ycp{base: ycpURL, http: &http.Client{Timeout: 15 * time.Second}, apiKey: apiKey}
+	if devMode {
+		log.Printf("dev mode: authenticating with the admin secret + api key id headers")
+		m.devAdminSecret, m.devAPIKeyID = devAdminSecret, devAPIKeyID
+	}
 
 	facts, err := kc.facts()
 	if err != nil {
@@ -524,59 +538,64 @@ func main() {
 	}
 	log.Printf("cluster facts: provider=%s region=%s k8s=%s nodes=%d", facts.Provider, facts.Region, facts.K8sVersion, facts.NodeCount)
 
-	// Enrollment is first contact only. The status token it returns is long-lived
-	// and env-scoped, so once we have one we persist it and never touch the
-	// enrollment token again — it is a bootstrap credential with a short TTL, and
-	// on any restart after that TTL it would be useless.
 	ns := ownNamespace()
 	st, err := kc.loadState(ns)
 	if err != nil {
-		// Refuse to guess. Enrolling here would spend a bootstrap credential to
-		// replace one that may well be sitting in the Secret we simply failed to
-		// read, and on a restart into a throttled API server that trades a working
-		// agent for a locked-out one. Crash-looping surfaces the real problem.
-		log.Fatalf("cannot read agent state: %v", err)
+		// Not fatal: the state is a resume nicety, not a credential. The check-in
+		// below re-establishes identity from the API key regardless.
+		log.Printf("WARNING could not read agent state: %v", err)
+		st = nil
+	}
+	if st != nil && st.envName != envName {
+		// ENV_NAME changed under us: the operator is re-pointing this agent. The
+		// persisted state is for a different environment, so discard it rather
+		// than reconciling the old environment's resources during an outage.
+		log.Printf("ENV_NAME changed (%q -> %q) — discarding persisted state", st.envName, envName)
+		st = nil
 	}
 
-	// envID and stack are what the agent needs to do its job: who it is, and what it
-	// runs. Both come from enrollment and both are persisted, so neither is fetched
-	// again on a restart.
+	// First check-in: enroll at every startup. Enrollment is idempotent and
+	// key-authenticated, so there is nothing to consume and nothing to earn — it
+	// re-establishes who this agent is (envID) and what it runs (stack).
+	//
+	// Whichever way it fails, persisted state is resumed from when there is any, so
+	// the reconcile loop holds the data plane up while the cause is fixed — the same
+	// shape as a mid-run failure. A 401 is called out loudly on every attempt, since
+	// no retry from here can fix a revoked or rebound key; recovery is a
+	// re-registration or a fresh key Secret, and neither needs this process to have
+	// stopped.
 	var envID string
 	var stack json.RawMessage
-	// resumedDesired is the persisted fallback, and only for the identity we resumed.
-	// Re-pointing an agent at a different environment must not leave it reconciling the
-	// previous environment's resources when the control plane is unreachable.
 	var resumedDesired json.RawMessage
-	switch {
-	case st != nil && st.envName != envName:
-		// ENV_NAME changed under us: the operator is re-pointing this agent. The
-		// persisted identity is for a different environment, so discard it rather
-		// than silently continuing to serve the old one.
-		log.Printf("ENV_NAME changed (%q -> %q) — discarding persisted state and re-enrolling", st.envName, envName)
-	case st != nil:
-		m.token, envID, stack, resumedDesired = st.token, st.envID, st.stack, st.desired
-		log.Printf("resuming as env=%s with the persisted status token; not enrolling", envID)
-	}
-
-	if envID == "" {
-		for {
-			id, s, eerr := m.enroll(envName, placement, enrollToken, facts)
-			if eerr == nil {
-				envID, stack = id, s
-				break
+	for {
+		id, s, eerr := m.enroll(envName, placement, facts)
+		if eerr == nil {
+			envID, stack = id, s
+			log.Printf("enrolled: environment_id=%s", envID)
+			if st != nil {
+				resumedDesired = st.desired
 			}
-			log.Printf("enroll failed (%v), retrying in 3s", eerr)
-			time.Sleep(3 * time.Second)
+			if serr := kc.saveState(ns, agentState{envName: envName, envID: envID, stack: stack, desired: resumedDesired}); serr != nil {
+				// Not fatal: the agent works for this lifetime; it just cannot
+				// resume through an outage that spans a restart.
+				log.Printf("WARNING could not persist agent state: %v "+
+					"(the ServiceAccount needs get/create/update on secrets in %s)", serr, ns)
+			}
+			break
 		}
-		log.Printf("enrolled: environment_id=%s (status token acquired)", envID)
-		// Fatal on purpose. An agent that cannot persist works until its first
-		// restart and then silently stops reporting — the exact failure this whole
-		// change exists to remove. Crash-looping makes a missing RBAC grant obvious
-		// while the enrollment token is still valid and reusable.
-		if serr := kc.saveState(ns, agentState{envName: envName, token: m.token, envID: envID, stack: stack}); serr != nil {
-			log.Fatalf("enrolled but could not persist agent state: %v "+
-				"(the ServiceAccount needs get/create/update on secrets in %s)", serr, ns)
+		if errors.Is(eerr, errUnauthorized) {
+			log.Printf("ENROLL REJECTED (401): the API key is revoked or bound to no environment; " +
+				"re-register the environment or redeploy with a fresh key")
+		} else {
+			log.Printf("enroll failed: %v", eerr)
 		}
+		if st != nil {
+			envID, stack, resumedDesired = st.envID, st.stack, st.desired
+			log.Printf("resuming as env=%s from persisted state; the loop retries on its own", envID)
+			break
+		}
+		log.Printf("no persisted state to fall back on — retrying in 3s")
+		time.Sleep(3 * time.Second)
 	}
 	if len(stack) > 0 {
 		log.Printf("enrolled with a Meko stack to run; deploying it on every tick")
@@ -613,29 +632,16 @@ func main() {
 		//    deploy from something it already holds, on its first tick and after every
 		//    restart, with no successful request in the path.
 		var ds api.DesiredState
-		dcode, derr := m.req("GET", "/api/v1/agent/desired-state?envId="+envID, nil, &ds)
+		dcode, derr := m.req("GET", "/agent/desired-state", nil, &ds)
 		desiredRead := derr == nil && dcode >= 200 && dcode <= 299
 		switch {
 		case dcode == 401 || dcode == 404:
-			// The status token was rejected — revoked, rotated, or the environment
-			// was re-registered. Re-enrolling needs an enrollment token that is still
-			// valid; past its TTL an operator has to issue a new one.
-			//
-			// Not a `continue`: the stack below is reconciled anyway. An environment
-			// whose token went stale should not have its data plane left to rot while
-			// somebody mints a new one.
-			log.Printf("desired-state %d — re-enrolling", dcode)
-			if id, s, err := m.enroll(envName, placement, enrollToken, facts); err == nil {
-				envID = id
-				if len(s) > 0 {
-					stack = s
-				}
-				if err := kc.saveState(ns, agentState{
-					envName: envName, token: m.token, envID: envID, stack: stack, desired: persistedDesired,
-				}); err != nil {
-					log.Printf("WARNING could not persist the new agent state: %v", err)
-				}
-			}
+			// The API key was rejected — revoked, or the environment was
+			// re-registered onto a new key. No retry from here can fix that; the
+			// stack below is still reconciled, so the data plane is not left to rot
+			// while a new key is issued.
+			log.Printf("DESIRED-STATE REJECTED (%d): the API key is revoked or bound to no environment; "+
+				"re-register the environment or redeploy with a fresh key — holding what we last read", dcode)
 		case !desiredRead:
 			log.Printf("desired-state unavailable (code=%d err=%v) — holding what we last read and changing nothing else", dcode, derr)
 		}
@@ -649,7 +655,7 @@ func main() {
 			// Persist it, but only when it changed — see persistedDesired.
 			if raw, merr := json.Marshal(lastGood); merr == nil && string(raw) != string(persistedDesired) {
 				if serr := kc.saveState(ns, agentState{
-					envName: envName, token: m.token, envID: envID, stack: stack, desired: raw,
+					envName: envName, envID: envID, stack: stack, desired: raw,
 				}); serr != nil {
 					// Not fatal: the agent works for this lifetime, it just loses the
 					// fallback if it restarts mid-outage. That is where it was before.
@@ -692,7 +698,7 @@ func main() {
 		}, sk.report()...)
 		state := stateFor(comps, &wasReady)
 
-		scode, err := m.req("POST", "/api/v1/agent/status?envId="+envID, api.StatusReport{
+		scode, err := m.req("POST", "/agent/status", api.StatusReport{
 			EnvironmentState: state, AgentVersion: agentVer, AppliedRevision: ds.Revision,
 			ClusterFacts: facts, Components: comps,
 		}, nil)
@@ -700,21 +706,8 @@ func main() {
 		case err != nil:
 			log.Printf("status error: %v", err)
 		case scode == 401 || scode == 404:
-			log.Printf("status %d — re-enrolling", scode)
-			if id, s, e := m.enroll(envName, placement, enrollToken, facts); e == nil {
-				envID = id
-				if len(s) > 0 {
-					stack = s
-				}
-				// Persist here too. Without it the rotated token lives only in
-				// memory and the next restart resumes with the dead one — the agent
-				// then 401s from the very first call.
-				if e := kc.saveState(ns, agentState{
-					envName: envName, token: m.token, envID: envID, stack: stack, desired: persistedDesired,
-				}); e != nil {
-					log.Printf("WARNING could not persist the rotated agent state: %v", e)
-				}
-			}
+			log.Printf("STATUS REJECTED (%d): the API key is revoked or bound to no environment; "+
+				"re-register the environment or redeploy with a fresh key", scode)
 		default:
 			log.Printf("status: state=%s components=[%s] declared=%d rev=%d -> %d",
 				state, summarize(comps), len(stackRes), ds.Revision, scode)

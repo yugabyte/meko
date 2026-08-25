@@ -265,7 +265,7 @@
 
     <!-- ============ REGISTER ============ -->
     <section data-view="onboard" hidden>
-      <div class="phead"><div><h2>Register environment</h2><div class="desc">Creates a real environment (state PENDING) and mints a short-TTL enrollment token. Run the printed command in your cluster to bring the agent online.</div></div></div>
+      <div class="phead"><div><h2>Register environment</h2><div class="desc">Creates a real environment (state PENDING) bound to a generated API key id. Run the printed command in your cluster to bring the agent online.</div></div></div>
       <div class="wiz">
         <div class="frow">
           <div class="fgroup"><label>Environment name</label><input id="obName" value="acme-prod" /></div>
@@ -294,9 +294,11 @@
         </div>
 
         <div id="registerResult" hidden>
-          <div class="sect-l">Enrollment token <span style="font-weight:400;color:var(--ink-faint)">— shown once, ~30&nbsp;min TTL, reusable within window</span></div>
+          <div class="sect-l">API key id <span style="font-weight:400;color:var(--ink-faint)">— generated in this page; hand it to a dev-mode agent as YCP_DEV_API_KEY_ID</span></div>
+          <div class="code" id="apiKeyIdBox"></div>
+          <div class="sect-l">Install</div>
           <div class="code" id="installCode"></div>
-          <div class="note"><b>Credentials stay with you —</b> the token only lets the agent dial out to YCP. Your kubeconfig and cloud credentials never leave your cloud. The new environment now appears in <b>Fleet</b> as <span class="chip prov" style="font-size:10px">PENDING</span>.</div>
+          <div class="note"><b>Credentials stay with you —</b> the agent only dials out to YCP. Your kubeconfig and cloud credentials never leave your cloud. The new environment now appears in <b>Fleet</b> as <span class="chip prov" style="font-size:10px">PENDING</span>.</div>
         </div>
       </div>
     </section>
@@ -703,32 +705,24 @@
     document.querySelectorAll("#modes .mode").forEach(x => x.classList.remove("sel"));
     m.classList.add("sel"); mode = m.dataset.mode;
   });
-  function envName() { return (el("obName").value || "").trim().toLowerCase().replace(/[ _\/]/g, "-") || "<env-name>"; }
-  function installSnippet(token) {
-    if (mode === "attach") {
-      // The real command: the agent is a component of the `meko` chart in
-      // meko-devops, not a published `meko/meko-agent` chart, and the token goes
-      // in a Secret rather than on the command line.
-      return `<span class="cm"># 1. store the enrollment token (the chart holds no secrets)</span>\nkubectl create ns meko-agent\nkubectl -n meko-agent create secret generic meko-agent-enrollment \\\n  <span class="fl">--from-literal</span>=enrollment-token=<span class="tok">${token}</span>\n\n<span class="cm"># 2. install the agent component from the meko-devops checkout</span>\nhelm upgrade --install meko-agent <span class="tok">charts/meko</span> -n meko-agent \\\n  <span class="fl">-f</span> charts/meko/values-aws.yaml \\\n  <span class="fl">--set</span> global.imageRegistry=$REGISTRY \\\n  <span class="fl">--set</span> agent.enabled=true <span class="fl">--set</span> agent.namespace=meko-agent \\\n  <span class="fl">--set</span> agent.ycpUrl=$YCP \\\n  <span class="fl">--set</span> agent.envName=<span class="tok">${envName()}</span> \\\n  <span class="fl">--set-string</span> agent.image.tag=$TAG \\\n  <span class="fl">--set</span> apiServer.enabled=false <span class="fl">--set</span> mekoUi.enabled=false \\\n  <span class="fl">--set</span> mekoMcpServer.enabled=false <span class="fl">--set</span> inferenceGateway.enabled=false \\\n  <span class="fl">--set</span> ragAgent.enabled=false <span class="fl">--set</span> langfuse.enabled=false \\\n  <span class="fl">--set</span> provisioner.enabled=false`;
-    }
-    return `<span class="cm"># provision a fresh cluster, then install</span>\nmeko bootstrap provision \\\n  <span class="fl">--cloud</span> aws <span class="fl">--region</span> ${el("obRegion").value||"us-east-1"} <span class="fl">--nodes</span> 3 \\\n  <span class="fl">--enrollment-token</span> <span class="tok">${token}</span>`;
-  }
   el("registerBtn").onclick = async () => {
     const name = el("obName").value.trim();
     if (!name) { alert("Environment name is required"); return; }
+    // The console has no YBM to mint a real API key, so it generates the id an
+    // operator hands to a dev-mode agent (YCP_DEV_ADMIN_SECRET + YCP_DEV_API_KEY_ID).
+    const apiKeyId = crypto.randomUUID();
     const reqBody = {
       name, kind: el("obKind").value, account_id: el("obAccount").value.trim(), region: el("obRegion").value.trim(),
-      placement: el("obPlacement").value,
+      placement: el("obPlacement").value, api_key_id: apiKeyId,
       cluster_spec: mode==="provision" ? {provider:"aws", region: el("obRegion").value.trim()||"us-east-1", node_count:3} : null,
     };
     const r = await api("/api/v1/environments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(reqBody)});
     if (!r.ok) { alert("Register failed ("+r.status+")"); return; }
     const j = (await unwrap(r)) || {};
-    // Prefer the server's install_hint: it is kind-aware (amp installs the amp
-    // controller chart, meko the meko-agent) and always runnable as printed.
-    // Fall back to the client-side snippet only if the server sent none.
-    if (j.install_hint) { el("installCode").textContent = j.install_hint; }
-    else { el("installCode").innerHTML = installSnippet(j.enrollment_token || "ycp_enr_…"); }
+    el("apiKeyIdBox").textContent = apiKeyId;
+    // The server's install_hint is kind-aware (amp installs the amp controller
+    // chart, meko the meko-agent) and runnable as printed.
+    el("installCode").textContent = j.install_hint || "";
     el("registerResult").hidden = false;
     refresh();
   };

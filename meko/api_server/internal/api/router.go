@@ -378,8 +378,8 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminGroup.DELETE("/amp-registration", ampRegH.Delete)
 
 	// YCP fleet registry + agent API (control-plane mode). Console/fleet routes
-	// are gated by the admin shared secret; agent routes authenticate with the
-	// enrollment token (enroll) and env-scoped status token (status/desired-state).
+	// are gated by the admin shared secret; agent routes additionally require the
+	// api-key-id header YBM stamps after authenticating the agent's API key.
 	if reg.envSvc != nil {
 		envH := handlers.NewEnvironmentHandler(reg.envSvc)
 		// The secret the console page carries, if this deployment opted in. Empty
@@ -407,7 +407,13 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.GET("/environments/:id/desired", envH.GetDesired)
 		fleet.POST("/environments/:id/desired", envH.SetDesired)
 		fleet.GET("/entitlements", envH.Entitlements)
-		agentGroup := v1.Group("/agent")
+		// The agent surface has no account header — the key id names the environment
+		// on its own — so it hangs off v1 directly with its own auth pair rather
+		// than the fleet group's.
+		agentGroup := v1.Group("/agent",
+			auth.RequireAdminSecret(cfg.AdminAPIKey),
+			auth.RequireAPIKeyID(),
+		)
 		agentGroup.POST("/enroll", envH.AgentEnroll)
 		agentGroup.GET("/desired-state", envH.AgentDesiredState)
 		agentGroup.POST("/status", envH.AgentStatus)

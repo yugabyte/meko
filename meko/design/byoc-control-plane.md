@@ -2,6 +2,12 @@
 
 **Status:** Draft · **Owner:** Platform · **Last updated:** 2026-07-16
 
+> **Superseded in one respect:** the agent credential model shipped differently from
+> §7 as drafted here. There is no enrollment token and no mTLS identity — the agent
+> authenticates every call with a YBM-minted API key whose id is bound to the
+> environment at registration, and enrollment is an idempotent check-in repeated at
+> every startup. See `ycp/ARCHITECTURE.md` for the shipped model.
+
 ---
 
 ## 1. Summary

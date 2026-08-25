@@ -14,8 +14,8 @@ name: Meko CI
 #   meko_ycp_e2e    — YCP build + deploy smoke test: builds the api-server and
 #                     agent images and deploys them to a throwaway kind cluster,
 #                     asserting the control plane migrates and serves, an agent
-#                     enrolls and reports READY, and a restarted agent resumes
-#                     without re-enrolling. Publishing images to ECR is a separate
+#                     enrolls and reports READY, and a restarted agent enrolls
+#                     again and keeps reporting. Publishing images to ECR is a separate
 #                     workflow (ycp-images.yml) that runs only on merge to main.
 #                     Fires on `ycp/**` and on the meko/api_server files that make up
 #                     the control plane (see the meko_ycp_cp filter).
@@ -279,7 +279,7 @@ jobs:
       # kind cluster, and drives the real bring-up against api_server
       # --control-plane-mode: controlplane migrations on plain Postgres, health,
       # the admin-secret gate, register -> enroll -> READY, then a restart that
-      # must resume on the persisted status token instead of re-enrolling.
+      # must check in again on its api key and keep reporting.
       # Dumps pod state, logs and events on failure.
       - name: Build & deploy smoke test
         run: ./test/e2e/run.sh

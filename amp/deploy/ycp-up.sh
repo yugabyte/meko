@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 #
 # Stand up an ephemeral YCP control plane in an existing namespace, register an
-# `amp` environment on it, and drop the resulting enrollment token into the Secret
-# the reconcile-agent reads — the control-plane half of the amp_deploy_gke_ycp
+# `amp` environment on it, and drop the agent's credentials into the Secret the
+# reconcile-agent reads — the control-plane half of the amp_deploy_gke_ycp
 # smoke path (see .github/workflows/amp-control-plane-gke.yml).
+#
+# There is no YBM here to mint a real API key, so the environment is registered
+# with a generated api_key_id and the agent runs in dev mode: the Secret carries
+# dev-admin-secret + dev-api-key-id, which the agent sends as the headers YBM
+# would have stamped after validating a real key.
 #
 # It is deliberately namespace-scoped and self-cleaning by proxy: everything it
 # creates lands in $NS, which the workflow deletes at the end of the run. By default
@@ -14,7 +19,7 @@
 #
 # For a long-lived dev environment (not the throwaway CI namespace), set
 # YCP_POSTGRES_PVC_SIZE (e.g. 5Gi) to back Postgres with a PVC so the fleet registry
-# — the environment record, its desired state, and the agent's enrollment — survives
+# — the environment record, its desired state, and the agent's key binding — survives
 # a postgres restart or node recycle. Without it a reschedule wipes the registry and
 # every enrolled agent is left unauthorized until re-registered.
 #
@@ -23,13 +28,13 @@
 #      Quay pull secret (so the api-server image can be pulled from Quay);
 #   2. renders ycp/controlplane.yaml (envsubst) and applies it;
 #   3. waits for Postgres + api-server to be Ready;
-#   4. port-forwards the api-server and POSTs a kind=amp environment, capturing the
-#      environment id and the one-time enrollment token;
-#   5. creates the Secret amp-reconcile-agent-enrollment (key: enrollment-token);
-#   6. emits YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_ENROLL_SECRET — appended to
+#   4. port-forwards the api-server and POSTs a kind=amp environment with a
+#      generated api_key_id, capturing the environment id;
+#   5. creates the Secret amp-agent-api-key (keys: dev-admin-secret, dev-api-key-id);
+#   6. emits YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_AGENT_SECRET — appended to
 #      $GITHUB_ENV when running in Actions, and always echoed as a summary.
 #
-# Prereqs: kubectl (context on the target cluster), curl, jq, envsubst, openssl.
+# Prereqs: kubectl (context on the target cluster), curl, jq, envsubst, openssl, uuidgen.
 #
 # Usage:
 #   NS=ci-pr-1 YCP_IMAGE=quay.io/yugabyte/ycp-api-server:custom-abc \
@@ -50,13 +55,16 @@ YCP_IMAGE="${YCP_IMAGE:?YCP_IMAGE (ycp-api-server ref, incl tag) is required}"
 YCP_ENV_NAME="${YCP_ENV_NAME:-gke-smoke}"
 YCP_PLACEMENT="${YCP_PLACEMENT:-cloud}"
 YCP_REGION="${YCP_REGION:-us-west1}"
-# Admin secret gating the fleet/console routes. Generated per run unless supplied;
-# ycp-up.sh, the controller (never — it uses the enrollment token) and smoke-test.sh
-# are the only things that see it, and it dies with the namespace.
+# Admin secret gating the fleet/console routes AND, paired with the api key id,
+# the agent's dev-mode headers. Generated per run unless supplied; it dies with
+# the namespace.
 YCP_ADMIN_KEY="${YCP_ADMIN_KEY:-$(openssl rand -hex 24)}"
-# Secret the reconcile-agent reads the enrollment token from (must match the
-# agent.enrollTokenSecret.name that up-gke.sh sets).
-YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-reconcile-agent-enrollment}"
+# Secret the reconcile-agent reads its YCP credentials from (must match the
+# agent.apiKeySecret.name that up-gke.sh sets).
+YCP_AGENT_SECRET="${YCP_AGENT_SECRET:-amp-agent-api-key}"
+# The api key id the environment is bound to. In dev there is no real key — the
+# id alone, sent with the admin secret, is the agent's identity.
+YCP_API_KEY_ID="${YCP_API_KEY_ID:-$(uuidgen | tr 'A-Z' 'a-z')}"
 
 # Postgres persistence for the control-plane state (fleet registry). Empty ->
 # emptyDir: ephemeral, the CI default, wiped on a pod reschedule. A size such as
@@ -81,7 +89,7 @@ die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # --- preflight ---
 say "preflight"
-for bin in kubectl curl jq envsubst openssl; do
+for bin in kubectl curl jq envsubst openssl uuidgen; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not found on PATH"
 done
 [ -f "${MANIFEST}" ] || die "manifest not found: ${MANIFEST}"
@@ -169,23 +177,23 @@ done
 RESP="$(curl -sf -X POST "${CP}/api/v1/environments" \
   -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" \
   -H 'Content-Type: application/json' \
-  -d "{\"name\":\"${YCP_ENV_NAME}\",\"kind\":\"amp\",\"placement\":\"${YCP_PLACEMENT}\",\"region\":\"${YCP_REGION}\"}")" \
+  -d "{\"name\":\"${YCP_ENV_NAME}\",\"kind\":\"amp\",\"placement\":\"${YCP_PLACEMENT}\",\"region\":\"${YCP_REGION}\",\"api_key_id\":\"${YCP_API_KEY_ID}\"}")" \
   || die "register POST failed"
 
 YCP_ENV_ID="$(printf '%s' "${RESP}" | jq -r '.data.environment.id // empty')"
-TOKEN="$(printf '%s' "${RESP}" | jq -r '.data.enrollment_token // empty')"
 [ -n "${YCP_ENV_ID}" ] || die "register response had no environment id (resp: ${RESP})"
-[ -n "${TOKEN}" ] || die "register response had no enrollment_token (resp: ${RESP})"
 echo "   environment id : ${YCP_ENV_ID}"
 
-# --- 5. enrollment-token Secret for the controller chart ---
-say "enrollment secret '${YCP_ENROLL_SECRET}' (key enrollment-token)"
-kubectl -n "${NS}" create secret generic "${YCP_ENROLL_SECRET}" \
-  --from-literal=enrollment-token="${TOKEN}" \
+# --- 5. dev-mode credential Secret for the controller chart ---
+say "agent secret '${YCP_AGENT_SECRET}' (keys dev-admin-secret, dev-api-key-id)"
+kubectl -n "${NS}" create secret generic "${YCP_AGENT_SECRET}" \
+  --from-literal=dev-admin-secret="${YCP_ADMIN_KEY}" \
+  --from-literal=dev-api-key-id="${YCP_API_KEY_ID}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # --- 6. emit outputs ---
-YCP_URL="http://meko-api-server.${NS}.svc.cluster.local"
+# The agent's base URL carries the API base; agent routes hang off it as /agent/*.
+YCP_URL="http://meko-api-server.${NS}.svc.cluster.local/api/v1"
 say "control plane up — outputs"
 emit() {  # emit KEY VALUE  -> $GITHUB_ENV (if in Actions) + stdout
   local k="$1" v="$2"
@@ -198,6 +206,6 @@ emit() {  # emit KEY VALUE  -> $GITHUB_ENV (if in Actions) + stdout
 emit YCP_URL "${YCP_URL}"
 emit YCP_ENV_ID "${YCP_ENV_ID}"
 emit YCP_ADMIN_KEY "${YCP_ADMIN_KEY}"
-emit YCP_ENROLL_SECRET "${YCP_ENROLL_SECRET}"
+emit YCP_AGENT_SECRET "${YCP_AGENT_SECRET}"
 
 exit 0

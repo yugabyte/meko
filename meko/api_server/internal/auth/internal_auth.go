@@ -96,6 +96,56 @@ func ValidateAccountID() echo.MiddlewareFunc {
 	}
 }
 
+// APIKeyIDHeader is the request header naming the YBM API key an agent call
+// authenticated with. YBM validates the key and stamps its id, so it is trusted
+// to the same degree as the admin secret that gates the route; the id alone
+// resolves the environment, since one key drives one environment.
+const APIKeyIDHeader = "X-Meko-Api-Key-ID" //nolint:gosec // header name, not a credential
+
+// apiKeyIDContextKey is where RequireAPIKeyID stores the parsed id for handlers.
+const apiKeyIDContextKey = "meko_api_key_id" //nolint:gosec // context key, not a credential
+
+// RequireAPIKeyID returns middleware that requires a well-formed APIKeyIDHeader:
+// 401 when absent (the call carries no agent identity at all), 400 on a value
+// that is not a uuid (api_key_id is a UUID column, so a garbled value would
+// otherwise surface as a 500 from the query). The id is stored in the request
+// context for GetAPIKeyID.
+func RequireAPIKeyID() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			raw := strings.TrimSpace(c.Request().Header.Get(APIKeyIDHeader))
+			if raw == "" {
+				return c.JSON(http.StatusUnauthorized, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "UNAUTHORIZED",
+						"message": APIKeyIDHeader + " required",
+					},
+				})
+			}
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": APIKeyIDHeader + " must be a uuid",
+					},
+				})
+			}
+			c.Set(apiKeyIDContextKey, id.String())
+			return next(c)
+		}
+	}
+}
+
+// GetAPIKeyID returns the API key id RequireAPIKeyID stored, or "" when the
+// middleware did not run.
+func GetAPIKeyID(c echo.Context) string {
+	id, _ := c.Get(apiKeyIDContextKey).(string)
+	return id
+}
+
 // RequireAccountID returns middleware rejecting any request that does not name an
 // account in AccountIDHeader, for a control plane where every fleet caller is
 // expected to be an account-aware proxy such as YBM.

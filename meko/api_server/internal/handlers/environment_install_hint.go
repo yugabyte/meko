@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
+
+	"meko/api_server/internal/models"
 )
 
 // registerRoutePath is the route this hint is generated from. Trimming it off the
@@ -19,6 +21,11 @@ const registerRoutePath = "/api/v1/environments"
 // a long-lived credential and reconciles the Meko stack beside itself.
 const defaultAgentNamespace = "ycp-agent"
 
+// apiKeyPlaceholder is what the hint prints where the plaintext API key goes. The
+// control plane never sees the key — YBM mints it and shows it once — so the YBM UI
+// substitutes the real value; an operator reading the hint raw pastes their own.
+const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder, not a credential
+
 // installHint renders the commands that attach an agent to a freshly registered
 // environment. It is the only place an operator is told how to do this, so it has to
 // be runnable as printed, not a sketch.
@@ -27,11 +34,12 @@ const defaultAgentNamespace = "ycp-agent"
 // component of the `meko` chart), an amp environment installs the amp controller
 // and its reconcile-agent (the yb-amp-controller chart's `agent` block) — the
 // agent is the sole YCP client and drives the controller over its REST API.
-func installHint(c echo.Context, kind, envID, token string) string {
-	if kind == "amp" {
-		return ampInstallHint(c, envID, token)
+func installHint(c echo.Context, e *models.Environment, agentBaseURL string) string {
+	url := agentURL(c, e.AccountID, agentBaseURL)
+	if e.Kind == "amp" {
+		return ampInstallHint(url, e.ID)
 	}
-	return mekoInstallHint(c, envID, token)
+	return mekoInstallHint(url, e.ID)
 }
 
 // mekoInstallHint attaches the meko-agent to a meko environment.
@@ -44,15 +52,14 @@ func installHint(c echo.Context, kind, envID, token string) string {
 // other seven components off. That last one is how a data-plane install ends up
 // putting an api-server and a Langfuse in a customer's cluster; `values-agent.yaml`
 // is the preset that exists to prevent it.
-func mekoInstallHint(c echo.Context, envID, token string) string {
-	ycpURL := controlPlaneURL(c)
+func mekoInstallHint(ycpURL, envID string) string {
 	ns := defaultAgentNamespace
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# 1 — hand the cluster this one-time enrollment token (30-minute TTL, so install promptly)\n")
+	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable there)\n")
 	fmt.Fprintf(&b, "kubectl create namespace %s\n", ns)
-	fmt.Fprintf(&b, "kubectl -n %s create secret generic meko-agent-enrollment \\\n", ns)
-	fmt.Fprintf(&b, "  --from-literal=enrollment-token=%s\n\n", token)
+	fmt.Fprintf(&b, "kubectl -n %s create secret generic meko-agent-api-key \\\n", ns)
+	fmt.Fprintf(&b, "  --from-literal=api-key=%s\n\n", apiKeyPlaceholder)
 
 	fmt.Fprintf(&b, "# 2 — install the agent, from a meko-devops checkout\n")
 	fmt.Fprintf(&b, "#      swap values-aws.yaml for values-gcp.yaml, and values-dev.yaml for\n")
@@ -75,30 +82,29 @@ func mekoInstallHint(c echo.Context, envID, token string) string {
 // when the operator does not choose otherwise.
 const ampInstallNamespace = "amp"
 
-// ampEnrollSecretName is the Secret the reconcile-agent reads the enrollment
-// token from. It is passed to the chart's agent.enrollTokenSecret.name so the
-// created Secret and the agent Deployment's secretKeyRef agree; it is the chart's
-// default name, but we set it explicitly so the two can't drift.
-const ampEnrollSecretName = "amp-reconcile-agent-enrollment"
+// ampAPIKeySecretName is the Secret the reconcile-agent reads the API key from. It
+// is passed to the chart's agent.apiKeySecret.name so the created Secret and the
+// agent Deployment's secretKeyRef agree; it is the chart's default name, but we set
+// it explicitly so the two can't drift.
+const ampAPIKeySecretName = "amp-agent-api-key" //nolint:gosec // a Secret NAME, not a credential
 
 // ampInstallHint attaches an amp environment to this control plane. It installs
 // the amp controller plus its reconcile-agent: the agent enrolls, binds the
 // controller, and converges it to the environment's desired state, driving it
 // over the REST API. The controller itself no longer talks to YCP. A YugabyteDB
 // foundation cluster must already be running (the controller's state store).
-func ampInstallHint(c echo.Context, envID, token string) string {
-	ycpURL := controlPlaneURL(c)
+func ampInstallHint(ycpURL, envID string) string {
 	ns := ampInstallNamespace
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Prerequisite: a YugabyteDB foundation cluster already running in this\n")
 	fmt.Fprintf(&b, "# cluster — it is the amp controller's state store.\n\n")
 
-	fmt.Fprintf(&b, "# 1 — hand the cluster this one-time enrollment token (30-minute TTL, so install\n")
-	fmt.Fprintf(&b, "#      promptly). The reconcile-agent reads it, not the controller.\n")
+	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable\n")
+	fmt.Fprintf(&b, "#      there). The reconcile-agent reads it, not the controller.\n")
 	fmt.Fprintf(&b, "kubectl create namespace %s\n", ns)
-	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n", ns, ampEnrollSecretName)
-	fmt.Fprintf(&b, "  --from-literal=enrollment-token=%s\n\n", token)
+	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n", ns, ampAPIKeySecretName)
+	fmt.Fprintf(&b, "  --from-literal=api-key=%s\n\n", apiKeyPlaceholder)
 
 	fmt.Fprintf(&b, "# 2 — install the amp controller and its reconcile-agent (from an amp checkout).\n")
 	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
@@ -107,13 +113,24 @@ func ampInstallHint(c echo.Context, envID, token string) string {
 	fmt.Fprintf(&b, "  --set agent.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set agent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "  --set agent.envName=%s \\\n", envID)
-	fmt.Fprintf(&b, "  --set agent.enrollTokenSecret.name=%s \\\n", ampEnrollSecretName)
+	fmt.Fprintf(&b, "  --set agent.apiKeySecret.name=%s \\\n", ampAPIKeySecretName)
 	fmt.Fprintf(&b, "  --set-string agent.image.tag=<reconcile-agent tag>\n\n")
 
 	fmt.Fprintf(&b, "# The agent enrolls, binds this controller, then converges it to the environment's\n")
 	fmt.Fprintf(&b, "# desired state and reports the result to this console.\n")
 	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/amp-reconcile-agent\n", ns)
 	return b.String()
+}
+
+// agentURL is the base the agent dials. Registered through YBM (agent_base_url +
+// an account), that is YBM's agent pass-through for the account; otherwise it
+// falls back to the address this register call arrived on plus /api/v1 — the
+// direct-to-meko shape a dev-mode agent uses.
+func agentURL(c echo.Context, accountID, agentBaseURL string) string {
+	if agentBaseURL != "" && accountID != "" {
+		return strings.TrimRight(agentBaseURL, "/") + "/accounts/" + accountID + "/ycp"
+	}
+	return controlPlaneURL(c) + "/api/v1"
 }
 
 // controlPlaneURL reconstructs the URL the caller reached this control plane on, for

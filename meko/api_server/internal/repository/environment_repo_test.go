@@ -9,7 +9,7 @@ import (
 	"meko/api_server/internal/models"
 )
 
-func TestEnvironmentRepo_EnrollLookup(t *testing.T) {
+func TestEnvironmentRepo_GetByAPIKeyID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -17,22 +17,25 @@ func TestEnvironmentRepo_EnrollLookup(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	// found
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+WHERE enroll_token_hash = \$1`).
-		WithArgs("abc123").
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
-	gotUUID, found, err := repo.EnrollLookup("abc123")
-	if err != nil || !found || gotUUID != envUUID {
-		t.Fatalf("EnrollLookup = (%q,%v,%v), want (%s,true,nil)", gotUUID, found, err, envUUID)
+	// found: an exact hit on the unique api_key_id index.
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyA).
+		WillReturnRows(listRow("acme-prod"))
+	e, err := repo.GetByAPIKeyID(keyA)
+	if err != nil || e == nil {
+		t.Fatalf("GetByAPIKeyID = (%v, %v), want the bound environment", e, err)
+	}
+	if e.APIKeyID != keyA {
+		t.Errorf("api key id = %q, want %q", e.APIKeyID, keyA)
 	}
 
-	// not found → (\"\", false, nil)
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
-		WithArgs("nope").
+	// unbound key → (nil, nil), which is also how a revoked key surfaces.
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyB).
 		WillReturnError(sql.ErrNoRows)
-	gotUUID, found, err = repo.EnrollLookup("nope")
-	if err != nil || found || gotUUID != "" {
-		t.Fatalf("EnrollLookup(miss) = (%q,%v,%v), want (\"\",false,nil)", gotUUID, found, err)
+	e, err = repo.GetByAPIKeyID(keyB)
+	if err != nil || e != nil {
+		t.Fatalf("GetByAPIKeyID(miss) = (%v, %v), want (nil, nil)", e, err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

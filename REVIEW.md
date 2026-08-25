@@ -104,13 +104,14 @@ The agent reaches YCP over **outbound HTTPS only**; YCP never dials into a custo
 cluster (`ARCHITECTURE.md:73`). Anything that introduces an inbound call, a callback URL,
 or a port the customer must open inverts that model — a finding, not a design detail.
 
-### The two tokens are not interchangeable
+### The API key is the agent's only credential
 
-Enrollment (`ycp_enr_…`, 30-minute bootstrap TTL) is exchanged **once** for a long-lived
-env-scoped status token (`ycp_sts_…`, returned once, hash persisted). The e2e asserts an
-agent survives a restart *without* re-enrolling, precisely because the status token
-persists. A change that loses that token, or silently falls back to enrollment, forces a
-human to re-run enrollment on every customer cluster. Check persistence and TTL handling
+Every agent call authenticates with the environment's YBM API key (bearer through
+YBM's pass-through; `X-Meko-Admin-Secret` + `X-Meko-Api-Key-ID` direct against a
+standalone control plane). One key drives one environment; the key id alone resolves
+it, and enrollment is an idempotent check-in repeated at every startup. A change that
+reintroduces a mintable agent-side credential, or makes enroll non-idempotent, brings
+back the lockout class the token model had — check restarts and re-registration
 deliberately.
 
 ### The e2e builds two images from two trees

@@ -12,33 +12,32 @@
 #      /ycp/, API under /ycp/api/v1, nothing at the domain root except the health
 #      alias that the kubelet probe uses,
 #   3. the fleet API rejects an unauthenticated call and accepts the admin secret,
-#   4. registering an environment mints an enrollment token,
+#   4. registering an environment binds it to an api_key_id,
 #   4b. a registration with nothing but a name seeds the WHOLE Meko stack: one
 #      meko-stack resource carrying all six pinned images, the MAGE-enabled YugabyteDB
 #      among them,
-#   5. the agent enrolls with that token and reports real cluster facts,
+#   5. the agent enrolls -- authenticating with the dev-mode headers (the admin
+#      secret + that api_key_id; there is no YBM here to validate a real key) --
+#      and reports real cluster facts,
 #   5b. registration ALONE bootstraps Meko: the environment was seeded with desired
 #      state when it was registered, so the agent brings up the database and reaches
 #      READY without anyone sending it a command,
-#   6. the agent survives a restart WITHOUT re-enrolling, because the status token
-#      it got at (5) was persisted on both sides,
+#   6. the agent survives a restart: enrollment is an idempotent key-authenticated
+#      check-in it repeats at every startup, so a restart at any later time
+#      re-enrolls and keeps reporting -- no bootstrap credential to expire,
 #   7. an operator COMMANDS the environment (POST /environments/{id}/desired) to add a
 #      second database, and the agent brings it up and reports it as a component with
 #      real replica counts,
 #   8. withdrawing it garbage-collects that database and leaves the first one alone.
-#
-# (6) is the assertion that matters most. The enrollment token is a 30-minute
-# bootstrap credential, so an agent that re-enrolls on every restart works in a
-# demo and then locks itself out an hour later. Nothing caught that before.
 #
 # (5b) and (7) are what make the loop closed rather than half-built: desired state
 # was readable by the agent long before anything could act on it, so an environment
 # could be registered, or commanded, and quietly do nothing.
 #
 # There is no seed path here on purpose: the environment is registered through the
-# real POST /api/v1/environments, so the token the agent uses is one the API
-# actually minted. That is why this script is a sequence rather than a single
-# `kubectl apply` -- the agent's Secret cannot exist until the control plane is up.
+# real POST /api/v1/environments, so the binding the agent authenticates against is
+# one the API actually stored. That is why this script is a sequence rather than a
+# single `kubectl apply` -- the agent cannot check in until the control plane is up.
 #
 # What this canNOT cover: the full Meko stack actually running. Every image in the
 # pinned release is private (ECR, no anonymous pull) and this cluster has no
@@ -73,9 +72,13 @@ KEEP="${YCP_E2E_KEEP:-0}"
 PORT="${YCP_E2E_PORT:-18080}"
 TIMEOUT="${YCP_E2E_TIMEOUT:-300s}"
 # Must match ENV_NAME in agent.yaml, and must be its own slug -- the server derives
-# the environment id as slug(name), and the agent enrolls by name.
+# the environment id as slug(name).
 ENV_NAME=e2e-cell
 ADMIN_KEY=e2eadminkey   # matches ycp-e2e-secrets in controlplane.yaml
+# The api key id the environment is bound to and the agent authenticates with (as
+# YCP_DEV_API_KEY_ID -- there is no YBM here to mint a real key). Rendered into
+# agent.yaml through the __API_KEY_ID__ placeholder.
+API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 # Subpath the control plane is mounted under. Non-empty on purpose: production
 # fronts YCP at https://devcloud.yugabyte.com/ycp/, so the prefixed mount is the
 # shape worth smoke-testing. `YCP_E2E_BASE_PATH= ./run.sh` tests the root mount
@@ -199,10 +202,11 @@ fi
 # placeholder and are rendered here at apply time. Hardcoding it in the YAML as
 # well would let the two drift, and because the root health alias answers either
 # way, a mismatch would sail past the health gate and fail later as something
-# that looks unrelated (an admin-gate 404).
+# that looks unrelated (an admin-gate 404). __API_KEY_ID__ is the run's minted
+# binding, rendered the same way for the same reason.
 render() {
   out="$TMPDIR_E2E/$(basename "$1")"
-  sed "s|__BASE_PATH__|$BASE|g" "$1" > "$out"
+  sed -e "s|__BASE_PATH__|$BASE|g" -e "s|__API_KEY_ID__|$API_KEY_ID|g" "$1" > "$out"
   printf '%s' "$out"
 }
 
@@ -328,8 +332,8 @@ echo "    unauthenticated -> 401, authenticated -> 200"
 
 # ------------------------------------------------------------------------- agent
 
-# 4. Register the environment and take the one-time enrollment token from the
-#    response. This is the operator step from YCP-RUNBOOK.md §4.
+# 4. Register the environment, bound to this run's api_key_id. This is the
+#    operator step (YBM performs it in production).
 # 4a. First, what a plain registration seeds, over the real API: one meko-stack
 #     resource carrying the pinned release. This is the contract the whole
 #     deploy-on-enroll path rests on — a caller sends a name and the control plane
@@ -342,8 +346,9 @@ echo "    unauthenticated -> 401, authenticated -> 200"
 #     is what test/local/meko-stack.sh exists for (it has ECR access). See the note at
 #     the top of this file.
 log "checking a plain registration seeds the whole Meko stack"
+seed_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 api POST /api/v1/environments -H 'content-type: application/json' \
-  -d '{"name":"seed-check","account_id":"11111111-1111-1111-1111-111111111111","placement":"cloud","region":"local"}' >/dev/null ||
+  -d '{"name":"seed-check","account_id":"11111111-1111-1111-1111-111111111111","placement":"cloud","region":"local","api_key_id":"'"$seed_key"'"}' >/dev/null ||
   die "registering seed-check failed"
 seed="$(api GET /api/v1/environments/seed-check/desired)"
 python3 - "$seed" <<'PY' || die "a plain registration did not seed a full meko-stack"
@@ -368,26 +373,22 @@ api DELETE /api/v1/environments/seed-check >/dev/null 2>&1 || true
 # 4b. The environment the agent actually attaches to. Its desired state is declared
 #     explicitly, with public images, because this cluster cannot pull the private ones.
 #     That still exercises what matters here: enrol, reconcile, report, GC.
-log "registering environment $ENV_NAME"
+log "registering environment $ENV_NAME (api_key_id ${API_KEY_ID:0:8}...)"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
   -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"11111111-1111-1111-1111-111111111111\",\"placement\":\"cloud\",\"region\":\"local\",
+       \"api_key_id\":\"$API_KEY_ID\",
        \"desired\":[{\"kind\":\"database\",\"name\":\"meko\",\"spec\":{}}]}")"
-TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
-[ -n "$TOKEN" ] || die "no enrollment_token in the register response: ${reg:0:200}"
-case "$TOKEN" in
-  ycp_enr_*) ;;
-  *) die "enrollment token has an unexpected prefix (want ycp_enr_): ${TOKEN:0:12}..." ;;
-esac
-echo "    enrollment token minted (${TOKEN:0:12}...)"
+bound="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["environment"]["api_key_id"])')"
+[ "$bound" = "$API_KEY_ID" ] || die "register response binding is $bound, want $API_KEY_ID: ${reg:0:200}"
+echo "    environment bound to the api key id"
 
-log "handing the token to the agent and deploying it"
-k -n "$NS" create secret generic meko-agent-enrollment --from-literal=enrollment-token="$TOKEN"
+log "deploying the agent (dev-mode headers: admin secret + api key id)"
 k apply -f "$(render "$E2E_DIR/agent.yaml")"
 k -n "$NS" rollout status deploy/meko-agent --timeout="$TIMEOUT"
 
-# 5. The real handshake: the agent read the token from its Secret, reached the
-#    control plane over service DNS, and sent cluster facts it had to get from the
-#    k8s API through its RBAC.
+# 5. The real check-in: the agent authenticated with the dev-mode headers, reached
+#    the control plane over service DNS, and sent cluster facts it had to get from
+#    the k8s API through its RBAC.
 log "checking enrollment"
 enrolled=""
 for _ in $(seq 1 60); do
@@ -401,7 +402,7 @@ done
 printf '    %s\n' "$enrolled"
 
 # READY + live + a real node count together are the signal the whole chain works:
-# the agent authenticated with its status token, read cluster facts, and the
+# the agent authenticated with its api key identity, read cluster facts, and the
 # control plane persisted them.
 # 5b. Registration ALONE has to be enough. Nobody has sent a command yet, so
 #     everything below comes from the desired state this environment was registered
@@ -470,30 +471,26 @@ print("    %s: state=READY live=true nodes=%s k8s=%s | %s" % (
     e["id"], e["node_count"], e["k8s_version"], summary))
 PY
 
-# 6. Restart the agent. It must come back on the persisted status token and NOT
-#    re-enroll -- the enrollment token is a short-lived bootstrap credential, so an
-#    agent that needs it again is one that breaks the first time it restarts after
-#    the TTL. Deleting the pod (rather than rollout restart) keeps exactly one pod
-#    alive, so the log assertions below cannot read the previous pod's output.
-log "restarting the agent — it must resume, not re-enroll"
+# 6. Restart the agent. Enrollment is an idempotent key-authenticated check-in the
+#    agent repeats at every startup, so the restarted pod must enroll again and keep
+#    reporting — there is no bootstrap credential whose expiry could lock it out.
+#    Deleting the pod (rather than rollout restart) keeps exactly one pod alive, so
+#    the log assertions below cannot read the previous pod's output.
+log "restarting the agent — it must check in again and keep reporting"
 k -n "$NS" delete pod -l app=meko-agent --wait=true
 k -n "$NS" rollout status deploy/meko-agent --timeout="$TIMEOUT"
-resumed=""
+reenrolled=""
 for _ in $(seq 1 45); do
   if k -n "$NS" logs deploy/meko-agent --tail=-1 2>/dev/null |
-      grep -q "resuming as env=$ENV_NAME with the persisted status token"; then
-    resumed=yes
+      grep -q "enrolled: environment_id=$ENV_NAME"; then
+    reenrolled=yes
     break
   fi
   sleep 2
 done
-[ "$resumed" = "yes" ] ||
-  die "the restarted agent did not resume from persisted state (expected 'resuming as env=$ENV_NAME ...'); \
-it likely re-enrolled, which only works while the bootstrap token is unexpired"
-if k -n "$NS" logs deploy/meko-agent --tail=-1 | grep -q "enrolled: environment_id="; then
-  die "the restarted agent re-enrolled as well as resuming — the enrollment token is spent on every restart"
-fi
-echo "    agent resumed on the persisted status token, no re-enrollment"
+[ "$reenrolled" = "yes" ] ||
+  die "the restarted agent did not check in (expected 'enrolled: environment_id=$ENV_NAME' in its logs)"
+echo "    agent restarted and checked in again on its api key"
 
 # ------------------------------------------------------------- commands & bootstrap
 
@@ -515,7 +512,7 @@ api POST "/api/v1/environments/$ENV_NAME/desired" -H 'content-type: application/
   ]
 }' >/dev/null || die "POST /environments/$ENV_NAME/desired failed"
 
-# The operator's read-back. The agent's own GET is authed with a status token no
+# The operator's read-back. The agent's own GET is authed with api-key headers no
 # console has, so without this route desired state could be set and never inspected.
 desired="$(api GET "/api/v1/environments/$ENV_NAME/desired")"
 python3 - "$desired" <<'PY' || die "GET /environments/{id}/desired did not return what was just set"

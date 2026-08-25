@@ -1,4 +1,10 @@
 <title>Yugabyte BYOC Control Plane — Design</title>
+<!--
+  Superseded in one respect, as in byoc-control-plane.md: the agent credential model
+  shipped differently. There is no enrollment token and no mTLS identity — the agent
+  authenticates every call with a YBM-minted API key whose id is bound to the
+  environment at registration. See ycp/ARCHITECTURE.md.
+-->
 <style>
   :root {
     --ground: #f4f6f9;

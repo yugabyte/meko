@@ -24,10 +24,6 @@ func NewEnvironmentHandler(svc *service.EnvironmentService) *EnvironmentHandler 
 	return &EnvironmentHandler{svc: svc}
 }
 
-func agentBearer(c echo.Context) string {
-	return strings.TrimSpace(strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer "))
-}
-
 // accountScope reads the account this fleet call acts for. Empty is unscoped, and
 // only reaches here when --require-account-header is off; the group middleware
 // rejects it otherwise. See auth.AccountIDHeader.
@@ -68,24 +64,33 @@ func (h *EnvironmentHandler) Get(c echo.Context) error {
 	return ok(c, http.StatusOK, e)
 }
 
-// Register mints an enrollment token and stores a PENDING environment.
+// Register stores a PENDING environment bound to the request's api_key_id. When a
+// re-registration rebound an existing row to a different key, the response carries
+// the old id as replaced_api_key_id so YBM can revoke it.
 func (h *EnvironmentHandler) Register(c echo.Context) error {
 	var req service.RegisterEnvironmentRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	e, token, err := h.svc.Register(req, accountScope(c))
+	e, replacedKeyID, err := h.svc.Register(req, accountScope(c))
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
+		if errors.Is(err, service.ErrAPIKeyBound) {
+			return apiError(c, http.StatusConflict, "API_KEY_BOUND",
+				"this api key is already bound to another environment; one key drives one environment")
+		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-	return ok(c, http.StatusCreated, map[string]any{
-		"environment":      e,
-		"enrollment_token": token,
-		"install_hint":     installHint(c, e.Kind, e.ID, token),
-	})
+	body := map[string]any{
+		"environment":  e,
+		"install_hint": installHint(c, e, req.AgentBaseURL),
+	}
+	if replacedKeyID != "" {
+		body["replaced_api_key_id"] = replacedKeyID
+	}
+	return ok(c, http.StatusCreated, body)
 }
 
 // SetDesired replaces the environment's desired resource set.
@@ -108,10 +113,11 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 
 // GetDesired returns the environment's desired resource set.
 //
-// The agent-facing GET is bearer-authed with an env-scoped status token, which an
-// operator does not have — so without this, desired state was write-only from the
-// console: you could send a command and never read back what an environment had
-// been told to run.
+// The agent-facing GET resolves the environment from a key id bound to it, which an
+// operator has no way to hold — the console can send the headers, but any key id it
+// mints resolves to nothing. Without this route desired state is write-only from the
+// console: you could send a command and never read back what an environment was told
+// to run.
 func (h *EnvironmentHandler) GetDesired(c echo.Context) error {
 	e, err := h.svc.Get(c.Param("id"), accountScope(c))
 	if err != nil {
@@ -131,6 +137,11 @@ func (h *EnvironmentHandler) GetDesired(c echo.Context) error {
 }
 
 // Action applies an operator lifecycle action (suspend|resume|drain|deregister).
+//
+// A deregister answers like DELETE — 200 with the api_key_id binding — because the
+// two are the same operation reached two ways, and a caller that deregisters through
+// PATCH needs the same thing to revoke. The other actions keep their bare 202: they
+// leave the binding in place.
 func (h *EnvironmentHandler) Action(c echo.Context) error {
 	var body struct {
 		Action string `json:"action"`
@@ -138,30 +149,35 @@ func (h *EnvironmentHandler) Action(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	found, err := h.svc.Action(c.Param("id"), accountScope(c), body.Action)
+	e, err := h.svc.Action(c.Param("id"), accountScope(c), body.Action)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
 		return envLookupError(c, err)
 	}
-	if !found {
+	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
+	}
+	if body.Action == "deregister" {
+		return ok(c, http.StatusOK, map[string]any{"api_key_id": e.APIKeyID})
 	}
 	return c.NoContent(http.StatusAccepted)
 }
 
 // Deregister marks the environment DEREGISTERED. A state change, not a row delete:
-// the fleet keeps the record (and its history) after an environment goes away.
+// the fleet keeps the record (and its history) after an environment goes away. The
+// response carries the environment's api_key_id so YBM can revoke the key nothing
+// authenticates with any more.
 func (h *EnvironmentHandler) Deregister(c echo.Context) error {
-	found, err := h.svc.Action(c.Param("id"), accountScope(c), "deregister")
+	e, err := h.svc.Action(c.Param("id"), accountScope(c), "deregister")
 	if err != nil {
 		return envLookupError(c, err)
 	}
-	if !found {
+	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
 	}
-	return c.NoContent(http.StatusAccepted)
+	return ok(c, http.StatusOK, map[string]any{"api_key_id": e.APIKeyID})
 }
 
 // Entitlements reports the plan and limits the console renders against.
@@ -170,12 +186,15 @@ func (h *EnvironmentHandler) Entitlements(c echo.Context) error {
 }
 
 // ---- agent surface ----
+//
+// Every route here sits behind RequireAdminSecret + RequireAPIKeyID (YBM
+// authenticates the agent's API key and forwards its id), and resolves the
+// environment from that id alone: one key drives one environment.
 
 // AgentBootstrapProgress advances an environment's state from agent-reported
-// bootstrap phases. Authenticated by the env-scoped status token like the other
-// agent endpoints.
+// bootstrap phases.
 func (h *EnvironmentHandler) AgentBootstrapProgress(c echo.Context) error {
-	e := h.authAgent(c, c.QueryParam("envId"))
+	e := h.resolveAgent(c)
 	if e == nil {
 		return nil
 	}
@@ -194,13 +213,15 @@ func (h *EnvironmentHandler) AgentBootstrapProgress(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// AgentEnroll performs the enrollment-token handshake.
+// AgentEnroll is the agent's first check-in: it binds the live agent to the
+// environment its API key was registered with and hands back everything the agent
+// needs to run.
 func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	var req service.EnrollRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	e, statusToken, valid, err := h.svc.EnrollWithToken(req.EnrollmentToken, req.Placement, req.Kind, req.ClusterFacts)
+	e, err := h.svc.EnrollByKey(auth.GetAPIKeyID(c), req.Placement, req.Kind, req.ClusterFacts)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
@@ -210,17 +231,20 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-	if !valid {
-		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or already-used enrollment token")
+	if e == nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "no environment is bound to this api key")
 	}
+	// environment_uuid is the row key, globally unique where the id is a slug unique
+	// only within an account. Nothing consumes it yet; it is handed over so an agent
+	// records an unambiguous identity.
 	body := map[string]any{
-		"environment_id": e.ID, "status_token": statusToken, "mcp_base_url": e.MCPBaseURL,
+		"environment_id": e.ID, "environment_uuid": e.UUID, "mcp_base_url": e.MCPBaseURL,
 	}
-	// The stack comes back with the token, so an agent that enrolls can deploy the whole
-	// data plane from this one response — no second call, and nothing for an operator to
-	// command. A failure to read it is logged and omitted rather than failing the
-	// enrollment: the status token is returned exactly once, and losing it to a
-	// transient read error would leave an environment no agent can attach to.
+	// The stack comes back with enrollment, so an agent that enrolls can deploy the
+	// whole data plane from this one response — no second call, and nothing for an
+	// operator to command. A failure to read it is logged and omitted rather than
+	// failing the enrollment: the agent retries the read on every desired-state tick
+	// anyway.
 	if stack, err := h.svc.EnrolledStack(e.UUID); err != nil {
 		slog.Warn("could not read the stack to hand the enrolling agent",
 			"environment", e.ID, "error", err)
@@ -230,9 +254,9 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	return ok(c, http.StatusOK, body)
 }
 
-// AgentDesiredState returns the generic desired-state resources (bearer-authed).
+// AgentDesiredState returns the generic desired-state resources.
 func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
-	e := h.authAgent(c, c.QueryParam("envId"))
+	e := h.resolveAgent(c)
 	if e == nil {
 		return nil
 	}
@@ -258,9 +282,9 @@ func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 	})
 }
 
-// AgentStatus ingests a status report (bearer-authed).
+// AgentStatus ingests a status report.
 func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
-	e := h.authAgent(c, c.QueryParam("envId"))
+	e := h.resolveAgent(c)
 	if e == nil {
 		return nil
 	}
@@ -278,27 +302,17 @@ func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// authAgent resolves the environment from the env-scoped status bearer, returning
-// nil (having written the error) when it cannot. The environment comes back rather
-// than a bool because an id alone no longer identifies a row -- callers need the
-// resolved key to read or write anything.
-func (h *EnvironmentHandler) authAgent(c echo.Context, envID string) *models.Environment {
-	if envID == "" {
-		_ = apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "envId query param required")
-		return nil
-	}
-	tok := agentBearer(c)
-	if tok == "" {
-		_ = apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer status token")
-		return nil
-	}
-	e, err := h.svc.ResolveAgent(envID, tok)
+// resolveAgent resolves the environment from the call's API key id, returning nil
+// (having written the error) when the key is bound to no environment. A revoked
+// key and a never-registered one are deliberately the same 401.
+func (h *EnvironmentHandler) resolveAgent(c echo.Context) *models.Environment {
+	e, err := h.svc.ResolveAgent(auth.GetAPIKeyID(c))
 	if err != nil {
 		_ = apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return nil
 	}
 	if e == nil {
-		_ = apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid status token")
+		_ = apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "no environment is bound to this api key")
 		return nil
 	}
 	return e

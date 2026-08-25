@@ -21,8 +21,8 @@ const (
 )
 
 // k8s is a tiny in-cluster REST client — just the ServiceAccount token + CA, no
-// client-go — used to persist the agent's status token/identity in a Secret so
-// a restart resumes without re-enrolling.
+// client-go — used to persist the agent's identity in a Secret so a restart that
+// cannot reach the control plane still knows which environment it is.
 type k8s struct {
 	host string
 	tok  string
@@ -78,11 +78,14 @@ func (k *k8s) do(method, path, contentType string, body []byte) (int, []byte, er
 	return resp.StatusCode, raw, nil
 }
 
-// state is the agent's persisted identity, mirrored to a k8s Secret.
+// state is the agent's persisted identity, mirrored to a k8s Secret. No
+// credential lives here: the API key is operator-provided, so the only thing
+// worth remembering is which environment the key was bound to when the control
+// plane last answered.
 type state struct {
-	EnvID       string `json:"environment-id"`
-	EnvName     string `json:"environment-name"`
-	StatusToken string `json:"status-token"`
+	EnvID   string `json:"environment-id"`
+	EnvUUID string `json:"environment-uuid"`
+	EnvName string `json:"environment-name"`
 }
 
 func (k *k8s) secretPath(name string) string {
@@ -113,20 +116,21 @@ func (k *k8s) readState(secret string) (state, error) {
 		return string(b)
 	}
 	return state{
-		EnvID:       dec("environment-id"),
-		EnvName:     dec("environment-name"),
-		StatusToken: dec("status-token"),
+		EnvID:   dec("environment-id"),
+		EnvUUID: dec("environment-uuid"),
+		EnvName: dec("environment-name"),
 	}, nil
 }
 
 // writeState upserts the identity Secret (create on first run, merge-patch
 // after) using stringData so values are written in plaintext and base64-encoded
-// by the API server.
+// by the API server. The merge-patch also nulls the data key `status-token` an
+// older agent may have left behind, so no dead credential lingers in the Secret.
 func (k *k8s) writeState(secret string, s state) error {
 	sd := map[string]string{
 		"environment-id":   s.EnvID,
+		"environment-uuid": s.EnvUUID,
 		"environment-name": s.EnvName,
-		"status-token":     s.StatusToken,
 	}
 	code, _, err := k.do(http.MethodGet, k.secretPath(secret), "", nil)
 	if err != nil {
@@ -148,7 +152,10 @@ func (k *k8s) writeState(secret string, s state) error {
 		}
 		return nil
 	}
-	body, _ := json.Marshal(map[string]any{"stringData": sd})
+	body, _ := json.Marshal(map[string]any{
+		"stringData": sd,
+		"data":       map[string]any{"status-token": nil},
+	})
 	c, raw, err := k.do(http.MethodPatch, k.secretPath(secret), "application/merge-patch+json", body)
 	if err != nil {
 		return err

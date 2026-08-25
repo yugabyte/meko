@@ -58,7 +58,7 @@ api-server once it is up, and are not modelled here. See
 
 # build + deploy end-to-end: builds the api-server and agent images, stands the
 # control plane up on a throwaway kind cluster, and asserts register -> enroll ->
-# READY -> restart-without-re-enrolling -> command -> bootstrap -> GC. Needs kind +
+# READY -> restart-and-re-enroll -> command -> bootstrap -> GC. Needs kind +
 # docker or podman; no registry credentials.
 (cd ycp && ./test/e2e/run.sh)
 

@@ -1,7 +1,7 @@
 /*
  * YCP fleet registry -- control-plane-mode migration set.
  *
- * Same tables as system/000008_environments.up.sql, in portable SQL. The system
+ * The successor of system/000008_environments.up.sql, in portable SQL. The system
  * set cannot be used here: it is a single ordered sequence, so reaching 000008
  * means first applying 000002/000004/000006, which use YugabyteDB-only DDL
  * (`PRIMARY KEY (col HASH, ...)`, `SPLIT INTO n TABLETS`) that PostgreSQL rejects.
@@ -9,15 +9,17 @@
  * run against a plain Postgres.
  *
  * Tracked in its own schema_migrations_controlplane table, independent of the
- * system set. Every statement is IF NOT EXISTS, so pointing control-plane mode at
- * a YugabyteDB that already ran system/000008 is a no-op rather than a conflict.
+ * system set. The two are not interchangeable: system/000008 is frozen without an
+ * api_key_id column, so over a database that already ran it the CREATE TABLE below
+ * is a no-op and the unique index on that column then has nothing to build on.
+ * Point control-plane mode at its own database (see connect.go).
  *
  * The dropped YB clauses are not load-bearing: on YB the first primary-key column
  * hashes by default, and SPLIT INTO only presets tablet count.
  *
- * id is the operator-facing handle -- slug(name), sent by the agent as ?envId= and baked
- * into the install hint's --set agent.envName=. It is unique per account, not
- * fleet-wide: two accounts may each hold an environment called "prod".
+ * id is the operator-facing handle -- slug(name), baked into the install hint's
+ * --set agent.envName=. It is unique per account, not fleet-wide: two accounts
+ * may each hold an environment called "prod".
  */
 CREATE SCHEMA IF NOT EXISTS meko_system;
 
@@ -48,9 +50,10 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
     kind               TEXT NOT NULL DEFAULT 'meko',        -- amp | meko; meko id is bare slug, amp id is prefixed "amp-"
     resources          JSONB NOT NULL DEFAULT '[]'::jsonb,  -- amp controller's reported inventory ([] for meko)
     live               BOOLEAN NOT NULL DEFAULT FALSE,
-    enroll_token_hash        TEXT NOT NULL DEFAULT '',   -- SHA-256 hex
-    enroll_token_expires_at  TIMESTAMPTZ,                -- bootstrap token TTL
-    status_token_hash        TEXT NOT NULL DEFAULT '',   -- SHA-256 hex
+    -- The YBM API key the environment's agent authenticates with. YBM validates the
+    -- key and forwards its id; the id alone identifies the environment, so it is
+    -- unique fleet-wide: one key drives one environment.
+    api_key_id         UUID NOT NULL,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (uuid)
 );
@@ -60,8 +63,8 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
 CREATE UNIQUE INDEX IF NOT EXISTS environments_account_id_uniq
     ON meko_system.environments (account_id, id);
 
-CREATE INDEX IF NOT EXISTS environments_enroll_token_hash_idx
-    ON meko_system.environments (enroll_token_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS environments_api_key_id_uniq
+    ON meko_system.environments (api_key_id);
 
 -- Keyed by the parent's uuid rather than its id: id is only unique per account, so
 -- keying on it would let two accounts' "prod" environments share one resource set.

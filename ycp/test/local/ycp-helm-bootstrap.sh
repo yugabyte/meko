@@ -193,10 +193,9 @@ curl -fsS "http://127.0.0.1:$PORT$BASE/api/v1/health" >/dev/null 2>&1 ||
 # The operator step. Everything the agent will run is decided here.
 
 log "registering environment $ENV_NAME in YCP"
+API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"local\"}")"
-TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
-[ -n "$TOKEN" ] || die "no enrollment_token in the register response"
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"local\",\"api_key_id\":\"$API_KEY_ID\"}")"
 
 echo
 echo "--------- the install command YCP printed (install_hint) ---------"
@@ -220,13 +219,15 @@ if not stack["spec"].get("images", {}).get("mcp_server"):
 
 # ---------------------------------------------------------------------- credentials
 #
-# The two Secrets the chart deliberately does not carry: the enrollment token, and the
-# registry/data-plane credentials the seeded desired state references BY NAME.
+# The two Secrets the chart deliberately does not carry: the agent's YCP credentials
+# (dev-mode headers here — no YBM to mint a real key), and the registry/data-plane
+# credentials the seeded desired state references BY NAME.
 
 log "creating the agent namespace and its Secrets"
 k create namespace "$AGENT_NS" --dry-run=client -o yaml | k apply -f - >/dev/null
-k -n "$AGENT_NS" create secret generic meko-agent-enrollment \
-  --from-literal=enrollment-token="$TOKEN" --dry-run=client -o yaml | k apply -f - >/dev/null
+k -n "$AGENT_NS" create secret generic meko-agent-api-key \
+  --from-literal=dev-admin-secret="$ADMIN_KEY" \
+  --from-literal=dev-api-key-id="$API_KEY_ID" --dry-run=client -o yaml | k apply -f - >/dev/null
 
 ecr_token="$(aws ecr get-login-password --region "$ECR_REGION")" ||
   die "aws ecr get-login-password failed — set AWS_PROFILE to a profile with ECR access"
@@ -240,7 +241,7 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
 fi
 k -n "$AGENT_NS" create secret generic "$CREDS_SECRET" "${creds[@]}" \
   --dry-run=client -o yaml | k apply -f - >/dev/null
-echo "    meko-agent-enrollment, $PULL_SECRET, $CREDS_SECRET"
+echo "    meko-agent-api-key (dev-mode), $PULL_SECRET, $CREDS_SECRET"
 
 # ---------------------------------------------------------------------------- helm
 #
@@ -248,7 +249,7 @@ echo "    meko-agent-enrollment, $PULL_SECRET, $CREDS_SECRET"
 # instead of the port-forward the hint saw, the side-loaded image tag, and the
 # registry escape hatch the chart documents for exactly this case.
 
-YCP_IN_CLUSTER="http://meko-api-server.$CP_NS.svc.cluster.local:80$BASE"
+YCP_IN_CLUSTER="http://meko-api-server.$CP_NS.svc.cluster.local:80$BASE/api/v1"
 
 log "helm upgrade --install meko-agent (chart: $CHART)"
 set -x

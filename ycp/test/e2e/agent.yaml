@@ -1,10 +1,9 @@
 # The meko-agent under test, enrolling into the control plane in controlplane.yaml.
 #
 # Applied by run.sh only AFTER an environment has been registered through the fleet
-# API and its one-time enrollment token written to the meko-agent-enrollment Secret.
-# That ordering is forced by the control plane: api_server has no way to pre-seed a
-# token, so it can only come from a real POST /api/v1/environments — which is the
-# operator flow, and therefore the thing worth testing.
+# API with this run's api_key_id. The agent authenticates with the dev-mode headers
+# (admin secret + that id) — there is no YBM in this cluster to mint or validate a
+# real key. run.sh substitutes __API_KEY_ID__ before applying.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -23,10 +22,9 @@ rules:
     resources: ["namespaces"]
     verbs: ["get", "list", "create", "delete"]
   # services/secrets/configmaps cover the Meko stack (database, mcp-server,
-  # rag-worker) and the agent's own meko-agent-state Secret.
-  # update is what lets it replace the stored status token in place; without it the
-  # agent cannot survive a restart, which is one of the things this e2e is here to
-  # prove. patch is server-side apply, which is how the stack reconcilers converge —
+  # rag-worker) and the agent's own meko-agent-state Secret (identity + outage
+  # caches, no credential). update is what lets it replace that state in place.
+  # patch is server-side apply, which is how the stack reconcilers converge —
   # without it a declared component is created once and never updated again.
   - apiGroups: [""]
     resources: ["services", "secrets", "configmaps"]
@@ -72,16 +70,19 @@ spec:
           imagePullPolicy: Never
           env:
             # Carries the subpath the control plane is mounted under (see
-            # MEKO_YCP_BASE_PATH in controlplane.yaml) — the same shape as the
-            # real deployment at https://devcloud.yugabyte.com/ycp. run.sh
+            # MEKO_YCP_BASE_PATH in controlplane.yaml) plus the /api/v1 base the
+            # agent routes hang off — the direct-to-meko shape. run.sh
             # substitutes __BASE_PATH__ from $BASE before applying.
-            - { name: YCP_URL, value: "http://meko-api-server.ycp-e2e.svc.cluster.local:80__BASE_PATH__" }
+            - { name: YCP_URL, value: "http://meko-api-server.ycp-e2e.svc.cluster.local:80__BASE_PATH__/api/v1" }
             - { name: ENV_NAME, value: "e2e-cell" }
             - { name: ENV_PLACEMENT, value: "cloud" }
             - { name: ENV_PROVIDER, value: "kind" }
             - { name: ENV_REGION, value: "local" }
-            - name: ENROLLMENT_TOKEN
-              valueFrom: { secretKeyRef: { name: meko-agent-enrollment, key: enrollment-token } }
+            # Dev-mode identity: no YBM here, so the agent sends these as the
+            # headers YBM would have stamped after validating a real key.
+            - name: YCP_DEV_ADMIN_SECRET
+              valueFrom: { secretKeyRef: { name: ycp-e2e-secrets, key: admin-api-key } }
+            - { name: YCP_DEV_API_KEY_ID, value: "__API_KEY_ID__" }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }

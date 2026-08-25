@@ -25,9 +25,9 @@
 # pull fails.
 #
 # Required Secret in the release namespace — the chart holds no secret material:
-#   meko-agent-enrollment, key `enrollment-token`
-# Enrollment tokens expire 30 minutes after they are minted, so create the Secret
-# and install promptly. See https://github.com/yugabyte/meko/issues/401.
+#   meko-agent-api-key, key `api-key` (the YBM API key, shown once by YBM and
+#   revocable there). Dev mode against a standalone control plane: keys
+#   `dev-admin-secret` + `dev-api-key-id` in the same Secret instead of api-key.
 # ============================================================================
 
 mode: agent

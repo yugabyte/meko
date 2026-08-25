@@ -2,24 +2,17 @@ package service
 
 import (
 	"testing"
-	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"meko/api_server/internal/repository"
 )
 
-// A successful enroll must leave the enrollment token intact.
-//
-// Burning it looks right — it is a bootstrap credential and the exchange it exists
-// for has happened — but EnrollLookup requires a non-empty hash, so clearing it
-// makes the agent's re-enroll-on-401 path permanently dead instead of TTL-bounded.
-// An agent whose status token is rotated, or which failed to persist its state, is
-// then locked out with no recovery short of re-registering the environment (which
-// resets its state and datapack counts). The TTL is the intended bound.
-//
-// This test exists to stop the burn being reintroduced without a re-issue path.
-func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
+// Enrollment is the key-authenticated first check-in: it resolves the environment
+// by the unique api_key_id, moves it to ATTESTING, and marks it live. Idempotent
+// on purpose — the agent repeats it at every startup, so nothing is consumed and
+// nothing is minted.
+func TestEnrollByKey_ChecksIn(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -27,31 +20,10 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	const plain = "ycp_enr_deadbeef"
-	tokenHash := hashToken(plain)
-	expires := time.Now().Add(20 * time.Minute).UTC()
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyA).
+		WillReturnRows(envRow("acme-prod", KindMeko))
 
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
-		WithArgs(tokenHash).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
-
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
-		WithArgs(envUUID).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
-			"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
-			"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
-			"status_token_hash", "created_at", "kind", "resources",
-		}).AddRow(
-			envUUID, "acme-prod", acctA, "cloud", "us-east-2", "PENDING", "", 0, "",
-			// created_at is a non-pointer time.Time, so it cannot be NULL here.
-			0, 400, "", nil, "", "", "[]", false, tokenHash, expires, "", time.Now(), "meko", "[]",
-		))
-
-	// $17 is enroll_token_hash and $18 its expiry. The regex below pins that mapping
-	// rather than assuming it: it matches the ON CONFLICT assignments, so reordering
-	// envColumnsInsert breaks this expectation instead of silently shifting which
-	// column the positional assertions below are checking.
 	mock.ExpectExec(`UPDATE meko_system\.environments SET`).
 		WithArgs(
 			envUUID,                            // $1  uuid — the key the update is applied by
@@ -61,25 +33,74 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
 			true,                               // $15 live
-			tokenHash,                          // $16 — still there
-			expires,                            // $17 — still there
-			sqlmock.AnyArg(),                   // $18 status_token_hash
-			sqlmock.AnyArg(), sqlmock.AnyArg(), // $19 kind, $20 resources
+			sqlmock.AnyArg(), sqlmock.AnyArg(), // $16 kind, $17 resources
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	_, statusToken, ok, err := svc.EnrollWithToken(plain, "cloud", KindMeko, ClusterFacts{Provider: "aws"})
+	e, err := svc.EnrollByKey(keyA, "cloud", KindMeko, ClusterFacts{Provider: "aws"})
 	if err != nil {
-		t.Fatalf("EnrollWithToken: %v", err)
+		t.Fatalf("EnrollByKey: %v", err)
 	}
-	if !ok {
-		t.Fatal("enroll should have succeeded")
+	if e == nil {
+		t.Fatal("enroll should have resolved the bound environment")
 	}
-	if statusToken == "" {
-		t.Fatal("no status token returned — the agent has nothing to persist")
+	if e.MCPBaseURL == "" {
+		t.Error("a meko enrollment must synthesize the MCP base URL")
 	}
-
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("enroll did not write back the environment as expected: %v", err)
+	}
+}
+
+// A key bound to no environment resolves to nil with no error — the handler's
+// 401. A revoked key and a never-registered one are deliberately the same answer.
+func TestEnrollByKey_UnknownKeyIsNil(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
+
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyB).
+		WillReturnRows(sqlmock.NewRows(envRowCols))
+
+	e, err := svc.EnrollByKey(keyB, "cloud", KindMeko, ClusterFacts{})
+	if err != nil {
+		t.Fatalf("EnrollByKey: %v", err)
+	}
+	if e != nil {
+		t.Fatal("an unbound key must not enroll")
+	}
+}
+
+// ResolveAgent is every non-enroll agent call's lookup: the key id alone names
+// the environment.
+func TestResolveAgent_ByKeyID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
+
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyA).
+		WillReturnRows(envRow("acme-prod", KindMeko))
+	e, err := svc.ResolveAgent(keyA)
+	if err != nil || e == nil {
+		t.Fatalf("ResolveAgent = (%v, %v), want the bound environment", e, err)
+	}
+	if e.APIKeyID != keyA {
+		t.Errorf("resolved binding = %q, want %q", e.APIKeyID, keyA)
+	}
+
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyB).
+		WillReturnRows(sqlmock.NewRows(envRowCols))
+	e, err = svc.ResolveAgent(keyB)
+	if err != nil || e != nil {
+		t.Fatalf("ResolveAgent(unbound) = (%v, %v), want (nil, nil)", e, err)
 	}
 }

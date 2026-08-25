@@ -97,7 +97,7 @@ it is unaffected. Four things to know before you do set it:
 - **Needs an image with `--base-path`** (`1.0.37-20260729` or newer). Older images
   ignore the env var and quietly serve at the root — check the tag the same way
   the runbook checks for `--control-plane-mode`.
-- **Agents need the prefixed URL** — `--set agent.ycpUrl=https://…/ycp`.
+- **Agents need the prefixed URL** — `--set agent.ycpUrl=https://…/ycp/api/v1`.
 
 The health probes deliberately stay unprefixed; see Notes / gotchas.
 [`YCP-RUNBOOK.md`](./YCP-RUNBOOK.md#serving-it-under-a-subpath) has the operational
@@ -166,19 +166,21 @@ than a separate one. A data-plane (`mcp` mode) install opts in to enrolling
 itself with an YCP control plane by turning the agent on:
 
 ```bash
-# 1. Register the environment with YCP → returns a one-time enrollment token
+# 1. Register the environment with YCP, bound to the agent's api key id
 curl -sX POST "$YCP/api/v1/environments" \
-  -d '{"name":"acme-prod","region":"us-west1","placement":"cloud"}'
+  -d '{"name":"acme-prod","region":"us-west1","placement":"cloud","api_key_id":"<uuid>"}'
 
-# 2. Store the token as a Secret in the data-plane cluster
-kubectl -n meko-system create secret generic meko-agent-enrollment \
-  --from-literal=enrollment-token=<token>
+# 2. Store the agent's credential as a Secret in the data-plane cluster: the YBM
+#    API key (key `api-key`), or against a standalone control plane the dev-mode
+#    pair (`dev-admin-secret` + `dev-api-key-id`)
+kubectl -n meko-system create secret generic meko-agent-api-key \
+  --from-literal=api-key=<the key YBM showed once>
 
-# 3. Deploy the data plane with the agent enabled, pointed at YCP
+# 3. Deploy the data plane with the agent enabled, pointed at YCP's API base
 helm upgrade --install meko charts/meko -n meko-system \
   -f charts/meko/values-gcp.yaml -f charts/meko/values-<env>.yaml \
   --set agent.enabled=true --set-string agent.image.tag=$VERSION \
-  --set agent.ycpUrl=http://ycp.ycp-demo.svc.cluster.local:80 \
+  --set agent.ycpUrl=http://ycp.ycp-demo.svc.cluster.local:80/api/v1 \
   --set agent.envName=acme-prod
 ```
 

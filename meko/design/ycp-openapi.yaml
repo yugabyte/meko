@@ -9,8 +9,10 @@ info:
 
     Three auth surfaces (see `securitySchemes`):
       * **Human / console** — OIDC relying party of YBM Aeon (`aeonOIDC`).
-      * **Agent** — `meko-agent` in the customer cluster, mutual TLS (`agentMTLS`).
-        Outbound-only; YCP never dials into the customer cloud.
+      * **Agent** — `meko-agent` in the customer cluster, authenticating every call
+        with a YBM-minted API key (`agentAPIKey`); YBM's pass-through validates it and
+        forwards the key id, which alone resolves the environment. Outbound-only; YCP
+        never dials into the customer cloud.
       * **Internal** — MCP server → api_server, shared secret header (`internalSecret`).
 
     This is a design stub: shapes are illustrative and not yet frozen.
@@ -32,7 +34,7 @@ tags:
   - name: entitlements
     description: Read-only plan/caps, sourced upstream from YBM Aeon.
   - name: agent
-    description: Pull-agent surface (mutual TLS). Enroll, reconcile desired state, report status.
+    description: Pull-agent surface (YBM API key). Enroll, reconcile desired state, report status.
   - name: internal
     description: MCP server → api_server calls (shared secret).
 
@@ -73,8 +75,9 @@ paths:
       responses:
         '201':
           description: |
-            Environment registered in state `PENDING`. Response carries a short-TTL, reusable
-            enrollment token and the `meko bootstrap` install hint.
+            Environment registered in state `PENDING`, bound to the request's `api_key_id`.
+            Response carries the install hint. A name already registered under this account
+            is refused with 409, not rebound.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EnvironmentCreated' }
@@ -108,9 +111,19 @@ paths:
               type: object
               required: [action]
               properties:
-                action: { type: string, enum: [suspend, resume, drain] }
+                action: { type: string, enum: [suspend, resume, drain, deregister] }
                 reason: { type: string }
       responses:
+        '200':
+          description: |
+            `deregister` only — the same operation as DELETE reached this way, so the body
+            carries the environment's `api_key_id` for revocation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_key_id: { type: string, format: uuid }
         '202': { description: Accepted; transition queued as desired state. }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -118,10 +131,17 @@ paths:
       tags: [environments]
       summary: Deregister an environment
       operationId: deregisterEnvironment
-      description: Moves the environment to `DRAINING` then `DEREGISTERED`; revokes the agent's mTLS identity.
+      description: Moves the environment to `DRAINING` then `DEREGISTERED`; returns the api_key_id binding so YBM can revoke the key.
       security: [{ aeonOIDC: ['fleet:write'] }]
       responses:
-        '202': { description: Deregistration started. }
+        '200':
+          description: Deregistered; the body carries the environment's `api_key_id` for revocation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_key_id: { type: string, format: uuid }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ------------------------------------------------------------------ datapacks
@@ -187,44 +207,42 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Entitlement' } } } }
 
-  # ------------------------------------------------------------------ agent (mTLS)
+  # ------------------------------------------------------------------ agent (API key)
   /api/v1/agent/enroll:
     post:
       tags: [agent]
-      summary: Exchange a one-time enrollment token for an mTLS identity
+      summary: Key-authenticated first check-in, repeated at every agent startup
       operationId: agentEnroll
-      security: []  # bootstrap: token in body, no client cert yet
+      security: [{ agentAPIKey: [] }]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [enrollment_token, csr]
               properties:
-                enrollment_token: { type: string, examples: [ycp_enr_9f2c...a71] }
-                csr: { type: string, description: PEM-encoded certificate signing request. }
+                name: { type: string, description: For logs only; identity comes from the key. }
                 cluster_facts: { $ref: '#/components/schemas/ClusterFacts' }
       responses:
         '200':
-          description: Signed client certificate + YCP endpoints.
+          description: The bound environment's identity and the stack it runs.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  client_cert: { type: string, description: PEM-encoded signed cert. }
-                  ca_bundle: { type: string }
                   environment_id: { type: string }
-        '401': { description: Invalid or expired enrollment token. }
+                  mcp_base_url: { type: string }
+                  stack: { type: object, description: The meko-stack spec to deploy. }
+        '401': { description: No environment is bound to the API key. }
 
   /api/v1/agent/bootstrap-progress:
     post:
       tags: [agent]
       summary: Pre-agent installer reports cluster-provisioning / install steps
       operationId: agentBootstrapProgress
-      description: Token-authed; used before the long-running agent's mTLS identity exists (§7.1).
-      security: [{ enrollmentToken: [] }]
+      description: Key-authed like every agent call; used by the pre-agent installer (§7.1).
+      security: [{ agentAPIKey: [] }]
       requestBody:
         required: true
         content:
@@ -249,7 +267,7 @@ paths:
         Returns the components, datapack specs, and target versions the agent should reconcile
         toward. Supports long-poll via `wait`. Datapack specs reference secret *names* only —
         never secret values.
-      security: [{ agentMTLS: [] }]
+      security: [{ agentAPIKey: [] }]
       parameters:
         - { name: since, in: query, description: Last revision the agent has applied., schema: { type: integer } }
         - { name: wait, in: query, description: Long-poll seconds., schema: { type: integer, default: 30, maximum: 90 } }
@@ -266,7 +284,7 @@ paths:
       description: |
         Drives the fleet registry and the §7 state machine. Bulk time-series metrics do NOT
         travel here — in-cluster Prometheus remote-writes those to Thanos (§9).
-      security: [{ agentMTLS: [] }]
+      security: [{ agentAPIKey: [] }]
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/StatusReport' } } }
@@ -312,13 +330,14 @@ components:
       type: openIdConnect
       openIdConnectUrl: https://auth.aeon.yugabyte.com/.well-known/openid-configuration
       description: Human identity federated from YBM Aeon (cloud or on-prem issuer).
-    agentMTLS:
-      type: mutualTLS
-      description: meko-agent client certificate issued at enrollment. Outbound-only.
-    enrollmentToken:
+    agentAPIKey:
       type: http
       scheme: bearer
-      description: Short-TTL bootstrap token (kubeadm-style) — reusable within its window (default 30m) so agent restarts can re-enroll; the agent then holds a longer-lived env-scoped credential.
+      description: |
+        YBM-minted API key, sent on every agent call. YBM validates it and forwards
+        X-Meko-Admin-Secret + X-Meko-Api-Key-ID to YCP; the key id alone resolves the
+        environment (one key drives one environment). Revocable from YBM; enrollment
+        is an idempotent check-in, so there is no bootstrap credential to expire.
     internalSecret:
       type: apiKey
       in: header
@@ -364,10 +383,17 @@ components:
 
     EnvironmentCreate:
       type: object
-      required: [name, placement, region]
+      required: [name, placement, region, api_key_id]
       properties:
         name: { type: string, examples: [acme-prod] }
         account_id: { type: string }
+        api_key_id:
+          type: string
+          format: uuid
+          description: The YBM API key the environment's agent authenticates with. One key = one environment.
+        agent_base_url:
+          type: string
+          description: YBM pass-through base for the install hint; absent ⇒ the address this call arrived on.
         placement: { type: string, enum: [cloud, onprem] }
         region: { type: string }
         cluster_spec:
@@ -389,9 +415,7 @@ components:
         - $ref: '#/components/schemas/Environment'
         - type: object
           properties:
-            enrollment_token: { type: string, examples: [ycp_enr_9f2c...a71] }
-            enrollment_expires_at: { type: string, format: date-time }
-            install_hint: { type: string, examples: ['helm install meko-agent meko/meko-agent --set enrollmentToken=...'] }
+            install_hint: { type: string, description: Runnable install commands, kind-aware. }
 
     ClusterFacts:
       type: object

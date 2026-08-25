@@ -21,13 +21,15 @@ const (
 	envUUID = "11111111-1111-1111-1111-111111111111"
 )
 
-const testAdminSecret = "admin-secret"
+const (
+	testAdminSecret = "admin-secret"
+	testAPIKeyID    = "b0000000-0000-0000-0000-00000000000a"
+)
 
 var headerRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
-	"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
-	"status_token_hash", "created_at", "kind", "resources",
+	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
 }
 
 // fleetServer stands up the real router in control-plane mode over a mocked system
@@ -110,7 +112,7 @@ func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 		WithArgs(acctA).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
+			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]",
 		))
 
 	resp := fleetGet(t, srv, "/api/v1/environments", acctA)
@@ -131,7 +133,7 @@ func TestFleetRoutes_AccountHeaderOptionalByDefault(t *testing.T) {
 	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
+			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]",
 		))
 
 	resp := fleetGet(t, srv, "/api/v1/environments", "")
@@ -144,30 +146,70 @@ func TestFleetRoutes_AccountHeaderOptionalByDefault(t *testing.T) {
 	}
 }
 
-// The agent surface authenticates with its own enrollment and status tokens and
-// has no account to send, so the requirement must not reach it — an enrolled
-// agent would otherwise stop being able to report status.
-func TestAgentRoutes_UnaffectedByAccountHeaderRequirement(t *testing.T) {
-	srv, _ := fleetServer(t, true)
-
-	resp, err := http.Post(srv.URL+"/api/v1/agent/enroll", "application/json", strings.NewReader(`{}`))
+// agentEnroll posts an enroll with the given auth headers ("" = absent) through
+// the real router, so the assertion covers the route's middleware chain.
+func agentEnroll(t *testing.T, srv *httptest.Server, adminSecret, apiKeyID string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/agent/enroll", strings.NewReader(`{}`))
 	if err != nil {
-		t.Fatalf("post: %v", err)
+		t.Fatalf("request: %v", err)
 	}
-	defer resp.Body.Close()
+	req.Header.Set("Content-Type", "application/json")
+	if adminSecret != "" {
+		req.Header.Set("X-Meko-Admin-Secret", adminSecret)
+	}
+	if apiKeyID != "" {
+		req.Header.Set("X-Meko-Api-Key-ID", apiKeyID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
 
-	// The handler's own validation answers (no enrollment_token), which is only
-	// reachable if the account-header middleware is not in this route's chain.
-	var body struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
+// The agent surface sits behind the admin secret + the api-key-id header, and
+// nothing else: no bearer, no account header. The four cases pin the chain in
+// order — no admin secret, no key id, a malformed key id (400 before any lookup),
+// then a well-formed call whose key is bound to nothing (the lookup's 401).
+func TestAgentRoutes_RequireAdminSecretAndKeyID(t *testing.T) {
+	srv, mock := fleetServer(t, true)
+
+	resp := agentEnroll(t, srv, "", testAPIKeyID)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("enroll without the admin secret = %d, want 401", resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
+
+	resp = agentEnroll(t, srv, testAdminSecret, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("enroll without a key id = %d, want 401", resp.StatusCode)
 	}
-	if strings.Contains(body.Error.Message, "X-Meko-Account-ID") {
-		t.Errorf("agent enroll was gated on the account header: %q", body.Error.Message)
+
+	resp = agentEnroll(t, srv, testAdminSecret, "not-a-uuid")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("enroll with a malformed key id = %d, want 400", resp.StatusCode)
+	}
+
+	// Fully authenticated but the key is bound to nothing: the lookup runs (the
+	// query below) and answers 401. Run on a require-account-header control plane
+	// on purpose — the account requirement must not reach the agent surface, or an
+	// enrolled agent could never report status.
+	mock.ExpectQuery(`FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(testAPIKeyID).
+		WillReturnRows(sqlmock.NewRows(headerRowCols))
+	resp = agentEnroll(t, srv, testAdminSecret, testAPIKeyID)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("enroll with an unbound key = %d, want 401", resp.StatusCode)
+	}
+	if code := errorCode(t, resp); code != "UNAUTHORIZED" {
+		t.Errorf("unbound key error code = %q, want UNAUTHORIZED", code)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("the authenticated enroll never reached the key lookup: %v", err)
 	}
 }
 

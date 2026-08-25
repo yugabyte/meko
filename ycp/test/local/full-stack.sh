@@ -141,11 +141,11 @@ curl -fsS "http://127.0.0.1:$PORT$BASE/api/v1/health" >/dev/null 2>&1 ||
 #
 # Start from nothing, every time.
 #
-# Registering an existing environment RESETS it: the status token hash is cleared and
-# the state goes back to PENDING, so an agent left over from a previous run is holding a
-# credential the control plane no longer honours. It re-enrolls and recovers eventually,
-# but in the meantime the fleet reports PENDING with no components and every assertion
-# below fails for a reason that has nothing to do with the code under test. Observed
+# Registering an existing environment RESETS it: it is rebound to this run's fresh
+# api_key_id and the state goes back to PENDING, so an agent left over from a previous
+# run holds an identity the control plane no longer honours. In the meantime the fleet
+# reports PENDING with no components and every assertion below fails for a reason that
+# has nothing to do with the code under test. Observed
 # exactly that on the second run of this script.
 #
 # So: remove the environment and the namespace first. It also means the database really
@@ -163,12 +163,11 @@ fi
 # We create Secrets under those names below.
 
 log "registering $ENV_NAME with nothing but a name"
-reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"local\"}")" ||
+API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+api POST /api/v1/environments -H 'content-type: application/json' \
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"local\",\"api_key_id\":\"$API_KEY_ID\"}" >/dev/null ||
   die "POST /api/v1/environments failed"
-TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
-[ -n "$TOKEN" ] || die "no enrollment_token in the register response: ${reg:0:200}"
-echo "    enrollment token minted (${TOKEN:0:12}...)"
+echo "    bound to api key id ${API_KEY_ID:0:8}... (the agent authenticates with it in dev mode)"
 
 log "checking what registration seeded"
 seeded="$(api GET "/api/v1/environments/$ENV_NAME/desired")"
@@ -242,8 +241,9 @@ if [ -n "$CREDS_SECRET" ]; then
     --dry-run=client -o yaml | k apply -f - >/dev/null
 fi
 
-k -n "$NS" create secret generic meko-agent-enrollment \
-  --from-literal=enrollment-token="$TOKEN" --dry-run=client -o yaml | k apply -f - >/dev/null
+k -n "$NS" create secret generic meko-agent-api-key \
+  --from-literal=dev-admin-secret="$ADMIN_KEY" \
+  --from-literal=dev-api-key-id="$API_KEY_ID" --dry-run=client -o yaml | k apply -f - >/dev/null
 
 # ---------------------------------------------------------------- the agent
 #
@@ -302,13 +302,15 @@ spec:
           image: $AGENT_IMAGE
           imagePullPolicy: IfNotPresent
           env:
-            - {name: YCP_URL, value: "http://meko-api-server.$CP_NS.svc.cluster.local.$BASE"}
+            - {name: YCP_URL, value: "http://meko-api-server.$CP_NS.svc.cluster.local.$BASE/api/v1"}
             - {name: ENV_NAME, value: "$ENV_NAME"}
             - {name: ENV_PLACEMENT, value: cloud}
             - {name: ENV_PROVIDER, value: kind}
             - {name: ENV_REGION, value: local}
-            - name: ENROLLMENT_TOKEN
-              valueFrom: {secretKeyRef: {name: meko-agent-enrollment, key: enrollment-token}}
+            - name: YCP_DEV_ADMIN_SECRET
+              valueFrom: {secretKeyRef: {name: meko-agent-api-key, key: dev-admin-secret}}
+            - name: YCP_DEV_API_KEY_ID
+              valueFrom: {secretKeyRef: {name: meko-agent-api-key, key: dev-api-key-id}}
 YAML
 k -n "$NS" rollout status deploy/meko-agent --timeout=120s
 

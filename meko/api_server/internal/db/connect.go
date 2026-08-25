@@ -194,11 +194,21 @@ func getPostgresConfig(purpose DBPurpose) *postgres.Config {
 		return &postgres.Config{
 			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "system"),
 		}
-	// Its own tracking table, so a database that already ran the system set can
-	// also run this one (every statement is IF NOT EXISTS) without either set
-	// seeing the other's version. In meko_system, the schema this set creates and
-	// owns, so DROP SCHEMA meko_system CASCADE is a complete reset instead of one
-	// that strands a version row claiming the migrations are still applied.
+	// Its own tracking table, so neither set sees the other's version. In
+	// meko_system, the schema this set creates and owns, so DROP SCHEMA meko_system
+	// CASCADE is a complete reset instead of one that strands a version row claiming
+	// the migrations are still applied.
+	//
+	// This set cannot run over a database that already ran system/000008: that set's
+	// environments table has no api_key_id column, and its CREATE TABLE is IF NOT
+	// EXISTS, so this set's unique index would have nothing to build on.
+	//
+	// Control-plane mode selects this set alone, so the two do not meet in any
+	// configuration that exists today -- but that is a property of which scopes the
+	// flags happen to build, not an enforced one: RunMigrations receives one handle
+	// for both sets, so a scope with System and ControlPlane both set would apply
+	// them to the same database.
+	// TODO(CLOUDGA-35739): reject that combination in RunMigrations.
 	case DBPurposeControlPlane:
 		return &postgres.Config{
 			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "controlplane"),

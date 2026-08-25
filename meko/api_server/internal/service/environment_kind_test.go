@@ -17,8 +17,7 @@ import (
 var envRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
-	"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
-	"status_token_hash", "created_at", "kind", "resources",
+	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
 }
 
 // envRow builds a stored-environment row of the given id/kind with harmless
@@ -26,7 +25,7 @@ var envRowCols = []string{
 func envRow(id, kind string) *sqlmock.Rows {
 	return sqlmock.NewRows(envRowCols).AddRow(
 		envUUID, id, acctA, "cloud", "us-east-1", "PENDING", "", 0, "",
-		0, 400, "", nil, "", "", "[]", false, "", nil, "", time.Now(), kind, "[]",
+		0, 400, "", nil, "", "", "[]", false, keyA, time.Now(), kind, "[]",
 	)
 }
 
@@ -44,10 +43,13 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true, Release: testRelease})
 
 	// Only the environment upsert — no desired-state write for amp.
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+		WillReturnRows(insertReturns(envUUID, ""))
+	mock.ExpectCommit()
 
-	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "amp"}, "")
+	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "amp", APIKeyID: keyA}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -57,8 +59,8 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 	if e.Kind != KindAmp {
 		t.Errorf("kind = %q, want %q", e.Kind, KindAmp)
 	}
-	if token == "" || !strings.HasPrefix(token, "ycp_enr_") {
-		t.Errorf("token = %q, want a ycp_enr_ enrollment token", token)
+	if e.APIKeyID != keyA {
+		t.Errorf("api key id = %q, want the registered binding %q", e.APIKeyID, keyA)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations (an amp registration must not write desired state): %v", err)
@@ -75,10 +77,13 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{}) // disabled: no desired write
 
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+		WillReturnRows(insertReturns(envUUID, ""))
+	mock.ExpectCommit()
 
-	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod"}, "")
+	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -91,7 +96,7 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 // fail rather than quietly create a meko environment.
 func TestRegister_RejectsUnknownKind(t *testing.T) {
 	svc := NewEnvironmentService(nil, BootstrapDefaults{}) // validation precedes any repo call
-	_, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "app"}, "")
+	_, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "app", APIKeyID: keyA}, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(kind=app) err = %v, want ErrValidation", err)
 	}
@@ -100,7 +105,7 @@ func TestRegister_RejectsUnknownKind(t *testing.T) {
 // An agent must not attach to an environment of a different kind: a meko-registered
 // environment rejects an amp enrollment (and vice versa) so it cannot start
 // reporting the wrong thing.
-func TestEnrollWithToken_RejectsKindMismatch(t *testing.T) {
+func TestEnrollByKey_RejectsKindMismatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -108,16 +113,12 @@ func TestEnrollWithToken_RejectsKindMismatch(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	const plain = "ycp_enr_deadbeef"
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
-		WithArgs(hashToken(plain)).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
-		WithArgs(envUUID).
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+		WithArgs(keyA).
 		WillReturnRows(envRow("acme-prod", KindMeko))
 
-	_, _, ok, err := svc.EnrollWithToken(plain, "cloud", KindAmp, ClusterFacts{})
-	if ok {
+	e, err := svc.EnrollByKey(keyA, "cloud", KindAmp, ClusterFacts{})
+	if e != nil {
 		t.Fatal("an amp agent must not enroll into a meko environment")
 	}
 	if !errors.Is(err, ErrKindMismatch) {
@@ -141,7 +142,7 @@ func (a argContains) Match(v driver.Value) bool {
 }
 
 // A status report's resources are stored on the environment: the amp controller's
-// inventory becomes the resources column ($22) the console reads.
+// inventory becomes the resources column ($17) the console reads.
 func TestApplyStatus_StoresReportedResources(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -154,8 +155,8 @@ func TestApplyStatus_StoresReportedResources(t *testing.T) {
 		WithArgs(envUUID).
 		WillReturnRows(envRow("amp-acme-prod", KindAmp))
 
-	// $1..$21 are anything; $22 (resources) must carry the reported pool.
-	anyArgs := make([]driver.Value, 19)
+	// $1..$16 are anything; $17 (resources) must carry the reported pool.
+	anyArgs := make([]driver.Value, 16)
 	for i := range anyArgs {
 		anyArgs[i] = sqlmock.AnyArg()
 	}

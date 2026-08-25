@@ -40,7 +40,7 @@ name: Amp control-plane GKE (itest-dev)
 #     from PR source, stands up an ephemeral control plane in the CI namespace
 #     (amp/deploy/ycp-up.sh: Postgres + api_server --control-plane-mode),
 #     registers an amp environment, deploys the reconcile-agent (agent.* Helm
-#     values + enrollment secret), and runs the agent-driven reconcile smoke
+#     values + its API key Secret), and runs the agent-driven reconcile smoke
 #     (amp/deploy/ycp-reconcile-smoke.sh) INSTEAD of the API-driven one: it
 #     declares desired state through YCP and asserts the authoritative agent
 #     creates the tree, reports it READY, and GCs it on withdrawal.
@@ -318,9 +318,9 @@ jobs:
 
       # YCP smoke only: stand up an ephemeral control plane (Postgres + api_server
       # --control-plane-mode) in this namespace, register an amp environment, and
-      # drop the enrollment token into the Secret the reconcile-agent reads. Runs
+      # drop the dev-mode credentials into the Secret the reconcile-agent reads. Runs
       # BEFORE up-gke.sh so the agent can enroll as soon as it is deployed. ycp-up.sh
-      # appends YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_ENROLL_SECRET to
+      # appends YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_AGENT_SECRET to
       # $GITHUB_ENV for the up-gke.sh (Helm values) and reconcile-smoke steps below.
       - name: YCP control plane + register (amp_deploy_gke_ycp)
         if: env.YCP == '1'

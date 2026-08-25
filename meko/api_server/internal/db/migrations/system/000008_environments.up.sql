@@ -2,12 +2,15 @@
  * YCP fleet registry (control-plane mode).
  *
  * NOT the live definition of these tables. That is the controlplane/ set, which keys
- * environments by uuid and makes (account_id, id) unique; this copy is frozen in the
- * pre-uuid shape and the code can no longer read it -- scanEnvironment selects uuid and
- * scans account_id as NOT NULL, so a control plane pointed at a database that ran only
- * this set fails on its first query rather than degrading. Control-plane mode migrates
- * with --only-controlplane-migrate, so that pairing is a misconfiguration and not a path
- * anything takes; both sets otherwise share one systemDB under separate version tables.
+ * environments by uuid, makes (account_id, id) unique, and binds each environment to an
+ * api_key_id. This copy is frozen in an older shape that the code cannot read:
+ * scanEnvironment selects uuid and api_key_id and scans account_id as NOT NULL, so a
+ * control plane pointed at a database that ran only this set fails on its first query
+ * rather than degrading. Nor can the controlplane set run over this one -- the table
+ * survives its IF NOT EXISTS create without an api_key_id column, and the unique index
+ * on that column then fails. Control-plane mode migrates with --only-controlplane-migrate
+ * against its own database, so that pairing is a misconfiguration and not a path anything
+ * takes.
  *
  * Inert rather than wrong in data-plane mode: envSvc is constructed only under
  * --control-plane-mode, so nothing here reads or writes these tables. Kept rather than
@@ -18,9 +21,10 @@
  * agent enrollment handshake and status reports; read by the console/fleet API.
  * Holds metadata only -- never customer data.
  *
- * Auth material is stored hashed: enroll_token_hash (single-use enrollment token,
- * consumed on first successful enroll) and status_token_hash (env-scoped bearer
- * the agent presents on status/desired-state).
+ * Auth material is stored hashed: enroll_token_hash (a bootstrap token accepted for a
+ * TTL) and status_token_hash (env-scoped bearer the agent presents on
+ * status/desired-state). Both belong to this frozen shape; the live set binds an
+ * api_key_id instead.
  *
  * PK design: ((id) HASH). id is a slug (e.g. "acme-prod"); list is a small scan.
  * Secondary index on enroll_token_hash is the enroll hot path.

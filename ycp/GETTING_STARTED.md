@@ -57,11 +57,12 @@ cd ycp
 It builds the api-server and agent images from source, loads them into a `kind`
 cluster it creates, and drives the whole bring-up: the control-plane migrations run
 against a plain Postgres, `/api/v1/health` comes up, the fleet API refuses an
-unauthenticated call, an environment is registered through the real API, the agent
-enrolls with the token that mints, reaches `READY` with real cluster facts, and
-restarts **without re-enrolling**. Then it *commands* the environment — one POST of
-desired state — and asserts the agent acts on it: it brings up a second declared
-database, reports it back as a component, and garbage-collects it when withdrawn.
+unauthenticated call, an environment is registered through the real API bound to an
+`api_key_id`, the agent checks in with that identity, reaches `READY` with real
+cluster facts, and **restarts and checks in again**. Then it *commands* the
+environment — one POST of desired state — and asserts the agent acts on it: it
+brings up a second declared database, reports it back as a component, and
+garbage-collects it when withdrawn.
 Then it deletes the cluster (`YCP_E2E_KEEP=1` to keep it and poke around).
 
 Everything it runs uses public images, so it needs no registry credentials. That is
@@ -125,9 +126,9 @@ namespace, and waits while the agent brings up YugabyteDB with `mage` and
 
 It asserts the things that would otherwise be believed rather than checked: that
 registration seeded all six images, that the agent was *handed* a stack at enrollment
-and persisted it (so a restart needs no control-plane call), that both extensions and
-the `dist_rag` schema really exist in the `meko` database, and that every component
-reports healthy to the fleet API.
+and persisted it (so a restart mid-outage needs no control-plane call), that both
+extensions and the `dist_rag` schema really exist in the `meko` database, and that
+every component reports healthy to the fleet API.
 
 Beyond level 2.5's two caveats (large image, 12-hour ECR token):
 
@@ -163,7 +164,7 @@ What it proves, in order:
 ...
     seeded at registration: database/meko, mcp-server/mcp
 ==> helm upgrade --install meko-agent (chart: .../charts/meko)
-    enrolled: environment_id=helm-cell (status token acquired)
+    enrolled: environment_id=helm-cell
 ==> waiting for the database the agent was never told to run
     /ping -> {"status":"ok"}
     /mcp initialize -> Meko MCP 3.2.4
@@ -403,7 +404,7 @@ Two things that stay put, both deliberately:
   its own URL, so it works whether the proxy forwards `/ycp` through (the
   `--base-path` case) or strips it before forwarding (leave `--base-path` unset).
 
-Agents point at the prefixed URL: `agent.ycpUrl=https://devcloud.yugabyte.com/ycp`
+Agents point at the prefixed URL: `agent.ycpUrl=https://devcloud.yugabyte.com/ycp/api/v1`
 (`YCP_URL`). A trailing slash is tolerated.
 
 One thing to know before putting the console on a shared domain: browser storage
@@ -447,15 +448,16 @@ The api-server image predates the flag. Check it as in section B.
 Harmless. The agent starts before the control plane is listening and retries every
 3s.
 
-**Agent logs `enroll -> 401`**
-Token mismatch or expiry. Enrollment tokens last 30 minutes. Confirm the agent's
-`ENROLLMENT_TOKEN` matches the minted one and that `ENV_NAME` matches the
-registered environment's id (the slug of the name it was registered under).
+**Agent logs `ENROLL REJECTED (401)`**
+No environment is bound to the key the agent authenticates with. Confirm the
+registered environment's `api_key_id` matches the agent's credential (`YCP_API_KEY`
+through YBM, or `YCP_DEV_API_KEY_ID` direct against the control plane), and that
+the environment was not re-registered onto a different key.
 
-**Agent exits with `cannot read agent state` or `enrolled but could not persist
-agent state`**
+**Agent logs `could not read agent state` or `could not persist agent state`**
 Its ServiceAccount is missing `get`/`create`/`update` on secrets in its own
-namespace. Both are deliberately fatal — see DEPLOY.md.
+namespace. Not fatal — the state holds no credential — but a restart during a
+control-plane outage then starts from nothing. See DEPLOY.md.
 
 **`kubectl exec` into a pod gives no shell**
 Expected for the agent: `gcr.io/distroless/static:nonroot`, no shell, no

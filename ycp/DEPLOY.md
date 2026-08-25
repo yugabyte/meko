@@ -60,11 +60,11 @@ agent images from source, loads them into a throwaway `kind` cluster, and drives
 the whole bring-up against the **real control plane** (`api_server
 --control-plane-mode` on a plain Postgres): every workload rolls out including the
 migrate init container, `/api/v1/health` reports both databases up, the fleet API
-rejects an unauthenticated call, registering an environment mints an enrollment
-token, the agent enrolls with it and reaches `READY` with real cluster facts, and
-— the assertion that matters most — the agent **restarts without re-enrolling**,
-proving the status token was persisted on both sides. It then commands a second
-database, asserts the agent brings it up, and withdraws it to assert the GC.
+rejects an unauthenticated call, registering an environment binds it to an
+`api_key_id`, the agent checks in with that identity and reaches `READY` with
+real cluster facts, and a restarted agent checks in again and keeps reporting. It
+then commands a second database, asserts the agent brings it up, and withdraws it
+to assert the GC.
 
 It deploys the control plane under a `/ycp` base path, matching how production
 fronts it at `https://devcloud.yugabyte.com/ycp/`, and asserts the mount: the
@@ -101,12 +101,14 @@ that image too.
 ```bash
 curl -X POST "$YCP/api/v1/environments" \
   -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
-  -d '{"name":"acme-prod","placement":"cloud","region":"us-east-2"}'
+  -d '{"name":"acme-prod","placement":"cloud","region":"us-east-2","api_key_id":"'$(uuidgen)'"}'
 ```
 
 The control plane resolves the Meko release itself and stores it as that environment's
 stack; the enroll response hands it to the agent, which deploys the lot. The caller
-supplies a name. It does not need to know which six image tags go together — that is
+supplies a name and the id of the API key the agent will authenticate with (YBM
+mints it in production; direct against the control plane any uuid works, handed to
+a dev-mode agent as `YCP_DEV_API_KEY_ID`). It does not need to know which six image tags go together — that is
 the knowledge a control plane exists to hold, and it is pinned in one place,
 [`meko/api_server/internal/service/dataplane_release.go`](../meko/api_server/internal/service/dataplane_release.go).
 **To ship a new data-plane release, bump the tags there.** Environments registered
@@ -278,10 +280,11 @@ across the fleet — `(account_id, id)` is what the database enforces. So two ac
 may each register `prod` and each gets its own environment; neither can address or
 overwrite the other's. Re-registering your own name updates it, as it always did.
 
-The id an operator and an agent use is unchanged by that. Rows are keyed internally
-by a uuid, which is what the desired-resources table and the enrollment handshake
-join on, but nothing in the API takes it: `{id}` in the path, `?envId=` from the
-agent, and `--set agent.envName=` are all still the name-derived slug.
+The id an operator uses is unchanged by that. Rows are keyed internally by a uuid,
+which is what the desired-resources table joins on; the fleet API's `{id}` path
+segment and `--set agent.envName=` are the name-derived slug, and agent calls
+carry no id at all — the environment is resolved from the api key they
+authenticate with.
 
 The one call that can now be ambiguous is an **unscoped** read of an id two accounts
 both hold: it answers 409 rather than picking one. Send an account to resolve it.
@@ -297,8 +300,8 @@ To make the header mandatory, so no call can reach the whole fleet:
 |---|---|---|
 | `--require-account-header` / `MEKO_REQUIRE_ACCOUNT_HEADER` | `apiServer.requireAccountHeader` | Answer 400 to any fleet call with no `X-Meko-Account-ID`, instead of serving it fleet-wide. **Off by default**, because it takes the unscoped path away: the console, the e2e and operator curl all authenticate with the admin secret alone. For a control plane reached only through YBM. |
 
-The agent API is unaffected either way — it authenticates with the enrollment and
-status tokens, not the admin secret.
+The agent API is unaffected either way — it resolves the environment from the
+api-key-id header and never needs an account header.
 
 ## Operating an attached agent
 
@@ -308,33 +311,28 @@ kubectl -n $ANS get secret meko-agent-state       # its persisted identity
 kubectl -n $ANS get all,cm -l meko.dev/stack=true # what it provisioned from desired state
 ```
 
-A healthy first start:
+A healthy start — first or restarted; enrollment is an idempotent check-in the
+agent repeats at every startup:
 
 ```
 meko-agent starting: env=meko-dev ycp=http://…
 cluster facts: provider=aws region=us-east-2 k8s=v1.33.13-eks-… nodes=17
-enrolled: environment_id=meko-dev (status token acquired)
+enrolled: environment_id=meko-dev
 status: state=READY components=[meko-agent 1/1] desired=0 rev=0 -> 204
 ```
 
-A healthy **re**start says `resuming as env=meko-dev with the persisted status
-token; not enrolling` and never mentions enrolling. If it does re-enroll, its
-`meko-agent-state` Secret is missing or unreadable, and it will keep working only
-until the enrollment token's 30-minute TTL expires.
-
-The same Secret holds the stack, so a restarted agent also says `enrolled with a Meko
-stack to run; deploying it on every tick` without asking the control plane anything. If
-it instead says `no stack came with enrollment`, this environment has none — a control
-plane running `--no-bootstrap-defaults`, one registered with an explicit `desired`, or
-one older than this feature. The environment then runs only what desired state declares.
+An agent that says `enrolled with a Meko stack to run; deploying it on every tick`
+was handed the environment's stack; one that says `no stack came with enrollment`
+has none — a control plane running `--no-bootstrap-defaults`, or an environment
+registered with an explicit `desired`. It then runs only what desired state
+declares.
 
 Failure modes worth knowing:
 
 | Symptom | Cause |
 |---|---|
-| `cannot read agent state` then exit | the ServiceAccount lacks `get` on secrets in its namespace. Deliberately fatal: enrolling instead would spend a bootstrap credential to replace one that may already be there. |
-| `enrolled but could not persist agent state` | it lacks `create`/`update` on secrets. Also fatal, while the enrollment token is still reusable. |
-| `enroll -> 401`, repeating | the enrollment token is expired or wrong. Mint another and update the Secret. |
+| `could not read agent state` / `could not persist agent state` | the ServiceAccount lacks `get`/`create`/`update` on secrets in its namespace. Not fatal — the state holds no credential — but a restart during a control-plane outage then starts from nothing. |
+| `ENROLL REJECTED (401)`, repeating | the API key was revoked, or the environment was re-registered onto a new key. Redeploy with a fresh key Secret, or re-register. |
 | `desired-state unavailable … holding what we last read and changing nothing else` | the control plane is unreachable or erroring. The agent keeps reconciling toward the last desired state it read — that is the point of persisting it — and skips only garbage collection, since it cannot know what an operator withdrew from a response it never got. A data plane survives a control plane being deleted outright: one ran for two and a half days that way, six components healthy throughout. |
 | every pod `ImagePullBackOff` | no `image_pull_secret`. The whole release is private; the control plane warns about this at boot. |
 | the database is `1/1` but `create extension mage` fails | the wrong database image. `mage` and `pg_dist_rag` are in `yugabyte-db/ybdb-meko-release`, not the public `yugabytedb` image. |
@@ -350,10 +348,10 @@ Failure modes worth knowing:
 | `reconcile mcp-server/… needs spec.image` | the private Meko images have no default. Declare `spec.image`, and `spec.image_pull_secret` for a namespace with no pull credentials. |
 | `this database's StatefulSet … cannot be changed in place` | `storage_size` (or another `volumeClaimTemplates` field) differs from what the StatefulSet was created with, which Kubernetes forbids changing. The database keeps serving; either declare the original value or delete the StatefulSet deliberately. |
 
-`meko-agent-state` holds a live `ycp_sts_` token that the control plane keeps
-honouring until the environment is deregistered. Deleting the agent's release does
-not remove it — delete the namespace, and `DELETE /api/v1/environments/{id}` to
-stop the token being accepted.
+The agent's credential is the operator-provided `meko-agent-api-key` Secret
+(`meko-agent-state` holds only identity and caches). Deleting the agent's release
+removes neither — delete the namespace, and `DELETE /api/v1/environments/{id}` to
+drop the binding; its response carries the `api_key_id` so YBM can revoke the key.
 
 ### In-cluster addresses carry a trailing dot
 
@@ -377,9 +375,10 @@ absolute form both work; the four-dot relative form is the one to avoid.
 
 | Env | Default | Purpose |
 |-----|---------|---------|
-| `YCP_URL` | `http://ycp:8080` | Control-plane base URL. Include the subpath when the control plane runs with `--base-path` (e.g. `https://devcloud.yugabyte.com/ycp`); a trailing slash is trimmed. |
-| `ENV_NAME` | `itest-mcs` | Environment to enroll as; must match the registered id (the slug of the name it was registered under). The default is demo residue — always set it. |
-| `ENROLLMENT_TOKEN` | _(unset)_ | One-time bootstrap credential, 30-min TTL. Read from a Secret, never a command line. |
+| `YCP_URL` | `http://ycp:8080/api/v1` | The API base agent routes hang off: YBM's pass-through (`…/api/public/v1/accounts/<id>/ycp`), or the control plane's own `/api/v1` (behind `--base-path`: `https://devcloud.yugabyte.com/ycp/api/v1`); a trailing slash is trimmed. |
+| `ENV_NAME` | `itest-mcs` | Environment name, for logs and the state Secret's re-point detection. The default is demo residue — always set it. |
+| `YCP_API_KEY` | _(unset)_ | The YBM API key every call authenticates with. Read from a Secret, never a command line. Required unless both dev-mode vars are set. |
+| `YCP_DEV_ADMIN_SECRET` / `YCP_DEV_API_KEY_ID` | _(unset)_ | Dev mode against a standalone control plane (no YBM): sent as the `X-Meko-Admin-Secret` / `X-Meko-Api-Key-ID` headers instead of the bearer. Both must be set. |
 | `ENV_PLACEMENT` | `cloud` | Reported placement. |
 | `ENV_PROVIDER` | `gke` | Reported provider; not detected. |
 | `ENV_REGION` | `us-west1` | Reported region; not detected. |

@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/models"
 )
@@ -15,7 +18,8 @@ import (
 //
 // Rows are keyed by uuid; id is the operator-facing slug, unique only within an
 // account. Any lookup starting from an id therefore needs the account, or another
-// way to tell two accounts' environments apart -- see Get and GetByAgentToken.
+// way to tell two accounts' environments apart -- see Get. Agent calls avoid the
+// problem entirely: they resolve by api_key_id, which is unique fleet-wide.
 type EnvironmentRepo struct {
 	db *sql.DB
 }
@@ -54,23 +58,19 @@ var ErrAmbiguousID = errors.New("environment id belongs to more than one account
 
 const envColumns = `uuid, id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
-	COALESCE(components::text, '[]'), live, enroll_token_hash, enroll_token_expires_at, status_token_hash, created_at,
+	COALESCE(components::text, '[]'), live, api_key_id, created_at,
 	COALESCE(kind, 'meko'), COALESCE(resources::text, '[]')`
 
 func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, error) {
 	var e models.Environment
 	var region, k8sVersion, provider, agentVersion, mcpBaseURL, certFingerprint sql.NullString
-	var lastHeartbeat, enrollExpires sql.NullTime
+	var lastHeartbeat sql.NullTime
 	var componentsText, resourcesText string
 	if err := row.Scan(&e.UUID, &e.ID, &e.AccountID, &e.Placement, &region, &e.State, &k8sVersion,
 		&e.NodeCount, &provider, &e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat,
-		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &e.EnrollTokenHash, &enrollExpires,
-		&e.StatusTokenHash, &e.CreatedAt, &e.Kind, &resourcesText); err != nil {
+		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &e.APIKeyID,
+		&e.CreatedAt, &e.Kind, &resourcesText); err != nil {
 		return nil, err
-	}
-	if enrollExpires.Valid {
-		t := enrollExpires.Time
-		e.EnrollTokenExpiresAt = &t
 	}
 	e.AccountID = accountFromStore(e.AccountID)
 	e.Region = region.String
@@ -141,17 +141,13 @@ func (r *EnvironmentRepo) Get(accountID, id string) (*models.Environment, error)
 	return found, nil
 }
 
-// GetByAgentToken resolves the environment an agent is reporting for. The agent
-// knows only its id, which no longer identifies a row on its own, so the status
-// token it authenticates with is what disambiguates. Returns (nil, nil) when
-// nothing matches both -- which is also how an invalid token surfaces.
-func (r *EnvironmentRepo) GetByAgentToken(id, statusTokenHash string) (*models.Environment, error) {
-	if statusTokenHash == "" {
-		return nil, nil
-	}
+// GetByAPIKeyID resolves the environment an agent is calling for, by the key id
+// YBM forwarded. An exact hit on the environments_api_key_id_uniq index; (nil,
+// nil) when no environment is bound to the key -- which is also how a revoked or
+// never-registered key surfaces.
+func (r *EnvironmentRepo) GetByAPIKeyID(apiKeyID string) (*models.Environment, error) {
 	return scanOne(r.db.QueryRow(
-		`SELECT `+envColumns+` FROM meko_system.environments WHERE id = $1 AND status_token_hash = $2`,
-		id, statusTokenHash))
+		`SELECT `+envColumns+` FROM meko_system.environments WHERE api_key_id = $1`, apiKeyID))
 }
 
 // List returns environments, live ones first. A non-empty accountID restricts the
@@ -182,16 +178,38 @@ func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) 
 
 const envColumnsInsert = `id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
-	components, live, enroll_token_hash, enroll_token_expires_at, status_token_hash, created_at,
+	components, live, api_key_id, created_at,
 	kind, resources`
 
+// ErrAPIKeyBound is returned when a registration would bind an api key that another
+// environment already holds, which environments_api_key_id_uniq forbids: one key
+// drives one environment. Mapped to 409 by handlers.
+var ErrAPIKeyBound = errors.New("api key is already bound to another environment")
+
+// apiKeyUniqueConstraint is the index whose violation means ErrAPIKeyBound. Matched
+// by name so a violation of any OTHER unique index still surfaces as itself.
+const apiKeyUniqueConstraint = "environments_api_key_id_uniq"
+
 // Insert registers an environment, or re-registers the caller's own, and sets
-// e.UUID to the key of the row that resulted.
+// e.UUID to the key of the row that resulted. replacedAPIKeyID is the api_key_id
+// a re-registered row held before this write, when it differs from the new one --
+// the caller (YBM) revokes that key, since nothing authenticates with it any more.
 //
 // The conflict target is (account_id, id), so a name another account holds is not a
 // conflict at all -- it inserts that account's own environment. Only re-registering
 // your own name updates a row, which is what registration always did.
-func (r *EnvironmentRepo) Insert(e *models.Environment) error {
+//
+// The `old` CTE reads the pre-statement snapshot, which is what makes the previous
+// binding observable in the same round trip as the upsert that replaces it. That
+// snapshot is also why the whole thing needs the advisory lock below: two concurrent
+// registrations of the same (account_id, id) would each see an empty `old`, so the
+// loser would overwrite the winner's api_key_id while reporting nothing to revoke --
+// leaving a live key bound to no environment. The lock key is hashtext of
+// (account_id, id), a 32-bit hash, so two different environments can collide onto
+// one key and serialize against each other. That costs a little concurrency and
+// nothing else: a collision over-serializes, it never admits two registrations of
+// the same name.
+func (r *EnvironmentRepo) Insert(e *models.Environment) (replacedAPIKeyID string, err error) {
 	components := e.Components
 	if len(components) == 0 {
 		components = json.RawMessage("[]")
@@ -204,30 +222,70 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 	if kind == "" {
 		kind = "meko"
 	}
-	err := r.db.QueryRow(`
-		INSERT INTO meko_system.environments (`+envColumnsInsert+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
-		ON CONFLICT (account_id, id) DO UPDATE SET
-			placement=$3, region=$4, state=$5, k8s_version=$6, node_count=$7,
-			provider=$8, datapacks=$9, max_datapacks=$10, agent_version=$11, last_heartbeat_at=$12,
-			mcp_base_url=$13, cert_fingerprint=$14, components=$15, live=$16,
-			enroll_token_hash=$17, enroll_token_expires_at=$18, status_token_hash=$19,
-			kind=$21, resources=$22
-		RETURNING uuid`,
-		e.ID, accountForStore(e.AccountID), e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
+	account := accountForStore(e.AccountID)
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("insert environment: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Held until commit, so it covers the read-and-upsert below as one unit.
+	if _, err = tx.Exec(
+		`SELECT pg_advisory_xact_lock(hashtext($1))`, account+"/"+e.ID); err != nil {
+		return "", fmt.Errorf("insert environment: lock: %w", err)
+	}
+
+	var oldKey string
+	err = tx.QueryRow(`
+		WITH old AS (
+			SELECT uuid, api_key_id FROM meko_system.environments WHERE account_id = $2 AND id = $1
+		), ins AS (
+			INSERT INTO meko_system.environments (`+envColumnsInsert+`)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			ON CONFLICT (account_id, id) DO UPDATE SET
+				placement=$3, region=$4, state=$5, k8s_version=$6, node_count=$7,
+				provider=$8, datapacks=$9, max_datapacks=$10, agent_version=$11, last_heartbeat_at=$12,
+				mcp_base_url=$13, cert_fingerprint=$14, components=$15, live=$16,
+				api_key_id=$17, kind=$19, resources=$20
+			RETURNING uuid
+		)
+		SELECT ins.uuid, COALESCE(old.api_key_id::text, '') FROM ins LEFT JOIN old ON old.uuid = ins.uuid`,
+		e.ID, account, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
-		e.EnrollTokenHash, e.EnrollTokenExpiresAt, e.StatusTokenHash, e.CreatedAt, kind,
-		[]byte(resources)).Scan(&e.UUID)
+		e.APIKeyID, e.CreatedAt, kind,
+		[]byte(resources)).Scan(&e.UUID, &oldKey)
 	if err != nil {
+		if isAPIKeyBoundViolation(err) {
+			return "", fmt.Errorf("%w: %s", ErrAPIKeyBound, e.APIKeyID)
+		}
 		slog.Error("insert environment", "id", e.ID, "account", e.AccountID, "err", err)
-		return fmt.Errorf("insert environment: %w", err)
+		return "", fmt.Errorf("insert environment: %w", err)
 	}
-	return nil
+	if err = tx.Commit(); err != nil {
+		return "", fmt.Errorf("insert environment: commit: %w", err)
+	}
+	if oldKey != "" && oldKey != e.APIKeyID {
+		replacedAPIKeyID = oldKey
+	}
+	return replacedAPIKeyID, nil
+}
+
+// isAPIKeyBoundViolation reports whether err is a unique violation (SQLSTATE 23505)
+// of the api-key index. Matched on the driver error's code and constraint name
+// rather than on message text, which is not a stable contract.
+func isAPIKeyBoundViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505" && strings.Contains(pqErr.Constraint, apiKeyUniqueConstraint)
+	}
+	return false
 }
 
 // Update writes an existing environment back by its key. Every caller has already
-// read the row; id and account_id are not written, because neither is editable.
+// read the row; id, account_id and api_key_id are not written -- the first two are
+// not editable, and the key binding changes only through registration.
 func (r *EnvironmentRepo) Update(e *models.Environment) error {
 	components := e.Components
 	if len(components) == 0 {
@@ -246,33 +304,17 @@ func (r *EnvironmentRepo) Update(e *models.Environment) error {
 			placement=$2, region=$3, state=$4, k8s_version=$5, node_count=$6,
 			provider=$7, datapacks=$8, max_datapacks=$9, agent_version=$10, last_heartbeat_at=$11,
 			mcp_base_url=$12, cert_fingerprint=$13, components=$14, live=$15,
-			enroll_token_hash=$16, enroll_token_expires_at=$17, status_token_hash=$18,
-			kind=$19, resources=$20
+			kind=$16, resources=$17
 		WHERE uuid = $1`,
 		e.UUID, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
-		e.EnrollTokenHash, e.EnrollTokenExpiresAt, e.StatusTokenHash, kind, []byte(resources))
+		kind, []byte(resources))
 	if err != nil {
 		slog.Error("update environment", "uuid", e.UUID, "err", err)
 		return fmt.Errorf("update environment: %w", err)
 	}
 	return nil
-}
-
-// EnrollLookup returns the uuid of the (single) environment holding a non-expired
-// enrollment token with the given hash; found=false when none matches.
-func (r *EnvironmentRepo) EnrollLookup(tokenHash string) (envUUID string, found bool, err error) {
-	err = r.db.QueryRow(
-		`SELECT uuid FROM meko_system.environments WHERE enroll_token_hash = $1 AND enroll_token_expires_at > now() LIMIT 1`,
-		tokenHash).Scan(&envUUID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("enroll lookup: %w", err)
-	}
-	return envUUID, true, nil
 }
 
 // ReplaceDesired atomically replaces the desired resource set for an environment,

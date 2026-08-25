@@ -18,7 +18,7 @@ write-once binding endpoint the agent pins itself to.
   reconcile-agent (in the customer cluster)     amp controller            YCP (control-plane mode)
   ┌─────────────────────────────────┐           ┌──────────────┐          ┌────────────────────────┐
   │ enroll (kind=amp) ──────────────┼───────────┼──────────────┼─────────►│ POST /agent/enroll     │
-  │ pin binding ────────────────────┼──────────►│ POST /ycp/    │          │  -> status token       │
+  │ pin binding ────────────────────┼──────────►│ POST /ycp/    │          │  -> environment id     │
   │                                 │           │      binding  │          │                        │
   │ every reconcile interval:       │           │              │          │ GET  /agent/desired... │
   │  1. GET desired state ──────────┼───────────┼──────────────┼─────────►│                        │
@@ -29,6 +29,12 @@ write-once binding endpoint the agent pins itself to.
                                                   ycp_binding                environments.kind='amp'
                                                   (migration 0007)           environments.resources=[…]
 ```
+
+Every agent → YCP call authenticates with the environment's YBM API key
+(`YCP_API_KEY`, or the `YCP_DEV_ADMIN_SECRET` + `YCP_DEV_API_KEY_ID` header pair
+against a standalone control plane). Enrollment is an idempotent check-in the
+agent repeats at every startup; the state Secret (`reconcile-agent-state`) keeps
+only the identity it confirmed, no credential.
 
 The engine, the amp backend (how desired-state kinds map onto amp's
 pool → cluster → branch → endpoint hierarchy), and the enroll/report client all
@@ -110,7 +116,7 @@ The controller used to enroll and report to YCP itself, on a background goroutin
 (`ycp.Loop`) with its identity persisted in `ycp_identity` (migration 0004). That
 was the "register + report" half of a design that always intended reconciliation
 to follow. When the standalone agent landed — which must be the *sole* YCP client
-(YCP mints one status token per environment) — the controller loop was retired
+(one API key drives one environment) — the controller loop was retired
 (migration 0008 drops `ycp_identity`; the `--ycp-*` flags and `controller.ycp.*`
 Helm values are gone). The binding endpoint is all that remains on the controller.
 

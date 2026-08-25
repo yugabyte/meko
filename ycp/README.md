@@ -38,6 +38,6 @@ Dockerfile builds which image, how the agent is configured, and how it is
 operated once attached.
 
 > **See also:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the pull-loop design
-> and the token model, [`BYOC-ON-GKE.md`](./BYOC-ON-GKE.md) to stand a whole data
+> and the api-key auth model, [`BYOC-ON-GKE.md`](./BYOC-ON-GKE.md) to stand a whole data
 > plane up on a real cluster start to finish, and [`STATUS.md`](./STATUS.md) for
 > what works today and what is still open.
