@@ -306,6 +306,31 @@ func assertEndpointsServe(t *core.T, env ampTenantEnv, tenants []tenant, settle 
 	return nil
 }
 
+// awaitControlPlaneReady polls /readyz to the caller's settle budget. The
+// controller stores its state in the backing YugabyteDB, so chaos there leaves
+// it unready, out of its Service, and refusing connections for minutes. The
+// client is re-resolved every round: a controller address that is a pod IP dies
+// with the pod, and polling the dead one for the whole budget reads as a hang.
+func awaitControlPlaneReady(t *core.T, fleet *tenantFleet, settle time.Duration) (time.Duration, error) {
+	start := time.Now()
+	deadline := start.Add(settle)
+	for {
+		cl, err := fleet.env.AmpController(t.Context)
+		if err == nil {
+			if err = cl.Readyz(t.Context); err == nil {
+				return time.Since(start), nil
+			}
+		}
+		if t.Context.Err() != nil {
+			return time.Since(start), t.Context.Err()
+		}
+		if time.Now().After(deadline) {
+			return time.Since(start), fmt.Errorf("the control plane is still not ready %s after the chaos stopped: %w", settle, err)
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
 // assertAmpHealthy reports pods in the control-plane namespace that are not
 // running and ready — a crash-looping controller or endpoint is exactly the
 // "amp stopped working" this tier is here to catch. Pods that completed

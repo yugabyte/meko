@@ -137,6 +137,11 @@ func runBackingNemesis(t *core.T) error {
 	}
 
 	return t.Step("control_plane_recovered", func(s *core.StepHandle) error {
+		waited, err := awaitControlPlaneReady(t, fleet, params.SettleTimeout)
+		if err != nil {
+			return err
+		}
+		s.Set("ready_after", waited.Round(time.Second).String())
 		before := len(fleet.Tenants)
 		if err := fleet.Create(t, 1); err != nil {
 			return fmt.Errorf("the control plane cannot create a tenant after the chaos: %w", err)
