@@ -44,7 +44,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/controller-ui:1.2.3
+          value: quay.io/yugabyte/amp-controller-ui:1.2.3
 
   - it: exposes the http container port and HTTP /healthz probes
     template: templates/ui-deployment.yaml

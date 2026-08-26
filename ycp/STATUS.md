@@ -261,5 +261,9 @@ amp id is prefixed `amp-<slug>`, and the enroll handshake checks the kind, so th
 two coexist in one fleet and neither attaches to the other's environment. An amp environment seeds no `meko-stack`;
 its install hint installs the `yb-amp-controller` chart with the reconcile-agent
 (`agent.enabled=true`) turned on — the agent is the sole YCP client and drives the
-controller over its REST API. The controller's design for this is
+controller over its REST API. Everything the control plane can know is filled in —
+the namespace (defaulted to the environment id, one per environment per cluster), the
+placement, the URL — and the three it cannot (YugabyteDB endpoint, image tag, pull
+secret) are an editable header rather than placeholders mid-command.
+The controller's design for this is
 [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md).

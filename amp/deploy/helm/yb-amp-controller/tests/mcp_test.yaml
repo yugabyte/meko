@@ -54,7 +54,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/mcp:1.2.3
+          value: quay.io/yugabyte/amp-mcp:1.2.3
 
   - it: exposes the mcp container port and HTTP /healthz probes
     template: templates/mcp-deployment.yaml

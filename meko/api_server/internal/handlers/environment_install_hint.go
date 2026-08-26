@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -37,7 +38,7 @@ const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder,
 func installHint(c echo.Context, e *models.Environment, agentBaseURL string) string {
 	url := agentURL(c, e.AccountID, agentBaseURL)
 	if e.Kind == "amp" {
-		return ampInstallHint(url, e.ID)
+		return ampInstallHint(url, e.ID, e.Placement)
 	}
 	return mekoInstallHint(url, e.ID)
 }
@@ -88,37 +89,96 @@ const ampInstallNamespace = "amp"
 // it explicitly so the two can't drift.
 const ampAPIKeySecretName = "amp-agent-api-key" //nolint:gosec // a Secret NAME, not a credential
 
-// ampInstallHint attaches an amp environment to this control plane. It installs
-// the amp controller plus its reconcile-agent: the agent enrolls, binds the
-// controller, and converges it to the environment's desired state, driving it
-// over the REST API. The controller itself no longer talks to YCP. A YugabyteDB
-// foundation cluster must already be running (the controller's state store).
-func ampInstallHint(ycpURL, envID string) string {
-	ns := ampInstallNamespace
+var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// namespaceFor is the namespace the amp install defaults to: the environment id,
+// so a cluster can hold several environments without the operator having to think
+// about it (the chart installs once per namespace — its cluster-scoped RBAC names
+// are namespace-prefixed for exactly this). The id is not guaranteed to be a legal
+// namespace: slug() only lowercases and maps space/underscore/slash, over a name
+// validated as 3-60 chars, so "amp-" + name can exceed 63 or carry a dot. Fall back
+// rather than print something kubectl will reject.
+func namespaceFor(envID string) string {
+	if len(envID) == 0 || len(envID) > 63 || !dns1123Label.MatchString(envID) {
+		return ampInstallNamespace
+	}
+	return envID
+}
+
+// ampInstallHint attaches an amp environment to this control plane: the amp
+// controller plus its reconcile-agent, which binds the controller and converges it
+// to the environment's desired state over the REST API. The controller itself never
+// talks to YCP.
+//
+// Everything the control plane can know is filled in. What is left are four values
+// it cannot — the YugabyteDB endpoint, the image tag, the pull secret, and the
+// namespace if the default does not suit — and those are lifted into a header the
+// operator edits once, rather than left as placeholders inside a command that looks
+// pasteable and is not. The chart's own defaults are not usable as-is: the images
+// resolve to docker.io, otel remote-writes to a store that is not there, and the UI
+// and an internal LoadBalancer would both be deployed for nobody.
+func ampInstallHint(ycpURL, envID, placement string) string {
+	ns := namespaceFor(envID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Prerequisite: a YugabyteDB foundation cluster already running in this\n")
-	fmt.Fprintf(&b, "# cluster — it is the amp controller's state store.\n\n")
+	fmt.Fprintf(&b, "# Prerequisites\n")
+	fmt.Fprintf(&b, "#   - YugabyteDB up and reachable from this cluster, with a yb_storage database:\n")
+	fmt.Fprintf(&b, "#       CREATE DATABASE yb_storage;\n")
+	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
+	fmt.Fprintf(&b, "#   - a docker-registry Secret for quay.io/yugabyte, in the namespace below\n\n")
+
+	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is.\n")
+	fmt.Fprintf(&b, "NS=%s\n", ns)
+	fmt.Fprintf(&b, "YB=<yb-tserver-host>:5433      # YugabyteDB tserver endpoint (host:port)\n")
+	fmt.Fprintf(&b, "TAG=<amp image tag>            # quay.io/yugabyte/amp-* tag, e.g. custom-7f195e43e51f\n")
+	fmt.Fprintf(&b, "PULL_SECRET=<secret name>      # docker-registry Secret for quay.io/yugabyte\n\n")
 
 	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable\n")
 	fmt.Fprintf(&b, "#      there). The reconcile-agent reads it, not the controller.\n")
-	fmt.Fprintf(&b, "kubectl create namespace %s\n", ns)
-	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n", ns, ampAPIKeySecretName)
-	fmt.Fprintf(&b, "  --from-literal=api-key=%s\n\n", apiKeyPlaceholder)
+	fmt.Fprintf(&b, "kubectl create namespace \"${NS}\" --dry-run=client -o yaml | kubectl apply -f -\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic %s \\\n", ampAPIKeySecretName)
+	fmt.Fprintf(&b, "  --from-literal=api-key=%s \\\n", apiKeyPlaceholder)
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
 
-	fmt.Fprintf(&b, "# 2 — install the amp controller and its reconcile-agent (from an amp checkout).\n")
+	fmt.Fprintf(&b, "# 2 — install the amp controller and its reconcile-agent, from a meko checkout.\n")
 	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
-	fmt.Fprintf(&b, "helm upgrade --install amp-controller amp/deploy/helm/yb-amp-controller -n %s \\\n", ns)
-	fmt.Fprintf(&b, "  --set controller.databaseUrl=<your YugabyteDB DSN> \\\n")
+	fmt.Fprintf(&b, "helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller -n \"${NS}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string imageTag=\"${TAG}\" \\\n")
+	// --set-string, not --set: the DSN's ? and = are mis-tokenized by --set.
+	fmt.Fprintf(&b, "  --set-string controller.databaseUrl=\"postgres://yugabyte@${YB}/yb_storage?sslmode=disable\" \\\n")
+	fmt.Fprintf(&b, "  --set-string controller.endpoint.ybHostPorts=\"${YB}\" \\\n")
+	fmt.Fprintf(&b, "  --set \"imagePullSecrets[0].name=${PULL_SECRET}\" \\\n")
+	fmt.Fprintf(&b, "  --set controller.service.type=none \\\n")
+	fmt.Fprintf(&b, "  --set ui.enabled=false \\\n")
+	fmt.Fprintf(&b, "  --set otel.enabled=false \\\n")
 	fmt.Fprintf(&b, "  --set agent.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set agent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "  --set agent.envName=%s \\\n", envID)
-	fmt.Fprintf(&b, "  --set agent.apiKeySecret.name=%s \\\n", ampAPIKeySecretName)
-	fmt.Fprintf(&b, "  --set-string agent.image.tag=<reconcile-agent tag>\n\n")
+	if placement != "" {
+		fmt.Fprintf(&b, "  --set agent.placement=%s \\\n", placement)
+	}
+	fmt.Fprintf(&b, "  --set agent.apiKeySecret.name=%s\n\n", ampAPIKeySecretName)
 
-	fmt.Fprintf(&b, "# The agent enrolls, binds this controller, then converges it to the environment's\n")
-	fmt.Fprintf(&b, "# desired state and reports the result to this console.\n")
-	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/amp-reconcile-agent\n", ns)
+	fmt.Fprintf(&b, "# The agent binds this controller, then converges it to the environment's desired\n")
+	fmt.Fprintf(&b, "# state and reports the result to this console.\n")
+	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" rollout status deploy/amp-controller\n")
+	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs -f deploy/amp-reconcile-agent\n")
+	fmt.Fprintf(&b, "#\n")
+	fmt.Fprintf(&b, "# otel is off because its default remote-write endpoint is a metrics store this\n")
+	fmt.Fprintf(&b, "# cluster very likely does not run. Turn it back on with otel.remoteWriteEndpoint\n")
+	fmt.Fprintf(&b, "# set, on a cluster running the OpenTelemetry Operator.\n")
+	fmt.Fprintf(&b, "#\n")
+	fmt.Fprintf(&b, "# Already running an amp controller in this namespace? Attach the agent to that\n")
+	fmt.Fprintf(&b, "# release instead, leaving every other value untouched:\n")
+	fmt.Fprintf(&b, "#   helm upgrade yb-amp-controller amp/deploy/helm/yb-amp-controller \\\n")
+	fmt.Fprintf(&b, "#     -n \"${NS}\" --reuse-values \\\n")
+	fmt.Fprintf(&b, "#     --set agent.enabled=true --set agent.ycpUrl=%s \\\n", ycpURL)
+	fmt.Fprintf(&b, "#     --set agent.envName=%s ", envID)
+	if placement != "" {
+		fmt.Fprintf(&b, "--set agent.placement=%s ", placement)
+	}
+	fmt.Fprintf(&b, "\\\n")
+	fmt.Fprintf(&b, "#     --set agent.apiKeySecret.name=%s\n", ampAPIKeySecretName)
 	return b.String()
 }
 

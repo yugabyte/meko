@@ -12,13 +12,21 @@ import (
 
 func hintFor(t *testing.T, kind, path, host, accountID, agentBaseURL string, headers map[string]string) string {
 	t.Helper()
+	return hintForEnv(t, &models.Environment{
+		ID: "acme-prod", Kind: kind, AccountID: accountID, APIKeyID: keyA,
+	}, path, host, agentBaseURL, headers)
+}
+
+func hintForEnv(
+	t *testing.T, e *models.Environment, path, host, agentBaseURL string, headers map[string]string,
+) string {
+	t.Helper()
 	req := httptest.NewRequest("POST", path, nil)
 	req.Host = host
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	c := echo.New().NewContext(req, httptest.NewRecorder())
-	e := &models.Environment{ID: "acme-prod", Kind: kind, AccountID: accountID, APIKeyID: keyA}
 	return installHint(c, e, agentBaseURL)
 }
 
@@ -64,19 +72,40 @@ func TestInstallHint_IsRunnableAsPrinted(t *testing.T) {
 // with its reconcile-agent turned on (the agent is the sole YCP client), not the
 // meko-agent. It must be runnable as printed and must not leak the meko chart into
 // an amp install.
+//
+// "Runnable as printed" is load-bearing here: the chart's own defaults are not
+// installable (images resolve to docker.io, otel remote-writes to a store that is
+// not there), so a hint that omits a value is not neutral — it is broken.
 func TestInstallHint_Amp(t *testing.T) {
-	hint := hintFor(t, "amp", "/api/v1/environments", "ycp.example.com", "", "", nil)
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA, Placement: "onprem",
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
 
 	for _, want := range []string{
 		// The key, in a Secret the agent reads from — the chart's default name.
 		"create secret generic amp-agent-api-key",
 		"--from-literal=api-key=<YCP_AGENT_API_KEY>",
-		// The amp controller chart, with the reconcile-agent turned on and pointed here.
-		"helm upgrade --install amp-controller amp/deploy/helm/yb-amp-controller",
+		// The release name every deploy script and the chart README use, so a
+		// hint-installed release answers to `helm uninstall yb-amp-controller`.
+		"helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller",
 		"--set agent.enabled=true",
 		"--set agent.ycpUrl=http://ycp.example.com/api/v1",
-		"--set agent.envName=acme-prod",
+		"--set agent.envName=amp-acme-prod",
 		"--set agent.apiKeySecret.name=amp-agent-api-key",
+		// The registered placement, or the agent silently reports "cloud".
+		"--set agent.placement=onprem",
+		// One value carries every image; without it they resolve to docker.io/amp/*.
+		`--set-string imageTag="${TAG}"`,
+		// --set-string, not --set: ? and = in the DSN are mis-tokenized by --set.
+		`--set-string controller.databaseUrl="postgres://yugabyte@${YB}/yb_storage?sslmode=disable"`,
+		// Without these three the controller comes up unable to pull, unable to
+		// reach storage, and shipping metrics to a store that is not there.
+		`--set-string controller.endpoint.ybHostPorts="${YB}"`,
+		`--set "imagePullSecrets[0].name=${PULL_SECRET}"`,
+		"--set otel.enabled=false",
+		// A YCP-driven environment has no UI of its own, and no cloud LB.
+		"--set ui.enabled=false",
+		"--set controller.service.type=none",
 		// The YugabyteDB prerequisite is called out.
 		"YugabyteDB",
 	} {
@@ -85,15 +114,100 @@ func TestInstallHint_Amp(t *testing.T) {
 		}
 	}
 
-	// The retired token flow and controller-side YCP loop must not reappear, and
-	// the meko-agent install must not bleed into an amp hint.
+	// The retired token flow and controller-side YCP loop must not reappear, the
+	// meko-agent install must not bleed into an amp hint, and the placeholders this
+	// rewrite removed must not come back.
 	for _, unwanted := range []string{
 		"enrollment-token", "ycp_enr_",
 		"controller.ycp", // the controller no longer talks to YCP
 		"meko-agent", "values-agent.yaml",
+		"<your YugabyteDB DSN>", "<reconcile-agent tag>",
+		"--set controller.databaseUrl=", // the mis-tokenizing form
 	} {
 		if strings.Contains(hint, unwanted) {
 			t.Errorf("amp hint contains retired/foreign string %q:\n%s", unwanted, hint)
+		}
+	}
+}
+
+// The failure mode this rewrite existed to kill was a `<placeholder>` sitting inside
+// a command that looks pasteable. Values the server cannot know belong in the
+// editable header, so no other line may carry one — checking the shape rather than
+// the three specific placeholders that happened to be there.
+func TestInstallHint_AmpPlaceholdersOnlyInTheHeader(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA, Placement: "cloud",
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	for _, line := range strings.Split(hint, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		// The header's NAME=<value> lines are the point: they are what the operator
+		// edits. A header line is a bare shell assignment — no spaces before the
+		// "=" — which is what separates it from a `--set foo=<bar>` flag.
+		if name, _, ok := strings.Cut(trimmed, "="); ok && name != "" && !strings.ContainsAny(name, " \t") {
+			continue
+		}
+		if strings.Contains(strings.ReplaceAll(line, apiKeyPlaceholder, ""), "<") {
+			t.Errorf("placeholder outside the editable header:\n%s\nin:\n%s", line, hint)
+		}
+	}
+}
+
+// An environment registered without a placement takes the chart default rather than
+// printing an empty --set.
+func TestInstallHint_AmpOmitsEmptyPlacement(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA,
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	if strings.Contains(hint, "agent.placement") {
+		t.Errorf("hint set a placement it was never given:\n%s", hint)
+	}
+}
+
+// One cluster holds many amp environments, one namespace each — the chart is built
+// for it. So the namespace is a variable defaulting to the environment id, and no
+// command may hardcode one.
+func TestInstallHint_AmpNamespaceIsAVariable(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA,
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	if !strings.Contains(hint, "NS=amp-acme-prod") {
+		t.Errorf("hint did not default NS to the environment id:\n%s", hint)
+	}
+	for _, want := range []string{
+		`kubectl create namespace "${NS}"`,
+		`kubectl -n "${NS}" create secret generic`,
+		`amp/deploy/helm/yb-amp-controller -n "${NS}"`,
+	} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint is missing %q — a hardcoded namespace collides with the\n"+
+				"other environments in the cluster:\n%s", want, hint)
+		}
+	}
+}
+
+// The environment id is only as constrained as the name it was slugged from, which
+// is validated as 3-60 chars and nothing else. Anything kubectl would reject falls
+// back rather than printing a command that cannot run.
+func TestNamespaceFor(t *testing.T) {
+	for _, tc := range []struct{ id, want string }{
+		{"amp-acme-prod", "amp-acme-prod"},
+		{"acme-prod", "acme-prod"},
+		{"amp-acme.prod", "amp"},                  // slug() does not strip dots
+		{"amp-acme@prod", "amp"},                  // nor anything else
+		{"amp-Acme", "amp"},                       // nor uppercase, if it ever reached here
+		{"-amp-acme", "amp"},                      // leading dash
+		{"amp-acme-", "amp"},                      // trailing dash
+		{"amp-" + strings.Repeat("x", 60), "amp"}, // 64 chars: over the 63 limit
+		{"", "amp"},
+	} {
+		if got := namespaceFor(tc.id); got != tc.want {
+			t.Errorf("namespaceFor(%q) = %q, want %q", tc.id, got, tc.want)
 		}
 	}
 }

@@ -53,9 +53,9 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             - name: AMP_ENDPOINT_IMAGE_REPO
-              value: {{ .Values.controller.endpoint.image.repository | quote }}
+              value: {{ include "yb-amp-controller.endpointImageRepo" . | quote }}
             - name: AMP_ENDPOINT_IMAGE_TAG
-              value: {{ .Values.controller.endpoint.image.tag | default .Chart.AppVersion | quote }}
+              value: {{ include "yb-amp-controller.endpointImageTag" . | quote }}
             {{- with .Values.imagePullSecrets }}
             - name: AMP_DEPLOY_PULL_SECRET
               value: {{ (first .).name | quote }}

@@ -1,0 +1,101 @@
+suite: reconcile-agent
+templates:
+  - templates/agent-deployment.yaml
+# Pin appVersion so the image-tag assertion is deterministic — the real
+# appVersion is stamped from the repo-root VERSION file (scripts/version.sh).
+chart:
+  appVersion: "1.2.3"
+tests:
+  - it: renders nothing when the agent is off
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the agent Deployment wired to YCP and the in-cluster controller
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+    release:
+      namespace: amp-acme-prod
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: amp-reconcile-agent
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YCP_URL
+            value: https://devcloud.yugabyte.com/ycp/api/v1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENV_NAME
+            value: amp-acme-prod
+      # Empty agent.controllerUrl resolves to the release namespace's own
+      # controller Service, with the /api/v1 base the agent's client expects.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_CONTROLLER_URL
+            value: http://amp-controller.amp-acme-prod.svc.cluster.local:8080/api/v1
+
+  # Both are hard `fail`s rather than a pod that starts and cannot work.
+  - it: refuses to render without agent.ycpUrl
+    set:
+      agent.enabled: true
+      agent.envName: amp-acme-prod
+    asserts:
+      - failedTemplate:
+          errorMessage: agent.ycpUrl is required when agent.enabled
+
+  - it: refuses to render without agent.envName
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+    asserts:
+      - failedTemplate:
+          errorMessage: agent.envName is required when agent.enabled
+
+  # The agent resolves through the same registry and tag rule as the amp
+  # images, so one imageTag covers the whole install.
+  - it: takes imageRegistry and imageTag like every other image
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      imageTag: custom-7f195e43e51f
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/ycp-reconciler-agent:custom-7f195e43e51f
+      # AGENT_VERSION reports whatever tag was resolved.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AGENT_VERSION
+            value: custom-7f195e43e51f
+
+  - it: falls back to the chart appVersion when no tag is set anywhere
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/ycp-reconciler-agent:1.2.3
+
+  - it: prefers an explicit agent image tag over imageTag
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      imageTag: custom-7f195e43e51f
+      agent.image.tag: latest
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/ycp-reconciler-agent:latest

@@ -44,7 +44,7 @@ spec:
             - name: ENV_PLACEMENT
               value: {{ .Values.agent.placement | quote }}
             - name: AGENT_VERSION
-              value: {{ .Values.agent.image.tag | default .Chart.AppVersion | quote }}
+              value: {{ include "yb-amp-controller.imageTag" (dict "tag" .Values.agent.image.tag "ctx" .) | quote }}
             {{- with .Values.agent.reconcileInterval }}
             - name: RECONCILE_INTERVAL
               value: {{ . | quote }}

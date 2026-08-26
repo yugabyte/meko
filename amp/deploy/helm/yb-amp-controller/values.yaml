@@ -6,6 +6,16 @@
 
 # -- Pull secrets for the controller + MCP images (ECR). List of {name: ...}.
 imagePullSecrets: []
+
+# -- Registry (and org) the amp images live in, prefixed onto any image
+# repository below that names no registry host of its own. A repository that
+# already carries a host (gcr.io/..., <acct>.dkr.ecr...) is used verbatim, so
+# the deploy scripts that pass full paths are unaffected.
+imageRegistry: "quay.io/yugabyte"
+# -- Tag for every image that does not set its own. Empty falls back to the
+# chart appVersion, which is not published — so a real deploy sets this (or a
+# per-image tag) rather than relying on the fallback.
+imageTag: ""
 nameOverride: ""
 fullnameOverride: ""
 
@@ -32,8 +42,8 @@ controller:
 
   image:
     # -- Controller image repository.
-    repository: amp/controller
-    # -- Image tag. Empty string defaults to the chart appVersion.
+    repository: amp-controller
+    # -- Image tag. Empty falls back to .Values.imageTag, then the chart appVersion.
     tag: ""
     pullPolicy: IfNotPresent
 
@@ -75,8 +85,9 @@ controller:
   endpoint:
     image:
       # -- Endpoint image repository (AMP_ENDPOINT_IMAGE_REPO).
-      repository: amp/endpoint
-      # -- Endpoint image tag (AMP_ENDPOINT_IMAGE_TAG); empty => chart appVersion.
+      repository: amp-endpoint
+      # -- Endpoint image tag (AMP_ENDPOINT_IMAGE_TAG); empty falls back to
+      # .Values.imageTag, then the chart appVersion.
       tag: ""
     # -- CSV of backing-YB tserver host:port the controller hands to endpoints (AMP_DEPLOY_YB_HOST_PORTS).
     ybHostPorts: "yb-tserver:5433"
@@ -140,16 +151,20 @@ agent:
   replicaCount: 1
 
   image:
-    # -- Reconcile-agent image repository.
-    repository: quay.io/yugabyte/ycp-reconciler-agent
-    # -- Image tag. This image publishes as custom-<sha> and latest (its own
-    # build, not the controller's), so pin custom-<sha> in production. Empty falls
-    # back to the chart appVersion, which this image does not publish.
-    tag: "latest"
+    # -- Reconcile-agent image repository. Published as
+    # quay.io/yugabyte/ycp-reconciler-agent; the host comes from imageRegistry.
+    repository: ycp-reconciler-agent
+    # -- Image tag. Empty falls back to .Values.imageTag, then the chart
+    # appVersion. /ci amp_deploy_gke_ycp publishes this image under the same
+    # custom-<sha> as the amp images, so imageTag covers all of them; its own
+    # build also publishes latest, which an explicit tag here selects.
+    tag: ""
     pullPolicy: IfNotPresent
 
-  # -- YCP control-plane base URL, e.g. https://devcloud.yugabyte.com/ycp
-  # (YCP_URL). Required when enabled.
+  # -- YCP base URL the agent dials (YCP_URL) — YBM's per-account pass-through,
+  # or a direct address like https://devcloud.yugabyte.com/ycp/api/v1. Take it
+  # from the install hint verbatim: it already carries the API base path.
+  # Required when enabled.
   ycpUrl: ""
   # -- Environment name to enroll as; must match the environment registered in
   # the YCP console (ENV_NAME). Required when enabled.
@@ -187,8 +202,8 @@ mcp:
 
   image:
     # -- MCP server image repository (built from controller/mcp/Dockerfile).
-    repository: amp/mcp
-    # -- Image tag. Empty string defaults to the chart appVersion.
+    repository: amp-mcp
+    # -- Image tag. Empty falls back to .Values.imageTag, then the chart appVersion.
     tag: ""
     pullPolicy: IfNotPresent
 
@@ -231,8 +246,8 @@ ui:
 
   image:
     # -- UI image repository (built from amp_ui/Dockerfile).
-    repository: amp/controller-ui
-    # -- Image tag. Empty string defaults to the chart appVersion.
+    repository: amp-controller-ui
+    # -- Image tag. Empty falls back to .Values.imageTag, then the chart appVersion.
     tag: ""
     pullPolicy: IfNotPresent
 
@@ -320,7 +335,7 @@ otel:
     username: "byoc"
     source: "amp"
     # -- Secret in the release namespace holding the BasicAuth password. Create
-    # it out-of-band before install (same convention as agent.enrollTokenSecret):
+    # it out-of-band before install (same convention as agent.apiKeySecret):
     #   kubectl -n <ns> create secret generic byoc-metrics-auth \
     #     --from-literal=password='<byoc htpasswd password>'
     passwordSecret:

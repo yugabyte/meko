@@ -80,21 +80,59 @@ app: amp-controller-ui
 {{- end }}
 
 {{/*
-Image references; tags fall back to the chart appVersion.
+Image references.
+
+A repository that names no registry host of its own is prefixed with
+.Values.imageRegistry, so one value repoints every amp image. One that already
+carries a host is used verbatim — that is what the deploy scripts and the QA
+framework pass (gcr.io/..., <acct>.dkr.ecr.<region>.amazonaws.com/..., quay.io/...),
+and prefixing those would corrupt them. "Has a host" is the usual registry rule:
+a dot or a colon in the first path segment.
+
+Tags resolve per-image tag -> .Values.imageTag -> chart appVersion. One rule for
+every image, the agent included: an install that names no tag gets an appVersion
+ref that is not published, uniformly, rather than one image silently riding a
+floating tag.
 */}}
+{{- define "yb-amp-controller.imageRepo" -}}
+{{- $head := splitList "/" .repo | first -}}
+{{- if or (contains "." $head) (contains ":" $head) -}}
+{{- .repo -}}
+{{- else if .ctx.Values.imageRegistry -}}
+{{- printf "%s/%s" (trimSuffix "/" .ctx.Values.imageRegistry) .repo -}}
+{{- else -}}
+{{- .repo -}}
+{{- end -}}
+{{- end }}
+
+{{- define "yb-amp-controller.imageTag" -}}
+{{- .tag | default .ctx.Values.imageTag | default .ctx.Chart.AppVersion -}}
+{{- end }}
+
 {{- define "yb-amp-controller.controllerImage" -}}
-{{- $tag := .Values.controller.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.controller.image.repository $tag -}}
+{{- printf "%s:%s"
+      (include "yb-amp-controller.imageRepo" (dict "repo" .Values.controller.image.repository "ctx" .))
+      (include "yb-amp-controller.imageTag" (dict "tag" .Values.controller.image.tag "ctx" .)) -}}
+{{- end }}
+
+{{- define "yb-amp-controller.endpointImageRepo" -}}
+{{- include "yb-amp-controller.imageRepo" (dict "repo" .Values.controller.endpoint.image.repository "ctx" .) -}}
+{{- end }}
+
+{{- define "yb-amp-controller.endpointImageTag" -}}
+{{- include "yb-amp-controller.imageTag" (dict "tag" .Values.controller.endpoint.image.tag "ctx" .) -}}
 {{- end }}
 
 {{- define "yb-amp-controller.mcpImage" -}}
-{{- $tag := .Values.mcp.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.mcp.image.repository $tag -}}
+{{- printf "%s:%s"
+      (include "yb-amp-controller.imageRepo" (dict "repo" .Values.mcp.image.repository "ctx" .))
+      (include "yb-amp-controller.imageTag" (dict "tag" .Values.mcp.image.tag "ctx" .)) -}}
 {{- end }}
 
 {{- define "yb-amp-controller.uiImage" -}}
-{{- $tag := .Values.ui.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.ui.image.repository $tag -}}
+{{- printf "%s:%s"
+      (include "yb-amp-controller.imageRepo" (dict "repo" .Values.ui.image.repository "ctx" .))
+      (include "yb-amp-controller.imageTag" (dict "tag" .Values.ui.image.tag "ctx" .)) -}}
 {{- end }}
 
 {{- define "yb-amp-controller.agentName" -}}
@@ -108,8 +146,9 @@ app: amp-reconcile-agent
 {{- end }}
 
 {{- define "yb-amp-controller.agentImage" -}}
-{{- $tag := .Values.agent.image.tag | default .Chart.AppVersion -}}
-{{- printf "%s:%s" .Values.agent.image.repository $tag -}}
+{{- printf "%s:%s"
+      (include "yb-amp-controller.imageRepo" (dict "repo" .Values.agent.image.repository "ctx" .))
+      (include "yb-amp-controller.imageTag" (dict "tag" .Values.agent.image.tag "ctx" .)) -}}
 {{- end }}
 
 {{/*

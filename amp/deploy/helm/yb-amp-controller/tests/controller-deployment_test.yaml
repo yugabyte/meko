@@ -24,7 +24,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/controller:1.2.3
+          value: quay.io/yugabyte/amp-controller:1.2.3
 
   - it: honours controller image repository and tag overrides
     set:
@@ -34,6 +34,46 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: registry.example.com/amp/controller:20260618-221855
+
+  - it: applies imageTag to the controller and the endpoint it deploys
+    set:
+      imageTag: custom-7f195e43e51f
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/amp-controller:custom-7f195e43e51f
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_ENDPOINT_IMAGE_TAG
+            value: custom-7f195e43e51f
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_ENDPOINT_IMAGE_REPO
+            value: quay.io/yugabyte/amp-endpoint
+
+  - it: prefers a per-image tag over imageTag
+    set:
+      imageTag: custom-7f195e43e51f
+      controller.image.tag: "20260618-221855"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/amp-controller:20260618-221855
+
+  # A repository that already names a registry host must survive imageRegistry
+  # untouched — that is what up-gke.sh (GCR), redeploy.sh (ECR) and the QA
+  # framework pass, and prefixing them would corrupt every one.
+  - it: leaves a repository that carries its own registry host alone
+    set:
+      imageRegistry: quay.io/yugabyte
+      controller.image.repository: 454529406029.dkr.ecr.us-west-2.amazonaws.com/amp/controller
+      controller.image.tag: x
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: 454529406029.dkr.ecr.us-west-2.amazonaws.com/amp/controller:x
 
   - it: exposes the api and sc container ports
     asserts:
