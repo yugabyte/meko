@@ -289,12 +289,11 @@ env:
 # End-to-end: for one YugabyteDB backing store, provision the cluster, run a
 # YB-native workload (layer 1), deploy amp on it (ampstack external), run a
 # workload through amp compute (layer 2), cross-check, tear down as one unit.
-# Self-provisions real infra, so opt-in: nothing spins unless functional.enabled
-# AND each test's required config is present (amp: env.ampstack.controller_chart;
-# amp_on_yba_universe: env.universe.yba.* + a universe; amp_on_yba_provisioned:
-# a k8s cluster [apps.ybastack.kubecontext/kubeconfig] + quay & AWS secrets).
+# Self-provisions real infra, so each test needs its own config present (amp:
+# env.ampstack.controller_chart; amp_on_yba_universe: env.universe.yba.* + a
+# universe; amp_on_yba_provisioned: a k8s cluster
+# [apps.ybastack.kubecontext/kubeconfig] + quay & AWS secrets).
 functional:
-  enabled: false
   # Backing-cluster host shape (awsvm tests); override env.awsvm.*/apps.cloud.aws.*.
   nodes: 3
   instance_type: ""

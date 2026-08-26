@@ -11,13 +11,8 @@
 // Everything else — the guaranteed-cleanup lifecycle, both workload layers, the
 // cross-layer checks — is shared in backing.go / workload.go.
 //
-// Gating: these tests self-provision real infrastructure, so they SKIP cleanly
-// unless functional.enabled is set AND the config each test needs is present.
-// A plain `ampqa run --suite functional` (no config) selects the "none"
-// provider and every amp-on-backing test skips before its body; a `--dry-run`
-// reaches the body and skips on the config gate. Only an explicit
-// functional.enabled=true with a real config (the wave-D live run) provisions
-// anything.
+// Gating: these tests self-provision real infrastructure, so they SKIP unless
+// the config each one needs is present.
 package features
 
 import (
@@ -70,8 +65,6 @@ const teardownBudget = 20 * time.Minute
 // from the same *core.Config at provision time (reusing their FromConfig), so
 // this struct carries only the amp-on-backing-specific scalars.
 type Config struct {
-	Enabled bool
-
 	// Backing-cluster shape.
 	Nodes        int
 	InstanceType string // "" → inherit the aws default
@@ -120,7 +113,6 @@ type Config struct {
 // into a Config.
 func FromConfig(c *core.Config) Config {
 	return Config{
-		Enabled:      c.GetBool("functional.enabled", false),
 		Nodes:        c.GetInt("functional.nodes", DefaultNodes),
 		InstanceType: c.GetString("functional.instance_type", ""),
 		Advertise:    c.GetString("functional.advertise", DefaultAdvertise),
@@ -163,12 +155,9 @@ func ampConfigured(c *core.Config) bool {
 }
 
 // gateAWS returns a skip reason (and false) unless the AWS-backed foundation
-// tests may run: enabled, and amp is deployable. AWS itself is always usable
-// via the shared dev-VPC defaults, so no AWS gate is needed.
+// tests may run: amp is deployable. AWS itself is always usable via the shared
+// dev-VPC defaults, so no AWS gate is needed.
 func (cfg Config) gateAWS(c *core.Config) (string, bool) {
-	if !cfg.Enabled {
-		return "functional.enabled is not set (self-provisioning tests are opt-in)", false
-	}
 	if !ampConfigured(c) {
 		return "amp not deployable: set env.ampstack.controller_chart (or controller_manifest)", false
 	}
@@ -176,7 +165,7 @@ func (cfg Config) gateAWS(c *core.Config) (string, bool) {
 }
 
 // gateYBA returns a skip reason (and false) unless the YBA-universe foundation
-// test may run: enabled, amp deployable, and a YBA target reachable (url +
+// test may run: amp deployable, and a YBA target reachable (url +
 // customer + token) with either a universe to attach or owned+a create spec.
 func (cfg Config) gateYBA(c *core.Config) (string, bool) {
 	if r, ok := cfg.gateAWS(c); !ok {
@@ -192,7 +181,7 @@ func (cfg Config) gateYBA(c *core.Config) (string, bool) {
 }
 
 // gateYBAProvisioned returns a skip reason (and false) unless the
-// stand-up-our-own-YBA foundation test may run: enabled, amp deployable, a k8s
+// stand-up-our-own-YBA foundation test may run: amp deployable, a k8s
 // cluster to deploy the YBA into (apps.ybastack.kubecontext or kubeconfig set),
 // and the deploy/provider secrets resolvable. The provider secrets differ by
 // apps.yba.provider_type: the aws backing needs the AWS access/secret keys, the
@@ -256,7 +245,7 @@ func (cfg Config) gateYBAProvisioned(c *core.Config) (string, bool) {
 }
 
 // gateYBK8s returns a skip reason (and false) unless the co-located
-// YB-in-k8s foundation test may run: enabled, amp deployable, and a k8s cluster
+// YB-in-k8s foundation test may run: amp deployable, and a k8s cluster
 // to deploy into (apps.ybk8s.kubecontext/kubeconfig, or the reused
 // env.ampstack.context). No cloud VM credentials are needed — it is pure k8s.
 // For genuine co-location the amp deploy must target the SAME cluster, so set

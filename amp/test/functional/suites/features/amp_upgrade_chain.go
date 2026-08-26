@@ -30,7 +30,7 @@
 //     but one whose cause is the test's own chart pinning — read the hop's
 //     controller diagnostics before filing it as a product bug.
 //
-// To RUN rather than skip it needs `functional.enabled`, a backing YugabyteDB it
+// To RUN rather than skip it needs a backing YugabyteDB it
 // can name (deploy mode, not an attached standing control plane), and a portal
 // that lists at least two releases. Each skip names the one that failed.
 package features

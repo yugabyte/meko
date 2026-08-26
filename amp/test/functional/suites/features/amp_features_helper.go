@@ -10,7 +10,7 @@
 // The stand-up + guaranteed LIFO teardown (endpoints/branches retired by the
 // cluster-delete cascade, then the amp namespace, then the backing namespace +
 // PVCs) is shared here; the three tests differ only in their feature phases. They
-// SKIP cleanly unless functional.enabled AND a k8s cluster are configured — the
+// SKIP cleanly unless a k8s cluster is configured — the
 // same gate the foundation tests use.
 package features
 

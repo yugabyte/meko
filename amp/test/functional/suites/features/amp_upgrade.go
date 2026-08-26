@@ -3,8 +3,8 @@
 // promise, that the controller deploys the endpoint image tag it was given.
 //
 // STATUS: written, UNVALIDATED end to end. No run has reached the upgrade itself,
-// so every assertion past the seed is unproven. Progress so far: the env gate and
-// functional.enabled gate are both cleared, and the previous release's control
+// so every assertion past the seed is unproven. Progress so far: the env gate is
+// cleared, and the previous release's control
 // plane does deploy (provision_backing, wait_backing_ready and deploy_amp_from all
 // passed on 2026-08-13). The seed then failed on a fork point, since fixed by
 // seeding on the cluster's own branch. Next run should reach the upgrade.
@@ -14,8 +14,6 @@
 //   - functional.upgrade.from_controller_image and from_endpoint_image are set
 //     (the previous release; adjacent releases only, chart and controller move in
 //     lockstep) and differ from the images the run upgrades TO
-//   - functional.enabled is true, a separate opt-in from the env shape, because
-//     this test provisions its own control plane instead of using the env's
 //   - the env can name its backing YugabyteDB, which only deploy mode can do; an
 //     attached standing control plane's backing is not ours to give a second
 //     control plane

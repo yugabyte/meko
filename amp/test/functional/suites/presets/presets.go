@@ -8,7 +8,7 @@
 // Usage: `ampqa setup -t presets/yb_k8s` → a ready environment; inspect with
 // `ampqa env ls`; tear down with `ampqa env rm <id>`. Like the functional
 // suite's amp-on-backing tests, presets self-provision real infrastructure, so
-// they SKIP cleanly unless functional.enabled and the shape's config are
+// they SKIP cleanly unless the shape's config is
 // present (StandUp gates).
 package presets
 

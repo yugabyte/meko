@@ -84,7 +84,7 @@ func TestManifestSurfacesConfigKeys(t *testing.T) {
 	for _, key := range []string{
 		"sched.capacity",
 		"env.sharedk8s.controller_service",
-		"functional.enabled",
+		"functional.nodes",
 		"apps.yba.provider_type",
 		"versions.yugabytedb",
 		"report.max_steps_retained",

@@ -413,9 +413,6 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 
 	// --- functional (amp-on-backing knobs) ---
 	fcfg := features.FromConfig(cfg)
-	if fcfg.Enabled {
-		t.Errorf("functional Enabled = true, want false (self-provisioning tests are opt-in)")
-	}
 	if fcfg.Nodes != features.DefaultNodes {
 		t.Errorf("functional Nodes = %d, want %d", fcfg.Nodes, features.DefaultNodes)
 	}

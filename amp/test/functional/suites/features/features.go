@@ -6,7 +6,7 @@
 // deploy amp on it (ampstack external), run a workload through amp compute
 // (layer 2), cross-check, and tear everything down as one unit. They
 // self-provision real infrastructure, so they are opt-in behind
-// functional.enabled and each shape's config gate (backing_config.go). The
+// each shape's config gate (backing_config.go). The
 // shared provision-and-prepare machinery (standup.go) also backs the presets
 // suite. All tests are blank-imported by cmd/ampqa.
 package features
