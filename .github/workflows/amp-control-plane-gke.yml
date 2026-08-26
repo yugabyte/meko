@@ -346,9 +346,12 @@ jobs:
       # dockerconfigjson whose quay.io "auth" is base64("robot-user:token") —
       # which is exactly base64(QUAY_AMP_TOKEN), since it already is that pair.
       #
-      # OTEL_ENABLED=false: itest-dev's OpenTelemetry Operator admission webhook
-      # (failurePolicy: Fail) rejects the install when its serving cert is
-      # untrusted, and the smoke does not exercise the metrics pipeline.
+      # OTEL_ENABLED=true: the collectors are the only thing that labels amp's
+      # metrics, so a deploy that skips them cannot exercise the metrics pipeline
+      # at all. This was false until now because itest-dev's OpenTelemetry
+      # Operator admission webhook (failurePolicy: Fail) rejects the whole install
+      # when its serving cert is untrusted — if this step starts failing on a
+      # webhook error, that is the cause, not the chart.
       - name: Deploy (amp/deploy/up-gke.sh)
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
@@ -365,7 +368,7 @@ jobs:
           PULL_SECRET="$PULL_SECRET" \
           CONTROLLER_EXPOSE=none \
           ENDPOINT_SERVICE_TYPE=ClusterIP \
-          OTEL_ENABLED=false \
+          OTEL_ENABLED=true \
           YCP_ENABLED="$YCP" \
           amp/deploy/up-gke.sh
 

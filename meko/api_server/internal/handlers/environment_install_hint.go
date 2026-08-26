@@ -38,7 +38,7 @@ const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder,
 func installHint(c echo.Context, e *models.Environment, agentBaseURL string) string {
 	url := agentURL(c, e.AccountID, agentBaseURL)
 	if e.Kind == "amp" {
-		return ampInstallHint(url, e.ID, e.Placement)
+		return ampInstallHint(url, e.ID, e.Placement, e.AccountID)
 	}
 	return mekoInstallHint(url, e.ID)
 }
@@ -89,6 +89,23 @@ const ampInstallNamespace = "amp"
 // it explicitly so the two can't drift.
 const ampAPIKeySecretName = "amp-agent-api-key" //nolint:gosec // a Secret NAME, not a credential
 
+// sentinelAccountID is the all-zeros account the fleet registry defaults to when
+// YCP runs without YBM to attribute an environment to (see the column comment in
+// 000001_fleet_registry.up.sql).
+const sentinelAccountID = "00000000-0000-0000-0000-000000000000"
+
+// metricsIdentityArgs are the --set arguments that stamp this environment's
+// identity on every series the OTel collectors scrape (ac-metrics.md). The
+// account is dropped when it is the standalone sentinel: the same zeros on every
+// series is worse than no label at all.
+func metricsIdentityArgs(envID, accountID string) []string {
+	args := []string{"otel.environmentId=" + envID}
+	if accountID != "" && accountID != sentinelAccountID {
+		args = append(args, "otel.accountId="+accountID)
+	}
+	return args
+}
+
 var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // namespaceFor is the namespace the amp install defaults to: the environment id,
@@ -117,7 +134,7 @@ func namespaceFor(envID string) string {
 // pasteable and is not. The chart's own defaults are not usable as-is: the images
 // resolve to docker.io, otel remote-writes to a store that is not there, and the UI
 // and an internal LoadBalancer would both be deployed for nobody.
-func ampInstallHint(ycpURL, envID, placement string) string {
+func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 	ns := namespaceFor(envID)
 
 	var b strings.Builder
@@ -151,6 +168,9 @@ func ampInstallHint(ycpURL, envID, placement string) string {
 	fmt.Fprintf(&b, "  --set controller.service.type=none \\\n")
 	fmt.Fprintf(&b, "  --set ui.enabled=false \\\n")
 	fmt.Fprintf(&b, "  --set otel.enabled=false \\\n")
+	for _, a := range metricsIdentityArgs(envID, accountID) {
+		fmt.Fprintf(&b, "  --set %s \\\n", a)
+	}
 	fmt.Fprintf(&b, "  --set agent.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set agent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "  --set agent.envName=%s \\\n", envID)
@@ -166,7 +186,8 @@ func ampInstallHint(ycpURL, envID, placement string) string {
 	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# otel is off because its default remote-write endpoint is a metrics store this\n")
 	fmt.Fprintf(&b, "# cluster very likely does not run. Turn it back on with otel.remoteWriteEndpoint\n")
-	fmt.Fprintf(&b, "# set, on a cluster running the OpenTelemetry Operator.\n")
+	fmt.Fprintf(&b, "# set, on a cluster running the OpenTelemetry Operator; the environmentId and\n")
+	fmt.Fprintf(&b, "# accountId above then label every series it scrapes.\n")
 	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# Already running an amp controller in this namespace? Attach the agent to that\n")
 	fmt.Fprintf(&b, "# release instead, leaving every other value untouched:\n")
@@ -178,6 +199,9 @@ func ampInstallHint(ycpURL, envID, placement string) string {
 		fmt.Fprintf(&b, "--set agent.placement=%s ", placement)
 	}
 	fmt.Fprintf(&b, "\\\n")
+	for _, a := range metricsIdentityArgs(envID, accountID) {
+		fmt.Fprintf(&b, "#     --set %s \\\n", a)
+	}
 	fmt.Fprintf(&b, "#     --set agent.apiKeySecret.name=%s\n", ampAPIKeySecretName)
 	return b.String()
 }

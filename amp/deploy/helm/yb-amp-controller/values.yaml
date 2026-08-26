@@ -320,6 +320,17 @@ otel:
   # -- Prometheus remote-write endpoint of the metrics store (VictoriaMetrics,
   # Prometheus, Thanos receive, …).
   remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # Fleet identity, stamped as a label on EVERY series both metrics collectors
+  # scrape (controller/architecture/ac-metrics.md). Normally set by the install
+  # hint the YCP console prints; unset stamps nothing.
+  #
+  # -- The YCP environment id — the slug, e.g. "amp-acme-prod", the same value as
+  # agent.envName. Unique per account, which accountId resolves.
+  environmentId: ""
+  # -- The YBM account that owns this environment. The install hint omits it for a
+  # standalone YCP, whose all-zeros sentinel account would label every series
+  # identically.
+  accountId: ""
   # Fan scraped metrics out to an external OTLP/HTTP ingress IN ADDITION to
   # remoteWriteEndpoint — e.g. the BYOC metrics door that lands in Thanos in the
   # yugabyte-cloud control plane, reached over an AWS PrivateLink endpoint. Off

@@ -61,6 +61,9 @@ func TestInstallHint_IsRunnableAsPrinted(t *testing.T) {
 	for _, unwanted := range []string{
 		"enrollment-token", "30-minute", "ycp_enr_",
 		"<ns>", "<this control plane>", "--set agent.enabled=true",
+		// The meko chart has no otel block; the amp hint's metrics values are not
+		// hers to set.
+		"otel.",
 	} {
 		if strings.Contains(hint, unwanted) {
 			t.Errorf("hint still contains %q:\n%s", unwanted, hint)
@@ -103,6 +106,8 @@ func TestInstallHint_Amp(t *testing.T) {
 		`--set-string controller.endpoint.ybHostPorts="${YB}"`,
 		`--set "imagePullSecrets[0].name=${PULL_SECRET}"`,
 		"--set otel.enabled=false",
+		// Tenancy label for every series the collectors scrape (ac-metrics.md).
+		"--set otel.environmentId=amp-acme-prod",
 		// A YCP-driven environment has no UI of its own, and no cloud LB.
 		"--set ui.enabled=false",
 		"--set controller.service.type=none",
@@ -165,6 +170,44 @@ func TestInstallHint_AmpOmitsEmptyPlacement(t *testing.T) {
 
 	if strings.Contains(hint, "agent.placement") {
 		t.Errorf("hint set a placement it was never given:\n%s", hint)
+	}
+}
+
+// The collectors stamp these on every series they scrape, so one shared metrics
+// store can tell one environment's — and one account's — series from another's.
+// Both the install command and the --reuse-values snippet have to carry them:
+// --reuse-values replays the previous release's values and ignores chart defaults,
+// so a value it does not name stays unset.
+func TestInstallHint_AmpStampsMetricsIdentity(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA,
+		AccountID: "3f2b1c00-0000-0000-0000-000000000009",
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	for _, want := range []string{
+		"--set otel.environmentId=amp-acme-prod",
+		"--set otel.accountId=3f2b1c00-0000-0000-0000-000000000009",
+	} {
+		if got := strings.Count(hint, want); got != 2 {
+			t.Errorf("want %q in both the install command and the --reuse-values snippet, found %d:\n%s",
+				want, got, hint)
+		}
+	}
+}
+
+// A YCP standing up without YBM attributes every environment to the all-zeros
+// sentinel, so stamping it would put one meaningless constant on every series in
+// the store. The environment id is still stamped.
+func TestInstallHint_AmpOmitsSentinelAccount(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA, AccountID: sentinelAccountID,
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	if strings.Contains(hint, "otel.accountId") {
+		t.Errorf("hint stamped the standalone sentinel account:\n%s", hint)
+	}
+	if !strings.Contains(hint, "--set otel.environmentId=amp-acme-prod") {
+		t.Errorf("hint dropped the environment id along with the account:\n%s", hint)
 	}
 }
 

@@ -97,6 +97,126 @@ tests:
           path: spec.config.exporters.prometheus_remote_write.endpoint
           value: http://vm.example:8428/api/v1/write
 
+  # Fleet identity labels. Both metrics collectors must stamp them, because the
+  # controller and the compute sources land in the same store and a series from
+  # either has to say which environment and account it came from.
+  - it: does not stamp identity labels by default
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    asserts:
+      - notExists:
+          path: spec.config.processors.transform/identity
+      - equal:
+          path: spec.config.service.pipelines.metrics.processors
+          value: [batch]
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+
+  - it: stamps environment and account on every series the controller collector scrapes
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.environmentId: amp-acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      # datapoint context, not resource: Prometheus's OTLP receiver promotes
+      # datapoint attributes to labels without promote_resource_attributes.
+      - equal:
+          path: spec.config.processors.transform/identity.metric_statements[0].context
+          value: datapoint
+      - equal:
+          path: spec.config.processors.transform/identity.metric_statements[0].statements
+          value:
+            - 'set(attributes["environment_id"], "amp-acme-prod")'
+            - 'set(attributes["account_id"], "3f2b1c00-0000-0000-0000-000000000009")'
+      - contains:
+          path: spec.config.service.pipelines.metrics.processors
+          content: transform/identity
+
+  - it: stamps the same labels on the compute collector
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.environmentId: amp-acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.processors.transform/identity.metric_statements[0].statements
+          value:
+            - 'set(attributes["environment_id"], "amp-acme-prod")'
+            - 'set(attributes["account_id"], "3f2b1c00-0000-0000-0000-000000000009")'
+      - contains:
+          path: spec.config.service.pipelines.metrics.processors
+          content: transform/identity
+
+  # A standalone YCP has no account to attribute an environment to, so the install
+  # hint sends the environment id alone. An empty accountId must not render as an
+  # empty label on every series.
+  - it: stamps the environment id alone when no account is given
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.environmentId: amp-acme-prod
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - equal:
+          path: spec.config.processors.transform/identity.metric_statements[0].statements
+          value:
+            - 'set(attributes["environment_id"], "amp-acme-prod")'
+
+  # The identity labels apply to both exporters; the byoc source label is gated on
+  # the byoc fan-out. Two independent processors, both in the pipeline.
+  - it: keeps the identity and byoc transforms independent
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.environmentId: amp-acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - contains:
+          path: spec.config.service.pipelines.metrics.processors
+          content: transform/identity
+      - contains:
+          path: spec.config.service.pipelines.metrics.processors
+          content: transform/byoc
+      - equal:
+          path: spec.config.processors.transform/byoc.metric_statements[0].statements[0]
+          value: 'set(attributes["source"], "amp")'
+
+  # The log pipeline is a separate concern (ac-logs.md); k8sattributes already
+  # attaches its own identity there.
+  - it: leaves the logs collector alone
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.environmentId: amp-acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - notExists:
+          path: spec.config.processors.transform/identity
+
   # BYOC OTLP fan-out is opt-in: an install that does not set otel.byoc.enabled
   # must not gain the extra exporter/extension/processor, and must keep pushing
   # only to the remote-write store.

@@ -109,6 +109,12 @@ dashboard bound to the `victorialogs` datasource; the other four use
 - `resource_to_telemetry_conversion` on the collector promotes k8s resource
   attributes to labels (`k8s_namespace_name`, `k8s_pod_name`, …). Per-component
   identity is carried in an `endpoint` label set by collector relabeling.
+- **`environment_id` and `account_id`** are on every metric series, stamped by the
+  collectors' `transform/identity` processor from `otel.environmentId` /
+  `otel.accountId` (`controller/architecture/ac-metrics.md`). They are what
+  separates one environment's — and one account's — series in a shared store;
+  absent on an install that sets neither, and on logs, which this processor does
+  not touch.
 - **Logs carry the same attributes, spelled differently.** `k8sattributes` emits
   the same Kubernetes resource attributes, but VictoriaLogs keeps the OTLP dotted
   form (`k8s.container.name`) where Prometheus normalization underscores it

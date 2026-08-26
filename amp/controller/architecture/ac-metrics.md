@@ -142,6 +142,28 @@ them, the Collector's pod service-discovery must target those ports (the
 multi-port scrape config or per-port annotations is the step-2 work. The
 `controller` and the amp `controller` (`:8080`) are scraped directly.
 
+### Tenancy labels
+
+Both metrics collectors stamp **`environment_id`** and **`account_id`** on every
+datapoint they scrape, via a `transform/identity` processor fed by
+`otel.environmentId` / `otel.accountId`. That covers every source at once — the Go
+controller, the Rust services, `postgres_exporter`, cAdvisor:
+labelling at the collector is one setting, where labelling at the source would be
+~230 metric declarations across two languages plus the exporters amp does not own.
+They are datapoint attributes rather than resource attributes so Prometheus's OTLP
+receiver promotes them to labels without the receiving control plane setting
+`promote_resource_attributes` (same reasoning as the BYOC `source` label).
+
+The values come from YCP, which owns both: `environment_id` is the environment
+slug (`amp-acme-prod` — the same value as `agent.envName`), and the install hint
+the console prints fills both in. Unset, nothing is stamped. The hint omits
+`account_id` for a standalone YCP, whose all-zeros sentinel account would label
+every series identically.
+
+Two sources this does **not** reach: the backing foundation YugabyteDB, which no
+collector job scrapes (the QA framework samples it into the report portal, a
+different pipeline), and the reconcile-agent, which exposes no `/metrics` at all.
+
 ## Step 3 — compute Postgres metrics (implemented)
 
 For downstream performance tooling, the **`postgres_exporter`** sidecar now runs

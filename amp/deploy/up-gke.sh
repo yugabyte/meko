@@ -99,6 +99,12 @@ UI_ENABLED="${UI_ENABLED:-true}"
 # failurePolicy: Fail, so a broken operator rejects the whole install even
 # though the smoke doesn't exercise metrics.
 OTEL_ENABLED="${OTEL_ENABLED:-true}"
+# Stamped as the environment_id label on every series the collectors scrape
+# (ac-metrics.md). Defaults to the namespace so an ordinary deploy still renders
+# the identity processor — a collector that never renders it never checks that its
+# statements parse. A YCP-driven deploy overrides this with the real environment
+# id below, which is what a customer install gets from the YCP install hint.
+METRICS_ENV_ID="${METRICS_ENV_ID:-${NS}}"
 
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -323,6 +329,7 @@ HELM_SET=(
   "ui.image.repository=${REGISTRY}/${UI_IMAGE_REPO}"
   "ui.image.tag=${TAG}"
   "otel.enabled=${OTEL_ENABLED}"
+  "otel.environmentId=${METRICS_ENV_ID}"
 )
 [ -n "${PULL_SECRET}" ] && HELM_SET+=("imagePullSecrets[0].name=${PULL_SECRET}")
 
@@ -351,6 +358,10 @@ if [ "${YCP_ENABLED}" = "1" ]; then
     "agent.image.tag=${TAG}"
     "agent.ycpUrl=${YCP_URL}"
     "agent.envName=${YCP_ENV_ID}"
+    # Override the namespace default: this deploy has a real environment id, so its
+    # series are attributable the way a hint-installed one's are. No account — the
+    # itest cluster is not registered against a YBM account.
+    "otel.environmentId=${YCP_ENV_ID}"
     "agent.placement=${YCP_PLACEMENT}"
     "agent.reconcileInterval=${YCP_RECONCILE_INTERVAL}"
     "agent.apiKeySecret.name=${YCP_AGENT_SECRET}"

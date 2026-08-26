@@ -30,6 +30,12 @@ so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
        different namespaces of one cluster share these objects and uninstalling
        either strips the other's node access (#888). */}}
 {{- $clusterName := printf "%s-%s-otel" $ns $fullName }}
+{{- /* Fleet identity, set by the install hint the control plane prints. `dig` for
+       the --reuse-values reason documented at the logs collector below: upgrading
+       an install that predates these keys leaves them unset, and a direct
+       reference nil-pointers the render. */}}
+{{- $envID := dig "environmentId" "" .Values.otel }}
+{{- $acctID := dig "accountId" "" .Values.otel }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -157,6 +163,21 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
     processors:
       batch: {}
+      {{- if or $envID $acctID }}
+      # Fleet identity on every scraped series, so one store can attribute a
+      # datapoint to its environment and account. Datapoint attributes, for the
+      # same reason as transform/byoc below.
+      transform/identity:
+        metric_statements:
+          - context: datapoint
+            statements:
+              {{- if $envID }}
+              - set(attributes["environment_id"], {{ $envID | quote }})
+              {{- end }}
+              {{- if $acctID }}
+              - set(attributes["account_id"], {{ $acctID | quote }})
+              {{- end }}
+      {{- end }}
       {{- if dig "byoc" "enabled" false .Values.otel }}
       # Stamp the source label on every datapoint. A datapoint attribute (not a
       # resource attribute) so Prometheus's OTLP receiver promotes it to a label
@@ -193,7 +214,7 @@ spec:
       pipelines:
         metrics:
           receivers: [prometheus]
-          processors: [batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
+          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
           exporters: [prometheus_remote_write{{ if dig "byoc" "enabled" false .Values.otel }}, otlphttp/byoc{{ end }}]
 {{- end }}
 {{- if .Values.otel.collectors.compute.enabled }}
@@ -283,6 +304,21 @@ spec:
             {{- end }}
     processors:
       batch: {}
+      {{- if or $envID $acctID }}
+      # Fleet identity on every scraped series, so one store can attribute a
+      # datapoint to its environment and account. Datapoint attributes, for the
+      # same reason as transform/byoc below.
+      transform/identity:
+        metric_statements:
+          - context: datapoint
+            statements:
+              {{- if $envID }}
+              - set(attributes["environment_id"], {{ $envID | quote }})
+              {{- end }}
+              {{- if $acctID }}
+              - set(attributes["account_id"], {{ $acctID | quote }})
+              {{- end }}
+      {{- end }}
       {{- if dig "byoc" "enabled" false .Values.otel }}
       # Stamp the source label on every datapoint. A datapoint attribute (not a
       # resource attribute) so Prometheus's OTLP receiver promotes it to a label
@@ -319,7 +355,7 @@ spec:
       pipelines:
         metrics:
           receivers: [prometheus]
-          processors: [batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
+          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
           exporters: [prometheus_remote_write{{ if dig "byoc" "enabled" false .Values.otel }}, otlphttp/byoc{{ end }}]
 {{- end }}
 {{- /*
