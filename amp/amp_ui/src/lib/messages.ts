@@ -15,6 +15,8 @@ export const dataBranchingMessages = {
   // Compute provisioning
   provisionSuccess: (role: string) => `Compute provisioned (${role})`,
   provisionError: "Failed to provision compute",
+  /** Shown against a Memory input the controller would reject with a 400. */
+  memoryNeedsUnit: 'Memory needs a unit — e.g. 4Gi, 512Mi. A bare "4" means four bytes.',
   readWriteAlreadyExists:
     "This branch already has a read-write compute — additional compute must be read-only.",
 

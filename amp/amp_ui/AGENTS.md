@@ -42,6 +42,7 @@ src/
 │   │   ├── resources.ts One function per REST endpoint
 │   │   └── queries.ts   react-query hooks + query keys
 │   ├── messages.ts      Centralized user-facing copy (see below)
+│   ├── compute.ts       Compute-reservation rules (cpu/memory quantities)
 │   ├── format.ts        Formatting helpers (dates, ids, sizes)
 │   ├── theme.ts         Theme constants
 │   └── utils.ts         `cn()` class-merge + misc helpers

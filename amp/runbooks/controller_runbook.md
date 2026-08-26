@@ -334,6 +334,13 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
 - **`403` on the resize / `pods/resize` forbidden** — the controller Role is
   missing the `pods/resize` subresource grant (older chart); re-deploy the
   `yb-amp-controller` chart.
+- **The resize never completes and the pod reports `PodResizeInProgress ...
+  cannot decrease memory limits ... memory limit (4) below current usage`** — the
+  endpoint's stored memory is a unitless byte count, accepted by a controller
+  predating the meko#492 validation (`select config->>'memory' from
+  amp_registry.endpoints where id = '<ep>'`). Migration `0009` rewrites those to
+  `4Gi` when the controller upgrades, so this clears on upgrade; before then, pass
+  an explicit `memory` (e.g. `"4Gi"`) with the resize.
 
 ## Every API call answers `503 service_unavailable`
 

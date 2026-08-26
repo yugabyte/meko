@@ -32,10 +32,8 @@ func init() {
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Assert a unitless endpoint memory quantity is rejected with 400 on both create and resize, while the same value with a unit is accepted and persisted.",
-		// Fails today: the memory regex makes the unit group optional, so a bare
-		// integer passes validation and lands as a byte count (meko#492).
-		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Run:    runAmpEndpointMemoryUnits,
+		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
+		Run:         runAmpEndpointMemoryUnits,
 	})
 }
 
@@ -56,10 +54,10 @@ func (a *ampFeatureRun) endpointMemoryUnits(ctx context.Context) error {
 	}
 
 	// Plan the create WITHOUT waiting out its task. The assertion is about the
-	// synchronous reply, and an ...AndWait here turns today's bug into a ten
-	// minute readiness timeout instead of an immediate red: the create is
-	// accepted, the four-byte compute never comes up, and the wait eats the
-	// test's whole budget before it can say why.
+	// synchronous reply, and an ...AndWait here would turn a regression into a ten
+	// minute readiness timeout instead of an immediate red: the create is accepted,
+	// the four-byte compute never comes up, and the wait eats the test's whole
+	// budget before it can say why.
 	_, _, err = cl.CreateEndpoint(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{
 		Role:      roleReadWrite,
 		Resources: &controller.EndpointResources{Memory: memoryUnitless},

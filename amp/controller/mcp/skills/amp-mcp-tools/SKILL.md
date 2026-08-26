@@ -164,7 +164,8 @@ current size until then. A later `get_endpoint` returns the **stored (desired)
 reservation**, so it confirms what was requested, not that the running pod was
 actually resized. cpu/memory are Kubernetes quantities (`"2"`, `"1500m"`,
 `"4Gi"`) applied as request == limit (Guaranteed QoS); both default to 2 cores /
-4Gi on create.
+4Gi on create. **memory needs an explicit unit** of Mi or larger — Kubernetes
+reads a unitless `"4"` as four *bytes*, so it is a 400 on both create and resize.
 
 ## Migrations — poll `get_migration`, not `get_task`
 

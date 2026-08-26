@@ -46,4 +46,19 @@ describe("ComputeSizeField", () => {
     fireEvent.change(mem, { target: { value: "32Gi" } });
     expect(onChange).toHaveBeenCalledWith({ cpu: "2", memory: "32Gi" });
   });
+
+  // A custom memory is the only way an unit-less quantity reaches the controller
+  // from here, and it would be a 400 (or, before meko#492 was fixed, a four-byte
+  // reservation). Flag the field rather than letting the caller submit it.
+  it("flags a custom memory with no unit", () => {
+    render(<ComputeSizeField value={{ cpu: "2", memory: "4" }} onChange={vi.fn()} />);
+    const mem = screen.getByLabelText(/memory/i);
+    expect(mem.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(/needs a unit/i)).toBeTruthy();
+
+    cleanup();
+    render(<ComputeSizeField value={{ cpu: "2", memory: "6Gi" }} onChange={vi.fn()} />);
+    expect(screen.getByLabelText(/memory/i).getAttribute("aria-invalid")).toBe("false");
+    expect(screen.queryByText(/needs a unit/i)).toBeNull();
+  });
 });

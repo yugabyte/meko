@@ -31,6 +31,7 @@ import { Stepper } from "@/components/ui/stepper";
 import { ComputeSizeField, type ComputeSize } from "@/components/ui/compute-size-field";
 import { EngineField } from "@/components/ui/engine-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
+import { isValidMemory } from "@/lib/compute";
 import {
   DEFAULT_ENDPOINT_CPU,
   DEFAULT_ENDPOINT_MEMORY,
@@ -73,8 +74,14 @@ export function CreateClusterWizard({
 
   const poolName = pools.find((p) => p.id === poolId)?.name ?? "";
   const trimmedName = name.trim();
+  // The compute step also needs a memory quantity the controller will accept: a
+  // unit-less one is a 400, and it would only surface after the review step.
   const stepValid =
-    step === 0 ? Boolean(trimmedName && poolId) : step === 1 ? Boolean(size.cpu.trim() && size.memory.trim()) : true;
+    step === 0
+      ? Boolean(trimmedName && poolId)
+      : step === 1
+        ? Boolean(size.cpu.trim()) && isValidMemory(size.memory)
+        : true;
 
   function create() {
     // One composite call: the controller creates the cluster, its `main` branch,

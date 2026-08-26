@@ -501,7 +501,10 @@ func (b *Backend) getJSON(ctx context.Context, call func(context.Context) (*http
 
 // mutate issues a create/update/delete. 2xx and 409 (already exists / in
 // flight) are success; any other non-2xx is an error carrying the controller's
-// message so a failed task surfaces in the tick result.
+// message so a failed task surfaces in the tick result. A 400 is permanent: the
+// controller is refusing the spec as declared (an endpoint memory quantity with
+// no unit, say), so every retry sends the same rejected body — surface it as
+// drift instead of backing off forever.
 func (b *Backend) mutate(ctx context.Context, call func(context.Context) (*http.Response, error)) error {
 	resp, err := call(ctx)
 	if err != nil {
@@ -511,6 +514,9 @@ func (b *Backend) mutate(ctx context.Context, call func(context.Context) (*http.
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusConflict || resp.StatusCode < 300 {
 		return nil
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		return reconcile.Permanent(httpErr(resp.StatusCode, body))
 	}
 	return httpErr(resp.StatusCode, body)
 }

@@ -696,10 +696,19 @@ var (
 	// CPU: an integer/decimal number of cores, optionally with the milli suffix
 	// (e.g. "2", "1.5", "500m").
 	cpuQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?m?$`)
-	// Memory: a number with an optional binary (Ki/Mi/Gi/Ti/Pi/Ei) or decimal-SI
-	// (k/M/G/T/P/E) suffix, the milli suffix, or a decimal exponent
-	// (e.g. "4Gi", "512Mi", "1500M", "1e9").
-	memoryQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?((Ki|Mi|Gi|Ti|Pi|Ei)|[kKMGTPE]|m|[eE][0-9]+)?$`)
+	// Memory: a number with a REQUIRED binary (Mi/Gi/Ti/Pi/Ei) or decimal-SI
+	// (M/G/T/P/E) unit (e.g. "4Gi", "512Mi", "1500M"). Kubernetes reads a unitless
+	// quantity as BYTES, so "4" reserves four bytes and the endpoint can never be
+	// resized in place afterwards — a cpu-only resize carries the stored memory
+	// forward and the kubelet wedges on it (meko#492). The milli suffix and Ki/k
+	// are out for the same reason: valid quantities, never a real reservation.
+	memoryQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)$`)
+)
+
+// Shared so create and resize reject the same value with the same wording.
+const (
+	errMsgCPUQuantity    = `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`
+	errMsgMemoryQuantity = `resources.memory must be a Kubernetes memory quantity with an explicit unit, Mi or larger (e.g. "4Gi", "512Mi"); a unitless "4" means four bytes`
 )
 
 // parseResourceOverrides validates an optional resources object and returns the
@@ -713,7 +722,7 @@ func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
 	if r.Cpu != nil {
 		if v := strings.TrimSpace(*r.Cpu); v != "" {
 			if !cpuQuantityRE.MatchString(v) {
-				return "", "", `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`
+				return "", "", errMsgCPUQuantity
 			}
 			cpu = v
 		}
@@ -721,7 +730,7 @@ func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
 	if r.Memory != nil {
 		if v := strings.TrimSpace(*r.Memory); v != "" {
 			if !memoryQuantityRE.MatchString(v) {
-				return "", "", `resources.memory must be a valid Kubernetes memory quantity (e.g. "4Gi", "512Mi")`
+				return "", "", errMsgMemoryQuantity
 			}
 			memory = v
 		}
@@ -977,7 +986,7 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	if request.Body.Resources.Cpu != nil {
 		if v := strings.TrimSpace(*request.Body.Resources.Cpu); v != "" {
 			if !cpuQuantityRE.MatchString(v) {
-				return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`))}, nil
+				return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsgCPUQuantity))}, nil
 			}
 			cpu = v
 		}
@@ -985,7 +994,7 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	if request.Body.Resources.Memory != nil {
 		if v := strings.TrimSpace(*request.Body.Resources.Memory); v != "" {
 			if !memoryQuantityRE.MatchString(v) {
-				return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.memory must be a valid Kubernetes memory quantity (e.g. "4Gi", "512Mi")`))}, nil
+				return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsgMemoryQuantity))}, nil
 			}
 			memory = v
 		}

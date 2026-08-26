@@ -79,7 +79,8 @@ type Backend interface {
 
 // PermanentError wraps a backend error the engine must not retry: the verb can
 // never succeed for this resource as declared — a kind with no delete path
-// (storage pools) or no update path (pools/clusters/branches). The engine
+// (storage pools) or no update path (pools/clusters/branches), or a spec the
+// controller rejects outright (400). The engine
 // surfaces it as drift on the resource and stops re-issuing the call, instead of
 // flapping the environment to DEGRADED on an endless backoff of a call that will
 // always fail. Contrast a transient failure (task rejected, controller down),
@@ -90,7 +91,7 @@ func (e *PermanentError) Error() string { return e.Err.Error() }
 func (e *PermanentError) Unwrap() error { return e.Err }
 
 // Permanent marks err as non-retryable. Backends return it for a verb a kind
-// structurally does not support.
+// structurally does not support, or a spec the remote rejects as invalid.
 func Permanent(err error) error { return &PermanentError{Err: err} }
 
 func isPermanent(err error) bool {

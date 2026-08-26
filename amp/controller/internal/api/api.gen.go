@@ -703,9 +703,12 @@ type EndpointResources struct {
 	// (2 cores) when omitted.
 	Cpu *string `json:"cpu,omitempty"`
 
-	// Memory Memory reservation as a Kubernetes quantity (e.g. "4Gi", "512Mi").
-	// Applied as both the request and the limit. Defaults to "4Gi" when
-	// omitted.
+	// Memory Memory reservation as a Kubernetes quantity, with an explicit unit of
+	// Mi or larger (e.g. "4Gi", "512Mi", "1500M"). Applied as both the
+	// request and the limit. Defaults to "4Gi" when omitted. A unitless
+	// value is a byte count, so "4" would reserve four bytes and leave the
+	// endpoint unresizable; it is rejected with 400, as are the milli
+	// suffix and Ki/k.
 	Memory *string `json:"memory,omitempty"`
 }
 

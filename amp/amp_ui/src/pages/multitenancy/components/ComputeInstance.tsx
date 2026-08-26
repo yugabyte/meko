@@ -23,6 +23,7 @@ import { useDeleteEndpoint, useResizeEndpoint } from "@/hooks/useEndpoints";
 import { SettingsDialog } from "./SettingsDialog";
 import type { Endpoint } from "@/lib/api/types";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
+import { isValidMemory } from "@/lib/compute";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeResourceTag } from "@/components/ResourceTag";
 
@@ -53,6 +54,10 @@ export function ComputeInstance({
   const [memory, setMemory] = useState(
     ep.resources?.memory || DEFAULT_ENDPOINT_MEMORY,
   );
+  // A memory quantity with no unit is a 400 from the controller. The pre-fill is
+  // the endpoint's stored value, so an endpoint an older controller sized without
+  // one opens here already flagged — which is the fix it needs.
+  const memoryValid = isValidMemory(memory);
 
   // Unprovision (delete) this compute instance. Confirmed via AlertDialog since
   // it tears down the running pod — the branch/data are untouched, only the
@@ -209,6 +214,8 @@ export function ComputeInstance({
               value={memory}
               onChange={(e) => setMemory(e.target.value)}
               placeholder={DEFAULT_ENDPOINT_MEMORY}
+              aria-invalid={!memoryValid}
+              aria-describedby={memoryValid ? undefined : `resize-memory-hint-${ep.id}`}
               className="h-8 w-24 font-mono text-xs"
             />
           </div>
@@ -216,10 +223,18 @@ export function ComputeInstance({
             variant="outline"
             size="sm"
             onClick={applyResize}
-            disabled={resize.isPending}
+            disabled={resize.isPending || !memoryValid}
           >
             {resize.isPending ? "Resizing…" : "Apply resize"}
           </Button>
+          {!memoryValid && (
+            <p
+              id={`resize-memory-hint-${ep.id}`}
+              className="basis-full text-[11px] text-destructive"
+            >
+              {msg.memoryNeedsUnit}
+            </p>
+          )}
         </div>
       )}
       {ep.address && (

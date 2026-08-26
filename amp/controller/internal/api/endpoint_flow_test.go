@@ -429,6 +429,125 @@ func TestEndpointResources(t *testing.T) {
 	}
 }
 
+// memoryNoUnit are the memory quantities Kubernetes accepts and a compute pod
+// never means: a bare number (and its exponent form) is a BYTE count, the milli
+// suffix is a fraction of a byte, and Ki/k is kilobytes. An endpoint created
+// with one can never be resized in place afterwards — a cpu-only resize carries
+// the stored value forward and the kubelet refuses to lower the limit below
+// current usage — so they are 400s, not sizes (meko#492).
+var memoryNoUnit = []string{"4", "4m", "512Ki", "4k", "1e9"}
+
+// memoryWithUnit is the other half of the contract: an explicit Mi-or-larger
+// unit, binary or decimal-SI, is what the validation asks for and must pass.
+var memoryWithUnit = []string{"4Gi", "512Mi", "1500M", "1.5Gi"}
+
+// TestEndpointMemoryRequiresUnit: create and resize both reject a memory quantity
+// with no unit, and accept the same intent expressed with one. Endpoints an older
+// controller already stored a unitless value for are repaired by migration 0009,
+// not at read time — every reader of the field agrees on what it says.
+func TestEndpointMemoryRequiresUnit(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "mem-unit-pool")
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	rw := api.CreateEndpointRequestRoleReadWrite
+
+	for _, mem := range memoryNoUnit {
+		m := mem
+		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
+			Role: &rw, Resources: &api.EndpointResources{Memory: &m},
+		})
+		if err != nil {
+			t.Fatalf("CreateEndpoint(memory %q): %v", m, err)
+		}
+		if resp.StatusCode() != http.StatusBadRequest {
+			t.Errorf("create with memory %q: status = %d, want 400 (a unitless quantity is a byte count); body = %s", m, resp.StatusCode(), resp.Body)
+		}
+	}
+	// A rejected create is rejected before the task is planned, so it leaves no
+	// endpoint behind — the branch's read_write slot is still free below.
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
+	if err != nil || list.JSON200 == nil {
+		t.Fatalf("ListEndpoints: err = %v, body = %s", err, list.Body)
+	}
+	if len(list.JSON200.Endpoints) != 0 {
+		t.Fatalf("endpoints after %d rejected creates = %d, want 0", len(memoryNoUnit), len(list.JSON200.Endpoints))
+	}
+
+	mem := memoryWithUnit[0]
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
+		Role: &rw, Resources: &api.EndpointResources{Memory: &mem},
+	})
+	if err != nil || created.StatusCode() != http.StatusAccepted {
+		t.Fatalf("create with memory %q: status = %d, err = %v; body = %s", mem, created.StatusCode(), err, created.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	list, _ = client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
+	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
+		t.Fatalf("expected one endpoint, body = %s", list.Body)
+	}
+	epID := list.JSON200.Endpoints[0].Id
+
+	// Every accepted shape survives a resize round-trip; every rejected one is a
+	// 400 that leaves the stored reservation where it was.
+	for _, m := range memoryWithUnit[1:] {
+		mm := m
+		resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
+			Resources: api.EndpointResources{Memory: &mm},
+		})
+		if err != nil || resp.StatusCode() != http.StatusAccepted {
+			t.Fatalf("resize to memory %q: status = %d, err = %v; body = %s", mm, resp.StatusCode(), err, resp.Body)
+		}
+		drainTasks(t, store, backend, prov)
+		got, _ := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID)
+		if got.JSON200 == nil || got.JSON200.Resources == nil || *got.JSON200.Resources.Memory != mm {
+			t.Errorf("stored memory after resize to %q = %+v, want %q", mm, got.JSON200.Resources, mm)
+		}
+	}
+	settled := memoryWithUnit[len(memoryWithUnit)-1]
+	for _, m := range memoryNoUnit {
+		mm := m
+		resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
+			Resources: api.EndpointResources{Memory: &mm},
+		})
+		if err != nil {
+			t.Fatalf("ResizeEndpoint(memory %q): %v", mm, err)
+		}
+		if resp.StatusCode() != http.StatusBadRequest {
+			t.Errorf("resize to memory %q: status = %d, want 400; body = %s", mm, resp.StatusCode(), resp.Body)
+		}
+		got, _ := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID)
+		if got.JSON200 == nil || got.JSON200.Resources == nil || *got.JSON200.Resources.Memory != settled {
+			t.Errorf("stored memory after a rejected resize to %q = %+v, want the unchanged %q", mm, got.JSON200.Resources, settled)
+		}
+	}
+
+	// A cpu-only resize keeps the stored memory, and the deployer is asked for
+	// exactly what the endpoint reports — no read-time substitution stands between
+	// the two.
+	newCPU := "6"
+	resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &newCPU},
+	})
+	if err != nil || resp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("cpu-only resize: status = %d, err = %v; body = %s", resp.StatusCode(), err, resp.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID)
+	if got.JSON200 == nil || got.JSON200.Resources == nil ||
+		*got.JSON200.Resources.Cpu != newCPU || *got.JSON200.Resources.Memory != settled {
+		t.Errorf("size after a cpu-only resize = %+v, want (%s, %s)", got.JSON200.Resources, newCPU, settled)
+	}
+	if last := dep.resized[len(dep.resized)-1]; last.Memory != settled {
+		t.Errorf("deployer was asked to resize to memory %q, want the stored %q", last.Memory, settled)
+	}
+}
+
 // TestEndpointResize drives the resize workflow: create an endpoint, then resize
 // it and confirm (a) the new size is persisted (GetEndpoint reports it), (b) the
 // deployer was asked to resize the right instance, (c) the task result reports

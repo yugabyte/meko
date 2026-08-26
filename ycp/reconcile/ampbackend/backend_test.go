@@ -2,11 +2,14 @@ package ampbackend
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"meko/ycp/internal/ampclient"
 	"meko/ycp/internal/api"
@@ -167,5 +170,55 @@ func TestListReportsResourceAttrs(t *testing.T) {
 
 	if a := byKind[KindPool].Attrs; a["id"] != poolID {
 		t.Errorf("pool attrs = %v, want id %s", a, poolID)
+	}
+}
+
+// A 400 says the controller refuses the spec as declared — an endpoint memory
+// quantity with no unit is the case that prompted this — so the same body would
+// be rejected on every retry. It must come back as a permanent error the engine
+// surfaces as drift, not a transient one it backs off on forever.
+func TestBadRequestIsPermanent(t *testing.T) {
+	const (
+		poolID    = "22222222-2222-2222-2222-222222222222"
+		clusterID = "33333333-3333-3333-3333-333333333333"
+		branchID  = "44444444-4444-4444-4444-444444444444"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/endpoints") && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"code":"invalid_request","message":"resources.memory must be a Kubernetes memory quantity with an explicit unit"}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := New(srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	idx := newIndex()
+	idx.pool["pool-a"] = uuid.MustParse(poolID)
+	idx.cluster["pool-a/cl"] = uuid.MustParse(clusterID)
+	idx.branch["pool-a/cl/main"] = uuid.MustParse(branchID)
+	b.idx = idx
+
+	err = b.Create(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint,
+		Name: "pool-a/cl/main/ep-rw",
+		Spec: json.RawMessage(`{"role":"read_write","resources":{"memory":"4"}}`),
+	})
+	if err == nil {
+		t.Fatal("Create with a rejected spec returned no error")
+	}
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Errorf("Create error = %v (%T), want a *reconcile.PermanentError — a retried 400 never clears", err, err)
+	}
+	if !strings.Contains(err.Error(), "explicit unit") {
+		t.Errorf("Create error = %v, want the controller's message carried through", err)
 	}
 }

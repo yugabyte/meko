@@ -17,6 +17,7 @@ import {
 import { useCreateEndpoint } from "@/hooks/useEndpoints";
 import type { Endpoint, EndpointRole } from "@/lib/api/types";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
+import { isValidMemory } from "@/lib/compute";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeInstance } from "./ComputeInstance";
 
@@ -41,6 +42,9 @@ export function EndpointsSection({
   const [cpu, setCpu] = useState(DEFAULT_ENDPOINT_CPU);
   const [memory, setMemory] = useState(DEFAULT_ENDPOINT_MEMORY);
   const createEndpoint = useCreateEndpoint();
+  // The controller rejects a memory quantity with no unit; block the click
+  // instead of sending one and reporting the 400 back as a toast.
+  const memoryValid = isValidMemory(memory);
 
   // A branch admits at most one read-write compute (multiple read-only are
   // fine). Once a read-write exists, disable that option and force the
@@ -59,7 +63,7 @@ export function EndpointsSection({
         branchId,
         role,
         cpu: cpu.trim() || DEFAULT_ENDPOINT_CPU,
-        memory: memory.trim() || DEFAULT_ENDPOINT_MEMORY,
+        memory: memory.trim(),
       },
       {
         onSuccess: (ep) =>
@@ -128,6 +132,8 @@ export function EndpointsSection({
             value={memory}
             onChange={(e) => setMemory(e.target.value)}
             placeholder={DEFAULT_ENDPOINT_MEMORY}
+            aria-invalid={!memoryValid}
+            aria-describedby={memoryValid ? undefined : "ep-memory-hint"}
             className="h-8 w-24 font-mono text-xs"
           />
         </div>
@@ -135,11 +141,16 @@ export function EndpointsSection({
           variant="outline"
           size="sm"
           onClick={provision}
-          disabled={createEndpoint.isPending}
+          disabled={createEndpoint.isPending || !memoryValid}
         >
           {createEndpoint.isPending ? "Provisioning…" : "Provision compute"}
         </Button>
       </div>
+      {!memoryValid && (
+        <p id="ep-memory-hint" className="mt-1.5 text-[11px] text-destructive">
+          {msg.memoryNeedsUnit}
+        </p>
+      )}
       {hasReadWrite && (
         <p className="mt-1.5 text-[11px] text-muted-foreground">
           This branch already has a read-write compute — additional compute must be read-only.

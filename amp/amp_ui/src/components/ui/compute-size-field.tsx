@@ -6,6 +6,8 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isValidMemory } from "@/lib/compute";
+import { dataBranchingMessages as msg } from "@/lib/messages";
 
 export type ComputeSize = { cpu: string; memory: string };
 export type ComputeSizePreset = { id: string; label: string; cpu: string; memory: string };
@@ -34,6 +36,9 @@ export function ComputeSizeField({
   const [customMode, setCustomMode] = useState(false);
   const matched = presets.find((p) => p.cpu === value.cpu && p.memory === value.memory);
   const isCustom = allowCustom && (customMode || !matched);
+  // Only a custom memory can be unit-less; every preset carries one. Callers gate
+  // their own submit on isValidMemory — this just says which field is wrong.
+  const memoryValid = isValidMemory(value.memory);
 
   const card = (on: boolean) =>
     cn(
@@ -96,8 +101,15 @@ export function ComputeSizeField({
               value={value.memory}
               onChange={(e) => onChange({ ...value, memory: e.target.value })}
               placeholder="4Gi"
+              aria-invalid={!memoryValid}
+              aria-describedby={memoryValid ? undefined : "compute-size-memory-hint"}
               className="font-mono"
             />
+            {!memoryValid && (
+              <p id="compute-size-memory-hint" className="text-[11px] text-destructive">
+                {msg.memoryNeedsUnit}
+              </p>
+            )}
           </div>
         </div>
       )}
