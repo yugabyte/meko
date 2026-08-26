@@ -168,6 +168,15 @@ falls back to **self-building `sharedk8s`** when none are configured but a
 kube-context is discoverable. "Everything other than k8s is a parameter":
 `--env-provider universe|exclusivek8s|fake` targets the same tests elsewhere.
 
+**Per-test dedicated stacks.** A test whose `EnvSpec` declares
+`Shape: DedicatedStack` is binding: in a `sharedk8s` run it is routed to an
+`exclusivek8s` provider derived from the run's own config (same kube context,
+chart, images and pull credentials), so it gets its own control plane and
+backing while the rest of the run stays on the shared one. There is no knob to
+force such a test onto the shared control plane — `sharedk8s` refuses the shape
+outright, and when no dedicated stack can be built the test skips with the
+reason instead of silently running against the wrong topology.
+
 **Lifecycle — `--env-mode build|attach|keep`.** Every `run` provisions an
 environment, runs the selected tests, and (by default) tears it down. The mode
 changes whether teardown happens:

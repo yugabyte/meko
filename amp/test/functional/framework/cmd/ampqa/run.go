@@ -211,6 +211,7 @@ available), distinct from a genuine all-pass.`,
 			if perr != nil {
 				return &exitError{code: 2, err: perr}
 			}
+			provider = wrapShapeRouter(name, provider, cfg)
 			opts.Provider = provider
 			opts.ProviderUnavailableReason = unavailable
 
@@ -271,7 +272,7 @@ available), distinct from a genuine all-pass.`,
 			// what it created and fails the run.
 			preparedProvider, prepErr := prepareProvider(c.Context(), provider, cfg, func() (core.EnvProvider, error) {
 				p, _, err := buildProvider(name, cfg, secrets, masker, detected)
-				return p, err
+				return wrapShapeRouter(name, p, cfg), err
 			})
 			provider = preparedProvider
 			opts.Provider = provider

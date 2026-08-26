@@ -72,6 +72,10 @@ type Config struct {
 	YBReadyTimeout  time.Duration
 	ReadyTimeout    time.Duration
 	Product         string
+	// Quay credentials for ampstack to mint the pull secret from when no
+	// pre-encoded PullSecretB64 is given.
+	QuayUser  string
+	QuayToken string
 }
 
 // FromConfig reads env.exclusivek8s.* from a framework Config.
@@ -287,8 +291,8 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 // ampstackConfig translates the provider's per-test config into an ampstack
 // Config for one namespace. exclusivek8s owns its own namespace, so it keeps the
 // chart-default cluster-scoped RBAC and no helm shim; it never mints an ECR
-// secret (ECRRegistry left empty), applying only a pre-encoded pull secret when
-// one is configured, matching the pre-composition behavior.
+// secret (ECRRegistry left empty), applying a pre-encoded pull secret or letting
+// ampstack mint one from quay credentials when either is configured.
 func (p *Provider) ampstackConfig(ns string) (ampstack.Config, error) {
 	local := p.nextLocalPort()
 	cfg := ampstack.Config{
@@ -303,6 +307,8 @@ func (p *Provider) ampstackConfig(ns string) (ampstack.Config, error) {
 		ECRRegistry:               "", // exclusivek8s uses a pre-encoded secret, never mints via ECR
 		PullSecretName:            p.cfg.PullSecretName,
 		PullSecretDockerConfigB64: p.cfg.PullSecretB64,
+		QuayUser:                  p.cfg.QuayUser,
+		QuayToken:                 p.cfg.QuayToken,
 		ControllerService:         p.cfg.ControllerService,
 		ControllerPort:            p.cfg.ControllerPort,
 		ControllerReach:           p.cfg.ControllerReach,

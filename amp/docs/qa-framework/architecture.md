@@ -320,7 +320,11 @@ existing `test/integration/` (Rust) and `controller/…_test.go` are untouched n
     environment to itself and runs alone on it).
   - **shape** — what kind of stack + weight: a project on a shared control plane,
     or a whole dedicated stack with pod-kill access
-    (see §5).
+    (see §5). The shape is binding: a `DedicatedStack` test in a `sharedk8s` run
+    is routed to a per-test `exclusivek8s` stack derived from the run's own
+    config, `sharedk8s` itself refuses the shape, and there is no knob to
+    override the declaration — a test that cannot get what it declared skips
+    with the reason rather than running against the wrong topology.
   This is the crux of the parallelism model: **not every test uses
   multitenancy.** A batch of functional tests declares `SHARED` and packs onto
   one environment; a destructive or perf-sensitive test declares `EXCLUSIVE` and

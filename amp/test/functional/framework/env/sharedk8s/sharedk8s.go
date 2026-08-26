@@ -600,6 +600,15 @@ func (p *Provider) nextLocalPort() int {
 // Provision creates a cluster + endpoint on the shared control plane and returns
 // a live environment bound to the endpoint's Postgres.
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
+	// A dedicated_stack test must never be silently served the shared control
+	// plane; the run command routes the shape to exclusivek8s (shape_router).
+	if spec.Shape == core.DedicatedStack {
+		return nil, &core.UnsupportedShapeError{
+			Provider: "sharedk8s",
+			Shape:    spec.Shape,
+			Why:      "the test requires its own control plane and backing; only exclusivek8s (namespace-per-test dedicated stack) can serve it",
+		}
+	}
 	cl, url, err := p.ctrl.get(ctx)
 	if err != nil {
 		return nil, err
