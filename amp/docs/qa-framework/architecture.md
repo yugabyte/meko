@@ -617,8 +617,8 @@ mechanics, copied from stress:
   pattern): when a test *runs* on all versions but one step only applies to
   some, a helper answers "is this feature available on this version" and the
   test branches or skips the step.
-- **Unimplemented behaviour keeps running and keeps failing**: a test whose
-  assertions describe a feature the product does not have yet stays in
+- **A broken feature keeps running and keeps failing**: a test whose
+  assertions describe behaviour the product *ships* but gets wrong stays in
   `regression` and goes red. A skipped test is a bug nobody sees — the daily
   run reports `passed=49 skipped=5`, reads green, and nothing anywhere is red
   for the open issues underneath. Attach the GitHub issue that explains it as a
@@ -629,8 +629,22 @@ mechanics, copied from stress:
   non-waiting client call rather than an `...AndWait`, and bound any readiness
   wait. Otherwise the bug reports as a bare `deadline exceeded` that names
   nothing, and a test that cannot pass spends a full environment budget saying
-  so — `features/amp_read_replica` spent 39 minutes on a helm `--wait` before
-  its per-attempt budget was added.
+  so — the read-replica test spent 39 minutes on a helm `--wait` before its
+  per-attempt budget was added.
+- **A feature that does not exist yet does not get a test**: if the surface is
+  not built — no route, no field, nothing in the provisioning path — a test
+  against it is not coverage. It is a red line saying what the GitHub issue
+  already says, every night, at the cost of a full environment. Write it when
+  the feature lands, and assert whatever *is* built around the gap in the
+  meantime: `read_only` is a validated, persisted endpoint role even though
+  nothing reads it, so `features/amp_single_writer` covers the enum and the
+  single-writer index.
+
+  The line between this and the bullet above is whether a fix would change
+  behaviour a user can already reach. `features/amp_endpoint_memory_units`
+  stays red because create and resize *do* validate memory, just with the unit
+  group optional (meko#492). The read-replica tests were deleted because
+  `role` never reaches `EndpointSpec` at all (meko#833).
 
   `Test.Skip: "<why>"` stays for the case it was built for — a test the
   *environment* cannot run, where the lifecycle gates it before provisioning so

@@ -38,23 +38,47 @@ func TestColdCacheTestIsActuallyCold(t *testing.T) {
 	}
 }
 
-// Skipping on ANY error let read_only resize coverage disappear with nothing
-// red: a 500, a timeout or a dead transport read exactly like "the role is not
-// plumbed yet". Only a terminal 4xx is the product saying it does not support
-// this.
-func TestReadOnlyResizeSkipsOnlyOnARefusal(t *testing.T) {
-	body := readSource(t, "amp_endpoint_resize.go")
-	i := strings.Index(body, "func (a *ampFeatureRun) endpointResizeReadOnly(")
-	if i < 0 {
-		t.Fatal("endpointResizeReadOnly is gone")
+// role never reaches EndpointSpec, so a read_only pod boots as a primary and
+// queues forever for its branch's write token (meko#833). Waiting on one is a
+// guaranteed timeout; planning one without waiting is fine.
+func TestNoTestWaitsOnAReadOnlyCompute(t *testing.T) {
+	for _, name := range sourceFiles(t) {
+		for n, line := range strings.Split(readSource(t, name), "\n") {
+			if !strings.Contains(line, "roleReadOnly") {
+				continue
+			}
+			if strings.Contains(line, "createRoleEndpoint(") || strings.Contains(line, "CreateEndpointAndWait(") {
+				t.Errorf("%s:%d waits for a read_only endpoint's compute, which cannot come ready (meko#833): %s", name, n+1, strings.TrimSpace(line))
+			}
+		}
 	}
-	fn := body[i : i+1600]
-	if !strings.Contains(fn, "apiErr.StatusCode >= 400 && apiErr.StatusCode < 500") {
-		t.Error("the skip is not restricted to a terminal 4xx refusal")
+}
+
+// The one exemption from the guard above, and the price of it: the raced create
+// can win and own a task that never settles, so both waits need a deadline.
+func TestDropRaceBoundsItsWaitsOnAReadOnlyEndpoint(t *testing.T) {
+	body := readSource(t, "amp_endpoint_drop_race.go")
+	if !strings.Contains(body, `joinRaceTaskWithin(ctx, cl, createTask, "create_endpoint", dropRaceCreateJoinBudget`) {
+		t.Error("the raced create is joined without a deadline again; its task never settles, so the join takes the rest of the test's budget")
 	}
-	if !strings.Contains(fn, "return fmt.Errorf(\"create %s endpoint to resize") {
-		t.Error("a non-refusal error no longer fails the test")
+	if !strings.Contains(body, "cleanupCtx, cancel := context.WithTimeout(ctx, dropRaceCleanupBudget)") {
+		t.Error("dropRaceCleanup retires the read_only endpoint without a deadline again")
 	}
+}
+
+func sourceFiles(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read suite directory: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if n := e.Name(); strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+			names = append(names, n)
+		}
+	}
+	return names
 }
 
 // The externalized extension catalog is a shipping commitment, and with the

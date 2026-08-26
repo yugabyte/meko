@@ -18,7 +18,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Assert endpoints_one_writer_per_branch: a second read_write endpoint on the same branch must fail to create, and the first keeps serving reads+writes intact.",
+		Description: "Assert the endpoint role surface: an unknown role is rejected 400, an accepted read_write endpoint echoes its role back, endpoints_one_writer_per_branch rejects a second read_write on the same branch, and the first keeps serving reads+writes intact.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpSingleWriter,
 	})
@@ -39,9 +39,20 @@ func (a *ampFeatureRun) singleWriter(ctx context.Context) error {
 }
 
 func singleWriterSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector) error {
+	// Not ...AndWait: an accepted create would deploy a compute to clean up.
+	if _, _, err := cl.CreateEndpoint(ctx, proj.poolID, proj.projID, proj.branchID,
+		controller.CreateEndpointRequest{Role: unknownRole}); err == nil {
+		return fmt.Errorf("creating an endpoint with role %q was accepted, want a 400 rejection (role must be %s or %s)", unknownRole, roleReadWrite, roleReadOnly)
+	} else if !isBadRequest(err) {
+		return fmt.Errorf("creating an endpoint with role %q was refused, but not with a 400: %w", unknownRole, err)
+	}
+
 	ep, err := createRoleEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID, roleReadWrite)
 	if err != nil {
 		return fmt.Errorf("create first read_write endpoint: %w", err)
+	}
+	if ep.Role != roleReadWrite {
+		return fmt.Errorf("the endpoint created for role %s reports role %q, want %s", roleReadWrite, ep.Role, roleReadWrite)
 	}
 	c, err := connect(ctx, ep)
 	if err != nil {

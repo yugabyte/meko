@@ -38,6 +38,14 @@ var endpointDropRaceDelays = []time.Duration{750 * time.Millisecond, 2 * time.Se
 // assertion polls rather than sampling once.
 const endpointDropRaceSettle = 120 * time.Second
 
+// Both waits touch the raced read_only endpoint, whose compute never becomes
+// ready, so on a backing where the deploy waits out readiness its task never
+// settles (meko#833) and an unbounded wait eats the deadline, once per round.
+const (
+	dropRaceCreateJoinBudget = 60 * time.Second
+	dropRaceCleanupBudget    = 90 * time.Second
+)
+
 func init() {
 	core.Register(core.Test{
 		Name:     "features/amp_endpoint_drop_race",
@@ -203,12 +211,11 @@ func endpointDropRaceRound(
 	case <-time.After(delay):
 	}
 
-	// read_only deliberately: the child already holds the branch's one permitted
-	// writer, and a second read_write would be rejected by
-	// endpoints_one_writer_per_branch before it ever reached the interlock under
-	// test. A synchronous error here is a legal outcome rather than a failure —
-	// it means the drop got far enough that the handler's own branch pre-check
-	// 404s.
+	// read_only because EnsureEndpointRecord INSERTs the endpoint row before the
+	// branch-row UPDATE that IS the interlock: a second read_write hits
+	// endpoints_one_writer_per_branch in the same transaction and never reaches
+	// it, leaving nothing to race. A synchronous error is legal here — it means
+	// the drop got far enough that the handler's branch pre-check 404s.
 	createTask, _, createErr := cl.CreateEndpoint(ctx, proj.poolID, proj.projID, child.BranchID,
 		controller.CreateEndpointRequest{Role: roleReadOnly})
 	if createErr != nil {
@@ -216,7 +223,7 @@ func endpointDropRaceRound(
 	}
 
 	dropStatus := joinRaceTask(ctx, cl, dropTask, "delete_branch", logf)
-	createStatus := joinRaceTask(ctx, cl, createTask, "create_endpoint", logf)
+	createStatus := joinRaceTaskWithin(ctx, cl, createTask, "create_endpoint", dropRaceCreateJoinBudget, logf)
 	logf("race on branch %s: drop=%s create=%s", child.BranchID, dropStatus, createStatus)
 
 	gone, err := branchAbsent(ctx, cl, proj.poolID, proj.projID, child.BranchID)
@@ -258,6 +265,22 @@ func joinRaceTask(ctx context.Context, cl ampCtl, task controller.Task, kind str
 	return "unknown"
 }
 
+// joinRaceTask for a task that may never settle: "still-running" is a usable
+// answer, since the status is only ever quoted in a diagnosis.
+func joinRaceTaskWithin(ctx context.Context, cl ampCtl, task controller.Task, kind string, budget time.Duration, logf func(string, ...any)) string {
+	if task.ID == "" {
+		return "not-planned"
+	}
+	joinCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	status := joinRaceTask(joinCtx, cl, task, kind, logf)
+	if status == "unknown" && ctx.Err() == nil {
+		logf("%s task %s had not settled after %s; continuing", kind, task.ID, budget)
+		return "still-running"
+	}
+	return status
+}
+
 // assertNoOrphanedCompute is the invariant: the branch is gone from the API, so
 // every compute that belonged to it must be gone from the cluster. It polls
 // rather than sampling once, because a pod that is still Terminating is not yet
@@ -297,18 +320,21 @@ func assertNoOrphanedCompute(ctx context.Context, branchCompute branchComputeLis
 // cleanup failure is logged rather than failing a round that already proved its
 // invariant.
 func dropRaceCleanup(ctx context.Context, cl ampCtl, proj ampCluster, branchID string, logf func(string, ...any)) error {
-	eps, err := cl.ListAllEndpoints(ctx, proj.poolID, proj.projID, branchID)
+	cleanupCtx, cancel := context.WithTimeout(ctx, dropRaceCleanupBudget)
+	defer cancel()
+
+	eps, err := cl.ListAllEndpoints(cleanupCtx, proj.poolID, proj.projID, branchID)
 	if err != nil {
 		logf("cleanup: list endpoints on %s: %v", branchID, err)
 		return nil
 	}
 	for _, ep := range eps {
-		if _, err := cl.DeleteEndpointAndWait(ctx, proj.poolID, proj.projID, branchID, ep.ID); err != nil {
+		if _, err := cl.DeleteEndpointAndWait(cleanupCtx, proj.poolID, proj.projID, branchID, ep.ID); err != nil {
 			logf("cleanup: delete endpoint %s: %v", ep.ID, err)
 			return nil
 		}
 	}
-	if _, err := cl.DeleteBranchAndWait(ctx, proj.poolID, proj.projID, branchID); err != nil {
+	if _, err := cl.DeleteBranchAndWait(cleanupCtx, proj.poolID, proj.projID, branchID); err != nil {
 		logf("cleanup: delete branch %s: %v", branchID, err)
 	}
 	return nil

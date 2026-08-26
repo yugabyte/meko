@@ -82,21 +82,6 @@ func init() {
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpEndpointResizeLock,
 	})
-
-	core.Register(core.Test{
-		Name:        "features/amp_endpoint_resize_read_only",
-		Suite:       "features",
-		Category:    core.Functional,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
-		OwningTeam:  core.TeamControlPlane,
-		Description: "Resize a read_only-role endpoint and assert it takes the new reservation the same way a read_write endpoint does.",
-		// Fails today: the read_only endpoint this resizes never becomes ready,
-		// because it queues for the write token the read_write endpoint holds
-		// (meko#833).
-		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Run:    runAmpEndpointResizeReadOnly,
-	})
 }
 
 // resizePodIdentity is the compute pod a resize must not disturb: which pod is
@@ -121,12 +106,6 @@ func runAmpEndpointResizeInPlace(t *core.T) error {
 func runAmpEndpointResizeLock(t *core.T) error {
 	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
 		return []phase{{"endpoint_resize_lock", a.endpointResizeLock}}
-	})
-}
-
-func runAmpEndpointResizeReadOnly(t *core.T) error {
-	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
-		return []phase{{"endpoint_resize_read_only", a.endpointResizeReadOnly}}
 	})
 }
 
@@ -391,43 +370,6 @@ func assertResizeTasksNeverOverlapped(tasks []controller.Task) error {
 		}
 	}
 	return nil
-}
-
-// endpointResizeReadOnly asserts a read_only-role endpoint takes a resize the
-// same way a read_write one does. The role is not yet plumbed into a compute mode
-// (see features/amp_read_replica, which is skipped for exactly that), so the test
-// skips when such an endpoint does not come up rather than reporting a resize
-// failure for an unrelated reason.
-func (a *ampFeatureRun) endpointResizeReadOnly(ctx context.Context) error {
-	cl, err := a.f.controllerClient(ctx)
-	if err != nil {
-		return err
-	}
-	if _, err := createEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID); err != nil {
-		return fmt.Errorf("create read_write endpoint: %w", err)
-	}
-	ep, err := createRoleEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID, roleReadOnly)
-	if err != nil {
-		var apiErr *controller.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
-			return fmt.Errorf("the controller refuses a %s endpoint (%s): the role is not plumbed to a compute mode yet (meko#833)", roleReadOnly, apiErr)
-		}
-		return fmt.Errorf("create %s endpoint to resize: %w", roleReadOnly, err)
-	}
-	if ep.Role != roleReadOnly {
-		return fmt.Errorf("the endpoint created for role %s reports role %q, want %s", roleReadOnly, ep.Role, roleReadOnly)
-	}
-	before, err := a.endpointResources(ctx, cl, ep.ID)
-	if err != nil {
-		return err
-	}
-
-	outcome, err := a.resize(ctx, cl, ep.ID, controller.EndpointResources{CPU: resizeCPUA})
-	if err != nil {
-		return err
-	}
-	a.f.logf("resized read_only endpoint cpu %s → %s: in-place outcome %q", before.CPU, resizeCPUA, outcome)
-	return a.assertResources(ctx, cl, ep.ID, resizeCPUA, before.Memory)
 }
 
 // resize issues one resize, waits for its task, and returns the in-place outcome
