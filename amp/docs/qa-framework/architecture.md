@@ -1104,17 +1104,22 @@ a run flags `is_regression` when a KPI crosses a configured threshold vs the
 branch baseline (or vs master). Historical comparison across builds is the perf
 tab's whole reason to exist.
 
-**As built, the perf tier is a benchmark harness:** each perf test runs a warmup
-plus N iterations, reports the **median** (TPS and latency p50/p95/p99) with a
-**variance guard** (coefficient of variation), and compares to a reference value
-in `baselines/perf.json` (per environment). Each run also **appends** its
-aggregate to a run-history store (`baselines/perf-history.json`, bounded to the
-most-recent runs) and the HTML report renders a **trend** chart from it. Two
-honest caveats today: the trend needs **≥2 history records** to draw a line
-(a first run shows none), and both the baseline and history files are
-**workspace-local and gitignored** — so a portal-triggered run on a fresh agent
-starts with an empty history and gets no trend line until the store is
-persisted/shared across runs.
+**As built, the perf tier is a benchmark harness:** each heavy perf test
+(tpcc/pgbench/sysbench) provisions a **fresh backing + control plane +
+endpoint `perf.provisions` times** (default 3) and repeats the whole benchmark
+per provision — a warmup plus N iterations each — because iterations inside one
+stack agree to ~1% while stack-to-stack spread runs 20%+. The gated headline is
+the **median across provisions** (TPS and latency p50/p95/p99), with the
+cross-provision **MAD** emitted as `<metric>.mad` (the run's own resolution)
+and the CV as a variance guard. The verdict comes from the **report portal's
+gate** (`POST /perf/gate`) when the run streams to one: the rolling median of
+the last N comparable stored runs (same load signature + YugabyteDB train,
+latest run per build) with a spread-aware band of max(3·MAD, 5% floor). The
+portal is the only store that persists between CI runs; `baselines/perf.json`
+(workspace-local, gitignored) is the fallback for portal-less runs. Each run
+also **appends** its aggregate to a run-history store
+(`baselines/perf-history.json`, bounded to the most-recent runs) and the HTML
+report renders a **trend** chart from it (needs ≥2 records to draw a line).
 
 ---
 

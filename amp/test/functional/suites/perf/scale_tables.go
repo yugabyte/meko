@@ -213,7 +213,7 @@ func runScaleTables(t *core.T) error {
 		}
 		id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsScaleTables(params))
 		t.SetPerfIdentity(id.core())
-		gateErr := emitAndGate(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_tables", gated, info, id, logf)
+		gateErr := emitAndGateAuto(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_tables", gated, info, id, logf)
 		t.Chart(core.Chart{
 			Title: "scale_tables: create rate vs table count", Kind: core.ChartLine,
 			XLabel: "tables", YLabel: "creates/s",

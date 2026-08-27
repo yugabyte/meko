@@ -1395,8 +1395,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 
 	// --- perf suite (perf/tpcc) ---
-	if cfg.GetBool("perf.enabled", true) {
-		t.Errorf("perf.enabled = true, want false (opt-in)")
+	if got := cfg.GetInt("perf.provisions", -1); got != 3 {
+		t.Errorf("perf.provisions = %d, want 3", got)
+	}
+	if got := cfg.GetInt("perf.gate.window", -1); got != 10 {
+		t.Errorf("perf.gate.window = %d, want 10", got)
 	}
 	if cfg.GetBool("perf.update_baseline", true) {
 		t.Errorf("perf.update_baseline = true, want false")

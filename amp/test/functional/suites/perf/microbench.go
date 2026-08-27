@@ -181,7 +181,7 @@ func runMicrobench(t *core.T) error {
 		if r, ok := phaseRatio(results, phaseInsertAfterTruncate, phaseInsertCold); ok {
 			s.Set("insert_after_truncate_ratio", fmt.Sprintf("%.2fx", r))
 		}
-		gateErr := emitAndGate(t, cfg, microbenchVersion(t), testNameMicrobench, gated, info, id, logf)
+		gateErr := emitAndGateAuto(t, cfg, microbenchVersion(t), testNameMicrobench, gated, info, id, logf)
 		return errors.Join(ratioErr, gateErr)
 	})
 }

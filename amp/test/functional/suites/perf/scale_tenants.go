@@ -170,7 +170,7 @@ func runScaleTenants(t *core.T) error {
 		id := identityFromConfig(t.Options, "", frameworkCommit(),
 			LoadFields{Script: "scale_tenants", Rows: params.SeedRows})
 		t.SetPerfIdentity(id.core())
-		gateErr := emitAndGate(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_tenants", gated, info, id, logf)
+		gateErr := emitAndGateAuto(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_tenants", gated, info, id, logf)
 		t.Chart(core.Chart{
 			Title: "scale_tenants: seconds per tenant vs population", Kind: core.ChartLine,
 			XLabel: "tenants", YLabel: "s",

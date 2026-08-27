@@ -338,3 +338,69 @@ func splitDatapoints(specs []metricSpec) (gated, info []core.Datapoint) {
 	}
 	return gated, info
 }
+
+func mad(vals []float64) float64 {
+	if len(vals) < 2 {
+		return 0
+	}
+	m := median(vals)
+	devs := make([]float64, len(vals))
+	for i, v := range vals {
+		devs[i] = math.Abs(v - m)
+	}
+	return median(devs)
+}
+
+// Over the provision medians, so CV/min/max are the stack-to-stack spread.
+func aggregateProvisions(rs []BenchResult) BenchResult {
+	if len(rs) == 1 {
+		return rs[0]
+	}
+	pick := func(get func(BenchResult) BenchStats) BenchStats {
+		vals := make([]float64, len(rs))
+		for i, r := range rs {
+			vals[i] = get(r).Median
+		}
+		return aggregate(vals)
+	}
+	return BenchResult{
+		TPS:        pick(func(r BenchResult) BenchStats { return r.TPS }),
+		LatencyAvg: pick(func(r BenchResult) BenchStats { return r.LatencyAvg }),
+		LatencyP95: pick(func(r BenchResult) BenchStats { return r.LatencyP95 }),
+		LatencyP99: pick(func(r BenchResult) BenchStats { return r.LatencyP99 }),
+	}
+}
+
+// A delta smaller than this spread is not a signal.
+func madDatapoints(specs []metricSpec) []core.Datapoint {
+	var out []core.Datapoint
+	for _, m := range specs {
+		out = append(out, core.Datapoint{Name: m.Name + ".mad", Value: mad(m.Stats.Values), Unit: m.Unit, Direction: core.LowerIsBetter})
+	}
+	return out
+}
+
+// Keeps the worst value per name, so each shape datapoint is emitted once.
+func worstShapeDatapoints(perProvision [][]core.Datapoint) []core.Datapoint {
+	worst := map[string]core.Datapoint{}
+	var order []string
+	for _, dps := range perProvision {
+		for _, dp := range dps {
+			cur, seen := worst[dp.Name]
+			if !seen {
+				worst[dp.Name] = dp
+				order = append(order, dp.Name)
+				continue
+			}
+			if dp.Direction == core.HigherIsBetter && dp.Value < cur.Value ||
+				dp.Direction != core.HigherIsBetter && dp.Value > cur.Value {
+				worst[dp.Name] = dp
+			}
+		}
+	}
+	out := make([]core.Datapoint, 0, len(order))
+	for _, n := range order {
+		out = append(out, worst[n])
+	}
+	return out
+}

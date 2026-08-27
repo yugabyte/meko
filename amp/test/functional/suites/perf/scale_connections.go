@@ -223,7 +223,7 @@ func runScaleConnections(t *core.T) error {
 		id := identityFromConfig(t.Options, "", frameworkCommit(),
 			LoadFields{Script: "scale_connections", Clients: params.BatchSize})
 		t.SetPerfIdentity(id.core())
-		gateErr := emitAndGate(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_connections", gated, info, id, logf)
+		gateErr := emitAndGateAuto(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_connections", gated, info, id, logf)
 		t.Chart(core.Chart{
 			Title: "scale_connections: endpoint memory vs held connections", Kind: core.ChartLine,
 			XLabel: "connections", YLabel: "MiB",

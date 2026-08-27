@@ -56,6 +56,8 @@ type LoadFields struct {
 	// keeps the signature of the workloads that leave them zero unchanged.
 	Rows   int `json:"rows,omitempty"`
 	Cycles int `json:"cycles,omitempty"`
+	// Bumped when a harness change alters what the numbers mean, breaking the series.
+	Harness string `json:"harness,omitempty"`
 }
 
 // LoadSignature is a deterministic short hash of the load config. Encoding a
@@ -66,6 +68,9 @@ func LoadSignature(f LoadFields) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])[:12]
 }
+
+// "2" = the headline is the median across fresh provisions, not across iterations.
+const benchHarnessRev = "2"
 
 // LoadShapeSignature hashes the load SHAPE only: the same fields minus the
 // harness cadence (iterations, warmup, measurement duration). Two runs with the
@@ -91,6 +96,7 @@ func loadFieldsTPCC(bc BenchConfig, cfg perfConfig) LoadFields {
 		MeasurementMS: bc.MeasurementDuration.Milliseconds(),
 		RF:            cfg.RF,
 		Warehouses:    cfg.Warehouses,
+		Harness:       benchHarnessRev,
 	}
 }
 
@@ -105,6 +111,7 @@ func loadFieldsPgbench(bc BenchConfig, cfg perfConfig, params pgbenchParams) Loa
 		Clients:       params.Clients,
 		Jobs:          params.Jobs,
 		RF:            cfg.RF,
+		Harness:       benchHarnessRev,
 	}
 }
 

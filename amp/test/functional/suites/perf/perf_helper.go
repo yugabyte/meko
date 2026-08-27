@@ -13,7 +13,7 @@
 // workload connects to it directly.
 //
 // Perf tests self-provision real infrastructure (a k8s cluster + a chart), so
-// they SKIP cleanly unless perf.enabled and the config gate are satisfied.
+// they SKIP cleanly unless the environment gate is satisfied.
 // BenchBase is a PUBLIC release, so — unlike the combined stress scenario — a
 // perf test needs no private jar secret. Teardown is guaranteed on every path
 // (LIFO stack on its own deadline). Registered by init.
@@ -41,6 +41,7 @@ const (
 	DefaultRemoteDir   = "/opt/ampqa"
 	DefaultMaxHeap     = "2g" // java -Xmx; small TPC-C needs little, fits a modest pod
 
+	DefaultProvisions        = 3
 	DefaultBaselinePath      = "baselines/perf.json"
 	DefaultThroughputDropPct = 20.0
 	DefaultLatencyRisePct    = 35.0
@@ -50,7 +51,9 @@ const (
 
 // perfConfig is the resolved perf.* configuration.
 type perfConfig struct {
-	RF                int
+	RF int
+	// Fresh-stack repeats; the gated headline is the median across them.
+	Provisions        int
 	Warehouses        int
 	Terminals         int
 	ClientImage       string
@@ -73,6 +76,7 @@ type perfConfig struct {
 func perfFromConfig(c *core.Config) perfConfig {
 	return perfConfig{
 		RF:                c.GetInt("perf.rf", DefaultRF),
+		Provisions:        maxInt(1, c.GetInt("perf.provisions", DefaultProvisions)),
 		Warehouses:        c.GetInt("perf.warehouses", DefaultWarehouses),
 		Terminals:         c.GetInt("perf.terminals", DefaultTerminals),
 		ClientImage:       c.GetString("perf.client_image", DefaultClientImage),
@@ -89,6 +93,13 @@ func perfFromConfig(c *core.Config) perfConfig {
 	}
 }
 
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // thresholds is the perfConfig's regression tolerance in the baseline gate's shape.
 func (c perfConfig) thresholds() baseline.Thresholds {
 	return baseline.Thresholds{DropPct: c.ThroughputDropPct, RisePct: c.LatencyRisePct}
@@ -96,7 +107,7 @@ func (c perfConfig) thresholds() baseline.Thresholds {
 
 // perfGate returns a skip reason (and false) only when the ENVIRONMENT can't run
 // the perf tier: no k8s cluster to deploy into, or no resolvable YB version.
-// Selecting a perf test is the intent — there is no separate perf.enabled opt-in.
+// Selecting a perf test is the intent — there is no separate opt-in flag.
 // Needs NO private jar secret — BenchBase is public.
 func perfGate(c *core.Config, cfg perfConfig) (string, bool) {
 	if c.GetString("apps.ybk8s.kubecontext", "") == "" &&

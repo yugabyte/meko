@@ -9,7 +9,7 @@ import (
 const (
 	DefaultFunctionalTimeout  = 10 * time.Minute
 	DefaultStressTimeout      = 60 * time.Minute
-	DefaultPerfTimeout        = 60 * time.Minute
+	DefaultPerfTimeout        = 150 * time.Minute
 	DefaultLongRunningTimeout = 24 * time.Hour
 	DefaultTeardownTimeout    = 5 * time.Minute
 	// DefaultProvisionTimeout bounds EnvProvider.Provision: a provision that waits

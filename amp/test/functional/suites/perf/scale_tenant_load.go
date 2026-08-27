@@ -321,7 +321,7 @@ func runTenantLoadLadder(t *core.T, ladder, workload string) error {
 		}
 		id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsTenantLoad(ladder, params))
 		t.SetPerfIdentity(id.core())
-		gateErr := emitAndGate(t, cfg, scaleVersion(t), "perf/"+ladder, gated, info, id, logf)
+		gateErr := emitAndGateAuto(t, cfg, scaleVersion(t), "perf/"+ladder, gated, info, id, logf)
 		t.Chart(core.Chart{
 			Title: ladder + ": throughput vs loaded tenants (" + params.EndpointCPU + "/" + params.EndpointMem + ")",
 			Kind:  core.ChartLine, XLabel: "tenants", YLabel: "tps",

@@ -15,28 +15,22 @@
 // perf/pgbench (reusing gatePerf/baseline). perf.compare.variants turns it into
 // the same A/B (N-way) variant comparison / bisect the other perf workloads
 // support. Teardown is guaranteed (LIFO stack on its own deadline). Gated
-// behind perf.enabled + a k8s cluster + a chart version. The sysbench load
+// behind a k8s cluster + a chart version. The sysbench load
 // shape lives under perf.sysbench.* (script/tables/table_size/threads); the
 // backing + gate knobs are shared under perf.*. Registered by init.
 package perf
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"regexp"
 	"strconv"
 
-	"github.com/yugabyte/amp/test/functional/framework/apps"
-	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sysbench"
-	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
-	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // testNameSysbench is the registered name and the baseline key for the sysbench test.
@@ -136,110 +130,19 @@ func runSysbench(t *core.T) (err error) {
 		})
 	}
 
-	r := &sysbenchRun{
-		t:       t,
-		cfg:     cfg,
-		bc:      bc,
-		gates:   benchGatesFromConfig(t.Options),
-		hcfg:    historyConfigFromConfig(t.Options),
-		params:  params,
-		version: chartVersion(t.Options),
-		id:      identityFromConfig(t.Options, "", commit, load),
-		td:      &teardownStack{},
-		logf:    t.Masker().Logf(log.Printf),
-	}
-	r.sink = attachSink{t: t, logf: r.logf}
-	t.SetPerfIdentity(r.id.core())
-
-	defer func() {
-		tctx, cancel := context.WithTimeout(context.Background(), perfTeardownBudget)
-		defer cancel()
-		if tdErr := r.td.run(tctx, r.logf); tdErr != nil && err == nil {
-			err = fmt.Errorf("teardown: %w", tdErr)
-		}
-	}()
-
-	step := func(name string, fn func(context.Context) error) error {
-		return t.Step(name, func(*core.StepHandle) error { return fn(t.Context) })
-	}
-	phases := []struct {
-		name string
-		fn   func(context.Context) error
-	}{
-		{"provision_backing", r.provisionBacking},
-		{"wait_backing_ready", r.waitReady},
-		{"provision_amp_endpoint", r.provisionEndpoint},
-		{"deploy_client_pod", r.deployClientPod},
-		{"run_sysbench", r.runBenchmark},
-		{"gate_baseline", r.gateBaseline},
-	}
-	for _, p := range phases {
-		if err := step(p.name, p.fn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// sysbenchRun carries the shared state the phases read/write.
-type sysbenchRun struct {
-	t       *core.T
-	cfg     perfConfig
-	bc      BenchConfig
-	gates   benchGates
-	hcfg    historyConfig
-	params  sysbenchParams
-	version string
-	id      Identity
-	td      *teardownStack
-	logf    func(string, ...any)
-	sink    apps.ArtifactSink
-
-	info      ybk8s.Info
-	kube      *k8s.Kubectl
-	endpoint  ampEndpoint
-	podExec   exec.RemoteExecutor
-	sampler   *metrics.Sampler
-	epSampler *metrics.Sampler
-
-	benchResult BenchResult
-}
-
-func (r *sysbenchRun) suffix() string { return r.t.ResourceSuffix() }
-
-// provisionBacking deploys the co-located YB backing and resolves the in-cluster
-// connection path plus a namespace-scoped kubectl.
-func (r *sysbenchRun) provisionBacking(ctx context.Context) error {
-	info, kube, err := deployYBBacking(ctx, r.t, r.cfg.RF, r.td, r.logf)
-	if err != nil {
-		return err
-	}
-	r.info = info
-	r.kube = kube
-	return nil
-}
-
-// provisionEndpoint stands the amp control plane + one compute endpoint on the
-// running backing and starts the endpoint-pod metrics sampler.
-func (r *sysbenchRun) provisionEndpoint(ctx context.Context) error {
-	ep, err := provisionAmpEndpoint(ctx, r.t, ampstack.FromConfig(r.t.Options), ybk8s.FromConfig(r.t.Options), r.info, r.suffix(), r.sink, r.td, r.logf)
-	if err != nil {
-		return err
-	}
-	r.endpoint = ep
-	r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
-	return nil
-}
-
-// deployClientPod launches the client pod and installs sysbench into it —
-// before any sysbench prepare/run.
-func (r *sysbenchRun) deployClientPod(ctx context.Context) error {
-	podExec, err := startPerfClientPod(ctx, r.kube, r.sink, r.td, "ampqa-sysbench-"+r.suffix(), r.cfg.ClientImage, r.cfg.ClientPullSecret)
-	if err != nil {
-		return err
-	}
-	r.podExec = podExec
-	return sysbench.EnsureInstalled(ctx, r.podExec)
+	return runBenchProvisioned(t, benchWorkloadSpec{
+		testName:     testNameSysbench,
+		runStep:      "run_sysbench",
+		podPrefix:    "ampqa-sysbench",
+		attachPrefix: "sysbench",
+		noTPSMsg:     "sysbench produced no tps — parse of sysbench output failed (see attached sysbench-iter-*.out)",
+		deliver: func(ctx context.Context, _ *core.T, _ perfConfig, podExec exec.RemoteExecutor) error {
+			return sysbench.EnsureInstalled(ctx, podExec)
+		},
+		mkWorkload: func(conn pg.ConnInfo) Workload { return sysbenchWorkloadFor(params, conn) },
+		specs:      sysbenchMetricSpecs,
+		datapoints: sysbenchDatapoints,
+	}, cfg, bc, identityFromConfig(t.Options, "", commit, load))
 }
 
 // sysbenchWorkloadFor builds the sysbench workload bound to conn at the shared
@@ -247,48 +150,6 @@ func (r *sysbenchRun) deployClientPod(ctx context.Context) error {
 // each comparison variant.
 func sysbenchWorkloadFor(params sysbenchParams, conn pg.ConnInfo) Workload {
 	return &sysbenchWorkload{conn: conn, params: params}
-}
-
-// waitReady blocks until the backing serves YSQL, then starts the metrics
-// sampler over the now-known backing pods.
-func (r *sysbenchRun) waitReady(ctx context.Context) error {
-	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout, r.sink, r.logf); err != nil {
-		return err
-	}
-	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
-	return nil
-}
-
-// runBenchmark drives sysbench through the harness: load the dataset ONCE, then
-// a discarded warmup + N measured runs, aggregated with robust statistics. Every
-// run's captured output is attached for triage regardless of parse/gate outcome.
-func (r *sysbenchRun) runBenchmark(ctx context.Context) error {
-	wl := sysbenchWorkloadFor(r.params, r.endpoint.Conn)
-	res, err := RunBenchmark(ctx, r.podExec, wl, r.bc)
-	attachBenchSamples(r.sink, res, "sysbench")
-	if err != nil {
-		return err
-	}
-	if len(res.Kept) == 0 || res.TPS.Median == 0 {
-		return fmt.Errorf("sysbench produced no tps — parse of sysbench output failed (see attached sysbench-iter-*.out)")
-	}
-	r.benchResult = res
-	emitBenchCharts(r.t, res)
-	emitMetricSeries(r.t, r.sampler)
-	emitMetricSeries(r.t, r.epSampler)
-	return nil
-}
-
-// gateBaseline emits the aggregate's datapoints: the medians gated against the
-// baseline, and the .cv noise signal informationally, exactly like perf/tpcc.
-// It then records this run in the history store and emits the cross-run trend
-// chart(s), before propagating any gate failure.
-func (r *sysbenchRun) gateBaseline(_ context.Context) error {
-	gated, info := sysbenchDatapoints(r.benchResult)
-	shape, shapeErr := benchShapeGate(r.benchResult, sysbenchMetricSpecs(r.benchResult), r.gates)
-	gateErr := emitAndGate(r.t, r.cfg, r.version, testNameSysbench, gated, append(info, shape...), r.id, r.logf)
-	emitHistoryTrend(r.t, r.hcfg, testNameSysbench, r.version, r.benchResult, r.id, r.logf)
-	return errors.Join(gateErr, shapeErr)
 }
 
 // sysbenchWorkload adapts the sysbench driver to the harness Workload:
@@ -400,5 +261,6 @@ func loadFieldsSysbench(bc BenchConfig, cfg perfConfig, params sysbenchParams) L
 		Tables:        params.Tables,
 		Script:        params.Script,
 		RF:            cfg.RF,
+		Harness:       benchHarnessRev,
 	}
 }

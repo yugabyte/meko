@@ -42,8 +42,8 @@ func backingConn(info ybk8s.Info) pg.ConnInfo {
 // to rf), registers its teardown on td, and returns the deploy Info plus a
 // namespace-scoped kubectl. The client pod lives in the same namespace, so the
 // namespace delete at teardown cascades it.
-func deployYBBacking(ctx context.Context, t *core.T, rf int, td *teardownStack, logf func(string, ...any)) (ybk8s.Info, *k8s.Kubectl, error) {
-	return deployYBBackingCfg(ctx, t, clampBackingRF(ybk8s.FromConfig(t.Options), rf), td, logf)
+func deployYBBacking(ctx context.Context, t *core.T, rf int, suffix string, td *teardownStack, logf func(string, ...any)) (ybk8s.Info, *k8s.Kubectl, error) {
+	return deployYBBackingCfg(ctx, t, clampBackingRF(ybk8s.FromConfig(t.Options), rf), suffix, td, logf)
 }
 
 // clampBackingRF forces k8sCfg's replication factor up to rf and re-couples the
@@ -63,12 +63,12 @@ func clampBackingRF(k8sCfg ybk8s.Config, rf int) ybk8s.Config {
 // ybk8s Config (rather than reading t.Options), so a comparison variant can
 // deploy its own image/version-overridden backing. It registers teardown on td
 // and returns the deploy Info plus a namespace-scoped kubectl.
-func deployYBBackingCfg(ctx context.Context, t *core.T, k8sCfg ybk8s.Config, td *teardownStack, logf func(string, ...any)) (ybk8s.Info, *k8s.Kubectl, error) {
+func deployYBBackingCfg(ctx context.Context, t *core.T, k8sCfg ybk8s.Config, suffix string, td *teardownStack, logf func(string, ...any)) (ybk8s.Info, *k8s.Kubectl, error) {
 	secrets, err := core.NewSecrets(t.Options)
 	if err != nil {
 		return ybk8s.Info{}, nil, core.EnvFail("secrets: %w", err)
 	}
-	d := ybk8s.New(k8sCfg, t.ResourceSuffix()).WithLogf(logf).WithSecretResolver(secrets.Value)
+	d := ybk8s.New(k8sCfg, suffix).WithLogf(logf).WithSecretResolver(secrets.Value)
 	td.push("teardown yb-in-k8s (namespace + PVCs + client pod)", func(ctx context.Context) error {
 		return d.Teardown(ctx)
 	})
@@ -507,7 +507,15 @@ func attachBenchSamples(sink apps.ArtifactSink, res BenchResult, prefix string) 
 // code. It is the shared helper every perf workload (perf/tpcc, perf/pgbench)
 // calls after RunBenchmark, so the two tests never duplicate chart wiring.
 func emitBenchCharts(t *core.T, res BenchResult) {
+	emitBenchChartsLabeled(t, res, "")
+}
+
+// The tag keeps a multi-provision run's chart titles distinguishable.
+func emitBenchChartsLabeled(t *core.T, res BenchResult, tag string) {
 	for _, c := range benchCharts(res) {
+		if tag != "" {
+			c.Title = tag + ": " + c.Title
+		}
 		t.Chart(c)
 	}
 }

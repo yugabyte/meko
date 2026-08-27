@@ -2,24 +2,18 @@ package perf
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"path"
 	"strings"
 	"time"
 
-	"github.com/yugabyte/amp/test/functional/framework/apps"
-	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/benchbase"
-	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
 	"github.com/yugabyte/amp/test/functional/framework/baseline"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
-	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // testNameTPCC is the registered name and the baseline key for the TPC-C test.
@@ -103,117 +97,17 @@ func runTPCC(t *core.T) (err error) {
 		})
 	}
 
-	r := &perfRun{
-		t:       t,
-		cfg:     cfg,
-		bc:      bc,
-		gates:   benchGatesFromConfig(t.Options),
-		hcfg:    historyConfigFromConfig(t.Options),
-		version: chartVersion(t.Options),
-		id:      identityFromConfig(t.Options, "", commit, load),
-		td:      &teardownStack{},
-		logf:    t.Masker().Logf(log.Printf),
-	}
-	r.sink = attachSink{t: t, logf: r.logf}
-	t.SetPerfIdentity(r.id.core())
-
-	defer func() {
-		tctx, cancel := context.WithTimeout(context.Background(), perfTeardownBudget)
-		defer cancel()
-		if tdErr := r.td.run(tctx, r.logf); tdErr != nil && err == nil {
-			err = fmt.Errorf("teardown: %w", tdErr)
-		}
-	}()
-
-	step := func(name string, fn func(context.Context) error) error {
-		return t.Step(name, func(*core.StepHandle) error { return fn(t.Context) })
-	}
-	phases := []struct {
-		name string
-		fn   func(context.Context) error
-	}{
-		{"provision_backing", r.provisionBacking},
-		{"wait_backing_ready", r.waitReady},
-		{"provision_amp_endpoint", r.provisionEndpoint},
-		{"deploy_client_pod", r.deployClientPod},
-		{"run_tpcc", r.runBenchmark},
-		{"gate_baseline", r.gateBaseline},
-	}
-	for _, p := range phases {
-		if err := step(p.name, p.fn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// perfRun carries the shared state the phases read/write.
-type perfRun struct {
-	t       *core.T
-	cfg     perfConfig
-	bc      BenchConfig
-	gates   benchGates
-	hcfg    historyConfig
-	version string
-	id      Identity
-	td      *teardownStack
-	logf    func(string, ...any)
-	sink    apps.ArtifactSink
-
-	info         ybk8s.Info
-	kube         *k8s.Kubectl
-	endpoint     ampEndpoint
-	benchbaseDir string
-	podExec      exec.RemoteExecutor
-	sampler      *metrics.Sampler
-	epSampler    *metrics.Sampler
-
-	benchResult BenchResult
-}
-
-func (r *perfRun) suffix() string { return r.t.ResourceSuffix() }
-
-// provisionBacking deploys a co-located YugabyteDB cluster in k8s (RF forced up
-// to cfg.RF), registers its teardown, and resolves the connection path plus a
-// namespace-scoped kubectl.
-func (r *perfRun) provisionBacking(ctx context.Context) error {
-	info, kube, err := deployYBBacking(ctx, r.t, r.cfg.RF, r.td, r.logf)
-	if err != nil {
-		return err
-	}
-	r.info = info
-	r.kube = kube
-	return nil
-}
-
-// provisionEndpoint stands the amp control plane + one compute endpoint on the
-// running backing and starts the endpoint-pod metrics sampler. The workload
-// connects here, so the amp compute + pageserver are in every measured request.
-func (r *perfRun) provisionEndpoint(ctx context.Context) error {
-	ep, err := provisionAmpEndpoint(ctx, r.t, ampstack.FromConfig(r.t.Options), ybk8s.FromConfig(r.t.Options), r.info, r.suffix(), r.sink, r.td, r.logf)
-	if err != nil {
-		return err
-	}
-	r.endpoint = ep
-	r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
-	return nil
-}
-
-// deployClientPod launches the long-lived in-cluster client pod (sleep-forever,
-// carrying Java) and delivers the PUBLIC benchbase artifact into it over its
-// pod-bound executor. No private sample-app jar is needed for the perf tier.
-func (r *perfRun) deployClientPod(ctx context.Context) error {
-	podExec, err := startPerfClientPod(ctx, r.kube, r.sink, r.td, "ampqa-perf-"+r.suffix(), r.cfg.ClientImage, r.cfg.ClientPullSecret)
-	if err != nil {
-		return err
-	}
-	r.podExec = podExec
-
-	if err := deliverBenchbase(ctx, r.t, r.cfg, r.podExec); err != nil {
-		return err
-	}
-	r.benchbaseDir = path.Join(r.cfg.RemoteDir, benchbase.DefaultSubdir)
-	return nil
+	return runBenchProvisioned(t, benchWorkloadSpec{
+		testName:     testNameTPCC,
+		runStep:      "run_tpcc",
+		podPrefix:    "ampqa-perf",
+		attachPrefix: "benchbase-tpcc",
+		noTPSMsg:     "benchbase tpcc produced no throughput — parse of results/summary.json failed (see attached benchbase-tpcc-iter-*.out)",
+		deliver:      deliverBenchbase,
+		mkWorkload:   func(conn pg.ConnInfo) Workload { return tpccWorkloadFor(cfg, conn) },
+		specs:        tpccMetricSpecs,
+		datapoints:   tpccDatapoints,
+	}, cfg, bc, identityFromConfig(t.Options, "", commit, load))
 }
 
 // deliverBenchbase resolves the public benchbase artifact and delivers it into
@@ -245,46 +139,6 @@ func tpccWorkloadFor(cfg perfConfig, conn pg.ConnInfo) Workload {
 		terminals:  cfg.Terminals,
 		maxHeap:    cfg.MaxHeap,
 	}
-}
-
-// waitReady blocks until the backing actually serves YSQL. Pod-Ready is
-// necessary but NOT sufficient: the tserver readiness probe gates the tserver
-// RPC port, while YSQL (postgres on :5433) comes up slightly later — and the
-// control plane deployed next creates its yb_storage database over YSQL. Once
-// it is serving, the backing's pods are known and the metrics sampler starts.
-func (r *perfRun) waitReady(ctx context.Context) error {
-	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout, r.sink, r.logf); err != nil {
-		return err
-	}
-	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
-	return nil
-}
-
-// runBenchmark drives BenchBase TPC-C through the harness: load ONCE, then a
-// discarded warmup + N measured execute iterations, aggregated with robust
-// statistics. Every run's captured output is attached for triage regardless of
-// parse/gate outcome.
-func (r *perfRun) runBenchmark(ctx context.Context) error {
-	wl := &tpccWorkload{
-		runDir:     r.benchbaseDir,
-		conn:       r.endpoint.Conn,
-		warehouses: r.cfg.Warehouses,
-		terminals:  r.cfg.Terminals,
-		maxHeap:    r.cfg.MaxHeap,
-	}
-	res, err := RunBenchmark(ctx, r.podExec, wl, r.bc)
-	attachBenchSamples(r.sink, res, "benchbase-tpcc")
-	if err != nil {
-		return err
-	}
-	if len(res.Kept) == 0 || res.TPS.Median == 0 {
-		return fmt.Errorf("benchbase tpcc produced no throughput — parse of results/summary.json failed (see attached benchbase-tpcc-iter-*.out)")
-	}
-	r.benchResult = res
-	emitBenchCharts(r.t, res)
-	emitMetricSeries(r.t, r.sampler)
-	emitMetricSeries(r.t, r.epSampler)
-	return nil
 }
 
 // tpccWorkload adapts the benchbase TPC-C driver to the harness Workload: the
@@ -378,20 +232,6 @@ func tpccMetricSpecs(res BenchResult) []metricSpec {
 		{Name: "tpcc.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99, FromSample: sampleLatencyP99},
 		{Name: "tpcc.latency_median", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg, FromSample: sampleLatencyAvg},
 	}
-}
-
-// gateBaseline emits the aggregate's datapoints — the medians gated against the
-// baseline (a regression fails the test; a first run or --update-baseline
-// establishes/refreshes it and WARNs), and the .cv datapoints informationally.
-// It then records this run in the history store and emits the cross-run trend
-// chart(s) — including a regressed run, which is still a point on the trend —
-// before propagating any gate failure.
-func (r *perfRun) gateBaseline(_ context.Context) error {
-	gated, info := tpccDatapoints(r.benchResult)
-	shape, shapeErr := benchShapeGate(r.benchResult, tpccMetricSpecs(r.benchResult), r.gates)
-	gateErr := emitAndGate(r.t, r.cfg, r.version, testNameTPCC, gated, append(info, shape...), r.id, r.logf)
-	emitHistoryTrend(r.t, r.hcfg, testNameTPCC, r.version, r.benchResult, r.id, r.logf)
-	return errors.Join(gateErr, shapeErr)
 }
 
 // gateOutcome is the pure result of the baseline gate: the datapoints (with

@@ -45,7 +45,9 @@ timeouts:
   # Category default test-body timeout (when a Test sets none).
   functional: 10m
   stress: 60m
-  perf: 60m
+  # Sized for perf.provisions=3 fresh-stack repeats of the heaviest workload
+  # (tpcc: ~20m per provision).
+  perf: 150m
   long_running: 24h
   # EnvProvider.Provision deadline (a pod wait pays a node add + image pull).
   # Single-node budget. Left UNSET-equivalent on purpose: when
@@ -1575,11 +1577,17 @@ stress:
 # Self-provisions real infra (k8s + a chart), so it is opt-in, and it needs
 # env.ampstack.controller_chart to have a control plane to deploy.
 perf:
-  # enabled gates the whole tier (self-provisioning + k8s + chart).
-  enabled: false
   # rf is the replication factor of the co-located YB cluster the amp control
   # plane is backed by (the deploy clamps up to this).
   rf: 3
+  # provisions is how many times the heavy bench workloads (tpcc, pgbench,
+  # sysbench) provision a FRESH backing + control plane + endpoint and repeat
+  # the whole benchmark; the gated headline is the MEDIAN across provisions and
+  # the cross-provision MAD is emitted as `<metric>.mad`. Iterations inside one
+  # stack agree to ~1% while stack-to-stack spread runs 20%+, so this is the
+  # repeat that actually samples the variance that matters. 1 restores the
+  # single-provision behaviour.
+  provisions: 3
   # Small but perf-meaningful TPC-C load, fixed so runs are comparable. For
   # TPC-C the warehouse count IS the scalefactor. Kept modest to stay cheap, but
   # above the 1-2 warehouse floor where run-to-run variance (throughput ~14%,
@@ -1599,6 +1607,19 @@ perf:
   # default fits a client pod with no explicit memory limit (a large -Xmx can
   # fail JVM init on a small node).
   max_heap: "2g"
+  # gate is the PORTAL gate: when the run streams to a report portal
+  # (report.portal.url), the perf verdict comes from POST /perf/gate — the
+  # rolling median of the last `window` comparable runs stored on the portal
+  # (same load signature + YugabyteDB train, latest run per build), with a
+  # spread-aware band of max(mad_k x MAD, floor). The portal is the only place
+  # perf history persists between CI runs; the baseline file below is the
+  # fallback for portal-less runs (and for a portal outage, which never fails
+  # a run on its own).
+  gate:
+    # window is how many prior comparable runs the rolling median is over.
+    window: 10
+    # mad_k overrides the portal's MAD multiplier (0 -> the portal default, 3).
+    mad_k: 0
   # baseline_path is the JSON baseline store (per version → test → datapoint). A
   # relative path resolves against the process working directory. A first run (no
   # baseline) establishes it and WARNs; a later run gates against it. Baselines

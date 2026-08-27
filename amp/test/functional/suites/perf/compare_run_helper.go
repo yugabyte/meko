@@ -262,7 +262,7 @@ func (p *liveProvisioner) Provision(ctx context.Context, v resolvedVariant) (exe
 	teardown := func(tc context.Context) error { return td.run(tc, p.logf) }
 	suffix := sanitizeLabel(v.Label) + "-" + p.t.ResourceSuffix()
 
-	info, kube, err := deployYBBackingCfg(ctx, p.t, v.YBK8s, td, p.logf)
+	info, kube, err := deployYBBackingCfg(ctx, p.t, v.YBK8s, suffix, td, p.logf)
 	if err != nil {
 		return nil, pg.ConnInfo{}, teardown, err
 	}

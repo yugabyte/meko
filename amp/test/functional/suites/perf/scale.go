@@ -424,7 +424,7 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 		}
 		id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsScale(ladder, params))
 		t.SetPerfIdentity(id.core())
-		gateErr := emitAndGate(t, cfg, scaleVersion(t), "perf/"+ladder, gated, info, id, logf)
+		gateErr := emitAndGateAuto(t, cfg, scaleVersion(t), "perf/"+ladder, gated, info, id, logf)
 		t.Chart(core.Chart{
 			Title: ladder + ": aggregate throughput vs concurrent drivers", Kind: core.ChartLine,
 			XLabel: "drivers", YLabel: "tps",

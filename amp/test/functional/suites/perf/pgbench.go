@@ -14,7 +14,7 @@
 // executor, emits tps + average latency as gated core.Datapoints, and gates them
 // against the stored baseline exactly like perf/tpcc (reusing gatePerf/baseline).
 // Teardown is guaranteed (LIFO stack on its own deadline). Gated behind
-// perf.enabled + a k8s cluster + a chart version, same as perf/tpcc. The pgbench
+// a k8s cluster + a chart version, same as perf/tpcc. The pgbench
 // load shape lives under perf.pgbench.* (scale/clients/jobs/duration); the
 // backing + gate knobs are shared under perf.*. Registered by init.
 //
@@ -25,7 +25,6 @@ package perf
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"path"
@@ -34,16 +33,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/amp/test/functional/framework/apps"
-	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pgbench"
-	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
-	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // testNamePgbench is the registered name and the baseline key for the pgbench test.
@@ -158,110 +152,17 @@ func runPgbench(t *core.T) (err error) {
 		})
 	}
 
-	r := &pgbenchRun{
-		t:       t,
-		cfg:     cfg,
-		bc:      bc,
-		gates:   benchGatesFromConfig(t.Options),
-		hcfg:    historyConfigFromConfig(t.Options),
-		params:  params,
-		version: chartVersion(t.Options),
-		id:      identityFromConfig(t.Options, "", commit, load),
-		td:      &teardownStack{},
-		logf:    t.Masker().Logf(log.Printf),
-	}
-	r.sink = attachSink{t: t, logf: r.logf}
-	t.SetPerfIdentity(r.id.core())
-
-	defer func() {
-		tctx, cancel := context.WithTimeout(context.Background(), perfTeardownBudget)
-		defer cancel()
-		if tdErr := r.td.run(tctx, r.logf); tdErr != nil && err == nil {
-			err = fmt.Errorf("teardown: %w", tdErr)
-		}
-	}()
-
-	step := func(name string, fn func(context.Context) error) error {
-		return t.Step(name, func(*core.StepHandle) error { return fn(t.Context) })
-	}
-	phases := []struct {
-		name string
-		fn   func(context.Context) error
-	}{
-		{"provision_backing", r.provisionBacking},
-		{"wait_backing_ready", r.waitReady},
-		{"provision_amp_endpoint", r.provisionEndpoint},
-		{"deploy_client_pod", r.deployClientPod},
-		{"run_pgbench", r.runBenchmark},
-		{"gate_baseline", r.gateBaseline},
-	}
-	for _, p := range phases {
-		if err := step(p.name, p.fn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// pgbenchRun carries the shared state the phases read/write.
-type pgbenchRun struct {
-	t       *core.T
-	cfg     perfConfig
-	bc      BenchConfig
-	gates   benchGates
-	hcfg    historyConfig
-	params  pgbenchParams
-	version string
-	id      Identity
-	td      *teardownStack
-	logf    func(string, ...any)
-	sink    apps.ArtifactSink
-
-	info      ybk8s.Info
-	kube      *k8s.Kubectl
-	endpoint  ampEndpoint
-	podExec   exec.RemoteExecutor
-	sampler   *metrics.Sampler
-	epSampler *metrics.Sampler
-
-	benchResult BenchResult
-}
-
-func (r *pgbenchRun) suffix() string { return r.t.ResourceSuffix() }
-
-// provisionBacking deploys the co-located YB backing and resolves the in-cluster
-// connection path plus a namespace-scoped kubectl.
-func (r *pgbenchRun) provisionBacking(ctx context.Context) error {
-	info, kube, err := deployYBBacking(ctx, r.t, r.cfg.RF, r.td, r.logf)
-	if err != nil {
-		return err
-	}
-	r.info = info
-	r.kube = kube
-	return nil
-}
-
-// provisionEndpoint stands the amp control plane + one compute endpoint on the
-// running backing and starts the endpoint-pod metrics sampler.
-func (r *pgbenchRun) provisionEndpoint(ctx context.Context) error {
-	ep, err := provisionAmpEndpoint(ctx, r.t, ampstack.FromConfig(r.t.Options), ybk8s.FromConfig(r.t.Options), r.info, r.suffix(), r.sink, r.td, r.logf)
-	if err != nil {
-		return err
-	}
-	r.endpoint = ep
-	r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
-	return nil
-}
-
-// deployClientPod launches the client pod and delivers the pgbench binary
-// (YB's ysql_bench, wrapped as `pgbench`) into it — before any pgbench Init/Run.
-func (r *pgbenchRun) deployClientPod(ctx context.Context) error {
-	podExec, err := startPerfClientPod(ctx, r.kube, r.sink, r.td, "ampqa-pgbench-"+r.suffix(), r.cfg.ClientImage, r.cfg.ClientPullSecret)
-	if err != nil {
-		return err
-	}
-	r.podExec = podExec
-	return deliverPgbenchArtifact(ctx, r.t, r.cfg, r.podExec)
+	return runBenchProvisioned(t, benchWorkloadSpec{
+		testName:     testNamePgbench,
+		runStep:      "run_pgbench",
+		podPrefix:    "ampqa-pgbench",
+		attachPrefix: "pgbench",
+		noTPSMsg:     "pgbench produced no tps — parse of pgbench output failed (see attached pgbench-iter-*.out)",
+		deliver:      deliverPgbenchArtifact,
+		mkWorkload:   func(conn pg.ConnInfo) Workload { return pgbenchWorkloadFor(params, conn) },
+		specs:        pgbenchMetricSpecs,
+		datapoints:   pgbenchDatapoints,
+	}, cfg, bc, identityFromConfig(t.Options, "", commit, load))
 }
 
 // deliverPgbenchArtifact resolves the pgbench artifact (the YB release tarball)
@@ -282,53 +183,6 @@ func deliverPgbenchArtifact(ctx context.Context, t *core.T, cfg perfConfig, podE
 // load (scale/clients/jobs). Shared by the single-run path and each variant.
 func pgbenchWorkloadFor(params pgbenchParams, conn pg.ConnInfo) Workload {
 	return &pgbenchWorkload{conn: conn, scale: params.Scale, clients: params.Clients, jobs: params.Jobs}
-}
-
-// waitReady blocks until the backing serves YSQL, then starts the metrics
-// sampler over the now-known backing pods.
-func (r *pgbenchRun) waitReady(ctx context.Context) error {
-	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout, r.sink, r.logf); err != nil {
-		return err
-	}
-	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
-	return nil
-}
-
-// runBenchmark drives pgbench through the harness: load the schema ONCE, then a
-// discarded warmup + N measured runs, aggregated with robust statistics. Every
-// run's captured output is attached for triage regardless of parse/gate outcome.
-func (r *pgbenchRun) runBenchmark(ctx context.Context) error {
-	wl := &pgbenchWorkload{
-		conn:    r.endpoint.Conn,
-		scale:   r.params.Scale,
-		clients: r.params.Clients,
-		jobs:    r.params.Jobs,
-	}
-	res, err := RunBenchmark(ctx, r.podExec, wl, r.bc)
-	attachBenchSamples(r.sink, res, "pgbench")
-	if err != nil {
-		return err
-	}
-	if len(res.Kept) == 0 || res.TPS.Median == 0 {
-		return fmt.Errorf("pgbench produced no tps — parse of pgbench output failed (see attached pgbench-iter-*.out)")
-	}
-	r.benchResult = res
-	emitBenchCharts(r.t, res)
-	emitMetricSeries(r.t, r.sampler)
-	emitMetricSeries(r.t, r.epSampler)
-	return nil
-}
-
-// gateBaseline emits the aggregate's datapoints: the medians gated against the
-// baseline, and the .cv noise signal informationally, exactly like perf/tpcc.
-// It then records this run in the history store and emits the cross-run trend
-// chart(s), before propagating any gate failure.
-func (r *pgbenchRun) gateBaseline(_ context.Context) error {
-	gated, info := pgbenchDatapoints(r.benchResult)
-	shape, shapeErr := benchShapeGate(r.benchResult, pgbenchMetricSpecs(r.benchResult), r.gates)
-	gateErr := emitAndGate(r.t, r.cfg, r.version, testNamePgbench, gated, append(info, shape...), r.id, r.logf)
-	emitHistoryTrend(r.t, r.hcfg, testNamePgbench, r.version, r.benchResult, r.id, r.logf)
-	return errors.Join(gateErr, shapeErr)
 }
 
 // pgbenchWorkload adapts the pgbench driver to the harness Workload: `pgbench

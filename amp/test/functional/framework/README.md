@@ -226,7 +226,7 @@ Per the live `ampqa collect` output (72 tests: `canary` 6, `features` 51,
 **Four tier tags** — `nightly` is a **superset** of the other three:
 `regression` (the fast PR gate: basic functions + the main use case + "the PR
 didn't break anything important"), `stress` (the `suites/stress` scenarios —
-sustained load and combined load under chaos), `perf` (the baseline-gated
+sustained load and combined load under chaos), `perf` (the portal-gated
 benchmarks in `suites/perf`), and `nightly` (re-runs regression against real
 backings *plus* the extended Jenkins sweep across real k8s/GCP/YBA/yugabyted/raw-YB
 backings, chaos, and perf). Every tagged test also carries `nightly`; the
@@ -239,7 +239,7 @@ extended-only tests carry just `nightly`. `canary` and `presets` are untagged
 | `features` | End-to-end amp-on-backing: provision a backing, run a YB-native workload, deploy amp, run a workload through amp compute, cross-check, tear down. Holds the **`regression`** tier (11 fast, env-portable core-guarantee tests: roundtrip, restart durability, workloadgen, parallel isolation, mutations, transaction, index, cold cache, DDL-survives-restart, the multi-db main case) plus **`nightly`** tests: the k8s foundation test (`amp_on_yb_k8s`) and the amp-feature tests (`amp_branch_isolation`, `amp_endpoint_lifecycle`, `amp_compute_restart`). The cross-cloud/VM/YBA foundation tests (`amp_on_yugabyted_aws`, `amp_on_raw_yugabyte_aws`, `amp_on_yba_universe`, `amp_on_yba_provisioned`) are **untagged** — run on demand by name when that cloud infra is available. |
 | `presets` | Setup-only menus for standing dev environments (`raw_aws`, `yb_k8s`, `yba_k8s`, `yugabyted_gce`, `pgbench_client`), sharing mode `persistent`, meant for `ampqa run --setup-only`. |
 | `stress` | `combined_load` (parallel workloads + chaos against an exclusive universe), `backing_maintenance` (workloads through a rolling restart, a gflag change, a data move and a YugabyteDB upgrade), `backing_backup_restore` (workloads through YBA backup, restore, PITR and scheduled backups on the backing, with a test-deployed MinIO as the backup store), `load_sustain` (workloadgen-driven soak), `multitenant_load`, `branch_churn`, the nemesis/durability family (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`, `commit_durability`) and `bulk_load_kill` (one large write killed mid-flight). |
-| `perf` | `tpcc` (BenchBase TPC-C) and `pgbench` (YB's `ysql_bench` fork) — both gate tps + latency against a stored baseline (`suites/perf/baseline/`). |
+| `perf` | `tpcc` (BenchBase TPC-C), `pgbench` (YB's `ysql_bench` fork) and `sysbench` — each repeats the whole benchmark on `perf.provisions` freshly-provisioned stacks and gates the cross-provision median against the report portal's stored history (`POST /perf/gate`; the local baseline file is the portal-less fallback). |
 
 ## CLI surface
 

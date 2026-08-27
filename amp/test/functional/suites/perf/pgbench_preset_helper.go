@@ -27,7 +27,7 @@ const pgbenchClientShape = "pgbench_client"
 // load-test env drives YSQL directly). The SetupResult carries ready-to-run
 // `kubectl exec … pgbench …` commands + connection info, and a serialized reap
 // plan so `ampqa env rm` reclaims the namespace (cascading the client pod) in a
-// separate process. It self-skips unless perf.enabled + a k8s cluster + a chart
+// separate process. It self-skips unless a k8s cluster + a chart
 // version are set (the perf gate).
 func StandUpPgbenchClient(t *core.T) (*core.SetupResult, error) {
 	cfg := perfFromConfig(t.Options)
@@ -52,7 +52,7 @@ func StandUpPgbenchClient(t *core.T) (*core.SetupResult, error) {
 		return nil, err
 	}
 
-	info, kube, err := deployYBBacking(t.Context, t, cfg.RF, td, logf)
+	info, kube, err := deployYBBacking(t.Context, t, cfg.RF, t.ResourceSuffix(), td, logf)
 	if err != nil {
 		return fail(err)
 	}
