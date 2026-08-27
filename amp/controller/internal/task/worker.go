@@ -2,25 +2,39 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"os"
 	"runtime/debug"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/yugabyte/amp/controller/internal/config"
 	"github.com/yugabyte/amp/controller/internal/db"
 	applog "github.com/yugabyte/amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
 // maxClaimBackoff caps the exponential backoff between failed claim attempts, so
 // a persistent claim error (e.g. the DB is down) is retried at a steady, sane
 // rate rather than every poll interval.
 const maxClaimBackoff = 30 * time.Second
+
+// claimCandidates is how many tasks one claim attempt tries the lease on before
+// idling. It replaces what FOR UPDATE SKIP LOCKED did — spreading instances over
+// different rows — so it need only exceed the instance count, not the backlog.
+const claimCandidates = 10
+
+// lockWaitLogThreshold is how long a resource-lock wait must run to be worth a log
+// line. Below it, contention is ordinary.
+const lockWaitLogThreshold = time.Second
+
+// releaseTimeout bounds giving a lease back. WithoutCancel is right there — a
+// cancelled release costs the next holder a whole TTL — but unbounded it would let
+// a wedged pool park a finishing task inside Release while it still holds its
+// execution slot.
+const releaseTimeout = 10 * time.Second
 
 // A step whose failure carries SQLSTATE 40001 is re-run rather than failing its
 // task: the abort means the transaction rolled back in full, so nothing landed and
@@ -83,6 +97,7 @@ type MetricsRecorder interface {
 type Worker struct {
 	store    Store
 	registry *Registry
+	locks    Locks
 	cfg      config.TaskConfig
 	logger   *slog.Logger
 	owner    string
@@ -98,15 +113,19 @@ type Option func(*Worker)
 func WithMetrics(r MetricsRecorder) Option { return func(w *Worker) { w.metrics = r } }
 
 // NewWorker builds a worker. registry rebuilds each persisted step fully wired
-// with its deps (it carries them). owner identifies this instance for lease
-// claims. Optional collaborators (e.g. metrics) are supplied via Options.
-func NewWorker(store Store, registry *Registry, cfg config.TaskConfig, logger *slog.Logger, opts ...Option) *Worker {
+// with its deps (it carries them); locks hands out the task and resource leases.
+// Optional collaborators (e.g. metrics) are supplied via Options.
+//
+// The owner comes from locks rather than being generated here, so the fence on
+// every task and step mutation names the same thing the lease does.
+func NewWorker(store Store, registry *Registry, locks Locks, cfg config.TaskConfig, logger *slog.Logger, opts ...Option) *Worker {
 	w := &Worker{
 		store:    store,
 		registry: registry,
+		locks:    locks,
 		cfg:      cfg,
 		logger:   logger,
-		owner:    ownerID(),
+		owner:    locks.Owner(),
 
 		retryBudget: stepRetryBudget,
 	}
@@ -116,12 +135,15 @@ func NewWorker(store Store, registry *Registry, cfg config.TaskConfig, logger *s
 	return w
 }
 
+// ownerID identifies this worker for lease claims and for the owner fence on
+// every task and step mutation.
+//
+// An owner must identify one PROCESS: a lease is granted unconditionally to its
+// current holder, so a restarted pod that recycles a hostname and pid would
+// otherwise read as the same owner and be handed a lease it never held.
+// NewOwner's nonce is what makes it a different one.
 func ownerID() string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "unknown"
-	}
-	return fmt.Sprintf("%s/%d", host, os.Getpid())
+	return pglease.NewOwner("task-worker")
 }
 
 // Run drives the claim loop until ctx is cancelled, then waits for in-flight
@@ -153,7 +175,7 @@ func (w *Worker) Run(ctx context.Context) {
 		case sem <- struct{}{}:
 		}
 
-		t, err := w.store.ClaimNext(ctx, w.owner, w.cfg.LeaseTTL)
+		t, lease, err := w.claim(ctx)
 		switch {
 		case err != nil:
 			<-sem
@@ -170,15 +192,65 @@ func (w *Worker) Run(ctx context.Context) {
 		default:
 			claimErrs = 0
 			wg.Add(1)
-			go func(t *Task) {
+			go func(t *Task, lease Lease) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				w.runTask(ctx, t)
-			}(t)
+				w.runTask(ctx, t, lease)
+			}(t, lease)
 		}
 	}
 
 	w.drainInFlight(&wg)
+}
+
+// claim takes the execution lease on one task and transitions it to running,
+// returning nil when nothing is claimable.
+//
+// The acquire IS the claim and comes first, so a task never reaches `running`
+// unowned. Candidates only narrows what to try, and a denial is not worth waiting
+// on — somebody is already running that task.
+// releaseLease gives a lease back, detached from ctx but bounded: see
+// releaseTimeout.
+func releaseLease(ctx context.Context, lease Lease) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	return lease.Release(ctx)
+}
+
+func (w *Worker) claim(ctx context.Context) (*Task, Lease, error) {
+	cands, err := w.store.Candidates(ctx, claimCandidates)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read claim candidates: %w", err)
+	}
+	for _, c := range cands {
+		lease, err := w.locks.AcquireTask(ctx, c.ID)
+		if errors.Is(err, ErrLockHeld) {
+			// "Somebody" is usually another instance, but it can also be this one:
+			// ErrLockHeld folds pglease's ErrAlreadyHeld, which a candidate read
+			// racing our own transition produces. Neither is worth more than a debug
+			// line — walking past a task somebody is running is the mechanism working,
+			// not an event.
+			w.logger.Debug("task lease already held; trying the next candidate",
+				"task_id", c.ID, "kind", c.Kind, "error", err)
+			continue
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("acquire task lease: %w", err)
+		}
+		t, err := w.store.Claim(ctx, c.ID, w.owner)
+		if err != nil || t == nil {
+			// Either the write failed or the task moved on between the candidate read
+			// and now. Give the lease back so the key is free immediately rather than
+			// for a TTL.
+			_ = releaseLease(ctx, lease)
+			if err != nil {
+				return nil, nil, fmt.Errorf("claim task %s: %w", c.ID, err)
+			}
+			continue
+		}
+		return t, lease, nil
+	}
+	return nil, nil, nil
 }
 
 // drainInFlight waits for in-flight task goroutines to finish, up to the
@@ -230,23 +302,26 @@ func (w *Worker) backoff(ctx context.Context, attempt int) {
 	w.wait(ctx, d)
 }
 
-// runTask drives one claimed task to completion, logging the outcome. A genuine
-// failure is already recorded in the store by execute; here it is only logged.
-// An interruption — the worker's context was cancelled by shutdown, or this
-// instance lost the lease (see heartbeat) — is not a failure: execute leaves the
-// task reclaimable (§8.2), so it is logged as such rather than as an error;
-// otherwise a graceful shutdown (or a reclaim) would emit one spurious "task
-// failed" per in-flight task.
+// runTask drives one claimed task to completion and logs the outcome; execute has
+// already recorded a genuine failure in the store. A shutdown interruption is not a
+// failure — the task is left reclaimable (§8.2) — or a graceful stop would emit one
+// spurious "task failed" per in-flight task.
 //
-// A per-task context carries a lease heartbeat that renews the lease while the
-// step loop runs, so a step that outlives LeaseTTL is not reclaimed and run
-// concurrently by a second goroutine (§8.2). If the lease is lost anyway (the
-// heartbeat can't renew, e.g. another instance already reclaimed it), the
-// heartbeat cancels this context so the in-flight step stops rather than racing
-// the new owner.
-func (w *Worker) runTask(ctx context.Context, t *Task) {
+// Nothing here watches the lease, deliberately: losing one exits the process
+// (architecture/ac-locking.md), so recovery code could never run. Releasing when
+// the task leaves execution is what frees the key at once instead of a TTL later,
+// which is what makes a graceful restart cheap.
+func (w *Worker) runTask(ctx context.Context, t *Task, lease Lease) {
 	logger := w.logger.With(applog.KeyTaskID, t.ID.String(), "kind", t.Kind)
 	logger.Debug("task claimed")
+
+	// Under a context of its own: on the shutdown path ctx is already cancelled, and
+	// a release that never reaches the database costs the next holder a whole TTL.
+	defer func() {
+		if err := releaseLease(ctx, lease); err != nil {
+			logger.Warn("releasing task lease", "error", err)
+		}
+	}()
 
 	if w.metrics != nil {
 		w.metrics.TaskStarted()
@@ -265,65 +340,18 @@ func (w *Worker) runTask(ctx context.Context, t *Task) {
 		}
 	}()
 
-	taskCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var hb sync.WaitGroup
-	hb.Add(1)
-	go func() {
-		defer hb.Done()
-		w.heartbeat(taskCtx, logger, t.ID, cancel)
-	}()
-
-	err := w.execute(taskCtx, logger, t)
-	// Classify before cancelling the heartbeat: a cancelled taskCtx (shutdown or
-	// a lost lease) is an interruption, not a failure. Capture it here because
-	// our own cancel() below would otherwise make taskCtx.Err() always non-nil.
-	interrupted := taskCtx.Err() != nil
-	cancel()  // stop the heartbeat
-	hb.Wait() // and wait for it to exit before returning
+	err := w.execute(ctx, logger, t)
 
 	switch {
 	case err == nil:
 		status = string(StatusSucceeded)
 		logger.Debug("task succeeded")
-	case interrupted:
+	case ctx.Err() != nil:
 		status = "interrupted"
-		logger.Info("task interrupted (shutdown or lost lease); left reclaimable", "error", err)
+		logger.Info("task interrupted by shutdown; left reclaimable", "error", err)
 	default:
 		status = string(StatusFailed)
 		logger.Error("task failed", "error", err)
-	}
-}
-
-// heartbeat renews the task's lease every RenewInterval until ctx is cancelled
-// (the task finished or the worker is shutting down). If the lease can no longer
-// be renewed — RenewLease reports it is no longer held, meaning another instance
-// reclaimed the task after its lease lapsed — it cancels the task via cancel so
-// the in-flight step stops instead of running concurrently with the new owner. A
-// transient renewal error is logged and retried on the next tick (the lease has
-// slack: RenewInterval < LeaseTTL), so a brief DB blip doesn't abandon the task.
-func (w *Worker) heartbeat(ctx context.Context, logger *slog.Logger, taskID uuid.UUID, cancel context.CancelFunc) {
-	ticker := time.NewTicker(w.cfg.RenewInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			held, err := w.store.RenewLease(ctx, taskID, w.owner, w.cfg.LeaseTTL)
-			if ctx.Err() != nil {
-				return // finished/shutting down; a renewal racing that is not interesting
-			}
-			if err != nil {
-				logger.Warn("task lease renewal failed; will retry", "error", err)
-				continue
-			}
-			if !held {
-				logger.Warn("task lease lost (reclaimed by another owner); cancelling execution")
-				cancel()
-				return
-			}
-		}
 	}
 }
 
@@ -334,6 +362,18 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 	if err != nil {
 		return fmt.Errorf("load steps: %w", err)
 	}
+	// Held from the step that declared it until the task leaves execution, not
+	// released between steps: a later step may still be on the same resource.
+	var resource Lease
+	var resourceKey string
+	defer func() {
+		if resource != nil {
+			if err := releaseLease(ctx, resource); err != nil {
+				logger.Warn("releasing resource lock", "lock", resourceKey, "error", err)
+			}
+		}
+	}()
+
 	for i, st := range steps {
 		if st.Status == StatusSucceeded {
 			continue
@@ -347,6 +387,15 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		if err != nil {
 			_ = w.store.FailStep(ctx, t.ID, st.ID, w.owner, err)
 			return fmt.Errorf("build step %d (%s): %w", i, st.Kind, err)
+		}
+		if lease, key, err := w.lockFor(ctx, stepLog, t, step, resource, resourceKey); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("step %d (%s) interrupted: %w", i, st.Kind, ctx.Err())
+			}
+			_ = w.store.FailStep(ctx, t.ID, st.ID, w.owner, err)
+			return fmt.Errorf("step %d (%s): %w", i, st.Kind, err)
+		} else if lease != nil {
+			resource, resourceKey = lease, key
 		}
 		if err := w.store.StartStep(ctx, t.ID, st.ID, w.owner); err != nil {
 			return fmt.Errorf("mark step running: %w", err)
@@ -375,6 +424,38 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		stepLog.Debug("step succeeded")
 	}
 	return w.store.CompleteTask(ctx, t.ID, w.owner)
+}
+
+// lockFor takes the resource lock a step declares, waiting out a holder. It returns
+// a nil lease when the step needs none or the task already holds the right one, and
+// refuses a SECOND, different lock — holding two is what deadlock needs.
+func (w *Worker) lockFor(ctx context.Context, logger *slog.Logger, t *Task, step Step, held Lease, heldKey string) (Lease, string, error) {
+	locking, ok := step.(Locking)
+	if !ok {
+		return nil, "", nil
+	}
+	lock := locking.Lock()
+	if lock.Zero() {
+		return nil, "", nil
+	}
+	if held != nil {
+		if heldKey == lock.Key() {
+			return nil, "", nil
+		}
+		return nil, "", fmt.Errorf("step %s wants lock %s while the task holds %s: a task may hold at most one",
+			step.Kind(), lock, heldKey)
+	}
+
+	start := time.Now()
+	lease, err := w.locks.AcquireResource(ctx, lock, t.ID, t.Kind)
+	if err != nil {
+		return nil, "", err
+	}
+	if waited := time.Since(start); waited > lockWaitLogThreshold {
+		logger.Info("waited for a resource lock", "lock", lock.Key(), "waited", waited.String())
+	}
+	logger.Debug("resource lock held", "lock", lock.Key())
+	return lease, lock.Key(), nil
 }
 
 // runStepWithRetry runs one step, re-running it while its failure is a

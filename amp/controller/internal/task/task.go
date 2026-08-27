@@ -27,18 +27,21 @@ const (
 // its steps in execution order; the steps themselves are StepRecord rows keyed by
 // those ids.
 type Task struct {
-	ID          uuid.UUID
-	Kind        string
-	Status      Status
-	ClusterID   *uuid.UUID
-	TargetRef   *string
-	Params      json.RawMessage
-	StepIDs     []uuid.UUID
-	Error       *string
-	Owner       *string
-	LeaseExpiry *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID        uuid.UUID
+	Kind      string
+	Status    Status
+	ClusterID *uuid.UUID
+	TargetRef *string
+	Params    json.RawMessage
+	StepIDs   []uuid.UUID
+	Error     *string
+	// Owner is the process that claimed the task, stamped once at claim. Its
+	// expiry is not here: ownership is a lease in amp_registry.resource_token
+	// (architecture/ac-locking.md), and a copy of the expiry would have to be
+	// re-stamped on every renewal to stay true.
+	Owner     *string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // StepRecord is one row of the `task_step` table: the persisted state of one

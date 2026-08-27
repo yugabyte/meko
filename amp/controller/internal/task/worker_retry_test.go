@@ -34,7 +34,7 @@ func TestWorkerRetriesSerializationAbort(t *testing.T) {
 
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if got := step.callCount(); got != 3 {
 		t.Fatalf("step calls = %d, want 3 (two aborts then success)", got)
@@ -57,7 +57,7 @@ func TestWorkerFailsAfterRetryAttempts(t *testing.T) {
 
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if got := step.callCount(); got != stepRetryAttempts {
 		t.Fatalf("step calls = %d, want stepRetryAttempts (%d)", got, stepRetryAttempts)
@@ -75,7 +75,7 @@ func TestWorkerDoesNotRetryOrdinaryFailure(t *testing.T) {
 
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if got := step.callCount(); got != 1 {
 		t.Fatalf("step calls = %d, want 1 (an ordinary failure is not retried)", got)
@@ -97,9 +97,9 @@ func TestWorkerStopsRetryingOnCancellation(t *testing.T) {
 	store.Seed(task, steps)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	claimed, err := store.ClaimNext(ctx, w.owner, w.cfg.LeaseTTL)
+	claimed, err := store.Claim(ctx, task.ID, w.owner)
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: claimed=%v err=%v", claimed, err)
+		t.Fatalf("Claim: task=%v err=%v", claimed, err)
 	}
 	// Cancel while the first backoff is in flight.
 	go func() {
@@ -193,7 +193,7 @@ func TestWorkerRetryBudgetStopsExpensiveStep(t *testing.T) {
 
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if got := step.callCount(); got != 1 {
 		t.Fatalf("step calls = %d, want 1 (the budget is spent by the first run, so no re-run)", got)

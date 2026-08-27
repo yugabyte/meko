@@ -54,7 +54,9 @@ sketch in §8.1 of the high-level doc):
 - **`task`** — one per operation, the user-visible unit (`GET /tasks/{id}`). Holds
   the kind, a coarse status, the target cluster/ref (for monitoring), the
   originating request (`params`), `step_ids` (its steps in execution order), the
-  owner + lease, and (on failure) the error.
+  owner, and (on failure) the error. Ownership's *expiry* is not here — it is a
+  lease in `amp_registry.resource_token` ([`ac-locking.md`](ac-locking.md)), and
+  `tasks.lease_expiry` is a deprecated leftover nothing reads.
 - **`task_step`** — the idempotent steps, one row each, keyed by its own `id`
   (referenced from `task.step_ids`, which fixes their order); a `task_id` backref
   keeps "the steps of this task" a cheap lookup. The `args` are written when the
@@ -84,9 +86,11 @@ down. On shutdown it stops claiming and waits up to `ShutdownGrace` for in-fligh
 tasks to unwind, then returns regardless — a step that ignores cancellation can't
 wedge process exit (the unfinished tasks are simply reclaimed, §8.2). Tasks run
 independently with no ordering between them, so two tasks touching the same
-resource can interleave — the DB constraints and step idempotency keep that
-correct, but per-resource serialization is future work
-([#176](https://github.com/yugabyte/amp/issues/176)).
+resource can interleave. Two tasks mutating one *endpoint* are now serialized by
+the endpoint lock ([`ac-locking.md`](ac-locking.md)), the first concrete case of
+[meko#454](https://github.com/yugabyte/meko/issues/454) (amp#176 before the
+renumber). The steps that fan out over many endpoints still are not:
+[meko#976](https://github.com/yugabyte/meko/issues/976).
 
 **Execution is a resume-safe loop** (`Worker.execute`, one per task goroutine):
 load the task's step records in execution order (`task.step_ids`), skip any already `succeeded`, and for each remaining step
@@ -105,38 +109,40 @@ expires and it is reclaimed and replayed (§8.2) — durably failing a task over
 graceful shutdown would strand it. Only a genuine step error on a live context
 fails the task.
 
-**Ownership and recovery** (§8.2). `Store.ClaimNext` atomically transitions one
-runnable task `pending → running`, stamping `owner` and `lease_expiry`
-(`FOR UPDATE SKIP LOCKED`, so two instances never claim the same task). A task is
-*runnable* if it is `pending`, or `running` with an expired lease — the latter is
-how a crashed owner's work is reclaimed. The new owner runs the same loop; the
-already-`succeeded` steps are skipped, so work resumes at the first unfinished
-step. Replaying the step that was in flight when the owner died is safe because
-**every step is idempotent**.
+**Ownership and recovery** (§8.2) is a **lease**, and it lives in
+`amp_registry.resource_token` rather than on the task row —
+[`ac-locking.md`](ac-locking.md) is the design; this is what the worker does with
+it. `Store.Candidates` offers the tasks that may be claimable (pending, plus
+running ones whose lease nobody holds), the worker takes `task:<id>` on one of
+them, and only then does `Store.Claim` transition it to `running` and stamp
+`owner`. The grant is the claim: a task never reaches `running` unowned. A task is
+reclaimable exactly when its lease has lapsed, which is how a crashed owner's work
+comes back — the new owner runs the same loop, the already-`succeeded` steps are
+skipped, and replaying the step that was in flight is safe because **every step is
+idempotent**.
 
-**Lease renewal.** While a task runs, the worker heartbeats its lease every
-`RenewInterval` (< `LeaseTTL`) via `Store.RenewLease` — an owner- and
-status-fenced `UPDATE` that only extends a `running` task still owned by this
-instance. So a step that legitimately outlives the lease TTL (a `create_endpoint`
-helm deploy waits minutes for the pod to become ready) is **not** reclaimed and
-run a second time in parallel. Without this, a reclaimed second execution races
-the first: for the shared deploy step the two `helm` runs uninstall each other's
-in-flight release (`Error: services "…" not found`), and their terminal writes
-(`FailStep` vs the unconditional `CompleteTask`) clobber, so the task's status
-flips (the flake behind #340). If renewal genuinely fails — the store reports the
-lease no longer held, i.e. another instance already reclaimed it after the lease
-lapsed (a paused worker, a long DB outage) — the worker cancels the in-flight
-step's context so it stops rather than racing the new owner; the task is left
-`running` and reclaimable. A crashed worker still stops heartbeating, so its lease
-expires and the task is reclaimed as before.
+The task runs under the worker's own context and `pglease` renews in the
+background, so there is no heartbeat here, and a step that legitimately outlives the TTL (a `create_endpoint` helm deploy
+waits minutes for the pod) is not reclaimed and run a second time. Without that, a
+reclaimed second execution races the first — the two `helm` runs uninstall each
+other's in-flight release (`Error: services "…" not found`) and their terminal
+writes clobber, flipping the task's status (the flake behind #340). Losing the
+lease **exits the process** (`ac-locking.md`), so the reclaim path is a restart.
 
-As a belt-and-suspenders on that last case, every task/step mutation
-(`StartStep`, `CompleteStep`, `FailStep`, `CompleteTask`) is **owner-fenced** —
-each `UPDATE` carries `AND owner = $currentOwner` (steps check their parent
-task's owner). So a worker that has lost the lease cannot advance or finish a
-task another instance now owns even if it briefly keeps running: its writes are
-no-ops. `RenewLease` is fenced the same way. Together, renewal + fencing make the
-§8.2 reclaim safe for steps that outlive the lease ([#90](https://github.com/yugabyte/amp/issues/90)).
+Every task/step mutation (`StartStep`, `CompleteStep`, `FailStep`, `CompleteTask`)
+is additionally **owner-fenced** — each `UPDATE` carries `AND owner =
+$currentOwner`, steps through their parent task's owner. A worker that has lost
+the lease cannot advance or finish a task another instance now owns even if it
+briefly keeps running: its writes are no-ops. `Claim` re-stamps `owner`, which is
+what closes the fence behind a takeover ([#90](https://github.com/yugabyte/amp/issues/90)).
+
+**Endpoint locks.** A step may declare a resource it needs exclusively
+(`Locking`); the worker takes that lock before running the step, waits out a
+holder, and releases it when the task leaves execution. `create_endpoint`,
+`resize_endpoint` and `delete_endpoint` all declare the endpoint they touch, so
+two tasks cannot mutate one endpoint's compute at once whichever process owns
+them. A task may hold at most one. The cascade deletes declare nothing — they
+touch many endpoints, and that needs intent locks.
 
 ## 3. The step catalog
 
@@ -338,9 +344,9 @@ their own task-store fake. The tests cover
   flight (a gated step asserts the cap), stops cleanly on cancel, recovers a
   panicking step into a task failure, logs a shutdown interruption as such (not as
   an error), returns within `ShutdownGrace` even if a step ignores cancel,
-  **renews the lease** of a long-running step so it is not reclaimed and re-run,
-  and **cancels** an in-flight step when the lease is lost (owner/status-fenced
-  `RenewLease`);
+  keeps a long-running task off its own candidate list (the held lease is what
+  does it), and gives the lease back when a task leaves execution — on success, on
+  failure, and on a shutdown mid-step — which is what makes a restart cheap;
 - **every step** — its happy path, **idempotent replay** (run twice, converge),
   error propagation, the fork-vs-default-branch deploy spec, and the best-effort
   recipe clear;
@@ -351,10 +357,12 @@ their own task-store fake. The tests cover
   correct ordered step kinds, ids generated and threaded consistently across
   steps, and branch ancestor wiring.
 
-Two things are tested **against a real database**, because `MemStore` cannot stand
-in for either (`store_pg_test.go`): the resize lock's `SQLSTATE 23505 →
-ErrResizeInProgress → 409` mapping (`TestPgResizeLock`) and the schema assumption
-that mapping rests on (`TestPgUniqueConstraintsOnTask`, below). `MemStore` rejects
+The `TestPg*` tests need a real database because `MemStore` cannot stand in.
+`store_pg_test.go` covers the resize lock's `SQLSTATE 23505 → ErrResizeInProgress →
+409` mapping (`TestPgResizeLock`) and the schema assumption it rests on
+(`TestPgUniqueConstraintsOnTask`, below); `locks_pg_test.go` covers the lease
+timings that `MemLocks` deliberately does not model
+([`ac-locking.md`](ac-locking.md)). `MemStore` rejects
 a concurrent resize with a plain in-memory check, so it exercises none of the
 mapping — which is how #400 shipped a lock that worked while every concurrent
 resize returned **500** instead of `409`. Both migrate a schema of their own and

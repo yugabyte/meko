@@ -6,11 +6,18 @@ schema it uses, and the HTTP surface it serves.
 
 ## What it owns
 
-- ~~Fencing authority~~ — **not the controller's.** Write fencing is a lease the
-  writing endpoint takes for itself, in `amp_registry.resource_token`
-  (see [`compute-fencing.md`](../../compute/architecture/compute-fencing.md)).
-  The controller neither issues it nor arbitrates it, so there is no second copy
-  of the fencing state to keep in step and no round trip to issue one.
+- ~~Fencing authority~~ — the **write** fence is not the controller's. It is a
+  lease the writing endpoint takes for itself, in `amp_registry.resource_token`
+  (see [`compute-fencing.md`](../../compute/architecture/compute-fencing.md)),
+  keyed `branch:<id>`; the controller neither issues it nor arbitrates it, so
+  there is no second copy of *that* state to keep in step and no round trip to
+  issue one.
+
+  The controller does take leases of its own in the same table, keyed `task:<id>`
+  and `endpoint:<id>`, for task ownership and endpoint exclusion
+  ([`ac-locking.md`](ac-locking.md)). Disjoint key spaces and one shared
+  definition of the rule (`token_acquire`), so the two coexist without either
+  arbitrating the other's.
 - **Branch and endpoint bookkeeping** — branch records + name mappings, seeding
   the per-branch state a pageserver needs to attach, and the launcher's durable
   endpoint records. Not a registry of its own: these are the control plane's own

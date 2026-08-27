@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/yugabyte/amp/controller/internal/db"
+	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
 // ErrResizeInProgress is returned by Create when a resize_endpoint task is
@@ -65,18 +65,22 @@ type Store interface {
 	// use; callers never construct executable Steps.
 	Create(ctx context.Context, spec TaskSpec) (*Task, error)
 
-	// ClaimNext atomically transitions one runnable task pending->running under
-	// a lease, returning nil if none is runnable. Tasks whose lease has expired
-	// are reclaimable (§8.2).
-	ClaimNext(ctx context.Context, owner string, lease time.Duration) (*Task, error)
+	// Candidates returns up to limit maybe-claimable tasks, oldest first: pending
+	// ones, plus running ones whose lease nobody holds because the owner died.
+	//
+	// A HINT only — the acquire decides, so a candidate whose read raced a takeover
+	// is refused and the caller moves on. Returning a set rather than one row is
+	// what replaces FOR UPDATE SKIP LOCKED (architecture/ac-locking.md).
+	Candidates(ctx context.Context, limit int) ([]*Task, error)
 
-	// RenewLease extends the lease of a task this owner is actively running,
-	// returning whether the lease is still held. It is owner- and status-fenced:
-	// it only touches a `running` task still owned by owner, so a task that was
-	// reclaimed by another instance (or already reached a terminal state) reports
-	// false without being modified. The worker calls it periodically so a step
-	// that outlives LeaseTTL is not reclaimed and run concurrently (§8.2).
-	RenewLease(ctx context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error)
+	// Claim transitions a task to running under owner, after the caller has taken
+	// its lease. It returns nil when the task is no longer claimable — it reached
+	// a terminal status or was deleted between the candidate read and now.
+	//
+	// Re-stamping owner is what fences out a previous owner's writes, so this is
+	// also the reclaim path: a running task whose lease lapsed is claimed the same
+	// way a pending one is.
+	Claim(ctx context.Context, taskID uuid.UUID, owner string) (*Task, error)
 
 	// Steps returns a task's step records in execution order (task.step_ids).
 	Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error)
@@ -131,8 +135,13 @@ func NewPgStore(pool *db.Pool) *PgStore {
 // the in-memory implementation used by unit tests; see mem.go).
 var _ Store = (*PgStore)(nil)
 
+// tasks.lease_expiry is absent: ownership is a lease in amp_registry.resource_token
+// (architecture/ac-locking.md), so the column is DEPRECATED — read and written by
+// nothing. Left in the schema rather than dropped, because a migration would make
+// every fresh install create it only to lose it.
+// Cleanup: https://github.com/yugabyte/meko/issues/975
 const taskColumns = `id::text, kind, status::text, cluster_id::text, target_ref,
-	params, step_ids::text[], error, owner, lease_expiry, created_at, updated_at`
+	params, step_ids::text[], error, owner, created_at, updated_at`
 
 func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	taskID := spec.ID
@@ -212,39 +221,51 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	return t, nil
 }
 
-func (s *PgStore) ClaimNext(ctx context.Context, owner string, lease time.Duration) (*Task, error) {
+// Candidates asks token_holder whether a running task's lease is live, and only for
+// running rows — pending is the common path. "No row" already means free to a new
+// owner, so this reuses migration 0006's definition instead of restating it.
+//
+// The skew must match the one PgLocks acquires under, or the two disagree about when
+// a lapsed lease is takeable; both take pglease's default.
+func (s *PgStore) Candidates(ctx context.Context, limit int) ([]*Task, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+taskColumns+`
+		 FROM tasks
+		 WHERE status = 'pending'
+		    OR (status = 'running'
+		        AND NOT EXISTS (
+		            SELECT 1 FROM amp_registry.token_holder('`+taskKeyPrefix+`' || id::text, $1)))
+		 ORDER BY created_at
+		 LIMIT $2`,
+		pglease.DefaultSkew.Milliseconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *PgStore) Claim(ctx context.Context, taskID uuid.UUID, owner string) (*Task, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE tasks
-		 SET status = 'running', owner = $1,
-		     lease_expiry = now() + make_interval(secs => $2),
-		     updated_at = now()
-		 WHERE id = (
-		     SELECT id FROM tasks
-		     WHERE status = 'pending'
-		        OR (status = 'running' AND lease_expiry < now())
-		     ORDER BY created_at
-		     FOR UPDATE SKIP LOCKED
-		     LIMIT 1
-		 )
+		 SET status = 'running', owner = $2, updated_at = now()
+		 WHERE id = $1::uuid AND status IN ('pending', 'running')
 		 RETURNING `+taskColumns,
-		owner, lease.Seconds())
+		taskID.String(), owner)
 	t, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	return t, err
-}
-
-func (s *PgStore) RenewLease(ctx context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error) {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE tasks
-		 SET lease_expiry = now() + make_interval(secs => $3), updated_at = now()
-		 WHERE id = $1::uuid AND owner = $2 AND status = 'running'`,
-		taskID.String(), owner, lease.Seconds())
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
 }
 
 func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error) {
@@ -428,7 +449,7 @@ func scanTask(r row) (*Task, error) {
 		t          Task
 	)
 	if err := r.Scan(&idStr, &t.Kind, &statusStr, &clusterStr, &t.TargetRef,
-		&params, &stepIDStrs, &t.Error, &t.Owner, &t.LeaseExpiry, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&params, &stepIDStrs, &t.Error, &t.Owner, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	id, err := uuid.Parse(idStr)

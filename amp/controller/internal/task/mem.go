@@ -23,6 +23,10 @@ type MemStore struct {
 	tasks     map[uuid.UUID]*Task
 	stepsByID map[uuid.UUID]*StepRecord
 	now       func() time.Time
+	// locks is the lock table, held here because the real one lives in the same
+	// database as the tasks: Candidates has to be able to ask whether a running
+	// task's lease is still held. Locks(owner) is one instance's view of it.
+	locks *memLockTable
 }
 
 // NewMemStore returns an empty in-memory Store.
@@ -31,6 +35,7 @@ func NewMemStore() *MemStore {
 		tasks:     map[uuid.UUID]*Task{},
 		stepsByID: map[uuid.UUID]*StepRecord{},
 		now:       time.Now,
+		locks:     newMemLockTable(),
 	}
 }
 
@@ -97,39 +102,49 @@ func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 	return cloneTask(t), nil
 }
 
-func (s *MemStore) ClaimNext(_ context.Context, owner string, lease time.Duration) (*Task, error) {
+// Candidates mirrors PgStore's: pending tasks, plus running ones whose execution
+// lease nobody holds, oldest first. The lock table it consults is this store's
+// own, the way the real one lives in the same database as the tasks.
+func (s *MemStore) Candidates(_ context.Context, limit int) ([]*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.now()
+	if limit <= 0 {
+		return nil, nil // as LIMIT 0 does; a negative one is an error in SQL
+	}
+	var out []*Task
 	for _, id := range s.order {
 		t := s.tasks[id]
-		claimable := t.Status == StatusPending ||
-			(t.Status == StatusRunning && t.LeaseExpiry != nil && t.LeaseExpiry.Before(now))
-		if !claimable {
+		switch {
+		case t.Status == StatusPending:
+		case t.Status == StatusRunning && s.locks.heldBy(taskLockKey(id)) == "":
+		default:
 			continue
 		}
-		t.Status = StatusRunning
-		t.Owner = &owner
-		exp := now.Add(lease)
-		t.LeaseExpiry = &exp
-		t.UpdatedAt = now
-		return cloneTask(t), nil
+		out = append(out, cloneTask(t))
 	}
-	return nil, nil
+	// Oldest first, as PgStore's ORDER BY created_at does. Insertion order is not a
+	// substitute: without this a regression dropping the ORDER BY — losing FIFO
+	// claiming and starving the oldest work — would still pass these tests.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID.String() < out[j].ID.String()
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return page(out, limit, 0), nil
 }
 
-func (s *MemStore) RenewLease(_ context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error) {
+func (s *MemStore) Claim(_ context.Context, taskID uuid.UUID, owner string) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tasks[taskID]
-	if t == nil || t.Status != StatusRunning || t.Owner == nil || *t.Owner != owner {
-		return false, nil
+	if t == nil || (t.Status != StatusPending && t.Status != StatusRunning) {
+		return nil, nil
 	}
-	now := s.now()
-	exp := now.Add(lease)
-	t.LeaseExpiry = &exp
-	t.UpdatedAt = now
-	return true, nil
+	t.Status = StatusRunning
+	t.Owner = &owner
+	t.UpdatedAt = s.now()
+	return cloneTask(t), nil
 }
 
 func (s *MemStore) Steps(_ context.Context, taskID uuid.UUID) ([]StepRecord, error) {

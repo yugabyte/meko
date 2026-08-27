@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -79,25 +78,12 @@ func TestPgResizeLock(t *testing.T) {
 
 	// And it self-releases: a terminal task drops out of the index's predicate.
 	// Terminating a task goes through the worker's fenced path — claim it, then
-	// complete it as its owner — so claim until this test's task comes up (a
-	// previous failed run can leave other pending tasks in the schema).
+	// complete it as its owner. The lease the real claim takes is not needed here:
+	// this test is about the index, and Claim is what stamps the owner the
+	// completion is fenced on.
 	const owner = "TestPgResizeLock"
-	claimed := false
-	for range 10 {
-		next, err := s.ClaimNext(ctx, owner, time.Minute)
-		if err != nil {
-			t.Fatalf("claim next task: %v", err)
-		}
-		if next == nil {
-			break
-		}
-		if next.ID == first.ID {
-			claimed = true
-			break
-		}
-	}
-	if !claimed {
-		t.Fatalf("never claimed the in-flight resize task %s", first.ID)
+	if claimed, err := s.Claim(ctx, first.ID, owner); err != nil || claimed == nil {
+		t.Fatalf("claim the in-flight resize task %s: claimed=%v err=%v", first.ID, claimed, err)
 	}
 	if err := s.CompleteTask(ctx, first.ID, owner); err != nil {
 		t.Fatalf("complete first resize: %v", err)

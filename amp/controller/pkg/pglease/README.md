@@ -84,12 +84,6 @@ One `Held` per key per `Client`: a second `Acquire` of a held key returns
 `ErrAlreadyHeld`, because the database cannot tell it from a renewal and would
 hand back a second lease over the one row.
 
-## YugabyteDB only
-
-Migration 0006 declares the table `PRIMARY KEY (resource_id HASH) SPLIT INTO 3
-TABLETS`, which vanilla Postgres rejects — so this needs YugabyteDB, and needs
-the amp migrations applied.
-
 ## Running the tests
 
 ```bash
@@ -98,10 +92,9 @@ AMP_TEST_DATABASE_URL=postgres://... go test ./... -race
 ```
 
 Live tests are named `TestPg…` and skip when `AMP_TEST_DATABASE_URL` is unset.
-They need YugabyteDB, not Postgres. `TestMain` provisions ONE migrated database
-for the whole package (`DROP DATABASE` costs ~70s on YugabyteDB, so one per test
-would dominate the run) and tests isolate from each other by using a resource key
-nothing else uses. Mutual exclusion, takeover timing, and the
-death of a stalled or killed holder are only covered with a database: without
-one, `go test` proves the timings and the argument checks and nothing about the
-contract.
+`TestMain` provisions ONE migrated database for the whole package (`DROP
+DATABASE` costs ~70s, so one per test would dominate the run) and tests isolate
+from each other by using a resource key nothing else uses. Mutual exclusion,
+takeover timing, and the death of a stalled or killed holder are only covered
+with a database: without one, `go test` proves the timings and the argument
+checks and nothing about the contract.

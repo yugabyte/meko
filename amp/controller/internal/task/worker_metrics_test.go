@@ -41,13 +41,13 @@ func (r *fakeRecorder) TaskFinished(kind, status string, _ time.Duration) {
 
 // runViaRecorder claims the seeded task and drives it through runTask (the path
 // the claim loop uses, where instrumentation lives), returning the recorder.
-func runViaRecorder(t *testing.T, w *Worker, store Store) *fakeRecorder {
+func runViaRecorder(t *testing.T, w *Worker) *fakeRecorder {
 	t.Helper()
-	claimed, err := store.ClaimNext(t.Context(), w.owner, w.cfg.LeaseTTL)
+	claimed, lease, err := w.claim(t.Context())
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: claimed=%v err=%v, want a task", claimed, err)
+		t.Fatalf("claim: task=%v err=%v, want a task", claimed, err)
 	}
-	w.runTask(t.Context(), claimed)
+	w.runTask(t.Context(), claimed, lease)
 	return w.metrics.(*fakeRecorder)
 }
 
@@ -59,7 +59,7 @@ func TestWorkerRecordsSucceededTaskMetrics(t *testing.T) {
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
 
-	rec := runViaRecorder(t, w, store)
+	rec := runViaRecorder(t, w)
 
 	if rec.started != 1 {
 		t.Fatalf("TaskStarted calls = %d, want 1", rec.started)
@@ -80,7 +80,7 @@ func TestWorkerRecordsFailedTaskMetrics(t *testing.T) {
 	task, steps := pendingTask("kfail")
 	store.Seed(task, steps)
 
-	rec := runViaRecorder(t, w, store)
+	rec := runViaRecorder(t, w)
 
 	if len(rec.finished) != 1 || rec.finished[0].status != "failed" {
 		t.Fatalf("finished events = %+v, want one with status failed", rec.finished)
@@ -96,9 +96,9 @@ func TestWorkerNilMetricsNoPanic(t *testing.T) {
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
 
-	claimed, err := store.ClaimNext(t.Context(), w.owner, w.cfg.LeaseTTL)
+	claimed, lease, err := w.claim(t.Context())
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: claimed=%v err=%v", claimed, err)
+		t.Fatalf("claim: task=%v err=%v", claimed, err)
 	}
-	w.runTask(t.Context(), claimed) // must not panic with a nil recorder
+	w.runTask(t.Context(), claimed, lease) // must not panic with a nil recorder
 }

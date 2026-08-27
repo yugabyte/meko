@@ -55,9 +55,10 @@ func drainTasks(t *testing.T, store *task.MemStore, backend core.Backend, prov a
 		RenewInterval: 10 * time.Second,
 		MaxConcurrent: 4,
 		ShutdownGrace: 2 * time.Second,
+		LockWait:      10 * time.Second,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	w := task.NewWorker(store, task.ProductionRegistry(deps), cfg, logger)
+	w := task.NewWorker(store, task.ProductionRegistry(deps), store.Locks("api-test"), cfg, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

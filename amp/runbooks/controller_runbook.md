@@ -363,6 +363,57 @@ write may have committed and a blind retry could double-apply it. The log line
 `state store unavailable mid-request; outcome unknown` marks those. Read the
 resource back before retrying.
 
+## The controller exits 66 / crash-loops with `pglease: lease ... lost`
+
+It is fenced out, not crashed. The controller runs each task under a lease in
+`amp_registry.resource_token`; when a lease cannot be proven held — no renewal
+confirmed for `--task-lease-ttl` minus its safety margin — the process dumps the
+cause and every goroutine to stderr and exits **66**, deliberately, rather than
+carrying on with work it can no longer prove is its own
+([`ac-locking.md`](../controller/architecture/ac-locking.md)). 66 is the compute
+fence's code too, so the same rule recognises both.
+
+The cause is almost always the backing database, because that is the only thing
+that stops renewals:
+
+```bash
+kubectl -n "$NS" logs deploy/amp-controller --previous | grep -m1 'pglease: lease'
+kubectl -n "$NS" get pods | grep yb-tserver
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/../readyz     # 503 = store unreachable
+```
+
+A restart loop here means the database is still unreachable; fix that and the loop
+clears on its own. **Nothing needs reclaiming by hand**: the in-flight tasks are
+left `running` with lapsed leases, and the restarted controller (or another
+instance) picks each up once its lease has lapsed — up to one `--task-lease-ttl`
+(30s) plus the skew grace per task, and the ones that had renewed most recently
+wait longest. Steps are idempotent, so the replay converges.
+
+To see what is still held, and by whom:
+
+```sql
+SELECT resource_id, client_id, to_timestamp(token/1e6) AS expires_at
+  FROM amp_registry.resource_token ORDER BY token;
+```
+
+`task:<uuid>` rows are task ownership and name the process that claimed it;
+`endpoint:<uuid>` rows name the *task* holding that endpoint. Do not delete rows to
+hurry a reclaim along — that is the fence, and removing it is how two controllers
+end up on one endpoint. A row is takeable once `expires_at` plus the 500ms
+clock-skew grace has passed, not at `expires_at` itself.
+
+**Downgrading to a pre-lease controller strands in-flight tasks.** The old claim
+query needed `lease_expiry < now()`, and a task claimed under a lease leaves that
+column NULL — `NULL < now()` is NULL, so the older binary never offers the task
+again. After a rollback, un-strand them once:
+
+```sql
+UPDATE tasks SET lease_expiry = now() WHERE status = 'running';
+```
+
+Do not run mixed versions: a lease-era controller holds leases an older one cannot
+see, so both would claim the same task.
+
 ## A dropped branch's data isn't going away
 
 The drop itself only **tombstones** the branch (`dropped_at`). The controller's
@@ -447,7 +498,7 @@ Read it in this order:
 ## Fast triage checklist
 
 ```bash
-# 1. controller up + reachable?
+# 1. controller up + reachable?  (restarts with exit 66 = fenced out, see above)
 kubectl -n "$NS" get deploy amp-controller; curl -s -o /dev/null -w '%{http_code}\n' $BASE/../healthz
 # 2. the failing task's error
 curl -s "$BASE/tasks?limit=50" | jq -r '.tasks[] | select(.status=="failed") | "\(.kind)\t\(.error)"'

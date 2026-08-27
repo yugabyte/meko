@@ -510,8 +510,8 @@ CREATE TABLE task (
     params       jsonb       NOT NULL,        -- the request that created the task
     step_ids     uuid[]      NOT NULL DEFAULT '{}',  -- this task's steps, in execution order
     error        text,                         -- set when status = 'failed'
-    owner        text,                         -- which instance holds the task (§8.2)
-    lease_expiry timestamptz,                  -- ownership lease; expiry => reclaimable
+    owner        text,                         -- which instance claimed the task (§8.2)
+    lease_expiry timestamptz,                  -- DEPRECATED, unused (see ac-locking.md)
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now()
 );
@@ -534,12 +534,16 @@ CREATE INDEX tasks_runnable ON task (status) WHERE status IN ('pending', 'runnin
 
 ### 8.2 Ownership and recovery
 
-A task is owned by one instance at a time. Claiming a task is an atomic transition
-(`pending` → `running`, stamping `owner` and `lease_expiry`), so two instances never run
-the same task concurrently. If the owner crashes, its lease expires; another instance then
-reclaims the task — re-stamping `owner` and resuming from the first non-`succeeded` step
-(§8.1). Because every step is idempotent, replaying the step that was in flight when the
-owner died converges rather than double-applying.
+A task is owned by one instance at a time, and what makes that true is a **lease** in
+`amp_registry.resource_token` keyed `task:<task-id>`, not a column here. An instance takes
+that lease and only then transitions the task (`pending` → `running`, stamping `owner`), so
+two instances never run the same task concurrently and a task never reaches `running`
+unowned. If the owner crashes, its lease lapses; another instance then reclaims the task —
+re-stamping `owner`, which fences the old one out, and resuming from the first
+non-`succeeded` step (§8.1). Because every step is idempotent, replaying the step that was
+in flight when the owner died converges rather than double-applying. A task may also lock a
+resource it mutates, so two tasks cannot touch one endpoint at once. Both leases, and why
+losing one exits the process, are in [`ac-locking.md`](ac-locking.md).
 
 The catalog of step kinds — which steps exist and their exact arguments — belongs to the
 task framework's own design doc, [`ac-tasks.md`](ac-tasks.md). What is fixed here is the

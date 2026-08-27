@@ -25,19 +25,23 @@ import (
 // context leaves it reclaimable. The claim loop itself (concurrency, backpressure,
 // graceful stop) is covered by the Run tests at the bottom.
 
-func testWorker(store Store, reg *Registry) *Worker {
-	return testWorkerMax(store, reg, 8)
+func testWorker(store *MemStore, reg *Registry) *Worker {
+	return testWorkerMax(store, store.Locks(ownerID()), reg, 8)
 }
 
-func testWorkerMax(store Store, reg *Registry, maxConcurrent int) *Worker {
-	cfg := config.TaskConfig{
+func testWorkerMax(store Store, locks Locks, reg *Registry, maxConcurrent int) *Worker {
+	return NewWorker(store, reg, locks, testTaskConfig(maxConcurrent), slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func testTaskConfig(maxConcurrent int) config.TaskConfig {
+	return config.TaskConfig{
 		PollInterval:  time.Millisecond,
 		LeaseTTL:      30 * time.Second,
 		RenewInterval: 10 * time.Second,
 		MaxConcurrent: maxConcurrent,
 		ShutdownGrace: 5 * time.Second,
+		LockWait:      2 * time.Second,
 	}
-	return NewWorker(store, reg, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 // regWith registers each fakeStep under its kind. The builder ignores args/deps
@@ -69,12 +73,13 @@ func pendingTask(kinds ...string) (*Task, []*StepRecord) {
 // claimAndExecute claims the next runnable task and runs it synchronously, for
 // the per-task scenarios. It fails the test if nothing is claimable. The
 // resulting task/step state is read back from the store by each test.
-func claimAndExecute(t *testing.T, w *Worker, store Store) {
+func claimAndExecute(t *testing.T, w *Worker) {
 	t.Helper()
-	claimed, err := store.ClaimNext(t.Context(), w.owner, w.cfg.LeaseTTL)
+	claimed, lease, err := w.claim(t.Context())
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: claimed=%v err=%v, want a task", claimed, err)
+		t.Fatalf("claim: task=%v err=%v, want a task", claimed, err)
 	}
+	defer func() { _ = lease.Release(t.Context()) }()
 	_ = w.execute(t.Context(), w.logger, claimed)
 }
 
@@ -101,7 +106,7 @@ func TestWorkerRunsAllStepsAndCompletes(t *testing.T) {
 	task, steps := pendingTask("k0", "k1")
 	store.Seed(task, steps)
 
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if h0.callCount() != 1 || h1.callCount() != 1 {
 		t.Fatalf("handler calls = (k0:%d, k1:%d), want (1,1)", h0.callCount(), h1.callCount())
@@ -132,16 +137,15 @@ func TestWorkerResumesSkippingSucceededSteps(t *testing.T) {
 	// and resume at step 1 without re-running step 0 (§8.1/§8.2).
 	id := uuid.New()
 	s0, s1 := uuid.New(), uuid.New()
-	expired := time.Now().Add(-time.Minute)
 	owner := "dead-owner"
-	task := &Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, LeaseExpiry: &expired, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0, s1}}
+	task := &Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0, s1}}
 	steps := []*StepRecord{
 		{ID: s0, TaskID: id, Kind: "k0", Status: StatusSucceeded},
 		{ID: s1, TaskID: id, Kind: "k1", Status: StatusPending},
 	}
 	store.Seed(task, steps)
 
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if h0.callCount() != 0 {
 		t.Errorf("already-succeeded step 0 was re-run %d time(s), want 0", h0.callCount())
@@ -167,12 +171,11 @@ func TestWorkerReplaysInFlightRunningStep(t *testing.T) {
 	// leave callCount at 0.
 	id := uuid.New()
 	s0 := uuid.New()
-	expired := time.Now().Add(-time.Minute)
 	owner := "dead-owner"
-	task := &Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, LeaseExpiry: &expired, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0}}
+	task := &Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0}}
 	store.Seed(task, []*StepRecord{{ID: s0, TaskID: id, Kind: "k0", Status: StatusRunning}})
 
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if h.callCount() != 1 {
 		t.Errorf("in-flight running step ran %d time(s) on reclaim, want exactly 1 (re-run, not skipped)", h.callCount())
@@ -190,9 +193,9 @@ func TestWorkerLeavesTaskReclaimableOnCancellation(t *testing.T) {
 
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
-	claimed, err := store.ClaimNext(t.Context(), "me", time.Minute)
+	claimed, err := store.Claim(t.Context(), task.ID, w.owner)
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: %v (claimed=%v)", err, claimed)
+		t.Fatalf("Claim: %v (claimed=%v)", err, claimed)
 	}
 
 	// The worker is shutting down mid-step: the step ctx is cancelled, so the
@@ -218,7 +221,7 @@ func TestWorkerFailsTaskAndHaltsLaterSteps(t *testing.T) {
 	task, steps := pendingTask("kfail", "knext")
 	store.Seed(task, steps)
 
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	if hNext.callCount() != 0 {
 		t.Errorf("step after the failed one ran %d time(s), want 0", hNext.callCount())
@@ -246,7 +249,7 @@ func TestWorkerFailsOnUnknownStepKind(t *testing.T) {
 	task, steps := pendingTask("mystery")
 	store.Seed(task, steps)
 
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	got, _ := store.Get(t.Context(), task.ID)
 	if got.Status != StatusFailed {
@@ -254,34 +257,62 @@ func TestWorkerFailsOnUnknownStepKind(t *testing.T) {
 	}
 }
 
-func TestWorkerIgnoresUnexpiredRunningTask(t *testing.T) {
+func TestWorkerIgnoresRunningTaskWhoseLeaseIsHeld(t *testing.T) {
 	store := NewMemStore()
 
-	// A task held by a live owner (lease in the future) must not be claimable.
+	// A running task whose execution lease somebody still holds is not a
+	// candidate: this is the whole point of the task lock, so a second instance
+	// looking for work walks past it.
 	id := uuid.New()
 	s0 := uuid.New()
-	future := time.Now().Add(time.Hour)
 	owner := "live-owner"
-	task := &Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, LeaseExpiry: &future, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0}}
+	task := &Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0}}
 	store.Seed(task, []*StepRecord{{ID: s0, TaskID: id, Kind: "k0", Status: StatusPending}})
-
-	claimed, err := store.ClaimNext(t.Context(), "me", time.Minute)
-	if err != nil {
-		t.Fatalf("ClaimNext: %v", err)
+	if _, err := store.Locks(owner).AcquireTask(t.Context(), id); err != nil {
+		t.Fatalf("seeding the holder's lease: %v", err)
 	}
-	if claimed != nil {
-		t.Errorf("claimed a live-owned (unexpired-lease) task %s, want nothing claimable", claimed.ID)
+
+	cands, err := store.Candidates(t.Context(), claimCandidates)
+	if err != nil {
+		t.Fatalf("Candidates: %v", err)
+	}
+	if len(cands) != 0 {
+		t.Errorf("offered %d candidate(s) including a live-leased task, want none", len(cands))
+	}
+
+	// Once the holder is gone the same task is offered again — that is the reclaim
+	// path, and it must not need the row to change.
+	store.ExpireTaskLease(id)
+	cands, err = store.Candidates(t.Context(), claimCandidates)
+	if err != nil || len(cands) != 1 || cands[0].ID != id {
+		t.Fatalf("after the holder died, Candidates = %v (err=%v), want just %s", cands, err, id)
 	}
 }
 
 func TestWorkerNothingRunnableWhenEmpty(t *testing.T) {
 	store := NewMemStore()
-	claimed, err := store.ClaimNext(t.Context(), "me", time.Minute)
+	cands, err := store.Candidates(t.Context(), claimCandidates)
 	if err != nil {
-		t.Fatalf("ClaimNext: %v", err)
+		t.Fatalf("Candidates: %v", err)
 	}
-	if claimed != nil {
-		t.Errorf("claimed %s from an empty store, want nothing", claimed.ID)
+	if len(cands) != 0 {
+		t.Errorf("got %d candidate(s) from an empty store, want none", len(cands))
+	}
+}
+
+func TestWorkerOwnerIsDistinctPerInstance(t *testing.T) {
+	// The owner fence and the lease key on this string, and a lease is granted
+	// unconditionally to its current holder — so an id a restarted process could
+	// reproduce would be handed a lease it never held. Two workers in one process
+	// stand in for that: the old host/pid spelling made them equal.
+	a := testWorker(NewMemStore(), DefaultRegistry(Deps{}))
+	b := testWorker(NewMemStore(), DefaultRegistry(Deps{}))
+
+	if a.owner == "" {
+		t.Fatal("empty owner id")
+	}
+	if a.owner == b.owner {
+		t.Errorf("two workers share owner id %q, want distinct ids", a.owner)
 	}
 }
 
@@ -293,7 +324,7 @@ func TestWorkerNoopStepEndToEnd(t *testing.T) {
 	task, steps := pendingTask(KindNoop)
 	store.Seed(task, steps)
 
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	got, _ := store.Get(t.Context(), task.ID)
 	if got.Status != StatusSucceeded {
@@ -345,7 +376,7 @@ func TestWorkerRunRespectsMaxConcurrent(t *testing.T) {
 	g := &gateStep{release: make(chan struct{})}
 	reg := NewRegistry()
 	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
-	w := testWorkerMax(store, reg, 2) // cap concurrency at 2
+	w := testWorkerMax(store, store.Locks(ownerID()), reg, 2) // cap concurrency at 2
 
 	var ids []uuid.UUID
 	for range 4 {
@@ -388,41 +419,70 @@ func TestWorkerRunRespectsMaxConcurrent(t *testing.T) {
 	}
 }
 
-func TestMemStoreRenewLeaseIsOwnerAndStatusFenced(t *testing.T) {
+// Two instances, one task: exactly one may execute it. This is the property the
+// task lock exists for, so it is asserted on the lock directly rather than
+// through a worker.
+func TestTaskLeaseAdmitsOneInstance(t *testing.T) {
 	store := NewMemStore()
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
+	a, b := store.Locks("instance-a"), store.Locks("instance-b")
 
-	claimed, err := store.ClaimNext(t.Context(), "owner-a", time.Second)
-	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: %v (claimed=%v)", err, claimed)
+	leaseA, err := a.AcquireTask(t.Context(), task.ID)
+	if err != nil {
+		t.Fatalf("first instance was refused the task lease: %v", err)
 	}
-	before := *claimed.LeaseExpiry
-
-	// The holder renews: reported held, lease extended.
-	held, err := store.RenewLease(t.Context(), task.ID, "owner-a", 10*time.Second)
-	if err != nil || !held {
-		t.Fatalf("RenewLease by holder = (held=%v, err=%v), want (true, nil)", held, err)
+	if _, err := b.AcquireTask(t.Context(), task.ID); !errors.Is(err, ErrLockHeld) {
+		t.Fatalf("second instance got err=%v, want ErrLockHeld", err)
 	}
-	got, _ := store.Get(t.Context(), task.ID)
-	if !got.LeaseExpiry.After(before) {
-		t.Errorf("lease_expiry not extended: before=%v after=%v", before, *got.LeaseExpiry)
+	// Nor may the holder take a second lease over the one row: two would each
+	// believe they own it, and either one's release would un-fence the other.
+	if _, err := a.AcquireTask(t.Context(), task.ID); !errors.Is(err, ErrLockHeld) {
+		t.Errorf("holder's second acquire got err=%v, want ErrLockHeld", err)
 	}
 
-	// A different owner cannot renew (it does not hold the lease).
-	if held, _ := store.RenewLease(t.Context(), task.ID, "owner-b", 10*time.Second); held {
-		t.Error("RenewLease by a non-holder reported held=true, want false")
+	// Released explicitly, it is takeable at once rather than after a TTL.
+	if err := leaseA.Release(t.Context()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if _, err := b.AcquireTask(t.Context(), task.ID); err != nil {
+		t.Fatalf("after release the second instance was still refused: %v", err)
+	}
+}
+
+// A holder that dies without releasing keeps the task until its lease lapses,
+// and then hands it over — the crash path, with the lapse standing in for the
+// TTL.
+func TestTaskLeaseIsTakeableOnceTheHolderIsGone(t *testing.T) {
+	store := NewMemStore()
+	task, steps := pendingTask("k0")
+	store.Seed(task, steps)
+	a, b := store.Locks("instance-a"), store.Locks("instance-b")
+
+	leaseA, err := a.AcquireTask(t.Context(), task.ID)
+	if err != nil {
+		t.Fatalf("AcquireTask: %v", err)
+	}
+	store.ExpireTaskLease(task.ID)
+
+	if _, err := b.AcquireTask(t.Context(), task.ID); err != nil {
+		t.Fatalf("takeover of a lapsed lease was refused: %v", err)
 	}
 
-	// A terminal task cannot be renewed (nothing to keep alive).
-	_ = store.CompleteTask(t.Context(), task.ID, "owner-a")
-	if held, _ := store.RenewLease(t.Context(), task.ID, "owner-a", 10*time.Second); held {
-		t.Error("RenewLease on a succeeded task reported held=true, want false")
+	// The previous holder is told, which is what pglease does too — there it is
+	// followed by the process exiting, so nothing in the controller reads it. The
+	// model keeps it so the two do not quietly diverge; asserted on the concrete
+	// type, since Lease deliberately does not expose it.
+	if leaseA.(*MemLease).Context().Err() == nil {
+		t.Error("the previous holder's lease was not ended by the takeover")
 	}
-
-	// A missing task reports not-held rather than erroring.
-	if held, err := store.RenewLease(t.Context(), uuid.New(), "owner-a", time.Second); err != nil || held {
-		t.Errorf("RenewLease on a missing task = (held=%v, err=%v), want (false, nil)", held, err)
+	// And its release must not take the successor's row: same key, and the owner
+	// string is all the release matches on.
+	if err := leaseA.Release(t.Context()); err != nil {
+		t.Fatalf("Release after loss: %v", err)
+	}
+	if got := store.locks.heldBy(taskLockKey(task.ID)); got != "instance-b" {
+		t.Errorf("after the loser released, the key is held by %q, want instance-b", got)
 	}
 }
 
@@ -432,9 +492,9 @@ func TestMemStoreMutationsAreOwnerFenced(t *testing.T) {
 	store.Seed(task, steps)
 	stepID := steps[0].ID
 
-	claimed, err := store.ClaimNext(t.Context(), "owner-a", time.Minute)
+	claimed, err := store.Claim(t.Context(), task.ID, "owner-a")
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNext: %v (claimed=%v)", err, claimed)
+		t.Fatalf("Claim: %v (claimed=%v)", err, claimed)
 	}
 
 	// A worker that no longer owns the task (owner-b) must not advance or finish
@@ -464,17 +524,12 @@ func TestMemStoreMutationsAreOwnerFenced(t *testing.T) {
 	}
 }
 
-func TestWorkerRenewsLeaseSoLongStepIsNotReclaimed(t *testing.T) {
+func TestWorkerDoesNotReclaimItsOwnLongRunningTask(t *testing.T) {
 	store := NewMemStore()
 	g := &gateStep{release: make(chan struct{})}
 	reg := NewRegistry()
 	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
-
-	// A short lease with faster renewal, and free slots so a reclaim *could*
-	// happen if the lease lapsed. Renewal must keep the running task's lease
-	// alive so the claim loop never reclaims and re-runs it.
-	cfg := config.TaskConfig{PollInterval: 5 * time.Millisecond, LeaseTTL: 100 * time.Millisecond, RenewInterval: 25 * time.Millisecond, MaxConcurrent: 4, ShutdownGrace: time.Second}
-	w := NewWorker(store, reg, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w := testWorker(store, reg)
 
 	task, steps := pendingTask("gate")
 	store.Seed(task, steps)
@@ -484,15 +539,12 @@ func TestWorkerRenewsLeaseSoLongStepIsNotReclaimed(t *testing.T) {
 	go func() { w.Run(ctx); close(done) }()
 
 	waitFor(t, 2*time.Second, func() bool { return g.cur() == 1 }) // claimed and running
-	// Hold the step across several lease periods. Without renewal the loop would
-	// reclaim the lease-expired running task and run it again (a second call).
-	time.Sleep(400 * time.Millisecond)
+	// Free slots, a fast poll, and a step that outlives any lease interval: the
+	// claim loop keeps looking for work throughout. It must never offer itself the
+	// task it is already running, which is what the held lease prevents.
+	time.Sleep(200 * time.Millisecond)
 	if c := g.callCount(); c != 1 {
-		t.Errorf("gate step ran %d time(s); want exactly 1 (renewal must prevent a lease-expiry reclaim)", c)
-	}
-	got, _ := store.Get(t.Context(), task.ID)
-	if got.LeaseExpiry == nil || !got.LeaseExpiry.After(time.Now()) {
-		t.Errorf("running task's lease not kept alive: lease_expiry=%v", got.LeaseExpiry)
+		t.Errorf("gate step ran %d time(s); want exactly 1 — a held task lease must keep it off the candidate list", c)
 	}
 
 	close(g.release)
@@ -504,56 +556,76 @@ func TestWorkerRenewsLeaseSoLongStepIsNotReclaimed(t *testing.T) {
 	}
 }
 
-func TestWorkerCancelsExecutionWhenLeaseLost(t *testing.T) {
-	store := &leaseLostStore{MemStore: NewMemStore()}
-	step := &cancelAwareStep{started: make(chan struct{})}
+// A task lease is given back when the task leaves execution, whether it finished
+// or was interrupted by shutdown. That is what makes a graceful restart cheap:
+// the successor claims immediately instead of waiting out a TTL. There is no
+// lease-loss case to test here — losing one exits the process
+// (architecture/ac-locking.md), which pglease's own crash test covers by
+// observing a subprocess die.
+func TestWorkerReleasesTaskLeaseWhenDone(t *testing.T) {
+	for _, tc := range []struct{ name, kind string }{
+		{name: "succeeded", kind: "k0"},
+		{name: "failed", kind: "kfail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemStore()
+			reg := regWith(&fakeStep{kind: "k0"}, &fakeStep{kind: "kfail", failWith: errors.New("boom")})
+			locks := store.Locks(ownerID())
+			w := testWorkerMax(store, locks, reg, 1)
+
+			task, steps := pendingTask(tc.kind)
+			store.Seed(task, steps)
+
+			claimed, lease, err := w.claim(t.Context())
+			if err != nil || claimed == nil {
+				t.Fatalf("claim: task=%v err=%v", claimed, err)
+			}
+			if got := store.locks.heldBy(taskLockKey(task.ID)); got == "" {
+				t.Fatal("the claimed task's lease is not held; the claim is the lease")
+			}
+			w.runTask(t.Context(), claimed, lease)
+
+			if got := store.locks.heldBy(taskLockKey(task.ID)); got != "" {
+				t.Errorf("task lease still held by %q after the task finished, want released", got)
+			}
+		})
+	}
+}
+
+func TestWorkerReleasesTaskLeaseOnShutdown(t *testing.T) {
+	store := NewMemStore()
+	g := &gateStep{release: make(chan struct{})}
 	reg := NewRegistry()
-	reg.Register("cancelaware", func(json.RawMessage, Deps) (Step, error) { return step, nil })
+	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
+	w := testWorkerMax(store, store.Locks(ownerID()), reg, 1)
 
-	rec := &capturingHandler{}
-	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 100 * time.Millisecond, RenewInterval: 10 * time.Millisecond, MaxConcurrent: 1, ShutdownGrace: 2 * time.Second}
-	w := NewWorker(store, reg, cfg, slog.New(rec))
-
-	task, steps := pendingTask("cancelaware")
+	task, steps := pendingTask("gate")
 	store.Seed(task, steps)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	done := make(chan struct{})
 	go func() { w.Run(ctx); close(done) }()
 
-	<-step.started // the step is running and blocked on its context
+	waitFor(t, 2*time.Second, func() bool { return g.cur() == 1 })
 
-	// The store reports the lease as lost on the first renewal; the heartbeat must
-	// cancel the step's context (it returns Fail(ctx.Err())) rather than let it run
-	// concurrently with the (simulated) new owner. That is an interruption, not a
-	// durable failure: the task must be left reclaimable.
-	waitFor(t, 2*time.Second, func() bool { return rec.has(slog.LevelWarn, "lease lost") })
-	waitFor(t, 2*time.Second, func() bool {
-		got, _ := store.Get(t.Context(), task.ID)
-		return got != nil && got.Status != StatusFailed
-	})
-	if rec.has(slog.LevelError, "task failed") {
-		t.Error(`a task cancelled by lease loss was logged as ERROR "task failed"; want an interruption`)
-	}
-
+	// SIGTERM mid-step. The step unwinds on the cancelled context, the task is
+	// left reclaimable rather than failed, and the lease goes back so the next
+	// instance does not wait a TTL for work nobody is doing.
 	cancel()
+	close(g.release)
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
 	}
-}
 
-// leaseLostStore is a MemStore that always reports a running task's lease as no
-// longer held, modeling another instance having reclaimed it — so the worker's
-// heartbeat exercises its lease-loss cancellation path.
-type leaseLostStore struct {
-	*MemStore
-}
-
-func (s *leaseLostStore) RenewLease(context.Context, uuid.UUID, string, time.Duration) (bool, error) {
-	return false, nil
+	if got := store.locks.heldBy(taskLockKey(task.ID)); got != "" {
+		t.Errorf("task lease still held by %q after shutdown, want released", got)
+	}
+	got, _ := store.Get(t.Context(), task.ID)
+	if got == nil || got.Status == StatusFailed {
+		t.Errorf("task status = %v after a shutdown, want it left reclaimable rather than failed", got)
+	}
 }
 
 // gateStep blocks in Execute until release is closed, tracking the peak number of
@@ -614,7 +686,7 @@ func TestWorkerRecoversFromStepPanic(t *testing.T) {
 
 	// A panicking step must not crash the worker — it fails its task instead. (If
 	// the recover regressed, the panic would propagate here and crash the test.)
-	claimAndExecute(t, w, store)
+	claimAndExecute(t, w)
 
 	got, _ := store.Get(t.Context(), task.ID)
 	if got.Status != StatusFailed {
@@ -634,7 +706,7 @@ func TestWorkerLogsShutdownInterruptionNotFailure(t *testing.T) {
 
 	rec := &capturingHandler{}
 	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, RenewInterval: 10 * time.Second, MaxConcurrent: 1, ShutdownGrace: 2 * time.Second}
-	w := NewWorker(store, reg, cfg, slog.New(rec))
+	w := NewWorker(store, reg, store.Locks(ownerID()), cfg, slog.New(rec))
 
 	task, steps := pendingTask("cancelaware")
 	store.Seed(task, steps)
@@ -666,8 +738,9 @@ func TestWorkerBoundedShutdown(t *testing.T) {
 	g := &gateStep{release: make(chan struct{})} // blocks forever; ignores ctx
 	reg := NewRegistry()
 	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
-	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, RenewInterval: 10 * time.Second, MaxConcurrent: 1, ShutdownGrace: 50 * time.Millisecond}
-	w := NewWorker(store, reg, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg := testTaskConfig(1)
+	cfg.ShutdownGrace = 50 * time.Millisecond
+	w := NewWorker(store, reg, store.Locks(ownerID()), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	task, steps := pendingTask("gate")
 	store.Seed(task, steps)

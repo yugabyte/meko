@@ -396,8 +396,8 @@ CREATE TABLE tasks (                            -- one per operation; status is 
     params       jsonb       NOT NULL,         -- the originating request
     step_ids     uuid[]      NOT NULL DEFAULT '{}',  -- its steps, in execution order
     error        text,                          -- set when status = 'failed'
-    owner        text,                          -- which instance holds it (crash recovery)
-    lease_expiry timestamptz                    -- lease expiry => another instance may reclaim
+    owner        text,                          -- which instance claimed it; fences its writes
+    lease_expiry timestamptz                    -- DEPRECATED, unused (see ac-locking.md)
 );
 
 CREATE TABLE task_steps (                        -- the write-ahead steps of one task

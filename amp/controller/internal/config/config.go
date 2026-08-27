@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
 // LogConfig controls the structured logger.
@@ -33,11 +35,13 @@ type DBConfig struct {
 type TaskConfig struct {
 	PollInterval time.Duration
 	LeaseTTL     time.Duration
-	// RenewInterval is how often the worker extends the lease of a task it is
-	// actively running, so a step that runs longer than LeaseTTL (e.g. a helm
-	// deploy that waits minutes for a pod) is not reclaimed and run concurrently
-	// by a second goroutine. It must be shorter than LeaseTTL so the lease is
-	// refreshed before it lapses.
+	// RenewInterval is how often the task's lease is renewed, so a step that runs
+	// longer than LeaseTTL (e.g. a helm deploy that waits minutes for a pod) is not
+	// reclaimed and run concurrently. The renewal is pglease's, not a heartbeat of
+	// the worker's, so this reaches pglease.Config.RenewEvery — which requires
+	// RenewInterval < LeaseTTL minus pglease's safety margin, a stricter bound than
+	// "shorter than the TTL". Validate enforces the stricter one so a rejected pair
+	// fails at startup here rather than inside NewPgLocks.
 	RenewInterval time.Duration
 	// MaxConcurrent caps how many tasks the worker executes at once; it only
 	// claims a task when a slot is free, so it never holds a lease on a task it
@@ -48,6 +52,10 @@ type TaskConfig struct {
 	// are left to be reclaimed (their leases expire), so a misbehaving step can't
 	// wedge process exit.
 	ShutdownGrace time.Duration
+	// LockWait bounds how long a step blocks on a resource lock another task
+	// holds. Past it the task fails cleanly rather than hanging, so a lock nothing
+	// ever releases costs one task instead of every task queued behind it.
+	LockWait time.Duration
 }
 
 // BranchGCConfig tunes the branch-drop reaper (internal/branchgc): the loop that
@@ -240,13 +248,14 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.Metrics, "metrics", envBool("AMP_METRICS", true), "expose the Prometheus /metrics scrape endpoint and record instrumentation")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
-	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often the worker renews the lease of a running task (must be < task-lease-ttl)")
+	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often a running task's lease is renewed (must be < task-lease-ttl minus a 2s safety margin)")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
 	fs.BoolVar(&c.GC.Enabled, "gc-enabled", envBool("AMP_GC_ENABLED", true), "sweep failed-create orphan clusters and endpoints and enqueue their teardown")
 	fs.DurationVar(&c.GC.Interval, "gc-interval", envDuration("AMP_GC_INTERVAL", 5*time.Minute), "how often the orphan sweeper runs")
 	fs.DurationVar(&c.GC.Grace, "gc-grace", envDuration("AMP_GC_GRACE", 30*time.Minute), "how long a failed-create orphan is left alone before teardown, so a fresh failure can be inspected and a manual retry is not raced")
 	fs.IntVar(&c.GC.BatchLimit, "gc-batch-limit", envInt("AMP_GC_BATCH_LIMIT", 20), "max orphans one sweep enqueues per resource kind")
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
+	fs.DurationVar(&c.Task.LockWait, "task-lock-wait", envDuration("AMP_TASK_LOCK_WAIT", 10*time.Minute), "max time a task waits for a resource lock (e.g. an endpoint) held by another task before failing")
 
 	fs.BoolVar(&c.BranchGC.Enabled, "branch-gc", envBool("AMP_BRANCH_GC", true), "run the branch-drop reaper: reclaim a dropped branch's amp_storage rows once its retention window has passed")
 	fs.DurationVar(&c.BranchGC.Interval, "branch-gc-interval", envDuration("AMP_BRANCH_GC_INTERVAL", 30*time.Second), "branch-drop reaper base tick cadence; the loop adapts around it — interval/6 while a reap is capped by its row budget, doubling to 8x while nothing is due (see internal/branchgc)")
@@ -325,14 +334,29 @@ func Load(args []string) (*Config, error) {
 	if c.Task.PollInterval <= 0 {
 		return nil, fmt.Errorf("task poll interval must be positive")
 	}
-	if c.Task.LeaseTTL <= 0 {
-		return nil, fmt.Errorf("task lease TTL must be positive")
+	// The whole pglease range, not just positivity: a TTL it rejects would otherwise
+	// pass here and abort startup inside NewPgLocks, with an error naming a package
+	// the operator never configured.
+	if c.Task.LeaseTTL < pglease.MinTTL || c.Task.LeaseTTL > pglease.MaxTTL {
+		return nil, fmt.Errorf("task lease TTL (%s) must be in [%s, %s]",
+			c.Task.LeaseTTL, pglease.MinTTL, pglease.MaxTTL)
 	}
 	if c.Task.RenewInterval <= 0 {
 		return nil, fmt.Errorf("task lease renew interval must be positive")
 	}
-	if c.Task.RenewInterval >= c.Task.LeaseTTL {
-		return nil, fmt.Errorf("task lease renew interval (%s) must be shorter than the lease TTL (%s)", c.Task.RenewInterval, c.Task.LeaseTTL)
+	// pglease.Config.Validate wants RenewEvery < TTL - SafetyMargin, so checking
+	// only against the TTL would accept a pair that then aborts startup inside
+	// NewPgLocks with an error about a package the operator did not configure.
+	if margin := c.Task.LeaseTTL - pglease.DefaultSafetyMargin; c.Task.RenewInterval >= margin {
+		return nil, fmt.Errorf(
+			"task lease renew interval (%s) must be shorter than the lease TTL minus the %s safety margin (%s)",
+			c.Task.RenewInterval, pglease.DefaultSafetyMargin, margin)
+	}
+	if c.Task.LockWait <= 0 {
+		// Zero would reach PgLocks.AcquireResource as an already-expired context, so
+		// every task with a locking step would fail its acquire immediately and be
+		// durably failed, with nothing at startup to point at the cause.
+		return nil, fmt.Errorf("task lock wait must be positive")
 	}
 	if c.Task.MaxConcurrent < 1 {
 		return nil, fmt.Errorf("task max concurrent must be at least 1")

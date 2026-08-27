@@ -12,6 +12,10 @@ with the design docs in [`architecture/`](architecture/):
 - [`architecture/ac-tasks.md`](architecture/ac-tasks.md) — the write-ahead task
   framework's design and **step catalog** (kinds, args, idempotency contract, the
   task plans that compose them) — what `amp-controller.md` §8 defers to.
+- [`architecture/ac-locking.md`](architecture/ac-locking.md) — the two locks,
+  both `pkg/pglease` leases: `task:<id>` so two instances cannot execute one task,
+  `endpoint:<id>` so two blocking tasks cannot touch one endpoint. Claiming,
+  reclaim after a crash, and why losing a lease exits the process.
 - [`architecture/ac-apis.md`](architecture/ac-apis.md) — the REST API: the
   OpenAPI v3 spec as source of truth, code generation, the served explorer, and
   how the API is tested through the generated client.

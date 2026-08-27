@@ -346,7 +346,14 @@ func runServe(args []string) error {
 		logger.Info("metrics disabled (--metrics=false); /metrics not served")
 	}
 
-	worker := task.NewWorker(store, task.ProductionRegistry(deps), cfg.Task, logger, task.WithMetrics(metricsReg))
+	// The task and endpoint leases (architecture/ac-locking.md), over the same pool
+	// as the task log. Losing one exits the process, so a failure to build the
+	// client is fatal here rather than degrading to an unlocked worker.
+	locks, err := task.NewPgLocks(pool, logger, cfg.Task.LeaseTTL, cfg.Task.RenewInterval, cfg.Task.LockWait)
+	if err != nil {
+		return fmt.Errorf("task locks: %w", err)
+	}
+	worker := task.NewWorker(store, task.ProductionRegistry(deps), locks, cfg.Task, logger, task.WithMetrics(metricsReg))
 
 	// The API creates tasks and reads their status through the task service (which
 	// wraps the same store the worker drains).
