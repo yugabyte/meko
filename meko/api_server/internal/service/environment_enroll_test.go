@@ -20,7 +20,7 @@ func TestEnrollByKey_ChecksIn(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyA).
 		WillReturnRows(envRow("acme-prod", KindMeko))
 
@@ -62,7 +62,7 @@ func TestEnrollByKey_UnknownKeyIsNil(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyB).
 		WillReturnRows(sqlmock.NewRows(envRowCols))
 
@@ -85,7 +85,7 @@ func TestResolveAgent_ByKeyID(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyA).
 		WillReturnRows(envRow("acme-prod", KindMeko))
 	e, err := svc.ResolveAgent(keyA)
@@ -96,7 +96,7 @@ func TestResolveAgent_ByKeyID(t *testing.T) {
 		t.Errorf("resolved binding = %q, want %q", e.APIKeyID, keyA)
 	}
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyB).
 		WillReturnRows(sqlmock.NewRows(envRowCols))
 	e, err = svc.ResolveAgent(keyB)

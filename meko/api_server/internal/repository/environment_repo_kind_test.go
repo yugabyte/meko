@@ -30,7 +30,7 @@ func TestEnvironmentRepo_Get_ScansKindAndResources(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	inventory := `[{"kind":"storage_pool","id":"pool-1","name":"default"}]`
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments e WHERE e\.uuid = \$1`).
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows(envRowColsK).AddRow(
 			envUUID, "amp-acme", acctA, "cloud", "us-east-1", "READY", "", 0, "",
@@ -65,7 +65,7 @@ func (a argContainsK) Match(v driver.Value) bool {
 	}
 }
 
-// Insert writes the kind ($19) and the resources inventory ($20).
+// Insert writes the kind ($18) and the resources inventory ($19).
 func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -74,14 +74,18 @@ func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	anyArgs := make([]driver.Value, 18) // $1..$18
+	anyArgs := make([]driver.Value, 17) // $1..$17
 	for i := range anyArgs {
 		anyArgs[i] = sqlmock.AnyArg()
 	}
-	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $19 kind, $20 resources
+	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $18 kind, $19 resources
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs(args...).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err = repo.Insert(&models.Environment{
 		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY", APIKeyID: keyA,

@@ -200,8 +200,8 @@ func getPostgresConfig(purpose DBPurpose) *postgres.Config {
 	// the migrations are still applied.
 	//
 	// This set cannot run over a database that already ran system/000008: that set's
-	// environments table has no api_key_id column, and its CREATE TABLE is IF NOT
-	// EXISTS, so this set's unique index would have nothing to build on.
+	// environments table survives this set's IF NOT EXISTS create in its older shape,
+	// which has no uuid for environment_api_keys' foreign key to reference.
 	//
 	// Control-plane mode selects this set alone, so the two do not meet in any
 	// configuration that exists today -- but that is a property of which scopes the

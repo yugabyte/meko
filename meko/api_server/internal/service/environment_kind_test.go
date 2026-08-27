@@ -43,8 +43,7 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true, Release: testRelease})
 
 	// Only the environment insert — no desired-state write for amp.
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 
 	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "amp", APIKeyID: keyA}, "")
 	if err != nil {
@@ -74,8 +73,7 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{}) // disabled: no desired write
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 
 	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, "")
 	if err != nil {
@@ -107,7 +105,7 @@ func TestEnrollByKey_RejectsKindMismatch(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyA).
 		WillReturnRows(envRow("acme-prod", KindMeko))
 
@@ -145,7 +143,7 @@ func TestApplyStatus_StoresReportedResources(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments e WHERE e\.uuid = \$1`).
 		WithArgs(envUUID).
 		WillReturnRows(envRow("amp-acme-prod", KindAmp))
 

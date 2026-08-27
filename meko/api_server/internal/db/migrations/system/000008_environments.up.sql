@@ -2,13 +2,13 @@
  * YCP fleet registry (control-plane mode).
  *
  * NOT the live definition of these tables. That is the controlplane/ set, which keys
- * environments by uuid, makes (account_id, id) unique, and binds each environment to an
- * api_key_id. This copy is frozen in an older shape that the code cannot read:
- * scanEnvironment selects uuid and api_key_id and scans account_id as NOT NULL, so a
+ * environments by uuid, makes (account_id, id) unique, and holds each environment's key
+ * bindings in environment_api_keys. This copy is frozen in an older shape that the code
+ * cannot read: scanEnvironment selects uuid and scans account_id as NOT NULL, so a
  * control plane pointed at a database that ran only this set fails on its first query
  * rather than degrading. Nor can the controlplane set run over this one -- the table
- * survives its IF NOT EXISTS create without an api_key_id column, and the unique index
- * on that column then fails. Control-plane mode migrates with --only-controlplane-migrate
+ * survives its IF NOT EXISTS create without a uuid, so environment_api_keys' foreign
+ * key has nothing to reference. Control-plane mode migrates with --only-controlplane-migrate
  * against its own database, so that pairing is a misconfiguration and not a path anything
  * takes.
  *

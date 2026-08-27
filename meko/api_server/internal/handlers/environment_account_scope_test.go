@@ -81,7 +81,7 @@ func TestList_FiltersByAccountHeader(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 ORDER BY live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ORDER BY e\.live DESC`).
 		WithArgs(acctA).
 		WillReturnRows(scopeRow("acme-prod", acctA))
 
@@ -101,7 +101,7 @@ func TestList_UnscopedWithoutAccountHeader(t *testing.T) {
 	defer done()
 
 	// ORDER BY must follow the table directly — no WHERE clause.
-	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
 		WillReturnRows(scopeRow("acme-prod", acctA))
 
 	rec := fleetRequest(t, h.List, http.MethodGet, "/api/v1/environments", "", "", "")
@@ -121,7 +121,7 @@ func TestGet_OtherAccountsEnvironmentIs404(t *testing.T) {
 
 	// Scoped in SQL: acct-2's query simply matches nothing, so acct-1's row is
 	// never read, let alone compared.
-	mock.ExpectQuery(`WHERE account_id = \$1 AND id = \$2`).
+	mock.ExpectQuery(`WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(acctB, "acme-prod").
 		WillReturnRows(sqlmock.NewRows(scopeRowCols))
 
@@ -137,8 +137,12 @@ func TestRegister_StampsAccountFromHeader(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
 		acctA, `{"name":"acme-prod","account_id":"`+acctB+`","api_key_id":"`+keyA+`"}`, "")
@@ -182,12 +186,14 @@ func TestRegister_ExistingNameIs409(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnError(&pq.Error{
 			Code:       "23505",
 			Constraint: "environments_account_id_uniq",
 			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
 		})
+	mock.ExpectRollback()
 
 	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
 		acctA, `{"name":"acme-prod","api_key_id":"`+keyB+`"}`, "")
@@ -205,12 +211,16 @@ func TestRegister_KeyBoundElsewhereIs409(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
 		WillReturnError(&pq.Error{
 			Code:       "23505",
-			Constraint: "environments_api_key_id_uniq",
-			Message:    `duplicate key value violates unique constraint "environments_api_key_id_uniq"`,
+			Constraint: "environment_api_keys_pkey",
+			Message:    `duplicate key value violates unique constraint "environment_api_keys_pkey"`,
 		})
+	mock.ExpectRollback()
 
 	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
 		acctA, `{"name":"acme-prod","api_key_id":"`+keyA+`"}`, "")
@@ -228,7 +238,7 @@ func TestAction_DeregisterReturnsAPIKeyID(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectQuery(`WHERE account_id = \$1 AND id = \$2`).
+	mock.ExpectQuery(`WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(acctA, "acme-prod").
 		WillReturnRows(scopeRow("acme-prod", acctA))
 	mock.ExpectExec(`UPDATE meko_system\.environments SET`).
@@ -258,7 +268,7 @@ func TestAction_SuspendStaysNoContent(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectQuery(`WHERE account_id = \$1 AND id = \$2`).
+	mock.ExpectQuery(`WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(acctA, "acme-prod").
 		WillReturnRows(scopeRow("acme-prod", acctA))
 	mock.ExpectExec(`UPDATE meko_system\.environments SET`).
@@ -277,7 +287,7 @@ func TestDeregister_ReturnsAPIKeyID(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectQuery(`WHERE account_id = \$1 AND id = \$2`).
+	mock.ExpectQuery(`WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(acctA, "acme-prod").
 		WillReturnRows(scopeRow("acme-prod", acctA))
 	mock.ExpectExec(`UPDATE meko_system\.environments SET`).

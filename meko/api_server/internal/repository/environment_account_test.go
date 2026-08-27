@@ -50,7 +50,7 @@ func TestEnvironmentRepo_ListFiltersByAccount(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 ORDER BY live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ORDER BY e\.live DESC`).
 		WithArgs(acctA).
 		WillReturnRows(listRow("acme-prod"))
 
@@ -78,7 +78,7 @@ func TestEnvironmentRepo_ListUnscopedHasNoFilter(t *testing.T) {
 
 	// The regexp requires ORDER BY to follow the table directly, so it fails if a
 	// WHERE clause is emitted.
-	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
 		WillReturnRows(listRow("acme-prod").AddRow(
 			"22222222-2222-2222-2222-222222222222", "other-prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, keyB, time.Now(), "meko", "[]",
@@ -107,7 +107,7 @@ func TestEnvironmentRepo_GetScopedHitsTheUniqueIndex(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 AND id = \$2`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(acctA, "acme-prod").
 		WillReturnRows(listRow("acme-prod"))
 
@@ -131,7 +131,7 @@ func TestEnvironmentRepo_GetUnscopedRefusesAmbiguousID(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE id = \$1 LIMIT 2`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.id = \$1 LIMIT 2`).
 		WithArgs("prod").
 		WillReturnRows(listRow("prod").AddRow(
 			"33333333-3333-3333-3333-333333333333", "prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
@@ -153,7 +153,7 @@ func TestEnvironmentRepo_GetUnscopedResolvesSingleMatch(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE id = \$1 LIMIT 2`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.id = \$1 LIMIT 2`).
 		WithArgs("acme-prod").
 		WillReturnRows(listRow("acme-prod"))
 
@@ -173,9 +173,16 @@ func TestEnvironmentRepo_InsertConflictsOnAccountAndIDAndReturnsUUID(t *testing.
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
+	// The environment row and its primary key binding are one transaction: an
+	// environment with no binding is one no agent can attach to.
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).
 			AddRow("44444444-4444-4444-4444-444444444444"))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
+		WithArgs(keyA, "44444444-4444-4444-4444-444444444444").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	e := &models.Environment{ID: "acme-prod", AccountID: acctB, State: "PENDING", APIKeyID: keyA}
 	if err := repo.Insert(e); err != nil {
@@ -183,6 +190,9 @@ func TestEnvironmentRepo_InsertConflictsOnAccountAndIDAndReturnsUUID(t *testing.
 	}
 	if e.UUID != "44444444-4444-4444-4444-444444444444" {
 		t.Errorf("uuid = %q, want the key the insert returned", e.UUID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }
 
@@ -196,12 +206,14 @@ func TestEnvironmentRepo_InsertRejectsExistingAccountAndID(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnError(&pq.Error{
 			Code:       "23505",
 			Constraint: "environments_account_id_uniq",
 			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
 		})
+	mock.ExpectRollback()
 
 	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyB})
 	if !errors.Is(err, ErrEnvironmentExists) {
@@ -209,7 +221,7 @@ func TestEnvironmentRepo_InsertRejectsExistingAccountAndID(t *testing.T) {
 	}
 }
 
-// One key drives one environment: environments_api_key_id_uniq forbids binding a
+// One key drives one environment: the side table's primary key forbids binding a
 // key another environment holds, and that has to surface as ErrAPIKeyBound (409)
 // rather than a raw driver error behind a 500.
 func TestEnvironmentRepo_InsertRejectsKeyBoundElsewhere(t *testing.T) {
@@ -220,16 +232,23 @@ func TestEnvironmentRepo_InsertRejectsKeyBoundElsewhere(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
 		WillReturnError(&pq.Error{
 			Code:       "23505",
-			Constraint: "environments_api_key_id_uniq",
-			Message:    `duplicate key value violates unique constraint "environments_api_key_id_uniq"`,
+			Constraint: "environment_api_keys_pkey",
+			Message:    `duplicate key value violates unique constraint "environment_api_keys_pkey"`,
 		})
+	mock.ExpectRollback()
 
 	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
 	if !errors.Is(err, ErrAPIKeyBound) {
 		t.Fatalf("Insert err = %v, want ErrAPIKeyBound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("the environment row must not survive a failed key binding: %v", err)
 	}
 }
 
@@ -243,8 +262,10 @@ func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotASentinel(t *testing.T) 
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnError(&pq.Error{Code: "23505", Constraint: "environments_pkey", Message: "duplicate key"})
+	mock.ExpectRollback()
 
 	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
 	if err == nil || errors.Is(err, ErrAPIKeyBound) || errors.Is(err, ErrEnvironmentExists) {
@@ -252,9 +273,9 @@ func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotASentinel(t *testing.T) 
 	}
 }
 
-// Writing an environment back never touches its id, its account, or its key
-// binding: the first two are not editable, and the binding changes only through
-// registration — 17 bind parameters, none of them api_key_id.
+// Writing an environment back never touches its id, its account, its key bindings
+// or its rotation slot: the first two are not editable, and the rest move only
+// through their own guarded statements — 17 bind parameters, none of them a key id.
 func TestEnvironmentRepo_UpdateKeysOnUUID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -296,14 +317,18 @@ func TestEnvironmentRepo_UnaccountedUsesTheSentinel(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs("acme-prod", "00000000-0000-0000-0000-000000000000", sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).
 			AddRow("44444444-4444-4444-4444-444444444444"))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	e := &models.Environment{ID: "acme-prod", AccountID: "", State: "PENDING", APIKeyID: keyA}
 	if err := repo.Insert(e); err != nil {

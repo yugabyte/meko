@@ -8,12 +8,6 @@
  * A control plane needs only the fleet registry, so it gets its own set and can
  * run against a plain Postgres.
  *
- * Tracked in its own schema_migrations_controlplane table, independent of the
- * system set. The two are not interchangeable: system/000008 is frozen without an
- * api_key_id column, so over a database that already ran it the CREATE TABLE below
- * is a no-op and the unique index on that column then has nothing to build on.
- * Point control-plane mode at its own database (see connect.go).
- *
  * The dropped YB clauses are not load-bearing: on YB the first primary-key column
  * hashes by default, and SPLIT INTO only presets tablet count.
  *
@@ -50,10 +44,6 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
     kind               TEXT NOT NULL DEFAULT 'meko',        -- amp | meko; meko id is bare slug, amp id is prefixed "amp-"
     resources          JSONB NOT NULL DEFAULT '[]'::jsonb,  -- amp controller's reported inventory ([] for meko)
     live               BOOLEAN NOT NULL DEFAULT FALSE,
-    -- The YBM API key the environment's agent authenticates with. YBM validates the
-    -- key and forwards its id; the id alone identifies the environment, so it is
-    -- unique fleet-wide: one key drives one environment.
-    api_key_id         UUID NOT NULL,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (uuid)
 );
@@ -64,8 +54,21 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
 CREATE UNIQUE INDEX IF NOT EXISTS environments_account_id_uniq
     ON meko_system.environments (account_id, id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS environments_api_key_id_uniq
-    ON meko_system.environments (api_key_id);
+-- The YBM API keys an environment's agent may authenticate with. A side table
+-- because a key id is unique fleet-wide whichever status it holds, which no index
+-- over two columns on environments would express; here it is the primary key.
+CREATE TABLE IF NOT EXISTS meko_system.environment_api_keys (
+    api_key_id UUID NOT NULL,
+    env_uuid   UUID NOT NULL REFERENCES meko_system.environments (uuid) ON DELETE CASCADE,
+    status     TEXT NOT NULL CHECK (status IN ('active', 'retiring')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (api_key_id)
+);
+
+-- At most one key of each status per environment. A retiring key still
+-- authenticates: it is the one an agent runs on until it picks up its replacement.
+CREATE UNIQUE INDEX IF NOT EXISTS environment_api_keys_env_status_uniq
+    ON meko_system.environment_api_keys (env_uuid, status);
 
 -- Keyed by the parent's uuid rather than its id: id is only unique per account, so
 -- keying on it would let two accounts' "prod" environments share one resource set.

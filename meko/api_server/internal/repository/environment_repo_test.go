@@ -18,7 +18,7 @@ func TestEnvironmentRepo_GetByAPIKeyID(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	// found: an exact hit on the unique api_key_id index.
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyA).
 		WillReturnRows(listRow("acme-prod"))
 	e, err := repo.GetByAPIKeyID(keyA)
@@ -30,7 +30,7 @@ func TestEnvironmentRepo_GetByAPIKeyID(t *testing.T) {
 	}
 
 	// unbound key → (nil, nil), which is also how a revoked key surfaces.
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyB).
 		WillReturnError(sql.ErrNoRows)
 	e, err = repo.GetByAPIKeyID(keyB)
@@ -51,7 +51,7 @@ func TestEnvironmentRepo_Get_NotFound(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments e WHERE e\.uuid = \$1`).
 		WithArgs("99999999-9999-9999-9999-999999999999").
 		WillReturnError(sql.ErrNoRows)
 	e, err := repo.GetByUUID("99999999-9999-9999-9999-999999999999")

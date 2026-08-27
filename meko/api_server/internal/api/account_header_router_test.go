@@ -108,7 +108,7 @@ func TestFleetRoutes_RequireAccountHeader_RejectsMissingHeader(t *testing.T) {
 func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 	srv, mock := fleetServer(t, true)
 
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 ORDER BY live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ORDER BY e\.live DESC`).
 		WithArgs(acctA).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
@@ -130,7 +130,7 @@ func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 func TestFleetRoutes_AccountHeaderOptionalByDefault(t *testing.T) {
 	srv, mock := fleetServer(t, false)
 
-	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]",
@@ -197,7 +197,7 @@ func TestAgentRoutes_RequireAdminSecretAndKeyID(t *testing.T) {
 	// query below) and answers 401. Run on a require-account-header control plane
 	// on purpose — the account requirement must not reach the agent surface, or an
 	// enrolled agent could never report status.
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE api_key_id = \$1`).
+	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(testAPIKeyID).
 		WillReturnRows(sqlmock.NewRows(headerRowCols))
 	resp = agentEnroll(t, srv, testAdminSecret, testAPIKeyID)

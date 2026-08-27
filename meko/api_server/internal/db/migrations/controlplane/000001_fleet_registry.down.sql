@@ -3,6 +3,6 @@
  * place: on a shared database it predates this set and other tables live in it.
  */
 DROP TABLE IF EXISTS meko_system.environment_desired_resources;
-DROP INDEX IF EXISTS meko_system.environments_api_key_id_uniq;
+DROP TABLE IF EXISTS meko_system.environment_api_keys;
 DROP INDEX IF EXISTS meko_system.environments_account_id_uniq;
 DROP TABLE IF EXISTS meko_system.environments;

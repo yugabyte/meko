@@ -19,9 +19,8 @@ type Environment struct {
 	ID        string `json:"id"`
 	AccountID string `json:"account_id,omitempty"`
 	// APIKeyID is the id of the YBM API key this environment's agent authenticates
-	// with. Unique fleet-wide (one key drives one environment), so it is what agent
-	// calls resolve the environment by. An id, not the key itself -- YBM holds the
-	// credential -- so serializing it leaks nothing.
+	// with. An id, not the key itself -- YBM holds the credential -- so serializing
+	// it leaks nothing.
 	APIKeyID string `json:"api_key_id"`
 	// Kind distinguishes an amp environment (the amp controller) from a meko one
 	// (the datapack/stack agent). It is fixed at registration. A meko id is a bare

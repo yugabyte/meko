@@ -22,9 +22,23 @@ const (
 	keyB = "b0000000-0000-0000-0000-00000000000b"
 )
 
-// insertReturns is what a successful register insert hands back: the row's key.
-func insertReturns(uuid string) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"uuid"}).AddRow(uuid)
+// expectRegisterInsert sets up the transaction a successful register performs: the
+// environment row, then the primary key binding in the side table.
+func expectRegisterInsert(mock sqlmock.Sqlmock, uuid string) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(uuid))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+}
+
+// expectRegisterInsertFails sets up a register whose environment row is refused, so
+// the transaction rolls back and no key is bound.
+func expectRegisterInsertFails(mock sqlmock.Sqlmock, err error) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).WillReturnError(err)
+	mock.ExpectRollback()
 }
 
 // newEnvSvc builds a service over a mocked DB. envRow (environment_kind_test.go)
@@ -46,7 +60,7 @@ const testEnvID = "acme-prod"
 // rows is what the database has for that pair -- empty when the account does not
 // own it, which is how "not yours" reaches the caller.
 func expectScopedGet(mock sqlmock.Sqlmock, accountID string, rows *sqlmock.Rows) {
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 AND id = \$2`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(accountID, testEnvID).
 		WillReturnRows(rows)
 }
@@ -73,7 +87,7 @@ func TestGet_HidesOtherAccountsEnvironment(t *testing.T) {
 	}
 
 	// Unscoped takes the id alone, and stays unambiguous while one account holds it.
-	mock.ExpectQuery(`FROM meko_system\.environments WHERE id = \$1 LIMIT 2`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.id = \$1 LIMIT 2`).
 		WithArgs(testEnvID).
 		WillReturnRows(envRows())
 	e, err = svc.Get(testEnvID, "")
@@ -128,8 +142,7 @@ func TestRegister_ScopeOverridesBodyAccount(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 
 	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: acctB, APIKeyID: keyA}, acctA)
 	if err != nil {
@@ -146,8 +159,7 @@ func TestRegister_UnscopedKeepsBodyAccount(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 
 	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: acctA, APIKeyID: keyA}, "")
 	if err != nil {
@@ -165,8 +177,7 @@ func TestRegister_NameHeldByAnotherAccountIsItsOwnEnvironment(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns("55555555-5555-5555-5555-555555555555"))
+	expectRegisterInsert(mock, "55555555-5555-5555-5555-555555555555")
 
 	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, acctB)
 	if err != nil {
@@ -185,12 +196,11 @@ func TestRegister_RejectsExistingName(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnError(&pq.Error{
-			Code:       "23505",
-			Constraint: "environments_account_id_uniq",
-			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
-		})
+	expectRegisterInsertFails(mock, &pq.Error{
+		Code:       "23505",
+		Constraint: "environments_account_id_uniq",
+		Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
+	})
 
 	_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyB}, acctA)
 	if !errors.Is(err, repository.ErrEnvironmentExists) {
@@ -219,8 +229,7 @@ func TestRegister_StoresCanonicalAPIKeyID(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 
 	e, err := svc.Register(RegisterEnvironmentRequest{
 		Name: "acme-prod", APIKeyID: strings.ToUpper(keyA),

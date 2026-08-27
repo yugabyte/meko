@@ -13,13 +13,17 @@ import (
 	"meko/api_server/internal/models"
 )
 
-// EnvironmentRepo persists the YCP fleet registry (meko_system.environments and
-// meko_system.environment_desired_resources). Control-plane mode only.
+// EnvironmentRepo persists the YCP fleet registry (meko_system.environments,
+// meko_system.environment_api_keys and meko_system.environment_desired_resources).
+// Control-plane mode only.
 //
 // Rows are keyed by uuid; id is the operator-facing slug, unique only within an
 // account. Any lookup starting from an id therefore needs the account, or another
 // way to tell two accounts' environments apart -- see Get. Agent calls avoid the
-// problem entirely: they resolve by api_key_id, which is unique fleet-wide.
+// problem entirely: they resolve through environment_api_keys, whose primary key is
+// the api key id.
+//
+// The key bindings are written by Insert and read through envColumns.
 type EnvironmentRepo struct {
 	db *sql.DB
 }
@@ -56,23 +60,34 @@ func accountFromStore(accountID string) string {
 // index, since ids were globally unique then.
 var ErrAmbiguousID = errors.New("environment id belongs to more than one account")
 
-const envColumns = `uuid, id, account_id, placement, region, state, k8s_version, node_count, provider,
-	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
-	COALESCE(components::text, '[]'), live, api_key_id, created_at,
-	COALESCE(kind, 'meko'), COALESCE(resources::text, '[]')`
+// envColumns reads an environment together with the id of the key its agent
+// authenticates with. That id comes from a scalar subquery, not a join: an
+// environment can hold more than one key row, and a join would return the
+// environment once per key.
+//
+// Every column is qualified with the `e` alias the subquery correlates on, so a
+// query selecting these must alias meko_system.environments as `e`.
+const envColumns = `e.uuid, e.id, e.account_id, e.placement, e.region, e.state, e.k8s_version,
+	e.node_count, e.provider, e.datapacks, e.max_datapacks, e.agent_version, e.last_heartbeat_at,
+	e.mcp_base_url, e.cert_fingerprint, COALESCE(e.components::text, '[]'), e.live,
+	(SELECT api_key_id FROM meko_system.environment_api_keys
+	   WHERE env_uuid = e.uuid AND status = 'active'),
+	e.created_at, COALESCE(e.kind, 'meko'), COALESCE(e.resources::text, '[]')`
 
 func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, error) {
 	var e models.Environment
 	var region, k8sVersion, provider, agentVersion, mcpBaseURL, certFingerprint sql.NullString
+	var apiKeyID sql.NullString
 	var lastHeartbeat sql.NullTime
 	var componentsText, resourcesText string
 	if err := row.Scan(&e.UUID, &e.ID, &e.AccountID, &e.Placement, &region, &e.State, &k8sVersion,
 		&e.NodeCount, &provider, &e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat,
-		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &e.APIKeyID,
+		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &apiKeyID,
 		&e.CreatedAt, &e.Kind, &resourcesText); err != nil {
 		return nil, err
 	}
 	e.AccountID = accountFromStore(e.AccountID)
+	e.APIKeyID = apiKeyID.String
 	e.Region = region.String
 	e.K8sVersion = k8sVersion.String
 	e.Provider = provider.String
@@ -103,7 +118,7 @@ func scanOne(row *sql.Row) (*models.Environment, error) {
 // GetByUUID returns the environment by its key, or (nil, nil) if not found.
 func (r *EnvironmentRepo) GetByUUID(envUUID string) (*models.Environment, error) {
 	return scanOne(r.db.QueryRow(
-		`SELECT `+envColumns+` FROM meko_system.environments WHERE uuid = $1`, envUUID))
+		`SELECT `+envColumns+` FROM meko_system.environments e WHERE e.uuid = $1`, envUUID))
 }
 
 // Get resolves an operator-facing id, or (nil, nil) if not found.
@@ -115,11 +130,12 @@ func (r *EnvironmentRepo) GetByUUID(envUUID string) (*models.Environment, error)
 func (r *EnvironmentRepo) Get(accountID, id string) (*models.Environment, error) {
 	if accountID != "" {
 		return scanOne(r.db.QueryRow(
-			`SELECT `+envColumns+` FROM meko_system.environments WHERE account_id = $1 AND id = $2`,
+			`SELECT `+envColumns+` FROM meko_system.environments e WHERE e.account_id = $1 AND e.id = $2`,
 			accountForStore(accountID), id))
 	}
 	// LIMIT 2 distinguishes "one" from "more than one" without reading the rest.
-	rows, err := r.db.Query(`SELECT `+envColumns+` FROM meko_system.environments WHERE id = $1 LIMIT 2`, id)
+	rows, err := r.db.Query(
+		`SELECT `+envColumns+` FROM meko_system.environments e WHERE e.id = $1 LIMIT 2`, id)
 	if err != nil {
 		return nil, fmt.Errorf("get environment: %w", err)
 	}
@@ -142,24 +158,29 @@ func (r *EnvironmentRepo) Get(accountID, id string) (*models.Environment, error)
 }
 
 // GetByAPIKeyID resolves the environment an agent is calling for, by the key id
-// YBM forwarded. An exact hit on the environments_api_key_id_uniq index; (nil,
-// nil) when no environment is bound to the key -- which is also how a revoked or
+// YBM forwarded. Status is not part of the lookup, so a retiring key resolves as
+// readily as an active one -- that is what lets an agent keep working until it
+// picks up a replacement.
+//
+// (nil, nil) when the key is bound to nothing, which is also how a revoked or
 // never-registered key surfaces.
 func (r *EnvironmentRepo) GetByAPIKeyID(apiKeyID string) (*models.Environment, error) {
 	return scanOne(r.db.QueryRow(
-		`SELECT `+envColumns+` FROM meko_system.environments WHERE api_key_id = $1`, apiKeyID))
+		`SELECT `+envColumns+` FROM meko_system.environments e
+		 WHERE e.uuid = (SELECT env_uuid FROM meko_system.environment_api_keys WHERE api_key_id = $1)`,
+		apiKeyID))
 }
 
 // List returns environments, live ones first. A non-empty accountID restricts the
 // result to that account; empty returns the whole fleet.
 func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) {
-	query := `SELECT ` + envColumns + ` FROM meko_system.environments`
+	query := `SELECT ` + envColumns + ` FROM meko_system.environments e`
 	var args []any
 	if accountID != "" {
-		query += ` WHERE account_id = $1`
+		query += ` WHERE e.account_id = $1`
 		args = append(args, accountForStore(accountID))
 	}
-	query += ` ORDER BY live DESC, id ASC`
+	query += ` ORDER BY e.live DESC, e.id ASC`
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
@@ -178,17 +199,17 @@ func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) 
 
 const envColumnsInsert = `id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
-	components, live, api_key_id, created_at,
+	components, live, created_at,
 	kind, resources`
 
-// ErrAPIKeyBound is returned when a registration would bind an api key that another
-// environment already holds, which environments_api_key_id_uniq forbids: one key
-// drives one environment. Mapped to 409 by handlers.
+// ErrAPIKeyBound is returned when a key binding would attach an api key that
+// another environment already holds, which environment_api_keys' primary key
+// forbids: one key drives one environment, whichever status it holds. Mapped to 409 by
+// handlers.
 var ErrAPIKeyBound = errors.New("api key is already bound to another environment")
 
-// apiKeyUniqueConstraint is the index whose violation means ErrAPIKeyBound. Matched
-// by name so a violation of any OTHER unique index still surfaces as itself.
-const apiKeyUniqueConstraint = "environments_api_key_id_uniq"
+// apiKeyUniqueConstraint is the index whose violation means ErrAPIKeyBound.
+const apiKeyUniqueConstraint = "environment_api_keys_pkey"
 
 // ErrEnvironmentExists is returned when a registration's (account_id, id) is
 // already taken, which environments_account_id_uniq forbids. Mapped to 409 by
@@ -198,12 +219,15 @@ var ErrEnvironmentExists = errors.New("environment already registered")
 // accountIDUniqueConstraint is the index whose violation means ErrEnvironmentExists.
 const accountIDUniqueConstraint = "environments_account_id_uniq"
 
-// Insert registers a brand-new environment and sets e.UUID to the generated key.
-// A name already claimed by this account returns ErrEnvironmentExists, and a key
-// already bound to another environment returns ErrAPIKeyBound -- one key drives
-// one environment.
+// Insert registers a brand-new environment with e.APIKeyID as its primary key
+// binding, and sets e.UUID to the generated row key. A name already claimed by this
+// account returns ErrEnvironmentExists, and a key already bound to another
+// environment returns ErrAPIKeyBound -- one key drives one environment.
 //
-// A plain INSERT relying on the unique indexes needs no lock: the loser of a race
+// The environment row and its key binding go in one transaction: an environment with
+// no key binding is one no agent can ever attach to.
+//
+// Plain INSERTs relying on the unique indexes need no lock: the loser of a race
 // between two registrations of the same (account_id, id) simply gets
 // ErrEnvironmentExists.
 func (r *EnvironmentRepo) Insert(e *models.Environment) error {
@@ -221,53 +245,57 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 	}
 	account := accountForStore(e.AccountID)
 
-	err := r.db.QueryRow(`
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	err = tx.QueryRow(`
 		INSERT INTO meko_system.environments (`+envColumnsInsert+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING uuid`,
 		e.ID, account, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
-		e.APIKeyID, e.CreatedAt, kind,
+		e.CreatedAt, kind,
 		[]byte(resources)).Scan(&e.UUID)
 	if err != nil {
-		if isAPIKeyBoundViolation(err) {
-			return fmt.Errorf("%w: %s", ErrAPIKeyBound, e.APIKeyID)
-		}
-		if isEnvironmentExistsViolation(err) {
+		if isUniqueViolationOf(err, accountIDUniqueConstraint) {
 			return fmt.Errorf("%w: %s", ErrEnvironmentExists, e.ID)
 		}
 		slog.Error("insert environment", "id", e.ID, "account", e.AccountID, "err", err)
 		return fmt.Errorf("insert environment: %w", err)
 	}
-	return nil
+	if _, err := tx.Exec(insertPrimaryKeyBinding, e.APIKeyID, e.UUID); err != nil {
+		if isUniqueViolationOf(err, apiKeyUniqueConstraint) {
+			return fmt.Errorf("%w: %s", ErrAPIKeyBound, e.APIKeyID)
+		}
+		slog.Error("bind environment api key", "id", e.ID, "err", err)
+		return fmt.Errorf("bind environment api key: %w", err)
+	}
+	return tx.Commit()
 }
 
-// isAPIKeyBoundViolation reports whether err is a unique violation (SQLSTATE 23505)
-// of the api-key index. Matched on the driver error's code and constraint name
-// rather than on message text, which is not a stable contract.
-func isAPIKeyBoundViolation(err error) bool {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		return pqErr.Code == "23505" && strings.Contains(pqErr.Constraint, apiKeyUniqueConstraint)
-	}
-	return false
-}
+// insertPrimaryKeyBinding attaches a key to an environment as its live credential.
+const insertPrimaryKeyBinding = `
+	INSERT INTO meko_system.environment_api_keys (api_key_id, env_uuid, status)
+	VALUES ($1, $2, 'active')`
 
-// isEnvironmentExistsViolation reports whether err is a unique violation (SQLSTATE
-// 23505) of the (account_id, id) index, the same way isAPIKeyBoundViolation does
-// for the api-key index.
-func isEnvironmentExistsViolation(err error) bool {
+// isUniqueViolationOf reports whether err is a unique violation (SQLSTATE 23505) of
+// an index whose name contains constraint. Matched on the driver error's code and
+// constraint name rather than on message text, which is not a stable contract; by
+// name so a violation of any OTHER unique index still surfaces as itself.
+func isUniqueViolationOf(err error, constraint string) bool {
 	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		return pqErr.Code == "23505" && strings.Contains(pqErr.Constraint, accountIDUniqueConstraint)
-	}
-	return false
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" &&
+		strings.Contains(pqErr.Constraint, constraint)
 }
 
 // Update writes an existing environment back by its key. Every caller has already
-// read the row; id, account_id and api_key_id are not written -- the first two are
-// not editable, and the key binding changes only through registration.
+// read the row; id and account_id are not written because they are not editable.
+// The key bindings are not written either -- they live in their own table, so a
+// status heartbeat cannot disturb them.
 func (r *EnvironmentRepo) Update(e *models.Environment) error {
 	components := e.Components
 	if len(components) == 0 {

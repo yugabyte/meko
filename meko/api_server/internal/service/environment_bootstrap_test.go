@@ -43,8 +43,7 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 		SecretRef:       "meko-data-plane",
 	})
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 	// ReplaceDesired upserts-and-prunes: read existing keys (none on a fresh
 	// register), upsert the seeded meko-stack, prune nothing.
 	mock.ExpectBegin()
@@ -152,8 +151,7 @@ func TestRegister_SurvivesDesiredStateWriteFailure(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true})
 
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID))
+	expectRegisterInsert(mock, envUUID)
 	mock.ExpectBegin().WillReturnError(errTest)
 
 	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1", APIKeyID: keyA}, "")
