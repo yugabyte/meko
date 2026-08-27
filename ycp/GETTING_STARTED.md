@@ -120,9 +120,11 @@ AWS_PROFILE=meko-dev OPENAI_API_KEY=sk-… ./test/local/full-stack.sh
 ```
 
 No desired state is POSTed anywhere in it. It patches the control plane with the two
-data-plane Secret names, registers `full-stack`, deploys a second agent into its own
-namespace, and waits while the agent brings up YugabyteDB with `mage` and
-`pg_dist_rag`, then api-server, mcp-server, rag-worker, inference-gateway and ui.
+data-plane Secret names, registers a fresh `full-stack-<timestamp>` environment (a
+new name every run, since registering over an existing one is refused), deploys a
+second agent into its own namespace, and waits while the agent brings up YugabyteDB
+with `mage` and `pg_dist_rag`, then api-server, mcp-server, rag-worker,
+inference-gateway and ui.
 
 It asserts the things that would otherwise be believed rather than checked: that
 registration seeded all six images, that the agent was *handed* a stack at enrollment
@@ -451,8 +453,9 @@ Harmless. The agent starts before the control plane is listening and retries eve
 **Agent logs `ENROLL REJECTED (401)`**
 No environment is bound to the key the agent authenticates with. Confirm the
 registered environment's `api_key_id` matches the agent's credential (`YCP_API_KEY`
-through YBM, or `YCP_DEV_API_KEY_ID` direct against the control plane), and that
-the environment was not re-registered onto a different key.
+through YBM, or `YCP_DEV_API_KEY_ID` direct against the control plane) -- an
+environment cannot be rebound to a different key once registered, so a mismatch
+means the key was revoked or the credential is simply wrong.
 
 **Agent logs `could not read agent state` or `could not persist agent state`**
 Its ServiceAccount is missing `get`/`create`/`update` on secrets in its own

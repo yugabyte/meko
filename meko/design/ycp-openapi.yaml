@@ -86,6 +86,7 @@ paths:
         '402':
           description: Aeon entitlement does not permit another environment.
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /api/v1/environments/{envId}:
     parameters: [{ $ref: '#/components/parameters/EnvId' }]

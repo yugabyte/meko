@@ -34,6 +34,10 @@ var ErrAmbiguousID = repository.ErrAmbiguousID
 // one key drives one environment.
 var ErrAPIKeyBound = repository.ErrAPIKeyBound
 
+// ErrEnvironmentExists re-exports the repository's for the same reason. Raised when
+// a registration's (account_id, id) is already taken (mapped to 409).
+var ErrEnvironmentExists = repository.ErrEnvironmentExists
+
 // AccountScope limits an operation to one account's environments. The zero value
 // is unscoped and reaches every environment; --require-account-header stops such a
 // call at the router, so it arrives here only where fleet-wide calls are allowed.
@@ -244,10 +248,8 @@ func (s *EnvironmentService) Get(id string, scope AccountScope) (*models.Environ
 	return s.repo.Get(string(scope), id)
 }
 
-// Register stores a PENDING environment bound to the given API key. The returned
-// replacedAPIKeyID is non-empty when a re-registration rebound an existing row to
-// a different key -- YBM revokes the old one, since nothing authenticates with it
-// any more.
+// Register stores a new PENDING environment bound to the given API key. A name
+// already claimed by this account comes back as ErrEnvironmentExists.
 //
 // A scoped registration is stamped with the scope's account and ignores the body's
 // account_id: the scope comes from the account YBM authenticated, the body from
@@ -256,7 +258,7 @@ func (s *EnvironmentService) Get(id string, scope AccountScope) (*models.Environ
 // which is how the console has always set it.
 func (s *EnvironmentService) Register(
 	req RegisterEnvironmentRequest, scope AccountScope,
-) (e *models.Environment, replacedAPIKeyID string, err error) {
+) (e *models.Environment, err error) {
 	accountID := req.AccountID
 	if scope != "" {
 		accountID = string(scope)
@@ -266,28 +268,24 @@ func (s *EnvironmentService) Register(
 	// unaccounted environment is stored under a sentinel.
 	if accountID != "" {
 		if _, perr := uuid.Parse(accountID); perr != nil {
-			return nil, "", fmt.Errorf("%w: account_id %q is not a uuid", ErrValidation, accountID)
+			return nil, fmt.Errorf("%w: account_id %q is not a uuid", ErrValidation, accountID)
 		}
 	}
 	// Required: the key binding is the environment's only agent credential, so an
-	// environment registered without one could never be attached to.
-	//
-	// Stored in the parsed form, not as sent. uuid.Parse also accepts uppercase,
-	// {braces}, urn:uuid: and bare hex, while the upsert compares the value against
-	// the stored api_key_id rendered as canonical text -- so a re-registration of the
-	// same key in another spelling would otherwise read as a rebind and have YBM
-	// revoke the live key.
+	// environment registered without one could never be attached to. Stored in the
+	// parsed (canonical) form, not as sent -- uuid.Parse also accepts uppercase,
+	// {braces}, urn:uuid: and bare hex.
 	apiKey, perr := uuid.Parse(strings.TrimSpace(req.APIKeyID))
 	if perr != nil {
-		return nil, "", fmt.Errorf("%w: api_key_id %q is not a uuid", ErrValidation, req.APIKeyID)
+		return nil, fmt.Errorf("%w: api_key_id %q is not a uuid", ErrValidation, req.APIKeyID)
 	}
 	name := strings.TrimSpace(req.Name)
 	if len(name) < 3 || len(name) > 60 {
-		return nil, "", fmt.Errorf("%w: name must be 3-60 chars", ErrValidation)
+		return nil, fmt.Errorf("%w: name must be 3-60 chars", ErrValidation)
 	}
 	kind, err := normalizeKind(req.Kind)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	placement := req.Placement
 	if placement == "" {
@@ -315,9 +313,8 @@ func (s *EnvironmentService) Register(
 	// Insert stamps e.UUID, which the desired-state write below is keyed on. A name
 	// another account already holds is not a conflict: (account_id, id) is what is
 	// unique, so this registers that account's own environment.
-	replacedAPIKeyID, err = s.repo.Insert(e)
-	if err != nil {
-		return nil, "", err
+	if err := s.repo.Insert(e); err != nil {
+		return nil, err
 	}
 	// Desired state comes with the registration, so the agent has something to do the
 	// moment it enrolls. Failing to write it must not fail the registration: the
@@ -325,10 +322,10 @@ func (s *EnvironmentService) Register(
 	// can always be retried or replaced by the operator.
 	if res := s.initialDesired(req, kind); res != nil {
 		if err := s.repo.ReplaceDesired(e.UUID, res); err != nil {
-			return e, replacedAPIKeyID, nil //nolint:nilerr // see above: the registration stands
+			return e, nil //nolint:nilerr // see above: the registration stands
 		}
 	}
-	return e, replacedAPIKeyID, nil
+	return e, nil
 }
 
 // initialDesired resolves what a newly registered environment should be running:

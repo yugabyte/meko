@@ -137,11 +137,8 @@ func TestRegister_StampsAccountFromHeader(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(envUUID, ""))
-	mock.ExpectCommit()
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
 	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
 		acctA, `{"name":"acme-prod","account_id":"`+acctB+`","api_key_id":"`+keyA+`"}`, "")
@@ -179,33 +176,26 @@ func TestRegister_RequiresAPIKeyID(t *testing.T) {
 	}
 }
 
-// A re-registration that rebinds the environment to a new key carries the old
-// binding in the response, so YBM can revoke it.
-func TestRegister_ReturnsReplacedAPIKeyID(t *testing.T) {
+// Re-registering an existing name is a 409 with a legible code, not a reset of
+// the existing row.
+func TestRegister_ExistingNameIs409(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(envUUID, keyA))
-	mock.ExpectCommit()
+		WillReturnError(&pq.Error{
+			Code:       "23505",
+			Constraint: "environments_account_id_uniq",
+			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
+		})
 
 	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
 		acctA, `{"name":"acme-prod","api_key_id":"`+keyB+`"}`, "")
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
 	}
-	var body struct {
-		Data struct {
-			ReplacedAPIKeyID string `json:"replaced_api_key_id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Data.ReplacedAPIKeyID != keyA {
-		t.Errorf("replaced_api_key_id = %q, want %q", body.Data.ReplacedAPIKeyID, keyA)
+	if !strings.Contains(rec.Body.String(), "ENVIRONMENT_EXISTS") {
+		t.Errorf("error code missing from %s", rec.Body.String())
 	}
 }
 
@@ -215,8 +205,6 @@ func TestRegister_KeyBoundElsewhereIs409(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnError(&pq.Error{
 			Code:       "23505",

@@ -163,10 +163,8 @@ func TestEnvironmentRepo_GetUnscopedResolvesSingleMatch(t *testing.T) {
 	}
 }
 
-// Registration conflicts on (account_id, id), so a name another account holds is not
-// a conflict at all. Insert also has to hand back the key it landed on, since the
-// desired-state write is keyed on it — and the api_key_id the row held before, so a
-// rebind surfaces the key YBM must revoke.
+// Registration conflicts on (account_id, id), so a name another account holds is
+// not a conflict at all -- it just inserts that account's own environment.
 func TestEnvironmentRepo_InsertConflictsOnAccountAndIDAndReturnsUUID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -175,29 +173,22 @@ func TestEnvironmentRepo_InsertConflictsOnAccountAndIDAndReturnsUUID(t *testing.
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).
-			AddRow("44444444-4444-4444-4444-444444444444", ""))
-	mock.ExpectCommit()
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).
+			AddRow("44444444-4444-4444-4444-444444444444"))
 
 	e := &models.Environment{ID: "acme-prod", AccountID: acctB, State: "PENDING", APIKeyID: keyA}
-	replaced, err := repo.Insert(e)
-	if err != nil {
+	if err := repo.Insert(e); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	if e.UUID != "44444444-4444-4444-4444-444444444444" {
 		t.Errorf("uuid = %q, want the key the insert returned", e.UUID)
 	}
-	if replaced != "" {
-		t.Errorf("replaced key = %q, want none on a fresh insert", replaced)
-	}
 }
 
-// A re-register that rebinds the row to a new key reports the old binding; the
-// same key back is not a replacement.
-func TestEnvironmentRepo_InsertReportsReplacedKey(t *testing.T) {
+// Re-registering an already-claimed (account_id, id) is refused as
+// ErrEnvironmentExists.
+func TestEnvironmentRepo_InsertRejectsExistingAccountAndID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -205,30 +196,16 @@ func TestEnvironmentRepo_InsertReportsReplacedKey(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(envUUID, keyA))
-	mock.ExpectCommit()
-	replaced, err := repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyB})
-	if err != nil {
-		t.Fatalf("Insert: %v", err)
-	}
-	if replaced != keyA {
-		t.Errorf("replaced key = %q, want the previous binding %q", replaced, keyA)
-	}
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnError(&pq.Error{
+			Code:       "23505",
+			Constraint: "environments_account_id_uniq",
+			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
+		})
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(envUUID, keyB))
-	mock.ExpectCommit()
-	replaced, err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyB})
-	if err != nil {
-		t.Fatalf("Insert: %v", err)
-	}
-	if replaced != "" {
-		t.Errorf("replaced key = %q, want none when the binding is unchanged", replaced)
+	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyB})
+	if !errors.Is(err, ErrEnvironmentExists) {
+		t.Fatalf("Insert err = %v, want ErrEnvironmentExists", err)
 	}
 }
 
@@ -243,24 +220,22 @@ func TestEnvironmentRepo_InsertRejectsKeyBoundElsewhere(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnError(&pq.Error{
 			Code:       "23505",
 			Constraint: "environments_api_key_id_uniq",
 			Message:    `duplicate key value violates unique constraint "environments_api_key_id_uniq"`,
 		})
 
-	_, err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
+	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
 	if !errors.Is(err, ErrAPIKeyBound) {
 		t.Fatalf("Insert err = %v, want ErrAPIKeyBound", err)
 	}
 }
 
-// A unique violation on any OTHER index is not a key-binding conflict, so it must
-// keep surfacing as itself rather than being reported as one.
-func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotKeyBound(t *testing.T) {
+// A unique violation on any OTHER index is neither a key-binding nor a name
+// conflict, so it must keep surfacing as itself rather than being reported as one.
+func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotASentinel(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -268,14 +243,12 @@ func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotKeyBound(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WillReturnError(&pq.Error{Code: "23505", Constraint: "environments_pkey", Message: "duplicate key"})
 
-	_, err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
-	if err == nil || errors.Is(err, ErrAPIKeyBound) {
-		t.Fatalf("Insert err = %v, want a plain error rather than ErrAPIKeyBound", err)
+	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
+	if err == nil || errors.Is(err, ErrAPIKeyBound) || errors.Is(err, ErrEnvironmentExists) {
+		t.Fatalf("Insert err = %v, want a plain error rather than either sentinel", err)
 	}
 }
 
@@ -323,20 +296,17 @@ func TestEnvironmentRepo_UnaccountedUsesTheSentinel(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs("acme-prod", "00000000-0000-0000-0000-000000000000", sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).
-			AddRow("44444444-4444-4444-4444-444444444444", ""))
-	mock.ExpectCommit()
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).
+			AddRow("44444444-4444-4444-4444-444444444444"))
 
 	e := &models.Environment{ID: "acme-prod", AccountID: "", State: "PENDING", APIKeyID: keyA}
-	if _, err := repo.Insert(e); err != nil {
+	if err := repo.Insert(e); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

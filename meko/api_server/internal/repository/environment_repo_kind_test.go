@@ -79,14 +79,11 @@ func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 		anyArgs[i] = sqlmock.AnyArg()
 	}
 	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $19 kind, $20 resources
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs(args...).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(envUUID, ""))
-	mock.ExpectCommit()
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
-	_, err = repo.Insert(&models.Environment{
+	err = repo.Insert(&models.Environment{
 		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY", APIKeyID: keyA,
 		Resources: json.RawMessage(`[{"kind":"storage_pool","id":"pool-1"}]`),
 	})

@@ -469,8 +469,8 @@ func decodeBody(r io.Reader, out any) error {
 }
 
 // errUnauthorized is the control plane rejecting the agent's credential (HTTP
-// 401): the API key was revoked, or the environment was re-registered onto a new
-// one. A sentinel rather than a status code the callers re-derive from a message.
+// 401): the API key was revoked. A sentinel rather than a status code the callers
+// re-derive from a message.
 var errUnauthorized = errors.New("unauthorized: the api key is revoked or bound to no environment")
 
 // enroll is the key-authenticated first check-in. It returns the environment id
@@ -561,9 +561,9 @@ func main() {
 	// Whichever way it fails, persisted state is resumed from when there is any, so
 	// the reconcile loop holds the data plane up while the cause is fixed — the same
 	// shape as a mid-run failure. A 401 is called out loudly on every attempt, since
-	// no retry from here can fix a revoked or rebound key; recovery is a
-	// re-registration or a fresh key Secret, and neither needs this process to have
-	// stopped.
+	// no retry from here can fix a revoked key; recovery is a fresh key Secret bound
+	// to a newly registered environment (an environment is never rebound to a
+	// different key), which does not need this process to have stopped.
 	var envID string
 	var stack json.RawMessage
 	var resumedDesired json.RawMessage
@@ -585,7 +585,7 @@ func main() {
 		}
 		if errors.Is(eerr, errUnauthorized) {
 			log.Printf("ENROLL REJECTED (401): the API key is revoked or bound to no environment; " +
-				"re-register the environment or redeploy with a fresh key")
+				"register a new environment and redeploy with its key")
 		} else {
 			log.Printf("enroll failed: %v", eerr)
 		}
@@ -636,12 +636,11 @@ func main() {
 		desiredRead := derr == nil && dcode >= 200 && dcode <= 299
 		switch {
 		case dcode == 401 || dcode == 404:
-			// The API key was rejected — revoked, or the environment was
-			// re-registered onto a new key. No retry from here can fix that; the
+			// The API key was rejected — revoked. No retry from here can fix that; the
 			// stack below is still reconciled, so the data plane is not left to rot
 			// while a new key is issued.
 			log.Printf("DESIRED-STATE REJECTED (%d): the API key is revoked or bound to no environment; "+
-				"re-register the environment or redeploy with a fresh key — holding what we last read", dcode)
+				"register a new environment and redeploy with its key — holding what we last read", dcode)
 		case !desiredRead:
 			log.Printf("desired-state unavailable (code=%d err=%v) — holding what we last read and changing nothing else", dcode, derr)
 		}
@@ -707,7 +706,7 @@ func main() {
 			log.Printf("status error: %v", err)
 		case scode == 401 || scode == 404:
 			log.Printf("STATUS REJECTED (%d): the API key is revoked or bound to no environment; "+
-				"re-register the environment or redeploy with a fresh key", scode)
+				"register a new environment and redeploy with its key", scode)
 		default:
 			log.Printf("status: state=%s components=[%s] declared=%d rev=%d -> %d",
 				state, summarize(comps), len(stackRes), ds.Revision, scode)

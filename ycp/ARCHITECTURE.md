@@ -209,13 +209,13 @@ e2e — no YBM), the agent sends that header pair itself
 
 There is no bootstrap credential and nothing minted at enroll time: enrollment is
 an idempotent check-in the agent repeats at every startup, so a restart can never
-lock an agent out. A 401 means the key was revoked or the environment
-re-registered onto a new key; the agent logs it loudly and keeps reconciling what
-it last read — recovery is a redeploy with a fresh key Secret, or a
-re-registration, neither of which needs the agent process to have stopped. A
-check-in that fails at startup falls back to the persisted identity when there is
-one, for the same reason: a control plane that cannot be reached must not take the
-data plane down with it.
+lock an agent out. A 401 means the key was revoked; the agent logs it loudly and
+keeps reconciling what it last read. Recovery is a redeploy with a fresh key
+Secret carrying a newly-minted key -- an environment is never rebound to a
+different key once registered, so a revoked key means registering a new
+environment for the replacement. A check-in that fails at startup falls back to
+the persisted identity when there is one, for the same reason: a control plane
+that cannot be reached must not take the data plane down with it.
 
 The `meko-agent-state` Secret holds no credential: only the identity the last
 check-in confirmed, the **stack** the agent enrolled with, and the last desired

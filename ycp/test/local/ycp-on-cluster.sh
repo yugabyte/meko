@@ -160,7 +160,9 @@ fi
     done
   --platform linux/amd64 matters: the nodes are amd64 and this laptop may not be."
 
-ENV_NAME="${ENV_NAME:-$MEKO_NS-$(printf '%s' "$CTX" | tr -c 'a-z0-9' '-' | tr -s '-' | sed 's/^-//;s/-$//' | tail -c 20)}"
+# Only the derived default is timestamped. --env-name has to stay the environment id so
+# --agent-only can attach to a control plane that is already running one.
+ENV_NAME="${ENV_NAME:-$MEKO_NS-$(printf '%s' "$CTX" | tr -c 'a-z0-9' '-' | tr -s '-' | sed 's/^-//;s/-$//' | tail -c 20)-$(date +%s)}"
 ENV_NAME="$(printf '%s' "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | tr -s '-' | sed 's/^-//;s/-$//')"
 
 PF_PID=""
@@ -405,14 +407,6 @@ h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   --set ecrCredentialRefresh.enabled=false \
   --wait --timeout "$TIMEOUT" >/dev/null ||
   die "the agent install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS)"
-
-# Force the agent to pick up the identity just registered. Registering above is an
-# upsert that rebinds the environment to this run's api_key_id; on a RE-RUN the
-# Deployment spec is identical, so helm changes nothing and the pod keeps the
-# previous run's id in its environment — a secretKeyRef env var is read once, at
-# start. The restart makes the new pod check in with the fresh binding.
-k -n "$MEKO_NS" rollout restart deploy/meko-agent >/dev/null
-k -n "$MEKO_NS" rollout status deploy/meko-agent --timeout="$TIMEOUT"
 
 # ------------------------------------------------------- watch it bootstrap itself
 

@@ -52,6 +52,10 @@ YCP_IMAGE="${YCP_IMAGE:?YCP_IMAGE (ycp-api-server ref, incl tag) is required}"
 # Name to register the amp environment under. The control plane slugs it and bakes
 # it into the id as "amp-<slug(name)>"; we read that id back rather than recomputing
 # the slug here, so the two can never drift.
+# Stable, so a re-run reaches the environment it stood up before. The amp controller
+# binds to one environment id for the life of its database, so a name that changed per
+# run would strand a controller whose storage outlived the control plane
+# (YCP_POSTGRES_PVC_SIZE) against a binding it can never satisfy.
 YCP_ENV_NAME="${YCP_ENV_NAME:-gke-smoke}"
 YCP_PLACEMENT="${YCP_PLACEMENT:-cloud}"
 YCP_REGION="${YCP_REGION:-us-west1}"
@@ -174,14 +178,19 @@ for ((i=0; i<60; i++)); do
 done
 [ "${ready}" = 1 ] || die "control plane /api/v1/health never came up (port-forward log: $(cat /tmp/ycp-up-pf.log 2>/dev/null))"
 
-RESP="$(curl -sf -X POST "${CP}/api/v1/environments" \
+# -w appends the status on its own line after the body, so a failure can report what
+# the control plane answered.
+REG="$(curl -s -w '\n%{http_code}' -X POST "${CP}/api/v1/environments" \
   -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" \
   -H 'Content-Type: application/json' \
-  -d "{\"name\":\"${YCP_ENV_NAME}\",\"kind\":\"amp\",\"placement\":\"${YCP_PLACEMENT}\",\"region\":\"${YCP_REGION}\",\"api_key_id\":\"${YCP_API_KEY_ID}\"}")" \
-  || die "register POST failed"
+  -d "{\"name\":\"${YCP_ENV_NAME}\",\"kind\":\"amp\",\"placement\":\"${YCP_PLACEMENT}\",\"region\":\"${YCP_REGION}\",\"api_key_id\":\"${YCP_API_KEY_ID}\"}")"
+REG_CODE="$(printf '%s' "${REG}" | tail -n1)"
+REG_BODY="$(printf '%s' "${REG}" | sed '$d')"
+[ "${REG_CODE}" = "201" ] ||
+  die "register ${YCP_ENV_NAME} answered ${REG_CODE}: $(printf '%s' "${REG_BODY}" | jq -r '.error.message // .' 2>/dev/null)"
 
-YCP_ENV_ID="$(printf '%s' "${RESP}" | jq -r '.data.environment.id // empty')"
-[ -n "${YCP_ENV_ID}" ] || die "register response had no environment id (resp: ${RESP})"
+YCP_ENV_ID="$(printf '%s' "${REG_BODY}" | jq -r '.data.environment.id // empty')"
+[ -n "${YCP_ENV_ID}" ] || die "register response had no environment id (resp: ${REG_BODY})"
 echo "   environment id : ${YCP_ENV_ID}"
 
 # --- 5. dev-mode credential Secret for the controller chart ---

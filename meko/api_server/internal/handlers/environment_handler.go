@@ -64,15 +64,14 @@ func (h *EnvironmentHandler) Get(c echo.Context) error {
 	return ok(c, http.StatusOK, e)
 }
 
-// Register stores a PENDING environment bound to the request's api_key_id. When a
-// re-registration rebound an existing row to a different key, the response carries
-// the old id as replaced_api_key_id so YBM can revoke it.
+// Register stores a new PENDING environment bound to the request's api_key_id. A
+// name this account already holds answers 409 ENVIRONMENT_EXISTS.
 func (h *EnvironmentHandler) Register(c echo.Context) error {
 	var req service.RegisterEnvironmentRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	e, replacedKeyID, err := h.svc.Register(req, accountScope(c))
+	e, err := h.svc.Register(req, accountScope(c))
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
@@ -81,14 +80,15 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 			return apiError(c, http.StatusConflict, "API_KEY_BOUND",
 				"this api key is already bound to another environment; one key drives one environment")
 		}
+		if errors.Is(err, service.ErrEnvironmentExists) {
+			return apiError(c, http.StatusConflict, "ENVIRONMENT_EXISTS",
+				"an environment with this name is already registered")
+		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	body := map[string]any{
 		"environment":  e,
 		"install_hint": installHint(c, e, req.AgentBaseURL),
-	}
-	if replacedKeyID != "" {
-		body["replaced_api_key_id"] = replacedKeyID
 	}
 	return ok(c, http.StatusCreated, body)
 }

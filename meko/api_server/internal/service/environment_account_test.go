@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/repository"
 )
@@ -21,10 +22,9 @@ const (
 	keyB = "b0000000-0000-0000-0000-00000000000b"
 )
 
-// insertReturns is what the register upsert hands back: the row's key plus the
-// api_key_id the row held before the write ("" on a fresh insert).
-func insertReturns(uuid, oldKey string) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"uuid", "old_api_key_id"}).AddRow(uuid, oldKey)
+// insertReturns is what a successful register insert hands back: the row's key.
+func insertReturns(uuid string) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"uuid"}).AddRow(uuid)
 }
 
 // newEnvSvc builds a service over a mocked DB. envRow (environment_kind_test.go)
@@ -128,13 +128,10 @@ func TestRegister_ScopeOverridesBodyAccount(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID, ""))
-	mock.ExpectCommit()
+		WillReturnRows(insertReturns(envUUID))
 
-	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: acctB, APIKeyID: keyA}, acctA)
+	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: acctB, APIKeyID: keyA}, acctA)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -149,13 +146,10 @@ func TestRegister_UnscopedKeepsBodyAccount(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID, ""))
-	mock.ExpectCommit()
+		WillReturnRows(insertReturns(envUUID))
 
-	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: acctA, APIKeyID: keyA}, "")
+	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: acctA, APIKeyID: keyA}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -166,18 +160,15 @@ func TestRegister_UnscopedKeepsBodyAccount(t *testing.T) {
 
 // A name another account already holds is not a conflict: (account_id, id) is what
 // is unique, so the second account registers its own environment and gets its own
-// key. The guard this replaced could only refuse that caller.
+// key.
 func TestRegister_NameHeldByAnotherAccountIsItsOwnEnvironment(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(insertReturns("55555555-5555-5555-5555-555555555555", ""))
-	mock.ExpectCommit()
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(insertReturns("55555555-5555-5555-5555-555555555555"))
 
-	e, replaced, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, acctB)
+	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, acctB)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -187,42 +178,23 @@ func TestRegister_NameHeldByAnotherAccountIsItsOwnEnvironment(t *testing.T) {
 	if e.ID != "acme-prod" || e.AccountID != acctB {
 		t.Errorf("registered (%q, %q), want acct-2's own acme-prod", e.AccountID, e.ID)
 	}
-	if replaced != "" {
-		t.Errorf("replaced key = %q, want none on a fresh registration", replaced)
-	}
 }
 
-// Re-registering a name onto a different key reports the binding it replaced, so
-// YBM can revoke the key nothing authenticates with any more. Re-registering onto
-// the SAME key reports nothing -- there is nothing to revoke.
-func TestRegister_ReportsReplacedAPIKey(t *testing.T) {
+// Re-registering the same (account_id, id) is refused as ErrEnvironmentExists.
+func TestRegister_RejectsExistingName(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(insertReturns(envUUID, keyA))
-	mock.ExpectCommit()
-	_, replaced, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyB}, acctA)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if replaced != keyA {
-		t.Errorf("replaced key = %q, want the previous binding %q", replaced, keyA)
-	}
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnError(&pq.Error{
+			Code:       "23505",
+			Constraint: "environments_account_id_uniq",
+			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
+		})
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(insertReturns(envUUID, keyB))
-	mock.ExpectCommit()
-	_, replaced, err = svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyB}, acctA)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if replaced != "" {
-		t.Errorf("replaced key = %q, want none when the binding is unchanged", replaced)
+	_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyB}, acctA)
+	if !errors.Is(err, repository.ErrEnvironmentExists) {
+		t.Fatalf("Register err = %v, want ErrEnvironmentExists", err)
 	}
 }
 
@@ -234,29 +206,23 @@ func TestRegister_RejectsNonUUIDAccount(t *testing.T) {
 	defer done()
 
 	for _, bad := range []string{"acme-corp", "e2e", "local", "not-a-uuid"} {
-		_, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: bad, APIKeyID: keyA}, "")
+		_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", AccountID: bad, APIKeyID: keyA}, "")
 		if !errors.Is(err, ErrValidation) {
 			t.Errorf("Register(account_id=%q) err = %v, want ErrValidation", bad, err)
 		}
 	}
 }
 
-// The key is stored in its canonical form, not as sent. uuid.Parse accepts
-// uppercase (and braces, and urn:uuid:), while the upsert compares the value
-// against the stored api_key_id as canonical text — so without normalizing, a
-// re-registration of the SAME key in another spelling reads as a rebind and YBM
-// revokes the live key.
-func TestRegister_NormalizesAPIKeyID(t *testing.T) {
+// The key is stored in its canonical form, not as sent: uuid.Parse also accepts
+// uppercase (and braces, and urn:uuid:).
+func TestRegister_StoresCanonicalAPIKeyID(t *testing.T) {
 	svc, mock, done := newEnvSvc(t)
 	defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
-		WillReturnRows(insertReturns(envUUID, keyA))
-	mock.ExpectCommit()
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(insertReturns(envUUID))
 
-	e, replaced, err := svc.Register(RegisterEnvironmentRequest{
+	e, err := svc.Register(RegisterEnvironmentRequest{
 		Name: "acme-prod", APIKeyID: strings.ToUpper(keyA),
 	}, acctA)
 	if err != nil {
@@ -265,9 +231,6 @@ func TestRegister_NormalizesAPIKeyID(t *testing.T) {
 	if e.APIKeyID != keyA {
 		t.Errorf("stored key = %q, want the canonical %q", e.APIKeyID, keyA)
 	}
-	if replaced != "" {
-		t.Errorf("replaced key = %q, want none: the binding is unchanged", replaced)
-	}
 }
 
 // api_key_id is the environment's only agent credential binding, so registering
@@ -275,7 +238,7 @@ func TestRegister_NormalizesAPIKeyID(t *testing.T) {
 func TestRegister_RequiresAPIKeyID(t *testing.T) {
 	svc := NewEnvironmentService(nil, BootstrapDefaults{}) // validation precedes any repo call
 	for _, bad := range []string{"", "not-a-uuid", "ycp_enr_deadbeef"} {
-		_, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: bad}, "")
+		_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: bad}, "")
 		if !errors.Is(err, ErrValidation) {
 			t.Errorf("Register(api_key_id=%q) err = %v, want ErrValidation", bad, err)
 		}

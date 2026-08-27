@@ -42,14 +42,11 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 	// the kind gate — not a disabled default — is what suppresses the meko-stack.
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true, Release: testRelease})
 
-	// Only the environment upsert — no desired-state write for amp.
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	// Only the environment insert — no desired-state write for amp.
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID, ""))
-	mock.ExpectCommit()
+		WillReturnRows(insertReturns(envUUID))
 
-	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "amp", APIKeyID: keyA}, "")
+	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "amp", APIKeyID: keyA}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -77,13 +74,10 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{}) // disabled: no desired write
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(insertReturns(envUUID, ""))
-	mock.ExpectCommit()
+		WillReturnRows(insertReturns(envUUID))
 
-	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, "")
+	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyA}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -96,7 +90,7 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 // fail rather than quietly create a meko environment.
 func TestRegister_RejectsUnknownKind(t *testing.T) {
 	svc := NewEnvironmentService(nil, BootstrapDefaults{}) // validation precedes any repo call
-	_, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "app", APIKeyID: keyA}, "")
+	_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "app", APIKeyID: keyA}, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(kind=app) err = %v, want ErrValidation", err)
 	}

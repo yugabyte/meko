@@ -190,26 +190,23 @@ var ErrAPIKeyBound = errors.New("api key is already bound to another environment
 // by name so a violation of any OTHER unique index still surfaces as itself.
 const apiKeyUniqueConstraint = "environments_api_key_id_uniq"
 
-// Insert registers an environment, or re-registers the caller's own, and sets
-// e.UUID to the key of the row that resulted. replacedAPIKeyID is the api_key_id
-// a re-registered row held before this write, when it differs from the new one --
-// the caller (YBM) revokes that key, since nothing authenticates with it any more.
+// ErrEnvironmentExists is returned when a registration's (account_id, id) is
+// already taken, which environments_account_id_uniq forbids. Mapped to 409 by
+// handlers. The name stays taken for the life of the row, deregistered or not.
+var ErrEnvironmentExists = errors.New("environment already registered")
+
+// accountIDUniqueConstraint is the index whose violation means ErrEnvironmentExists.
+const accountIDUniqueConstraint = "environments_account_id_uniq"
+
+// Insert registers a brand-new environment and sets e.UUID to the generated key.
+// A name already claimed by this account returns ErrEnvironmentExists, and a key
+// already bound to another environment returns ErrAPIKeyBound -- one key drives
+// one environment.
 //
-// The conflict target is (account_id, id), so a name another account holds is not a
-// conflict at all -- it inserts that account's own environment. Only re-registering
-// your own name updates a row, which is what registration always did.
-//
-// The `old` CTE reads the pre-statement snapshot, which is what makes the previous
-// binding observable in the same round trip as the upsert that replaces it. That
-// snapshot is also why the whole thing needs the advisory lock below: two concurrent
-// registrations of the same (account_id, id) would each see an empty `old`, so the
-// loser would overwrite the winner's api_key_id while reporting nothing to revoke --
-// leaving a live key bound to no environment. The lock key is hashtext of
-// (account_id, id), a 32-bit hash, so two different environments can collide onto
-// one key and serialize against each other. That costs a little concurrency and
-// nothing else: a collision over-serializes, it never admits two registrations of
-// the same name.
-func (r *EnvironmentRepo) Insert(e *models.Environment) (replacedAPIKeyID string, err error) {
+// A plain INSERT relying on the unique indexes needs no lock: the loser of a race
+// between two registrations of the same (account_id, id) simply gets
+// ErrEnvironmentExists.
+func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 	components := e.Components
 	if len(components) == 0 {
 		components = json.RawMessage("[]")
@@ -224,52 +221,26 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) (replacedAPIKeyID string
 	}
 	account := accountForStore(e.AccountID)
 
-	tx, err := r.db.Begin()
-	if err != nil {
-		return "", fmt.Errorf("insert environment: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Held until commit, so it covers the read-and-upsert below as one unit.
-	if _, err = tx.Exec(
-		`SELECT pg_advisory_xact_lock(hashtext($1))`, account+"/"+e.ID); err != nil {
-		return "", fmt.Errorf("insert environment: lock: %w", err)
-	}
-
-	var oldKey string
-	err = tx.QueryRow(`
-		WITH old AS (
-			SELECT uuid, api_key_id FROM meko_system.environments WHERE account_id = $2 AND id = $1
-		), ins AS (
-			INSERT INTO meko_system.environments (`+envColumnsInsert+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-			ON CONFLICT (account_id, id) DO UPDATE SET
-				placement=$3, region=$4, state=$5, k8s_version=$6, node_count=$7,
-				provider=$8, datapacks=$9, max_datapacks=$10, agent_version=$11, last_heartbeat_at=$12,
-				mcp_base_url=$13, cert_fingerprint=$14, components=$15, live=$16,
-				api_key_id=$17, kind=$19, resources=$20
-			RETURNING uuid
-		)
-		SELECT ins.uuid, COALESCE(old.api_key_id::text, '') FROM ins LEFT JOIN old ON old.uuid = ins.uuid`,
+	err := r.db.QueryRow(`
+		INSERT INTO meko_system.environments (`+envColumnsInsert+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		RETURNING uuid`,
 		e.ID, account, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
 		e.APIKeyID, e.CreatedAt, kind,
-		[]byte(resources)).Scan(&e.UUID, &oldKey)
+		[]byte(resources)).Scan(&e.UUID)
 	if err != nil {
 		if isAPIKeyBoundViolation(err) {
-			return "", fmt.Errorf("%w: %s", ErrAPIKeyBound, e.APIKeyID)
+			return fmt.Errorf("%w: %s", ErrAPIKeyBound, e.APIKeyID)
+		}
+		if isEnvironmentExistsViolation(err) {
+			return fmt.Errorf("%w: %s", ErrEnvironmentExists, e.ID)
 		}
 		slog.Error("insert environment", "id", e.ID, "account", e.AccountID, "err", err)
-		return "", fmt.Errorf("insert environment: %w", err)
+		return fmt.Errorf("insert environment: %w", err)
 	}
-	if err = tx.Commit(); err != nil {
-		return "", fmt.Errorf("insert environment: commit: %w", err)
-	}
-	if oldKey != "" && oldKey != e.APIKeyID {
-		replacedAPIKeyID = oldKey
-	}
-	return replacedAPIKeyID, nil
+	return nil
 }
 
 // isAPIKeyBoundViolation reports whether err is a unique violation (SQLSTATE 23505)
@@ -279,6 +250,17 @@ func isAPIKeyBoundViolation(err error) bool {
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
 		return pqErr.Code == "23505" && strings.Contains(pqErr.Constraint, apiKeyUniqueConstraint)
+	}
+	return false
+}
+
+// isEnvironmentExistsViolation reports whether err is a unique violation (SQLSTATE
+// 23505) of the (account_id, id) index, the same way isAPIKeyBoundViolation does
+// for the api-key index.
+func isEnvironmentExistsViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505" && strings.Contains(pqErr.Constraint, accountIDUniqueConstraint)
 	}
 	return false
 }

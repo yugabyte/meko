@@ -278,7 +278,10 @@ that belongs to another account answers 404, the same as one that does not exist
 Environment ids come from the name, and the name is unique per account rather than
 across the fleet — `(account_id, id)` is what the database enforces. So two accounts
 may each register `prod` and each gets its own environment; neither can address or
-overwrite the other's. Re-registering your own name updates it, as it always did.
+overwrite the other's. Re-registering your own name is refused (409) rather than
+resetting it: an environment is never replaceable by registering over it.
+Deregister it if it is no longer needed, and register the replacement under a new
+name.
 
 The id an operator uses is unchanged by that. Rows are keyed internally by a uuid,
 which is what the desired-resources table joins on; the fleet API's `{id}` path
@@ -332,7 +335,7 @@ Failure modes worth knowing:
 | Symptom | Cause |
 |---|---|
 | `could not read agent state` / `could not persist agent state` | the ServiceAccount lacks `get`/`create`/`update` on secrets in its namespace. Not fatal — the state holds no credential — but a restart during a control-plane outage then starts from nothing. |
-| `ENROLL REJECTED (401)`, repeating | the API key was revoked, or the environment was re-registered onto a new key. Redeploy with a fresh key Secret, or re-register. |
+| `ENROLL REJECTED (401)`, repeating | the API key was revoked. Redeploy with a fresh key Secret pointed at a newly registered environment -- an environment cannot be rebound to a different key once registered. |
 | `desired-state unavailable … holding what we last read and changing nothing else` | the control plane is unreachable or erroring. The agent keeps reconciling toward the last desired state it read — that is the point of persisting it — and skips only garbage collection, since it cannot know what an operator withdrew from a response it never got. A data plane survives a control plane being deleted outright: one ran for two and a half days that way, six components healthy throughout. |
 | every pod `ImagePullBackOff` | no `image_pull_secret`. The whole release is private; the control plane warns about this at boot. |
 | the database is `1/1` but `create extension mage` fails | the wrong database image. `mage` and `pg_dist_rag` are in `yugabyte-db/ybdb-meko-release`, not the public `yugabytedb` image. |

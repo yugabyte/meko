@@ -22,9 +22,9 @@ import (
 )
 
 // ErrUnauthorized is returned when the control plane rejects the API key (HTTP
-// 401): the key was revoked, or its environment was re-registered onto a new one.
-// Not retryable with the credentials the agent holds -- the caller logs loudly
-// and keeps ticking, so a re-issued key (a redeploy with a fresh Secret) recovers.
+// 401): the key was revoked. Not retryable with the credentials the agent holds --
+// the caller logs loudly and keeps ticking, so a re-issued key (a redeploy with a
+// fresh Secret) recovers.
 var ErrUnauthorized = fmt.Errorf("ycp: unauthorized")
 
 // Client talks to one YCP control plane.

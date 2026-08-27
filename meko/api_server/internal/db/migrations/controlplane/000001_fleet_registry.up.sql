@@ -58,8 +58,9 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
     PRIMARY KEY (uuid)
 );
 
--- What Register upserts on: a name another account holds is a separate row, and
--- re-registering your own name updates it.
+-- Composite, so two accounts can each hold an environment called "prod". A repeat
+-- within one account violates this index, which is what makes registration refuse
+-- it as a conflict.
 CREATE UNIQUE INDEX IF NOT EXISTS environments_account_id_uniq
     ON meko_system.environments (account_id, id);
 

@@ -343,8 +343,10 @@ console that loads and then refuses every call.
 **Fleet endpoints return 401** — wrong admin secret in the request.
 
 **Agent logs `ENROLL REJECTED (401)` repeatedly** — no environment is bound to the
-agent's key id (revoked, or re-registered onto a new one). Re-register, or update
-the `meko-agent-api-key` Secret and restart the agent.
+agent's key id: the key was revoked, or the `meko-agent-api-key` Secret carries the
+wrong one. Update the Secret with the correct id and restart the agent -- an
+environment cannot be rebound to a different key once registered, so a revoked key
+means registering a new environment for the replacement.
 
 **Agent logs `enroll -> 500`** — a server-side error; `kubectl logs
 deploy/meko-api-server` shows the cause on an `enroll failed:` line.

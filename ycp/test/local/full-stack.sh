@@ -24,7 +24,9 @@
 #   AWS_PROFILE           profile that can read the Meko ECR (meko-dev here).
 #   OPENAI_API_KEY        written to the data-plane Secret when set. The MCP server and
 #                         the gateway start without it and fail on the first embedding.
-#   MEKO_FULL_STACK_ENV   environment name to register (default full-stack).
+#   MEKO_FULL_STACK_ENV   environment name to register. The default carries a run
+#                         timestamp so re-runs never collide with a previous run's
+#                         row; a name given here is used as-is.
 #   MEKO_FULL_STACK_NS    namespace for the new agent (default ycp-full-stack).
 #   MEKO_FULL_STACK_AGENT_IMAGE
 #                         agent image to deploy; default = whatever the e2e is running.
@@ -40,7 +42,9 @@ CLUSTER="${YCP_E2E_CLUSTER:-ycp-e2e}"
 CTX="kind-${CLUSTER}"
 CP_NS=ycp-e2e
 NS="${MEKO_FULL_STACK_NS:-ycp-full-stack}"
-ENV_NAME="${MEKO_FULL_STACK_ENV:-full-stack}"
+# Only the default carries the run timestamp, so a caller that names an environment
+# gets the one it asked for. Registration refuses a name already in use.
+ENV_NAME="${MEKO_FULL_STACK_ENV:-full-stack-$(date +%s)}"
 ADMIN_KEY=e2eadminkey
 PORT="${YCP_LOCAL_PORT:-18082}"
 BASE="${YCP_E2E_BASE_PATH-/ycp}"
@@ -139,23 +143,9 @@ curl -fsS "http://127.0.0.1:$PORT$BASE/api/v1/health" >/dev/null 2>&1 ||
 
 # ------------------------------------------------------------------- register
 #
-# Start from nothing, every time.
-#
-# Registering an existing environment RESETS it: it is rebound to this run's fresh
-# api_key_id and the state goes back to PENDING, so an agent left over from a previous
-# run holds an identity the control plane no longer honours. In the meantime the fleet
-# reports PENDING with no components and every assertion below fails for a reason that
-# has nothing to do with the code under test. Observed
-# exactly that on the second run of this script.
-#
-# So: remove the environment and the namespace first. It also means the database really
-# is created from scratch, which is the thing being tested.
-if api GET "/api/v1/environments/$ENV_NAME" >/dev/null 2>&1; then
-  log "removing the previous $ENV_NAME environment and its namespace"
-  api DELETE "/api/v1/environments/$ENV_NAME" >/dev/null 2>&1 || true
-  k delete namespace "$NS" --ignore-not-found --wait=true >/dev/null
-  echo "    gone (the database's PersistentVolumeClaim went with the namespace)"
-fi
+# Start from nothing, every time. The namespace is wiped unconditionally so the
+# database really is created from scratch, which is the thing being tested.
+k delete namespace "$NS" --ignore-not-found --wait=true >/dev/null
 
 # A name, a placement and a region. Nothing about images, versions or Secrets: the
 # control plane resolves the release, and the two Secret NAMES it references are

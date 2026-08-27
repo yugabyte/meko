@@ -243,7 +243,7 @@ func (a *agent) enrollWithRetry(ctx context.Context, st state) error {
 		}
 		if errors.Is(err, ycpclient.ErrUnauthorized) {
 			log.Printf("ENROLL REJECTED (401): the API key is revoked or bound to no environment; "+
-				"re-register the environment or redeploy with a fresh key (retrying in %s)", backoff)
+				"register a new environment and redeploy with its key (retrying in %s)", backoff)
 		} else {
 			log.Printf("enroll: %v (retrying in %s)", err, backoff)
 		}

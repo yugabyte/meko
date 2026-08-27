@@ -268,7 +268,7 @@
       <div class="phead"><div><h2>Register environment</h2><div class="desc">Creates a real environment (state PENDING) bound to a generated API key id. Run the printed command in your cluster to bring the agent online.</div></div></div>
       <div class="wiz">
         <div class="frow">
-          <div class="fgroup"><label>Environment name</label><input id="obName" value="acme-prod" /></div>
+          <div class="fgroup"><label>Environment name</label><input id="obName" /></div>
           <div class="fgroup"><label>Account</label><input id="obAccount" value="33333333-3333-3333-3333-333333333333" /></div>
         </div>
         <div class="frow">
@@ -717,7 +717,11 @@
       cluster_spec: mode==="provision" ? {provider:"aws", region: el("obRegion").value.trim()||"us-east-1", node_count:3} : null,
     };
     const r = await api("/api/v1/environments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(reqBody)});
-    if (!r.ok) { alert("Register failed ("+r.status+")"); return; }
+    if (!r.ok) {
+      const errBody = await r.json().catch(() => null);
+      alert((errBody && errBody.error && errBody.error.message) || ("Register failed ("+r.status+")"));
+      return;
+    }
     const j = (await unwrap(r)) || {};
     el("apiKeyIdBox").textContent = apiKeyId;
     // The server's install_hint is kind-aware (amp installs the amp controller

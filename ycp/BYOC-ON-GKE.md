@@ -81,11 +81,11 @@ Four flags worth understanding rather than copying:
   namespaces it created (it labels them), so it cannot walk over someone else's release on
   a shared cluster.
 - **`--env-name`** is the environment id. It is the slug of the name, so `itest-mcs` stays
-  `itest-mcs`.
+  `itest-mcs`. Left unset, the derived default carries a run timestamp so repeat runs do
+  not collide.
 
-**Re-running is safe.** It refreshes the ECR token, re-registers, and restarts the agent so
-it picks up the freshly bound api key id. That last part is load-bearing — see
-[re-running](#re-running-and-why-the-agent-has-to-restart).
+**Re-running refreshes the ECR token.** Registration itself is not repeatable — see
+[re-running](#re-running-and-registration).
 
 It takes about 4 minutes on a warm node and prints, at the end, the admin secret, the
 addresses, and a `curl` that replaces the environment's desired state.
@@ -240,17 +240,14 @@ Running pods are fine — their images are cached on the node — but any evicti
 after that lands in `ImagePullBackOff`. Re-run the script to refresh
 `ecr-registry-creds`; it does nothing else destructive.
 
-### Re-running, and why the agent has to restart
+### Re-running and registration
 
-Registering an environment is an **upsert** that rebinds it to the run's freshly
-generated api key id, so a second run invalidates the identity the running agent
-holds. The Deployment spec is unchanged, so `helm upgrade` restarts nothing, and a
-`secretKeyRef` env var is read once at start — leaving the agent 401ing on every call
-with an id that is no longer bound.
-
-The script restarts the agent after installing, so this is handled: the restarted
-agent checks in with the fresh id, since enrollment is an idempotent key-authenticated
-check-in it repeats at every startup.
+Registration is INSERT-only. A second run against the same `--env-name` is refused with
+409 `ENVIRONMENT_EXISTS`, and the name stays claimed for the life of the row whether or
+not the environment was later deregistered. Nothing is rebound, so an agent already
+attached to that environment keeps its identity and needs no restart. Use `--agent-only`
+to bring an agent back up against an environment that is already registered; to stand up
+a separate one, pass a name that is not taken.
 
 ### A StatefulSet blocks its own replacement
 
