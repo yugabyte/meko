@@ -578,13 +578,19 @@ func (r *maintenanceRun) endpointsServeAgain(ctx context.Context) error {
 }
 
 // Probes for COMMIT working again: reads alone still answer from the pageserver (cf. meko#727).
+// Waits first: a lapsed write token restarts Postgres, outlasting the window.
 func (r *maintenanceRun) writesFlowAgain(ctx context.Context) error {
+	waited, err := awaitWritePath(ctx, r.env, r.fleet.Tenants, r.cfg.SettleTimeout, r.cfg.PayloadBytes)
+	if err != nil {
+		return fmt.Errorf("the write path never came back after the maintenance finished: %w", err)
+	}
+	r.t.Metric("write_path_back_after_s", waited.Seconds(), "s")
 	before := totalWritten(r.fleet.Tenants)
 	runWriters(ctx, r.env, r.fleet.Tenants, r.cfg.ResumeDuration, r.cfg.PayloadBytes)
 	delta := totalWritten(r.fleet.Tenants) - before
 	r.t.Metric("rows_after_maintenance", float64(delta), "count")
 	if delta == 0 {
-		return fmt.Errorf("no tenant committed a row through amp in %s after the maintenance finished — the write path is dead", r.cfg.ResumeDuration)
+		return fmt.Errorf("every tenant committed a probe row, then none committed anything through amp in the following %s. The write path stalled again", r.cfg.ResumeDuration)
 	}
 	return nil
 }

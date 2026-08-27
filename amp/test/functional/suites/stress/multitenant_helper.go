@@ -88,6 +88,16 @@ type tenant struct {
 	nextID int64
 }
 
+// Namespaces one tenant's ids; a shared range misattributes data loss.
+const tenantIDSpan = 1_000_000_000
+
+// Not safe for concurrent callers: one tenant has one writer.
+func (ten *tenant) nextRowID() int64 {
+	id := int64(ten.Index)*tenantIDSpan + ten.nextID
+	ten.nextID++
+	return id
+}
+
 // tenantFleet owns the tenants' lifecycle: create them, hand them out, and
 // delete them whatever happened.
 type tenantFleet struct {
@@ -207,7 +217,6 @@ func (f *tenantFleet) findCluster(ctx context.Context, name string) (controller.
 // committed. Rows carry a payload so the run moves real bytes rather than just
 // row counts, and every value is folded into a checksum.
 func writeFor(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes int) {
-	base := int64(ten.Index) * 1_000_000_000
 	// A real client reconnects. Without this a broken connection turns the
 	// tenant into a silent no-op writer, and the fairness gate then reports it as
 	// starved by its neighbours — blaming the product for a dead port-forward.
@@ -216,8 +225,7 @@ func writeFor(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes i
 	const reconnectAfterErrors = 5
 	consecutive := 0
 	for ctx.Err() == nil {
-		id := base + ten.nextID
-		ten.nextID++
+		id := ten.nextRowID()
 		atomic.AddInt64(&ten.Attempted, 1)
 		// v is a pure function of id, so every stored row can be checked for
 		// corruption without knowing which ids were acknowledged.
@@ -409,4 +417,80 @@ func totalWritten(tenants []tenant) int64 {
 		n += atomic.LoadInt64(&tenants[i].Written)
 	}
 	return n
+}
+
+// Per-probe deadline: a never-returning COMMIT reads as a hang (meko#727).
+const (
+	writeProbeTimeout  = 15 * time.Second
+	writeProbeInterval = 3 * time.Second
+)
+
+// A lapsed write token restarts Postgres, so a window opened at fault-stop times that.
+func awaitWritePath(ctx context.Context, env ampTenantEnv, tenants []tenant, settle time.Duration, payloadBytes int) (time.Duration, error) {
+	start := time.Now()
+	deadline := start.Add(settle)
+	pending := make([]*tenant, 0, len(tenants))
+	for i := range tenants {
+		pending = append(pending, &tenants[i])
+	}
+	for {
+		var still []*tenant
+		var lastErr error
+		for _, ten := range pending {
+			if err := probeWrite(ctx, env, ten, payloadBytes); err != nil {
+				still = append(still, ten)
+				lastErr = err
+			}
+		}
+		if len(still) == 0 {
+			return time.Since(start), nil
+		}
+		pending = still
+		if ctx.Err() != nil {
+			return time.Since(start), ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			ten := pending[0]
+			return time.Since(start), fmt.Errorf(
+				"%d of %d tenant(s) could not commit a single row within %s of the backing coming back; tenant %d (%s) is one of them: %d write error(s), %d reconnect(s) over %d attempted id(s): %w",
+				len(pending), len(tenants), settle, ten.Index, ten.Name,
+				atomic.LoadInt64(&ten.WriteErrors), atomic.LoadInt64(&ten.Reconnects),
+				atomic.LoadInt64(&ten.Attempted), lastErr)
+		}
+		time.Sleep(writeProbeInterval)
+	}
+}
+
+// One row on the writers' own id scheme, so verify_data cannot tell it apart.
+func probeWrite(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes int) error {
+	if ten.Conn == nil {
+		conn, err := env.ConnectEndpoint(ctx, ten.Endpoint)
+		if err != nil {
+			return fmt.Errorf("connect to the endpoint: %w", err)
+		}
+		ten.Conn = conn
+		atomic.AddInt64(&ten.Reconnects, 1)
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, writeProbeTimeout)
+	defer cancel()
+	id := ten.nextRowID()
+	atomic.AddInt64(&ten.Attempted, 1)
+	_, err := ten.Conn.Exec(attemptCtx, fmt.Sprintf(
+		"INSERT INTO %s (id, v, pad) VALUES ($1, $2, repeat('t', $3::int)) ON CONFLICT (id) DO NOTHING", ten.Table),
+		id, id*7, payloadBytes)
+	if err == nil {
+		atomic.AddInt64(&ten.Written, 1)
+		return nil
+	}
+	atomic.AddInt64(&ten.WriteErrors, 1)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// The connection is the likely casualty, not the endpoint: reconnect next probe.
+	ten.Conn.Close()
+	ten.Conn = nil
+	if attemptCtx.Err() != nil {
+		return fmt.Errorf("the write did not return within %s, so the COMMIT is hung rather than refused: %w", writeProbeTimeout, err)
+	}
+	return err
 }

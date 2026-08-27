@@ -67,7 +67,7 @@ func TestAmpNemesisParamsDefaults(t *testing.T) {
 // A tenant's id range must not overlap its neighbour's, or the isolation check
 // would be asserting nothing.
 func TestTenantIDRangesDoNotOverlap(t *testing.T) {
-	const span = int64(1_000_000_000)
+	const span = int64(tenantIDSpan)
 	for i := 0; i < 8; i++ {
 		base := int64(i) * span
 		next := int64(i+1) * span

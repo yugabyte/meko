@@ -163,18 +163,21 @@ func (d *Deployer) deployRemoteDownload(ctx context.Context, ex exec.RemoteExecu
 // separate environment, so the value still travels inside the transported
 // command string; true isolation needs a transport with its own env channel
 // (e.g. an ssh.Session.Setenv), which is future work.
+// --retry: one transient 5xx from GitHub's CDN used to env-fail the run.
+const curlFlags = "curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors"
+
 func remoteFetchCommand(spec Spec, remotePath, secretValue string) (string, error) {
 	switch spec.Type {
 	case TypeHTTP:
-		return fmt.Sprintf("curl -fsSL -o %s %s", shellQuote(remotePath), shellQuote(spec.URL)), nil
+		return fmt.Sprintf("%s -o %s %s", curlFlags, shellQuote(remotePath), shellQuote(spec.URL)), nil
 	case TypeGithubRelease:
 		// remote_download + github_release requires the declaration's url to
 		// already be the exact asset URL — the target has no GH-API-by-tag
 		// resolution logic of its own, unlike the local-cache path.
 		if secretValue == "" {
-			return fmt.Sprintf("curl -fsSL -o %s %s", shellQuote(remotePath), shellQuote(spec.URL)), nil
+			return fmt.Sprintf("%s -o %s %s", curlFlags, shellQuote(remotePath), shellQuote(spec.URL)), nil
 		}
-		inner := fmt.Sprintf(`curl -fsSL -H "Authorization: Bearer $AMPQA_TOKEN" -o %s %s`, remotePath, spec.URL)
+		inner := fmt.Sprintf(`%s -H "Authorization: Bearer $AMPQA_TOKEN" -o %s %s`, curlFlags, remotePath, spec.URL)
 		return fmt.Sprintf("AMPQA_TOKEN=%s sh -c %s", shellQuote(secretValue), shellQuote(inner)), nil
 	case TypeS3:
 		return fmt.Sprintf("aws s3 cp %s %s", shellQuote(spec.URL), shellQuote(remotePath)), nil

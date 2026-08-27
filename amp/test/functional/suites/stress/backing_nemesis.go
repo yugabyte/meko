@@ -105,6 +105,17 @@ func runBackingNemesis(t *core.T) error {
 		return err
 	}
 
+	if err := t.Step("backing_recovered", func(s *core.StepHandle) error {
+		waited, err := awaitBackingReady(t, backingEnv.BackingKube(), params.SettleTimeout)
+		if err != nil {
+			return err
+		}
+		s.Set("ready_after", waited.Round(time.Second).String())
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	if err := t.Step("endpoints_serve_again", func(s *core.StepHandle) error {
 		if err := assertEndpointsServe(t, env, fleet.Tenants, params.SettleTimeout); err != nil {
 			return err
@@ -117,12 +128,17 @@ func runBackingNemesis(t *core.T) error {
 
 	// meko#727: reads answer from the pageserver while no COMMIT returns.
 	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
+		waited, err := awaitWritePath(t.Context, env, fleet.Tenants, params.SettleTimeout, params.PayloadBytes)
+		if err != nil {
+			return fmt.Errorf("the write path never came back (cf. meko#727): %w", err)
+		}
+		s.Set("write_path_back_after", waited.Round(time.Second).String())
 		before := totalWritten(fleet.Tenants)
 		runWriters(t.Context, env, fleet.Tenants, params.ResumeDuration, params.PayloadBytes)
 		delta := totalWritten(fleet.Tenants) - before
 		s.Set("rows_after_chaos", delta)
 		if delta == 0 {
-			return fmt.Errorf("no tenant committed a single row in %s after the backing recovered — the write path is dead (cf. meko#727)",
+			return fmt.Errorf("every tenant committed a probe row, then none committed anything in the following %s. The write path stalled again (cf. meko#727)",
 				params.ResumeDuration)
 		}
 		return nil

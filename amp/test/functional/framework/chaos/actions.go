@@ -39,11 +39,38 @@ func (a podDelete) Inject(ctx context.Context, t *Target) error {
 	return t.kube.Delete(ctx, "pod", t.pod)
 }
 
+// `kubectl wait` returns NotFound on a pod not yet recreated, faking recovery.
 func (a podDelete) Recover(ctx context.Context, t *Target) error {
 	if t.kind != KindPod {
 		return nil
 	}
+	if err := a.awaitPodExists(ctx, t); err != nil {
+		return err
+	}
 	return t.kube.WaitFor(ctx, "pod/"+t.pod, "condition=Ready", a.waitTimeout)
+}
+
+const podExistsPollInterval = 2 * time.Second
+
+func (a podDelete) awaitPodExists(ctx context.Context, t *Target) error {
+	deadline := time.Now().Add(a.waitTimeout)
+	for {
+		_, err := t.kube.Get(ctx, "pod", t.pod, "{.metadata.name}")
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pod %s was never recreated within %s of being deleted: %w", t.pod, a.waitTimeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(podExistsPollInterval):
+		}
+	}
 }
 
 // --- process_kill: SIGKILL the YB process; recover ensures it is back. Analog

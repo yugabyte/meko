@@ -1250,9 +1250,7 @@ stress:
     duration: "3m"
     settle_timeout: "10m"
     payload_bytes: 256
-    # resume_duration is the post-chaos write window proving the WAL path
-    # works again — the probe for a backing that came back but can no longer
-    # commit anything (meko#727).
+    # resume_duration is the throughput window after recovery, not a budget for it.
     resume_duration: "30s"
   # commit_durability: journals every commit's acknowledgement per id under faults,
   # then holds storage to the EXACT acked set. A count check cannot do this: a lost
