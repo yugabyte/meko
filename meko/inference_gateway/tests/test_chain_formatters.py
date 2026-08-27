@@ -27,6 +27,8 @@ in milliseconds.
 from __future__ import annotations
 
 from inference_gateway.chain import (
+    CONV_SUMMARY_MAX_TURNS,
+    _conversation_hits_to_bullets,
     _format_knowledge_context,
     _format_memory_context,
     _is_trivial_query,
@@ -412,3 +414,55 @@ def test_kb_hits_preserve_indexer_duplicates() -> None:
     }
     rendered = _format_knowledge_context(payload)
     assert rendered.count("duplicate body") == 3
+
+
+# --------------------------------------------------------------------------- #
+# _conversation_hits_to_bullets — used only on the blended path (conversation
+# + memory/KB matched together), see run_chat_turn
+# --------------------------------------------------------------------------- #
+
+def test_conversation_hits_empty_returns_empty_string() -> None:
+    assert _conversation_hits_to_bullets([]) == ""
+
+
+def test_conversation_hits_render_content_as_bullets() -> None:
+    turns = [{"content": "first turn"}, {"content": "second turn"}]
+    rendered = _conversation_hits_to_bullets(turns)
+    assert "- first turn" in rendered
+    assert "- second turn" in rendered
+
+
+def test_conversation_hits_sorted_by_distance_when_present() -> None:
+    """Mirrors test_kb_hits_sorted_by_distance_asc: closest match first,
+    not insertion order — these come from `hits` (the matched chunks),
+    unlike a plain `thread` where no distance is available."""
+    turns = [
+        {"content": "Far", "distance": 1.10},
+        {"content": "Closest", "distance": 0.05},
+        {"content": "Middle", "distance": 0.50},
+    ]
+    rendered = _conversation_hits_to_bullets(turns)
+    assert rendered.index("Closest") < rendered.index("Middle")
+    assert rendered.index("Middle") < rendered.index("Far")
+
+
+def test_conversation_hits_without_distance_keep_given_order() -> None:
+    """A plain `thread` (no `distance` field) isn't a matched-chunk list —
+    keep it oldest -> newest as given, don't invent an ordering."""
+    turns = [{"content": "oldest"}, {"content": "middle"}, {"content": "newest"}]
+    rendered = _conversation_hits_to_bullets(turns)
+    assert rendered.index("oldest") < rendered.index("middle") < rendered.index("newest")
+
+
+def test_conversation_hits_capped_at_max_turns_closest_first() -> None:
+    """Regression: capping a long list must keep the CLOSEST turns, not
+    blindly the first N — a long thread's oldest turns can be entirely
+    unrelated to what actually matched."""
+    turns = [
+        {"content": f"turn {i}", "distance": float(i)}
+        for i in range(CONV_SUMMARY_MAX_TURNS + 5)
+    ]
+    rendered = _conversation_hits_to_bullets(turns)
+    assert rendered.count("- turn") == CONV_SUMMARY_MAX_TURNS
+    assert "turn 0" in rendered
+    assert f"turn {CONV_SUMMARY_MAX_TURNS}" not in rendered

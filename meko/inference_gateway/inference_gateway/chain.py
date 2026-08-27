@@ -241,13 +241,17 @@ def _is_trivial_query(message: str) -> bool:
 
 SYSTEM_TEMPLATE = """You are the Meko playground assistant. Be concise and helpful.
 
-Ground your answer in the memories and knowledge below when relevant;
-ignore them when they don't apply.
+Ground your answer in the memories, knowledge, and prior conversation below
+when relevant; ignore them when they don't apply.
 
 Sources — when they conflict, the KB wins:
   - KB = user-curated documents; authoritative on whatever it covers.
   - Memories = user intent/preferences/context; use to tailor the
     answer, not to override KB facts.
+  - Conversation = prior turns from this shared workspace (not necessarily
+    this user) that also matched this query; useful for continuity, but
+    treated with the same caution as memories — the KB still wins on
+    conflict.
 
 Response budget: ~{max_tokens} tokens (~{max_chars} chars). Prefer a
 complete brief answer to a sprawling one that gets cut off.
@@ -257,6 +261,9 @@ Memories (from `memory_search`):
 
 Knowledge (from `knowledgebase_search`):
 {kb_context}
+
+Prior conversation (from `context_search`):
+{conversation_context}
 """
 
 
@@ -579,6 +586,8 @@ async def run_chat_turn(
     # the skip explicitly so the UI shows it.
     memory_hits: List[MemoryHit] = []
     kb_hits: List[KbHit] = []
+    conversation_context: str = ""
+    conversation_provenance: Optional[Dict[str, Any]] = None
     # Did the user reject the previous cache answer? Either via the UI button
     # (bypass_conversation_cache) or by typing dissatisfaction on the turn right
     # after a cache hit. On a reject we bypass the conversation cache and answer
@@ -652,7 +661,15 @@ async def run_chat_turn(
             )
             memory_hits = []
 
-        if conv_result:
+        if conv_result and not kb_hits and not memory_hits:
+            # Conversation is the ONLY signal this turn matched — take the
+            # cheap path: summarize with the small model and skip the main
+            # LLM call entirely, same contract a legacy conversation-cache
+            # hit always had. This is safe ONLY when nothing else matched;
+            # once memory or KB also returned hits (the unified path can
+            # return all three together), unconditionally short-circuiting
+            # here would silently discard them — see the `else` branch
+            # below for that case instead of returning early.
             hits = conv_result.get("hits") or []
             # Summarize the WHOLE matched conversation (oldest→newest) so later
             # turns supersede earlier ones; fall back to the matched chunks if
@@ -674,10 +691,18 @@ async def run_chat_turn(
                     tool_args={"summary_model": summary_model, "conversation_id": source_conv_id},
                 )
             )
-            steps.append(ProcessingStep("memory_search", 0, "skipped", "conversation cache hit"))
-            steps.append(ProcessingStep("knowledgebase_search", 0, "skipped", "conversation cache hit"))
+            # No memory_search/knowledgebase_search "skipped" steps here:
+            # this branch is only reachable via the unified path (legacy
+            # _search_knowledge never produces a conv_result — see its own
+            # docstring), and _search_context already recorded both as real
+            # "ok, 0 hits" steps above. Appending "skipped" duplicates here
+            # double-counted the DB-call chip and its duration in the UI's
+            # decision-trace timeline.
             steps.append(
-                ProcessingStep("llm_invoke", 0, "skipped", "answered from conversation history (small-model summary)")
+                ProcessingStep(
+                    "llm_invoke", 0, "skipped",
+                    "answered from conversation history (small-model summary)",
+                )
             )
             # Provenance + observability: closest chunk for the primary deep-link,
             # the summarized turns, and the summary model.
@@ -724,6 +749,37 @@ async def run_chat_turn(
                 kb_hits=(),
                 processing_steps=tuple(steps),
             )
+        elif conv_result:
+            # Memory or KB also matched — fold the conversation hit into
+            # context instead of exclusively answering from it (the P1 this
+            # fixes: a stale/narrow cache hit must not hide a KB document or
+            # memory that supersedes it). No separate summarization call
+            # here; like memory/KB, the raw turns are rendered as bullets and
+            # the main LLM call below reads them directly.
+            hits = conv_result.get("hits") or []
+            turns = conv_result.get("thread") or hits
+            if len(turns) > CONV_SUMMARY_MAX_TURNS and hits:
+                # The oldest CONV_SUMMARY_MAX_TURNS of a long thread can miss
+                # the turns that actually matched — `hits` are the matched
+                # chunks themselves (and carry `distance`), not blindly the
+                # oldest ones.
+                turns = hits
+            conversation_context = _conversation_hits_to_bullets(turns)
+            top = hits[0] if hits else (turns[0] if turns else {})
+            # Distinct from the cheap-path `answered_from_cache` below:
+            # this turn was NOT answered from the cache — the main LLM
+            # blended this alongside memory/KB — but conversation_chunks
+            # still needs to land in the trace metadata for the "Reused
+            # prior conversation" deep-links to render (api_server keys
+            # that purely off conversation_chunks' presence, not on which
+            # `answered_from` tag accompanies it).
+            conversation_provenance = {
+                "conversation_id": top.get("conversation_id"),
+                "message_id": top.get("message_id"),
+                "distance": top.get("distance"),
+                "chunks": turns,
+                "blended": True,
+            }
 
         # 2b. Legacy path only: no conversation hit → KB chunks are already in
         #     hand from the call above; run memory search separately to
@@ -773,6 +829,7 @@ async def run_chat_turn(
             content=SYSTEM_TEMPLATE.format(
                 memory_context=memory_context or "(none yet)",
                 kb_context=kb_context or "(none yet)",
+                conversation_context=conversation_context or "(none yet)",
                 max_tokens=cfg.llm_max_tokens,
                 max_chars=cfg.llm_max_tokens * 4,
             )
@@ -858,6 +915,7 @@ async def run_chat_turn(
             # reuse, which is now the server's default (per-datapack
             # opt-out) rather than something this caller has to request.
             rejected_cache=bypass,  # full re-answer after a rejected cache hit
+            answered_from_cache=conversation_provenance,  # set only on the blended path
         )
         logger.debug(
             "run_chat_turn: persisted turn session=%s conversation_id=%s "
@@ -1080,7 +1138,7 @@ async def _search_knowledge(
 
     `knowledgebase_search` is pure KB search now — conversation-history
     search moved out to the standalone `conversation_search` tool (and is
-    orchestrated by `_search_contextual_prominence` for the unified path).
+    orchestrated by `_search_context` for the unified path).
     This legacy helper never gets a conversation hit from the MCP call
     itself, so `conv_result` is always None here; the second element of the
     return tuple only still exists so `run_chat_turn`'s conversation-hit
@@ -1191,22 +1249,29 @@ async def _search_context(
 ) -> Tuple[List[KbHit], List[MemoryHit], Optional[Dict[str, Any]]]:
     """Run the MCP server's unified `context_search` tool (formerly
     `contextual_prominence_search`) — one call covering the conversation
-    cache, memory, and the knowledgebase — and return
+    cache, memory, and the knowledgebase in parallel — and return
     `(kb_hits, memory_hits, conv_result)`.
 
-    `conv_result` uses the exact `{"hits", "thread"}` contract `_search_knowledge`
-    returns on a conversation-cache hit, so `run_chat_turn`'s conversation-hit
-    branch (summarize + skip memory/KB + early return) works unchanged
-    regardless of which retrieval path produced it. Each hit/turn carries a
-    single `content` field (not separate `question`/`answer` keys — the
-    server chunks/stores a turn's Q+A combined).
+    The response is keyed by source (`results.knowledge_base` / `.memory` /
+    `.conversation`, each independently present, `[]`/`{}`, or `null`), not a
+    single winning `source` string — every source that cleared its own
+    relevance floor comes back, so `conv_result`, `kb_hits`, and `memory_hits`
+    can all be non-empty together. `run_chat_turn` only takes its cheap
+    conversation-only shortcut (summarize + skip memory/KB + early return)
+    when memory and KB are both empty; otherwise it blends all three into one
+    main-LLM call. `conv_result`'s `{"hits", "thread"}` shape is unrelated to
+    `_search_knowledge`, which never produces a conv_result at all now (see
+    its own docstring) — this is the only source of one. Each hit/turn
+    carries a single `content` field (not separate `question`/`answer` keys
+    — the server chunks/stores a turn's Q+A combined).
 
     Synthesizes `conversation_search` / `memory_search` / `knowledgebase_search`
-    ProcessingStep entries — the same names the two-call path records — based
-    on which tier the tool actually used (`source` in its response), plus one
-    `context_search` step carrying the tool's own token-savings figure. This
-    keeps the Agent Reasoning panel's per-stage timeline shape stable
-    whichever retrieval path is active.
+    ProcessingStep entries — the same names the two-call path records, always
+    reflecting what was actually queried this call (never "skipped", since
+    auto mode queries all three) — plus one `context_search` step carrying
+    the tool's own token-savings figure. This keeps the Agent Reasoning
+    panel's per-stage timeline shape stable whichever retrieval path is
+    active.
 
     Best-effort: tool-missing / no-datapack_id / MCP failure / a malformed
     response all return `([], [], None)` — the same empty-hits fallback
@@ -1267,9 +1332,8 @@ async def _search_context(
         return [], [], None
 
     parsed = _parse_json(raw)
-    # TEMP DEBUG: raw unified-search response. The unified path skips
-    # _search_memories, so this is where memory results show up when context
-    # search is ON. Unconditional so it always prints on this path.
+    # TEMP DEBUG: dump the raw context_search response so we can see the
+    # actual results/token_savings shape.
     # logger.info("context_search RAW (agent_id=%s): %s", agent_id, _truncate(str(parsed), 3000))
     if not isinstance(parsed, dict) or parsed.get("error"):
         detail = parsed.get("error") if isinstance(parsed, dict) else "malformed response"
@@ -1285,37 +1349,71 @@ async def _search_context(
         return [], [], None
 
     duration_ms = int((time.monotonic() - start) * 1000)
-    source = parsed.get("source")
-    savings = parsed.get("token_savings") or {}
-    tokens_saved = savings.get("tokens_saved", 0)
 
-    if source == "conversation":
-        hits = parsed.get("conversation_hits") or []
-        thread = parsed.get("thread")
+    # New context_search response format (parallel rewrite):
+    #   {
+    #     "results": {
+    #       "knowledge_base": [...] | null,
+    #       "memory": [...] | null,
+    #       "conversation": {"hits": [...], "thread": [...]} | null
+    #     },
+    #     "token_savings": {
+    #       "total_tokens": ...,
+    #       "knowledge_base": {"tokens_sent": ..., "tokens_saved": ...},  # only when non-empty
+    #       "memory": {...},
+    #       "conversation": {...},
+    #     }
+    #   }
+    results_field = parsed.get("results")
+    savings = parsed.get("token_savings") or {}
+    total_tokens_saved = sum(
+        v.get("tokens_saved", 0)
+        for v in savings.values()
+        if isinstance(v, dict)
+    )
+
+    if not isinstance(results_field, dict):
+        # Unexpected shape — log and return empty.
+        logger.warning(
+            "context_search: unexpected results type %s — expected dict",
+            type(results_field).__name__,
+        )
         if steps is not None:
-            top_d = hits[0].get("distance") if hits else None
             steps.append(
                 ProcessingStep(
-                    "conversation_search", duration_ms, "ok",
-                    f"{len(hits)} chunk(s)" + (f", top_distance={top_d}" if hits else "")
-                    + " (via context_search)",
+                    "context_search", duration_ms, "error",
+                    f"unexpected results type: {type(results_field).__name__}",
                     query=query, tool_args=tool_args,
                 )
             )
-            steps.append(
-                ProcessingStep(
-                    "context_search", 0, "ok",
-                    f"source=conversation tokens_saved={tokens_saved}",
-                    tool_args=tool_args,
-                )
-            )
-        return [], [], {"hits": hits, "thread": thread if isinstance(thread, list) else []}
+        return [], [], None
 
-    results = parsed.get("results") or []
-    kb_results = [r for r in results if isinstance(r, dict) and r.get("source") == "knowledge_base"]
-    mem_results = [r for r in results if isinstance(r, dict) and r.get("source") == "memory"]
-    kb_hits = _extract_kb_hits({"results": kb_results})
+    # Conversation tier.
+    conv_data = results_field.get("conversation")
+    conv_result: Optional[Dict[str, Any]] = None
+    if isinstance(conv_data, dict):
+        hits = conv_data.get("hits") or []
+        thread = conv_data.get("thread") or []
+        if hits or thread:
+            conv_result = {"hits": hits, "thread": thread if isinstance(thread, list) else []}
+            if steps is not None:
+                top_d = hits[0].get("distance") if hits else None
+                steps.append(
+                    ProcessingStep(
+                        "conversation_search", duration_ms, "ok",
+                        f"{len(hits)} chunk(s)" + (f", top_distance={top_d}" if hits else "")
+                        + " (via context_search)",
+                        query=query, tool_args=tool_args,
+                    )
+                )
+
+    # Memory and KB tiers.
+    mem_results = results_field.get("memory") or []
+    kb_results_raw = results_field.get("knowledge_base") or []
+    mem_results = mem_results if isinstance(mem_results, list) else []
+    kb_results_raw = kb_results_raw if isinstance(kb_results_raw, list) else []
     memory_hits = _extract_memory_hits({"results": mem_results})
+    kb_hits = _extract_kb_hits({"results": kb_results_raw})
 
     for h in memory_hits:
         logger.debug(
@@ -1332,6 +1430,13 @@ async def _search_context(
         )
 
     if steps is not None:
+        if conv_result is None:
+            steps.append(
+                ProcessingStep(
+                    "conversation_search", 0, "skipped",
+                    "no conversation hit (via context_search)",
+                )
+            )
         steps.append(
             ProcessingStep(
                 "memory_search", duration_ms, "ok",
@@ -1339,30 +1444,23 @@ async def _search_context(
                 query=query, tool_args=tool_args,
             )
         )
-        if source == "memory":
-            steps.append(
-                ProcessingStep(
-                    "knowledgebase_search", 0, "skipped",
-                    "context_search: memory sufficient",
-                )
+        steps.append(
+            ProcessingStep(
+                "knowledgebase_search", duration_ms, "ok",
+                f"{len(kb_hits)} hit{'' if len(kb_hits) == 1 else 's'} (via context_search)",
+                query=query, tool_args=tool_args,
             )
-        else:  # "knowledge_base+memory"
-            steps.append(
-                ProcessingStep(
-                    "knowledgebase_search", duration_ms, "ok",
-                    f"{len(kb_hits)} hit{'' if len(kb_hits) == 1 else 's'} (via context_search)",
-                    query=query, tool_args=tool_args,
-                )
-            )
+        )
         steps.append(
             ProcessingStep(
                 "context_search", 0, "ok",
-                f"source={source} tokens_saved={tokens_saved}",
+                f"mem={len(memory_hits)} kb={len(kb_hits)} "
+                f"conv={'yes' if conv_result else 'no'} tokens_saved={total_tokens_saved}",
                 tool_args=tool_args,
             )
         )
 
-    return kb_hits, memory_hits, None
+    return kb_hits, memory_hits, conv_result
 
 
 async def _add_message(
@@ -1386,8 +1484,10 @@ async def _add_message(
     content is redundant with what's already indexed (a cache-hit summary),
     so it doesn't pollute conversation_history_search with a near-duplicate
     entry — it does not affect whether the turn is stored in Langfuse.
-    `answered_from_cache` (set on a cache hit) tags the trace with provenance
-    so observability can show which prior conversation answered it.
+    `answered_from_cache` (set on a cache hit, or when a conversation match
+    was blended into a normal LLM answer — pass `{"blended": True, ...}`)
+    tags the trace with provenance so observability can show which prior
+    conversation contributed to it.
     `rejected_cache` marks a full re-answer the user requested after rejecting
     a prior cache-hit summary — tagged in the trace so dashboards can tell the
     cache was overridden.
@@ -1433,8 +1533,9 @@ async def _add_message(
             for c in chunks[:CONV_TRACE_MAX_CHUNKS]
             if isinstance(c, dict)
         ]
+        blended = answered_from_cache.get("blended")
         meta_payload = {
-            "answered_from": "conversation_cache",
+            "answered_from": "conversation_context" if blended else "conversation_cache",
             "source_conversation_id": answered_from_cache.get("conversation_id"),
             "source_message_id": answered_from_cache.get("message_id"),
             "match_distance": answered_from_cache.get("distance"),
@@ -1704,6 +1805,29 @@ def _format_relation_triple(item: Any) -> str:
     if not (source and target and relation):
         return ""
     return f"{source} {relation} {target}"
+
+
+def _conversation_hits_to_bullets(turns: List[Dict[str, Any]]) -> str:
+    """Render prior-conversation turns as bulleted text for the system
+    prompt — used only when memory or KB also matched this turn, so a
+    conversation hit is blended into the main LLM call instead of
+    exclusively answering from it (see run_chat_turn). Capped the same as
+    _summarize_conversation_hits, but by closeness (ascending `distance`)
+    rather than blindly the first N — the caller already prefers the
+    actually-matched `hits` over a long `thread`, but sort here too since
+    `hits` itself can still exceed the cap. Turns with no `distance` (a
+    thread that's already short enough to use as-is) keep their given
+    order, appended after any that do."""
+    dicts = [t for t in turns if isinstance(t, dict)]
+    scored = [t for t in dicts if isinstance(t.get("distance"), (int, float))]
+    unscored = [t for t in dicts if not isinstance(t.get("distance"), (int, float))]
+    ordered = sorted(scored, key=lambda t: t["distance"]) + unscored
+    lines: List[str] = []
+    for h in ordered[:CONV_SUMMARY_MAX_TURNS]:
+        content = h.get("content", "")
+        if content:
+            lines.append(f"- {content}")
+    return "\n".join(lines)
 
 
 def _memory_hits_to_bullets(hits: List[MemoryHit]) -> str:

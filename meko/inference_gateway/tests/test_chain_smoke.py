@@ -276,7 +276,7 @@ async def test_search_failure_does_not_break_turn() -> None:
     assert out.assistant_text == "ok"
     # System message should still render with empty placeholders for both.
     sys_content = llm.calls[0][0].content
-    assert sys_content.count("(none yet)") == 2  # memory + kb
+    assert sys_content.count("(none yet)") == 3  # memory + kb + conversation
 
 
 async def test_unwraps_langchain_mcp_content_block_format() -> None:
@@ -384,7 +384,7 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
 
     # System prompt rendered with empty placeholders for both retrieval blocks.
     sys_content = llm.calls[0][0].content
-    assert sys_content.count("(none yet)") == 2  # memory + kb
+    assert sys_content.count("(none yet)") == 3  # memory + kb + conversation
 
     # The returned ChatTurnResult carries empty context for the UI's Agent
     # Reasoning panel — which self-hides when both are empty.
@@ -620,7 +620,10 @@ class TestContextualProminenceSearchIntegration:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
+        unified = _mock_tool({
+            "results": {"conversation": None, "memory": [], "knowledge_base": []},
+            "token_savings": {"total_tokens": 0},
+        })
         addmsg = _mock_tool({"status": "accepted"})
 
         tools = {
@@ -641,20 +644,30 @@ class TestContextualProminenceSearchIntegration:
         kb_search.ainvoke.assert_awaited_once()
         unified.ainvoke.assert_not_awaited()
 
-    async def test_conversation_tier_short_circuits_like_legacy_hit(self) -> None:
-        """source=conversation: summarizes the thread, never calls memory_search
-        or knowledgebase_search — same early-return contract as a legacy
-        knowledgebase_search conversation-cache hit."""
+    async def test_conversation_only_hit_short_circuits(self) -> None:
+        """Conversation matched, memory/KB did not: summarizes the thread,
+        never calls memory_search or knowledgebase_search, skips the main
+        LLM — the cheap path is safe here because nothing else would be
+        discarded by taking it."""
         cfg = _make_cfg(contextual_prominence_search_enabled=True)
         llm = _FakeLLM(["unused — should not be called"])
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
         unified = _mock_tool({
-            "source": "conversation",
-            "conversation_hits": [{"content": "q1 a1", "conversation_id": "old-conv", "message_id": "m1", "distance": 0.1}],
-            "thread": [{"content": "q1 a1"}],
-            "token_savings": {"tokens_sent": 1000, "tokens_if_raw": 10000, "tokens_saved": 9000},
+            "results": {
+                "conversation": {
+                    "hits": [{"content": "q1 a1", "conversation_id": "old-conv",
+                              "message_id": "m1", "distance": 0.1}],
+                    "thread": [{"content": "q1 a1"}],
+                },
+                "memory": [],
+                "knowledge_base": [],
+            },
+            "token_savings": {
+                "total_tokens": 10000,
+                "conversation": {"tokens_sent": 1000, "tokens_saved": 9000},
+            },
         })
         addmsg = _mock_tool({"status": "accepted", "message_id": "m2"})
 
@@ -687,20 +700,33 @@ class TestContextualProminenceSearchIntegration:
         assert "llm_invoke" in step_names
         llm_invoke_step = next(s for s in out.processing_steps if s.name == "llm_invoke")
         assert llm_invoke_step.status == "skipped"
+        # Regression: _search_context already records memory_search/
+        # knowledgebase_search as "ok, 0 hits" — run_chat_turn's cheap-path
+        # branch must not append a second "skipped" entry for either, or
+        # the UI's decision-trace timeline double-counts the DB-call chip
+        # and its duration for a turn that made one MCP call.
+        assert step_names.count("memory_search") == 1
+        assert step_names.count("knowledgebase_search") == 1
 
-    async def test_memory_tier_skips_knowledgebase_search(self) -> None:
-        """source=memory: memory_hits populated from the tagged results,
-        knowledgebase_search never called."""
+    async def test_memory_only_hit_never_calls_knowledgebase_search(self) -> None:
+        """Memory matched, KB queried but returned nothing: memory_hits
+        populated from `results.memory`, the separate `knowledgebase_search`
+        tool is never called (KB retrieval, when it happens, is inside the
+        one context_search call, not a second tool call)."""
         cfg = _make_cfg(contextual_prominence_search_enabled=True)
         llm = _FakeLLM(["answer from memory"])
         create = _mock_tool({"conversation_id": "c1"})
         kb_search = _mock_tool({"results": [{"chunk_text": "should not be used"}]})
         unified = _mock_tool({
-            "source": "memory",
-            "results": [
-                {"memory": "user prefers hiking", "score": 0.9, "source": "memory"},
-            ],
-            "token_savings": {"tokens_sent": 200, "tokens_if_raw": 10000, "tokens_saved": 9800},
+            "results": {
+                "conversation": None,
+                "memory": [{"memory": "user prefers hiking", "score": 0.9}],
+                "knowledge_base": [],
+            },
+            "token_savings": {
+                "total_tokens": 10000,
+                "memory": {"tokens_sent": 200, "tokens_saved": 9800},
+            },
         })
         addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
 
@@ -720,23 +746,34 @@ class TestContextualProminenceSearchIntegration:
         kb_search.ainvoke.assert_not_awaited()
         assert "user prefers hiking" in llm.calls[0][0].content  # memory_context
         step_names = {s.name: s for s in out.processing_steps}
-        assert step_names["knowledgebase_search"].status == "skipped"
+        # In auto mode context_search reports the KB tier "ok" with 0 hits
+        # here, not "skipped" — the gateway can't distinguish "searched,
+        # nothing relevant" from "not searched" from the response alone
+        # (knowledge_base is [] either way), so it reports the former.
+        assert step_names["knowledgebase_search"].status == "ok"
         assert step_names["memory_search"].status == "ok"
 
-    async def test_knowledge_base_plus_memory_tier_splits_by_source_tag(self) -> None:
-        """source=knowledge_base+memory: the pooled `results` list is split by
-        each item's `source` tag into kb_hits vs memory_hits."""
+    async def test_knowledge_base_and_memory_both_populate_context(self) -> None:
+        """KB and memory both matched (no conversation hit): both land in
+        the response, keyed separately — no more per-item `source` tag to
+        split a pooled list by."""
         cfg = _make_cfg(contextual_prominence_search_enabled=True)
         llm = _FakeLLM(["blended answer"])
         create = _mock_tool({"conversation_id": "c1"})
         unified = _mock_tool({
-            "source": "knowledge_base+memory",
-            "results": [
-                {"chunk_text": "Patagonia trek W circuit", "document_name": "europe.md",
-                 "distance": 0.1, "source": "knowledge_base"},
-                {"memory": "user prefers hiking", "score": 0.8, "source": "memory"},
-            ],
-            "token_savings": {"tokens_sent": 1200, "tokens_if_raw": 1200, "tokens_saved": 0},
+            "results": {
+                "conversation": None,
+                "knowledge_base": [
+                    {"chunk_text": "Patagonia trek W circuit", "document_name": "europe.md",
+                     "distance": 0.1},
+                ],
+                "memory": [{"memory": "user prefers hiking", "score": 0.8}],
+            },
+            "token_savings": {
+                "total_tokens": 1200,
+                "knowledge_base": {"tokens_sent": 1200, "tokens_saved": 0},
+                "memory": {"tokens_sent": 200, "tokens_saved": 1000},
+            },
         })
         addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
 
@@ -758,6 +795,77 @@ class TestContextualProminenceSearchIntegration:
         assert "Patagonia trek W circuit" in sys_content
         assert "user prefers hiking" in sys_content
 
+    async def test_conversation_hit_does_not_suppress_memory_or_kb(self) -> None:
+        """Regression for the P1 this fixes: context_search's parallel
+        redesign can return a conversation hit AND memory AND KB hits
+        together in one response. The old exclusive-early-return contract
+        would discard memory/KB the moment a conversation hit was present,
+        silently downgrading the answer to a possibly-stale cached summary.
+        All three must now survive, and the main LLM (not the small summary
+        model) must be the one that answers, with all three folded into its
+        system prompt."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["blended answer using all three sources"])
+        create = _mock_tool({"conversation_id": "c1"})
+        unified = _mock_tool({
+            "results": {
+                "conversation": {
+                    "hits": [{"content": "we discussed the auth flow last week",
+                              "conversation_id": "old-conv", "message_id": "m1", "distance": 0.05}],
+                    "thread": [{"content": "we discussed the auth flow last week"}],
+                },
+                "memory": [{"memory": "user prefers OAuth over API keys", "score": 0.9}],
+                "knowledge_base": [
+                    {"chunk_text": "Auth flow spec: use PKCE", "document_name": "auth.md",
+                     "distance": 0.1},
+                ],
+            },
+            "token_savings": {
+                "total_tokens": 800,
+                "conversation": {"tokens_sent": 1000, "tokens_saved": -200},
+                "memory": {"tokens_sent": 200, "tokens_saved": 600},
+                "knowledge_base": {"tokens_sent": 800, "tokens_saved": 0},
+            },
+        })
+        addmsg = _mock_tool({"status": "accepted", "message_id": "m2"})
+
+        tools = {
+            "conversation_create": create,
+            "context_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="what did we decide about the auth flow?",
+            datapack_id="dp-1",
+        )
+
+        # The main LLM answered — not the small conversation-summary model.
+        assert out.assistant_text == "blended answer using all three sources"
+        assert len(out.kb_hits) == 1
+        assert len(out.memory_hits) == 1
+        sys_content = llm.calls[0][0].content
+        assert "Auth flow spec: use PKCE" in sys_content
+        assert "user prefers OAuth over API keys" in sys_content
+        assert "we discussed the auth flow last week" in sys_content
+
+        step_names = {s.name: s for s in out.processing_steps}
+        assert "llm_invoke" in step_names
+        assert step_names["llm_invoke"].status == "ok"
+        assert "conversation_summarize" not in step_names
+
+        # Regression: the blended path still needs to tag conversation_add_message
+        # with conversation provenance, or api_server has nothing to key the
+        # "Reused prior conversation" decision-trace view off of — even though
+        # this turn wasn't answered FROM the cache (the main LLM answered).
+        addmsg_args = addmsg.ainvoke.call_args.args[0]
+        metadata = json.loads(addmsg_args["metadata"])
+        assert metadata["answered_from"] == "conversation_context"
+        assert metadata["source_conversation_id"] == "old-conv"
+        assert len(metadata["conversation_chunks"]) == 1
+
     async def test_bypass_forces_legacy_path_even_when_flag_enabled(self) -> None:
         """A rejected cache answer (bypass_conversation_cache=True) always uses
         the legacy two-call path — the unified tool has no skip_conversation
@@ -767,7 +875,10 @@ class TestContextualProminenceSearchIntegration:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
+        unified = _mock_tool({
+            "results": {"conversation": None, "memory": [], "knowledge_base": []},
+            "token_savings": {"total_tokens": 0},
+        })
         addmsg = _mock_tool({"status": "accepted"})
 
         tools = {
