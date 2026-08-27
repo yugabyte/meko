@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Info, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackNameDescriptionFields } from "@/features/datapacks/components/DatapackNameDescriptionFields";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
@@ -13,7 +15,12 @@ import { toast } from "@/hooks/use-toast";
 import { validateDatapackName } from "@/lib/datapackNameValidation";
 import { setCachedDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import type { CurrentUser } from "@/lib/api/mekoApi";
-import { getApiErrorMessage, getDatapack, updateDatapack } from "@/lib/api/mekoApi";
+import {
+  getApiErrorMessage,
+  getDatapack,
+  setConversationSearchOptOut,
+  updateDatapack,
+} from "@/lib/api/mekoApi";
 
 type Props = {
   datapackId: string;
@@ -27,6 +34,8 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
   const [description, setDescription] = useState("");
   const [initialName, setInitialName] = useState("");
   const [initialDescription, setInitialDescription] = useState("");
+  const [conversationSearchOptOut, setConversationSearchOptOutState] = useState(false);
+  const [initialConversationSearchOptOut, setInitialConversationSearchOptOut] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isDefaultDatapack = initialName === DEFAULT_ACCOUNT_DATAPACK_NAME;
@@ -40,10 +49,13 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
         if (cancelled) return;
         const n = dp.datapack_name ?? "";
         const d = dp.description ?? "";
+        const optedOut = dp.conversation_search_opt_out ?? false;
         setName(n);
         setDescription(d);
         setInitialName(n);
         setInitialDescription(d);
+        setConversationSearchOptOutState(optedOut);
+        setInitialConversationSearchOptOut(optedOut);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -81,6 +93,7 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
     const initialDescTrim = initialDescription.trim();
       const dirty =
       (!isDefaultDatapack && trimmedName !== initialName) || descTrim !== initialDescTrim;
+    const optOutDirty = conversationSearchOptOut !== initialConversationSearchOptOut;
     try {
       if (dirty) {
         await updateDatapack(datapackId, {
@@ -93,6 +106,14 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
           description: trimmedName !== initialName
             ? `Renamed to "${trimmedName}" successfully.`
             : "Description updated successfully.",
+        });
+      }
+      // Separate request: a different endpoint, gated owner-or-maintainer
+      // rather than the owner-only rename/description update above.
+      if (optOutDirty) {
+        await setConversationSearchOptOut(datapackId, conversationSearchOptOut, {});
+        toast({
+          title: conversationSearchOptOut ? "Conversation search disabled" : "Conversation search enabled",
         });
       }
       navigate(datapackDetailPath(datapackId), { replace: true });
@@ -155,6 +176,22 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
             nameInputId="datapack-edit-page-name"
             descriptionInputId="datapack-edit-page-description"
           />
+
+          <div className="flex items-start justify-between gap-4 rounded-xl border border-border bg-card/40 p-6 shadow-sm">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="datapack-edit-page-conversation-search">Conversation search</Label>
+              <p className="text-xs text-muted-foreground">
+                Cache substantive conversation turns so future searches can reuse them. Turning this
+                off only stops future turns from being indexed — turns already cached are unaffected.
+              </p>
+            </div>
+            <Switch
+              id="datapack-edit-page-conversation-search"
+              checked={!conversationSearchOptOut}
+              onCheckedChange={(checked) => setConversationSearchOptOutState(!checked)}
+              disabled={submitting || loading}
+            />
+          </div>
 
           {error ? (
             <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">

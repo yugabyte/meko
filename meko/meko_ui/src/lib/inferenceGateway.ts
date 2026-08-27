@@ -127,8 +127,7 @@ export type ProcessingStep = {
 
 /** One prior-conversation excerpt that fed a conversation_search hit. */
 export type ConversationChunk = {
-  question?: string;
-  answer?: string;
+  content?: string;
   distance?: number;
   conversation_id?: string;
   message_id?: string;

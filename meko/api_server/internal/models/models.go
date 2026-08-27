@@ -39,6 +39,9 @@ type Datapack struct {
 	LearningsCount int `json:"learnings_count"`
 	// CollectiveMemoryCount = memories promoted into the shared KB.
 	CollectiveMemoryCount int `json:"collective_memory_count"`
+	// ConversationSearchOptOut mirrors meko_system.conversation_search_opt_outs
+	// (presence of a row for this datapack). Populated by DatapackHandler.Describe.
+	ConversationSearchOptOut bool `json:"conversation_search_opt_out"`
 }
 
 // Agent represents a user-scoped agent. Backed by meko_system.agents.

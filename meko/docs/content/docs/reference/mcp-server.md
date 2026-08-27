@@ -90,7 +90,7 @@ Authorization comes from the authenticated user and their datapack grants.
 | `datapack_create` | Provision a new datapack.<br>Use this to set up a new isolated Meko environment.<br>Typical inputs: `name, conversation_id, datapack_id` |
 | `datapack_describe` | Return datapack details and optional status.<br>Use this to inspect an existing datapack.<br>Typical inputs: `datapack_id, include_status, conversation_id` |
 | `datapack_list` | List datapacks visible to the current user.<br>Use this to see all workspaces/environments.<br>Typical inputs: `conversation_id, datapack_id` |
-| `datapack_update` | Update a datapack's name and/or description.<br>At least one of `name` or `description` must be provided; clearing a description with an empty string isn't supported.<br>Typical inputs: `datapack_id, name, description, conversation_id` |
+| `datapack_update` | Update a datapack's name, description, and/or conversation-search opt-out.<br>At least one of `name`, `description`, or `conversation_search_opt_out` must be provided; clearing a description with an empty string isn't supported. Conversation search is on by default — opting out (restricted to the datapack's owner or a maintainer) is also available from the portal.<br>Typical inputs: `datapack_id, name, description, conversation_search_opt_out, conversation_id` |
 | `datapack_delete` | Permanently delete a datapack.<br>This operation is irreversible and requires an explicit `datapack_id`.<br>Typical inputs: `datapack_id, conversation_id` |
 
 ### Artifact tools

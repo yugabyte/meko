@@ -96,6 +96,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	kbRepo := repository.NewKnowledgeBaseRepo(cfg.SystemDB, cfg.DB)
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
 	freeTierRepo := repository.NewFreeTierUsageRepo(cfg.SystemDB)
+	convSearchOptOutRepo := repository.NewConversationSearchOptOutRepo(cfg.SystemDB)
 	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
 	memoriesRepo := repository.NewMemoriesRepo(
@@ -159,7 +160,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("ses invite emails disabled (set SES_FROM_ADDRESS to enable)")
 	}
 
-	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc, freeTierRepo)
+	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc, freeTierRepo, convSearchOptOutRepo)
 
 	mcpPATRepo := repository.NewMCPPATRepo(cfg.SystemDB)
 	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.SystemDB)
@@ -836,6 +837,18 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	dpDirect.GET("/datapacks/:datapack_id", dpH.Describe,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
+	// Conversation-search opt-out: owner or maintainer only (not viewer/
+	// contributor) — deliberately NOT under RequireDatapackOwnership (which
+	// would exclude maintainers), same reasoning as the share/invite routes
+	// above. On dpDirect (not the JWT-only group `g`) so meko-mcp-server's
+	// PAT-authenticated datapack_update tool can reach it too, same as
+	// Describe.
+	dpDirect.PATCH("/datapacks/:datapack_id/conversation-search-opt-out", dpH.SetConversationSearchOptOut,
+		auth.RequireScope(auth.ScopeWrite),
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
 
 	// Connect / MCP details: any member with datapack access (owner or

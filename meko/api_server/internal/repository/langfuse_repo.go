@@ -330,8 +330,7 @@ type MessageDecisionTrace struct {
 // ConversationChunk is one prior-conversation excerpt that fed a cache-hit
 // summary. conversation_id + user_id let the UI link back to the source.
 type ConversationChunk struct {
-	Question       string   `json:"question,omitempty"`
-	Answer         string   `json:"answer,omitempty"`
+	Content        string   `json:"content,omitempty"`
 	Distance       *float64 `json:"distance,omitempty"`
 	ConversationID string   `json:"conversation_id,omitempty"`
 	MessageID      string   `json:"message_id,omitempty"`

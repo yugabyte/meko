@@ -144,7 +144,7 @@ async def test_full_turn_wires_everything() -> None:
             "agent_id": "agent",
             "input": "plan a trip",
             "output": "hello back",
-            "index_for_search": True,
+            "skip_search_embed": False,
             "datapack_id": "dp-1",
         }
     )
@@ -609,7 +609,7 @@ async def test_missing_conversation_create_raises_clearly() -> None:
 
 class TestContextualProminenceSearchIntegration:
     """cfg.contextual_prominence_search_enabled (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH)
-    routes retrieval through one `contextual_prominence_search` MCP call instead of
+    routes retrieval through one `context_search` MCP call instead of
     separate `memory_search` + `knowledgebase_search` calls."""
 
     async def test_flag_off_never_calls_unified_tool(self) -> None:
@@ -627,7 +627,7 @@ class TestContextualProminenceSearchIntegration:
             "conversation_create": create,
             "memory_search": mem_search,
             "knowledgebase_search": kb_search,
-            "contextual_prominence_search": unified,
+            "context_search": unified,
             "conversation_add_message": addmsg,
         }
         store = InMemorySessionStore()
@@ -652,8 +652,8 @@ class TestContextualProminenceSearchIntegration:
         kb_search = _mock_tool({"results": []})
         unified = _mock_tool({
             "source": "conversation",
-            "conversation_hits": [{"question": "q1", "answer": "a1", "conversation_id": "old-conv", "message_id": "m1", "distance": 0.1}],
-            "thread": [{"question": "q1", "answer": "a1"}],
+            "conversation_hits": [{"content": "q1 a1", "conversation_id": "old-conv", "message_id": "m1", "distance": 0.1}],
+            "thread": [{"content": "q1 a1"}],
             "token_savings": {"tokens_sent": 1000, "tokens_if_raw": 10000, "tokens_saved": 9000},
         })
         addmsg = _mock_tool({"status": "accepted", "message_id": "m2"})
@@ -662,7 +662,7 @@ class TestContextualProminenceSearchIntegration:
             "conversation_create": create,
             "memory_search": mem_search,
             "knowledgebase_search": kb_search,
-            "contextual_prominence_search": unified,
+            "context_search": unified,
             "conversation_add_message": addmsg,
         }
         store = InMemorySessionStore()
@@ -683,7 +683,7 @@ class TestContextualProminenceSearchIntegration:
 
         step_names = [s.name for s in out.processing_steps]
         assert "conversation_search" in step_names
-        assert "contextual_prominence_search" in step_names
+        assert "context_search" in step_names
         assert "llm_invoke" in step_names
         llm_invoke_step = next(s for s in out.processing_steps if s.name == "llm_invoke")
         assert llm_invoke_step.status == "skipped"
@@ -707,7 +707,7 @@ class TestContextualProminenceSearchIntegration:
         tools = {
             "conversation_create": create,
             "knowledgebase_search": kb_search,
-            "contextual_prominence_search": unified,
+            "context_search": unified,
             "conversation_add_message": addmsg,
         }
         store = InMemorySessionStore()
@@ -742,7 +742,7 @@ class TestContextualProminenceSearchIntegration:
 
         tools = {
             "conversation_create": create,
-            "contextual_prominence_search": unified,
+            "context_search": unified,
             "conversation_add_message": addmsg,
         }
         store = InMemorySessionStore()
@@ -774,7 +774,7 @@ class TestContextualProminenceSearchIntegration:
             "conversation_create": create,
             "memory_search": mem_search,
             "knowledgebase_search": kb_search,
-            "contextual_prominence_search": unified,
+            "context_search": unified,
             "conversation_add_message": addmsg,
         }
         store = InMemorySessionStore()
@@ -801,7 +801,7 @@ class TestContextualProminenceSearchIntegration:
         tools = {
             "conversation_create": create,
             "conversation_add_message": addmsg,
-            # No "contextual_prominence_search", no "memory_search"/"knowledgebase_search".
+            # No "context_search", no "memory_search"/"knowledgebase_search".
         }
         store = InMemorySessionStore()
 

@@ -204,14 +204,9 @@ export function DecisionTraceStep({
                       key={c.message_id ?? i}
                       className="rounded border border-border/40 bg-background/40 p-2 space-y-1"
                     >
-                      {c.question ? (
-                        <div className="text-[11px] font-medium text-foreground/90">
-                          Q: {c.question}
-                        </div>
-                      ) : null}
-                      {c.answer ? (
+                      {c.content ? (
                         <div className="line-clamp-3 whitespace-pre-wrap text-[11px] text-muted-foreground">
-                          {c.answer}
+                          {c.content}
                         </div>
                       ) : null}
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground">

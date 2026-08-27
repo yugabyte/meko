@@ -256,3 +256,42 @@ func TestRequireAuth_AccountLookupError(t *testing.T) {
 		t.Errorf("expected 401, got %d", resp.StatusCode)
 	}
 }
+
+// setupOwnerOrMaintainerTest wires RequireDatapackOwnerOrMaintainerGrant
+// directly behind a handler that seeds ContextKeyDatapack with the given
+// grant, standing in for RequireDatapackAccess (which this middleware reads
+// but does not itself invoke). Used to test the owner/maintainer-vs-viewer/
+// contributor boundary the conversation-search opt-out route relies on.
+func setupOwnerOrMaintainerTest(grant string) *echo.Echo {
+	e := echo.New()
+	e.GET("/protected", func(c echo.Context) error {
+		c.Set(auth.ContextKeyDatapack, &models.Datapack{ID: "dp-1", Grant: grant})
+		return auth.RequireDatapackOwnerOrMaintainerGrant()(func(c echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"ok": "true"})
+		})(c)
+	})
+	return e
+}
+
+func TestRequireDatapackOwnerOrMaintainerGrant(t *testing.T) {
+	cases := []struct {
+		grant      string
+		wantStatus int
+	}{
+		{grant: models.GrantOwner, wantStatus: http.StatusOK},
+		{grant: string(models.GrantMaintainer), wantStatus: http.StatusOK},
+		{grant: string(models.GrantViewer), wantStatus: http.StatusForbidden},
+		{grant: string(models.GrantContributor), wantStatus: http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.grant, func(t *testing.T) {
+			e := setupOwnerOrMaintainerTest(tc.grant)
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("grant=%q: expected status %d, got %d", tc.grant, tc.wantStatus, rec.Code)
+			}
+		})
+	}
+}

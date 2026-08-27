@@ -43,6 +43,7 @@ func cleanupDatapacks(t *testing.T, db *sql.DB) {
 	t.Helper()
 	stmts := []string{
 		`DELETE FROM meko_system.datapack_invites`,
+		`DELETE FROM meko_system.conversation_search_opt_outs`,
 		`DELETE FROM meko_system.knowledge_bases`,
 		`DELETE FROM meko_system.agent_access_permissions`,
 		`DELETE FROM meko_system.agent_access`,
@@ -210,6 +211,73 @@ func TestDatapack_Update(t *testing.T) {
 			"expected status %d, got %d",
 			http.StatusOK, resp.StatusCode,
 		)
+	}
+}
+
+func TestDatapack_ConversationSearchOptOut(t *testing.T) {
+	srv, db := setupTestServer(t)
+	defer srv.Close()
+	defer db.Close()
+
+	createDatapack(t, srv.URL, "test-dp-opt-out")
+
+	// Default: not opted out.
+	descResp, err := http.Get(srv.URL + "/api/v1/datapacks/test-dp-opt-out")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	var descResult handlers.APIResponse
+	if decErr := json.NewDecoder(descResp.Body).Decode(&descResult); decErr != nil {
+		t.Fatal(decErr)
+	}
+	descResp.Body.Close()
+	dataMap, ok := descResult.Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected data to be a map")
+	}
+	if optedOut, _ := dataMap["conversation_search_opt_out"].(bool); optedOut {
+		t.Error("expected conversation_search_opt_out=false by default")
+	}
+
+	// Opt out.
+	patchBody, err := json.Marshal(map[string]bool{"opted_out": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(
+		http.MethodPatch,
+		srv.URL+"/api/v1/datapacks/test-dp-opt-out/conversation-search-opt-out",
+		bytes.NewReader(patchBody),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	// Describe now reflects the opt-out.
+	descResp2, err := http.Get(srv.URL + "/api/v1/datapacks/test-dp-opt-out")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer descResp2.Body.Close()
+	var descResult2 handlers.APIResponse
+	if decErr := json.NewDecoder(descResp2.Body).Decode(&descResult2); decErr != nil {
+		t.Fatal(decErr)
+	}
+	dataMap2, ok := descResult2.Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected data to be a map")
+	}
+	if optedOut, _ := dataMap2["conversation_search_opt_out"].(bool); !optedOut {
+		t.Error("expected conversation_search_opt_out=true after opting out")
 	}
 }
 

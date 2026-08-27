@@ -83,6 +83,12 @@ type DatapackService struct {
 	// deleting a datapack never refunds quota. Optional: when nil the
 	// cap is not enforced (matches early-bootstrap minimal wiring).
 	freeTierRepo *repository.FreeTierUsageRepo
+	// convSearchOptOutRepo backs the conversation-search opt-out toggle.
+	// Deliberately NOT part of UpdateRequest/Update: that endpoint is
+	// owner-only (RequireDatapackOwnership), while the opt-out toggle must
+	// also allow a shared maintainer — see SetConversationSearchOptOut and
+	// its dedicated route/middleware in router.go.
+	convSearchOptOutRepo *repository.ConversationSearchOptOutRepo
 	// ampSvc, when set (AMP feature enabled), tears down the datapack's AMP
 	// clusters + pool mapping on delete. Nil leaves deletion AMP-blind.
 	ampSvc *AMPService
@@ -99,14 +105,36 @@ func NewDatapackService(
 	accountRepo *repository.AccountRepo,
 	langfuseSvc *LangfuseService,
 	freeTierRepo *repository.FreeTierUsageRepo,
+	convSearchOptOutRepo *repository.ConversationSearchOptOutRepo,
 ) *DatapackService {
 	return &DatapackService{
-		repo:         repo,
-		ybaSvc:       ybaSvc,
-		accountRepo:  accountRepo,
-		langfuseSvc:  langfuseSvc,
-		freeTierRepo: freeTierRepo,
+		repo:                 repo,
+		ybaSvc:               ybaSvc,
+		accountRepo:          accountRepo,
+		langfuseSvc:          langfuseSvc,
+		freeTierRepo:         freeTierRepo,
+		convSearchOptOutRepo: convSearchOptOutRepo,
 	}
+}
+
+// ConversationSearchOptedOut reports whether datapackID has opted out of
+// conversation-search embedding. Readable by anyone with datapack access
+// (see the route's RequireDatapackAccess-only gate) — only *changing* it is
+// restricted to owner/maintainer.
+func (s *DatapackService) ConversationSearchOptedOut(datapackID string) (bool, error) {
+	return s.convSearchOptOutRepo.IsOptedOut(datapackID)
+}
+
+// SetConversationSearchOptOut sets or clears the opt-out for datapackID.
+// userID is the acting account, stamped as opted_out_by on opt-out. Callers
+// must already have verified the caller is the datapack's owner or a
+// maintainer (see RequireDatapackOwnerOrMaintainerGrant on this method's route)
+// — this method itself does not re-check access.
+func (s *DatapackService) SetConversationSearchOptOut(userID, datapackID string, optedOut bool) error {
+	if optedOut {
+		return s.convSearchOptOutRepo.SetOptedOut(datapackID, userID)
+	}
+	return s.convSearchOptOutRepo.ClearOptedOut(datapackID)
 }
 
 // CreateRequest holds the fields for creating a datapack.

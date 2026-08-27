@@ -153,10 +153,7 @@ export function DecisionTrace({
     const convStep = rawSteps.find((s) => s.name === "conversation_search");
     const chunks = convStep?.conversation_chunks ?? [];
     if (chunks.length === 0) return 0;
-    const chars = chunks.reduce(
-      (sum, c) => sum + (c.question?.length ?? 0) + (c.answer?.length ?? 0),
-      0,
-    );
+    const chars = chunks.reduce((sum, c) => sum + (c.content?.length ?? 0), 0);
     return Math.round(chars / 4);
   }, [rawSteps]);
 

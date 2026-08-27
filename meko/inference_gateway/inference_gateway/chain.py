@@ -378,7 +378,13 @@ async def _summarize_conversation_hits(
 ) -> str:
     """Summarize retrieved prior-conversation chunks into an answer to `query`
     using the small summary model. Falls back to the closest answer verbatim if
-    the model call fails — we never want a tracing/model hiccup to drop the turn."""
+    the model call fails — we never want a tracing/model hiccup to drop the turn.
+
+    Each hit carries a single `content` field (the turn's combined Q+A,
+    chunked and stored by the MCP server) rather than separate `question`/
+    `answer` keys — these hits only ever come from the unified `context_search`
+    path (the legacy `_search_knowledge` path never produces a conversation
+    hit itself, per its own docstring)."""
     if not hits:
         return ""
     # Fallback answer when the SLM returns empty or errors: the CLOSEST matched
@@ -387,13 +393,13 @@ async def _summarize_conversation_hits(
     def _closest_answer() -> str:
         scored = [h for h in hits if isinstance(h.get("distance"), (int, float))]
         if scored:
-            return min(scored, key=lambda h: h["distance"]).get("answer", "")
-        return hits[0].get("answer", "")
+            return min(scored, key=lambda h: h["distance"]).get("content", "")
+        return hits[0].get("content", "")
     blocks = []
     # Cap so a long thread can't blow up the summary prompt; fewer is fine
     # (most threads are far shorter). Turns arrive oldest→newest.
     for i, h in enumerate(hits[:CONV_SUMMARY_MAX_TURNS], 1):
-        blocks.append(f"[{i}] Q: {h.get('question', '')}\n    A: {h.get('answer', '')}")
+        blocks.append(f"[{i}] {h.get('content', '')}")
     context = "\n\n".join(blocks)
     messages = [
         SystemMessage(content=_CONV_SUMMARY_SYSTEM),
@@ -605,11 +611,15 @@ async def run_chat_turn(
             )
 
         # 2. Retrieval. Two paths, chosen by cfg.contextual_prominence_search_enabled
-        #    (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH — shared with the MCP server):
+        #    (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH — this gateway's OWN
+        #    config name/env var, kept as-is even though the MCP server's
+        #    matching flag was retired when its tool, now `context_search`,
+        #    became always-registered; renaming a deployment env var is a
+        #    bigger operational change than this cutover needs):
         #
-        #    - Unified: one `contextual_prominence_search` call covers the
-        #      conversation cache, memory, and the knowledgebase, tiered by
-        #      relevance server-side.
+        #    - Unified: one `context_search` call covers the conversation
+        #      cache, memory, and the knowledgebase, tiered by relevance
+        #      server-side.
         #    - Legacy: knowledge-base search runs FIRST and (when enabled and NOT
         #      bypassed) performs conversation-history search INSIDE it. Returns
         #      either a conversation hit (chunks + thread → summarize) or KB
@@ -621,7 +631,7 @@ async def run_chat_turn(
         #    same rejected cache summary would be worse than the extra call.
         use_unified_search = cfg.contextual_prominence_search_enabled and not bypass
         if use_unified_search:
-            kb_hits, memory_hits, conv_result = await _search_contextual_prominence(
+            kb_hits, memory_hits, conv_result = await _search_context(
                 tools_by_name=tools_by_name,
                 agent_id=cfg.agent_id,
                 query=user_message,
@@ -686,7 +696,7 @@ async def run_chat_turn(
                 user_message=user_message,
                 assistant_message=assistant_text,
                 datapack_id=datapack_id,
-                index_for_search=False,  # don't re-index a summary of existing chunks
+                skip_search_embed=True,  # don't re-index a summary of existing chunks
                 answered_from_cache=answered_from_cache,
             )
             steps.append(
@@ -844,7 +854,9 @@ async def run_chat_turn(
             user_message=user_message,
             assistant_message=assistant_text,
             datapack_id=datapack_id,
-            index_for_search=True,  # cache genuine Q&A for future reuse
+            # No skip_search_embed here — genuine Q&A should embed for future
+            # reuse, which is now the server's default (per-datapack
+            # opt-out) rather than something this caller has to request.
             rejected_cache=bypass,  # full re-answer after a rejected cache hit
         )
         logger.debug(
@@ -1167,7 +1179,7 @@ async def _search_knowledge(
     return hits, None
 
 
-async def _search_contextual_prominence(
+async def _search_context(
     *,
     tools_by_name: Dict[str, BaseTool],
     agent_id: str,
@@ -1177,21 +1189,24 @@ async def _search_contextual_prominence(
     top_k: int,
     steps: Optional[List[ProcessingStep]] = None,
 ) -> Tuple[List[KbHit], List[MemoryHit], Optional[Dict[str, Any]]]:
-    """Run the MCP server's unified `contextual_prominence_search` tool — one
-    call covering the conversation cache, memory, and the knowledgebase — and
-    return `(kb_hits, memory_hits, conv_result)`.
+    """Run the MCP server's unified `context_search` tool (formerly
+    `contextual_prominence_search`) — one call covering the conversation
+    cache, memory, and the knowledgebase — and return
+    `(kb_hits, memory_hits, conv_result)`.
 
     `conv_result` uses the exact `{"hits", "thread"}` contract `_search_knowledge`
     returns on a conversation-cache hit, so `run_chat_turn`'s conversation-hit
     branch (summarize + skip memory/KB + early return) works unchanged
-    regardless of which retrieval path produced it.
+    regardless of which retrieval path produced it. Each hit/turn carries a
+    single `content` field (not separate `question`/`answer` keys — the
+    server chunks/stores a turn's Q+A combined).
 
     Synthesizes `conversation_search` / `memory_search` / `knowledgebase_search`
     ProcessingStep entries — the same names the two-call path records — based
     on which tier the tool actually used (`source` in its response), plus one
-    `contextual_prominence_search` step carrying the tool's own token-savings
-    figure. This keeps the Agent Reasoning panel's per-stage timeline shape
-    stable whichever retrieval path is active.
+    `context_search` step carrying the tool's own token-savings figure. This
+    keeps the Agent Reasoning panel's per-stage timeline shape stable
+    whichever retrieval path is active.
 
     Best-effort: tool-missing / no-datapack_id / MCP failure / a malformed
     response all return `([], [], None)` — the same empty-hits fallback
@@ -1212,21 +1227,21 @@ async def _search_contextual_prominence(
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "contextual_prominence_search", 0, "skipped", "no datapack_id",
+                    "context_search", 0, "skipped", "no datapack_id",
                     query=query, tool_args=tool_args,
                 )
             )
         return [], [], None
 
-    tool = tools_by_name.get("contextual_prominence_search")
+    tool = tools_by_name.get("context_search")
     if tool is None:
         logger.warning(
-            "contextual_prominence_search tool unavailable; skipping unified grounding"
+            "context_search tool unavailable; skipping unified grounding"
         )
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "contextual_prominence_search", 0, "skipped", "tool unavailable",
+                    "context_search", 0, "skipped", "tool unavailable",
                     query=query, tool_args=tool_args,
                 )
             )
@@ -1237,14 +1252,14 @@ async def _search_contextual_prominence(
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001 — MCP failure must not break chat
         logger.warning(
-            "contextual_prominence_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
+            "context_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
             agent_id, datapack_id, query, _format_exc_chain(exc),
             exc_info=exc,
         )
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "contextual_prominence_search",
+                    "context_search",
                     int((time.monotonic() - start) * 1000),
                     "error", str(exc), query=query, tool_args=tool_args,
                 )
@@ -1253,16 +1268,16 @@ async def _search_contextual_prominence(
 
     parsed = _parse_json(raw)
     # TEMP DEBUG: raw unified-search response. The unified path skips
-    # _search_memories, so this is where memory results show up when contextual
-    # prominence search is ON. Unconditional so it always prints on this path.
-    # logger.info("contextual_prominence_search RAW (agent_id=%s): %s", agent_id, _truncate(str(parsed), 3000))
+    # _search_memories, so this is where memory results show up when context
+    # search is ON. Unconditional so it always prints on this path.
+    # logger.info("context_search RAW (agent_id=%s): %s", agent_id, _truncate(str(parsed), 3000))
     if not isinstance(parsed, dict) or parsed.get("error"):
         detail = parsed.get("error") if isinstance(parsed, dict) else "malformed response"
-        logger.warning("contextual_prominence_search returned an error: %s", detail)
+        logger.warning("context_search returned an error: %s", detail)
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "contextual_prominence_search",
+                    "context_search",
                     int((time.monotonic() - start) * 1000),
                     "error", str(detail), query=query, tool_args=tool_args,
                 )
@@ -1283,13 +1298,13 @@ async def _search_contextual_prominence(
                 ProcessingStep(
                     "conversation_search", duration_ms, "ok",
                     f"{len(hits)} chunk(s)" + (f", top_distance={top_d}" if hits else "")
-                    + " (via contextual_prominence_search)",
+                    + " (via context_search)",
                     query=query, tool_args=tool_args,
                 )
             )
             steps.append(
                 ProcessingStep(
-                    "contextual_prominence_search", 0, "ok",
+                    "context_search", 0, "ok",
                     f"source=conversation tokens_saved={tokens_saved}",
                     tool_args=tool_args,
                 )
@@ -1304,12 +1319,12 @@ async def _search_contextual_prominence(
 
     for h in memory_hits:
         logger.debug(
-            "contextual_prominence_search: kept memory hit kind=%s score=%s text=%r",
+            "context_search: kept memory hit kind=%s score=%s text=%r",
             h.kind, f"{h.score:.3f}" if h.score is not None else "-", _truncate(h.text, 80),
         )
     for h in kb_hits:
         logger.debug(
-            "contextual_prominence_search: kept kb chunk doc=%s score=%s distance=%s text=%r",
+            "context_search: kept kb chunk doc=%s score=%s distance=%s text=%r",
             h.document_id or "-",
             f"{h.score:.3f}" if h.score is not None else "-",
             f"{h.distance:.3f}" if h.distance is not None else "-",
@@ -1320,7 +1335,7 @@ async def _search_contextual_prominence(
         steps.append(
             ProcessingStep(
                 "memory_search", duration_ms, "ok",
-                f"{len(memory_hits)} hit{'' if len(memory_hits) == 1 else 's'} (via contextual_prominence_search)",
+                f"{len(memory_hits)} hit{'' if len(memory_hits) == 1 else 's'} (via context_search)",
                 query=query, tool_args=tool_args,
             )
         )
@@ -1328,20 +1343,20 @@ async def _search_contextual_prominence(
             steps.append(
                 ProcessingStep(
                     "knowledgebase_search", 0, "skipped",
-                    "contextual_prominence_search: memory sufficient",
+                    "context_search: memory sufficient",
                 )
             )
         else:  # "knowledge_base+memory"
             steps.append(
                 ProcessingStep(
                     "knowledgebase_search", duration_ms, "ok",
-                    f"{len(kb_hits)} hit{'' if len(kb_hits) == 1 else 's'} (via contextual_prominence_search)",
+                    f"{len(kb_hits)} hit{'' if len(kb_hits) == 1 else 's'} (via context_search)",
                     query=query, tool_args=tool_args,
                 )
             )
         steps.append(
             ProcessingStep(
-                "contextual_prominence_search", 0, "ok",
+                "context_search", 0, "ok",
                 f"source={source} tokens_saved={tokens_saved}",
                 tool_args=tool_args,
             )
@@ -1358,14 +1373,19 @@ async def _add_message(
     user_message: str,
     assistant_message: str,
     datapack_id: Optional[str],
-    index_for_search: bool = False,
+    skip_search_embed: bool = False,
     answered_from_cache: Optional[Dict[str, Any]] = None,
     rejected_cache: bool = False,
 ) -> str:
     """Append the turn to the conversation. Returns the Langfuse `message_id`
     minted by MCP (used by the UI to deep-link into the trace drawer).
 
-    `index_for_search` asks MCP to embed + cache this turn for future reuse;
+    Embedding into the conversation-search cache is the MCP server's own
+    default (per-datapack opt-out) now, not something this caller requests.
+    `skip_search_embed` is the narrow exception: set it when THIS turn's
+    content is redundant with what's already indexed (a cache-hit summary),
+    so it doesn't pollute conversation_history_search with a near-duplicate
+    entry — it does not affect whether the turn is stored in Langfuse.
     `answered_from_cache` (set on a cache hit) tags the trace with provenance
     so observability can show which prior conversation answered it.
     `rejected_cache` marks a full re-answer the user requested after rejecting
@@ -1388,7 +1408,7 @@ async def _add_message(
         "agent_id": agent_id,
         "input": user_message,
         "output": assistant_message,
-        "index_for_search": index_for_search,
+        "skip_search_embed": skip_search_embed,
     }
     if datapack_id:
         args["datapack_id"] = datapack_id
@@ -1400,12 +1420,11 @@ async def _add_message(
         # UI can show which prior conversation answered the query.
         # Slim chunk list for the decision-trace card: show ALL retrieved turns
         # (up to the 50-turn retrieval cap) so the trace reflects exactly what we
-        # summarized. Each Q/A is still length-trimmed to keep metadata bounded.
+        # summarized. Still length-trimmed to keep metadata bounded.
         chunks = answered_from_cache.get("chunks") or []
         slim_chunks = [
             {
-                "question": (c.get("question") or "")[:300],
-                "answer": (c.get("answer") or "")[:600],
+                "content": (c.get("content") or "")[:600],
                 "distance": c.get("distance"),
                 "conversation_id": c.get("conversation_id"),
                 "message_id": c.get("message_id"),

@@ -105,6 +105,8 @@ export type Datapack = {
   datapack_owner_name?: string;
   /** Owner account email from `users.user_email` (list + describe). */
   datapack_owner_email_id?: string;
+  /** Conversation-search embedding opt-out (describe only). Enabled by default; true means opted out. */
+  conversation_search_opt_out?: boolean;
   /**
    * From `GET /datapacks`: `"owner"` for datapacks you created; invite grant (`viewer` | `contributor` | `maintainer`)
    * for datapacks shared with you.
@@ -477,6 +479,29 @@ export async function updateDatapack(
 
 export async function deleteDatapack(datapackId: string, options: DatapackRouteOptions = {}) {
   return request<DeleteDatapackResponse>(datapackRoute(datapackId), "DELETE", undefined, options);
+}
+
+/** `data` from PATCH /datapacks/:datapack_id/conversation-search-opt-out. */
+export type SetConversationSearchOptOutResponse = {
+  conversation_search_opt_out: boolean;
+};
+
+/**
+ * PATCH /datapacks/:datapack_id/conversation-search-opt-out — a dedicated
+ * endpoint (not part of updateDatapack), restricted to the datapack's owner
+ * or a maintainer (viewer/contributor get a 403).
+ */
+export async function setConversationSearchOptOut(
+  datapackId: string,
+  optedOut: boolean,
+  options: DatapackRouteOptions = {},
+) {
+  return request<SetConversationSearchOptOutResponse>(
+    `${datapackRoute(datapackId)}/conversation-search-opt-out`,
+    "PATCH",
+    { opted_out: optedOut },
+    options,
+  );
 }
 
 // --- Datapack share / invites (paths are under `API_BASE`, typically `/api/v1`) ---

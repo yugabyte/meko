@@ -174,8 +174,64 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 		}
 	}
 
+	if optedOut, err := h.svc.ConversationSearchOptedOut(dp.ID); err != nil {
+		slog.Warn("failed to read conversation search opt-out", "datapack_id", dp.ID, "error", err)
+	} else {
+		dp.ConversationSearchOptOut = optedOut
+	}
+
 	redactDatapack(dp)
 	return ok(c, http.StatusOK, dp)
+}
+
+// setConversationSearchOptOutRequest is the body for
+// PATCH /datapacks/:datapack_id/conversation-search-opt-out.
+type setConversationSearchOptOutRequest struct {
+	OptedOut bool `json:"opted_out"`
+}
+
+// SetConversationSearchOptOut handles PATCH /datapacks/:datapack_id/conversation-search-opt-out.
+// Restricted to the datapack's owner or a maintainer (see
+// auth.RequireDatapackOwnerOrMaintainerGrant on this route) — deliberately
+// NOT folded into Update, which is owner-only.
+//
+//	@Summary	Set a datapack's conversation-search opt-out
+//	@Tags		datapacks
+//	@Accept		json
+//	@Produce	json
+//	@Param		datapack_id	path		string								true	"Datapack ID"
+//	@Param		body		body		setConversationSearchOptOutRequest	true	"Opt-out state"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{datapack_id}/conversation-search-opt-out [patch]
+func (h *DatapackHandler) SetConversationSearchOptOut(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	dp, err := auth.GetDatapack(c)
+	if err != nil || dp == nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack not resolved by middleware")
+	}
+
+	var req setConversationSearchOptOutRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+
+	if err := h.svc.SetConversationSearchOptOut(account.ID, dp.ID, req.OptedOut); err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", err.Error())
+	}
+
+	return ok(c, http.StatusOK, map[string]bool{"conversation_search_opt_out": req.OptedOut})
 }
 
 // Update handles PATCH /api/v1/datapacks/:datapack_id.
