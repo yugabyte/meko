@@ -179,6 +179,36 @@ yb amp fleet --help          # standing portals: deploy / update / delete
 All three are thin triggers over Jenkins jobs — the portal records the build
 and links it; deep failure diagnosis continues in the Jenkins console.
 
+**Triggering a run — two rules before any flags:**
+
+1. **The YugabyteDB version comes from the portal settings.** `yb amp settings`
+   → `default_yb_version` is the version the rest of the stack is known to
+   carry; pass it as `--yb-version` on every trigger. Never hand-pick one and
+   never omit the flag — an omitted version falls through to the Jenkins job's
+   own baked default, which can be a whole train behind.
+2. **A branch that only changes test code does not rebuild amp.** `--branch`
+   names the TEST FRAMEWORK checkout; the amp images are a separate axis.
+   Pass `--image-version` with the newest release (first non-custom row of
+   `yb amp builds`) and the run deploys those prebuilt images while the tests
+   come from the branch head. `--commit` is the build-from-source switch: it
+   implies BUILD_FROM_SOURCE, ignores `--image-version`, and costs ~20 min of
+   image build per new sha — reach for it only when the branch changes amp/
+   product code.
+
+```bash
+# test-only branch: framework from the branch head, images from a release
+yb amp run trigger --tag perf --branch <user>/<topic>     --image-version <release-tag> --yb-version <default_yb_version> ...
+
+# product branch: build and test the images from this exact sha
+yb amp run trigger --tag regression --branch <user>/<topic> --commit <sha>     --yb-version <default_yb_version> ...
+```
+
+After triggering, `yb amp run get <id>` shows the Jenkins params: a release run
+carries `IMAGE_VERSION` and no `BUILD_FROM_SOURCE`, and `YB_VERSION` must be
+present either way. Repeat triggers at the SAME sha reuse the already-built
+`custom-<sha>` images, so amending commits is what makes source builds
+expensive.
+
 ## Anti-patterns
 
 - **Guessing flags from memory or from this file** instead of `--help` /
@@ -194,3 +224,9 @@ and links it; deep failure diagnosis continues in the Jenkins console.
   it.
 - **Editing portal state to "fix" a result.** Results are records of what ran;
   if the outcome is wrong, fix the test or the product and re-run.
+- **Triggering without `--yb-version`, or with a hand-picked one.** The portal
+  default (`yb amp settings`) is the only version the deployed stack is known
+  to carry.
+- **`--commit` on a test-only branch.** It flips the run to build-from-source
+  and rebuilds identical amp images for every sha; use `--branch` +
+  `--image-version` (see Triggering above).
