@@ -14,6 +14,7 @@ untagged and run on demand — see the Perf bullet):
   `multitenant_load` and
   `branch_churn` (many tenants, many branches), the nemesis / durability
   scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
+  `wal_tail_nemesis`, `control_plane_nemesis`,
   `commit_durability`) and `bulk_load_kill` (one large write killed mid-flight).
   Scheduled as its own tier so the report portal gets a Stress
   column; the `Category: core.Stress` tests in `suites/features` are **not** in it
@@ -92,6 +93,9 @@ need (a single run would demand every cloud credential at once). They are:
   operations — backup, restore, PITR, scheduled backups), `load_sustain`
   (workloadgen soak), `multitenant_load` and `branch_churn`, the nemesis /
   durability scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
+  `wal_tail_nemesis` — safekeeper restarts under a degraded backing, the
+  meko#777/meko#941 WAL-loss class, `control_plane_nemesis` — the controller pod
+  deleted mid-task, holding the meko#578/meko#971 task re-claim contract,
   `commit_durability`) and `bulk_load_kill`, which deletes an endpoint's compute
   pod — gracefully and by killing the container outright — in the middle of one
   large COPY / INSERT ... SELECT / batched-insert transaction / million-row
