@@ -54,6 +54,21 @@ func Unavailable(err error) bool {
 	// an outage — so the shutdown codes are enumerated. 53300 is the store
 	// refusing new work. Anything else — syntax, constraint, permission, bad
 	// password — is a verdict on the statement, and stays the controller's problem.
+	// The pool gave up before it ever reached the server. pgxpool's Acquire
+	// retries MaxConns+1 times, destroying each candidate whose liveness ping
+	// fails, and then returns a bare errors.New — no SQLSTATE, no net.OpError, no
+	// SafeToRetry, so every arm above declines it and the request would land as a
+	// 500 (#886's exact failure). Bounding PingTimeout is what puts this within a
+	// caller's budget: unbounded, the first ping blocked until the caller's
+	// context died and the caller saw that instead.
+	//
+	// Matched on the message because pgxpool exports no sentinel for it
+	// (pgxpool/pool.go:665, pgx v5.10.0). A wording change on a version bump would
+	// silently drop the match, which is what TestUnavailablePoolExhaustion pins.
+	if strings.Contains(err.Error(), "too many failed attempts acquiring connection") {
+		return true
+	}
+
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {

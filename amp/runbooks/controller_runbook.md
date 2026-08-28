@@ -263,6 +263,44 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
 
 ## Controller deploy gotchas
 
+- **`/readyz` 503s for ~2 minutes after the backing pod is replaced, while endpoints serve fine.**
+  The pool is holding ESTABLISHED sockets to the old pod IP. The peer vanished rather than sending
+  a RST, so a write to one blocks in kernel retransmit and the caller burns its whole deadline
+  discovering a single dead connection. The tell is in the shape, not the message: every `/readyz`
+  takes *exactly* its 1s probe budget and every `/metrics` scrape exactly its 5s, and the error is
+  a bare `context deadline exceeded` with **no address in it** — the call never reached a dial.
+  (Contrast a dial that did happen, where the error names an address:
+  `10.x.y.z:5433 (…-yb-tserver-0.…): dial error: …`. Both shapes can appear in one incident at
+  different moments; the address-less one is what says the pool is the problem.)
+
+  `db.Connect` bounds this at two levels (#961). Pool-level (`PingTimeout`, `ConnectTimeout`,
+  `MaxConnIdleTime`, `HealthCheckPeriod`, `MaxConnLifetime`) — pgx already sets most of these, at
+  1h/30m/1m, so this is a tightening rather than switching something on. The exception is
+  `PingTimeout`, which really does default to *no timeout*, and that is what let one dead socket
+  eat a whole probe. Socket-level (`TCP_USER_TIMEOUT` plus a TCP keepalive, in `dialer.go`) — the
+  pool bounds only shed one dead connection per caller, whereas the kernel fails all of them
+  within one `tcpUserTimeout` window.
+
+  **This does not rule out DNS.** In run 44551e5d the collected controller log ends at 23:05:07,
+  before `/readyz` recovered, and #961 quotes a GC sweep at 23:05:29 still dialing the departed pod
+  IP by name — 2m09s after the replacement came up. A stale address outlived the window the log
+  covers, and these bounds do not close that path; they only cap each attempt at `connectTimeout`.
+  What the log does establish is that from 23:03:26 to where it ends, no dial was attempted at
+  all — every call hung on a pooled socket instead.
+
+  `TCP_USER_TIMEOUT` is Linux-only and set through `net.Dialer.Control`, so it is silently absent
+  on a macOS dev box (`dialer_other.go`) — and it would also be silently absent if the Control
+  hook stopped running, which is why the test reads the value back off a real socket instead of
+  asserting the constant. It does not bound slow queries: the timer only runs while data is
+  unacknowledged at the TCP layer, so a server that ACKs and then thinks is not affected.
+
+  The numbers are shared with the compute side rather than invented here, so one failure has one
+  answer in both languages: `connectTimeout` 5s is `ysql_client`'s `DEFAULT_CONNECT_TIMEOUT_MS`,
+  `tcpUserTimeout` 3s is `endpoint_supervisor`'s `TCP_USER_TIMEOUT_MS` / `LEASE_TCP_USER_TIMEOUT_MS`,
+  and `maxConnLifetime` 15m + 25% jitter is `DEFAULT_CONNECTION_LIFETIME_MS` and the envelope
+  `jittered()` spreads over. `PingTimeout`, `MaxConnIdleTime` and `HealthCheckPeriod` are pgxpool's
+  alone — the Rust clients have no acquire-time ping or background reaper to match.
+
 - **DB URL must match how YugabyteDB was stood up.** `deploy/controller/redeploy.sh` defaults
   `DB_URL`/`YB_HOST_PORTS` to `yb-tserver.$NS.svc…`, but `deploy/up.sh` brings up a *yugabyted*
   StatefulSet at `yugabyted-0.yugabyted.$NS.svc.cluster.local:5433`. Running `redeploy.sh` standalone
