@@ -99,13 +99,14 @@ ENV BUILD_TYPE=release
 # one. Cache mounts are not part of
 # the image layer, so the built binaries are copied out to /home/nonroot/out
 # (a real dir) before the mount is unmounted; the final stage copies from there.
+# RUSTFLAGS is exported rather than prefixed onto the cargo command: the `make`
+# after the `&&` drives its own cargo build into the same target/release, and a
+# different RUSTFLAGS there makes the two invalidate each other's artifacts —
+# which under the cache mount above means recompiling the release dep graph
+# twice per build.
 RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
     --mount=type=cache,target=/home/nonroot/.cargo/registry,uid=1000,gid=1000 \
     set -e \
-    `# Exported, not a prefix assignment: the make below drives its own cargo` \
-    `# build into the same target/release, and a different RUSTFLAGS there makes` \
-    `# the two invalidate each other's artifacts — which under the cache mount` \
-    `# above means recompiling the release dep graph twice per build.` \
     && export RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes" \
     && cargo build --locked --release \
          --bin pageserver \

@@ -128,15 +128,16 @@ ENV PG_INSTALL_CACHED=1
 # build.
 ENV BUILD_TYPE=release
 
+# RUSTFLAGS is exported rather than prefixed onto the cargo command: the `make`
+# after the `&&` drives its own cargo build into the same target/release, and a
+# different RUSTFLAGS there makes the two invalidate each other's artifacts on
+# every build.
 RUN  set -e \
     && if [ "$IO_ALIGNMENT" = "4k" ]; then \
         export CARGO_FEATURES="${CARGO_FEATURES},io-align-4k"; \
     elif [ "$IO_ALIGNMENT" = "512" ]; then \
         export CARGO_FEATURES="${CARGO_FEATURES},io-align-512"; \
     fi \
-    `# Exported, not a prefix assignment: the make below drives its own cargo` \
-    `# build into the same target/release, and a different RUSTFLAGS there makes` \
-    `# the two invalidate each other's artifacts on every build.` \
     && export RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" \
     && cargo auditable build \
       --features $CARGO_FEATURES \
