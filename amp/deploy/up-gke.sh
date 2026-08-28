@@ -375,8 +375,10 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   )
 fi
 
+# Commas escaped: helm's --set-string splits on them, so a multi-host DSN would
+# arrive as separate fragments and fail the install.
 HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}"
-           --set-string "controller.databaseUrl=${DB_URL}")
+           --set-string "controller.databaseUrl=${DB_URL//,/\\,}")
 for s in "${HELM_SET[@]}"; do HELM_ARGS+=(--set "${s}"); done
 
 # internal-lb Service annotations contain dots (--set would mis-tokenize them),

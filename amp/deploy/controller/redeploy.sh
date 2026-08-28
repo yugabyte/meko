@@ -228,8 +228,13 @@ HELM_SET=(
 
 # --set-string for the DSN ('?' + '=' would be mis-tokenized by --set). The
 # Service annotation lists go via the values file below.
+#
+# Commas are escaped: helm's --set-string grammar splits on them, so a multi-host
+# DSN ("postgres://u@t0:5433,t1:5433,t2:5433/db" — which is how you give the
+# controller more than one tserver to fail over to) would arrive as three
+# fragments and the install would fail on the ones with no "=".
 HELM_SET_STRING=(
-  "controller.databaseUrl=${DB_URL}"
+  "controller.databaseUrl=${DB_URL//,/\\,}"
 )
 
 # The controller + endpoint Service annotations are YAML lists of "k=v" strings

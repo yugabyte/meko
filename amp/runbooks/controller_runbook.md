@@ -270,6 +270,15 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   `hostname resolving error: lookup yb-tserver.$NS.svc.cluster.local … no such host`. Pass the real
   `DB_URL`/`YB_HOST_PORTS`, or just re-run `up.sh` (which sets them). Confirm with:
   `kubectl -n "$NS" get pod <pod> -o jsonpath='{..env[?(@.name=="AMP_DATABASE_URL")].value}'`.
+- **A single-host DB URL single-homes the control plane.** pgx dials only what the DSN lists, in
+  order, so a DSN naming one tserver pod leaves the controller nothing to fail over to when that
+  pod goes, even where the endpoints have the whole `YB_HOST_PORTS` CSV. List every tserver
+  (`postgres://u@t0:5433,t1:5433,t2:5433/db`) or point it at the tservers' headless Service.
+  Names, never pod IPs — an IP survives a reschedule as a dead address, whereas a name
+  re-resolves on the next dial. `redeploy.sh` and `up-gke.sh` escape the commas for you before
+  `helm --set-string` (which otherwise splits on them and fails the install); if you invoke helm
+  by hand, escape them yourself. Note this is not what caused the two-minute stall in meko#961:
+  that was a pool holding sockets to a departed pod, and a multi-host DSN would not have helped.
 - **Rolling updates briefly run two controllers (two managed controllers) on one DB.** With
   `replicas: 1` + the default RollingUpdate (`maxSurge` makes 2 pods during the swap). If that ever
   causes trouble, `kubectl -n "$NS" delete deploy amp-controller` then redeploy for a clean single pod.

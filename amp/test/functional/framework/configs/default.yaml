@@ -177,7 +177,12 @@ env:
     #   external → ampstack deploys NO yugabyted; it ensures yb_storage on a
     #     cluster owned elsewhere and points controller+endpoints at it (teardown
     #     never touches it). host_ports (CSV of tserver host:port) required;
-    #     user/db_name/sslmode default to yugabyte/yb_storage/disable.
+    #     user/db_name/sslmode default to yugabyte/yb_storage/disable. List every
+    #     tserver: the whole CSV reaches both the endpoints and the controller's
+    #     own DSN, so the controller has somewhere to fail over to when one pod
+    #     goes. (This is hardening, not the fix for the control-plane stall in
+    #     https://github.com/yugabyte/meko/issues/961 — that was the pool holding
+    #     sockets to a departed pod.)
     # admin_host_ports: coordinator-reachable CSV used ONLY for the one-shot
     #   CREATE DATABASE; empty → host_ports. Set only for co-located YB-in-k8s
     #   where host_ports is an in-cluster name this coordinator cannot resolve.

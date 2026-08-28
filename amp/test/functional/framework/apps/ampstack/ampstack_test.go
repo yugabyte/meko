@@ -797,7 +797,21 @@ func (e *ensureRec) count() int {
 
 func externalApp(cfg Config, rec *recorder, ens *ensureRec) *App {
 	if cfg.Backing.Mode == "" {
-		cfg.Backing = Backing{Mode: BackingExternal, HostPorts: "10.0.0.1:5433,10.0.0.2:5433,10.0.0.3:5433"}
+		// A non-colocated external cluster: several tservers, addressed by
+		// names the coordinator can actually resolve. Names rather than IPs
+		// because an IP is invalidated by a reschedule while a name re-resolves
+		// on the next dial.
+		//
+		// Deliberately NOT the per-pod .svc.cluster.local shape. ybbacking never
+		// yields that alone — every constructor that produces it (FromYBK8s,
+		// FromYBAUniverse, FromProvisionedUniverse) also sets KubeNamespace and
+		// a coordinator-reachable AdminHostPorts, because an in-cluster name is
+		// unresolvable from here. Putting one here without those would send
+		// ensureExternalStorageDB down the dial path against an address the
+		// coordinator cannot reach — the failure TestStorageAccessKubeLocated-
+		// Forwards exists to forbid. That co-located shape is covered there;
+		// this fixture drives the dial path, so it uses a dialable address.
+		cfg.Backing = Backing{Mode: BackingExternal, HostPorts: "yb-0.db.example.com:5433,yb-1.db.example.com:5433,yb-2.db.example.com:5433"}
 	}
 	a := testApp(cfg, rec)
 	a.WithEnsureDB(ens.fn)
@@ -833,8 +847,8 @@ func TestDeployExternalBackingSkipsYugabytedAndEnsuresDB(t *testing.T) {
 	if got.dbName != DefaultDBName {
 		t.Errorf("ensureDB dbName = %q, want %q", got.dbName, DefaultDBName)
 	}
-	if got.ci.Host != "10.0.0.1" || got.ci.Port != 5433 {
-		t.Errorf("ensureDB target = %s:%d, want 10.0.0.1:5433", got.ci.Host, got.ci.Port)
+	if wantHost := "yb-0.db.example.com"; got.ci.Host != wantHost || got.ci.Port != 5433 {
+		t.Errorf("ensureDB target = %s:%d, want %s:5433", got.ci.Host, got.ci.Port, wantHost)
 	}
 	if got.ci.Database != ybMaintenanceDB {
 		t.Errorf("ensureDB maintenance database = %q, want %q", got.ci.Database, ybMaintenanceDB)
@@ -843,11 +857,14 @@ func TestDeployExternalBackingSkipsYugabytedAndEnsuresDB(t *testing.T) {
 	// via --set-string with commas escaped (a raw --set/--set-string value
 	// would have the CSV's commas split into bogus extra key=value pairs) —
 	// the "\," between each host:port entry is the round-trip check.
-	if !hasCall(calls, `--set-string controller.endpoint.ybHostPorts=10.0.0.1:5433\,10.0.0.2:5433\,10.0.0.3:5433`) {
+	if !hasCall(calls, `--set-string controller.endpoint.ybHostPorts=yb-0.db.example.com:5433\,yb-1.db.example.com:5433\,yb-2.db.example.com:5433`) {
 		t.Errorf("helm template must set controller.endpoint.ybHostPorts to the escaped external CSV via --set-string\ncalls: %v", calls)
 	}
-	if !hasCall(calls, "controller.databaseUrl=postgres://yugabyte@10.0.0.1:5433/yb_storage?sslmode=disable") {
-		t.Errorf("helm template must set controller.databaseUrl to the external DSN\ncalls: %v", calls)
+	// The controller's own DSN carries every CSV host, not just the first, so a
+	// rescheduled tserver is a failover rather than an outage (meko#961). Same
+	// --set-string comma escaping as ybHostPorts above.
+	if !hasCall(calls, `--set-string controller.databaseUrl=postgres://yugabyte@yb-0.db.example.com:5433\,yb-1.db.example.com:5433\,yb-2.db.example.com:5433/yb_storage?sslmode=disable`) {
+		t.Errorf("helm template must set controller.databaseUrl to the multi-host external DSN\ncalls: %v", calls)
 	}
 	// The controller still deploys and the port-forward/health still run.
 	if info.ControllerURL != "http://127.0.0.1:18080" {
@@ -962,15 +979,44 @@ func TestFirstHostPort(t *testing.T) {
 		host string
 		port int
 	}{
-		{"10.0.0.1:5433,10.0.0.2:5433", "10.0.0.1", 5433},
+		// The real input: a CSV of per-pod StatefulSet DNS, first entry wins.
+		{"ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433", "ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local", 5433},
 		{"db.example.com:6000", "db.example.com", 6000},
 		{"barehost", "barehost", 5433},
 		{" spaced:5433 , x:1", "spaced", 5433},
+		// A bracketed literal is the one address form that parses differently,
+		// so it stays covered even though we deploy with names.
+		{"[::1]:5433", "::1", 5433},
 	}
 	for _, c := range cases {
 		h, p := firstHostPort(c.in)
 		if h != c.host || p != c.port {
 			t.Errorf("firstHostPort(%q) = (%q,%d), want (%q,%d)", c.in, h, p, c.host, c.port)
+		}
+	}
+}
+
+func TestHostPortList(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		// The real input: every per-pod DNS entry survives, in order.
+		{"ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433", "ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433"},
+		// A name with no port takes the YSQL default, so a CSV that mixes the
+		// two still renders a uniform authority.
+		{"ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:6000", "ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:6000"},
+		// Bare hosts and odd ports both normalise to host:port.
+		{"a,b:6000", "a:5433,b:6000"},
+		{" spaced:5433 , x:1 ", "spaced:5433,x:1"},
+		// Empty entries are dropped rather than emitting a ":5433" host.
+		{"a:5433,,b:5433,", "a:5433,b:5433"},
+		{"", ""},
+		{"[::1]:5433", "[::1]:5433"},
+	}
+	for _, c := range cases {
+		if got := hostPortList(c.in); got != c.want {
+			t.Errorf("hostPortList(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -1109,9 +1155,9 @@ func TestHelmEscape(t *testing.T) {
 	// Two-node CSV round-trips: the escaped form carries exactly one "\," in
 	// place of the separating comma, which helm un-escapes back to "," when
 	// it renders the chart.
-	csv := "10.0.0.1:5433,10.0.0.2:5433"
+	csv := "ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433"
 	escaped := helmEscape(csv)
-	if want := `10.0.0.1:5433\,10.0.0.2:5433`; escaped != want {
+	if want := `ybampqa-fkzo-yb-tserver-0.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433\,ybampqa-fkzo-yb-tserver-1.ybampqa-fkzo-yb-tservers.yb-dev-ampqa-5e2503.svc.cluster.local:5433`; escaped != want {
 		t.Errorf("helmEscape(%q) = %q, want %q", csv, escaped, want)
 	}
 	if strings.Count(escaped, `\,`) != 1 {

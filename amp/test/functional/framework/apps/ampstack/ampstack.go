@@ -1287,13 +1287,25 @@ func (a *App) adminHostPorts() string {
 	return a.cfg.Backing.HostPorts
 }
 
-// dbURL is the controller's own backing DSN (AMP_DATABASE_URL). It targets the
-// external cluster's first host:port in external mode, else the built-in
-// yugabyted pod.
+// dbURL is the controller's own backing DSN (AMP_DATABASE_URL). In external
+// mode it carries every host:port of the CSV, not just the first, so the
+// controller can fail over to another tserver the way the endpoints already do
+// — pgx expands a multi-host DSN into one fallback per host and dials them in
+// order. Taking only the first entry single-homed the control plane onto one
+// tserver pod for no reason.
+//
+// Every entry is a name, never a pod IP: a reschedule invalidates an IP, and
+// re-resolving the name on the next dial is what lands the reconnect on the
+// replacement pod. Built-in mode has a single yugabyted pod, so there is
+// nothing to list.
+//
+// This is hardening, not a fix for a seen outage: the backings these suites run
+// against today are single-tserver, so the CSV has one entry and this changes
+// nothing for them. The two-minute control-plane stall in #961 was a pool
+// holding dead sockets, and is fixed controller-side.
 func (a *App) dbURL() string {
 	if a.externalBacking() {
-		host, port := firstHostPort(a.cfg.Backing.HostPorts)
-		return backingDSN(host, port, a.backingUser(), a.cfg.Backing.Password, a.storageDBName(), orDefault(a.cfg.Backing.SSLMode, DefaultBackingSSLMode))
+		return backingDSN(hostPortList(a.cfg.Backing.HostPorts), a.backingUser(), a.cfg.Backing.Password, a.storageDBName(), orDefault(a.cfg.Backing.SSLMode, DefaultBackingSSLMode))
 	}
 	return fmt.Sprintf("postgres://%s@%s:5433/%s?sslmode=%s", DefaultBackingUser, a.ybFQDN(), a.cfg.DBName, DefaultBackingSSLMode)
 }
@@ -1722,14 +1734,33 @@ func firstHostPort(csv string) (string, int) {
 	return host, port
 }
 
+// hostPortList normalises a CSV of tserver addresses into the authority a
+// multi-host postgres:// URL takes: every entry as "host:port", ports defaulted
+// to 5433, joined by commas. pgx splits that back into parallel host/port lists
+// and builds one fallback per entry, giving libpq-style failover across the
+// whole CSV. Empty entries are dropped; an empty CSV yields "", which external
+// mode already refuses before any DSN is rendered.
+func hostPortList(csv string) string {
+	var out []string
+	for _, entry := range strings.Split(csv, ",") {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+		host, port := firstHostPort(entry)
+		out = append(out, net.JoinHostPort(host, strconv.Itoa(port)))
+	}
+	return strings.Join(out, ",")
+}
+
 // backingDSN renders a postgres:// URL for the controller's AMP_DATABASE_URL.
+// authority is one or more comma-separated "host:port" (see hostPortList).
 // Password, when set, is included; sslmode defaults to disable.
-func backingDSN(host string, port int, user, password, dbName, sslMode string) string {
+func backingDSN(authority, user, password, dbName, sslMode string) string {
 	userInfo := user
 	if password != "" {
 		userInfo = user + ":" + password
 	}
-	return fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=%s", userInfo, host, port, dbName, orDefault(sslMode, DefaultBackingSSLMode))
+	return fmt.Sprintf("postgres://%s@%s/%s?sslmode=%s", userInfo, authority, dbName, orDefault(sslMode, DefaultBackingSSLMode))
 }
 
 // pgQuoteIdent double-quotes a SQL identifier, escaping embedded quotes.
