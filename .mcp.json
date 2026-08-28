@@ -2,7 +2,7 @@
   "mcpServers": {
     "amp-report": {
       "type": "http",
-      "url": "http://10.150.1.93/mcp"
+      "url": "https://amp-qa.dev.yugabyte.com/mcp"
     }
   }
 }

@@ -1134,7 +1134,7 @@ report:
   # url empty → sink not attached. The sink is non-critical: a portal outage
   # never fails or slows a run.
   portal:
-    # Portal base URL, e.g. http://10.150.1.93
+    # Portal base URL, e.g. https://amp-qa.dev.yugabyte.com
     url: ""
     # Report bucket the run files under on the portal (e.g. regression).
     report: ""

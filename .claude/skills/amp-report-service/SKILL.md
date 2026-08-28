@@ -12,12 +12,14 @@ description: >-
 
 # amp report service — how developers use it
 
-The amp report portal at **http://10.150.1.93** is where every ampqa run lands:
-functional/stress/perf results, their logs and attachments, perf history with
-regression gates, known-issue tracking against GitHub, and the buttons that
-drive Jenkins — launch a test run, cut a release build, deploy or update an amp
-portal. If you want to know "did my change break anything", "why is this test
-red", or "put my branch build on a cluster", this is the service you talk to.
+The amp report portal at **https://amp-qa.dev.yugabyte.com** — the bare
+`http://10.150.1.93` still answers, so older links keep working — is where
+every ampqa run lands: functional/stress/perf results, their logs and
+attachments, perf history with regression gates, known-issue tracking against
+GitHub, and the buttons that drive Jenkins — launch a test run, cut a release
+build, deploy or update an amp portal. If you want to know "did my change break
+anything", "why is this test red", or "put my branch build on a cluster", this
+is the service you talk to.
 
 ## Rule zero — discover, don't recall
 
@@ -56,7 +58,7 @@ Command families (`yb amp --help` for the live list): `run`, `result`, `files`,
 Conventions that hold across all of them:
 
 - Commands accept **bare UUIDs or full portal URLs** interchangeably — paste a
-  `http://10.150.1.93/runs/<id>` link directly.
+  `https://amp-qa.dev.yugabyte.com/runs/<id>` link directly.
 - `--json` on anything returns a stable envelope (`kind`, `data`, `truncated`)
   for scripting.
 - **Write operations refuse to run** without `--yes` (interactive) or `--json`
@@ -73,27 +75,28 @@ results, perf compare, known issues, file search, trigger run/build/deploy, …)
 
 | Transport | URL |
 |---|---|
-| streamable HTTP (Cursor, Windsurf, …) | `http://10.150.1.93:8989/mcp` |
-| SSE (Claude Code) | `http://10.150.1.93:8989/sse` |
+| streamable HTTP (Cursor, Windsurf, …) | `https://amp-qa.dev.yugabyte.com/mcp` |
+| SSE (Claude Code) | `https://amp-qa.dev.yugabyte.com/sse` |
 
 ```bash
 # Claude Code
-claude mcp add amp-report --transport sse http://10.150.1.93:8989/sse
+claude mcp add amp-report --transport sse https://amp-qa.dev.yugabyte.com/sse
 # health check
-curl http://10.150.1.93:8989/health
+curl https://amp-qa.dev.yugabyte.com/health
 ```
 
-No auth, no local install. For a locally-run portal the same paths hang off
-`localhost:8989`. First action in any session: `tools/list` — the tool set
-tracks the portal release, not this document.
+No auth, no local install. The same paths are also published on plain HTTP at
+`:8989`, and hang off `localhost:8989` for a locally-run portal. First action in
+any session: `tools/list` — the tool set tracks the portal release, not this
+document.
 
 ### 3. The web UI
 
-http://10.150.1.93 — runs list, per-result pages (steps, error, attachments,
-perf tables and charts), perf trends, Fleet (standing portals + deploy/update
-dialogs), known issues, schedules, and a per-release product status board. The
-UI and the tools read the same API: anything you see on a page, the CLI/MCP can
-fetch — a result page maps to `yb amp result get <url>`.
+https://amp-qa.dev.yugabyte.com — runs list, per-result pages (steps, error,
+attachments, perf tables and charts), perf trends, Fleet (standing portals +
+deploy/update dialogs), known issues, schedules, and a per-release product
+status board. The UI and the tools read the same API: anything you see on a
+page, the CLI/MCP can fetch — a result page maps to `yb amp result get <url>`.
 
 ## The data model in one screen
 
