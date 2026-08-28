@@ -237,6 +237,10 @@ if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
     # exported PROFILE, our reassignment above re-exports it, the extension
     # make inherits it, and PGXS appends its value as a bogus C flag
     # (`gcc: error: <value>: No such file or directory`). Strip it for this make.
+    # No BUILD_TYPE, so this is a cassert Postgres — deliberately. The suite
+    # exists to catch corruption and lost-write bugs, and an assertion firing on
+    # the spot is the point; a release build would run the same tests blind. The
+    # shipped images are the opposite case and say so (deploy/*/Dockerfile).
     env -u PROFILE make -C "$REPO" yb-amp-pg-ext-v18
     mkdir -p "$REPO/build"
     touch "$EXT_STAMP"

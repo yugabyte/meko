@@ -230,6 +230,21 @@ for ((r=0; r<10; r++)); do
 done
 echo "$out" | grep -q '^t$' && ok "pg_stat_statements preloaded + created, tracking statements" \
   || bad "pg_stat_statements not usable on a fresh endpoint (got: $(echo "$out"|tail -1))"
+# (d) the shipped Postgres is a release build. `debug_assertions` reports whether it
+#     was configured --enable-cassert, which the image must never be: assertions plus
+#     the -O0 that comes with them are a large, silent slowdown, and nothing else here
+#     looks at how the binary was built.
+#
+#     This has been wrong before (#1019): the Dockerfile builds Postgres twice, and the
+#     second stage inherits no BUILD_TYPE, so the Makefile's `?= debug` default quietly
+#     reinstalled a cassert build over the release one. A dev tree looked fine, because
+#     build.sh sets the type; only the image was affected, and nothing asserted on it.
+asrt=$(psql_pod "$POD" 127.0.0.1 55433 <<<'SHOW debug_assertions;' 2>&1)
+if echo "$asrt" | grep -q '^off$'; then
+  ok "shipped Postgres is a release build (debug_assertions=off)"
+else
+  bad "shipped Postgres has assertions enabled — a --enable-cassert -O0 build reached the image (debug_assertions: $(echo "$asrt"|tail -1))"
+fi
 
 hdr "createBranch (fork default) -> task succeeded"
 # The default fork-point resolution reads the parent writer's safekeeper flush_lsn;

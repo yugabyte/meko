@@ -77,6 +77,18 @@ COPY --chown=nonroot . .
 COPY --from=yb-thin-client /home/nonroot/yb_thin_client /opt/yb_thin_client
 ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
 
+# As in the pg image: use the Postgres copied from `pg-build` rather than
+# building another. `yb-amp-pg-ext` depends on `postgres-install-v18`, whose
+# configure stamp lives in BUILD_DIR — not copied across — so make would
+# re-configure and reinstall all of Postgres over the copied binaries, at the
+# Makefile's `?= debug` default: `--enable-cassert -O0`, in the Postgres this
+# image ships. PG_INSTALL_CACHED stubs those targets so nothing overwrites it.
+ENV PG_INSTALL_CACHED=1
+# Still needed, and not for Postgres: BUILD_TYPE also picks CARGO_PROFILE, and
+# `yb-amp-pg-ext` drives a cargo build of libcommunicator.a that is linked into
+# the yb_amp extension this image ships. Unset, that library is `--profile=dev`.
+ENV BUILD_TYPE=release
+
 # `io-align-512` is the default pageserver feature, so a plain release
 # build is correct. We only need the endpoint's own services plus the
 # control-plane tools used for (optional) schema provisioning.
@@ -90,8 +102,12 @@ ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
 RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
     --mount=type=cache,target=/home/nonroot/.cargo/registry,uid=1000,gid=1000 \
     set -e \
-    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes" \
-       cargo build --locked --release \
+    `# Exported, not a prefix assignment: the make below drives its own cargo` \
+    `# build into the same target/release, and a different RUSTFLAGS there makes` \
+    `# the two invalidate each other's artifacts — which under the cache mount` \
+    `# above means recompiling the release dep graph twice per build.` \
+    && export RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes" \
+    && cargo build --locked --release \
          --bin pageserver \
          --bin safekeeper \
          --bin compute-ctl \

@@ -109,13 +109,36 @@ COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install/ pg_install
 COPY --chown=nonroot . .
 COPY --chown=nonroot --from=plan     /home/nonroot/Cargo.lock               Cargo.lock
 
+# Use the Postgres copied from `pg-build`; do not build another one.
+#
+# `yb-amp-pg-ext` depends on `postgres-install-v18`, and the configure stamp that
+# target keys on lives in BUILD_DIR — which is NOT copied from `pg-build`, only
+# `pg_install` is. Left to itself, make therefore re-configures and reinstalls
+# all of Postgres over the binaries that were copied, at whatever BUILD_TYPE
+# happens to be set: unset means the Makefile's `?= debug`, so a
+# `--enable-cassert -O0` build is what the image shipped. PG_INSTALL_CACHED stubs
+# those targets, so the extension builds against the copied install's pg_config
+# and nothing overwrites it — which is what the "reuse the Postgres build
+# artifacts" comment above has always claimed, and makes a source-only change
+# stop paying a full Postgres compile in a stage keyed on `COPY . .`.
+ENV PG_INSTALL_CACHED=1
+# Still needed, and not for Postgres: BUILD_TYPE also picks CARGO_PROFILE, and
+# `yb-amp-pg-ext` drives a cargo build of libcommunicator.a that is linked into
+# the yb_amp extension this image ships. Unset, that library is a `--profile=dev`
+# build.
+ENV BUILD_TYPE=release
+
 RUN  set -e \
     && if [ "$IO_ALIGNMENT" = "4k" ]; then \
         export CARGO_FEATURES="${CARGO_FEATURES},io-align-4k"; \
     elif [ "$IO_ALIGNMENT" = "512" ]; then \
         export CARGO_FEATURES="${CARGO_FEATURES},io-align-512"; \
     fi \
-    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" cargo auditable build \
+    `# Exported, not a prefix assignment: the make below drives its own cargo` \
+    `# build into the same target/release, and a different RUSTFLAGS there makes` \
+    `# the two invalidate each other's artifacts on every build.` \
+    && export RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" \
+    && cargo auditable build \
       --features $CARGO_FEATURES \
       --bin pageserver  \
       --bin safekeeper  \

@@ -101,8 +101,8 @@ fi
 #    --no-build: a caller already produced all of it in this tree, so touch
 #    nothing. CI relies on that — it runs this straight after run.sh in the same
 #    job, and building here would not just duplicate work but UNDO it: build.sh
-#    requires a release Postgres, run.sh's extension make leaves a cassert one
-#    (Makefile BUILD_TYPE defaults to debug), so each would wipe and rebuild
+#    requires a release Postgres, while run.sh deliberately leaves a cassert one
+#    (the suite wants assertions firing), so each would wipe and rebuild
 #    pg_install behind the other, dragging the postgres_ffi-dependent crates with
 #    it. The profile comes from whatever is in target/, so it follows run.sh
 #    rather than needing to agree with it.
