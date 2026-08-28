@@ -1820,7 +1820,7 @@ perf:
     endpoint_memory: "4Gi"
     # pause_resume times fork_pause/fork_resume/fork_resume_first_count. Off
     # until the controller grows the pause/resume routes (meko#518): the POST
-    # 404s today, which is why features/amp_endpoint_pause_resume fails.
+    # 404s today, which is also why features/amp_endpoint_pause_resume is skipped.
     pause_resume: false
   # scale is the shape every ladder shares: ONE tenant (one cluster, one
   # branch, one endpoint) that keeps getting more concurrent drivers —

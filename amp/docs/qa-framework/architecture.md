@@ -650,9 +650,16 @@ mechanics, copied from stress:
   group optional (meko#492). The read-replica tests were deleted because
   `role` never reaches `EndpointSpec` at all (meko#833).
 
-  `Test.Skip: "<why>"` stays for the case it was built for — a test the
-  *environment* cannot run, where the lifecycle gates it before provisioning so
-  it costs nothing. It is not for a product bug.
+  `Test.Skip: "<why>"` gates a test before provisioning, so it costs no
+  environment and still reports its reason through `ampqa
+  describe`/`list`/`manifest`. Two cases earn it. One is a test the
+  *environment* cannot run. The other is a test already written against a
+  surface that turned out not to exist and whose issue has stalled: deleting it
+  throws the assertions away, and leaving it red burns an environment every
+  night to restate an issue nobody is working. `features/amp_endpoint_pause_resume`
+  is the second case — meko#524 was closed unmerged and the routes are unowned,
+  so it is skipped until they land. Neither case covers a product bug in
+  behaviour that ships; that stays red.
 - **Version checks inside apps**: apps handling API differences between
   versions compare the live version and **take the other route** — an endpoint
   that moved, a field that was renamed, an older flow for older builds — so

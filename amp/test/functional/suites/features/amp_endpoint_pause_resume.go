@@ -29,10 +29,9 @@ func init() {
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Pause an endpoint and assert its compute stops while the record, branch and data survive, then resume it on the same branch and assert it serves the prior data and new writes.",
-		// Fails today: the pause/resume routes do not exist, so the pause POST
-		// 404s (meko#518).
-		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Run:    runAmpEndpointPauseResume,
+		Skip:        "blocked on yugabyte/meko#518: the controller has no pause/resume routes, so the pause POST 404s. meko#524 carried the implementation and was closed unmerged, leaving the surface unowned",
+		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
+		Run:         runAmpEndpointPauseResume,
 	})
 }
 
