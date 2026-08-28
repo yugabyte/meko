@@ -301,11 +301,17 @@ audit / recreate.
    extension registers a background worker or needs shared memory (its `_PG_init`
    requires `shared_preload_libraries`), keeping it in step with the manifest's
    `preload:`.
-3. For a non-default extension, opt a branch in by passing
+3. Give the manifest row a one-line `description:` (step 1) and regenerate the
+   UI catalog: `cd amp_ui && npm run gen:extensions`, committing the resulting
+   `src/config/extensions.json`. The controller exposes no catalog endpoint, so
+   the picker ships the list; generating it from the manifest keeps the two from
+   drifting, and `src/config/extensions.test.ts` fails if the checked-in file is
+   stale.
+4. For a non-default extension, opt a branch in by passing
    `extensions: ["<name>"]` to `createCluster` (seeds the default branch), or
    `addBranchExtensions` on a branch later; every endpoint on that branch then
    mounts it.
-4. (Optional but expected) add a `regress:` block to the manifest row so
+5. (Optional but expected) add a `regress:` block to the manifest row so
    `extensions.sh --regress` runs the extension's upstream suite: `driver: pgxs`
    for a Makefile with a `REGRESS` target, or `driver: script` + `script: <path>`
    for a custom runner. Bless any by-design amp diffs under
@@ -376,4 +382,10 @@ audit / recreate.
   (`RecordBranch` — a fork copies its ancestor's extensions),
   [migration 0002](../../controller/migrations/0002_resource_model.up.sql)
   (`amp_registry.branches.extensions`, per branch).
+- UI: [`amp_ui/src/components/ui/extensions-field.tsx`](../../amp_ui/src/components/ui/extensions-field.tsx)
+  (the picker), offered by the create-cluster wizard and
+  [`ExtensionsDialog.tsx`](../../amp_ui/src/pages/multitenancy/components/ExtensionsDialog.tsx)
+  on a branch; its catalog is generated from the manifest by
+  [`gen-extensions.py`](../../amp_ui/scripts/gen-extensions.py) into
+  `amp_ui/src/config/extensions.json`.
 - Patches: [`compute/image/patches/`](../image/patches/) (reused verbatim).

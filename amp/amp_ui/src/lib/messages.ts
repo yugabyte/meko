@@ -28,6 +28,15 @@ export const dataBranchingMessages = {
   resizeUnsupported: (size: string) => `Resized to ${size} (in-place n/a on this runtime)`,
   resizeError: "Failed to resize compute",
 
+  // Extensions
+  extensionsTitle: (branch: string) => `Extensions — ${branch}`,
+  extensionsDescription:
+    "Externalized extensions mounted on every compute on this branch.",
+  extensionsRedeployWarning:
+    "Adding extensions redeploys every compute on this branch and drops their connections. Extensions can't be removed once added.",
+  extensionsAdded: (names: string) => `Adding ${names} — redeploying this branch's compute.`,
+  extensionsError: "Failed to add extensions",
+
   // Settings
   settingsTitle: "Settings",
   settingsBranchDescription:

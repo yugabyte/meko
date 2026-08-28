@@ -34,6 +34,9 @@ export type Branch = {
   pg_settings?: PgSettings;
   /** How the supervisor holds this branch's write lease. */
   write_token_settings?: WriteTokenSettings;
+  /** Externalized extensions enabled on this branch, by catalog name. Every
+   *  endpoint on the branch mounts them and a fork inherits the set. */
+  extensions?: string[];
   created_at: string;
 };
 
@@ -44,6 +47,8 @@ export type Cluster = {
   name: string;
   storage_pool_id: string;
   default_branch: Branch;
+  /** The default branch's extension set, surfaced as the cluster's. */
+  extensions?: string[];
   created_at: string;
 };
 
@@ -118,7 +123,10 @@ export type TaskList = { tasks: Task[]; count: number; total: number };
 
 export type CreateUserInput = { is_admin: boolean };
 export type CreateStoragePoolInput = { name: string; owner_user_id: string };
-export type CreateClusterInput = { name: string };
+export type CreateClusterInput = { name: string; extensions?: string[] };
+/** Unioned into the branch's set; the controller redeploys every endpoint on
+ *  the branch to mount them. At least one name. */
+export type AddBranchExtensionsInput = { extensions: string[] };
 /** CPU + memory reserved for the endpoint pod. Each value is a Kubernetes
  *  resource quantity applied as both the request and the limit (Guaranteed QoS). */
 export type EndpointResources = {

@@ -1,8 +1,9 @@
 // One branch in the tree: its identity badges (name, source/fork, pg version,
-// lineage) plus the compute section for that branch, and — on forks — a delete.
+// lineage), the extensions enabled on it, plus the compute section for that
+// branch, and — on forks — a delete.
 
 import { useState } from "react";
-import { GitBranch, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Blocks, GitBranch, SlidersHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ import type { Branch, Endpoint } from "@/lib/api/types";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { formatDateTime } from "@/lib/format";
 import { EndpointsSection } from "./EndpointsSection";
+import { ExtensionsDialog } from "./ExtensionsDialog";
 import { SettingsDialog } from "./SettingsDialog";
 
 export function BranchCard({
@@ -48,6 +50,8 @@ export function BranchCard({
   const del = useDeleteBranch();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showExtensions, setShowExtensions] = useState(false);
+  const extensions = branch.extensions ?? [];
 
   function remove() {
     del.mutate(
@@ -116,6 +120,15 @@ export function BranchCard({
           <Button
             variant="ghost"
             size="sm"
+            onClick={() => setShowExtensions(true)}
+            className="h-7 gap-1 px-2 text-xs"
+          >
+            <Blocks className="h-3.5 w-3.5" />
+            Extensions
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowSettings(true)}
             className="h-7 gap-1 px-2 text-xs"
           >
@@ -136,6 +149,17 @@ export function BranchCard({
           )}
         </div>
       </div>
+
+      {extensions.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Extensions</span>
+          {extensions.map((name) => (
+            <Badge key={name} variant="outline" className="font-mono text-[10px]">
+              {name}
+            </Badge>
+          ))}
+        </div>
+      )}
 
       <EndpointsSection
         poolId={poolId}
@@ -169,6 +193,15 @@ export function BranchCard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <ExtensionsDialog
+        open={showExtensions}
+        onOpenChange={setShowExtensions}
+        poolId={poolId}
+        clusterId={clusterId}
+        branchId={branch.branch_id}
+        enabled={extensions}
+        title={branch.name}
+      />
       <SettingsDialog
         open={showSettings}
         onOpenChange={setShowSettings}

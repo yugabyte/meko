@@ -1,8 +1,9 @@
-// Create-cluster wizard: a multi-step flow (Cluster -> Compute -> Review) that
-// creates a cluster and its writer endpoint. It composes the reusable
-// components/ui primitives (Stepper, ComputeSizeField) and fires ONE composite
-// call — createCluster (create_cluster with_writer) — which the controller runs
-// as a single background task: cluster + `main` branch + read_write endpoint.
+// Create-cluster wizard: a multi-step flow (Cluster -> Extensions -> Compute ->
+// Review) that creates a cluster and its writer endpoint. It composes the
+// reusable components/ui primitives (Stepper, ExtensionsField, ComputeSizeField)
+// and fires ONE composite call — createCluster (create_cluster with_writer) —
+// which the controller runs as a single background task: cluster + `main` branch
+// (seeded with the picked extensions) + read_write endpoint.
 // The wizard doesn't wait for it; it toasts and deeplinks to Tasks, so the work
 // survives navigating away. No read replica — not supported today.
 
@@ -30,6 +31,7 @@ import {
 import { Stepper } from "@/components/ui/stepper";
 import { ComputeSizeField, type ComputeSize } from "@/components/ui/compute-size-field";
 import { EngineField } from "@/components/ui/engine-field";
+import { ExtensionsField } from "@/components/ui/extensions-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
 import { isValidMemory } from "@/lib/compute";
 import {
@@ -38,7 +40,7 @@ import {
   type StoragePool,
 } from "@/lib/api/types";
 
-const STEPS = ["Cluster", "Compute", "Review"];
+const STEPS = ["Cluster", "Extensions", "Compute", "Review"];
 
 export function CreateClusterWizard({
   open,
@@ -53,6 +55,7 @@ export function CreateClusterWizard({
   const [engine, setEngine] = useState("postgres");
   const [name, setName] = useState("");
   const [poolId, setPoolId] = useState("");
+  const [extensions, setExtensions] = useState<string[]>([]);
   const [size, setSize] = useState<ComputeSize>({
     cpu: DEFAULT_ENDPOINT_CPU,
     memory: DEFAULT_ENDPOINT_MEMORY,
@@ -68,6 +71,7 @@ export function CreateClusterWizard({
       setEngine("postgres");
       setName("");
       setPoolId("");
+      setExtensions([]);
       setSize({ cpu: DEFAULT_ENDPOINT_CPU, memory: DEFAULT_ENDPOINT_MEMORY });
     }
   }, [open]);
@@ -79,7 +83,7 @@ export function CreateClusterWizard({
   const stepValid =
     step === 0
       ? Boolean(trimmedName && poolId)
-      : step === 1
+      : step === 2
         ? Boolean(size.cpu.trim()) && isValidMemory(size.memory)
         : true;
 
@@ -88,7 +92,13 @@ export function CreateClusterWizard({
     // and the read_write endpoint as a single background task. We don't wait for
     // it — toast + deeplink to Tasks and let the worker finish independently.
     createCluster.mutate(
-      { poolId, name: trimmedName, cpu: size.cpu.trim(), memory: size.memory.trim() },
+      {
+        poolId,
+        name: trimmedName,
+        cpu: size.cpu.trim(),
+        memory: size.memory.trim(),
+        extensions,
+      },
       {
         onSuccess: () => {
           toast.success(
@@ -165,17 +175,36 @@ export function CreateClusterWizard({
           {step === 1 && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
+                Enabled on the cluster's <code>main</code> branch — every compute on it
+                mounts them. You can add more later from a branch's Extensions dialog.
+              </p>
+              <ExtensionsField
+                value={extensions}
+                onChange={setExtensions}
+                showRestartTag={false}
+              />
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
                 Sizes the cluster's read-write endpoint on the <code>main</code> branch.
               </p>
               <ComputeSizeField value={size} onChange={setSize} />
             </div>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <div className="space-y-2 rounded-lg border border-border">
               <ReviewRow k="Name" v={trimmedName || "—"} mono />
               <ReviewRow k="Engine" v="PostgreSQL 18" />
               <ReviewRow k="Shared pool" v={poolName} mono />
+              <ReviewRow
+                k="Extensions"
+                v={extensions.length ? extensions.join(", ") : "None"}
+                mono={extensions.length > 0}
+              />
               <ReviewRow k="Writer compute" v={`${size.cpu} vCPU · ${size.memory}`} mono />
             </div>
           )}

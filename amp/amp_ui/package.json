@@ -12,6 +12,7 @@
     "build": "vite build",
     "preview": "vite preview --port 3020",
     "check": "tsc --noEmit",
+    "gen:extensions": "python3 scripts/gen-extensions.py",
     "test": "vitest run",
     "test:watch": "vitest"
   },

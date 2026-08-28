@@ -13,6 +13,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "moduleResolution": "bundler",
+    "resolveJsonModule": true,
     "baseUrl": ".",
     "types": ["node", "vite/client"],
     "paths": {

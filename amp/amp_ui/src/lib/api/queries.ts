@@ -10,6 +10,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
+  addBranchExtensions,
   createBranch,
   createCluster,
   createClusterWithWriter,
@@ -23,6 +24,7 @@ import {
   listStoragePools,
   listTasks,
   listUsers,
+  pollTask,
   updateBranchSettings,
 } from "./resources";
 import type {
@@ -31,6 +33,7 @@ import type {
   Cluster,
   SettingsUpdateResult,
   StoragePool,
+  Task,
   UpdateBranchSettingsInput,
   User,
 } from "./types";
@@ -182,11 +185,18 @@ export function useCreateCluster() {
 export function useCreateClusterWithWriter() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { poolId: string; name: string; cpu?: string; memory?: string }) =>
+    mutationFn: (input: {
+      poolId: string;
+      name: string;
+      cpu?: string;
+      memory?: string;
+      extensions?: string[];
+    }) =>
       createClusterWithWriter(input.poolId, {
         name: input.name,
         cpu: input.cpu,
         memory: input.memory,
+        extensions: input.extensions,
       }),
     onSuccess: (_task, input) => {
       qc.invalidateQueries({ queryKey: qk.clusters(input.poolId) });
@@ -239,6 +249,49 @@ export function useCreateBranch() {
       qc.invalidateQueries({
         queryKey: qk.branches(input.poolId, input.clusterId),
       });
+    },
+  });
+}
+
+/** Enable extensions on a branch.
+ *
+ * The controller unions them into the branch's set and redeploys every endpoint
+ * on the branch to mount the new ImageVolumes, so the whole subtree goes stale:
+ * the branch list carries the set, and each endpoint is replaced (the redeploy
+ * recreates the pod, so its address changes). The redeploy drops connections,
+ * which the caller warns about before calling.
+ *
+ * The POST returns 202 as soon as the task is *recorded*, before any of that has
+ * happened, so invalidating there would only re-read pre-task state and nothing
+ * would refetch again: the badges would miss the names just added, `enabled`
+ * would leave them togglable in the picker, and each endpoint's cached address
+ * would still be the pre-redeploy pod IP. Wait for the task to finish, then
+ * invalidate.
+ */
+export function useAddBranchExtensions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      poolId: string;
+      clusterId: string;
+      branchId: string;
+      extensions: string[];
+    }): Promise<Task> =>
+      addBranchExtensions(input.poolId, input.clusterId, input.branchId, {
+        extensions: input.extensions,
+      }),
+    onSuccess: (task, input) => {
+      // Deliberately not awaited: the dialog closes on the 202 rather than
+      // blocking for a redeploy of every endpoint on the branch. A failed or
+      // timed-out task still invalidates — it may have applied part of the set.
+      void pollTask(task.id)
+        .catch(() => undefined)
+        .then(() => {
+          qc.invalidateQueries({ queryKey: qk.branches(input.poolId, input.clusterId) });
+          // Prefix of qk.endpoints(pool, cluster, *) — every endpoint on the
+          // branch is redeployed, so each one's address may have changed.
+          qc.invalidateQueries({ queryKey: ["endpoints", input.poolId, input.clusterId] });
+        });
     },
   });
 }

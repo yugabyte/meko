@@ -4,6 +4,7 @@
 
 import { apiRequest, ApiError, LIST_LIMIT } from "./client";
 import type {
+  AddBranchExtensionsInput,
   Branch,
   BranchList,
   CreateBranchInput,
@@ -66,7 +67,7 @@ export function listTasks(params: {
 /** Poll a task to a terminal state: resolve with the succeeded Task, or throw an
  *  ApiError carrying `task.error` on failure (so the existing UI error path
  *  surfaces it) or on timeout. */
-async function pollTask(taskId: string): Promise<Task> {
+export async function pollTask(taskId: string): Promise<Task> {
   const deadline = Date.now() + TASK_TIMEOUT_MS;
   for (;;) {
     const task = await getTask(taskId);
@@ -166,11 +167,16 @@ export async function createCluster(
 // the writer; empty takes the controller default (2 cores / 4Gi).
 export function createClusterWithWriter(
   poolId: string,
-  input: { name: string; cpu?: string; memory?: string },
+  input: { name: string; cpu?: string; memory?: string; extensions?: string[] },
 ): Promise<Task> {
   const body: Record<string, unknown> = { name: input.name, with_writer: true };
   if (input.cpu || input.memory) {
     body.resources = { cpu: input.cpu || undefined, memory: input.memory || undefined };
+  }
+  // Seeds the `main` branch's set. Omitted rather than sent empty: [] and absent
+  // mean the same to the controller, and absent is the quieter payload.
+  if (input.extensions?.length) {
+    body.extensions = input.extensions;
   }
   return apiRequest<Task>(`/storage-pools/${poolId}/clusters`, {
     method: "POST",
@@ -343,6 +349,23 @@ export async function updateBranchSettings(
   return apiRequest<SettingsUpdateResult>(
     `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/settings`,
     { method: "PATCH", body: input },
+  );
+}
+
+// Async, fire-and-forget: records an add_branch_extensions task that unions the
+// names into the branch's set and redeploys every endpoint on the branch to
+// mount them. Returns the Task immediately — the redeploy interrupts each
+// compute's connections, so the caller says so before it happens. Idempotent:
+// re-adding an already-enabled extension is a no-op.
+export function addBranchExtensions(
+  poolId: string,
+  clusterId: string,
+  branchId: string,
+  input: AddBranchExtensionsInput,
+): Promise<Task> {
+  return apiRequest<Task>(
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/extensions`,
+    { method: "POST", body: input },
   );
 }
 
