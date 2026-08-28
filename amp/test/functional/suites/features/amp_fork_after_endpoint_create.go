@@ -17,7 +17,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Fork a branch the instant its endpoint's create task reports success, with no wait in between, and assert the controller resolves a fork point instead of rejecting its own just-deployed endpoint.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

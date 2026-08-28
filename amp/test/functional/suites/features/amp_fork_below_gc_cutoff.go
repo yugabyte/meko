@@ -71,7 +71,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Force the ancestor's GC past a captured LSN, then assert a fork at that reclaimed LSN is rejected at registration rather than registered and left unusable.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

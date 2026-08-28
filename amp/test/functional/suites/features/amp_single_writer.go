@@ -16,7 +16,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Assert the endpoint role surface: an unknown role is rejected 400, an accepted read_write endpoint echoes its role back, endpoints_one_writer_per_branch rejects a second read_write on the same branch, and the first keeps serving reads+writes intact.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

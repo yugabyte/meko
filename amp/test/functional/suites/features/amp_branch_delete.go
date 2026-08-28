@@ -16,7 +16,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Delete a forked branch (endpoint first, then branch) and assert it is gone from the list, the parent's data and endpoint are untouched, and no task is left failed.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

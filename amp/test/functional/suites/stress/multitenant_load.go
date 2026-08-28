@@ -26,7 +26,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"stress", "nightly"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "N tenants (cluster + endpoint each) writing in parallel on one control plane for a config-tunable duration: every tenant's rows and checksum must match what its own writer committed, no tenant may see another's tables, nobody may be starved, and the control plane must still serve afterwards.",
 		Params:      []string{"stress.multitenant"},

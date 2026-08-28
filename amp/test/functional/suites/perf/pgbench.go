@@ -92,7 +92,7 @@ func init() {
 		Suite:       "perf",
 		Category:    core.Perf,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		Tags:        []string{"perf", "nightly"},
+		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Run pgbench (YB's ysql_bench fork) through an amp compute endpoint backed by a co-located YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
 		Params:      []string{"perf", "apps.ybk8s", "env.ampstack"},

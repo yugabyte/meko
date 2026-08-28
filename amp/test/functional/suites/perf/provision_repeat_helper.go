@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
@@ -36,30 +37,33 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 	logf := t.Masker().Logf(log.Printf)
 	t.SetPerfIdentity(id.core())
 
+	// Provisions run concurrently: each is its own universe + amp stack + client
+	// pod, namespaced by the p<N> suffix, so N iterations cost one wall clock.
 	provisions := cfg.Provisions
-	var provResults []BenchResult
-	var shapeDPs [][]core.Datapoint
-	var shapeErrs []error
+	provResults := make([]BenchResult, provisions)
+	provErrs := make([]error, provisions)
+	var wg sync.WaitGroup
 	for i := 1; i <= provisions; i++ {
-		res, err := runOneProvision(t, spec, cfg, bc, i, provisions, logf)
-		if err != nil {
-			return err
-		}
-		provResults = append(provResults, res)
-		dps, serr := benchShapeGate(res, spec.specs(res), gates)
-		shapeDPs = append(shapeDPs, dps)
-		if serr != nil {
-			shapeErrs = append(shapeErrs, fmt.Errorf("provision %d/%d: %w", i, provisions, serr))
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			provResults[i-1], provErrs[i-1] = runOneProvision(t, spec, cfg, bc, i, provisions, logf)
+		}(i)
+	}
+	wg.Wait()
+	if err := errors.Join(provErrs...); err != nil {
+		return err
+	}
+	var shapeErrs []error
+	for i, res := range provResults {
+		if serr := benchShapeGate(res, spec.specs(res), gates); serr != nil {
+			shapeErrs = append(shapeErrs, fmt.Errorf("provision %d/%d: %w", i+1, provisions, serr))
 		}
 	}
 
 	return t.Step("gate_perf", func(*core.StepHandle) error {
 		agg := aggregateProvisions(provResults)
 		gated, info := spec.datapoints(agg)
-		if provisions > 1 {
-			info = append(info, madDatapoints(spec.specs(agg))...)
-		}
-		info = append(info, worstShapeDatapoints(shapeDPs)...)
 		gateErr := emitAndGateAuto(t, cfg, version, spec.testName, gated, info, id, logf)
 		emitHistoryTrend(t, hcfg, spec.testName, version, agg, id, logf)
 		return errors.Join(append([]error{gateErr}, shapeErrs...)...)
@@ -87,7 +91,7 @@ type benchProvision struct {
 	benchResult BenchResult
 }
 
-// Teardown runs before the next provision starts.
+// Each provision tears its own stack down on return.
 func runOneProvision(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc BenchConfig, prov, provisions int, logf func(string, ...any)) (_ BenchResult, err error) {
 	r := &benchProvision{
 		t: t, spec: spec, cfg: cfg, bc: bc,
@@ -120,12 +124,13 @@ func runOneProvision(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc Bench
 		{spec.runStep, r.runBenchmark},
 	}
 	for _, p := range phases {
-		name := p.name
-		if r.tag != "" {
-			name = r.tag + "_" + name
-		}
 		fn := p.fn
-		if err := t.Step(name, func(*core.StepHandle) error { return fn(t.Context) }); err != nil {
+		if err := t.Step(p.name, func(s *core.StepHandle) error {
+			if provisions > 1 {
+				s.Set("provision", prov)
+			}
+			return fn(t.Context)
+		}); err != nil {
 			return r.benchResult, err
 		}
 	}

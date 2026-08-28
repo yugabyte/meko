@@ -57,7 +57,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Prove the metrics pipeline the control-plane chart deploys comes up healthy: an endpoint pod's postgres-exporter sidecar serves a parseable exposition carrying the series the shipped dashboards read, and on a cluster whose opentelemetry.io CRDs let the chart render them, every declared OpenTelemetry collector is present and ready in the run's namespace.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

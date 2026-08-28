@@ -23,7 +23,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "pg_cron end to end on an opted-in endpoint: the library is genuinely in shared_preload_libraries, a scheduled every-minute job actually fires (a row lands and job_run_details records success), and unschedule removes it.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

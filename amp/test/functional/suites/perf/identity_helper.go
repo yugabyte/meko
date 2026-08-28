@@ -70,7 +70,9 @@ func LoadSignature(f LoadFields) string {
 }
 
 // "2" = the headline is the median across fresh provisions, not across iterations.
-const benchHarnessRev = "2"
+// "3" = the provisions run CONCURRENTLY, so every number includes co-stack
+// contention; not comparable with sequential-provision history.
+const benchHarnessRev = "3"
 
 // LoadShapeSignature hashes the load SHAPE only: the same fields minus the
 // harness cadence (iterations, warmup, measurement duration). Two runs with the

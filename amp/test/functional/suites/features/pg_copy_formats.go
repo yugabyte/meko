@@ -25,7 +25,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "COPY TO STDOUT and COPY FROM STDIN over text and CSV (header, custom delimiter, NULL marker): each export is compared to Go-built bytes, re-imported into a fresh table and verified, and a malformed CSV row must abort its COPY leaving the table unchanged.",
 		Run:         runCopyFormats,

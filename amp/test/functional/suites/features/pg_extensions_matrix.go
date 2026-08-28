@@ -57,7 +57,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a cluster opted into all of it, each created, version-matched and canary-queried.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

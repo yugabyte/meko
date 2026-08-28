@@ -522,11 +522,11 @@ func emitBenchChartsLabeled(t *core.T, res BenchResult, tag string) {
 
 // benchCharts turns a BenchResult into the charts a perf run reports: TPS over
 // time and latency over time (a line series per kept iteration that carries a
-// progress time series), and per-iteration TPS (a bar across the kept
-// iterations — the run-to-run spread that pairs with the CV datapoint). A chart
-// whose underlying series is empty (e.g. a workload whose tool reports no
-// periodic progress, so Sample.Series is empty) is skipped rather than emitted
-// blank. Pure — unit-tested without a live run.
+// progress time series). The iteration spread is NOT charted — the .cv/.mad
+// datapoints already carry it, and a bar chart per provision only spams the
+// report. A chart whose underlying series is empty (e.g. a workload whose tool
+// reports no periodic progress, so Sample.Series is empty) is skipped rather
+// than emitted blank. Pure — unit-tested without a live run.
 func benchCharts(res BenchResult) []core.Chart {
 	var charts []core.Chart
 
@@ -557,18 +557,6 @@ func benchCharts(res BenchResult) []core.Chart {
 		charts = append(charts, core.Chart{
 			Title: "Latency over time", Kind: core.ChartLine,
 			XLabel: "elapsed (s)", YLabel: "latency (ms)", Series: latSeries,
-		})
-	}
-
-	if len(res.Kept) > 0 {
-		var pts []core.ChartPoint
-		for i, s := range res.Kept {
-			pts = append(pts, core.ChartPoint{X: float64(i + 1), Y: s.TPS})
-		}
-		charts = append(charts, core.Chart{
-			Title: "Per-iteration TPS", Kind: core.ChartBar,
-			XLabel: "iteration", YLabel: "tps",
-			Series: []core.ChartSeries{{Name: "tps", Points: pts}},
 		})
 	}
 	return charts

@@ -1,6 +1,7 @@
-# Test tiers: `regression`, `stress`, `perf` and `nightly`
+# Test tiers: `regression`, `stress` and `perf`
 
-Four tier tags — and **`nightly` is a superset of the other three**:
+Three tier tags, each a scheduled lane (`scale` exists in `suites/perf` but is
+untagged and run on demand — see the Perf bullet):
 
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
@@ -16,20 +17,14 @@ Four tier tags — and **`nightly` is a superset of the other three**:
   `commit_durability`) and `bulk_load_kill` (one large write killed mid-flight).
   Scheduled as its own tier so the report portal gets a Stress
   column; the `Category: core.Stress` tests in `suites/features` are **not** in it
-  (they belong to `regression`/`nightly` and would double-report).
+  (they belong to `regression` and would double-report).
 - **`perf`** — the baseline-gated benchmarks in `suites/perf` (`tpcc`, `pgbench`,
   `sysbench`), with version/image comparison + bisect + history/trend.
-- **`nightly`** — the extended sweep, run on Jenkins against real deployments. It
-  **re-runs** every tagged test (across the real backings) *plus* what regression
-  can't afford: real k8s / GCP / YBA / yugabyted / raw-YB backings, chaos/nemesis,
-  and (planned) negative/red-path cases.
 
-So a regression test carries **both** `regression` + `nightly`, a stress test
-`stress` + `nightly`, a perf test `perf` + `nightly`; the extended-only tests carry
-just `nightly`.
+Extended tests that fit no lane (foundation end-to-ends, upgrade, chaos
+one-offs) are **untagged** and run on demand by name or `--testr`.
 
-`ampqa collect --tag regression` and `--tag nightly` are the source of truth for
-what's in each. The `canary` suite (engine self-test) and `presets` (setup-only
+`ampqa collect --tag <tier>` is the source of truth for what's in each. The `canary` suite (engine self-test) and `presets` (setup-only
 dev-env menus) are deliberately untagged — they're selected by `--suite` / name,
 not by tier.
 
@@ -75,19 +70,17 @@ merge (note exit `4` = all-skipped, which the gate must treat as a failure).
 
 ---
 
-## `nightly` — extended sweep on Jenkins (the regression tests plus the extended ones)
+## Extended tests — on demand, by name
 
-The wide, heavy tier: it re-runs the regression tests against real backings, and
-adds real deployments across clouds/backings, chaos, and long runs. Selected by
-`--tag nightly`; on Jenkins it's typically split into several jobs, each with the
-env overlay its tests need (a single run would demand every cloud credential at
-once). The extended-only tests (beyond regression) are:
+Beyond the three lanes: real deployments across clouds/backings, chaos, and long
+runs. Untagged; select by name or `--testr`, each with the env overlay its tests
+need (a single run would demand every cloud credential at once). They are:
 
 - **Foundation on k8s** — end-to-end (backing → amp → workloads → teardown) on the
   k8s-hosted backing: `amp_on_yb_k8s`. The cross-cloud / VM / YBA foundation tests
   (`amp_on_yugabyted_aws`, `amp_on_raw_yugabyte_aws`, `amp_on_yba_universe`,
-  `amp_on_yba_provisioned`) are **untagged** — run on demand by name when that
-  cloud infra is available, not part of the automated nightly tier for now. (A
+  `amp_on_yba_provisioned`) run on demand by name when that
+  cloud infra is available. (A
   second k8s check — yugabyted in k8s pods, via the `ybpod` backing — is planned
   but not yet a registered test.)
 - **amp features on real k8s** — `amp_branch_isolation`, `amp_endpoint_lifecycle`,
@@ -111,12 +104,17 @@ once). The extended-only tests (beyond regression) are:
   latency`, not a raw prometheus name. `microbench` samples the amp compute
   endpoint pod instead (`apps.metrics.endpoint_collect`, section `[endpoint]`),
   since no YB backing is in its request path. Set
-  `apps.metrics.enabled=bool:false` to turn that off.
+  `apps.metrics.enabled=bool:false` to turn that off. `lifecycle` times the data
+  lifecycle on a loaded tenant (fork off millions of rows, endpoint up on the
+  fork, cold reads, pause/resume once `perf.lifecycle.pause_resume` is on, big
+  delete, drop, branch and cluster delete), run over
+  `perf.lifecycle.iterations` concurrent fresh tenants with each phase's median
+  as the portal-gated datapoint.
 
 Example (one env at a time):
 
 ```
-ampqa run --tag nightly --testr '^features/amp_on_yb_k8s$'          -c gke.yaml
+ampqa run --testr '^features/amp_on_yb_k8s$'                         -c gke.yaml
 # cross-cloud/VM foundation (untagged — on demand, needs the cloud infra):
 ampqa run --testr '^features/amp_on_(yugabyted|raw_yugabyte)_aws$'   -c aws.yaml
 ampqa run --tag stress -c gke.yaml -o stress.combined.enabled=bool:true
@@ -134,9 +132,8 @@ set *and* a kube-context (`apps.ybk8s.kubecontext` / `apps.ybk8s.kubeconfig` /
 operate on the universe the env already stood up, so they need
 `env.yb_deploy=yba_provisioned` (kubernetes) and skip on any env that gives them
 no YBA universe. Both are ON by default (`stress.backing_maintenance.enabled`,
-`stress.backing_backup_restore.enabled`) — and since every tagged test also
-carries `nightly`, that is roughly an hour of backing-mutating work added to the
-`stress` lane and to the nightly sweep, not just to `--tag stress`.
+`stress.backing_backup_restore.enabled`) — roughly an hour of backing-mutating
+work in the `stress` lane.
 
 They still skip, with the reason on the result, when the backing cannot carry
 them:
@@ -162,23 +159,20 @@ ampqa run --testr '^stress/backing_maintenance$' -c gke.yaml \
 ```
 
 > **Planned, not yet present:** dedicated negative / red-path cases (error paths,
-> failure injection with asserted failure) belong in `nightly`. Add them tagged
-> `nightly`; there are none today.
+> failure injection with asserted failure); there are none today.
 
-Nightly failures are triaged, not auto-merge-blocking — except a `regression`-tagged
-test failing there too, which is a real regression.
+Scheduled-lane failures are triaged, not auto-merge-blocking — except a
+`regression`-tagged test failing there too, which is a real regression.
 
 ---
 
 ## Conventions
 
-- **Four tier tags:** `regression`, `stress`, `perf`, `nightly`. Don't introduce
-  others; `canary`/`presets` stay untagged (selected by `--suite` / name).
-- **Every tagged test also carries `nightly`** — the tier tags partition what the
-  nightly sweep re-runs, they don't opt out of it.
+- **Three tier tags:** `regression`, `stress`, `perf`. Don't introduce others;
+  `canary`/`presets`/`scale` and the extended tests stay untagged (selected by
+  `--suite` / name / `--testr`).
 - **PR gate = `--tag regression` only** — fast, deterministic, no cloud provisioning.
-- **Nightly = `--tag nightly`**, one Jenkins job per env overlay; collect reports
-  centrally. `--tag stress` / `--tag perf` are the scheduled per-tier lanes, each
-  needing its own env overlay and enable flag (see below).
+- `--tag regression` / `--tag stress` / `--tag perf` are the scheduled daily lanes,
+  each needing its own env overlay and enable flag (see below).
 - `ampqa describe <test>` shows a test's parameters; `ampqa collect --tag <t>` lists
   a tier; `ampqa manifest` is the machine-readable catalog for CI.

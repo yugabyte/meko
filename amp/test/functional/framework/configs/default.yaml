@@ -1578,13 +1578,12 @@ perf:
   # rf is the replication factor of the co-located YB cluster the amp control
   # plane is backed by (the deploy clamps up to this).
   rf: 3
-  # provisions is how many times the heavy bench workloads (tpcc, pgbench,
-  # sysbench) provision a FRESH backing + control plane + endpoint and repeat
-  # the whole benchmark; the gated headline is the MEDIAN across provisions and
-  # the cross-provision MAD is emitted as `<metric>.mad`. Iterations inside one
-  # stack agree to ~1% while stack-to-stack spread runs 20%+, so this is the
-  # repeat that actually samples the variance that matters. 1 restores the
-  # single-provision behaviour.
+  # provisions is how many FRESH backing + control plane + endpoint stacks the
+  # heavy bench workloads (tpcc, pgbench, sysbench) stand up and benchmark, ALL
+  # CONCURRENTLY, so N stacks cost one wall clock; the gated headline is the
+  # MEDIAN across provisions. Iterations inside one stack agree to ~1% while
+  # stack-to-stack spread runs 20%+, so this is the repeat that actually
+  # samples the variance that matters. 1 restores the single-stack behaviour.
   provisions: 3
   # Small but perf-meaningful TPC-C load, fixed so runs are comparable. For
   # TPC-C the warehouse count IS the scalefactor. Kept modest to stay cheap, but
@@ -1643,11 +1642,11 @@ perf:
   # bench is the multi-iteration benchmark HARNESS shared by every perf workload
   # (perf/tpcc, perf/pgbench). A workload is prepared ONCE (schema + initial
   # load), then driven for a discarded warmup + N measured iterations; the kept
-  # iterations are aggregated with robust statistics (the MEDIAN is the gated
-  # headline — never the mean — plus mean/stddev/CV/min/max). Each metric's
-  # coefficient of variation is emitted as a `<metric>.cv` datapoint so a noisy
-  # run is visible in the report. The measured-iteration run length is
-  # measurement_duration (it supersedes any per-workload duration knob).
+  # iterations are aggregated with robust statistics and the MEDIAN — never the
+  # mean — is the gated headline; only the medians are reported (the raw
+  # per-iteration numbers are attached, so spread stats belong report-side).
+  # The measured-iteration run length is measurement_duration (it supersedes
+  # any per-workload duration knob).
   bench:
     # iterations is the number of MEASURED runs (excludes the warmup below).
     iterations: 3
@@ -1683,11 +1682,8 @@ perf:
     # collects, so they assert on the very first run at no extra runtime. Both are
     # expressed as a regression percent in the metric's own worse direction (a drop
     # for throughput, a rise for latency): positive is worse, negative is
-    # improving, and 0 is flat. Emitted as `<metric>_iter_delta_pct` /
-    # `<metric>_decay_pct` datapoints (plus the previously discarded warmup as
-    # `<metric>_warmup` and `<metric>_warmup_delta_pct`, ungated — a cold warmup
-    # being SLOWER is normal). Set a limit to 0 to keep the datapoint but drop the
-    # assertion.
+    # improving, and 0 is flat. Assertion-only, no datapoints: a violation names
+    # its numbers in the failure. Set a limit to 0 to drop the assertion.
     #
     # Both defaults deliberately sit ABOVE the run-to-run spread a small
     # co-located load already shows (see perf.warehouses: ~14% throughput and up
@@ -1768,6 +1764,34 @@ perf:
     # against real hardware: treat the first runs as establishing what the healthy
     # ratio is on your target. 0 disables the assertion, keeping the datapoint.
     max_phase_ratio: 2.0
+  # lifecycle is perf/lifecycle: the data lifecycle a customer runs on a
+  # loaded tenant, each step timed as a lifecycle.<phase> datapoint — fork off a
+  # near-empty branch and off `rows` rows, endpoint up on the fork, cold/warm
+  # count, write into the fork, pause/resume, delete half the parent, drop the
+  # table, delete the fork and the cluster. Runs on the standing control plane
+  # (sharedk8s), no backing or client pod of its own.
+  lifecycle:
+    # iterations runs the WHOLE lifecycle that many times CONCURRENTLY, each on
+    # its own fresh tenant; the median of each tracked phase is what gets gated
+    # (per-iteration timings live in phases.txt). One shot is not a signal here:
+    # create_endpoint has shown a 0.49 coefficient of variation in one run.
+    iterations: 3
+    # rows is the parent's dataset; ~100 bytes a row with the default payload.
+    rows: 3000000
+    # batch_rows is the size of one INSERT ... SELECT during the load.
+    batch_rows: 200000
+    # fork_write_rows is what gets written into the fork after it is up.
+    fork_write_rows: 200000
+    payload_bytes: 64
+    # max_fork_ratio gates fork_loaded / fork_small: a copy-on-write fork should
+    # not scale with the parent. 0 keeps the datapoint and drops the assertion.
+    max_fork_ratio: 5.0
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+    # pause_resume times fork_pause/fork_resume/fork_resume_first_count. Off
+    # until the controller grows the pause/resume routes (meko#518): the POST
+    # 404s today, which is why features/amp_endpoint_pause_resume fails.
+    pause_resume: false
   # scale is the shape every ladder shares: ONE tenant (one cluster, one
   # branch, one endpoint) that keeps getting more concurrent drivers —
   # perf/scale_tpcc, scale_ycsb, scale_pgbench escalate copies of one workload,

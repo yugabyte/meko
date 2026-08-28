@@ -25,12 +25,8 @@ import (
 // Both are expressed as a REGRESSION PERCENT in the metric's own worse direction
 // (a drop for throughput, a rise for latency): positive = worse, negative =
 // improving, so one threshold per gate covers both directions. A limit <= 0
-// turns that gate off; the datapoint is still emitted.
-//
-// The discarded warmup is recorded too (`<metric>_warmup` plus the delta to the
-// measured median), ungated: a warmup that is FASTER than steady state is the
-// signal the harness currently throws away, but a cold warmup being slower is
-// normal, so it is reported rather than asserted.
+// turns that gate off. The gates assert only — no datapoints: a violation
+// carries its numbers in the error, and the raw iteration output is attached.
 
 // Shape-gate defaults (perf.bench.*). Sized to sit ABOVE the run-to-run spread
 // a small co-located load already shows (see perf.warehouses in
@@ -62,27 +58,13 @@ func benchGatesFromConfig(c *core.Config) benchGates {
 	}
 }
 
-// benchShapeGate turns a finished BenchResult into the shape datapoints and
-// asserts the gated ones against g. The datapoints are returned for the caller
-// to emit alongside the other informational ones; the error names every
-// violation. Pure — unit-tested without a live run.
-func benchShapeGate(res BenchResult, specs []metricSpec, g benchGates) ([]core.Datapoint, error) {
-	var dps []core.Datapoint
+// benchShapeGate asserts a finished BenchResult's shape against g; the error
+// names every violation with its numbers. Pure — unit-tested without a live run.
+func benchShapeGate(res BenchResult, specs []metricSpec, g benchGates) error {
 	var violations []string
 
 	for _, m := range specs {
-		if m.FromSample != nil && res.Warmup != nil {
-			if w := m.FromSample(*res.Warmup); w > 0 {
-				// The cold number itself, kept: discarding it is what hides a
-				// "fast first pass, slow forever after" shape.
-				dps = append(dps, core.Datapoint{Name: m.Name + "_warmup", Value: w, Unit: m.Unit, Direction: m.Dir})
-				if d, ok := regressionPct(w, m.Stats.Median, m.Dir); ok {
-					dps = append(dps, pctDatapoint(m.Name+"_warmup_delta_pct", d))
-				}
-			}
-		}
 		if d, ok := iterDriftPct(m.Stats, m.Dir); ok {
-			dps = append(dps, pctDatapoint(m.Name+"_iter_delta_pct", d))
 			if g.MaxIterDriftPct > 0 && d > g.MaxIterDriftPct {
 				violations = append(violations, fmt.Sprintf("%s drifted %.1f%% across iterations (limit %.1f%%: first %.4g → last %.4g %s)",
 					m.Name, d, g.MaxIterDriftPct, first(m.Stats.Values), last(m.Stats.Values), m.Unit))
@@ -90,7 +72,6 @@ func benchShapeGate(res BenchResult, specs []metricSpec, g benchGates) ([]core.D
 		}
 		if m.FromPoint != nil {
 			if d, ok := runDecayPct(res.Kept, m.FromPoint, m.Dir); ok {
-				dps = append(dps, pctDatapoint(m.Name+"_decay_pct", d))
 				if g.MaxDecayPct > 0 && d > g.MaxDecayPct {
 					violations = append(violations, fmt.Sprintf("%s decayed %.1f%% within the run (limit %.1f%%: first third vs last third of the progress samples)",
 						m.Name, d, g.MaxDecayPct))
@@ -100,15 +81,9 @@ func benchShapeGate(res BenchResult, specs []metricSpec, g benchGates) ([]core.D
 	}
 
 	if len(violations) > 0 {
-		return dps, fmt.Errorf("perf shape regression: %s", strings.Join(violations, "; "))
+		return fmt.Errorf("perf shape regression: %s", strings.Join(violations, "; "))
 	}
-	return dps, nil
-}
-
-// pctDatapoint is one shape datapoint: a regression percent in the metric's
-// worse direction, so lower is always better and 0 is flat.
-func pctDatapoint(name string, pct float64) core.Datapoint {
-	return core.Datapoint{Name: name, Value: pct, Unit: "%", Direction: core.LowerIsBetter}
+	return nil
 }
 
 // regressionPct is the percent change from → to expressed in dir's WORSE

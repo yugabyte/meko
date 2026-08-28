@@ -53,7 +53,6 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "In-place control-plane upgrade: deploy the previous release, seed checksummed data through an endpoint, upgrade the controller image, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, and a new endpoint gets the post-upgrade image.",
 		Params:      []string{"functional", "functional.upgrade", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

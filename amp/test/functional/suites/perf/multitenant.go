@@ -149,7 +149,7 @@ func init() {
 		Suite:       "perf",
 		Category:    core.Perf,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"perf", "nightly"},
+		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Multitenancy performance on one control plane: each tenant is its own cluster + endpoint driven by its own real benchmark client (TPC-C, SqlBankTransfer, SqlTransactions by default), measured alone and then with every tenant running. Reports per-workload throughput and latency in both conditions, the interference ratio between them (the gate), control-plane op latencies and fork time against an empty versus a seeded parent.",
 		Params:      []string{"perf.multitenant"},

@@ -23,7 +23,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "ALTER TABLE column commands on a seeded table — ADD (with and without default), SET/DROP DEFAULT, SET/DROP NOT NULL, ALTER TYPE with a USING cast, RENAME, ADD/DROP CONSTRAINT, DROP COLUMN — each verified against the pre-existing rows and re-verified on a cold connection.",
 		Run:         runColumnOps,

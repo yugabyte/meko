@@ -75,7 +75,6 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		Tags:        []string{"nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "End-to-end amp-on-backing: deploy YugabyteDB in k8s co-located with amp → layer-1 + layer-2 workloads → teardown.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybk8s"},

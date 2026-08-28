@@ -327,28 +327,16 @@ type metricSpec struct {
 	FromPoint  func(SamplePoint) float64
 }
 
-// splitDatapoints turns the metric specs into two lists: the GATED headline
-// datapoints (each carrying the median) and the informational .cv datapoints
-// (the run's noise signal, emitted ungated so a noisy run is visible without
-// gating on the volatile CV itself).
+// splitDatapoints turns the metric specs into the GATED headline datapoints,
+// each carrying the median. Derived statistics (CV, MAD, warmup deltas) are NOT
+// reported — the raw per-iteration numbers live in the attachments, and a
+// spread the portal needs can be computed there instead of shipping a wall of
+// parameters nobody reads.
 func splitDatapoints(specs []metricSpec) (gated, info []core.Datapoint) {
 	for _, m := range specs {
 		gated = append(gated, core.Datapoint{Name: m.Name, Value: m.Stats.Median, Unit: m.Unit, Direction: m.Dir})
-		info = append(info, core.Datapoint{Name: m.Name + ".cv", Value: m.Stats.CV, Unit: "cv", Direction: core.LowerIsBetter})
 	}
 	return gated, info
-}
-
-func mad(vals []float64) float64 {
-	if len(vals) < 2 {
-		return 0
-	}
-	m := median(vals)
-	devs := make([]float64, len(vals))
-	for i, v := range vals {
-		devs[i] = math.Abs(v - m)
-	}
-	return median(devs)
 }
 
 // Over the provision medians, so CV/min/max are the stack-to-stack spread.
@@ -369,38 +357,4 @@ func aggregateProvisions(rs []BenchResult) BenchResult {
 		LatencyP95: pick(func(r BenchResult) BenchStats { return r.LatencyP95 }),
 		LatencyP99: pick(func(r BenchResult) BenchStats { return r.LatencyP99 }),
 	}
-}
-
-// A delta smaller than this spread is not a signal.
-func madDatapoints(specs []metricSpec) []core.Datapoint {
-	var out []core.Datapoint
-	for _, m := range specs {
-		out = append(out, core.Datapoint{Name: m.Name + ".mad", Value: mad(m.Stats.Values), Unit: m.Unit, Direction: core.LowerIsBetter})
-	}
-	return out
-}
-
-// Keeps the worst value per name, so each shape datapoint is emitted once.
-func worstShapeDatapoints(perProvision [][]core.Datapoint) []core.Datapoint {
-	worst := map[string]core.Datapoint{}
-	var order []string
-	for _, dps := range perProvision {
-		for _, dp := range dps {
-			cur, seen := worst[dp.Name]
-			if !seen {
-				worst[dp.Name] = dp
-				order = append(order, dp.Name)
-				continue
-			}
-			if dp.Direction == core.HigherIsBetter && dp.Value < cur.Value ||
-				dp.Direction != core.HigherIsBetter && dp.Value > cur.Value {
-				worst[dp.Name] = dp
-			}
-		}
-	}
-	out := make([]core.Datapoint, 0, len(order))
-	for _, n := range order {
-		out = append(out, worst[n])
-	}
-	return out
 }

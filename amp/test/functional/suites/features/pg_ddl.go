@@ -22,7 +22,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Schema/constraint/view/index DDL through an endpoint: constraints reject what they must, a materialised view refreshes, transactional DDL rolls back, and every object is re-verified on a cold connection before a DROP SCHEMA CASCADE removes it.",
 		Run:         runDDL,

@@ -157,26 +157,12 @@ func TestBenchShapeGateFiresOnIterationDrift(t *testing.T) {
 		FromSample: sampleLatencyAvg,
 	}}
 
-	dps, err := benchShapeGate(res, specs, benchGates{MaxIterDriftPct: 10, MaxDecayPct: 35})
+	err := benchShapeGate(res, specs, benchGates{MaxIterDriftPct: 10, MaxDecayPct: 35})
 	if err == nil {
 		t.Fatal("gate passed on a 15 pct iteration drift with a 10 pct limit")
 	}
 	if !strings.Contains(err.Error(), "x.latency_avg drifted") {
 		t.Errorf("error = %q, want it to name the drifted metric", err)
-	}
-	want := map[string]float64{
-		"x.latency_avg_warmup":           3704,
-		"x.latency_avg_warmup_delta_pct": 399.4,
-		"x.latency_avg_iter_delta_pct":   14.96,
-	}
-	got := map[string]float64{}
-	for _, dp := range dps {
-		got[dp.Name] = dp.Value
-	}
-	for name, v := range want {
-		if math.Abs(got[name]-v) > 0.5 {
-			t.Errorf("datapoint %s = %v, want ~%v (got %v)", name, got[name], v, got)
-		}
 	}
 }
 
@@ -193,41 +179,28 @@ func TestBenchShapeGateDegenerateResults(t *testing.T) {
 
 	single := BenchResult{Kept: []Sample{{TPS: 500}}}
 	single.TPS = aggregate([]float64{500})
-	dps, err := benchShapeGate(single, specs(single), gates)
-	if err != nil {
+	if err := benchShapeGate(single, specs(single), gates); err != nil {
 		t.Errorf("single-iteration run failed the shape gate: %v", err)
-	}
-	for _, dp := range dps {
-		if strings.HasSuffix(dp.Name, "_iter_delta_pct") {
-			t.Errorf("single-iteration run emitted %s", dp.Name)
-		}
 	}
 
 	noWarmup := BenchResult{Kept: []Sample{{TPS: 500}, {TPS: 490}}}
 	noWarmup.TPS = aggregate([]float64{500, 490})
-	dps, err = benchShapeGate(noWarmup, specs(noWarmup), gates)
-	if err != nil {
+	if err := benchShapeGate(noWarmup, specs(noWarmup), gates); err != nil {
 		t.Errorf("a 2 pct drift failed a 10 pct gate: %v", err)
-	}
-	for _, dp := range dps {
-		if strings.Contains(dp.Name, "warmup") {
-			t.Errorf("run without a warmup emitted %s", dp.Name)
-		}
 	}
 
 	zeroWarmup := BenchResult{Warmup: &Sample{}, Kept: []Sample{{TPS: 500}}}
 	zeroWarmup.TPS = aggregate([]float64{500})
-	if _, err := benchShapeGate(zeroWarmup, specs(zeroWarmup), gates); err != nil {
+	if err := benchShapeGate(zeroWarmup, specs(zeroWarmup), gates); err != nil {
 		t.Errorf("zero-valued warmup failed the shape gate: %v", err)
 	}
 
-	if dps, err := benchShapeGate(BenchResult{}, specs(BenchResult{}), gates); err != nil || len(dps) != 0 {
-		t.Errorf("empty result produced %d datapoints, err %v", len(dps), err)
+	if err := benchShapeGate(BenchResult{}, specs(BenchResult{}), gates); err != nil {
+		t.Errorf("empty result failed the shape gate: %v", err)
 	}
 }
 
-// TestBenchShapeGateDisabledLimits: a limit of 0 keeps the datapoints but drops
-// the assertion.
+// TestBenchShapeGateDisabledLimits: a limit of 0 drops the assertion.
 func TestBenchShapeGateDisabledLimits(t *testing.T) {
 	res := BenchResult{Kept: []Sample{
 		{TPS: 1000, Series: series(1000, 1000, 1000, 100, 100, 100)},
@@ -239,29 +212,10 @@ func TestBenchShapeGateDisabledLimits(t *testing.T) {
 		FromSample: sampleTPS, FromPoint: pointTPS,
 	}}
 
-	if _, err := benchShapeGate(res, specs, benchGates{}); err != nil {
+	if err := benchShapeGate(res, specs, benchGates{}); err != nil {
 		t.Errorf("both limits disabled still failed: %v", err)
 	}
-	dps, err := benchShapeGate(res, specs, benchGates{MaxDecayPct: 35})
-	if err == nil || !strings.Contains(err.Error(), "decayed") {
+	if err := benchShapeGate(res, specs, benchGates{MaxDecayPct: 35}); err == nil || !strings.Contains(err.Error(), "decayed") {
 		t.Errorf("decay limit did not fire: %v", err)
 	}
-	var names []string
-	for _, dp := range dps {
-		names = append(names, dp.Name)
-	}
-	for _, want := range []string{"x.tps_iter_delta_pct", "x.tps_decay_pct"} {
-		if !contains(names, want) {
-			t.Errorf("datapoints %v missing %s", names, want)
-		}
-	}
-}
-
-func contains(vals []string, want string) bool {
-	for _, v := range vals {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }

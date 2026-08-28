@@ -14,7 +14,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Apache AGE on an opted-in endpoint: LOAD the library, create a graph, run a cypher CREATE and MATCH round trip, and drop the graph. Skips (visibly) while the controller's catalog predates the age entry; the skip disappears with the image that ships it.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

@@ -28,7 +28,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
-		Tags:        []string{"stress", "nightly"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Journal every write's outcome while pod_delete faults hit amp's endpoint computes and the backing YugabyteDB, aiming a PostgreSQL cancel request at a seeded share of in-flight inserts plus a forced floor per writer, then recycle one tenant's endpoint and hold storage to the exact set: every acknowledged id present with its value, every present id one that was issued, and writes flowing again. A cancelled insert the server acks anyway is journaled as acked, which makes the meko#473 window reachable, not certain.",
 		Params:      []string{"stress.commit_durability", "chaos"},

@@ -52,7 +52,7 @@ func init() {
 		Suite:    "features",
 		Category: core.Stress,
 		Env:      core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:     []string{"regression", "nightly"},
+		Tags:     []string{"regression"},
 		// Both sides of this race are control-plane statements, and what it
 		// prevents is a compute the control plane can no longer see.
 		OwningTeam:  core.TeamControlPlane,

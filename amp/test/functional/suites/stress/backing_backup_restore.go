@@ -22,7 +22,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
-		Tags:        []string{"stress", "nightly"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Back up, restore, PITR-rewind and schedule backups on the YugabyteDB universe under amp while amp tenants run bank-transfer and SQL-transaction workloads through their endpoints, then assert every operation succeeded, restores round-tripped exactly, and amp acknowledged commits throughout.",
 		Params:      []string{"stress.backing_backup_restore"},

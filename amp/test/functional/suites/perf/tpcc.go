@@ -38,7 +38,7 @@ func init() {
 		Suite:       "perf",
 		Category:    core.Perf,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		Tags:        []string{"perf", "nightly"},
+		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Run BenchBase TPC-C at a fixed scale through an amp compute endpoint backed by a co-located RF3 YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
 		Params:      []string{"perf", "apps.ybk8s", "env.ampstack"},

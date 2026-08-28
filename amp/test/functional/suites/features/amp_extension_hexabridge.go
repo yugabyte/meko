@@ -15,7 +15,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "hexabridge (Oracle compatibility) on an opted-in endpoint: the library is genuinely in shared_preload_libraries, Oracle to_char formats a number, and dbms_output.put_line executes — both through the extension's C library, not just its SQL scripts.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

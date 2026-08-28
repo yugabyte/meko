@@ -54,7 +54,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"stress", "nightly"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Churn the branch lifecycle (fork, endpoint, write, retire, delete) in parallel lanes against one cluster and assert every cycle converged, nothing was orphaned, and no task failed.",
 		Params:      []string{"env.sharedk8s"},

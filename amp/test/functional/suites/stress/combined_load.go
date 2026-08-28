@@ -70,7 +70,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		Tags:        []string{"stress", "nightly"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Combined stress: run four sample-app + BenchBase workloads in parallel under chaos on a co-located YB backing, then assert cluster health + data consistency.",
 		Params:      []string{"stress.combined", "chaos", "apps.ybk8s"},

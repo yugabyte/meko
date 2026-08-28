@@ -71,7 +71,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Seed a visibility-shaped table, build a multi-column GIN index over btree_gin scalars plus a pg_trgm memo column, and assert four predicates return exactly the ids a Go oracle computes, through the index, after a post-index insert batch and across a branch fork.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

@@ -17,7 +17,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Churn a small key set with many UPDATE rounds (long per-page version chains), CHECKPOINT, cold-reconnect, and verify every value reconstructs correctly.",
 		Run:         runDeltaChain,

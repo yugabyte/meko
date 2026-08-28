@@ -110,7 +110,7 @@ func init() {
 		Suite:      "perf",
 		Category:   core.Perf,
 		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.SingleContainer},
-		Tags:       []string{"perf", "nightly"},
+		Tags:       []string{"perf"},
 		OwningTeam: core.TeamCompute,
 		Description: "Time labelled DDL/bulk-DML phases (create, cold 200k insert, truncate + re-insert cycles, count, PK lookup, update, delete, drop) " +
 			"through an amp compute endpoint, and gate median(insert_after_truncate)/insert_cold against perf.microbench.max_phase_ratio — an intra-run ratio, so it asserts with no stored baseline.",

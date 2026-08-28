@@ -46,7 +46,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Global product health: sustained sample-app workloads through an amp endpoint while the control plane is exercised (LSN fork, endpoint delete+recreate), gated by a workloadgen consistency oracle and controller health.",
 		Params:      []string{"health", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

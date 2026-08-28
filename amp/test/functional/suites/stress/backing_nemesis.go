@@ -19,7 +19,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
-		Tags:        []string{"stress", "nightly"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Kill the backing YugabyteDB's serving pods (YBA universe / ybk8s tservers, or the built-in yugabyted) while tenants write through amp endpoints, then assert full recovery: endpoints serve, writes flow again, and every acknowledged row verifies exactly.",
 		Params:      []string{"stress.backing_nemesis", "chaos"},

@@ -46,8 +46,8 @@ func TestManifestSurfacesTestsAndTags(t *testing.T) {
 	if !containsStr(m.Data.Suites, "features") || !containsStr(m.Data.Suites, "presets") {
 		t.Errorf("suites %v missing features/presets", m.Data.Suites)
 	}
-	if !containsStr(m.Data.Tags, "regression") || !containsStr(m.Data.Tags, "nightly") {
-		t.Errorf("tags %v missing regression/nightly", m.Data.Tags)
+	if !containsStr(m.Data.Tags, "regression") || !containsStr(m.Data.Tags, "perf") {
+		t.Errorf("tags %v missing regression/perf", m.Data.Tags)
 	}
 	if len(m.Data.Tests) == 0 {
 		t.Fatal("manifest lists no tests")

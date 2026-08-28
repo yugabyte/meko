@@ -26,7 +26,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Pause an endpoint and assert its compute stops while the record, branch and data survive, then resume it on the same branch and assert it serves the prior data and new writes.",
 		// Fails today: the pause/resume routes do not exist, so the pause POST

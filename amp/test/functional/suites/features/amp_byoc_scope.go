@@ -57,7 +57,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Prove the controller operates under namespace-scoped RBAC only, as a BYOC install grants: the API server denies the controller's service account every cluster-scoped probe, still grants the namespaced ones its Role declares, and a real endpoint deploy plus query goes through under that restriction.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

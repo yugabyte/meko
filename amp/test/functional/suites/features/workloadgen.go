@@ -14,7 +14,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Load deterministic workloadgen rows and verify the recomputed count/checksum matches the database.",
 		Run:         runWorkloadgenVerify,

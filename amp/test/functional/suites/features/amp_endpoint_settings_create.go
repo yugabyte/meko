@@ -26,7 +26,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "The settings API at endpoint CREATE (features/amp_endpoint_settings covers the reload half): an unknown pageserver key, a protected identity key, a nested value and an unknown safekeeper key are each rejected with 400 leaving no endpoint behind, and a valid create's pg/pageserver/safekeeper settings are echoed back with the pg override live in SHOW.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

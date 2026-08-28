@@ -21,7 +21,6 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Prove copy-on-write branch isolation: a forked child sees base data but writes diverge on each side.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

@@ -50,7 +50,7 @@ func init() {
 		Suite:      "features",
 		Category:   core.Stress,
 		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:       []string{"regression", "nightly"},
+		Tags:       []string{"regression"},
 		OwningTeam: core.TeamCompute,
 		Description: "Settings reach a running compute the cheapest way that applies them: " +
 			"a reloadable setting keeps its connections, one fixed at server start restarts and says so, " +

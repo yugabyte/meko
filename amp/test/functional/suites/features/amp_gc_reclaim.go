@@ -50,7 +50,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "nightly"},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "DROP TABLE reclamation end to end: on an endpoint whose GC retention is tightened via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

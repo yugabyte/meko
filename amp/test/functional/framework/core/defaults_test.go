@@ -1448,6 +1448,33 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 
+	// --- perf/lifecycle (perf.lifecycle.*) ---
+	for key, want := range map[string]int{
+		"perf.lifecycle.iterations":      perf.DefaultLifecycleIterations,
+		"perf.lifecycle.rows":            perf.DefaultLifecycleRows,
+		"perf.lifecycle.batch_rows":      perf.DefaultLifecycleBatchRows,
+		"perf.lifecycle.fork_write_rows": perf.DefaultLifecycleForkWriteRows,
+		"perf.lifecycle.payload_bytes":   perf.DefaultLifecyclePayloadBytes,
+	} {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	if got := cfg.GetFloat("perf.lifecycle.max_fork_ratio", -1); got != perf.DefaultLifecycleMaxForkRatio {
+		t.Errorf("perf.lifecycle.max_fork_ratio = %v, want %v", got, perf.DefaultLifecycleMaxForkRatio)
+	}
+	if got := cfg.GetBool("perf.lifecycle.pause_resume", true); got != perf.DefaultLifecyclePauseResume {
+		t.Errorf("perf.lifecycle.pause_resume = %v, want %v", got, perf.DefaultLifecyclePauseResume)
+	}
+	for key, want := range map[string]string{
+		"perf.lifecycle.endpoint_cpu":    perf.DefaultLifecycleEndpointCPU,
+		"perf.lifecycle.endpoint_memory": perf.DefaultLifecycleEndpointMem,
+	} {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+
 	// --- perf.bench.* (the multi-iteration benchmark harness) ---
 	if got := cfg.GetInt("perf.bench.iterations", -1); got != perf.DefaultBenchIterations {
 		t.Errorf("perf.bench.iterations = %d, want %d", got, perf.DefaultBenchIterations)
