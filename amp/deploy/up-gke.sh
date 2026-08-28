@@ -90,6 +90,12 @@ ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 # default 100GB boot disk has ~43.8Gi allocatable, so a 2-vCPU endpoint's 40Gi packs
 # one endpoint per node; "10Gi" fits four.
 ENDPOINT_DISK_SIZE_OVERRIDE="${ENDPOINT_DISK_SIZE_OVERRIDE:-}"
+# GiB of endpoint memory per vCPU: fills in the memory when a create names only
+# CPU, and is the floor every request is held to. 0 (default) = the product's own
+# 8, deliberately: itest-dev schedules a 2-vCPU/16Gi endpoint, so this deploy
+# exercises the shape real endpoints get rather than a test-only one. Lower it
+# only if this cluster stops being able to hold that.
+ENDPOINT_MEMORY_GIB_PER_VCPU="${ENDPOINT_MEMORY_GIB_PER_VCPU:-0}"
 # GKE internal-LB annotations (used for internal-lb controller/UI Services).
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
 MCP_ENABLED="${MCP_ENABLED:-true}"
@@ -321,6 +327,7 @@ HELM_SET=(
   "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
   "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
+  "controller.endpoint.memoryGiBPerVCPU=${ENDPOINT_MEMORY_GIB_PER_VCPU}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
   "mcp.enabled=${MCP_ENABLED}"
   "mcp.image.repository=${REGISTRY}/${MCP_IMAGE_REPO}"

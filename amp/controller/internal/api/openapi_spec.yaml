@@ -1842,7 +1842,8 @@ components:
         Kubernetes resource quantity and is applied as BOTH the request and the
         limit on the endpoint container, so the pod is scheduled with the
         **Guaranteed** QoS class. Omit the object (or either field) to take the
-        defaults of 2 CPU cores and 4Gi of memory.
+        defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
+        standard 8 GiB per vCPU).
       properties:
         cpu:
           type: string
@@ -1853,14 +1854,27 @@ components:
             (2 cores) when omitted.
         memory:
           type: string
-          default: "4Gi"
+          # Deliberately no `default:`. It is not a constant — it is `cpu` times
+          # the control plane's ratio — so declaring one would be false, and any
+          # consumer that honours spec defaults (a generated client, a validator
+          # added later) would send 16Gi alongside a cpu of 4 and get the 400
+          # this field exists to avoid.
           description: |
-            Memory reservation as a Kubernetes quantity, with an explicit unit of
-            Mi or larger (e.g. "4Gi", "512Mi", "1500M"). Applied as both the
-            request and the limit. Defaults to "4Gi" when omitted. A unitless
-            value is a byte count, so "4" would reserve four bytes and leave the
-            endpoint unresizable; it is rejected with 400, as are the milli
-            suffix and Ki/k.
+            Memory reservation as a Kubernetes quantity, with an explicit unit
+            of Mi or larger (e.g. "16Gi", "512Mi", "1500M"). Applied as both the
+            request and the limit. A unitless value is a byte count, so "4" would
+            reserve four bytes and leave the endpoint unresizable; it is rejected
+            with 400, as are the milli suffix and Ki/k.
+
+            Omitted, it follows `cpu` at the control plane's memory-per-vCPU
+            ratio — 8 GiB per core by default, so the 2-core default gets 16Gi
+            and 8 cores get 64Gi. Naming only `cpu` is therefore enough.
+
+            That ratio is also a **floor**: less memory per core is a `400`
+            naming the minimum for the CPU asked for. More is accepted — a
+            working set that needs it is a real request; less produces an
+            endpoint that starts and then cannot hold its own cache, which
+            surfaces as a slow database rather than a wrong request.
 
     ResizeEndpointRequest:
       type: object

@@ -69,7 +69,10 @@ type EndpointSpec struct {
 	// CPU and Memory are the compute reserved for the endpoint pod, as Kubernetes
 	// resource quantities (e.g. "2", "4Gi"). Each is applied as BOTH the request
 	// and the limit on the endpoint container, so the pod gets Guaranteed QoS.
-	// Empty defaults to 2 cores / 4Gi at the deployer (matching the chart default).
+	// Empty defaults to 2 cores / 4Gi at the deployer. That is not the chart
+	// default and not what a new endpoint gets — it is the shape the pods written
+	// before memory was stored are already running, kept so a redeploy does not
+	// resize them (see defaultEndpointMemory in kubernetes.go).
 	CPU    string
 	Memory string
 	// Extensions are the externalized PostgreSQL extensions to mount into the

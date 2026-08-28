@@ -29,14 +29,31 @@ import (
 )
 
 const (
+	// resizeCreateCPU/resizeCreateMemory is what these tests create, and the
+	// memory is deliberate headroom rather than the default.
+	//
+	// The control plane holds an endpoint to a memory-per-vCPU floor, and a
+	// cpu-only resize does not move memory — so growing the cores of an endpoint
+	// sitting *on* the floor is refused by definition. These tests grow cpu on
+	// purpose, so they start with memory to spare.
+	//
+	// Sized for the product floor of 8 GiB/vCPU, not for a lowered one: the QA
+	// environments run the product default, so a fixture built for anything less
+	// is refused at create. 16Gi across one core carries every cpu these tests
+	// move to, and works unchanged if an environment ever does lower the ratio —
+	// a smaller floor accepts everything a larger one does.
+	resizeCreateCPU    = "1"
+	resizeCreateMemory = "16Gi"
 	// resizeCPUA/resizeMemoryA and resizeCPUB/resizeMemoryB are the two sizes the
-	// tests move between. Both differ from the controller's create-time defaults
-	// ("2" / "4Gi"), which the API substitutes for an unset dimension — resizing
-	// to a default would make "persisted" indistinguishable from "defaulted".
-	resizeCPUA    = "3"
-	resizeMemoryA = "5Gi"
-	resizeCPUB    = "4"
-	resizeMemoryB = "6Gi"
+	// tests move between. Both differ from the create shape, and the memory of
+	// each differs from what the controller's create-time default owes 2 cores at
+	// the ratio — which is what the API substitutes for an unset dimension.
+	// resizeCPUA is that default cpu, so for size A it is the memory alone that
+	// keeps "persisted" distinguishable from "defaulted".
+	resizeCPUA    = "2"
+	resizeMemoryA = "20Gi"
+	resizeCPUB    = "1500m"
+	resizeMemoryB = "24Gi"
 	// resizeContenders is how many concurrent resizes the lock test fires at one
 	// endpoint. High enough that some contender arrives while a resize is still
 	// non-terminal; an all-accepted burst fails as untested.
@@ -117,7 +134,11 @@ func (a *ampFeatureRun) endpointResize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ep, err := createEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID)
+	ep, err := createEndpointReq(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID,
+		controller.CreateEndpointRequest{
+			Role:      roleReadWrite,
+			Resources: &controller.EndpointResources{CPU: resizeCreateCPU, Memory: resizeCreateMemory},
+		})
 	if err != nil {
 		return fmt.Errorf("create endpoint: %w", err)
 	}
@@ -156,7 +177,11 @@ func (a *ampFeatureRun) endpointResizeInPlace(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ep, err := createEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID)
+	ep, err := createEndpointReq(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID,
+		controller.CreateEndpointRequest{
+			Role:      roleReadWrite,
+			Resources: &controller.EndpointResources{CPU: resizeCreateCPU, Memory: resizeCreateMemory},
+		})
 	if err != nil {
 		return fmt.Errorf("create endpoint: %w", err)
 	}
@@ -264,7 +289,11 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ep, err := createEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID)
+	ep, err := createEndpointReq(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID,
+		controller.CreateEndpointRequest{
+			Role:      roleReadWrite,
+			Resources: &controller.EndpointResources{CPU: resizeCreateCPU, Memory: resizeCreateMemory},
+		})
 	if err != nil {
 		return fmt.Errorf("create endpoint: %w", err)
 	}
@@ -283,8 +312,13 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for i := range attempts {
 		// Distinct cpu per contender, so the endpoint's final size identifies the
-		// winner rather than being satisfied by any of them.
-		attempts[i].cpu = strconv.Itoa(3 + i)
+		// winner rather than being satisfied by any of them. Fractional rather
+		// than 1..N: these are cpu-only resizes against the create-time memory,
+		// and every one of them has to stay above the memory-per-vCPU floor —
+		// 16Gi carries 2 cores at the product's 8 GiB/vCPU, so with
+		// resizeContenders at 6 the range is 500m..1750m in 250m steps rather than
+		// whole cores. Past 7 contenders the top one exceeds what 16Gi carries.
+		attempts[i].cpu = fmt.Sprintf("%dm", 500+250*i)
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

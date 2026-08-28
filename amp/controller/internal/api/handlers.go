@@ -55,6 +55,11 @@ type Provisioning struct {
 	VoyagerMigrations       migration.Store
 	VoyagerMigrationService *migration.Service
 	VoyagerRunner           deploy.VoyagerJobRunner
+
+	// MemoryGiBPerVCPU is the memory-per-core shape endpoints are held to: it
+	// fills in the memory for a request naming only CPU, and is the floor a
+	// request naming both must meet. 0 = the built-in 8 GiB/vCPU.
+	MemoryGiBPerVCPU int
 }
 
 // Controllers implements the generated StrictServerInterface: the controller's
@@ -271,9 +276,17 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	withWriter := request.Body.WithWriter != nil && *request.Body.WithWriter
 	var cpu, memory string
 	if withWriter {
-		var errMsg string
-		if cpu, memory, errMsg = parseResourceOverrides(request.Body.Resources); errMsg != "" {
+		oCPU, oMem, errMsg := parseResourceOverrides(request.Body.Resources)
+		if errMsg != "" {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
+		}
+		// Resolved here exactly as `createEndpoint` resolves it. This is the
+		// one-call onboarding path, so its writer is the endpoint most likely to
+		// exist: leaving it on the raw pair would let the shape the floor exists
+		// to refuse in through the door most callers use, and would hand the
+		// deployer an empty memory for a request that named only CPU.
+		if cpu, memory, errMsg = deploy.ResolveEndpointShape(oCPU, oMem, c.memoryFloorGiBPerVCPU()); errMsg != "" {
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", errMsg))}, nil
 		}
 	}
 
@@ -494,6 +507,10 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 		PgVersion:      parent.PgVersion,
 		WithWriter:     false,
 		PgSettings:     branchPgSettings(request.Body),
+		// Carried even with WithWriter false: the field is what sizes that
+		// endpoint if the flag is ever set here, and a zero would silently mean
+		// the built-in rather than this control plane's own.
+		MemoryGiBPerVCPU: c.memoryFloorGiBPerVCPU(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create branch task: %w", err)
@@ -679,15 +696,35 @@ func (c *Controllers) parentWriterEndpoint(ctx context.Context, poolID uuid.UUID
 
 // --- Endpoints (deployed by a task, #108/#113) -----------------------------
 
-// defaultEndpointCPU / defaultEndpointMemory back a create-endpoint request that
-// omits a resource reservation. They mirror the deployer's and the chart's own
-// defaults; the handler resolves the concrete value up front so the task's params
-// carry it (and a reclaim/replay deploys the same size). request == limit at the
-// chart gives the pod Guaranteed QoS.
+// What a create-endpoint request that omits a reservation gets: these cores, and
+// the memory they are owed at the control plane's ratio. The handler resolves the
+// concrete pair up front so the task's params carry it, and a reclaim or replay
+// deploys the same size; request == limit at the chart gives the pod Guaranteed
+// QoS.
+//
+// The three defaults in play are no longer one number. This and the chart agree
+// (2 cores / 16Gi); the deployer's fallback is deliberately still 4Gi, because it
+// applies only to a spec written before the control plane sent both dimensions
+// and raising it would resize those pods on their next redeploy.
 const (
-	defaultEndpointCPU    = "2"
-	defaultEndpointMemory = "4Gi"
+	// Both live in deploy, which is where the rule that uses them lives — the
+	// HTTP handler is not the only thing that sizes an endpoint.
+	defaultEndpointCPU      = deploy.DefaultEndpointCPU
+	defaultMemoryGiBPerVCPU = deploy.DefaultMemoryGiBPerVCPU
+	// legacyEndpointMemory is what an endpoint created before memory was stored
+	// on the row is actually running. It is not a default for anything new — new
+	// requests get memory from the ratio — and exists so reporting such an
+	// endpoint's size, and redeploying it, say what its pod has all along.
+	legacyEndpointMemory = "4Gi"
 )
+
+// memoryFloorGiBPerVCPU is the configured memory-per-core shape, or the built-in.
+func (c *Controllers) memoryFloorGiBPerVCPU() int {
+	if c.prov.MemoryGiBPerVCPU > 0 {
+		return c.prov.MemoryGiBPerVCPU
+	}
+	return defaultMemoryGiBPerVCPU
+}
 
 // Validation for caller-supplied Kubernetes resource quantities, so a malformed
 // value is rejected synchronously with 400 rather than accepted, planned as a
@@ -750,23 +787,23 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "role must be read_write or read_only"))}, nil
 	}
 
-	// Resolve the pod's CPU + memory reservation, defaulting to 2 cores / 4Gi.
+	// Resolve the pod's CPU + memory reservation: 2 cores by default, memory
+	// following CPU at the control plane's ratio, and a pair below it refused.
 	// The values are Kubernetes resource quantities passed through to the chart,
 	// which renders each as both a request and a limit (Guaranteed QoS). An empty
 	// (whitespace-only) override falls back to the default rather than emitting an
 	// invalid empty quantity.
-	cpu, memory := defaultEndpointCPU, defaultEndpointMemory
+	var oCPU, oMem string
 	if request.Body != nil {
-		oCPU, oMem, errMsg := parseResourceOverrides(request.Body.Resources)
+		var errMsg string
+		oCPU, oMem, errMsg = parseResourceOverrides(request.Body.Resources)
 		if errMsg != "" {
 			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
 		}
-		if oCPU != "" {
-			cpu = oCPU
-		}
-		if oMem != "" {
-			memory = oMem
-		}
+	}
+	cpu, memory, errMsg := deploy.ResolveEndpointShape(oCPU, oMem, c.memoryFloorGiBPerVCPU())
+	if errMsg != "" {
+		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", errMsg))}, nil
 	}
 
 	// Disk type defaults to network (the configured storage class). A local
@@ -981,8 +1018,18 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	}
 	memory := ep.Memory
 	if memory == "" {
-		memory = defaultEndpointMemory
+		// What this endpoint's pod is actually running: it predates memory being
+		// stored on the row. A resize that only names CPU is then held to the
+		// floor against this, which is the point — growing the cores of an
+		// endpoint whose memory has not moved is exactly the shape now refused.
+		memory = legacyEndpointMemory
 	}
+	// The endpoint's shape as it stands, captured before the request's overrides
+	// are folded in. Both halves of the floor decision below are about this pair,
+	// and reading it from the raw row instead would be reading "" for anything
+	// created before resources were tracked — which resolves to the *default*
+	// shape and reports a starved endpoint as healthy.
+	currentCPU, currentMemory := cpu, memory
 	if request.Body.Resources.Cpu != nil {
 		if v := strings.TrimSpace(*request.Body.Resources.Cpu); v != "" {
 			if !cpuQuantityRE.MatchString(v) {
@@ -999,6 +1046,33 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 			memory = v
 		}
 	}
+
+	// The floor applies to what the resize would leave the endpoint at, not to
+	// what the request happened to name: growing CPU alone is the ordinary way to
+	// end up under it.
+	//
+	// Except for an endpoint that is already under it. Those exist — everything
+	// created before this rule sits at 2 cores / 4Gi — and holding them to it
+	// would make them unresizable in any direction, including the shrink that
+	// would bring them closer to it, unless the caller happened to raise memory
+	// in the same request. So the rule for them is "no worse": a resize that does
+	// not reduce the memory each core has is allowed through, and one that does
+	// is refused. An endpoint at or above the floor is held to the floor as
+	// normal, so this cannot be used to walk a healthy endpoint downwards.
+	floor := c.memoryFloorGiBPerVCPU()
+	wasBelow := !deploy.MeetsFloor(currentCPU, currentMemory, floor)
+	resolvedCPU, resolvedMem, errMsg := deploy.ResolveEndpointShape(cpu, memory, floor)
+	if errMsg != "" {
+		if !wasBelow {
+			return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", errMsg))}, nil
+		}
+		better, worseMsg := deploy.NoWorseThan(currentCPU, currentMemory, cpu, memory)
+		if !better {
+			return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", worseMsg))}, nil
+		}
+		resolvedCPU, resolvedMem = cpu, memory
+	}
+	cpu, memory = resolvedCPU, resolvedMem
 
 	// Plan the work as an async task and return 202 + the Task. The worker's
 	// resize_endpoint step persists the new size, updates the workload's desired
@@ -1190,7 +1264,7 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 		cpu = defaultEndpointCPU
 	}
 	if memory == "" {
-		memory = defaultEndpointMemory
+		memory = legacyEndpointMemory
 	}
 	out := Endpoint{
 		Id:             e.ID,

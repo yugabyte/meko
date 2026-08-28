@@ -11,13 +11,13 @@ afterEach(cleanup);
 describe("ComputeSizeField", () => {
   it("emits the preset's cpu/memory when a preset is clicked", () => {
     const onChange = vi.fn();
-    render(<ComputeSizeField value={{ cpu: "2", memory: "4Gi" }} onChange={onChange} />);
+    render(<ComputeSizeField value={{ cpu: "2", memory: "16Gi" }} onChange={onChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: /medium/i }));
-    expect(onChange).toHaveBeenCalledWith({ cpu: "4", memory: "8Gi" });
+    expect(onChange).toHaveBeenCalledWith({ cpu: "4", memory: "32Gi" });
 
     fireEvent.click(screen.getByRole("button", { name: /large/i }));
-    expect(onChange).toHaveBeenCalledWith({ cpu: "8", memory: "16Gi" });
+    expect(onChange).toHaveBeenCalledWith({ cpu: "8", memory: "64Gi" });
   });
 
   it("marks the preset matching the current value as selected", () => {
@@ -29,7 +29,7 @@ describe("ComputeSizeField", () => {
 
   it("reveals cpu/memory inputs in Custom mode and emits typed values", () => {
     const onChange = vi.fn();
-    render(<ComputeSizeField value={{ cpu: "2", memory: "4Gi" }} onChange={onChange} />);
+    render(<ComputeSizeField value={{ cpu: "2", memory: "16Gi" }} onChange={onChange} />);
 
     // No custom inputs until Custom is chosen (value matches a preset).
     expect(screen.queryByLabelText(/vcpu/i)).toBeNull();
@@ -41,7 +41,7 @@ describe("ComputeSizeField", () => {
     expect(mem).toBeTruthy();
 
     fireEvent.change(cpu, { target: { value: "12" } });
-    expect(onChange).toHaveBeenCalledWith({ cpu: "12", memory: "4Gi" });
+    expect(onChange).toHaveBeenCalledWith({ cpu: "12", memory: "16Gi" });
 
     fireEvent.change(mem, { target: { value: "32Gi" } });
     expect(onChange).toHaveBeenCalledWith({ cpu: "2", memory: "32Gi" });
@@ -57,7 +57,8 @@ describe("ComputeSizeField", () => {
     expect(screen.getByText(/needs a unit/i)).toBeTruthy();
 
     cleanup();
-    render(<ComputeSizeField value={{ cpu: "2", memory: "6Gi" }} onChange={vi.fn()} />);
+    // Not a preset, or the custom inputs this asserts on are not rendered at all.
+    render(<ComputeSizeField value={{ cpu: "2", memory: "20Gi" }} onChange={vi.fn()} />);
     expect(screen.getByLabelText(/memory/i).getAttribute("aria-invalid")).toBe("false");
     expect(screen.queryByText(/needs a unit/i)).toBeNull();
   });

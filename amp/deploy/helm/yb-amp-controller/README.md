@@ -141,6 +141,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `controller.endpoint.ybUser` / `.ybDbname` | `yugabyte` / `yb_storage` | `AMP_DEPLOY_YB_USER` / `AMP_DEPLOY_YB_DBNAME` |
 | `controller.endpoint.storageClass` | _(empty)_ | `AMP_DEPLOY_STORAGE_CLASS` (empty ⇒ emptyDir) |
 | `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` (a **floor**; the size itself is 20 GiB × the endpoint's vCPU) |
+| `controller.endpoint.memoryGiBPerVCPU` | `0` | `AMP_DEPLOY_MEMORY_GIB_PER_VCPU` — GiB of memory per endpoint vCPU. Fills in the memory when a create names only CPU, and is the **floor** every request is held to (a pair below it is a `400`). `0` ⇒ the built-in 8. Lower it only for a cluster whose nodes cannot back that shape |
 | `controller.endpoint.diskSizeOverride` | _(empty)_ | `AMP_DEPLOY_DISK_SIZE_OVERRIDE` — flat `/data` size for every endpoint whatever its CPU, bypassing the ratio and the floor. Empty ⇒ CPU-proportional. Test clusters only |
 | `controller.endpoint.service.type` | `ClusterIP` | `AMP_DEPLOY_SERVICE_TYPE` (ClusterIP \| NodePort \| LoadBalancer) |
 | `controller.endpoint.service.nodePortValue` | _(empty)_ | reserved — the deployer currently auto-assigns the endpoint NodePort |

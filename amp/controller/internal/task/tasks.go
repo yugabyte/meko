@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
 // This file is the caller-facing surface of the task framework: a Service that
@@ -149,6 +151,10 @@ type BranchInput struct {
 	PgSettings map[string]string `json:"pg_settings,omitempty"`
 	// WithWriter also creates and deploys a write endpoint on the new branch.
 	WithWriter bool `json:"with_writer"`
+	// MemoryGiBPerVCPU is the control plane's memory-per-core shape, used to size
+	// that endpoint. Config belongs to the caller, so it is passed in; 0 = the
+	// built-in.
+	MemoryGiBPerVCPU int `json:"memory_gib_per_vcpu,omitempty"`
 }
 
 // Branch records a branch task: fork the parent into a new branch, record its
@@ -178,12 +184,22 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 		}),
 	}
 	if in.WithWriter {
+		// Sized here rather than left empty. An endpoint that reaches the deployer
+		// with no size lands on its fallback, which is the memory-starved pair the
+		// floor exists to eliminate — a fork's writer is no more entitled to it
+		// than any other endpoint.
+		cpu, memory, shapeErr := deploy.ResolveEndpointShape("", "", in.MemoryGiBPerVCPU)
+		if shapeErr != "" {
+			return nil, fmt.Errorf("branch writer size: %s", shapeErr)
+		}
 		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID: uuid.New(),
 			ClusterID:  in.ClusterID,
 			BranchID:   branchID,
 			Role:       roleReadWrite,
 			PgVersion:  in.PgVersion,
+			CPU:        cpu,
+			Memory:     memory,
 		}))
 	}
 	return s.create(ctx, KindBranch, in, in.ClusterID, branchID.String(), steps)

@@ -18,19 +18,19 @@ func TestParseCPUQuantity(t *testing.T) {
 		{in: "", wantErr: true},
 		{in: "abc", wantErr: true},
 	} {
-		got, err := parseCPUQuantity(tc.in)
+		got, err := ParseCPUQuantity(tc.in)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("parseCPUQuantity(%q): want error, got %v", tc.in, got)
+				t.Errorf("ParseCPUQuantity(%q): want error, got %v", tc.in, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("parseCPUQuantity(%q): %v", tc.in, err)
+			t.Errorf("ParseCPUQuantity(%q): %v", tc.in, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("parseCPUQuantity(%q) = %v, want %v", tc.in, got, tc.want)
+			t.Errorf("ParseCPUQuantity(%q) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }
@@ -49,19 +49,19 @@ func TestParseByteQuantity(t *testing.T) {
 		{in: "", wantErr: true},
 		{in: "nope", wantErr: true},
 	} {
-		got, err := parseByteQuantity(tc.in)
+		got, err := ParseByteQuantity(tc.in)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("parseByteQuantity(%q): want error, got %v", tc.in, got)
+				t.Errorf("ParseByteQuantity(%q): want error, got %v", tc.in, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("parseByteQuantity(%q): %v", tc.in, err)
+			t.Errorf("ParseByteQuantity(%q): %v", tc.in, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("parseByteQuantity(%q) = %d, want %d", tc.in, got, tc.want)
+			t.Errorf("ParseByteQuantity(%q) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 }

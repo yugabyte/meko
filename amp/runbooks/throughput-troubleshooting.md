@@ -219,6 +219,11 @@ Then `yb_amp_local pageserver restart --id 1`. Verify:
 reads `scale_factor` once at startup and builds its pools from it, so this takes effect when the
 pageserver restarts, not at the moment an in-place resize lands.
 
+Raise memory in the same request. The control plane holds the resulting shape to
+a memory-per-vCPU floor (`--deploy-memory-gib-per-vcpu`, 8 by default), so a
+cpu-only resize is refused with a `400` naming the minimum for the cores asked
+for — 4 vCPU needs 32Gi at the default ratio.
+
 **Observed impact at the equivalent widening on a 4 vCPU / 32 GB tier** (1000 wh TPC-C, 100 conn;
 measured at `scale_factor=6` before the scale-derived bases were halved, i.e. `scale_factor=12` today):
 TPM-C 6,200 → 12,500 (≈ 2×); per-tx avg latency 430 ms → 138 ms (3×); StockLevel avg 3,286 ms → 763 ms (4.3×);

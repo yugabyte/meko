@@ -38,7 +38,8 @@ export function EndpointsSection({
 }) {
   const [role, setRole] = useState<EndpointRole>("read_write");
   // CPU + memory reserved for the compute pod, pre-filled with the controller's
-  // 2-core / 4Gi default. Sent as request == limit → Guaranteed QoS.
+  // default shape (DEFAULT_ENDPOINT_CPU/MEMORY, which follow its memory-per-vCPU
+  // ratio). Sent as request == limit → Guaranteed QoS.
   const [cpu, setCpu] = useState(DEFAULT_ENDPOINT_CPU);
   const [memory, setMemory] = useState(DEFAULT_ENDPOINT_MEMORY);
   const createEndpoint = useCreateEndpoint();

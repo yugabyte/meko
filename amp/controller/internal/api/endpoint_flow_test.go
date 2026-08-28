@@ -3,7 +3,10 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -378,7 +381,8 @@ func TestEndpointResources(t *testing.T) {
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 
-	// (1) omitted resources -> the 2-core / 4Gi default reaches the deployer.
+	// (1) omitted resources -> the 2-core default, and the memory its cores are
+	// owed at 8 GiB each, reach the deployer.
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(default resources): %v", err)
@@ -390,15 +394,15 @@ func TestEndpointResources(t *testing.T) {
 	if len(dep.created) != 1 {
 		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
 	}
-	if dep.created[0].CPU != "2" || dep.created[0].Memory != "4Gi" {
-		t.Errorf("default deploy spec resources = (%q, %q), want (2, 4Gi)", dep.created[0].CPU, dep.created[0].Memory)
+	if dep.created[0].CPU != "2" || dep.created[0].Memory != "16Gi" {
+		t.Errorf("default deploy spec resources = (%q, %q), want (2, 16Gi)", dep.created[0].CPU, dep.created[0].Memory)
 	}
 
 	// (2) explicit resources -> threaded through verbatim (on a second branch, so
 	// the single-writer rule isn't tripped).
 	branch2 := uuid.New()
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branch2, Name: "b2", PgVersion: 18})
-	cpu, mem := "8", "16Gi"
+	cpu, mem := "8", "64Gi"
 	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{
 		Role:      &rw,
 		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
@@ -441,6 +445,15 @@ var memoryNoUnit = []string{"4", "4m", "512Ki", "4k", "1e9"}
 // unit, binary or decimal-SI, is what the validation asks for and must pass.
 var memoryWithUnit = []string{"4Gi", "512Mi", "1500M", "1.5Gi"}
 
+// memoryUnitCPU is the cpu these shapes are paired with.
+//
+// The unit contract and the memory-per-vCPU floor are separate rules that both
+// apply here, and the smallest value above (512Mi) only clears the floor on a
+// small enough endpoint: 62m of a core is owed 496Mi at 8 GiB/vCPU. Pairing
+// every case with this cpu keeps the unit variety — Mi, decimal-SI, fractional
+// Gi — which is what this test is actually about.
+const memoryUnitCPU = "62m"
+
 // TestEndpointMemoryRequiresUnit: create and resize both reject a memory quantity
 // with no unit, and accept the same intent expressed with one. Endpoints an older
 // controller already stored a unitless value for are repaired by migration 0009,
@@ -480,8 +493,9 @@ func TestEndpointMemoryRequiresUnit(t *testing.T) {
 	}
 
 	mem := memoryWithUnit[0]
+	unitCPU := memoryUnitCPU
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
-		Role: &rw, Resources: &api.EndpointResources{Memory: &mem},
+		Role: &rw, Resources: &api.EndpointResources{Cpu: &unitCPU, Memory: &mem},
 	})
 	if err != nil || created.StatusCode() != http.StatusAccepted {
 		t.Fatalf("create with memory %q: status = %d, err = %v; body = %s", mem, created.StatusCode(), err, created.Body)
@@ -529,8 +543,10 @@ func TestEndpointMemoryRequiresUnit(t *testing.T) {
 
 	// A cpu-only resize keeps the stored memory, and the deployer is asked for
 	// exactly what the endpoint reports — no read-time substitution stands between
-	// the two.
-	newCPU := "6"
+	// the two. Small, because a cpu-only resize does not move memory: growing to 6
+	// cores against the 1.5Gi settled above would be refused by the floor, which
+	// is a different rule than the one under test here.
+	newCPU := "100m"
 	resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &newCPU},
 	})
@@ -583,7 +599,7 @@ func TestEndpointResize(t *testing.T) {
 	_ = created
 
 	// Resize cpu+memory -> 202 + a resize_endpoint task.
-	cpu, mem := "4", "8Gi"
+	cpu, mem := "4", "32Gi"
 	resized, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
 	})
@@ -597,13 +613,13 @@ func TestEndpointResize(t *testing.T) {
 	drainTasks(t, store, backend, prov)
 
 	// The deployer was asked to resize this instance to the new size.
-	if rs := dep.resizedSpecs(); len(rs) != 1 || rs[0].CPU != "4" || rs[0].Memory != "8Gi" {
-		t.Fatalf("deployer resize calls = %+v, want one {cpu:4, memory:8Gi}", rs)
+	if rs := dep.resizedSpecs(); len(rs) != 1 || rs[0].CPU != "4" || rs[0].Memory != "32Gi" {
+		t.Fatalf("deployer resize calls = %+v, want one {cpu:4, memory:32Gi}", rs)
 	}
 	// The persisted size now reflects the resize.
 	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id)
-	if got.JSON200 == nil || got.JSON200.Resources == nil || *got.JSON200.Resources.Cpu != "4" || *got.JSON200.Resources.Memory != "8Gi" {
-		t.Fatalf("resized endpoint resources = %+v, want cpu=4 memory=8Gi", got.JSON200.Resources)
+	if got.JSON200 == nil || got.JSON200.Resources == nil || *got.JSON200.Resources.Cpu != "4" || *got.JSON200.Resources.Memory != "32Gi" {
+		t.Fatalf("resized endpoint resources = %+v, want cpu=4 memory=32Gi", got.JSON200.Resources)
 	}
 	// The task result reports the in-place outcome.
 	taskResp, _ := client.GetTaskWithResponse(ctx, resized.JSON202.Id)
@@ -614,8 +630,11 @@ func TestEndpointResize(t *testing.T) {
 		t.Errorf("task result = %v, want in_place_resize=completed", taskResp.JSON200.Result)
 	}
 
-	// Resize only cpu -> memory keeps its current value (8Gi).
-	cpuOnly := "6"
+	// Resize only cpu -> memory keeps its current value (32Gi). Down to 3 cores
+	// rather than up to 6: memory is unchanged either way, and shrinking keeps it
+	// above the per-core floor, where growing to 6 would need 48Gi and is refused
+	// (covered by TestEndpointShapeFloor).
+	cpuOnly := "3"
 	partial, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &cpuOnly},
 	})
@@ -623,8 +642,8 @@ func TestEndpointResize(t *testing.T) {
 		t.Fatalf("ResizeEndpoint(cpu only): status = %d, err = %v", partial.StatusCode(), err)
 	}
 	drainTasks(t, store, backend, prov)
-	if rs := dep.resizedSpecs(); len(rs) == 0 || rs[len(rs)-1].CPU != "6" || rs[len(rs)-1].Memory != "8Gi" {
-		t.Errorf("partial resize spec = %+v, want last {6, 8Gi} (memory unchanged)", rs)
+	if rs := dep.resizedSpecs(); len(rs) == 0 || rs[len(rs)-1].CPU != "3" || rs[len(rs)-1].Memory != "32Gi" {
+		t.Errorf("partial resize spec = %+v, want last {3, 32Gi} (memory unchanged)", rs)
 	}
 
 	// A malformed quantity is rejected synchronously with 400.
@@ -682,9 +701,12 @@ func TestEndpointResizeParallel(t *testing.T) {
 
 	// Fire N concurrent resizes, each to a distinct size, WITHOUT draining — so
 	// the first-planned resize is still in flight (pending) when the rest arrive.
+	// Distinct sizes, each at the memory-per-core floor: this test is about
+	// first-writer-wins, so a shape the API refuses would fail it for the wrong
+	// reason.
 	sizes := []struct{ cpu, mem string }{
-		{"1", "2Gi"}, {"2", "4Gi"}, {"3", "6Gi"}, {"4", "8Gi"},
-		{"5", "10Gi"}, {"6", "12Gi"}, {"7", "14Gi"}, {"8", "16Gi"},
+		{"1", "8Gi"}, {"2", "16Gi"}, {"3", "24Gi"}, {"4", "32Gi"},
+		{"5", "40Gi"}, {"6", "48Gi"}, {"7", "56Gi"}, {"8", "64Gi"},
 	}
 	type result struct {
 		code     int
@@ -743,7 +765,7 @@ func TestEndpointResizeParallel(t *testing.T) {
 	}
 
 	// The lock released: a fresh resize is accepted again.
-	nc, nm := "2", "4Gi"
+	nc, nm := "2", "16Gi"
 	again, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &nc, Memory: &nm},
 	})
@@ -795,7 +817,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 		return fixture{client, backend, store, prov, pool.Id, clusterID, branchID, list.JSON200.Endpoints[0].Id}
 	}
 
-	cpu, mem := "4", "8Gi"
+	cpu, mem := "4", "32Gi"
 
 	// (a) infeasible: task succeeds, result reports infeasible, size still persisted.
 	t.Run("infeasible still succeeds and persists", func(t *testing.T) {
@@ -839,10 +861,11 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 		if tk == nil || tk.Status != task.StatusFailed || tk.Error == nil {
 			t.Fatalf("errored resize task = %v, want failed with an error", statusOf(tk))
 		}
-		// Original create-time defaults (2 / 4Gi), unchanged by the rejected resize.
+		// Original create-time defaults (2 cores, and the memory those cores are
+		// owed), unchanged by the rejected resize.
 		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.clusterID, f.branch, f.epID)
-		if *got.JSON200.Resources.Cpu != "2" || *got.JSON200.Resources.Memory != "4Gi" {
-			t.Errorf("size after a rejected resize = (%s,%s), want the unchanged original (2,4Gi) — a rejected size must not be persisted", *got.JSON200.Resources.Cpu, *got.JSON200.Resources.Memory)
+		if *got.JSON200.Resources.Cpu != "2" || *got.JSON200.Resources.Memory != "16Gi" {
+			t.Errorf("size after a rejected resize = (%s,%s), want the unchanged original (2,16Gi) — a rejected size must not be persisted", *got.JSON200.Resources.Cpu, *got.JSON200.Resources.Memory)
 		}
 	})
 }
@@ -1072,4 +1095,271 @@ func mustOneEndpoint(t *testing.T, client *api.ClientWithResponses, poolID, clus
 		t.Fatalf("ListEndpoints = %d, want exactly one endpoint; body = %s", list.StatusCode(), list.Body)
 	}
 	return list.JSON200.Endpoints[0]
+}
+
+// TestEndpointShapeFloor: the memory-per-core floor is enforced where a request
+// arrives, not left to the pod. An endpoint accepted under the floor starts and
+// serves, so the failure would surface as a database that looks slow rather than
+// a request that was wrong — which is why this is a 400 and not a warning.
+func TestEndpointShapeFloor(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "floor-pool")
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	rw := api.CreateEndpointRequestRoleReadWrite
+
+	// Create below the floor: refused, and the message names what would be taken.
+	cpu, thin := "4", "8Gi"
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
+		Role:      &rw,
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin},
+	})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(thin): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
+	if !strings.Contains(string(bad.Body), "32Gi") {
+		t.Errorf("the refusal does not say what would be accepted: %s", bad.Body)
+	}
+	if len(dep.created) != 0 {
+		t.Errorf("a refused shape reached the deployer: %+v", dep.created)
+	}
+
+	// Naming only cpu is accepted, because memory follows it.
+	big := "8"
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
+		Role:      &rw,
+		Resources: &api.EndpointResources{Cpu: &big},
+	})
+	if err != nil || ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateEndpoint(cpu only): status = %d, err = %v; body = %s", ok.StatusCode(), err, ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	if len(dep.created) != 1 || dep.created[0].Memory != "64Gi" {
+		t.Fatalf("deploy spec = %+v, want memory 64Gi for 8 cores", dep.created)
+	}
+
+	// Growing cpu alone is the ordinary way to fall under the floor: memory does
+	// not move, so the endpoint would end up at a shape the API refuses.
+	eps, _, err := backend.ListEndpoints(ctx, pool.Id, clusterID, branchID, 10, 0)
+	if err != nil || len(eps) != 1 {
+		t.Fatalf("ListEndpoints: %v (%d endpoints)", err, len(eps))
+	}
+	grow := "32"
+	resized, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, eps[0].ID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &grow},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(cpu only): %v", err)
+	}
+	if resized.StatusCode() != http.StatusBadRequest {
+		t.Errorf("cpu-only resize past the floor = %d, want 400; body = %s", resized.StatusCode(), resized.Body)
+	}
+}
+
+// The floor is the control plane's to set. A pool built to a different
+// memory-per-core shape configures its own, and both halves of the rule have to
+// follow it: what a request naming only CPU gets, and what a request naming both
+// is held to.
+func TestEndpointShapeFloorIsConfigurable(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep, MemoryGiBPerVCPU: 4}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "ratio-pool")
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	rw := api.CreateEndpointRequestRoleReadWrite
+
+	// 4 GiB per core: a shape the built-in 8 would refuse.
+	cpu, mem := "4", "16Gi"
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
+		Role:      &rw,
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
+	})
+	if err != nil || ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("a shape meeting the configured floor was refused: status = %d, err = %v; body = %s", ok.StatusCode(), err, ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+
+	// And the fill-in follows the configured ratio, not the built-in.
+	branch2 := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branch2, Name: "b2", PgVersion: 18})
+	only := "8"
+	ok2, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{
+		Role:      &rw,
+		Resources: &api.EndpointResources{Cpu: &only},
+	})
+	if err != nil || ok2.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateEndpoint(cpu only): status = %d, err = %v", ok2.StatusCode(), err)
+	}
+	drainTasks(t, store, backend, prov)
+	last := dep.created[len(dep.created)-1]
+	if last.Memory != "32Gi" {
+		t.Errorf("memory filled in = %q, want 32Gi (8 cores at the configured 4 GiB each)", last.Memory)
+	}
+
+	// Still a floor, just a different one.
+	thin := "8Gi"
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, uuid.New(), api.CreateEndpointRequest{
+		Role:      &rw,
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin},
+	})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(under the configured floor): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 — a configured floor is still a floor; body = %s", bad.StatusCode(), bad.Body)
+	}
+}
+
+// A body that names only cpu, sent the way an operator's client sends it: the
+// field absent from the JSON entirely.
+//
+// The generated client cannot express that difference — it marshals its struct,
+// so an omitted *string and a server filling the gap in from an OpenAPI default
+// look identical from there. Only a raw body shows that memory really follows
+// cpu: a fixed default of 16Gi beside a cpu of 4 would be 4 GiB per core, and a
+// 400 from the very floor this feature adds.
+func TestCreateEndpointRawBodyWithOnlyCPU(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	backend := core.NewMemBackend()
+	client, store, base := newTestServerRaw(t, backend, prov)
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "raw-pool")
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	url := fmt.Sprintf("%s/storage-pools/%s/clusters/%s/branches/%s/endpoints", base, pool.Id, clusterID, branchID)
+	body := `{"role":"read_write","resources":{"cpu":"4"}}`
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	got, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", resp.StatusCode, got)
+	}
+	drainTasks(t, store, backend, prov)
+
+	if len(dep.created) != 1 {
+		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
+	}
+	if dep.created[0].CPU != "4" || dep.created[0].Memory != "32Gi" {
+		t.Errorf("deploy spec = (%q, %q), want (4, 32Gi) — memory must follow cpu, not arrive as a fixed default",
+			dep.created[0].CPU, dep.created[0].Memory)
+	}
+}
+
+// Endpoints created before the floor sit at 2 cores / 4Gi. Holding them to it
+// would make them unresizable in every direction — including the shrink that
+// brings them closer to it — so the rule for them is "no worse": a resize may not
+// lower the memory each core has, and anything that does not is allowed through.
+func TestResizeGrandfathersAnEndpointBelowTheFloor(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	backend := core.NewMemBackend()
+	client, _, store := newTestServerWith(t, backend, prov)
+	ctx := context.Background()
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "grandfather-pool")
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	// An endpoint as it exists today: 2 cores / 4Gi, a quarter of the floor.
+	ep, err := backend.CreateEndpoint(ctx, clusterID, branchID, core.RoleReadWrite, nil)
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if err := backend.UpdateEndpointResources(ctx, ep.ID, "2", "4Gi"); err != nil {
+		t.Fatalf("seed the pre-floor size: %v", err)
+	}
+
+	// Shrinking cpu raises memory-per-core: allowed, though still under the floor.
+	shrink := "1"
+	ok, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.ID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &shrink},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(shrink): %v", err)
+	}
+	if ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("shrinking a below-floor endpoint = %d, want 202 — it moves towards the floor; body = %s", ok.StatusCode(), ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+
+	// Growing cpu lowers it further: refused.
+	grow := "8"
+	bad, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.ID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &grow},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(grow): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Errorf("growing cpu on a below-floor endpoint = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
+}
+
+// An endpoint created before resources were tracked at all stores "" for both,
+// not "2"/"4Gi" — `core/pg.go` COALESCEs to empty and migration 0009 leaves an
+// empty memory alone as the "unset" marker. Those rows are the oldest ones, and
+// the grandfathering exists for them most of all.
+//
+// Reading the floor decision off the raw pair gets them exactly backwards: "" and
+// "" resolve to the DEFAULT shape, which meets the floor, so the endpoint reports
+// as healthy while the resize target carries the substituted 4Gi and does not —
+// and every resize of it, including the shrink towards the floor, is refused.
+func TestResizeGrandfathersAnEndpointWithNoStoredResources(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	backend := core.NewMemBackend()
+	client, _, store := newTestServerWith(t, backend, prov)
+	ctx := context.Background()
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "unset-pool")
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	// Created and never sized: both fields empty, as the oldest rows are.
+	ep, err := backend.CreateEndpoint(ctx, clusterID, branchID, core.RoleReadWrite, nil)
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	// Shrinking cpu raises the memory each core has. It is still under the floor,
+	// and it is the move the grandfathering is for.
+	shrink := "1"
+	ok, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.ID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &shrink},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(shrink): %v", err)
+	}
+	if ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("shrinking an endpoint with no stored resources = %d, want 202; body = %s", ok.StatusCode(), ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+
+	// And growing cpu, which lowers it further, is still refused.
+	grow := "8"
+	bad, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.ID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &grow},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(grow): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Errorf("growing cpu on a starved endpoint = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
 }

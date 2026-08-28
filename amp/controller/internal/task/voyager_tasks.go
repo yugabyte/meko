@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/voyager/migration"
+
+	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
 // This file holds the Voyager-migration task planners, split out of the generic
@@ -84,6 +86,9 @@ type VoyagerCreateMigrationTargetInput struct {
 	ProjectName        string    `json:"project_name"`
 	TargetDatabaseName string    `json:"target_database_name"`
 	VCPU               int       `json:"vcpu"`
+	// MemoryGiBPerVCPU is the control plane's memory-per-core shape, passed in
+	// because config belongs to the caller. 0 = the built-in.
+	MemoryGiBPerVCPU int `json:"memory_gib_per_vcpu,omitempty"`
 }
 
 // VoyagerCreateMigrationTarget records a target-provisioning task: it reuses the
@@ -102,9 +107,17 @@ func (s *Service) VoyagerCreateMigrationTarget(ctx context.Context, in VoyagerCr
 	branchID := uuid.New()
 	endpointID := uuid.New()
 
+	// Through the same rule the API applies: a migration target sized only by
+	// vCPU would otherwise reach the deployer with no memory and land on its
+	// fallback, which for a 16-core target is 4Gi — the shape naming CPU alone is
+	// supposed to make impossible.
 	var cpu string
 	if in.VCPU > 0 {
 		cpu = strconv.Itoa(in.VCPU)
+	}
+	cpu, memory, shapeErr := deploy.ResolveEndpointShape(cpu, "", in.MemoryGiBPerVCPU)
+	if shapeErr != "" {
+		return nil, fmt.Errorf("migration target size: %s", shapeErr)
 	}
 
 	steps := []StepSpec{
@@ -129,6 +142,7 @@ func (s *Service) VoyagerCreateMigrationTarget(ctx context.Context, in VoyagerCr
 			Role:       roleReadWrite,
 			PgVersion:  voyagerTargetPgVersion,
 			CPU:        cpu,
+			Memory:     memory,
 		}),
 		stepSpec(StepVoyagerAttachTarget, VoyagerAttachTargetArgs{
 			MigrationID:        in.MigrationID,

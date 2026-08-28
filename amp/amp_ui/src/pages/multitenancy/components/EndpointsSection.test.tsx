@@ -30,7 +30,7 @@ describe("EndpointsSection", () => {
     const btn = screen.getByRole("button", { name: /provision compute/i }) as HTMLButtonElement;
     const memory = screen.getByLabelText(/memory/i);
 
-    // Pre-filled with the controller's 4Gi default.
+    // Pre-filled with the controller's default shape, which clears the floor.
     expect(btn.disabled).toBe(false);
 
     fireEvent.change(memory, { target: { value: "4" } });
@@ -38,7 +38,7 @@ describe("EndpointsSection", () => {
     expect(memory.getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByText(/needs a unit/i)).toBeTruthy();
 
-    fireEvent.change(memory, { target: { value: "4Gi" } });
+    fireEvent.change(memory, { target: { value: "16Gi" } });
     expect(btn.disabled).toBe(false);
     expect(screen.queryByText(/needs a unit/i)).toBeNull();
   });

@@ -163,9 +163,19 @@ resources for a future controller-driven redeploy, and the running pod keeps its
 current size until then. A later `get_endpoint` returns the **stored (desired)
 reservation**, so it confirms what was requested, not that the running pod was
 actually resized. cpu/memory are Kubernetes quantities (`"2"`, `"1500m"`,
-`"4Gi"`) applied as request == limit (Guaranteed QoS); both default to 2 cores /
-4Gi on create. **memory needs an explicit unit** of Mi or larger — Kubernetes
-reads a unitless `"4"` as four *bytes*, so it is a 400 on both create and resize.
+`"16Gi"`) applied as request == limit (Guaranteed QoS). **memory needs an
+explicit unit** of Mi or larger — Kubernetes reads a unitless `"4"` as four
+*bytes*, so it is a 400 on both create and resize.
+
+**On create**, CPU defaults to 2 cores and memory follows it at 8 GiB per core
+(2 → 16Gi, 8 → 64Gi): name only `cpu` and the memory is right by construction.
+**On resize**, neither defaults — an omitted dimension keeps its current value —
+so raising `cpu` alone leaves memory where it was and is the ordinary way to land
+under the floor. Either way, less memory per core than the ratio is a 400 naming
+the minimum for the CPU asked for: a core without the memory to feed it gives
+Postgres a cache it cannot keep. An endpoint already below the floor (one created
+before the rule) may still resize, as long as the change does not lower its
+memory per core further.
 
 ## Migrations — poll `get_migration`, not `get_task`
 

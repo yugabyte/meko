@@ -82,12 +82,14 @@ endpoint:
   extensions: []
   # -- Compute reserved for the endpoint container. Each value is a Kubernetes
   # resource quantity and is rendered as BOTH a request and a limit, so the pod
-  # is scheduled with the Guaranteed QoS class. Defaults to 2 cores / 4Gi.
+  # is scheduled with the Guaranteed QoS class. Defaults to 2 cores / 16Gi — the
+  # 8 GiB per vCPU the control plane holds every endpoint to, since a core
+  # without the memory to feed it gives Postgres a cache it cannot keep.
   resources:
     # -- CPU cores (request == limit). e.g. "2", "1500m".
     cpu: "2"
-    # -- Memory (request == limit). e.g. "4Gi", "512Mi".
-    memory: "4Gi"
+    # -- Memory (request == limit). e.g. "16Gi", "512Mi".
+    memory: "16Gi"
     # -- Ephemeral storage for the emptyDir /data (request == limit), e.g. "10Gi".
     # The controller sets it to the same figure as runDir.sizeLimit, which is an
     # eviction ceiling only: this request is what the scheduler accounts against

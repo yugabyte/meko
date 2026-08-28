@@ -61,7 +61,7 @@ func (k *KubernetesDeployer) diskBytesFor(vcpu float64) float64 {
 	// Config validation rejects an unparseable override at startup; falling back
 	// to the ratio keeps a directly-constructed deployer from sizing to 0.
 	if k.cfg.DiskSizeOverride != "" {
-		if flat, err := parseByteQuantity(k.cfg.DiskSizeOverride); err == nil && flat > 0 {
+		if flat, err := ParseByteQuantity(k.cfg.DiskSizeOverride); err == nil && flat > 0 {
 			return float64(flat)
 		}
 	}
@@ -70,15 +70,18 @@ func (k *KubernetesDeployer) diskBytesFor(vcpu float64) float64 {
 		ratio = defaultDiskGiBPerVCPU
 	}
 	want := float64(ratio) * vcpu * float64(1<<30)
-	if floor, err := parseByteQuantity(k.cfg.DiskSize); err == nil && float64(floor) > want {
+	if floor, err := ParseByteQuantity(k.cfg.DiskSize); err == nil && float64(floor) > want {
 		want = float64(floor)
 	}
 	return want
 }
 
-// parseCPUQuantity parses a Kubernetes CPU quantity ("2", "1500m", "0.5") into
+// ParseCPUQuantity parses a Kubernetes CPU quantity ("2", "1500m", "0.5") into
 // cores.
-func parseCPUQuantity(s string) (float64, error) {
+//
+// Exported for the API layer, which needs the same reading of a quantity to
+// check an endpoint's memory-to-CPU shape before it accepts the request.
+func ParseCPUQuantity(s string) (float64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, fmt.Errorf("empty cpu quantity")
@@ -105,9 +108,11 @@ var byteSuffixes = []struct {
 	{"k", 1e3}, {"K", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15},
 }
 
-// parseByteQuantity parses a Kubernetes storage/memory quantity ("10Gi",
+// ParseByteQuantity parses a Kubernetes storage/memory quantity ("10Gi",
 // "98831908Ki", "2G", "1073741824") into bytes.
-func parseByteQuantity(s string) (int64, error) {
+//
+// Exported alongside [ParseCPUQuantity], and for the same reason.
+func ParseByteQuantity(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, fmt.Errorf("empty byte quantity")
@@ -144,7 +149,7 @@ func gibString(bytes float64) string {
 // v.Endpoint.Resources.CPU is the already-defaulted value values() resolved, so
 // this never has to re-apply defaultEndpointCPU.
 func (k *KubernetesDeployer) applyDiskSizing(v *chartValues) error {
-	vcpu, err := parseCPUQuantity(v.Endpoint.Resources.CPU)
+	vcpu, err := ParseCPUQuantity(v.Endpoint.Resources.CPU)
 	if err != nil {
 		return fmt.Errorf("disk sizing: %w", err)
 	}

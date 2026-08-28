@@ -303,7 +303,7 @@ the old size until a redeploy re-renders from `config`. Needs k8s ≥ 1.33.
 ```bash
 # resize -> 202 + a resize_endpoint Task (omit a field to keep its current value)
 curl -s -X POST "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints/$EP/resize" \
-  -H 'content-type: application/json' -d '{"resources":{"cpu":"4","memory":"8Gi"}}'
+  -H 'content-type: application/json' -d '{"resources":{"cpu":"4","memory":"32Gi"}}'
 # poll the task; its result reports the in-place outcome:
 curl -s "$BASE/tasks/$TASK" | jq '{status, result}'   # result.in_place_resize: completed|pending|infeasible|unsupported
 ```
@@ -320,6 +320,15 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
 - **`in_place_resize: infeasible`** — the node can't fit the new size right now.
   The size is still persisted in `config`, so a controller-driven redeploy lands
   it; free capacity or let the pod reschedule, then redeploy.
+- **`400 invalid_argument`, "below the N GiB per vCPU this control plane
+  requires"** — the shape the resize would leave the endpoint at is under the
+  memory-per-vCPU floor. It applies to the resulting pair, not to what the
+  request named, so growing cpu alone is the usual way to meet it: name memory in
+  the same request, at least the figure the error quotes. An endpoint already
+  under the floor is not held to it — those may resize as long as the move does
+  not lower the memory each core has, and a resize that would is refused with
+  "this endpoint is below the memory-per-vCPU floor already". The floor is per
+  deployment (`--deploy-memory-gib-per-vcpu`, 8 by default).
 - **`409` on the resize call** — a resize of this endpoint is already in flight
   (first-writer-wins lock). Wait for the in-flight task to finish (`GET
   /tasks?kind=resize_endpoint` → its status) and retry.

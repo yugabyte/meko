@@ -130,6 +130,13 @@ env:
     # ghcr (ghcr.io/yugabyte/amp-*; token from ghcr_token or the local
     # `gh auth token`). Fully-qualified refs always win over this knob.
     registry: "quay"
+    # GiB of endpoint memory per vCPU the deployed control plane enforces: it
+    # fills in the memory when a create names only cpu, and is the floor every
+    # create and resize is held to. The product's own is 8; these clusters run 2
+    # because the perf and scale suites pack many small endpoints and scale_tenants
+    # alone would reserve hundreds of GiB at the product shape. Raise it to
+    # exercise what real endpoints get, at the cost of what those suites can fit.
+    endpoint_memory_gib_per_vcpu: 2
     # Pinned to known-good tags; bump as new builds publish. custom-7f195e43e51f
     # is the current build whose controller folds the storage-controller
     # in-process (#280) and so matches this chart. Earlier tags (custom-4f1ca53,
@@ -1885,6 +1892,13 @@ perf:
   # sample of the existing ones after every batch. The wall is the control
   # plane, the k8s pool's ability to schedule another endpoint pod, or the
   # shared YugabyteDB — which one it is, is the finding.
+  # Sized for the ratio QA deploys, not the product's memory-per-vCPU floor — as
+  # every endpoint in this file is. This suite is why that ratio is configurable
+  # at all: its whole point is population, up to max_tenants endpoints at once,
+  # and 8 GiB per vCPU across that many is hundreds of GiB of reservation no test
+  # pool holds. 2 cores / 4Gi is 2 GiB per vCPU, which is what
+  # env.ampstack.endpoint_memory_gib_per_vcpu deploys the QA control plane at. A
+  # deployment left at the product's 8 refuses these creates.
   scale_tenants:
     batch_size: 3
     max_tenants: 200
@@ -1935,6 +1949,9 @@ perf:
   # client, measured alone and then all together. Everything here is overridable
   # per run (-o perf.multitenant.<key>=...), because the useful shape depends on
   # what the cluster can actually schedule that day — see endpoint_cpu.
+  # Same shape and the same reason as scale_tenants: five tenants held to the
+  # product's 8 GiB per vCPU would be 80Gi of reservation. At 2 cores / 4Gi it is
+  # 20Gi.
   multitenant:
     # tenants is the population: one per workload in the mix, each tenant a
     # different KIND. Population size belongs to the scale schedules, which raise

@@ -129,6 +129,18 @@ type DeployConfig struct {
 	// (#584), so a ratio the pool cannot back shows up as an endpoint that will
 	// not schedule.
 	DiskGiBPerVCPU int
+
+	// MemoryGiBPerVCPU is the memory-to-CPU shape an endpoint must be asked for,
+	// in GiB of RAM per vCPU. It does two jobs: it fills in the memory for a
+	// request that names only CPU, and it is the floor a request naming both must
+	// meet — less memory per core is rejected, not quietly accepted.
+	//
+	// A floor rather than a fixed shape: more memory per core is a legitimate ask
+	// (a workload whose working set does not fit), while less is the shape that
+	// produces an endpoint which starts and then cannot hold its own cache.
+	// 0 = the built-in 8 GiB/vCPU. Set it for a pool built to a deliberately
+	// different memory-per-core shape.
+	MemoryGiBPerVCPU int
 	// DiskSizeOverride is a flat data-volume size applied to every endpoint
 	// whatever its CPU, bypassing both the per-vCPU ratio and the DiskSize
 	// floor. Empty (the default) keeps the CPU-proportional policy. This is for
@@ -230,7 +242,7 @@ var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var dns1123Re = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // byteQuantityRe matches a Kubernetes storage quantity ("10Gi", "512Mi", "2G",
-// "1073741824") — the subset deploy.parseByteQuantity accepts. A typo here would
+// "1073741824") — the subset deploy.ParseByteQuantity accepts. A typo here would
 // otherwise be discovered as a mis-sized volume at endpoint-create time.
 var byteQuantityRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|k|K|M|G|T|P)?$`)
 
@@ -284,6 +296,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")
 	fs.IntVar(&d.DiskGiBPerVCPU, "deploy-disk-gib-per-vcpu", envInt("AMP_DEPLOY_DISK_GIB_PER_VCPU", 0), "k8s: GiB of endpoint data volume per vCPU (0 = the built-in 20 GiB/vCPU policy; override only for a pool built to a different disk-per-core shape)")
+	fs.IntVar(&d.MemoryGiBPerVCPU, "deploy-memory-gib-per-vcpu", envInt("AMP_DEPLOY_MEMORY_GIB_PER_VCPU", 0), "GiB of endpoint memory per vCPU: fills in the memory when a request names only CPU, and is the floor every request must meet (0 = the built-in 8 GiB/vCPU)")
 	fs.StringVar(&d.DiskSizeOverride, "deploy-disk-size-override", env("AMP_DEPLOY_DISK_SIZE_OVERRIDE", ""), "k8s: flat endpoint data volume size (e.g. 10Gi) for every endpoint regardless of CPU, bypassing the per-vCPU ratio and --deploy-disk-size floor; empty = CPU-proportional sizing. For test clusters whose nodes cannot back the ratio")
 	fs.StringVar(&d.BackingYBHostPorts, "deploy-yb-host-ports", env("AMP_DEPLOY_YB_HOST_PORTS", ""), "backing YugabyteDB host:port[,...] as the deployed pods reach it")
 	fs.StringVar(&d.BackingYBUser, "deploy-yb-user", env("AMP_DEPLOY_YB_USER", "yugabyte"), "backing YugabyteDB user for deployed endpoints")

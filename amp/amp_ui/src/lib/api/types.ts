@@ -120,17 +120,21 @@ export type CreateUserInput = { is_admin: boolean };
 export type CreateStoragePoolInput = { name: string; owner_user_id: string };
 export type CreateClusterInput = { name: string };
 /** CPU + memory reserved for the endpoint pod. Each value is a Kubernetes
- *  resource quantity applied as both the request and the limit (Guaranteed QoS).
- *  Omit either field to take its default (2 cores / 4Gi). */
+ *  resource quantity applied as both the request and the limit (Guaranteed QoS). */
 export type EndpointResources = {
   /** CPU cores, e.g. "2" or "1500m". Defaults to "2". */
   cpu?: string;
-  /** Memory, e.g. "4Gi" or "512Mi". Defaults to "4Gi". */
+  /** Memory, e.g. "16Gi" or "512Mi", with an explicit Mi-or-larger unit.
+   *  Omitted, it follows `cpu` at the control plane's memory-per-vCPU ratio, so
+   *  naming only `cpu` is enough. Less memory per core than that ratio is a 400
+   *  naming the minimum. The ratio is per deployment, so the control plane is
+   *  what decides it, not this client. */
   memory?: string;
 };
 
 /** disk_type defaults to "network"; "local" is rejected by the controller.
- *  resources default to 2 cores / 4Gi when omitted. */
+ *  resources default to 2 cores, with memory following cpu at the control
+ *  plane's memory-per-vCPU ratio. */
 export type CreateEndpointInput = {
   role?: EndpointRole;
   disk_type?: "network" | "local";
@@ -202,9 +206,13 @@ export type SettingsUpdateResult = {
 /** The in-place resize outcome reported by the resize task result. */
 export type ResizeOutcome = "completed" | "pending" | "infeasible" | "unsupported";
 
-/** UI defaults, mirroring the controller's own 2-core / 4Gi default. */
+/** UI defaults, mirroring the controller's own: 2 cores, and the memory those
+ *  cores are owed at the 8 GiB per vCPU it holds every endpoint to. Sending
+ *  less than that ratio is a 400, so these are not free-form suggestions —
+ *  a pre-filled value under the floor makes the default action fail. */
 export const DEFAULT_ENDPOINT_CPU = "2";
-export const DEFAULT_ENDPOINT_MEMORY = "4Gi";
+export const DEFAULT_ENDPOINT_MEMORY = "16Gi";
+
 export type CreateBranchInput = {
   name: string;
   /** Branch to fork from. Omit to use the cluster's default branch. */

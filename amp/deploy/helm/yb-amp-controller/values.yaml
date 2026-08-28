@@ -105,6 +105,14 @@ controller:
     # test cluster whose nodes cannot back the ratio: a 100GB GKE boot disk leaves
     # ~43.8Gi allocatable, so a 2-vCPU endpoint's 40Gi packs one per node, "10Gi" four.
     diskSizeOverride: ""
+    # -- GiB of memory per endpoint vCPU (AMP_DEPLOY_MEMORY_GIB_PER_VCPU). Fills
+    # in the memory when a create names only CPU, and is the floor every request
+    # is held to — a pair below it is refused with a 400. 0 (default) uses the
+    # built-in 8 GiB/vCPU. Lower it only for a cluster whose nodes cannot back
+    # that shape: a test pool packing many small tenants is the case it exists
+    # for, and every endpoint there gets a Postgres with less cache than the
+    # product intends.
+    memoryGiBPerVCPU: 0
     # -- Node labels endpoint pods must schedule onto, as a list of "key=value"
     # strings (joined into the AMP_DEPLOY_NODE_SELECTOR CSV). Leave storageClass
     # empty and point this at a local-NVMe-SSD ephemeral node pool (GKE:

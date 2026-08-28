@@ -51,9 +51,15 @@ const tenantRole = "read_write"
 // tenants exhaust a shared test cluster — the deploys then sit Pending until the
 // controller's deploy timeout expires, and the run fails for capacity rather
 // than for anything the test was asking about.
+//
+// Small, but on the memory-per-vCPU floor: half a core is owed 4Gi at the
+// product's 8 GiB/vCPU, and asking for less is a 400 before anything is
+// scheduled. These suites run a handful of tenants, so 4Gi each is a few GiB
+// across the run — the shapes that genuinely cannot pay this are the ones that
+// pack hundreds, and they are not sized here.
 const (
 	tenantEndpointCPU    = "500m"
-	tenantEndpointMemory = "1Gi"
+	tenantEndpointMemory = "4Gi"
 )
 
 // tenant is one tenant and the state its verification needs.

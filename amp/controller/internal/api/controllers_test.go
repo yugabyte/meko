@@ -152,6 +152,26 @@ func newTestServerWith(t *testing.T, backend *core.MemBackend, prov api.Provisio
 	return client, backend, tasks
 }
 
+// newTestServerRaw is newTestServerBackend plus the base URL, for a test that
+// has to send a body the generated client cannot express — an omitted field is
+// the obvious one, since the client sends what its struct holds and a server
+// that filled the gap in from an OpenAPI default would be invisible to it.
+func newTestServerRaw(t *testing.T, backend *core.MemBackend, prov api.Provisioning) (*api.ClientWithResponses, *task.MemStore, string) {
+	t.Helper()
+	tasks := task.NewMemStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{ListenAddr: ":0"}
+	cfg.Deploy.Enabled = prov.Deployer != nil
+	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, nil, logger)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
+	if err != nil {
+		t.Fatalf("NewClientWithResponses: %v", err)
+	}
+	return client, tasks, ts.URL + "/api/v1"
+}
+
 // newTestServerBackend builds the server over any core.Backend (so a failing
 // backend can be injected), returning the client and the wired task store.
 func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provisioning) (*api.ClientWithResponses, *task.MemStore) {
@@ -427,7 +447,7 @@ func TestCreateClusterWithWriter(t *testing.T) {
 	prov := api.Provisioning{Deployer: dep}
 
 	withWriter := true
-	cpu, mem := "4", "8Gi"
+	cpu, mem := "4", "32Gi"
 	cp, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "shop",
 		WithWriter: &withWriter,
@@ -1149,5 +1169,50 @@ func TestListTasks(t *testing.T) {
 	}
 	if invalid.StatusCode() != http.StatusBadRequest {
 		t.Fatalf("ListTasks(status=bogus) status = %d, want 400, body = %s", invalid.StatusCode(), invalid.Body)
+	}
+}
+
+// The one-call create is the door most callers use, so its writer has to be held
+// to the same shape as one created through createEndpoint — including memory
+// following cpu when a caller names only cpu, which is the whole reason naming
+// one dimension is enough.
+func TestCreateClusterWithWriterIsHeldToTheFloor(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "writer-floor-pool")
+	_ = backend
+
+	withWriter := true
+	// Under the floor: refused before anything is planned.
+	cpu, thin := "4", "8Gi"
+	bad, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
+		Name:       "thin",
+		WithWriter: &withWriter,
+		Resources:  &api.EndpointResources{Cpu: &cpu, Memory: &thin},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster(thin writer): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
+
+	// Naming only cpu: memory follows it rather than reaching the deployer empty
+	// and landing on a fallback that predates this rule.
+	only := "8"
+	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
+		Name:       "sized",
+		WithWriter: &withWriter,
+		Resources:  &api.EndpointResources{Cpu: &only},
+	})
+	if err != nil || ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateCluster(cpu only): status = %d, err = %v; body = %s", ok.StatusCode(), err, ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	if len(dep.created) != 1 || dep.created[0].CPU != "8" || dep.created[0].Memory != "64Gi" {
+		t.Fatalf("writer deploy spec = %+v, want one {8, 64Gi}", dep.created)
 	}
 }

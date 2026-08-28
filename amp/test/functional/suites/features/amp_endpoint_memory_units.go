@@ -21,6 +21,12 @@ const (
 	memoryUnitless = "4"
 	// memoryWithUnit is the same intent expressed correctly, and must be accepted.
 	memoryWithUnit = "4Gi"
+	// memoryUnitCPU pairs with it. The unit rule and the memory-per-vCPU floor
+	// are separate rules that both apply to a create: 4Gi is owed to half a core
+	// at the product's 8 GiB/vCPU, and at the default 2 cores it would be refused
+	// by the floor — which would make this test fail for a reason that is not the
+	// unit it exists to check.
+	memoryUnitCPU = "500m"
 )
 
 func init() {
@@ -80,7 +86,7 @@ func (a *ampFeatureRun) endpointMemoryUnits(ctx context.Context) error {
 
 	ep, err := createEndpointReq(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{
 		Role:      roleReadWrite,
-		Resources: &controller.EndpointResources{Memory: memoryWithUnit},
+		Resources: &controller.EndpointResources{CPU: memoryUnitCPU, Memory: memoryWithUnit},
 	})
 	if err != nil {
 		return fmt.Errorf("creating an endpoint with memory %q was rejected, want it accepted (an explicit unit is exactly what the validation must require): %w", memoryWithUnit, err)

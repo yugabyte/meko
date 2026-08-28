@@ -12,3 +12,10 @@ const MEMORY_QUANTITY = /^\d+(\.\d+)?(Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)$/;
 export function isValidMemory(memory: string): boolean {
   return MEMORY_QUANTITY.test(memory.trim());
 }
+
+// The control plane also holds a pair to a memory-per-vCPU floor, and that is
+// deliberately not checked here. The ratio is per deployment
+// (--deploy-memory-gib-per-vcpu) and is not carried on any response, so any
+// figure this side could use would be a guess — and a guess that refuses input
+// the deployment accepts is worse than the round trip it saves. The 400 names
+// the minimum for the cores asked for.

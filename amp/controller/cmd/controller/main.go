@@ -88,6 +88,9 @@ func (a recipeStore) RecordBranchRecipe(ctx context.Context, clusterID, branchID
 // identical.
 func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisioning, error) {
 	var prov api.Provisioning
+	// Set whatever the driver: it shapes what the API accepts, not what any one
+	// deployer launches.
+	prov.MemoryGiBPerVCPU = cfg.Deploy.MemoryGiBPerVCPU
 
 	if cfg.Deploy.Enabled {
 		// Records only: the compute this controller names is deployed by someone

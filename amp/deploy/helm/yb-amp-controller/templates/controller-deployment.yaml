@@ -90,6 +90,11 @@ spec:
             # per-vCPU ratio. Empty (the default) = CPU-proportional sizing.
             - name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
               value: {{ .Values.controller.endpoint.diskSizeOverride | default "" | quote }}
+            # Memory per endpoint vCPU: fills in the memory when a create names
+            # only CPU, and is the floor every request is held to. 0 = the
+            # built-in 8 GiB/vCPU.
+            - name: AMP_DEPLOY_MEMORY_GIB_PER_VCPU
+              value: {{ .Values.controller.endpoint.memoryGiBPerVCPU | default 0 | quote }}
             # Node labels endpoint pods must match (e.g. a local-NVMe-SSD ephemeral
             # pool). The controller parses this as a "k=v,k=v" CSV.
             - name: AMP_DEPLOY_NODE_SELECTOR

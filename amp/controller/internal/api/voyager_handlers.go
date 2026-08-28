@@ -277,6 +277,7 @@ func (c *Controllers) ProvisionMigrationTarget(ctx context.Context, request Prov
 		return nil, fmt.Errorf("claim target provisioning: %w", err)
 	}
 	t, err := c.tasks.VoyagerCreateMigrationTarget(ctx, task.VoyagerCreateMigrationTargetInput{
+		MemoryGiBPerVCPU:   c.memoryFloorGiBPerVCPU(),
 		TaskID:             taskID,
 		MigrationID:        request.MigrationId,
 		PoolID:             request.Body.PoolId,

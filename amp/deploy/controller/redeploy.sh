@@ -45,6 +45,13 @@
 #                           bypassing the 20 GiB-per-vCPU policy (empty = keep it).
 #                           For a test cluster whose nodes are too small to back
 #                           the ratio; leave empty in prod
+#   ENDPOINT_MEMORY_GIB_PER_VCPU
+#                           GiB of memory per endpoint vCPU (default 2 here, 8 in
+#                           the product). Fills in the memory when a create names
+#                           only CPU, and is the floor every request is held to.
+#                           Lowered for a test cluster that packs many small
+#                           tenants; its endpoints then run with less cache than
+#                           the product intends, which is the trade
 #   ENDPOINT_NODE_SELECTOR  "k=v,k=v" node labels endpoint pods must schedule onto;
 #                           leave ENDPOINT_STORAGE_CLASS empty and point this at a
 #                           local-NVMe-SSD ephemeral pool to put /data on NVMe
@@ -125,6 +132,25 @@ ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 # Flat /data size for every endpoint whatever its CPU, bypassing the per-vCPU
 # ratio and the floor above. Empty (the default) keeps CPU-proportional sizing.
 ENDPOINT_DISK_SIZE_OVERRIDE="${ENDPOINT_DISK_SIZE_OVERRIDE:-}"
+# GiB of endpoint memory per vCPU: fills in the memory when a create names only
+# CPU, and is the floor every request is held to. 0 = the product's own 8.
+#
+# 2 here, for a cluster whose nodes cannot back 8 GiB/vCPU. The trade is real —
+# endpoints deployed this way run with less cache than a production endpoint, so
+# they are not the place to measure cache behaviour.
+#
+# Not what the QA suites use. Those clusters are stood up by ampstack, which
+# renders the chart itself and passes its own value (env.ampstack.
+# endpoint_memory_gib_per_vcpu); this script covers deployments made through
+# deploy/up.sh.
+#
+# This reaches deployments that go through this script (deploy/up.sh). It does
+# NOT reach the Jenkins portal pipeline: that job passes its own Helm values and
+# has no parameter for this, so a portal deployed through it runs the product
+# default. Verified by deploying hsunder/endpoint-memory-per-vcpu to a portal and
+# asking it for 2 cpu / 4Gi — refused, naming 8 GiB/vCPU. Lowering it there means
+# adding the parameter to that job.
+ENDPOINT_MEMORY_GIB_PER_VCPU="${ENDPOINT_MEMORY_GIB_PER_VCPU:-2}"
 # Node labels endpoint pods must schedule onto, as a "k=v,k=v" CSV. Leave
 # ENDPOINT_STORAGE_CLASS empty and set this to a local-NVMe-SSD ephemeral pool
 # (e.g. "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
@@ -189,6 +215,7 @@ HELM_SET=(
   "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
   "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
+  "controller.endpoint.memoryGiBPerVCPU=${ENDPOINT_MEMORY_GIB_PER_VCPU}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
   "controller.service.nodePortValue=${CONTROLLER_NODEPORT}"
   "mcp.enabled=${MCP_ENABLED}"

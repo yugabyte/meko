@@ -182,12 +182,14 @@ def create_endpoint(
     `role` is `read_write` (default) or `read_only`; a branch admits at most one
     `read_write` endpoint. `disk_type` defaults to `network` (`local` is not yet
     supported and is rejected with 400). `cpu` (e.g. "2", "1500m") and `memory`
-    (e.g. "4Gi") are the pod's compute reservation, applied as request == limit
-    (Guaranteed QoS); both default to 2 cores / 4Gi. `memory` needs an explicit
-    unit of Mi or larger — a unitless "4" is four BYTES and is rejected with 400.
-    Returns a Task; poll `get_task(task_id=<id>)` until `status` is `succeeded`
-    or `failed`, then call `get_endpoint` to read its `address` (and
-    `tailnet_address`, if the endpoint is exposed on the tailnet).
+    (e.g. "16Gi") are the pod's compute reservation, applied as request == limit
+    (Guaranteed QoS). `memory` needs an explicit unit of Mi or larger — a unitless
+    "4" is four BYTES and is rejected with 400. CPU defaults to 2 cores and memory
+    follows it at 8 GiB per core, so naming only `cpu` is enough; asking for less
+    memory per core than that is a 400 naming the minimum. Returns a Task; poll
+    `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then call
+    `get_endpoint` to read its `address` (and `tailnet_address`, if the endpoint
+    is exposed on the tailnet).
 
     Three optional settings maps configure what runs inside the pod. To change
     one later use `update_endpoint_settings` — the endpoint restarts the
@@ -268,16 +270,21 @@ def resize_endpoint(
     """Change an endpoint's compute reservation (vertical resize). ASYNCHRONOUS.
 
     Works for either role (a branch's `read_write` endpoint or any `read_only`
-    one). `cpu` (e.g. "2", "1500m") and `memory` (e.g. "4Gi") are Kubernetes
+    one). `cpu` (e.g. "2", "1500m") and `memory` (e.g. "16Gi") are Kubernetes
     quantities applied as request == limit (Guaranteed QoS); pass at least one
     (an omitted field keeps its current value — sending neither is rejected with
     400). `memory` needs an explicit unit of Mi or larger; a unitless "4" is four
-    BYTES and is rejected with 400. The controller persists the new size, updates
-    the Deployment, and resizes the running pod in place where the node allows
-    it. Returns a Task; poll `get_task(task_id=<id>)` until `status` is
-    `succeeded` or `failed` — the task result carries `in_place_resize`
-    (`completed` / `pending` / `infeasible` / `unsupported`). Then call
-    `get_endpoint` to read the new reservation.
+    BYTES and is rejected with 400. The memory-per-core floor applies to where the
+    resize LEAVES the endpoint, not to what the request names: growing cpu alone
+    is the ordinary way under it, and comes back as a 400 naming the memory that
+    cpu needs. The controller persists the new size, updates the Deployment, and
+    resizes the running pod in place where the node allows it. Returns a Task;
+    poll `get_task(task_id=<id>)` until `status` is `succeeded` or `failed` — the
+    task result carries `in_place_resize` (`completed` / `pending` / `infeasible`
+    / `unsupported`). Then call `get_endpoint` to read the new reservation.
+
+    An endpoint already below the floor — one created before the rule — may still
+    resize, as long as the change does not lower its memory per core further.
     """
     return controller_client.resize_endpoint(
         pool_id, cluster_id, branch_id, endpoint_id, cpu, memory

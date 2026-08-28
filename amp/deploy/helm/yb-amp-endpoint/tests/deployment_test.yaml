@@ -315,7 +315,7 @@ tests:
       - notExists:
           path: spec.template.metadata.annotations["prometheus.io/scrape"]
 
-  - it: reserves 2 cores / 4Gi with request == limit (Guaranteed QoS) by default
+  - it: reserves 2 cores / 16Gi with request == limit (Guaranteed QoS) by default
     template: templates/deployment.yaml
     asserts:
       - equal:
@@ -323,19 +323,21 @@ tests:
           value: "2"
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
-          value: "4Gi"
+          value: "16Gi"
       - equal:
           path: spec.template.spec.containers[0].resources.limits.cpu
           value: "2"
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
-          value: "4Gi"
+          value: "16Gi"
 
+  # Both values differ from the chart's defaults on purpose: an override that
+  # happens to equal the default cannot tell "honoured" from "ignored".
   - it: honours an explicit resources override, keeping request == limit
     template: templates/deployment.yaml
     set:
       endpoint.resources.cpu: "8"
-      endpoint.resources.memory: 16Gi
+      endpoint.resources.memory: 64Gi
     asserts:
       - equal:
           path: spec.template.spec.containers[0].resources.requests.cpu
@@ -345,10 +347,10 @@ tests:
           value: "8"
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
-          value: "16Gi"
+          value: "64Gi"
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
-          value: "16Gi"
+          value: "64Gi"
 
   - it: omits resources entirely when cpu/memory are cleared
     template: templates/deployment.yaml

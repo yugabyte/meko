@@ -220,10 +220,14 @@ func TestServiceCreateMigrationTargetSizingIsOptional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Steps: %v", err)
 	}
+	// Sizing stays optional for the caller, but the shape no longer is: leaving
+	// both empty would drop the target on the deployer's fallback, which is the
+	// memory-starved pair the floor exists to eliminate. An unsized target gets
+	// the default cores and the memory those cores are owed, spelled out.
 	var endpoint CreateEndpointArgs
 	decodeArgs(t, steps[2], &endpoint)
-	if endpoint.CPU != "" {
-		t.Errorf("endpoint CPU = %q, want empty (chart default) when VCPU is zero", endpoint.CPU)
+	if endpoint.CPU != "2" || endpoint.Memory != "16Gi" {
+		t.Errorf("endpoint size = (%q, %q), want (2, 16Gi) when VCPU is zero", endpoint.CPU, endpoint.Memory)
 	}
 }
 

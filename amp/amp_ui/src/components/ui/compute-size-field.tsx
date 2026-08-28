@@ -12,10 +12,12 @@ import { dataBranchingMessages as msg } from "@/lib/messages";
 export type ComputeSize = { cpu: string; memory: string };
 export type ComputeSizePreset = { id: string; label: string; cpu: string; memory: string };
 
+/** Each preset is on the controller's 8 GiB per vCPU floor. A preset below it
+ *  would be a choice the UI offers and the API refuses. */
 export const DEFAULT_COMPUTE_PRESETS: ComputeSizePreset[] = [
-  { id: "small", label: "Small", cpu: "2", memory: "4Gi" },
-  { id: "medium", label: "Medium", cpu: "4", memory: "8Gi" },
-  { id: "large", label: "Large", cpu: "8", memory: "16Gi" },
+  { id: "small", label: "Small", cpu: "2", memory: "16Gi" },
+  { id: "medium", label: "Medium", cpu: "4", memory: "32Gi" },
+  { id: "large", label: "Large", cpu: "8", memory: "64Gi" },
 ];
 
 export function ComputeSizeField({

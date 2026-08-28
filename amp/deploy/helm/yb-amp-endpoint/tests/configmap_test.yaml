@@ -45,14 +45,14 @@ tests:
           path: data.ENDPOINT_MEMORY
           value: "8Gi"
 
-  - it: defaults the reservation echo to the chart's 2 cores / 4Gi
+  - it: defaults the reservation echo to the chart's 2 cores / 16Gi
     asserts:
       - equal:
           path: data.ENDPOINT_CPU
           value: "2"
       - equal:
           path: data.ENDPOINT_MEMORY
-          value: "4Gi"
+          value: "16Gi"
 
   # The LFC must stay inside the /data budget. On the emptyDir path statvfs
   # reports the whole node filesystem (sizeLimit is kubelet-enforced, not a fs

@@ -217,6 +217,12 @@ type Config struct {
 	// the `helm template` render (after the built-in flags, so they can override).
 	ExtraHelmSet []string
 
+	// EndpointMemoryGiBPerVCPU is the memory-per-vCPU shape the deployed control
+	// plane holds endpoints to. The product default is 8, and a suite whose point
+	// is population cannot pay it — scale_tenants alone would reserve hundreds of
+	// GiB — so these clusters run a lower one. 0 leaves the chart's own default.
+	EndpointMemoryGiBPerVCPU int
+
 	YBImage   string
 	YBStorage string
 	// YBStorageClass is the built-in yugabyted PVC's class, separate from
@@ -383,7 +389,12 @@ func FromConfig(get Getter) Config {
 		YBTserverGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
 			get.GetString("env.ampstack.yb_tserver_gflags", "")),
 		StorageClass: get.GetString("env.ampstack.storage_class", ""),
-		DBName:       get.GetString("env.ampstack.db_name", DefaultDBName),
+		// 2, not the product's 8: these clusters pack many small endpoints, and
+		// the shapes the perf and scale suites were built around predate the
+		// floor. Raise it to exercise the product's own shape, at the cost of
+		// what those suites can fit.
+		EndpointMemoryGiBPerVCPU: get.GetInt("env.ampstack.endpoint_memory_gib_per_vcpu", 2),
+		DBName:                   get.GetString("env.ampstack.db_name", DefaultDBName),
 		Backing: Backing{
 			Mode:           BackingMode(get.GetString("env.ampstack.backing.mode", string(BackingBuiltinYugabyted))),
 			HostPorts:      get.GetString("env.ampstack.backing.host_ports", ""),
@@ -1193,6 +1204,7 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 		"controller.endpoint.ybDbname":         a.storageDBName(),
 		"controller.endpoint.service.type":     a.cfg.EndpointServiceType,
 		"controller.endpoint.storageClass":     a.cfg.StorageClass,
+		"controller.endpoint.memoryGiBPerVCPU": strconv.Itoa(a.cfg.EndpointMemoryGiBPerVCPU),
 		"controller.service.type":              a.cfg.ControllerExpose,
 		"mcp.enabled":                          boolStr(a.cfg.MCPEnabled),
 		"ui.enabled":                           boolStr(a.cfg.UIEnabled),

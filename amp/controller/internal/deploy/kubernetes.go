@@ -23,9 +23,15 @@ import (
 const defaultPgVersion = 18
 
 // defaultEndpointCPU / defaultEndpointMemory back an endpoint whose spec omits a
-// resource reservation. They mirror the chart's own values.yaml default so a
-// controller-driven deploy and a standalone chart install reserve the same
-// compute (2 cores / 4Gi) — applied as request == limit for Guaranteed QoS.
+// resource reservation — applied as request == limit for Guaranteed QoS.
+//
+// This is not the shape a new endpoint gets. The control plane resolves both
+// dimensions before it plans the deploy, holding them to a memory-per-core floor
+// (ResolveEndpointShape), so a spec reaching here without memory is one
+// written before it did. 4Gi is what those pods have been running, and handing
+// them the current default instead would resize every one of them on its next
+// redeploy — a change nobody asked for, arriving whenever something happens to
+// redeploy it.
 const (
 	defaultEndpointCPU    = "2"
 	defaultEndpointMemory = "4Gi"
