@@ -1604,19 +1604,37 @@ perf:
   # default fits a client pod with no explicit memory limit (a large -Xmx can
   # fail JVM init on a small node).
   max_heap: "2g"
-  # gate is the PORTAL gate: when the run streams to a report portal
-  # (report.portal.url), the perf verdict comes from POST /perf/gate — the
-  # rolling median of the last `window` comparable runs stored on the portal
-  # (same load signature + YugabyteDB train, latest run per build), with a
-  # spread-aware band of max(mad_k x MAD, floor). The portal is the only place
-  # perf history persists between CI runs; the baseline file below is the
-  # fallback for portal-less runs (and for a portal outage, which never fails
-  # a run on its own).
+  # gate is the HISTORY gate: when the run streams to a report portal
+  # (report.portal.url), the portal serves each datapoint's rolling median/MAD
+  # over the last `window` comparable runs (same load signature + YugabyteDB
+  # train, latest run per build) — DATA only. The band and the verdict are
+  # computed here: regressed when the worse-direction delta exceeds
+  # max(mad_k x MAD%, floor_pct). The portal is just the history store; the
+  # baseline file below is the fallback for portal-less runs (and a portal
+  # outage never fails a run on its own). When the live baseline arm ran
+  # (perf.baseline.live below), this gate is informational — the live
+  # comparison is the verdict.
   gate:
     # window is how many prior comparable runs the rolling median is over.
     window: 10
-    # mad_k overrides the portal's MAD multiplier (0 -> the portal default, 3).
-    mad_k: 0
+    mad_k: 3.0
+    # floor_pct is the minimum band: steadier history than this still gets
+    # this much tolerance.
+    floor_pct: 5.0
+    # min_runs is the history floor below which a datapoint is no_signal.
+    min_runs: 3
+  # baseline.live runs the SAME workload on a second set of stacks deployed
+  # from a prior amp release, CONCURRENTLY with the run's own, and gates
+  # current-vs-that under identical cluster conditions (thresholds:
+  # throughput_drop_pct / latency_rise_pct below). The arm's release is
+  # baseline.image_version when set; else the release before the current tag;
+  # else (custom tag) the newest release — resolved from the portal's builds
+  # list, and skipped (history gate takes over) when none is resolvable.
+  # Doubles the run's stacks; applies to the self-provisioning bench workloads
+  # (tpcc, pgbench, sysbench).
+  baseline:
+    live: true
+    image_version: ""
   # baseline_path is the JSON baseline store (per version → test → datapoint). A
   # relative path resolves against the process working directory. A first run (no
   # baseline) establishes it and WARNs; a later run gates against it. Baselines

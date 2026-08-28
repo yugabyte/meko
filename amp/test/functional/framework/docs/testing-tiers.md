@@ -97,7 +97,11 @@ need (a single run would demand every cloud credential at once). They are:
   large COPY / INSERT ... SELECT / batched-insert transaction / million-row
   UPDATE and holds it to all-or-nothing.
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
-  baseline-gated, with version/image comparison + bisect + history/trend. All
+  each gated against a LIVE baseline by default (`perf.baseline.live`): a second
+  set of stacks on the prior release runs the same workload concurrently, and
+  the verdict is current-vs-that under identical conditions. The portal-history
+  comparison stays informational (its band/verdict are framework-side,
+  `perf.gate.*`). Version/image comparison + bisect + history/trend remain. All
   three also sample the backing's own numbers while the benchmark runs
   (`apps/metrics`: per-pod CPU/memory plus the `apps.metrics.collect` prometheus
   set) and report them as series metrics under human keys — `[yb tserver] Write

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -12,25 +13,32 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
-// The portal holds the only perf history that survives a CI workspace.
+// The portal serves history DATA (rolling median/MAD per datapoint); the band and verdict are computed here, from perf.gate.*.
 
 const (
-	DefaultGateWindow  = 10
-	portalGateTimeout  = 30 * time.Second
-	portalGateArtifact = "perf-portal-gate.json"
+	DefaultGateWindow   = 10
+	DefaultGateMADK     = 3.0
+	DefaultGateFloorPct = 5.0
+	DefaultGateMinRuns  = 3
+	portalGateTimeout   = 30 * time.Second
+	portalGateArtifact  = "perf-portal-gate.json"
 )
 
 type portalGateConfig struct {
-	URL    string
-	Window int
-	MADK   float64
+	URL      string
+	Window   int
+	MADK     float64
+	FloorPct float64
+	MinRuns  int
 }
 
 func portalGateFromConfig(c *core.Config) portalGateConfig {
 	return portalGateConfig{
-		URL:    strings.TrimRight(c.GetString("report.portal.url", ""), "/"),
-		Window: c.GetInt("perf.gate.window", DefaultGateWindow),
-		MADK:   c.GetFloat("perf.gate.mad_k", 0),
+		URL:      strings.TrimRight(c.GetString("report.portal.url", ""), "/"),
+		Window:   c.GetInt("perf.gate.window", DefaultGateWindow),
+		MADK:     c.GetFloat("perf.gate.mad_k", DefaultGateMADK),
+		FloorPct: c.GetFloat("perf.gate.floor_pct", DefaultGateFloorPct),
+		MinRuns:  c.GetInt("perf.gate.min_runs", DefaultGateMinRuns),
 	}
 }
 
@@ -105,6 +113,54 @@ func portalGateCall(ctx context.Context, pg portalGateConfig, testName, ybVersio
 	return &out, buf.Bytes(), nil
 }
 
+// Recomputes delta/band/verdict from the portal's data, ignoring its verdicts: band = max(mad_k x MAD%, floor%), delta signed in the worse direction.
+func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGateConfig) []portalGateItem {
+	dirByName := map[string]core.Direction{}
+	for _, dp := range gated {
+		dirByName[dp.Name] = dp.Direction
+	}
+	out := make([]portalGateItem, len(items))
+	for i, it := range items {
+		out[i] = it
+		out[i].DeltaPct = nil
+		out[i].Verdict = "no_signal"
+		if it.Prev.N < pg.MinRuns || it.Prev.Median <= 0 {
+			continue
+		}
+		d, ok := regressionPct(it.Prev.Median, it.Value, dirByName[it.Name])
+		if !ok {
+			continue
+		}
+		band := math.Max(pg.MADK*(it.Prev.MAD/it.Prev.Median*100), pg.FloorPct)
+		out[i].DeltaPct = &d
+		out[i].Threshold = band
+		out[i].ThresholdFrom = "framework"
+		switch {
+		case d > band:
+			out[i].Verdict = "regressed"
+		case d < -band:
+			out[i].Verdict = "improved"
+		default:
+			out[i].Verdict = "neutral"
+		}
+	}
+	return out
+}
+
+func gateCounts(items []portalGateItem) (regressed, improved, noSignal int) {
+	for _, it := range items {
+		switch it.Verdict {
+		case "regressed":
+			regressed++
+		case "improved":
+			improved++
+		case "no_signal":
+			noSignal++
+		}
+	}
+	return
+}
+
 func applyPortalComparisons(gated []core.Datapoint, items []portalGateItem) []core.Datapoint {
 	byName := map[string]portalGateItem{}
 	for _, it := range items {
@@ -128,8 +184,12 @@ func applyPortalComparisons(gated []core.Datapoint, items []portalGateItem) []co
 }
 
 func portalGateSummary(testName string, out *portalGateResponse) string {
-	return fmt.Sprintf("perf: portal gate %s for %s — %d/%d regressed, %d improved, %d without enough history (window %d, train %s)",
-		out.Gate, testName, out.Regressed, out.Total, out.Improved, out.NoSignal, out.Window, orNone(out.YBTrain))
+	verdict := "pass"
+	if out.Regressed > 0 {
+		verdict = "fail"
+	}
+	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history (window %d, train %s)",
+		verdict, testName, out.Regressed, out.Total, out.Improved, out.NoSignal, out.Window, orNone(out.YBTrain))
 }
 
 func portalRegressionError(testName string, out *portalGateResponse) error {
@@ -151,15 +211,35 @@ func trimFloatStr(v float64) string {
 }
 
 func emitAndGateAuto(t *core.T, cfg perfConfig, version, testName string, gated, info []core.Datapoint, id Identity, logf func(string, ...any)) error {
+	return emitAndGateHistory(t, cfg, version, testName, gated, info, id, true, logf)
+}
+
+// assert=false stamps the history comparison but never fails on it (the live baseline arm owns the verdict).
+func emitAndGateHistory(t *core.T, cfg perfConfig, version, testName string, gated, info []core.Datapoint, id Identity, assert bool, logf func(string, ...any)) error {
 	pg := portalGateFromConfig(t.Options)
 	if pg.URL == "" {
+		if !assert {
+			for _, dp := range append(gated, info...) {
+				t.Datapoint(dp)
+			}
+			return nil
+		}
 		return emitAndGate(t, cfg, version, testName, gated, info, id, logf)
 	}
 	out, raw, err := portalGateCall(t.Context, pg, testName, version, gated, id)
 	if err != nil {
+		if !assert {
+			logf("perf: WARN portal history unavailable (%v) — datapoints emitted without a comparison", err)
+			for _, dp := range append(gated, info...) {
+				t.Datapoint(dp)
+			}
+			return nil
+		}
 		logf("perf: WARN portal gate unavailable (%v) — falling back to the local baseline file", err)
 		return emitAndGate(t, cfg, version, testName, gated, info, id, logf)
 	}
+	out.Items = localGateItems(gated, out.Items, pg)
+	out.Regressed, out.Improved, out.NoSignal = gateCounts(out.Items)
 	for _, dp := range applyPortalComparisons(gated, out.Items) {
 		t.Datapoint(dp)
 	}
@@ -168,7 +248,7 @@ func emitAndGateAuto(t *core.T, cfg perfConfig, version, testName string, gated,
 	}
 	t.AttachBytes(portalGateArtifact, "log", raw)
 	logf("%s", portalGateSummary(testName, out))
-	if out.Gate == "fail" {
+	if assert && out.Regressed > 0 {
 		return portalRegressionError(testName, out)
 	}
 	return nil

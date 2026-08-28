@@ -1482,6 +1482,24 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetInt("perf.bench.min_iterations", -1); got != perf.DefaultBenchMinIterations {
 		t.Errorf("perf.bench.min_iterations = %d, want %d", got, perf.DefaultBenchMinIterations)
 	}
+	if got := cfg.GetInt("perf.gate.window", -1); got != perf.DefaultGateWindow {
+		t.Errorf("perf.gate.window = %d, want %d", got, perf.DefaultGateWindow)
+	}
+	if got := cfg.GetFloat("perf.gate.mad_k", -1); got != perf.DefaultGateMADK {
+		t.Errorf("perf.gate.mad_k = %v, want %v", got, perf.DefaultGateMADK)
+	}
+	if got := cfg.GetFloat("perf.gate.floor_pct", -1); got != perf.DefaultGateFloorPct {
+		t.Errorf("perf.gate.floor_pct = %v, want %v", got, perf.DefaultGateFloorPct)
+	}
+	if got := cfg.GetInt("perf.gate.min_runs", -1); got != perf.DefaultGateMinRuns {
+		t.Errorf("perf.gate.min_runs = %d, want %d", got, perf.DefaultGateMinRuns)
+	}
+	if got := cfg.GetBool("perf.baseline.live", false); got != true {
+		t.Error("perf.baseline.live must default true")
+	}
+	if got := cfg.GetString("perf.baseline.image_version", "x"); got != "" {
+		t.Errorf("perf.baseline.image_version = %q, want empty", got)
+	}
 	if got := cfg.GetBool("perf.bench.discard_first", false); got != perf.DefaultBenchDiscardFirst {
 		t.Errorf("perf.bench.discard_first = %v, want %v", got, perf.DefaultBenchDiscardFirst)
 	}

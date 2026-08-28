@@ -90,6 +90,9 @@ type BenchConfig struct {
 	// stops (perf.bench.load_only). They are mutually exclusive.
 	SkipLoad bool
 	LoadOnly bool
+	// StartGate blocks after the load phase until every concurrent arm is loaded,
+	// so the measured windows overlap; nil = start immediately.
+	StartGate func(context.Context) error
 }
 
 // benchConfigFromConfig reads perf.bench.* into a BenchConfig.
@@ -180,6 +183,12 @@ func RunBenchmark(ctx context.Context, ex exec.RemoteExecutor, w Workload, bc Be
 	// a (kept) environment once, then re-run execute-only against it later.
 	if bc.LoadOnly {
 		return res, nil
+	}
+
+	if bc.StartGate != nil {
+		if err := bc.StartGate(ctx); err != nil {
+			return res, fmt.Errorf("await concurrent arms: %w", err)
+		}
 	}
 
 	if bc.Warmup > 0 {
