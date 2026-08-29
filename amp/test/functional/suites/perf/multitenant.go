@@ -361,7 +361,7 @@ func runMultitenant(t *core.T) error {
 				solo[c.TenantIndex] = base
 				continue
 			}
-			sample, cv, err := measureRepeated(t, logf, c, "solo", params, bc.SampleInterval)
+			sample, err := measureRepeated(t, logf, c, "solo", params, bc.SampleInterval)
 			if err != nil {
 				logf("multitenant: dropping tenant %d (%s): solo run failed: %v", c.TenantIndex, c.WorkloadName, err)
 				dropped = append(dropped, fmt.Sprintf("%s (solo: %v)", c.WorkloadName, err))
@@ -377,12 +377,6 @@ func runMultitenant(t *core.T) error {
 			t.Datapoint(core.Datapoint{
 				Name: fmt.Sprintf("multitenant.%s.solo_latency_avg_ms", c.WorkloadName), Value: sample.LatencyAvgMS,
 				Unit: "ms", Direction: core.LowerIsBetter})
-			// How far the iterations spread. A wide spread means the medians above
-			// are not a stable basis for comparing versions, and says so in the
-			// report instead of leaving it to be guessed.
-			t.Datapoint(core.Datapoint{
-				Name: fmt.Sprintf("multitenant.%s.solo_tps_cv", c.WorkloadName), Value: cv,
-				Unit: "%", Direction: core.LowerIsBetter})
 		}
 		clients = kept
 		if len(clients) == 0 {
@@ -394,7 +388,6 @@ func runMultitenant(t *core.T) error {
 	}
 
 	mixed := map[int]Sample{}
-	mixedCV := map[int]float64{}
 	if err := t.Step("measure_mixed", func(s *core.StepHandle) error {
 		// Every tenant's driver at once — the arrangement the product is sold as.
 		var wg sync.WaitGroup
@@ -405,9 +398,8 @@ func runMultitenant(t *core.T) error {
 			go func(idx int) {
 				defer wg.Done()
 				c := clients[idx]
-				sample, cv, err := measureRepeated(t, logf, c, "mixed", params, bc.SampleInterval)
+				sample, err := measureRepeated(t, logf, c, "mixed", params, bc.SampleInterval)
 				mu.Lock()
-				mixedCV[c.TenantIndex] = cv
 				defer mu.Unlock()
 				if err != nil {
 					errs[idx] = fmt.Errorf("tenant %d (%s): mixed run: %w", c.TenantIndex, c.WorkloadName, err)
@@ -441,9 +433,6 @@ func runMultitenant(t *core.T) error {
 			t.Datapoint(core.Datapoint{
 				Name: fmt.Sprintf("multitenant.%s.mixed_latency_avg_ms", c.WorkloadName), Value: sample.LatencyAvgMS,
 				Unit: "ms", Direction: core.LowerIsBetter})
-			t.Datapoint(core.Datapoint{
-				Name: fmt.Sprintf("multitenant.%s.mixed_tps_cv", c.WorkloadName), Value: mixedCV[c.TenantIndex],
-				Unit: "%", Direction: core.LowerIsBetter})
 		}
 		t.Datapoint(core.Datapoint{Name: "multitenant.aggregate_tps", Value: total, Unit: "tps", Direction: core.HigherIsBetter})
 		t.Chart(throughputChart(clients, solo, mixed))
@@ -567,14 +556,14 @@ func recordDriverRun(t *core.T, logf func(string, ...any), workload, phase strin
 }
 
 // measureRepeated runs one tenant's driver params.Iterations times and returns
-// the median iteration's numbers, plus the coefficient of variation of
-// throughput across iterations as a percentage.
+// the median iteration's numbers. The iteration spread is logged, not reported —
+// spreads are computed report-side, like everywhere else in this suite.
 //
 // The returned Sample keeps the SERIES of the iteration whose throughput is the
 // median, not an average of all of them: iterations do not share a time base, so
 // averaging their points smears real dips into a flat line that never happened.
 func measureRepeated(t *core.T, logf func(string, ...any), c tenantClient, phase string,
-	params multitenantParams, sampleInterval time.Duration) (Sample, float64, error) {
+	params multitenantParams, sampleInterval time.Duration) (Sample, error) {
 	iters := params.Iterations
 	if iters < 1 {
 		iters = 1
@@ -593,7 +582,7 @@ func measureRepeated(t *core.T, logf func(string, ...any), c tenantClient, phase
 		samples = append(samples, s)
 	}
 	if len(samples) == 0 {
-		return Sample{}, 0, lastErr
+		return Sample{}, lastErr
 	}
 	tps := make([]float64, len(samples))
 	lat := make([]float64, len(samples))
@@ -610,7 +599,7 @@ func measureRepeated(t *core.T, logf func(string, ...any), c tenantClient, phase
 	out := Sample{TPS: medTPS, LatencyAvgMS: median(lat), Series: rep.Series, Raw: rep.Raw}
 	logf("multitenant: %s %s median of %d iterations: %.1f tps, %.2f ms (cv %.1f%%)",
 		c.WorkloadName, phase, len(samples), out.TPS, out.LatencyAvgMS, cvPct(tps))
-	return out, cvPct(tps), nil
+	return out, nil
 }
 
 // cvPct is the coefficient of variation as a percentage: 0 means every
