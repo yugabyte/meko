@@ -1,7 +1,7 @@
 import { GitPullRequest } from "lucide-react";
 
 import type { LabDefinition } from "../types";
-import { ADLC_REVIEW_AGENT_LAB_CHAPTERS } from "./adlcReviewAgentLab/steps";
+import { ADLC_REVIEW_AGENT_LAB_STAGES } from "./adlcReviewAgentLab/stages";
 
 export const ADLC_REVIEW_AGENT_LAB: LabDefinition = {
   id: "adlc-review-agent",
@@ -12,11 +12,10 @@ export const ADLC_REVIEW_AGENT_LAB: LabDefinition = {
   tags: ["ADLC", "Code Review"],
   icon: GitPullRequest,
   estimatedMinutes: 5,
-  chapters: ADLC_REVIEW_AGENT_LAB_CHAPTERS,
+  stages: ADLC_REVIEW_AGENT_LAB_STAGES,
   demoApp: {
     kind: "pr-review-chat",
     persona: "review_agent",
-    datapackName: "ADLC Review Agent Lab",
   },
   observation: {
     kind: "workbench-live-observation",

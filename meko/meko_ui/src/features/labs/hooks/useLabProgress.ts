@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { getLocalItem, setLocalItem } from "@/lib/browserStorage";
 
 import type { LabDefinition } from "../types";
 
-type Progress = { chapterIndex: number; stepIndex: number };
+type Progress = { stageIndex: number };
 
 function storageKey(labId: string): string {
   return `meko:lab-progress:${labId}`;
@@ -12,33 +12,26 @@ function storageKey(labId: string): string {
 
 function readProgress(labId: string): Progress {
   const raw = getLocalItem(storageKey(labId));
-  if (!raw) return { chapterIndex: 0, stepIndex: 0 };
+  if (!raw) return { stageIndex: 0 };
   try {
     const parsed = JSON.parse(raw) as Partial<Progress>;
-    return {
-      chapterIndex: typeof parsed.chapterIndex === "number" ? parsed.chapterIndex : 0,
-      stepIndex: typeof parsed.stepIndex === "number" ? parsed.stepIndex : 0,
-    };
+    // A pre-restructuring blob ({chapterIndex, stepIndex}) has no
+    // stageIndex key, so this falls back to 0 — no migration needed.
+    return { stageIndex: typeof parsed.stageIndex === "number" ? parsed.stageIndex : 0 };
   } catch {
-    return { chapterIndex: 0, stepIndex: 0 };
+    return { stageIndex: 0 };
   }
 }
 
 /**
- * Chapter/step position within a lab's walkthrough, persisted per lab id so
- * reloading the runner resumes where the user left off. Bounds-checks
- * against the lab's actual chapter/step counts so a lab definition edit
- * (fewer chapters/steps than a stale saved position) can't leave the rail
- * pointing at nothing.
+ * Which of the lab's 5 fixed stages the user is on, persisted per lab id so
+ * reloading the runner resumes where they left off. Bounds-checked against
+ * the lab's actual stage count so a lab definition edit (fewer stages than a
+ * stale saved index) can't leave the nav pointing at nothing.
  */
 export function useLabProgress(lab: LabDefinition) {
   const [progress, setProgress] = useState<Progress>(() => readProgress(lab.id));
-
-  const chapterIndex = Math.min(progress.chapterIndex, lab.chapters.length - 1);
-  const stepIndex = Math.min(
-    progress.stepIndex,
-    lab.chapters[chapterIndex].steps.length - 1,
-  );
+  const stageIndex = Math.min(progress.stageIndex, lab.stages.length - 1);
 
   const persist = useCallback(
     (next: Progress) => {
@@ -48,39 +41,22 @@ export function useLabProgress(lab: LabDefinition) {
     [lab.id],
   );
 
-  const goToNext = useCallback(() => {
-    const chapter = lab.chapters[chapterIndex];
-    if (stepIndex < chapter.steps.length - 1) {
-      persist({ chapterIndex, stepIndex: stepIndex + 1 });
-    } else if (chapterIndex < lab.chapters.length - 1) {
-      persist({ chapterIndex: chapterIndex + 1, stepIndex: 0 });
-    }
-  }, [lab.chapters, chapterIndex, stepIndex, persist]);
-
-  const goToChapter = useCallback(
+  const goToStage = useCallback(
     (index: number) => {
-      persist({ chapterIndex: Math.max(0, Math.min(index, lab.chapters.length - 1)), stepIndex: 0 });
+      persist({ stageIndex: Math.max(0, Math.min(index, lab.stages.length - 1)) });
     },
-    [lab.chapters.length, persist],
+    [lab.stages.length, persist],
   );
 
-  const isLastStep = useMemo(
-    () =>
-      chapterIndex === lab.chapters.length - 1 &&
-      stepIndex === lab.chapters[chapterIndex].steps.length - 1,
-    [lab.chapters, chapterIndex, stepIndex],
-  );
+  const goToNext = useCallback(() => goToStage(stageIndex + 1), [goToStage, stageIndex]);
 
-  const isLastStepOfChapter = stepIndex === lab.chapters[chapterIndex].steps.length - 1;
+  const isLastStage = stageIndex === lab.stages.length - 1;
 
   return {
-    chapterIndex,
-    stepIndex,
-    currentChapter: lab.chapters[chapterIndex],
-    currentStep: lab.chapters[chapterIndex].steps[stepIndex],
+    stageIndex,
+    currentStage: lab.stages[stageIndex],
+    goToStage,
     goToNext,
-    goToChapter,
-    isLastStep,
-    isLastStepOfChapter,
+    isLastStage,
   };
 }

@@ -12,25 +12,45 @@ describe("LAB_DEFINITIONS", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("every lab has at least one chapter, and every chapter at least one step", () => {
+  it("every lab has at least the 5 fixed stages", () => {
     for (const lab of LAB_DEFINITIONS) {
-      expect(lab.chapters.length).toBeGreaterThan(0);
-      for (const chapter of lab.chapters) {
-        expect(chapter.steps.length).toBeGreaterThan(0);
+      expect(lab.stages.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("has unique stage ids within each lab", () => {
+    for (const lab of LAB_DEFINITIONS) {
+      const stageIds = lab.stages.map((stage) => stage.id);
+      expect(new Set(stageIds).size).toBe(stageIds.length);
+    }
+  });
+
+  it("every stage has a non-empty title, shortLabel, and summary", () => {
+    for (const lab of LAB_DEFINITIONS) {
+      for (const stage of lab.stages) {
+        expect(stage.title.trim().length).toBeGreaterThan(0);
+        expect(stage.shortLabel.trim().length).toBeGreaterThan(0);
+        expect(stage.summary.trim().length).toBeGreaterThan(0);
       }
     }
   });
 
-  it("has unique step ids within each lab", () => {
+  it("every stage has exactly two non-empty highlights", () => {
     for (const lab of LAB_DEFINITIONS) {
-      const stepIds = lab.chapters.flatMap((chapter) => chapter.steps.map((step) => step.id));
-      expect(new Set(stepIds).size).toBe(stepIds.length);
+      for (const stage of lab.stages) {
+        expect(stage.highlights.length).toBe(2);
+        for (const highlight of stage.highlights) {
+          expect(highlight.trim().length).toBeGreaterThan(0);
+        }
+      }
     }
   });
 
-  it("every lab has a non-empty demoApp.datapackName", () => {
+  it("every deployable lab has a non-empty demoApp.deployable.agentSlug", () => {
     for (const lab of LAB_DEFINITIONS) {
-      expect(lab.demoApp.datapackName.trim().length).toBeGreaterThan(0);
+      if (lab.demoApp.deployable) {
+        expect(lab.demoApp.deployable.agentSlug.trim().length).toBeGreaterThan(0);
+      }
     }
   });
 

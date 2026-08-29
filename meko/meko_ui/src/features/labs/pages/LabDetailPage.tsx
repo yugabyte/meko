@@ -48,12 +48,21 @@ export default function LabDetailPage() {
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
           </TabsList>
-          <TabsContent value="overview" className="flex flex-col gap-4 pt-4">
+          <TabsContent value="overview" className="flex flex-col gap-6 pt-4">
             <p className="text-sm text-muted-foreground">{lab.description}</p>
-            <ol className="flex flex-col gap-2">
-              {lab.chapters.map((chapter, i) => (
-                <li key={chapter.id} className="text-sm">
-                  <span className="font-medium">{i + 1}. {chapter.title}</span>
+            <ol className="relative flex items-start justify-between gap-2">
+              <div className="absolute left-0 right-0 top-4 h-0.5 bg-border" aria-hidden />
+              {lab.stages.map((stage, i) => (
+                <li key={stage.id} className="relative z-10 flex flex-1 flex-col items-center gap-1.5 text-center">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground ring-4 ring-background">
+                    {i + 1}
+                  </span>
+                  <p className="text-xs font-semibold sm:text-sm">{stage.title}</p>
+                  <div className="flex flex-col gap-0.5 text-[11px] leading-tight text-muted-foreground sm:text-xs">
+                    {stage.highlights.map((highlight, hi) => (
+                      <span key={hi}>{highlight}</span>
+                    ))}
+                  </div>
                 </li>
               ))}
             </ol>

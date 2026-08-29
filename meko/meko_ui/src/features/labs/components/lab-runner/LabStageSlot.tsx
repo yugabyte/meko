@@ -1,0 +1,51 @@
+import { CollaborateStage } from "../stages/CollaborateStage";
+import { CreateDatapackStage } from "../stages/CreateDatapackStage";
+import { SeedContextStage } from "../stages/SeedContextStage";
+import type { useLabProgress } from "../../hooks/useLabProgress";
+import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import type { LabDefinition } from "../../types";
+
+/**
+ * Main content pane of the lab runner: switches on progress.currentStage.id
+ * (closed union, same convention the old LabDemoAppSlot used for
+ * demoApp.kind) to render one of the 5 fixed stage components.
+ */
+export function LabStageSlot({
+  lab,
+  session,
+  progress,
+}: {
+  lab: LabDefinition;
+  session: ReturnType<typeof useLabRunnerSession>;
+  progress: ReturnType<typeof useLabProgress>;
+}) {
+  const goToCreateDatapack = () => progress.goToStage(0);
+
+  switch (progress.currentStage.id) {
+    case "create-datapack":
+      return (
+        <CreateDatapackStage
+          datapacks={session.accessibleDatapacks}
+          loading={session.datapacksLoading}
+          selectedId={session.datapackId}
+          onSelect={session.selectDatapack}
+          onCreate={session.createAndSelectDatapack}
+          creating={session.creating}
+          onContinue={progress.goToNext}
+        />
+      );
+    case "seed-context":
+      return <SeedContextStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    case "deploy-agent":
+    case "run-review":
+      return (
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
+          Coming soon.
+        </div>
+      );
+    case "collaborate":
+      return <CollaborateStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    default:
+      return null;
+  }
+}
