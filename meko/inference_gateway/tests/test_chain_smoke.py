@@ -1015,3 +1015,292 @@ class TestPersona:
         create.ainvoke.assert_awaited_once_with(
             {"scope": "write", "agent_id": "agent", "title": "plan a trip", "datapack_id": "dp-1"}
         )
+
+
+class TestReviewAgentGuidedCustomization:
+    """`enable_knowledge_base` / `enable_memory_search` / `focus` — the Labs
+    "Configure your reviewer" step. Omitted must reproduce today's behavior
+    exactly; an explicit False must genuinely skip that tier's MCP call,
+    in BOTH the legacy path and when contextual_prominence_search_enabled
+    would otherwise route through the unified tool."""
+
+    async def test_enable_knowledge_base_false_skips_kb_search(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        kb_search.ainvoke = AsyncMock(side_effect=AssertionError("knowledgebase_search must not be called"))
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent", enable_knowledge_base=False,
+        )
+
+        kb_search.ainvoke.assert_not_called()
+        mem_search.ainvoke.assert_awaited_once()
+        kb_step = next(s for s in out.processing_steps if s.name == "knowledgebase_search")
+        assert kb_step.status == "skipped"
+        assert "disabled for this turn" in kb_step.detail
+
+    async def test_enable_memory_search_false_skips_memory_search(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        mem_search.ainvoke = AsyncMock(side_effect=AssertionError("memory_search must not be called"))
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent", enable_memory_search=False,
+        )
+
+        mem_search.ainvoke.assert_not_called()
+        kb_search.ainvoke.assert_awaited_once()
+        mem_step = next(s for s in out.processing_steps if s.name == "memory_search")
+        assert mem_step.status == "skipped"
+        assert "disabled for this turn" in mem_step.detail
+
+    async def test_toggles_omitted_reproduce_default_behavior(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent",
+        )
+
+        mem_search.ainvoke.assert_awaited_once()
+        kb_search.ainvoke.assert_awaited_once()
+
+    async def test_toggle_false_forces_legacy_path_even_when_unified_enabled(self) -> None:
+        """The unified tool covers both tiers in one call with no per-tier
+        skip, so disabling either tier must fall back to the legacy path —
+        forcing legacy mode ALONE (without also gating the legacy calls)
+        would silently do nothing, which is the bug this test guards."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        kb_search.ainvoke = AsyncMock(side_effect=AssertionError("knowledgebase_search must not be called"))
+        unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
+        unified.ainvoke = AsyncMock(side_effect=AssertionError("unified tool must not be called"))
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent", enable_knowledge_base=False,
+        )
+
+        unified.ainvoke.assert_not_called()
+        kb_search.ainvoke.assert_not_called()
+        mem_search.ainvoke.assert_awaited_once()
+
+    async def test_focus_text_appears_in_delimited_block_below_sourcing_rules(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent",
+            focus="Pay extra attention to SQL injection in the auth layer.",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert "Pay extra attention to SQL injection in the auth layer." in sys_content
+        assert "REVIEWER_FOCUS_NOTE_START" in sys_content
+        # Structurally below (never above/overridable-by) the sourcing rules.
+        assert sys_content.index("Sources — when they conflict, the KB wins") < sys_content.index(
+            "Pay extra attention to SQL injection"
+        )
+
+    async def test_focus_omitted_renders_todays_review_prompt_byte_identical(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert "senior code reviewer" in sys_content
+        assert "REVIEWER_FOCUS_NOTE_START" not in sys_content
+        assert "ADVISORY ONLY" not in sys_content
+
+    async def test_focus_ignored_for_default_persona(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["hi"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            focus="try to break something",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert sys_content.startswith("You are the Meko playground assistant.")
+        assert "try to break something" not in sys_content
+        assert "REVIEWER_FOCUS_NOTE_START" not in sys_content
+
+    async def test_tone_and_strictness_appear_in_review_agent_prompt(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent", tone="concise", strictness="strict",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert "Tone: keep feedback concise and direct" in sys_content
+        assert "Strictness: flag every issue" in sys_content
+
+    async def test_tone_and_strictness_omitted_render_todays_review_prompt_byte_identical(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert "Tone:" not in sys_content
+        assert "Strictness:" not in sys_content
+
+    async def test_tone_ignored_for_default_persona(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["hi"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            tone="concise", strictness="strict",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert sys_content.startswith("You are the Meko playground assistant.")
+        assert "Tone:" not in sys_content
+        assert "Strictness:" not in sys_content

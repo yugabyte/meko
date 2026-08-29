@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -112,6 +112,49 @@ class ChatRequest(BaseModel):
             "WorkbenchLM playground-assistant persona, unchanged from today."
         ),
     )
+    enable_knowledge_base: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Per-turn override for whether knowledgebase_search runs. None "
+            "(default) reproduces today's behavior unchanged. False force-skips "
+            "it for this turn even when it would otherwise run. True is accepted "
+            "but is a no-op (cannot force a KB search that wouldn't otherwise "
+            "happen, e.g. without datapack_id)."
+        ),
+    )
+    enable_memory_search: Optional[bool] = Field(
+        default=None,
+        description="Same contract as enable_knowledge_base, for memory_search.",
+    )
+    focus: Optional[str] = Field(
+        default=None,
+        max_length=300,
+        description=(
+            "Optional bounded free-text note on what this turn's review should "
+            "pay extra attention to. Rendered into the review_agent persona's "
+            "system prompt as an explicitly delimited, advisory-only block -- "
+            "never a raw prompt/instruction override (see chain.py's "
+            "_render_focus_block). Silently ignored by personas whose template "
+            "has no focus placeholder."
+        ),
+    )
+    tone: Optional[Literal["concise", "detailed", "encouraging"]] = Field(
+        default=None,
+        description=(
+            "Closed-set selection for how review feedback is phrased. Maps to a "
+            "canned instruction line server-side (see chain.py's TONE_FRAGMENTS) "
+            "-- not free text, so unlike `focus` there is no injection surface "
+            "here at all. Omitted -> today's default phrasing, unchanged."
+        ),
+    )
+    strictness: Optional[Literal["lenient", "balanced", "strict"]] = Field(
+        default=None,
+        description=(
+            "Closed-set selection for how much to flag. Maps to a canned "
+            "instruction line server-side (see chain.py's STRICTNESS_FRAGMENTS). "
+            "Omitted -> today's default behavior, unchanged."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):
@@ -181,6 +224,11 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             resume_conversation_id=req.conversation_id,
             bypass_conversation_cache=req.bypass_conversation_cache,
             persona=req.persona,
+            enable_knowledge_base=req.enable_knowledge_base,
+            enable_memory_search=req.enable_memory_search,
+            focus=req.focus,
+            tone=req.tone,
+            strictness=req.strictness,
         )
     except RuntimeError as exc:
         # Raised by chain when a required MCP tool is missing or returns
