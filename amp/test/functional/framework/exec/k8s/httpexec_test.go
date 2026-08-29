@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 )
@@ -113,5 +114,71 @@ func TestExecTransportHandlesAChunkedHeaderOverDecodedBody(t *testing.T) {
 	}
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+// curl exit 28 is what a nemesis-killed target pod leaves behind.
+func TestExecTransportRetriesTransientCurlExitsOnGET(t *testing.T) {
+	old := transientRetryPause
+	transientRetryPause = time.Millisecond
+	defer func() { transientRetryPause = old }()
+
+	attempts := 0
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(ctx context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
+			attempts++
+			if attempts == 1 {
+				return execpkg.Result{ExitCode: 28, Stderr: "curl: (28) Connection timed out"}, nil
+			}
+			return execpkg.Result{Stdout: "HTTP/1.1 200 OK\r\n\r\n{\"state\":\"succeeded\"}"}, nil
+		})
+	tr := &HTTPExecTransport{Kube: kube, BaseURL: "http://amp-controller:8080", Logf: func(string, ...any) {}}
+	req, _ := http.NewRequest(http.MethodGet, "http://placeholder/api/v1/tasks/t1", nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("want the retry to succeed, got %v", err)
+	}
+	resp.Body.Close()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+// A timed-out POST may already have applied; retrying could double-create.
+func TestExecTransportDoesNotRetryTransientExitsOnPOST(t *testing.T) {
+	attempts := 0
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(ctx context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
+			attempts++
+			return execpkg.Result{ExitCode: 28, Stderr: "curl: (28) Connection timed out"}, nil
+		})
+	tr := &HTTPExecTransport{Kube: kube, BaseURL: "http://amp-controller:8080"}
+	req, _ := http.NewRequest(http.MethodPost, "http://placeholder/api/v1/clusters", strings.NewReader("{}"))
+	if _, err := tr.RoundTrip(req); err == nil {
+		t.Fatal("want the timeout surfaced")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestExecTransportGivesUpAfterTransientBudget(t *testing.T) {
+	old := transientRetryPause
+	transientRetryPause = time.Millisecond
+	defer func() { transientRetryPause = old }()
+
+	attempts := 0
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(ctx context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
+			attempts++
+			return execpkg.Result{ExitCode: 7, Stderr: "curl: (7) Connection refused"}, nil
+		})
+	tr := &HTTPExecTransport{Kube: kube, BaseURL: "http://amp-controller:8080"}
+	req, _ := http.NewRequest(http.MethodGet, "http://placeholder/healthz", nil)
+	if _, err := tr.RoundTrip(req); err == nil {
+		t.Fatal("want the failure surfaced once the budget is spent")
+	}
+	if attempts != transientAttempts {
+		t.Fatalf("attempts = %d, want %d", attempts, transientAttempts)
 	}
 }

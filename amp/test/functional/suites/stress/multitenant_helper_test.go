@@ -146,3 +146,19 @@ func TestSilentTenantIsNamedAsABrokenClient(t *testing.T) {
 		}
 	}
 }
+
+// A briefly-unready collector pod on a new autoscaler node is not amp's fault.
+func TestTelemetryCollectorPodsAreNotAmpHealth(t *testing.T) {
+	for pod, want := range map[string]bool{
+		"yb-amp-controller-logs-collector-ws59p":                   true,
+		"yb-amp-controller-compute-collector-55b57985d-mghmn":      true,
+		"yb-amp-controller-controller-collector-74b88b9669-z8rlk":  true,
+		"amp-controller-fcdbc5c74-49w4k":                           false,
+		"yb-ep-2066e47e-3249-4c10-bc43-03848605003e-8574696cdf-x1": false,
+		"ampqa-http-relay": false,
+	} {
+		if got := telemetryCollectorPod(pod); got != want {
+			t.Errorf("telemetryCollectorPod(%q) = %v, want %v", pod, got, want)
+		}
+	}
+}

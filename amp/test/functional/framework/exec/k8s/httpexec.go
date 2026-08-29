@@ -39,14 +39,22 @@ type HTTPExecTransport struct {
 	Logf func(string, ...any)
 }
 
-const defaultHTTPExecTimeout = 2 * time.Minute
+const (
+	defaultHTTPExecTimeout = 2 * time.Minute
+	// A Service VIP keeps routing to a just-deleted pod, so the connect
+	// blackholes; without this it burns the whole --max-time.
+	curlConnectTimeout = 10 * time.Second
+	transientAttempts  = 3
+)
+
+var transientRetryPause = 3 * time.Second
 
 func (t *HTTPExecTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	body, err := requestBody(req)
 	if err != nil {
 		return nil, err
 	}
-	res, err := t.exec(req, body)
+	res, err := t.execTransient(req, body)
 	if err == nil {
 		return parseWireResponse(res.Stdout, req)
 	}
@@ -59,11 +67,47 @@ func (t *HTTPExecTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if eerr := t.EnsurePod(req.Context()); eerr != nil {
 		return nil, fmt.Errorf("HTTP exec failed (%w) and the relay pod could not be recreated: %v", err, eerr)
 	}
-	res, err = t.exec(req, body)
+	res, err = t.execTransient(req, body)
 	if err != nil {
 		return nil, err
 	}
 	return parseWireResponse(res.Stdout, req)
+}
+
+// execTransient retries curl exits where the connection never carried a
+// response. Idempotent methods only: a timed-out POST may already have applied.
+func (t *HTTPExecTransport) execTransient(req *http.Request, body []byte) (execpkg.Result, error) {
+	res, err := t.exec(req, body)
+	if err == nil || !idempotentMethod(req.Method) {
+		return res, err
+	}
+	for attempt := 2; attempt <= transientAttempts && transientCurlExit(res.ExitCode); attempt++ {
+		if t.Logf != nil {
+			t.Logf("k8s: curl exited %d on %s %s; retrying (attempt %d/%d)", res.ExitCode, req.Method, req.URL.Path, attempt, transientAttempts)
+		}
+		select {
+		case <-req.Context().Done():
+			return res, err
+		case <-time.After(transientRetryPause):
+		}
+		res, err = t.exec(req, body)
+		if err == nil {
+			return res, nil
+		}
+	}
+	return res, err
+}
+
+func transientCurlExit(code int) bool {
+	switch code {
+	case 6, 7, 28, 52, 56: // resolve, refused, timed out, empty reply, recv failure
+		return true
+	}
+	return false
+}
+
+func idempotentMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 // exec runs one curl inside the pod, body on stdin.
@@ -94,6 +138,7 @@ func curlCommand(req *http.Request, baseURL string, hasBody bool, timeout time.D
 	args := []string{
 		"curl", "-isS",
 		"--max-time", fmt.Sprintf("%d", int(timeout.Seconds())),
+		"--connect-timeout", fmt.Sprintf("%d", int(curlConnectTimeout.Seconds())),
 		"-X", req.Method,
 		"-H", "Expect:",
 	}

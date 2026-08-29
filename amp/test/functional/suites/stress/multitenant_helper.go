@@ -345,6 +345,20 @@ func awaitControlPlaneReady(t *core.T, fleet *tenantFleet, settle time.Duration)
 	}
 }
 
+const (
+	// The namespace is shared, so a neighbouring nemesis reschedules pods
+	// mid-run. That churn settles in seconds; a crash loop does not.
+	ampHealthySettleBudget = 90 * time.Second
+	ampHealthySettlePoll   = 5 * time.Second
+)
+
+// telemetryCollectorPod matches the operator's otel collectors. They observe
+// amp but are not its data path, and the logs DaemonSet grows a pod on every
+// node the autoscaler adds.
+func telemetryCollectorPod(pod string) bool {
+	return strings.HasPrefix(pod, "yb-amp-controller-") && strings.Contains(pod, "-collector-")
+}
+
 // assertAmpHealthy reports pods in the control-plane namespace that are not
 // running and ready — a crash-looping controller or endpoint is exactly the
 // "amp stopped working" this tier is here to catch. Pods that completed
@@ -356,9 +370,31 @@ func assertAmpHealthy(t *core.T, kube *k8s.Kubectl, tenants []tenant) (string, e
 	if kube == nil {
 		return "", core.AsEnvFailure(fmt.Errorf("no kube context: pod health could not be checked, so this run cannot claim the deployment survived"))
 	}
-	states, err := kube.PodStates(t.Context)
+	deadline := time.Now().Add(ampHealthySettleBudget)
+	for {
+		unhealthy, total, err := unhealthyAmpPods(t.Context, kube, tenants)
+		if err != nil {
+			return "", err
+		}
+		if len(unhealthy) == 0 {
+			return fmt.Sprintf("%d pod(s) running and ready", total), nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("%d pod(s) in the amp namespace are not running and ready after the load (waited %s): %s",
+				len(unhealthy), ampHealthySettleBudget, strings.Join(unhealthy, ", "))
+		}
+		select {
+		case <-t.Context.Done():
+			return "", t.Context.Err()
+		case <-time.After(ampHealthySettlePoll):
+		}
+	}
+}
+
+func unhealthyAmpPods(ctx context.Context, kube *k8s.Kubectl, tenants []tenant) ([]string, int, error) {
+	states, err := kube.PodStates(ctx)
 	if err != nil {
-		return "", fmt.Errorf("read pod states: %w", err)
+		return nil, 0, fmt.Errorf("read pod states: %w", err)
 	}
 	var unhealthy []string
 	for _, p := range states {
@@ -370,19 +406,18 @@ func assertAmpHealthy(t *core.T, kube *k8s.Kubectl, tenants []tenant) (string, e
 		if foreignEndpointPod(p.Name, tenants) {
 			continue
 		}
+		if telemetryCollectorPod(p.Name) {
+			continue
+		}
 		if p.Phase != "Running" || !p.Ready {
 			entry := fmt.Sprintf("%s (%s, ready=%v)", p.Name, p.Phase, p.Ready)
-			if why := kube.PodTrouble(t.Context, p.Name); why != "" {
+			if why := kube.PodTrouble(ctx, p.Name); why != "" {
 				entry += ": " + why
 			}
 			unhealthy = append(unhealthy, entry)
 		}
 	}
-	if len(unhealthy) > 0 {
-		return "", fmt.Errorf("%d pod(s) in the amp namespace are not running and ready after the load: %s",
-			len(unhealthy), strings.Join(unhealthy, ", "))
-	}
-	return fmt.Sprintf("%d pod(s) running and ready", len(states)), nil
+	return unhealthy, len(states), nil
 }
 
 // silentTenant names a tenant that committed nothing, with the evidence that
