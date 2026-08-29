@@ -446,9 +446,17 @@ comes from memory or YB. For a read at position `pos` the chain is:
       flush frontier at fetch-issue time. Committed WAL is immutable, so a
       cached chunk can never be shadowed by a rewrite. The cache is
       invalidated in step with the YB DELETEs (`truncate_after`,
-      `remove_segnos_below`). A single `std::sync::Mutex` suffices: writes
-      touch high offsets, reads low offsets, and the lock covers only
-      O(log n) metadata operations.
+      `remove_segnos_below`); both bound the FIFO order as well as the map,
+      because the byte budget alone does not bound it — an entry removed by
+      either path leaves the cache under capacity, and the evictor that pops
+      the FIFO only runs while it is *over* (#955). A single
+      `std::sync::Mutex` suffices: writes touch high offsets, reads low
+      offsets, and the lock covers only O(log n) metadata operations — with
+      one exception, the FIFO prune, which is O(fifo) under that same lock.
+      `remove_segnos_below` fires once per segment retired and the read path
+      takes the lock too, so the prune is rate-limited to when the FIFO
+      exceeds twice the live entry count: the waste stays bounded at one
+      stale key per live one, and the scan amortises to O(1) per removal.
    3. **YB fetch** — fetching the covering chunk **and** a
       forward prefetch window (`FETCH_FORWARD_CHUNKS = 64` /
       `FETCH_FORWARD_BYTES = 4 MiB`) in a single snapshot: on YSQL, one

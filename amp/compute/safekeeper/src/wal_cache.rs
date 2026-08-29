@@ -28,7 +28,9 @@
 //! offsets — writes append past `flush_lsn`, reads consume up to it — so
 //! the BTreeMap entries they touch never overlap. The lock holds only
 //! across O(log n) metadata ops (no I/O), so a single coarse mutex is
-//! fine.
+//! fine. The one exception is [`WalCache::prune_fifo`], an O(fifo) scan
+//! the removal paths run under the same lock; it is rate-limited so the
+//! cost amortises to O(1) per removal (see its docs).
 //!
 //! The cache is dropped on safekeeper shutdown. After restart, reads go
 //! to YB until the next write_wal repopulates it. Correctness does not
@@ -80,9 +82,11 @@ struct CacheKey {
 /// In-memory cache of recent WAL chunks. See module docs.
 pub struct WalCache {
     by_segno: HashMap<u64, BTreeMap<u64, CachedChunk>>,
-    /// Insertion order, used for FIFO eviction. May contain stale keys
-    /// (entries whose chunk has already been removed by `truncate_after`
-    /// or `remove_segnos_below`); evictor skips those.
+    /// Insertion order, used for FIFO eviction. May carry keys whose chunk is
+    /// already gone, but only up to [`WalCache::prune_fifo`]'s bound — never
+    /// unboundedly, which is the part that matters: the evictor is the only
+    /// other thing that pops this, and it runs solely while `total_bytes >
+    /// capacity_bytes`, so the byte budget cannot bound it on its own (#955).
     fifo: VecDeque<CacheKey>,
     total_bytes: usize,
     capacity_bytes: usize,
@@ -196,7 +200,7 @@ impl WalCache {
                 self.by_segno.remove(&segno_end);
             }
         }
-        // fifo may contain stale keys; lookup/evict tolerates that.
+        self.prune_fifo();
     }
 
     /// Drop cached chunks for all segnos strictly less than
@@ -209,6 +213,9 @@ impl WalCache {
             .copied()
             .filter(|s| *s < segno_up_to)
             .collect();
+        if drop_segnos.is_empty() {
+            return;
+        }
         for s in drop_segnos {
             if let Some(seg) = self.by_segno.remove(&s) {
                 for (_, c) in seg {
@@ -217,6 +224,40 @@ impl WalCache {
                 }
             }
         }
+        self.prune_fifo();
+    }
+
+    /// Bound `fifo` against the removal paths, which are the only ones that can
+    /// take an entry out from under it — `insert` pushes with the entry and the
+    /// evictor pops with it, so those two keep step on their own.
+    ///
+    /// The scan runs under the cache's mutex, which the WAL sender's read path
+    /// also takes, and `remove_segnos_below` fires once per WAL segment retired
+    /// rather than once in a while — so it is deliberately NOT run on every
+    /// removal. It runs only once `fifo` has grown past twice the live entry
+    /// count, which caps the waste at one stale key per live one and amortises
+    /// the scan to O(1) per removal: each pass drops at least half the keys, so
+    /// the next is at least that many removals away.
+    ///
+    /// The slack is why the evictor still has to tolerate a stale key.
+    fn prune_fifo(&mut self) {
+        let live = self.live_entries();
+        if self.fifo.len() <= 2 * live {
+            return;
+        }
+        let by_segno = &self.by_segno;
+        self.fifo.retain(|k| {
+            by_segno
+                .get(&k.segno)
+                .is_some_and(|seg| seg.contains_key(&k.chunk_offset))
+        });
+    }
+
+    /// Number of chunks actually cached. O(segnos), not O(chunks): `BTreeMap`
+    /// tracks its own length, and a segno covers 16 MiB of WAL, so even a
+    /// generous cache holds only a handful.
+    fn live_entries(&self) -> usize {
+        self.by_segno.values().map(|seg| seg.len()).sum()
     }
 
     pub fn stats(&self) -> WalCacheStats {
@@ -327,6 +368,94 @@ mod tests {
         assert!(c.lookup(1, 0).is_none());
         assert!(c.lookup(2, 0).is_none());
         assert!(c.lookup(3, 0).is_some());
+    }
+
+    /// #955: the leak, reproduced at its smallest. Every cycle inserts a chunk
+    /// and then removes it through `remove_segnos_below`, so `total_bytes`
+    /// returns to zero and the cache never reaches capacity — which is exactly
+    /// when the evictor, the only thing that used to pop `fifo`, never runs.
+    /// Before the fix `fifo` grew by one key per insert with nothing to bound
+    /// it; six days of this cost 4 GiB.
+    #[test]
+    fn fifo_does_not_grow_across_insert_remove_cycles() {
+        let mut c = WalCache::new(10_000);
+        for segno in 0..1_000u64 {
+            c.insert(segno, 0, data(b'x', 10));
+            c.remove_segnos_below(segno + 1);
+        }
+        assert!(c.by_segno.is_empty(), "every chunk was removed");
+        assert_eq!(c.total_bytes, 0);
+        assert!(
+            c.fifo.is_empty(),
+            "fifo holds {} stale keys after 1000 insert/remove cycles; it must \
+             track live entries, not insertions",
+            c.fifo.len()
+        );
+    }
+
+    /// The same shape through the other removal path.
+    #[test]
+    fn fifo_does_not_grow_across_insert_truncate_cycles() {
+        let mut c = WalCache::new(10_000);
+        for i in 0..1_000u64 {
+            c.insert(1, i * 10, data(b'y', 10));
+            c.truncate_after(1, i * 10);
+        }
+        assert!(c.fifo.len() <= c.by_segno.values().map(|s| s.len()).sum::<usize>());
+        assert!(c.fifo.len() < 10, "fifo grew to {}", c.fifo.len());
+    }
+
+    /// The bound the removal paths hold: at most one stale key per live one.
+    /// Not exact equality — pruning is rate-limited so the scan stays off the
+    /// hot path, so some slack is expected and deliberate.
+    #[test]
+    fn fifo_stays_bounded_against_live_entries() {
+        let mut c = WalCache::new(10_000);
+        for segno in 1..=5u64 {
+            c.insert(segno, 0, data(b'a', 10));
+            c.insert(segno, 10, data(b'b', 10));
+        }
+        assert_eq!(c.fifo.len(), 10);
+
+        c.remove_segnos_below(3); // drops segnos 1,2 -> 4 entries
+        assert!(c.fifo.len() <= 2 * c.live_entries());
+
+        c.truncate_after(4, 10); // drops segno 5, and segno 4's [10,20)
+        assert_eq!(c.live_entries(), 3);
+        assert!(
+            c.fifo.len() <= 2 * c.live_entries(),
+            "fifo {} exceeds twice the {} live entries",
+            c.fifo.len(),
+            c.live_entries()
+        );
+    }
+
+    /// The slack above means the evictor really does meet stale keys, so its
+    /// skip-and-continue arm is load-bearing rather than defensive. Pin both
+    /// halves: the stale key is skipped, and it is not counted as an eviction —
+    /// miscounting would read as cache pressure that is not there.
+    #[test]
+    fn evictor_skips_stale_keys_without_counting_them() {
+        let mut c = WalCache::new(100);
+        // Two entries, then remove one out from under the fifo. The prune is
+        // rate-limited (1 live, 2 keys, not > 2), so the key stays stale.
+        c.insert(1, 0, data(b'a', 40));
+        c.insert(2, 0, data(b'b', 40));
+        c.remove_segnos_below(2);
+        assert_eq!(c.fifo.len(), 2, "the stale key is deliberately still there");
+        assert_eq!(c.live_entries(), 1);
+
+        // Push past capacity: the evictor pops the stale key first, must skip
+        // it without counting, then evict the live one behind it.
+        c.insert(3, 0, data(b'c', 80)); // 40 + 80 = 120 > 100
+        assert_eq!(
+            c.stats().evictions,
+            1,
+            "the stale key must not be counted as an eviction"
+        );
+        assert!(c.lookup(1, 0).is_none(), "removed earlier");
+        assert!(c.lookup(2, 0).is_none(), "the real eviction");
+        assert!(c.lookup(3, 0).is_some(), "the newest survives");
     }
 
     #[test]
