@@ -14,6 +14,9 @@ export const ROUTES = {
   workbenchLm: "/workbench-lm",
   datapacks: "/datapacks",
   observeHub: "/observe-hub",
+  /** Guided product labs (e.g. the ADLC Review Agent Lab). Gated by the
+   *  showLabs feature flag; see `@/features/labs/hooks/useLabsNavFlag`. */
+  labs: "/labs",
   /** Account-scoped settings page (profile + change password). */
   settings: "/settings",
   /** Account-scoped usage page — live consumed-vs-cap tracker (moved out of Settings). */
@@ -250,4 +253,15 @@ export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.settings,
   ROUTES.usage,
   ROUTES.admin,
+  ROUTES.labs,
 ] as const;
+
+/** `/labs/:labId` — the lab detail page. */
+export function labDetailPath(labId: string): string {
+  return `${ROUTES.labs}/${encodeURIComponent(labId)}`;
+}
+
+/** `/labs/:labId/run` — the running lab (3-pane layout). */
+export function labRunnerPath(labId: string): string {
+  return `${labDetailPath(labId)}/run`;
+}

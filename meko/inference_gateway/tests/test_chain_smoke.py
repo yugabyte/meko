@@ -924,3 +924,94 @@ class TestContextualProminenceSearchIntegration:
         assert out.assistant_text == "ok anyway"
         assert out.kb_hits == ()
         assert out.memory_hits == ()
+
+
+class TestPersona:
+    """`persona` selects this turn's system-prompt framing + agent_id (see
+    PERSONA_TEMPLATES/PERSONA_AGENT_IDS in chain.py). Omitted/unrecognized
+    must reproduce today's WorkbenchLM behavior exactly — no feature flag
+    guards this, so these tests are the backward-compatibility contract."""
+
+    async def test_default_persona_reproduces_todays_system_prompt_and_agent_id(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["hi"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert sys_content.startswith("You are the Meko playground assistant.")
+        create.ainvoke.assert_awaited_once_with(
+            {"scope": "write", "agent_id": "agent", "title": "plan a trip", "datapack_id": "dp-1"}
+        )
+
+    async def test_persona_review_agent_uses_review_system_prompt_and_agent_id(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["review done"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            persona="review_agent",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert "senior code reviewer" in sys_content
+
+        for mock_tool in (create, mem_search, kb_search, addmsg):
+            call_args = mock_tool.ainvoke.call_args.args[0]
+            assert call_args["agent_id"] == "ReviewAgentLab"
+
+    async def test_unknown_persona_falls_back_to_default(self) -> None:
+        cfg = _make_cfg()
+        llm = _FakeLLM(["hi"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            persona="does_not_exist",
+        )
+
+        sys_content = llm.calls[0][0].content
+        assert sys_content.startswith("You are the Meko playground assistant.")
+        create.ainvoke.assert_awaited_once_with(
+            {"scope": "write", "agent_id": "agent", "title": "plan a trip", "datapack_id": "dp-1"}
+        )

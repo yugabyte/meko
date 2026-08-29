@@ -44,6 +44,10 @@ export type GatewayChatRequest = {
    *  via the full memory + KB + LLM path. Set by the "Regenerate with full
    *  search" button after a cache-hit answer the user wasn't happy with. */
   bypass_conversation_cache?: boolean;
+  /** Named persona preset selecting this turn's system-prompt framing.
+   *  Currently defined values: "review_agent". Omitted -> default
+   *  WorkbenchLM playground-assistant persona. */
+  persona?: string;
 };
 
 /** One structured memory hit returned by `memory_search`. `kind`

@@ -9,7 +9,7 @@ habit.
 
 ```
 src/
-  features/<feature>/            # one folder per product area (datapacks, auth, billing, onboarding, workbench-lm, …)
+  features/<feature>/            # one folder per product area (datapacks, auth, billing, onboarding, workbench-lm, labs, …)
     components/                  # feature-scoped components (may nest, e.g. datapack-detail/, datapack-detail/dialogs/)
     pages/                       # route-level screens
     hooks/                       # feature-scoped hooks (use*)

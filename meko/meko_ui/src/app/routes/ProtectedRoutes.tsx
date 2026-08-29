@@ -12,6 +12,9 @@ import UsagePage from "@/features/settings/pages/UsagePage";
 import BillingPage from "@/features/billing/pages/BillingPage";
 import AdminPage from "@/features/admin/pages/AdminPage";
 import MarketplaceCompletePage from "@/features/billing/pages/MarketplaceCompletePage";
+import LabsSection from "@/features/labs/pages/LabsSection";
+import LabRunnerPage from "@/features/labs/pages/LabRunnerPage";
+import { parseLabRoute } from "@/features/labs/lib/parseLabRoute";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -50,6 +53,9 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isUsage = pathname === ROUTES.usage || pathname.startsWith(`${ROUTES.usage}/`);
 
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
+  const isLabsRoute = pathname === ROUTES.labs || pathname.startsWith(`${ROUTES.labs}/`);
+  const isLabRunner = parseLabRoute(pathname)?.isRunner ?? false;
+  const isLabsListOrDetail = isLabsRoute && !isLabRunner;
   // Admin console (flag-gated). Conditionally mounted like WorkbenchLM so its
   // /admin/* data fetches never tick while the user is elsewhere.
   // Mount AdminPage for ANY /admin route (not gated by the flag here): AdminPage
@@ -59,7 +65,7 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const onAdminRoute = pathname === ROUTES.admin || pathname.startsWith(`${ROUTES.admin}/`);
   const isMarketplaceComplete = pathname === ROUTES.marketplaceComplete;
 
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, admin. */
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, admin, labs. */
   const isDatapacks =
     !isObserve &&
     !isConnect &&
@@ -68,7 +74,8 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
     !isUsage &&
     !isBilling &&
     !isMarketplaceComplete &&
-    !onAdminRoute;
+    !onAdminRoute &&
+    !isLabsRoute;
 
   // See onboarding-shell comment above re: h-dvh for iOS keyboard.
   return (
@@ -125,6 +132,16 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
             <BillingPage />
           </div>
           {isMarketplaceComplete ? <MarketplaceCompletePage /> : null}
+          {/* Lab runner — conditionally mounted like WorkbenchLM/Admin, since
+              it drives the same live-observation polling. List/detail are
+              static config reads, so they stay display-toggled below. */}
+          {isLabRunner ? <LabRunnerPage /> : null}
+          <div
+            className="min-h-0 flex-1 overflow-hidden"
+            style={{ display: isLabsListOrDetail ? "contents" : "none" }}
+          >
+            <LabsSection />
+          </div>
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isDatapacks ? "contents" : "none" }}

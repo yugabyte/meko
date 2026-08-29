@@ -13,6 +13,11 @@ export const FEATURE_FLAGS = {
     storageKey: "meko:show_billing_nav",
     queryParam: "showPaymentOptions",
   },
+  /** Labs nav entry + routes. Latched once unlocked. */
+  showLabs: {
+    storageKey: "meko:show_labs_nav",
+    queryParam: "showLabs",
+  },
 } as const;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

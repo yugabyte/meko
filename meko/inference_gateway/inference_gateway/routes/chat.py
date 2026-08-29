@@ -104,6 +104,14 @@ class ChatRequest(BaseModel):
             "'Regenerate with full search' button after a cache-hit answer."
         ),
     )
+    persona: Optional[str] = Field(
+        default=None,
+        description=(
+            "Named persona preset selecting this turn's system-prompt framing "
+            "(e.g. 'review_agent'). Omitted or unrecognized -> the default "
+            "WorkbenchLM playground-assistant persona, unchanged from today."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):
@@ -172,6 +180,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             datapack_id=req.datapack_id,
             resume_conversation_id=req.conversation_id,
             bypass_conversation_cache=req.bypass_conversation_cache,
+            persona=req.persona,
         )
     except RuntimeError as exc:
         # Raised by chain when a required MCP tool is missing or returns

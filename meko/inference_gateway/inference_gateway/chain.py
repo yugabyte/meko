@@ -267,6 +267,43 @@ Prior conversation (from `context_search`):
 """
 
 
+REVIEW_AGENT_SYSTEM_TEMPLATE = """You are a senior code reviewer. Review the following
+PR/diff against the org's coding standards and security requirements retrieved
+from context. Be specific about what needs to change and why.
+
+Ground your review in the memories and knowledge below when relevant;
+ignore them when they don't apply.
+
+Sources — when they conflict, the KB wins:
+  - KB = user-curated documents; authoritative on whatever it covers.
+  - Memories = user intent/preferences/context; use to tailor the
+    review, not to override KB facts.
+
+Response budget: ~{max_tokens} tokens (~{max_chars} chars). Prefer a
+complete brief review to a sprawling one that gets cut off.
+
+Memories (from `memory_search`):
+{memory_context}
+
+Knowledge (from `knowledgebase_search`):
+{kb_context}
+"""
+
+# Registry of persona -> system-prompt template. Keyed by ChatRequest.persona.
+# Missing/unrecognized key -> SYSTEM_TEMPLATE (today's only behavior), so
+# adding a new persona here is purely additive.
+PERSONA_TEMPLATES: dict[str, str] = {
+    "review_agent": REVIEW_AGENT_SYSTEM_TEMPLATE,
+}
+
+# Registry of persona -> agent_id. Keeps a persona's conversations/memories
+# under a distinct agent_id from WorkbenchLM traffic without exposing a raw
+# agent_id field on ChatRequest (that would let a caller read/write into an
+# arbitrary agent's memory namespace).
+PERSONA_AGENT_IDS: dict[str, str] = {
+    "review_agent": "ReviewAgentLab",
+}
+
 
 class MemoryHit(NamedTuple):
     """One structured memory hit for the UI's Agent Reasoning panel.
@@ -479,6 +516,7 @@ async def run_chat_turn(
     resume_conversation_id: Optional[str] = None,
     summary_llm: Optional[BaseChatModel] = None,
     bypass_conversation_cache: bool = False,
+    persona: Optional[str] = None,
 ) -> ChatTurnResult:
     """Run one chat turn end-to-end. Returns the assistant text + Langfuse
     message_id + structured retrieval hits + a processing-steps timeline
@@ -492,7 +530,17 @@ async def run_chat_turn(
     only has to send `conversation_id` once. If the session already has
     a mapping, the supplied id is ignored (the existing one wins — we
     don't want to silently switch conversations mid-session).
+
+    `persona` selects this turn's system-prompt framing and agent_id via
+    PERSONA_TEMPLATES/PERSONA_AGENT_IDS above. None or unrecognized ->
+    the default WorkbenchLM playground-assistant persona, unchanged from
+    today — so omitting it reproduces existing behavior exactly.
     """
+    # Persona resolution: an unrecognized/None persona resolves to today's
+    # defaults, so omitting the field reproduces existing behavior exactly.
+    agent_id = PERSONA_AGENT_IDS.get(persona or "", cfg.agent_id)
+    system_template = PERSONA_TEMPLATES.get(persona or "", SYSTEM_TEMPLATE)
+
     # Step list grows in invocation order as the pipeline runs; surfaces
     # to the UI as the per-turn observability timeline.
     steps: List[ProcessingStep] = []
@@ -538,7 +586,7 @@ async def run_chat_turn(
         # one) so that field is naturally absent here.
         conv_tool_args: Dict[str, Any] = {
             "scope": "write",
-            "agent_id": cfg.agent_id,
+            "agent_id": agent_id,
             "title": conv_title,
         }
         if datapack_id:
@@ -546,7 +594,7 @@ async def run_chat_turn(
         try:
             conversation_id = await _create_conversation(
                 tools_by_name=tools_by_name,
-                agent_id=cfg.agent_id,
+                agent_id=agent_id,
                 datapack_id=datapack_id,
                 title=conv_title,
             )
@@ -642,7 +690,7 @@ async def run_chat_turn(
         if use_unified_search:
             kb_hits, memory_hits, conv_result = await _search_context(
                 tools_by_name=tools_by_name,
-                agent_id=cfg.agent_id,
+                agent_id=agent_id,
                 query=user_message,
                 conversation_id=conversation_id,
                 datapack_id=datapack_id,
@@ -652,7 +700,7 @@ async def run_chat_turn(
         else:
             kb_hits, conv_result = await _search_knowledge(
                 tools_by_name=tools_by_name,
-                agent_id=cfg.agent_id,
+                agent_id=agent_id,
                 query=user_message,
                 conversation_id=conversation_id,
                 datapack_id=datapack_id,
@@ -717,7 +765,7 @@ async def run_chat_turn(
             message_id = await _add_message(
                 tools_by_name=tools_by_name,
                 conversation_id=conversation_id,
-                agent_id=cfg.agent_id,
+                agent_id=agent_id,
                 user_message=user_message,
                 assistant_message=assistant_text,
                 datapack_id=datapack_id,
@@ -788,7 +836,7 @@ async def run_chat_turn(
         if not use_unified_search:
             memory_hits = await _search_memories(
                 tools_by_name=tools_by_name,
-                agent_id=cfg.agent_id,
+                agent_id=agent_id,
                 query=user_message,
                 conversation_id=conversation_id,
                 datapack_id=datapack_id,
@@ -826,7 +874,7 @@ async def run_chat_turn(
     # `cfg.llm_max_tokens` so the model self-paces (~4 chars per token).
     messages: List[BaseMessage] = [
         SystemMessage(
-            content=SYSTEM_TEMPLATE.format(
+            content=system_template.format(
                 memory_context=memory_context or "(none yet)",
                 kb_context=kb_context or "(none yet)",
                 conversation_context=conversation_context or "(none yet)",
@@ -907,7 +955,7 @@ async def run_chat_turn(
         message_id = await _add_message(
             tools_by_name=tools_by_name,
             conversation_id=conversation_id,
-            agent_id=cfg.agent_id,
+            agent_id=agent_id,
             user_message=user_message,
             assistant_message=assistant_text,
             datapack_id=datapack_id,
