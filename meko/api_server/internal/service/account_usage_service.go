@@ -11,6 +11,14 @@ import (
 // Lives in service (not handler) because the SUM-by-agent query uses it.
 const AgentIDWorkbenchLM = "WorkbenchLM"
 
+// AgentIDReviewAgentLab is the agent_id inference_gateway's chain.py stamps
+// on review_agent-persona traces (PERSONA_AGENT_IDS). Metered the same as
+// WorkbenchLM -- Labs traffic isn't exempt from the free-tier token cap.
+const AgentIDReviewAgentLab = "ReviewAgentLab"
+
+// MeteredTokenBurnAgentIDs are the agent_ids summed into TokenBurn below.
+var MeteredTokenBurnAgentIDs = []string{AgentIDWorkbenchLM, AgentIDReviewAgentLab}
+
 // AccountUsage is the four-counter response shape returned by
 // /auth/me/usage. Storage is bytes; conversations and tokens are
 // scoped to WorkbenchLM specifically (see field comments).
@@ -135,15 +143,20 @@ func (s *AccountUsageService) GetUsage(userID string) (AccountUsage, error) {
 		}
 	}
 
-	// token_burn source: Langfuse SUM. Best-effort — when Langfuse
-	// is unconfigured (dev / minimal stack) we surface 0.
+	// token_burn source: Langfuse SUM across every metered agent_id.
+	// Best-effort — when Langfuse is unconfigured (dev / minimal stack)
+	// we surface 0.
 	if s.langfuseRepo != nil && s.langfuseRepo.LangfuseDBConfigured() {
-		nTok, tokErr := s.langfuseRepo.SumTokenUsageByUserAndAgent(userID, AgentIDWorkbenchLM)
-		if tokErr != nil {
-			slog.Warn("usage: sum token burn (langfuse)", "user_id", userID, "error", tokErr)
-		} else {
-			usage.TokenBurn = nTok
+		var total int64
+		for _, agentID := range MeteredTokenBurnAgentIDs {
+			nTok, tokErr := s.langfuseRepo.SumTokenUsageByUserAndAgent(userID, agentID)
+			if tokErr != nil {
+				slog.Warn("usage: sum token burn (langfuse)", "user_id", userID, "agent_id", agentID, "error", tokErr)
+				continue
+			}
+			total += nTok
 		}
+		usage.TokenBurn = total
 	}
 
 	return usage, nil

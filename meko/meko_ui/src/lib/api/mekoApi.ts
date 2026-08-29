@@ -75,7 +75,9 @@ const AUTH_PUBLIC_ENDPOINTS = new Set([
   "/auth/complete-new-password",
 ]);
 
-function notifyAuthExpiredOnce() {
+/** Exported for callers that bypass `request()` entirely (deploymentInvokeApi.ts's
+ *  streaming fetch) but still need the same session-expired redirect on a 401. */
+export function notifyAuthExpiredOnce() {
   if (authExpiredNotified) return;
   authExpiredNotified = true;
   dispatchAppEvent(AUTH_EXPIRED_EVENT);

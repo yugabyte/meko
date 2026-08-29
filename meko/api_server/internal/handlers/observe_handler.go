@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -262,7 +263,7 @@ func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
 	if detail != nil {
 		account, aErr := auth.GetAccount(c)
 		if aErr == nil && account != nil &&
-			detail.UserID == account.ID && detail.AgentID == models.WorkbenchAgentID {
+			detail.UserID == account.ID && slices.Contains(models.ConversationCacheBackfillAgentIDs, detail.AgentID) {
 			indexed, idxErr := h.langfuse.ConversationHistoryIndexed(dp.ID, conversationID)
 			if idxErr != nil {
 				slog.Warn("conversation detail: indexed check failed",

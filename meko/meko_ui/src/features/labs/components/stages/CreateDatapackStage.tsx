@@ -1,11 +1,9 @@
 // Stage 1: forces an explicit datapack choice (no auto-select-first, unlike
-// WorkbenchLMHeader's picker) since a lab's demo app writes memories/KB
-// content into whichever datapack is picked. Ported from the old header
-// DatapackPicker widget, restyled larger for a full content panel instead
-// of a cramped h-8 header control.
+// WorkbenchLMHeader's inline datapack Select) since a lab's demo app writes
+// memories/KB content into whichever datapack is picked.
 
 import { useState } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { AlertCircle, Loader2, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +18,7 @@ export function CreateDatapackStage({
   onSelect,
   onCreate,
   creating,
+  hasHitDatapackCount,
   onContinue,
 }: {
   datapacks: Datapack[];
@@ -28,17 +27,24 @@ export function CreateDatapackStage({
   onSelect: (id: string) => void;
   onCreate: (name: string) => Promise<void>;
   creating: boolean;
+  hasHitDatapackCount: boolean;
   onContinue: () => void;
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const handleCreate = async () => {
     const trimmed = newName.trim();
     if (!trimmed) return;
-    await onCreate(trimmed);
-    setNewName("");
-    setShowCreate(false);
+    setCreateError(null);
+    try {
+      await onCreate(trimmed);
+      setNewName("");
+      setShowCreate(false);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Failed to create the datapack.");
+    }
   };
 
   return (
@@ -57,6 +63,11 @@ export function CreateDatapackStage({
               if (e.key === "Escape") setShowCreate(false);
             }}
           />
+          {createError && (
+            <p className="flex items-center gap-1.5 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" /> {createError}
+            </p>
+          )}
           <div className="flex gap-2">
             <Button onClick={() => void handleCreate()} disabled={!newName.trim() || creating}>
               {creating && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -91,11 +102,22 @@ export function CreateDatapackStage({
                 ))}
               </SelectContent>
             </Select>
-            <Button variant="outline" className="gap-1" onClick={() => setShowCreate(true)}>
+            <Button
+              variant="outline"
+              className="gap-1"
+              onClick={() => setShowCreate(true)}
+              disabled={hasHitDatapackCount}
+              title={hasHitDatapackCount ? "You've hit your datapack limit -- upgrade to create more." : undefined}
+            >
               <Plus className="h-4 w-4" />
               New
             </Button>
           </div>
+          {hasHitDatapackCount && (
+            <p className="text-sm text-muted-foreground">
+              You've hit your datapack limit — pick an existing one, or upgrade to create more.
+            </p>
+          )}
         </div>
       )}
       <Button onClick={onContinue} disabled={!selectedId}>

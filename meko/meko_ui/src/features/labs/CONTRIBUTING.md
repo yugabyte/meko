@@ -20,8 +20,8 @@ lab means adding config, not touching those pages.
 
 Every lab walks the same 5 stages (`LabStageId` in `types.ts`): Create
 Datapack → Seed Context → Deploy Agent → Run a Review → Collaborate. They're
-a closed union, not per-lab config — a lab supplies the `title`/`shortLabel`/
-`summary` copy for each, but the stage components themselves
+a closed union, not per-lab config — a lab supplies the `title`/`summary`/
+`highlights` copy for each, but the stage components themselves
 (`components/stages/*`) are shared across every lab. `LabStageSlot.tsx`
 switches on `LabStage.id` to render the right one.
 
@@ -47,8 +47,12 @@ change — they're generic over any `LabDefinition`.
   rather than duplicating it.
 - `components/lab-runner/LabObservationSlot.tsx` wraps
   `DatapackTokenBurnTile` + `WorkbenchLMLiveObservationPanel` — reusable by
-  any lab whose demo app is a real Meko conversation (i.e. calls `postChat`
-  with a `datapack_id`).
+  any lab whose demo app writes real conversations/memories into the
+  selected datapack, whether via `postChat` directly or (like
+  `pr-review-chat`) a deployed agent invoked through `invokeDeployment`.
 - `components/lab-runner/LabStageNeedsDatapack.tsx` is the shared "pick a
   datapack first" prompt every stage but Create Datapack degrades to when
   `session.datapackId` is null.
+- `components/lab-runner/LabStageNeedsDeployment.tsx` is the same pattern
+  for a stage that also needs an active deployment — currently just
+  Run a Review, gated on `session.deploymentActive`.

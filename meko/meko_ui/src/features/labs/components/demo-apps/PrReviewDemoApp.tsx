@@ -3,29 +3,50 @@
 // bakes in WorkbenchLM-specific empty-state copy, a resume-thread dropdown,
 // free-tier telemetry, and KB-readiness gating that don't apply to a single
 // guided lab run). Reuses the generic leaf pieces that ARE shared: ChatInput,
-// MarkdownMessage, the Message type, and the same postChat pipeline
-// WorkbenchLMChat uses.
+// MarkdownMessage, and the Message type.
+//
+// Reviews stream from the deployed agent (invokeDeployment), not a direct
+// inference_gateway call — RunReviewStage already gates this component
+// behind an active deployment, so there's no fallback path here. Two
+// payload shapes go through the same streaming consumer: the initial
+// review (pr_title/pr_diff + review config) and a follow-up question
+// (conversation_id + prior_review_text, reusing the same conversation).
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ExternalLink, Loader2, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
+import { InvokeDeploymentError, invokeDeployment } from "@/lib/api/deploymentInvokeApi";
 import { ChatInput } from "@/features/workbench-lm/components/workbench-lm-chat/ChatInput";
 import type { Message } from "@/features/workbench-lm/components/workbench-lm-chat/types";
 
-import { fetchPullRequestDiff, fetchPullRequestSummary, parsePrRef } from "../../lib/githubApi";
-import { postToSlackChannel } from "../../lib/slackApi";
+import { fetchPullRequestDiff, fetchPullRequestSummary, parsePrRef } from "@/lib/api/githubApi";
+import { postToSlackChannel } from "@/lib/api/slackApi";
 import { SAMPLE_DIFF_CONTENT, SAMPLE_DIFF_TITLE } from "../../data/adlcReviewAgentLab/sampleDiff";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
 import { PrDiffViewer } from "./PrDiffViewer";
+import {
+  DEFAULT_REVIEW_AGENT_CONFIG,
+  ReviewAgentConfigPanel,
+  type ReviewAgentConfig,
+} from "./ReviewAgentConfigPanel";
 
 function buildReviewPrompt(title: string, diff: string): string {
   return `Review this pull request:\n\nTitle: ${title}\n\n\`\`\`diff\n${diff}\n\`\`\``;
+}
+
+function reviewConfigPayload(config: ReviewAgentConfig) {
+  return {
+    enable_knowledge_base: config.useKnowledgeBase,
+    enable_memory_search: config.useMemories,
+    focus: config.focus.trim() || undefined,
+    tone: config.tone,
+    strictness: config.strictness,
+  };
 }
 
 export function PrReviewDemoApp({
@@ -40,11 +61,15 @@ export function PrReviewDemoApp({
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [sessionId] = useState(() => crypto.randomUUID());
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // The original review's full text, captured once and reused as the
+  // context anchor for every follow-up question (not replaced by later
+  // follow-up answers) -- matches agentcore_entrypoint.py's follow-up
+  // payload contract (prior_review_text).
+  const [reviewText, setReviewText] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   // id of the first, diff-embedded user turn — hidden from the transcript
-  // since PrDiffViewer already shows the diff; every later message (the
+  // since PrDiffViewer already shows the diff. Every later message (the
   // agent's reply, and any follow-up question/answer) renders normally.
   const [reviewPromptMessageId, setReviewPromptMessageId] = useState<string | null>(null);
 
@@ -57,42 +82,65 @@ export function PrReviewDemoApp({
   const [slackChannel, setSlackChannel] = useState("");
   const [slackStatus, setSlackStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
-  const canReview = Boolean(session.datapackId && session.userToken && session.userId);
+  const [reviewConfig, setReviewConfig] = useState<ReviewAgentConfig>(DEFAULT_REVIEW_AGENT_CONFIG);
+
+  const canReview = Boolean(
+    session.datapackId && session.userToken && session.userId && session.deploymentId,
+  );
+
+  // Aborts an in-flight invokeDeployment call on unmount -- otherwise a user
+  // navigating away mid-review leaves the fetch (and the AgentCore run it
+  // proxies to) running, and any later stream event would set state on an
+  // unmounted component.
+  const abortControllerRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => abortControllerRef.current?.abort();
+  }, []);
 
   const send = useCallback(
-    async (userText: string, isReviewPrompt = false) => {
-      if (!session.datapackId || !session.userToken || !session.userId) return;
+    async (payload: Record<string, unknown>, userText: string, isReviewPrompt = false) => {
+      if (!session.deploymentId) return;
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
       setSending(true);
       setSendError(null);
       const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: userText };
       if (isReviewPrompt) setReviewPromptMessageId(userMessage.id);
-      setMessages((prev) => [...prev, userMessage]);
+      const assistantId = crypto.randomUUID();
+      setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "" }]);
+
       try {
-        const res = await postChat({
-          message: userText,
-          user_token: session.userToken,
-          user_id: session.userId,
-          session_id: sessionId,
-          datapack_id: session.datapackId,
-          conversation_id: conversationId,
-          persona: demoApp.persona,
-        });
-        setConversationId(res.conversation_id);
-        const assistantMessage: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: res.message,
-          langfuseMessageId: res.message_id,
-        };
-        setMessages((prev) => [...prev, assistantMessage]);
-        session.bumpRefreshTick();
+        let fullReviewText = "";
+        // Accumulated separately from the message content as a fallback: if
+        // the stream ends without a `done` frame, fullReviewText would stay
+        // "" (not null), wrongly flipping canFollowUp on with an empty
+        // prior_review_text for every subsequent question.
+        let accumulatedText = "";
+        for await (const event of invokeDeployment(session.deploymentId, payload, controller.signal)) {
+          if (event.type === "meta") {
+            setConversationId(event.conversation_id);
+          } else if (event.type === "text_delta") {
+            accumulatedText += event.text;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + event.text } : m)),
+            );
+          } else if (event.type === "done") {
+            fullReviewText = event.review;
+            session.bumpRefreshTick();
+          }
+        }
+        if (isReviewPrompt) setReviewText(fullReviewText || accumulatedText || null);
       } catch (err) {
-        setSendError(getInferenceGatewayErrorMessage(err));
+        if (controller.signal.aborted) return; // unmounted mid-stream -- nothing left to show it to
+        setSendError(err instanceof InvokeDeploymentError || err instanceof Error ? err.message : "Review failed.");
+        // Drop the placeholder if nothing ever streamed into it -- otherwise
+        // it lingers as a dead, permanently-empty card in the transcript.
+        setMessages((prev) => prev.filter((m) => !(m.id === assistantId && m.content === "")));
       } finally {
         setSending(false);
       }
     },
-    [session, sessionId, conversationId, demoApp.persona],
+    [session],
   );
 
   const handleRunReview = useCallback(async () => {
@@ -124,11 +172,39 @@ export function PrReviewDemoApp({
 
     setDiffTitle(title);
     setDiffContent(diff);
-    await send(buildReviewPrompt(title, diff), true);
-  }, [githubToken, prRefInput, send]);
+    await send(
+      {
+        datapack_id: session.datapackId,
+        meko_pat: session.userToken,
+        pr_title: title,
+        pr_diff: diff,
+        ...reviewConfigPayload(reviewConfig),
+      },
+      buildReviewPrompt(title, diff),
+      true,
+    );
+  }, [githubToken, prRefInput, send, session.datapackId, session.userToken, reviewConfig]);
+
+  const handleFollowUp = useCallback(
+    (text: string) => {
+      if (!conversationId || reviewText === null) return;
+      void send(
+        {
+          datapack_id: session.datapackId,
+          meko_pat: session.userToken,
+          conversation_id: conversationId,
+          question: text,
+          prior_review_text: reviewText,
+          ...reviewConfigPayload(reviewConfig),
+        },
+        text,
+      );
+    },
+    [conversationId, reviewText, send, session.datapackId, session.userToken, reviewConfig],
+  );
 
   const handlePostToSlack = useCallback(async () => {
-    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
     if (!lastAssistant || !slackToken.trim() || !slackChannel.trim()) return;
     setSlackStatus("sending");
     try {
@@ -144,6 +220,7 @@ export function PrReviewDemoApp({
   }, [messages, slackToken, slackChannel, diffTitle]);
 
   const hasReviewed = diffContent !== null;
+  const canFollowUp = canReview && conversationId !== null && reviewText !== null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -177,6 +254,11 @@ export function PrReviewDemoApp({
             <p className="text-sm text-muted-foreground">
               Leave both blank to review the bundled sample diff instead.
             </p>
+            <ReviewAgentConfigPanel
+              value={reviewConfig}
+              onChange={setReviewConfig}
+              agentDisplayName={demoApp.agentDisplayName}
+            />
             <Button onClick={handleRunReview} disabled={!canReview || fetchingPr || sending}>
               {fetchingPr || sending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -204,16 +286,19 @@ export function PrReviewDemoApp({
                   }
                 >
                   {message.role === "assistant" ? (
-                    <MarkdownMessage text={message.content} />
+                    message.content ? (
+                      <MarkdownMessage text={message.content} />
+                    ) : (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    )
                   ) : (
                     message.content
                   )}
                 </div>
               ))}
-            {sending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
             {sendError && <p className="text-sm text-destructive">{sendError}</p>}
 
-            {messages.some((m) => m.role === "assistant") && (
+            {messages.some((m) => m.role === "assistant" && m.content.trim()) && (
               <div className="flex flex-col gap-2 rounded-md border border-border p-3">
                 <p className="text-sm font-medium">Post the review to Slack (optional)</p>
                 <Input
@@ -262,11 +347,11 @@ export function PrReviewDemoApp({
             const text = input.trim();
             if (!text) return;
             setInput("");
-            void send(text);
+            handleFollowUp(text);
           }}
-          disabled={!canReview}
+          disabled={!canFollowUp}
           sending={sending}
-          blockedReason={canReview ? null : "Setting up this lab's datapack..."}
+          blockedReason={canFollowUp ? null : "Waiting for the review to finish..."}
         />
       )}
     </div>

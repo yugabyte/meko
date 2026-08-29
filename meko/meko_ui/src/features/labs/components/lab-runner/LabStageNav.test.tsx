@@ -14,21 +14,18 @@ const FIXTURE_STAGES: LabStage[] = [
   {
     id: "create-datapack",
     title: "Create a datapack",
-    shortLabel: "Datapack",
     summary: "Pick one.",
     highlights: ["Pick an existing datapack.", "Or create a new one."],
   },
   {
     id: "seed-context",
     title: "Seed context",
-    shortLabel: "Seed context",
     summary: "Upload or chat.",
     highlights: ["Upload documents.", "Or describe them in chat."],
   },
   {
     id: "run-review",
     title: "Run a review",
-    shortLabel: "Run review",
     summary: "Review a diff.",
     highlights: ["Review a real PR.", "Or the bundled sample diff."],
   },

@@ -31,16 +31,23 @@ function fakeSession(datapackId: string | null): ReturnType<typeof useLabRunnerS
     },
     datapackId,
     datapackName: datapackId ? "test-datapack" : null,
+    datapackGrant: null,
     accessibleDatapacks: [],
     datapacksLoading: false,
     selectDatapack: vi.fn(),
     createAndSelectDatapack: vi.fn(),
     creating: false,
+    hasHitDatapackCount: false,
     userToken: "mko_tkn_fake",
     loading: false,
     error: null,
     refreshTick: 0,
     bumpRefreshTick: vi.fn(),
+    deploymentId: null,
+    selectDeployment: vi.fn(),
+    clearDeployment: vi.fn(),
+    deployment: null,
+    deploymentActive: false,
   };
 }
 
@@ -89,5 +96,30 @@ describe("CollaborateStage", () => {
     );
     // Silent refetch: a second members fetch, without the initial loading skeleton reappearing.
     await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(2));
+  });
+
+  it("hides the invite form for a contributor -- accessibleDatapacks admits them, but only owner/maintainer can share", async () => {
+    mockListMembers.mockResolvedValue({
+      members: [
+        { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
+        {
+          user_id: "user-2",
+          is_owner: false,
+          user_name: "Contributor User",
+          user_email_id: "contributor@example.com",
+          grant: "contributor",
+        },
+      ],
+    });
+    const contributorSession = {
+      ...fakeSession("dp-1"),
+      currentUser: { ...fakeSession("dp-1").currentUser!, email: "contributor@example.com" },
+    };
+
+    render(<CollaborateStage session={contributorSession} onGoToCreateDatapack={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText("Owner User")).toBeTruthy());
+    expect(screen.queryByPlaceholderText("name@company.com")).toBeNull();
+    expect(screen.queryByRole("button", { name: /send invite/i })).toBeNull();
   });
 });

@@ -13,11 +13,11 @@ export type LabStageId = "create-datapack" | "seed-context" | "deploy-agent" | "
 
 export type LabStage = {
   id: LabStageId;
-  /** Heading shown atop the stage's content panel and in LabDetailPage's overview list. */
+  /** Heading shown on this stage's left-rail nav card and in LabDetailPage's
+   *  overview list -- not rendered inside the stage's own content panel,
+   *  which titles itself. */
   title: string;
-  /** Terse label for the full-width top stepper strip. */
-  shortLabel: string;
-  /** One or two sentences shown under the title in the stage panel. */
+  /** One or two sentences shown under the title on the left-rail nav card. */
   summary: string;
   /** Exactly two bullet points shown under this stage in LabDetailPage's
    *  overview timeline — a slightly more concrete "what this does" than
@@ -27,9 +27,19 @@ export type LabStage = {
 
 export type LabDemoAppConfig = {
   kind: "pr-review-chat";
-  /** Persona key forwarded to the inference gateway's /chat `persona`
-   *  field — see inference_gateway/chain.py's PERSONA_TEMPLATES. */
-  persona: string;
+  /** User-facing name for this lab's agent (e.g. "AgentK") — every screen
+   *  that used to say "this agent"/"the agent" interpolates this instead,
+   *  so a second lab's demo app shows its own agent's name rather than
+   *  another lab's. */
+  agentDisplayName: string;
+  /** Enables the standalone Deploy stage. Only agentSlugs api_server's
+   *  DeploymentService recognizes can actually deploy — see
+   *  service.SupportedDeploymentAgentSlugs. Its image is resolved by
+   *  convention from MEKO_LABS_AGENT_IMAGES_REPO, so adding a new
+   *  deployable lab needs no new env var. `sourceRepoUrl` links to the
+   *  agent's own source (shown in the Deploy stage's "About" panel) so
+   *  users can inspect what they're actually running. */
+  deployable?: { agentSlug: string; sourceRepoUrl: string };
 };
 
 export type LabObservationConfig = {

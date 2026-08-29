@@ -2,19 +2,32 @@ import { Loader2 } from "lucide-react";
 import { Link, Navigate, useLocation } from "react-router-dom";
 
 import { ROUTES } from "@/app/routes/paths";
+import NotFoundPage from "@/features/system/pages/NotFoundPage";
 
 import { getLabDefinition, LAB_DEFINITIONS } from "../data/labDefinitions";
 import { parseLabRoute } from "../lib/parseLabRoute";
+import { useLabsNavFlag } from "../hooks/useLabsNavFlag";
 import { useLabProgress } from "../hooks/useLabProgress";
 import { useLabRunnerSession } from "../hooks/useLabRunnerSession";
 import { LabStageNav } from "../components/lab-runner/LabStageNav";
 import { LabStageSlot } from "../components/lab-runner/LabStageSlot";
 import { LabObservationSlot } from "../components/lab-runner/LabObservationSlot";
+import type { LabStageId } from "../types";
+
+// The only 2 stages that read session.userToken (SeedContextChat,
+// PrReviewDemoApp) -- Deploy Agent and Collaborate need just
+// session.datapackId, which is available synchronously.
+const STAGES_NEEDING_TOKEN: LabStageId[] = ["seed-context", "run-review"];
+
+export function shouldShowProvisionStatusSpinner(loading: boolean, stageId: LabStageId): boolean {
+  return loading && STAGES_NEEDING_TOKEN.includes(stageId);
+}
 
 export default function LabRunnerPage() {
   const location = useLocation();
   const parsed = parseLabRoute(location.pathname);
   const lab = parsed?.isRunner ? getLabDefinition(parsed.labId) : undefined;
+  const showLabs = useLabsNavFlag();
 
   // Hooks must run unconditionally — an invalid :labId means `lab` is
   // undefined, so we call these with LAB_DEFINITIONS[0] as a placeholder
@@ -22,11 +35,12 @@ export default function LabRunnerPage() {
   const progress = useLabProgress(lab ?? LAB_DEFINITIONS[0]);
   const session = useLabRunnerSession(lab ?? LAB_DEFINITIONS[0]);
 
+  // Pre-GA: the flag gates more than the Sidebar entry -- a direct URL hit
+  // must bounce too, same as BillingPage/AdminPage self-guard.
+  if (!showLabs) return <NotFoundPage />;
   if (!lab) return <Navigate to={ROUTES.labs} replace />;
 
-  // Create Datapack doesn't need the provision-status lookup the other 4
-  // stages wait on, so it shouldn't block on that spinner.
-  const showSpinner = session.loading && progress.currentStage.id !== "create-datapack";
+  const showSpinner = shouldShowProvisionStatusSpinner(session.loading, progress.currentStage.id);
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
@@ -59,6 +73,7 @@ export default function LabRunnerPage() {
             observation={lab.observation}
             datapackId={session.datapackId}
             datapackName={session.datapackName}
+            datapackGrant={session.datapackGrant}
             refreshTick={session.refreshTick}
           />
         </div>

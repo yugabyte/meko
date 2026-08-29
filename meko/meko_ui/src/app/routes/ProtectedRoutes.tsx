@@ -133,8 +133,10 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           </div>
           {isMarketplaceComplete ? <MarketplaceCompletePage /> : null}
           {/* Lab runner — conditionally mounted like WorkbenchLM/Admin, since
-              it drives the same live-observation polling. List/detail are
-              static config reads, so they stay display-toggled below. */}
+              it drives the same live-observation polling. List/detail don't
+              poll, so they stay display-toggled below -- both self-guard on
+              the showLabs flag internally (LabsSection/LabRunnerPage), same
+              as BillingPage/AdminPage below. */}
           {isLabRunner ? <LabRunnerPage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"

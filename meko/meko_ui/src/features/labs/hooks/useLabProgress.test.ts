@@ -7,9 +7,9 @@ import { useLabProgress } from "./useLabProgress";
 afterEach(() => localStorage.clear());
 
 const FIXTURE_STAGES: LabStage[] = [
-  { id: "create-datapack", title: "Create a datapack", shortLabel: "Datapack", summary: "" },
-  { id: "seed-context", title: "Seed context", shortLabel: "Seed context", summary: "" },
-  { id: "run-review", title: "Run a review", shortLabel: "Run review", summary: "" },
+  { id: "create-datapack", title: "Create a datapack", summary: "", highlights: ["a", "b"] },
+  { id: "seed-context", title: "Seed context", summary: "", highlights: ["a", "b"] },
+  { id: "run-review", title: "Run a review", summary: "", highlights: ["a", "b"] },
 ];
 const FIXTURE_LAB = { id: "test-lab", stages: FIXTURE_STAGES } as never;
 
@@ -49,5 +49,12 @@ describe("useLabProgress", () => {
     localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ chapterIndex: 2, stepIndex: 1 }));
     const { result } = renderHook(() => useLabProgress(FIXTURE_LAB));
     expect(result.current.stageIndex).toBe(0);
+  });
+
+  it("clamps a negative persisted stageIndex on initial read, instead of indexing off the front", () => {
+    localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ stageIndex: -1 }));
+    const { result } = renderHook(() => useLabProgress(FIXTURE_LAB));
+    expect(result.current.stageIndex).toBe(0);
+    expect(result.current.currentStage.id).toBe("create-datapack");
   });
 });

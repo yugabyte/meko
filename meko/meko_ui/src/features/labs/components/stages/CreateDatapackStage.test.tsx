@@ -23,6 +23,7 @@ function renderStage(overrides: Partial<Parameters<typeof CreateDatapackStage>[0
       onSelect={onSelect}
       onCreate={onCreate}
       creating={false}
+      hasHitDatapackCount={false}
       onContinue={onContinue}
       {...overrides}
     />,
@@ -54,5 +55,22 @@ describe("CreateDatapackStage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await Promise.resolve();
     expect(onCreate).toHaveBeenCalledWith("My Pack");
+  });
+
+  it("disables New once the datapack quota is hit", () => {
+    renderStage({ hasHitDatapackCount: true });
+    expect((screen.getByRole("button", { name: /new/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("surfaces onCreate's rejection instead of silently doing nothing", async () => {
+    const onCreate = vi.fn().mockRejectedValue(new Error("You've hit the Free tier limit."));
+    renderStage({ onCreate });
+    fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    fireEvent.change(screen.getByLabelText("New datapack name"), { target: { value: "My Pack" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText("You've hit the Free tier limit.")).toBeTruthy();
+    // The dialog stays open with the name intact so the user can retry.
+    expect(screen.getByLabelText("New datapack name")).toBeTruthy();
   });
 });

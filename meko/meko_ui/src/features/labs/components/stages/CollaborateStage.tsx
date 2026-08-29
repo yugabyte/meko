@@ -1,12 +1,16 @@
 // Stage 5: a direct port of DatapackSharePage.tsx's own composition (see
 // its lines 44-60, 169-200), minus that page's chrome, invite-mode tabs,
-// and the owner-only LinkSharing/TransferOwnership stubs.
+// and LinkSharingSection/TransferOwnershipSection (both still coming-soon
+// stubs there, not gated on role -- not worth porting yet).
 
 import { InviteByEmailSection } from "@/features/datapacks/components/datapack-share/InviteByEmailSection";
 import { MembersSection } from "@/features/datapacks/components/datapack-share/MembersSection";
 import { PendingInvitesSection } from "@/features/datapacks/components/datapack-share/PendingInvitesSection";
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
-import { DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
+import {
+  DATAPACK_SHARE_GRANT_OWNER,
+  isDatapackGrantEligibleToShare,
+} from "@/lib/datapackShareGrants";
 
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
@@ -43,16 +47,25 @@ function CollaborateStageContent({
 
   const refreshShares = () => void refetch({ silent: true });
 
+  // Same owner/maintainer gate every other entry point to DatapackSharePage
+  // enforces (DatapackDetailPage, DatapacksTilesSection) -- accessibleDatapacks
+  // also admits contributors (see useLabRunnerSession), and InviteByEmailSection
+  // itself doesn't gate on role, so without this a contributor gets a live
+  // send-invite form backed only by the BE's 403.
+  const canInvite = isDatapackGrantEligibleToShare({ grant: sharedByRole });
+
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
       {error && <p className="text-sm text-destructive">{error}</p>}
-      <InviteByEmailSection
-        datapackId={datapackId}
-        currentUserEmail={session.currentUser?.email}
-        sharedByRole={sharedByRole}
-        priorShareCount={priorShareCount}
-        onInviteSent={refreshShares}
-      />
+      {canInvite && (
+        <InviteByEmailSection
+          datapackId={datapackId}
+          currentUserEmail={session.currentUser?.email}
+          sharedByRole={sharedByRole}
+          priorShareCount={priorShareCount}
+          onInviteSent={refreshShares}
+        />
+      )}
       <MembersSection
         currentUser={session.currentUser}
         datapackName={session.datapackName ?? ""}

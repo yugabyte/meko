@@ -11,6 +11,16 @@ import (
 // populate the conversation cache, so only they can be backfilled.
 const WorkbenchAgentID = "WorkbenchLM"
 
+// ReviewAgentLabAgentID is the agent_id inference_gateway's chain.py stamps
+// on review_agent-persona traces (PERSONA_AGENT_IDS) -- written through the
+// same conversation_add_message path as WorkbenchLM, so it's equally
+// eligible for backfill.
+const ReviewAgentLabAgentID = "ReviewAgentLab"
+
+// ConversationCacheBackfillAgentIDs are the agent_ids observe_handler.go's
+// "Index conversation" eligibility check accepts.
+var ConversationCacheBackfillAgentIDs = []string{WorkbenchAgentID, ReviewAgentLabAgentID}
+
 // Datapack represents a registered datapack in the meko system.
 //
 // Backed by meko_system.datapacks. Identified by (user_id, datapack_id);
@@ -617,7 +627,7 @@ type Artifact struct {
 	Filename       string     `json:"filename"`
 	ContentType    string     `json:"content_type"`
 	SizeBytes      int64      `json:"size_bytes"`
-	InlineContent  []byte     `json:"-"`             // only for small files; not serialised
+	InlineContent  []byte     `json:"-"` // only for small files; not serialised
 	S3Key          string     `json:"s3_key,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`

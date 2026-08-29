@@ -31,7 +31,7 @@ function readProgress(labId: string): Progress {
  */
 export function useLabProgress(lab: LabDefinition) {
   const [progress, setProgress] = useState<Progress>(() => readProgress(lab.id));
-  const stageIndex = Math.min(progress.stageIndex, lab.stages.length - 1);
+  const stageIndex = Math.max(0, Math.min(progress.stageIndex, lab.stages.length - 1));
 
   const persist = useCallback(
     (next: Progress) => {

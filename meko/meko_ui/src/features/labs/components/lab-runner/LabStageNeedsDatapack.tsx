@@ -1,9 +1,8 @@
 import { Button } from "@/components/ui/button";
 
 /** Shared degrade prompt for the 4 stages that need a datapack already
- *  selected. Same copy/pattern the page-level "Choose a datapack to begin"
- *  placeholder used before the restructuring — now reused per-stage since
- *  CreateDatapackStage is what actually sets the selection. */
+ *  selected — CreateDatapackStage is the only stage that sets the
+ *  selection, so every other stage degrades to this until it does. */
 export function LabStageNeedsDatapack({ onGoToCreateDatapack }: { onGoToCreateDatapack: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">

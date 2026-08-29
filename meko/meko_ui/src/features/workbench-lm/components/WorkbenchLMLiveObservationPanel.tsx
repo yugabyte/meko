@@ -119,7 +119,7 @@ export function WorkbenchLMLiveObservationPanel({
 
   return (
     <aside
-      className="flex min-h-0 w-full flex-col border-l border-border bg-background"
+      className="flex min-h-0 w-full flex-1 flex-col border-l border-border bg-background"
       // Pause auto-poll while the user is reading. `mouseenter/leave` covers
       // pointer interaction; `focusin/out` covers keyboard nav (a11y).
       onMouseEnter={() => setIsInteracting(true)}

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
+import type { LabStageId } from "../types";
 import { LAB_DEFINITIONS, getLabDefinition } from "./labDefinitions";
+
+// LabStageId is a closed 5-value union LabStageSlot switches on
+// exhaustively -- a lab missing one silently gets a blank pane for it.
+const FIXED_STAGE_IDS: LabStageId[] = [
+  "create-datapack",
+  "seed-context",
+  "deploy-agent",
+  "run-review",
+  "collaborate",
+];
 
 describe("LAB_DEFINITIONS", () => {
   it("has at least one lab", () => {
@@ -12,9 +23,10 @@ describe("LAB_DEFINITIONS", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("every lab has at least the 5 fixed stages", () => {
+  it("every lab has exactly the 5 fixed stages", () => {
     for (const lab of LAB_DEFINITIONS) {
-      expect(lab.stages.length).toBeGreaterThan(0);
+      const stageIds = lab.stages.map((stage) => stage.id);
+      expect(new Set(stageIds)).toEqual(new Set(FIXED_STAGE_IDS));
     }
   });
 
@@ -25,11 +37,10 @@ describe("LAB_DEFINITIONS", () => {
     }
   });
 
-  it("every stage has a non-empty title, shortLabel, and summary", () => {
+  it("every stage has a non-empty title and summary", () => {
     for (const lab of LAB_DEFINITIONS) {
       for (const stage of lab.stages) {
         expect(stage.title.trim().length).toBeGreaterThan(0);
-        expect(stage.shortLabel.trim().length).toBeGreaterThan(0);
         expect(stage.summary.trim().length).toBeGreaterThan(0);
       }
     }

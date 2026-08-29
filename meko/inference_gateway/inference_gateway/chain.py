@@ -342,6 +342,22 @@ _FOCUS_BLOCK_START = "<<<REVIEWER_FOCUS_NOTE_START>>>"
 _FOCUS_BLOCK_END = "<<<REVIEWER_FOCUS_NOTE_END>>>"
 
 
+def _strip_focus_block_tokens(text: str) -> str:
+    """Removes every occurrence of both delimiter tokens, to a fixed point.
+
+    A single `str.replace` pass per token is not enough: removing one
+    occurrence can splice the text on either side of it into a *new*
+    occurrence (nesting one token inside another, or inside itself,
+    forges a close/open tag a single pass never re-scans for). Looping
+    until neither token appears converges in O(len(text)) iterations
+    (each removal strictly shortens the string) and is the only way to
+    guarantee the *output* is actually free of both tokens.
+    """
+    while _FOCUS_BLOCK_START in text or _FOCUS_BLOCK_END in text:
+        text = text.replace(_FOCUS_BLOCK_START, "").replace(_FOCUS_BLOCK_END, "")
+    return text
+
+
 def _render_focus_block(focus: Optional[str]) -> str:
     """Renders the optional user-supplied "focus" note as an explicitly
     delimited, advisory-only block for REVIEW_AGENT_SYSTEM_TEMPLATE's
@@ -352,14 +368,14 @@ def _render_focus_block(focus: Optional[str]) -> str:
     Security: `focus` is bounded (ChatRequest.focus: max_length=300) and
     caller-controlled, so unlike memory_context/kb_context (which come
     from our own retrieval, not the caller) this text must be explicitly
-    framed as DATA, never as instructions -- see PERSONA_AGENT_IDS'
-    comment on why ChatRequest never exposes a raw system-prompt override.
+    framed as DATA, never as instructions. ChatRequest has no raw
+    system-prompt-override field at all -- this delimited-block rendering
+    is the only way caller-supplied text ever reaches the system prompt.
     """
     text = (focus or "").strip()
     if not text:
         return ""
-    for token in (_FOCUS_BLOCK_START, _FOCUS_BLOCK_END):
-        text = text.replace(token, "")
+    text = _strip_focus_block_tokens(text)
     # Collapse to one line: blank-line/heading formatting is a common
     # injection vector for faking a new turn or role boundary.
     text = " ".join(text.split())
@@ -747,6 +763,15 @@ async def run_chat_turn(
     # after a cache hit. On a reject we bypass the conversation cache and answer
     # via the full memory + KB + LLM path.
     bypass = bypass_conversation_cache
+    # tone/strictness/focus change what the model renders even when the
+    # cache would otherwise answer identically -- a cache hit never
+    # touches system_template, so re-running the same diff after
+    # reconfiguring (the Labs "Configure your reviewer" loop) would
+    # silently re-serve the previous configuration's answer. Force the
+    # full path the same way an explicit enable_knowledge_base=False /
+    # enable_memory_search=False does further below.
+    if tone or strictness or focus:
+        bypass = True
     if _is_trivial_query(user_message):
         logger.info(
             "skipping retrieval for trivial query session=%s len=%d",
@@ -769,9 +794,10 @@ async def run_chat_turn(
                     logger.info("conversation cache rejected via typed '%s' — bypassing", verdict)
 
         if bypass:
-            steps.append(
-                ProcessingStep("conversation_search", 0, "skipped", "user rejected cache answer", query=user_message)
+            bypass_reason = (
+                "review config supplied" if (tone or strictness or focus) else "user rejected cache answer"
             )
+            steps.append(ProcessingStep("conversation_search", 0, "skipped", bypass_reason, query=user_message))
 
         # 2. Retrieval. Two paths, chosen by cfg.contextual_prominence_search_enabled
         #    (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH — this gateway's OWN

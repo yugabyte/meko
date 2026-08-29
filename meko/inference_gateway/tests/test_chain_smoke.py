@@ -901,6 +901,39 @@ class TestContextualProminenceSearchIntegration:
         assert kb_search.ainvoke.call_args.args[0]["skip_conversation"] is True
         mem_search.ainvoke.assert_awaited_once()
 
+    async def test_review_config_forces_legacy_path_so_a_cache_hit_cant_serve_a_stale_answer(self) -> None:
+        """tone/strictness/focus change what the model renders, but a
+        conversation-cache hit never touches system_template -- without
+        forcing the full path, reconfiguring and re-running the same diff
+        (Labs' "Configure your reviewer" loop) would silently re-serve the
+        previous configuration's answer from cache."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["fresh answer"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="review this diff",
+            datapack_id="dp-1", persona="review_agent", strictness="strict",
+        )
+
+        unified.ainvoke.assert_not_awaited()
+        kb_search.ainvoke.assert_awaited_once()
+        assert kb_search.ainvoke.call_args.args[0]["skip_conversation"] is True
+
     async def test_unified_tool_missing_degrades_to_empty_context(self) -> None:
         """Flag on but the connected MCP server doesn't expose the tool yet
         (older server version) — best-effort: no crash, empty context."""

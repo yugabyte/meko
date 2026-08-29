@@ -1,7 +1,8 @@
 // Sample PR diff for the ADLC Review Agent Lab's fixture ("in-built repo")
 // path — used when the user hasn't pasted a GitHub PAT. Deliberately trips
-// two of ORG_CODING_STANDARDS_CONTENT's rules (bare except, no input
-// validation) so the review has something concrete to flag.
+// three real issues so the review has something concrete to flag: a bare
+// `except:` that swallows every error, `team_id` concatenated straight into
+// the SQL query (injection), and no validation on that same input.
 
 export const SAMPLE_DIFF_TITLE = "Add per-team spend aggregation endpoint";
 
