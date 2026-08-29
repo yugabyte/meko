@@ -145,9 +145,8 @@ To move to a newer shim: rebuild + publish the tarball, bump `shim/COMMIT`
 
 ## Hot-path integration
 
-Selected per connection via `hot_path = "yb_thin_client"` in the
-`yb_storage_conn` block (`ysql_client::HotPath::ThinClient`) — the default, and
-the only direct lane; the alternative is plain `ysql`. The pageserver opens
+This is the only transport for the page and WAL hot paths — there is no YSQL
+alternative. The pageserver opens
 `PageStore::thinclient` (`pages`/`slru_pages`/`meta`) and the safekeeper opens
 `YbThinClient` (`amp_storage.wals`), and the safekeeper's multi-segment WAL fetch
 rides one `read(&ops)` Perform. Cold paths

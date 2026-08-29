@@ -1201,9 +1201,9 @@ impl Cluster {
     /// The writer never produces overlapping chunks and everything
     /// downstream leans on it — `load_write_lsn`'s "highest offset ⇒
     /// highest end" rehydration, `truncate_wals_above`'s straddle math,
-    /// and the segment reader's covering-chunk selection. Per-batch
-    /// bucket stamping and the direct→YSQL fallback both replay the same
-    /// coalesced runs, so any overlap here means a real write-path bug.
+    /// and the segment reader's covering-chunk selection. Per-batch bucket
+    /// stamping and the consumer's retries replay the same coalesced runs, so
+    /// any overlap here means a real write-path bug.
     ///
     /// One window-function query per scenario (lag over chunk_offset per
     /// partition); an empty table — early scenarios, or post-GC — is a

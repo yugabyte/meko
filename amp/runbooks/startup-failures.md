@@ -282,7 +282,7 @@ wrong pageserver — re-check branch placement (Step E/F) before anything else.
 `pthread_create` returned EAGAIN — the box hit the per-user process/thread
 limit (`ulimit -u`, and/or the user slice's cgroup `pids.max`), so tokio (or
 the direct-RPC reactors) couldn't spawn a worker. Seen when many endpoint
-PS+SK pairs run on one host: with `hot_path = "yb_thin_client"` each daemon also
+PS+SK pairs run on one host: each daemon also
 opens pggate RPC connections to the tserver RPC port, adding worker/reactor
 threads per daemon (daemons sharing a process share one client). The pool
 packs `tsclient_sessions_per_conn` server sessions (default 4) onto each TCP

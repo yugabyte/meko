@@ -181,8 +181,8 @@ second writer.
 
 **Safekeeper.** The check sits in `flush_batch`
 (`compute/safekeeper/src/yb_wal_storage.rs`) — the single point every WAL
-byte passes through on its way into `amp_storage.wals`, on both the
-thin-client and YSQL lanes. If the token has expired against the local
+byte passes through on its way into `amp_storage.wals`. If the token has
+expired against the local
 wall clock, the safekeeper does not write and does not return an error to
 its caller: it logs and **exits the process**.
 

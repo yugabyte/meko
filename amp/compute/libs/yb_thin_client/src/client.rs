@@ -439,10 +439,10 @@ fn cond_op(op: CondOp) -> ffi::YbCondOp {
     }
 }
 
-/// Attempts a single `Perform` gets before its error is surfaced. This lane has
-/// no YSQL fallback, so it must ride out transient failures (tablet-leader
-/// moves, `TRY_AGAIN`, network blips) itself — a hard failure here stalls the
-/// WAL consumer or a getpage.
+/// Attempts a single `Perform` gets before its error is surfaced. This lane
+/// has nothing to fall back to, so it must ride out transient failures
+/// (tablet-leader moves, `TRY_AGAIN`, network blips) itself — a hard failure
+/// here stalls the WAL consumer or a getpage.
 const MAX_ATTEMPTS: usize = 10;
 /// First inter-attempt sleep; doubles per attempt up to [`BACKOFF_MAX`].
 const BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_millis(50);

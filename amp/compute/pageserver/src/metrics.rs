@@ -348,8 +348,8 @@ pub(crate) static PAGE_READS: Lazy<IntCounterVec> = Lazy::new(|| {
 });
 
 /// Latency of every PageStore round trip to YB, by operation and
-/// transport. `path` = `ysql` (Postgres wire) or `yb_thin_client` (direct
-/// tserver RPC via the C++ shim, `hot_path = "yb_thin_client"`); see
+/// transport. `path` is always `yb_thin_client` (direct tserver RPC via the
+/// C++ shim) — the label is kept so the series stays stable; see
 /// `architecture/yugabyte.md`.
 /// NOT the same `path` label as `pageserver_yb_page_reads_total` (which
 /// means cache blend).

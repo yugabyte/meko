@@ -167,9 +167,8 @@ independent of the connection's `search_path`).
 - **`bucket_id` is placement, not identity** (`WALS_BUCKETS = 6`). As the
   leading range-key column it spreads a branch's WAL across all six
   pre-split tablets. The consumer stamps each assembled **batch** with one
-  bucket, rotating one bucket per batch: every batch targets ONE tablet
-  (atomic as a group on both write lanes, and the single-shard transaction
-  fast path on YSQL — no distributed transaction), while sustained load
+  bucket, rotating one bucket per batch: every batch targets ONE tablet and
+  lands atomically as a group, while sustained load
   rotates across all tablets. Readers cannot derive a chunk's bucket, so
   index-tight reads carry a `bucket_id IN (0..5)` key list, which YSQL
   executes as batched per-bucket index probes rather than a scan.
@@ -220,30 +219,19 @@ against a future refactor rather than a live race.
 
 ## YB connections: `YbWalConn`
 
-`YbWalConn::from_conf` opens three independent YSQL connections at boot
-(auto-reconnecting `ysql_client::YsqlClient` wrappers, each with its own
+`YbWalConn::from_conf` opens one YSQL connection at boot (an
+auto-reconnecting `ysql_client::YsqlClient` wrapper with its own
 `application_name` for attribution in `pg_stat_activity`):
 
-- **`fpu_client`** (`safekeeper:yb_wal_fpu`) — the only lane with
-  `yb_enable_upsert_mode = true`. Carries the hot-path WAL chunk INSERTs and
-  the one-shot `branch_state` INSERT of `control_file::create_new` (the
-  non-idempotent INSERT needs upsert semantics so the client's
-  retry-on-connection-drop loop can blindly replay it without a
-  duplicate-key failure).
-- **`read_client`** (`safekeeper:yb_wal_reads`) — exclusively the WAL
-  sender's chunk SELECTs (`YbSegmentReader`). Keeping streaming reads off
-  the system lane means a long control-file write or GC DELETE cannot stall
-  the read-back path that walproposer commits depend on.
-- **`system_client`** (`safekeeper:yb_wal_system`) — everything else:
-  startup rehydration SELECTs, the GC DELETE, and the idempotent
+- **`system_client`** (`safekeeper:yb_wal_system`) — everything off the hot
+  path: startup rehydration SELECTs, the GC DELETE, and the idempotent
   control-file ops (restore / persist / delete / list).
 
-With `hot_path = "yb_thin_client"` in `yb_storage_conn` — the default (see
-[`yugabyte.md`](yugabyte.md) §"Direct-to-tserver hot path") — `YbWalConn`
-additionally opens the direct-RPC client (`compute/libs/yb_thin_client`,
-`Perform` to a tserver's RPC port over the `libyb_thin_client` C++ shim) to
-`amp_storage.wals` — fail-fast
-health-checked at startup. The hot-path WAL write batch then runs as ONE
+`YbWalConn` also opens the direct-RPC client
+(`compute/libs/yb_thin_client`, `Perform` to a tserver's RPC port over the
+`libyb_thin_client` C++ shim) to `amp_storage.wals` — fail-fast
+health-checked at startup, and the only transport for the WAL chunk
+writes and reads. The hot-path WAL write batch runs as ONE
 Perform per batch (a single-tablet atomic write batch — a crash mid-flush
 cannot leave a hole), and the WAL sender's fetch issues all
 2×`WALS_BUCKETS` (arm, bucket) read ops as ops of ONE Perform served at a
@@ -253,17 +241,14 @@ rows it wants: while `wals` is hash-sharded a full hash prefix keeps every op
 on one tablet and the fetch settles in that single Perform, but once it is
 range-sharded an op's scan can span tablets and the fetch may page across
 several. The single-snapshot guarantee holds either way — that, not the
-round-trip count, is what #139 needs. `hot_path =
-"yb_thin_client"` runs the identical lane over `compute/libs/yb_thin_client`
-(the batch-first shim client) instead — the `flush_batch_thin` write and the
+round-trip count, is what #139 needs. The `flush_batch_thin` write and the
 `fetch_chunks_thin` multi-op fetch keep the same one-batch-per-Perform write
-and one-snapshot read semantics (the `read_pages` fan-out becomes one
-`read(&ops)` batch). The direct lane retries across tservers round-robin with no YSQL
-fallback. Control file,
-`branch_state`, GC, truncation, and rehydration always stay on the YSQL
-lanes. `PGSQL_UPSERT` write ops carry skip-read-before-write semantics
-natively, so the `yb_enable_upsert_mode` GUC has no counterpart on this
-lane.
+and one-snapshot read semantics (the `read_pages` fan-out is one `read(&ops)`
+batch). The lane retries across tservers round-robin, with nothing to fall
+back to — a terminal failure fails the flush. Control file, `branch_state`,
+GC, truncation, and rehydration stay on the YSQL system lane.
+`PGSQL_UPSERT` write ops carry skip-read-before-write semantics natively, so
+the `yb_enable_upsert_mode` GUC has no counterpart here.
 
 ## Write path: `YbWalStorage` and the flush protocol
 
@@ -459,10 +444,9 @@ comes from memory or YB. For a read at position `pos` the chain is:
       stale key per live one, and the scan amortises to O(1) per removal.
    3. **YB fetch** — fetching the covering chunk **and** a
       forward prefetch window (`FETCH_FORWARD_CHUNKS = 64` /
-      `FETCH_FORWARD_BYTES = 4 MiB`) in a single snapshot: on YSQL, one
-      `UNION ALL` statement (covering arm: highest `chunk_offset < pos`,
-      `LIMIT 1`; forward arm: ascending from `pos`); on the direct lane, all
-      (arm, bucket) ops in one Perform at one read point. One round trip
+      `FETCH_FORWARD_BYTES = 4 MiB`) in a single snapshot: all
+      (arm, bucket) ops — covering arm, highest `chunk_offset < pos`; forward
+      arm, ascending from `pos` — in one Perform at one read point. One round trip
       against a hash-sharded `wals`; range-sharded, ops carrying a
       continuation are re-issued at that same pinned read point, so the fetch
       may take several. A single snapshot
@@ -611,8 +595,8 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
 - **Creation**: either explicitly via `POST /v1/branch`, or implicitly by
   the first walproposer `START_WAL_PUSH` handshake
   (`allow_timeline_creation`, default true). Creation claims the slot with a
-  `CreationInProgress` marker, writes the `branch_state` row (`create_new`,
-  on the upsert lane), then loads the timeline back from it. Claiming the slot
+  `CreationInProgress` marker, writes the `branch_state` row, then loads the
+  timeline back from it. Claiming the slot
   before the write keeps concurrent creators out; the marker is cleared on
   every failure path.
   - A create arriving before `init()` finishes waits for it (HTTP serves
@@ -651,8 +635,7 @@ loses nothing but logs.
      the end of WAL. Within a segno the top-offset row necessarily has the
      highest end because rows never overlap. No hole detection is needed:
      every consumer batch carries one bucket and lands atomically (one
-     single-tablet Perform on the direct-RPC lane, one single-shard statement
-     on YSQL), and batches are
+     single-tablet Perform), and batches are
      written sequentially — so the durable row set is always a contiguous
      prefix of the WAL stream. If either property is ever relaxed (batches
      spanning tablets, or concurrent in-flight batches), hole detection must

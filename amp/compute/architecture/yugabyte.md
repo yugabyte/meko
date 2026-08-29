@@ -83,15 +83,15 @@ There are two ways yb-amp code reaches YB:
   YB's own code rather than being re-implemented in Rust. Its one read
   primitive is a **batch of ops = one `Perform`** (one RPC, one snapshot),
   so multi-op reads collapse to a single round trip; writes are the same
-  shape. Selected by `hot_path = "yb_thin_client"` (**the default**) — the
-  single hot-path client. It speaks the pggate RPC protocol
+  shape. It is **the** hot-path client — there is no YSQL alternative for
+  the page and WAL hot paths. It speaks the pggate RPC protocol
   (`yb.tserver.PgClientService`) directly to a tserver's RPC port (9100),
   skipping the PG backend entirely (wire framing, parse/plan, pggate), and
   implements exactly what the hot tables need — hash-eq + range-bound
   clustered scans with paging and snapshot pinning, and batched
   `PGSQL_UPSERT` writes — and nothing else.
 
-### Direct-to-tserver hot path (`hot_path = "yb_thin_client"`)
+### Direct-to-tserver hot path
 
 The shared `yb_storage_conn` block accepts several optional keys:
 
@@ -99,19 +99,17 @@ The shared `yb_storage_conn` block accepts several optional keys:
 yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsclient_read_sessions = 4, tsclient_write_sessions = 4 }
 ```
 
-- `hot_path` — `"yb_thin_client"` (**the default**) runs the hot paths over
-  the `yb_thin_client` shim client (batch-first: a call = a batch of ops =
-  one Perform); `"ysql"` is the Postgres-wire escape hatch. The
-  safekeeper honors it for the WAL write/read path on `amp_storage.wals`
-  (see [`safekeeper.md`](safekeeper.md) §"Direct-to-tserver hot path")
-  and the pageserver for the page read/write hot path on
-  `pages`/`slru_pages`/`meta` (see
-  [`pageserver.md`](pageserver.md) §"Direct-to-tserver hot
-  path"). The direct lanes keep per-op fallback to YSQL at runtime;
-  cold paths (DDL, GC, rehydration, control file, `branch_state`)
-  always use YSQL. A binary that does not know these keys fails to
-  parse a config that sets them (`deny_unknown_fields`) — intentional,
-  not silently ignored.
+The hot paths always run over the `yb_thin_client` shim client
+(batch-first: a call = a batch of ops = one Perform): the safekeeper for
+the WAL write/read path on `amp_storage.wals` (see
+[`safekeeper.md`](safekeeper.md) §"Direct-to-tserver hot path") and the
+pageserver for the page read/write hot path on `pages`/`slru_pages`/`meta`
+(see [`pageserver.md`](pageserver.md) §"Direct-to-tserver hot path").
+There is no YSQL fallback — a daemon that cannot open its table handles at
+boot refuses to start. Cold paths (DDL, GC, rehydration, control file,
+`branch_state`) always use YSQL. A binary that does not know these keys
+fails to parse a config that sets them (`deny_unknown_fields`) —
+intentional, not silently ignored.
 - `tserver_rpc_addrs` — yb-tserver RPC endpoints for the direct-RPC
   transport. When unset, the `host_ports` hosts on port 9100; set it
   explicitly to reach every tserver when `host_ports` is only a subset
@@ -385,11 +383,9 @@ Because `bucket_id` leads the key, **every** query against `pages` binds
 it to a single value. A chain read knows its blknum and so binds the
 entire 7-column prefix (one tablet); a blknum range scan touches one
 bucket per 2MB stretch and loops over `page_buckets_for_range`;
-whole-fork and cross-fork operations fan out over all six. On the thin
-lane that is forced — its range-key bind takes one value per column, with
-no set form — whereas YSQL could equally use `bucket_id = ANY(…)`, which
-YB pushes into the index condition; the per-bucket shape is shared so
-both lanes fan out alike. See [`pageserver.md`](pageserver.md) "Why the
+whole-fork and cross-fork operations fan out over all six. One bucket per
+query is forced: the range-key bind takes one value per column, with no
+set form. See [`pageserver.md`](pageserver.md) "Why the
 bucket" for the function's design and the salt's failure mode.
 
 `payload` here — and in `slru_pages` and `meta` below — holds a
@@ -683,10 +679,8 @@ same bytes.
 range-key column it spreads a branch's WAL across all
 `WALS_BUCKETS = 6` pre-split tablets. The consumer stamps each write
 **batch** with one bucket, rotating through the buckets one batch at a
-time — each batch lands on ONE tablet (the direct-RPC lane applies it as
-one atomic write batch; the YSQL lane's multi-VALUES INSERT hits the
-single-shard transaction fast path), while sustained load rotates
-across all tablets. Readers cannot derive a chunk's bucket, so
+time — each batch lands on ONE tablet, applied as one atomic write batch,
+while sustained load rotates across all tablets. Readers cannot derive a chunk's bucket, so
 index-tight reads name every bucket with a `bucket_id IN (0..5)`
 key list — YSQL executes that as batched per-bucket index probes,
 not a scan.

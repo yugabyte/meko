@@ -51,8 +51,8 @@ Code anchors:
 - `compute/libs/remote_storage/src/yb_store.rs` — the YbStore impl, chunked
   uploads, streaming downloads, parse/reconstruct key.
 - `compute/libs/yb_thin_client` — direct-to-tserver client over the
-  `libyb_thin_client` C++ shim (`hot_path = "yb_thin_client"`, **the
-  default**): batches reads/writes into one `Perform` per call, so the
+  `libyb_thin_client` C++ shim, and **the only** transport for the page +
+  WAL hot paths: batches reads/writes into one `Perform` per call, so the
   tserver does the tablet routing; the shim is fetched per-arch at build
   time (`scripts/fetch-yb-thin-client.sh`, pinned by `shim/VERSION` +
   `shim/COMMIT`), never vendored. See `compute/libs/yb_thin_client/README.md`.

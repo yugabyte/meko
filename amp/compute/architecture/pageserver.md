@@ -99,27 +99,26 @@ behind internal writes:
   connection instead of serialising on one backend.
 - **`fpu_page_store`** (`application_name = "pageserver:fpu"`, pool
   of 2 × `scale_factor`) — walreceiver flushes, the materialiser's
-  durable chain reads, and the materialiser's image INSERTs. Each
-  connection runs `SET yb_enable_upsert_mode = true`
-  (`YsqlClient`, `compute/libs/ysql_client/`), so a chunk retried after
-  a partial-flush failure upserts instead of PK-conflicting.
-  Under the default `hot_path` the flush's four writes — pages, SLRU,
-  meta, and the `pending_gc` candidates that trail them — all take the
-  direct-RPC lane below, and these connections are their fallback. What
-  still goes out over YSQL from this pool is everything with no lane of
-  its own: the meta *range* scans, branch-state CRUD, and the lineage
-  walks.
+  durable chain reads, and the materialiser's image writes. The flush's
+  four writes — pages, SLRU, meta, and the `pending_gc` candidates that
+  trail them — all take the direct-RPC lane below. What goes out over YSQL
+  from this pool is everything with no lane of its own: the meta *range*
+  scans, branch-state CRUD, and the lineage walks.
 
-With `hot_path = "yb_thin_client"` in the shared connection block — **the
-default** (`YbConnConfig::hot_path`, `HotPath::ThinClient`) — `PageStore`
-additionally opens direct-RPC table handles over `libs/yb_thin_client`
+  Each connection still runs `SET yb_enable_upsert_mode = true`, which is
+  now vestigial: the GUC only skips YB's read-before-write on INSERT, and
+  no production INSERT reaches these connections any more — what is left is
+  SELECTs, branch-state UPDATEs and GC DELETEs. The name and the flag
+  outlive their reason.
+
+`PageStore` also opens direct-RPC table handles over `libs/yb_thin_client`
 (`PageStore::thinclient`, the batch-first client over the
 `libyb_thin_client` C++ shim — routing stays server-side) to
 `pages`/`slru_pages`/`meta`/`pending_gc` at startup with a fail-fast
-health check. Set `hot_path = "ysql"` to run everything over the Postgres
-wire instead. `pending_gc` is a write-only handle on this lane — the GC
-drain's select/delete/dequeue stay on YSQL (see
-[`pageserver-gc.md`](pageserver-gc.md)).
+health check; this is the only transport for the page hot paths, so a
+daemon that cannot open them refuses to start. `pending_gc` is a
+write-only handle on this lane — the GC drain's select/delete/dequeue
+stay on YSQL (see [`pageserver-gc.md`](pageserver-gc.md)).
 
 ## Schema
 
@@ -199,12 +198,10 @@ Consequences to know:
   known blknum, so it binds the whole 7-column prefix and hits one tablet.
   A blknum *range* scan touches one bucket per 2MB stretch it spans, so
   callers loop over `page_buckets_for_range` and merge; whole-fork and
-  cross-fork operations fan out over all six. The thin lane has no
-  alternative — `RangeRead::new_range` binds one value per key column and
-  the shim's `range_values` ABI has no set form. YSQL could equally write
-  `bucket_id = ANY(…)`, which YB does push into the index condition; both
-  lanes use the one-bucket-per-query shape so the two read alike.
-- The CHECK is enforcement only on the YSQL lane — thin-client writes go
+  cross-fork operations fan out over all six. One bucket per query is
+  forced — `RangeRead::new_range` binds one value per key column and the
+  shim's `range_values` ABI has no set form.
+- The CHECK never fires on the hot path — thin-client writes go
   straight to DocDB and never reach it. A mis-computed bucket is worse
   than in `pending_gc` (a missed candidate): the row lands outside the key
   range every reader looks in, i.e. a lost page.
@@ -369,11 +366,10 @@ escaping above this boundary would silently reinterpret page bytes as
 record bytes.
 
 - Encode: one call at the top of each `put_pages` / `put_slru_pages` /
-  `put_meta`, ahead of the YSQL/thin-RPC lane split, so both lanes bind
-  identical bytes.
-- Decode: `decode_payload`, reached from `row_to_page` /
-  `row_to_slru_page` / `row_to_meta` (YSQL) and `assemble_page_chain` /
-  `assemble_slru_chain` / `decode_meta_row` (thin-RPC). The two scan
+  `put_meta`, before anything binds a payload.
+- Decode: `decode_payload`, reached from `row_to_page` / `row_to_meta`
+  (the YSQL cold-path reads) and `assemble_page_chain` /
+  `assemble_slru_chain` / `decode_meta_row` (the hot path). The two scan
   assemblers delegate to the chain assemblers.
 
 Because the flush-size thresholds (`flush_size_bytes`,
@@ -427,11 +423,21 @@ Reads above the applied ingest frontier block on `wait_lsn` (bounded by
 `wait_lsn_timeout`, default 300 s); reads below `applied_gc_cutoff_lsn`
 return an error.
 
-### The SQL shape
+### The scan shape
 
-`PageStore::read_chain` (single-key path) uses a scalar-subquery anchor
-with `COALESCE(..., 0)` as the lower bound so both ends of the LSN
-range push into a single DocDB scan:
+Every chain read is anchored on the newest image at or below the target
+LSN, and returns that image plus the deltas above it. With `is_image` in
+the clustering key the anchor seek is `O(log B)` where `B` is the number of
+image rows for that block — typically 1. If no image exists the read
+degrades to a plain LSN-descending scan of the whole chain; the Rust-side
+trim stops at the first `will_init=true` row, so both cases shorten
+correctly. The no-image case is the only slow path and only fires for cold
+blocks the background image materialiser has not visited yet.
+
+The remaining YSQL readers (the cross-forknum range scan and
+`scan_scattered_set`) express that anchor as a scalar subquery with
+`COALESCE(..., 0)` as the lower bound, so both ends of the LSN range push
+into a single DocDB scan:
 
 ```sql
 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum,
@@ -447,26 +453,15 @@ WHERE <key_filter>
 ORDER BY p.lsn DESC, p.is_image DESC;
 ```
 
-With `is_image` in the clustering key the anchor seek is `O(log B)`
-where `B` is the number of image rows for that block — typically 1. If
-no image exists the subquery returns NULL and `COALESCE(..., 0)` turns
-the lower bound into `p.lsn >= 0` — a plain LSN-descending scan of the
-whole chain; the Rust-side trim stops at the first `will_init=true`
-row, so both cases shorten correctly. The no-image case is the only
-slow path and only fires for cold blocks the background image
-materialiser has not visited yet.
-
-Multi-block scans (`build_scan_one_fork_sql`,
-`build_scan_one_fork_scattered_sql`, `build_scan_cross_fork_sql`) wrap
-the same per-block anchor in a `CROSS JOIN LATERAL` driven by either a
-`SELECT DISTINCT blknum` CTE (contiguous range) or
-`unnest($6::bigint[])` (scattered set), so each block gets the pushdown
-individually. The cross-forknum variant keys the LATERAL on the full
-(spcnode, dbnode, relnode, forknum, blknum) tuple; it fans out across
+The YSQL multi-block scans that remain (`build_scan_one_fork_scattered_sql`,
+`build_scan_cross_fork_sql`) wrap the same per-block anchor in a
+`CROSS JOIN LATERAL` driven by either `unnest($6::bigint[])` (scattered set)
+or a `SELECT DISTINCT` CTE (cross-forknum range), so each block gets the
+pushdown individually. The cross-forknum variant keys the LATERAL on the
+full (spcnode, dbnode, relnode, forknum, blknum) tuple; it fans out across
 all buckets and is rare in practice.
 
-On the direct-RPC lane (`yb_thin_client`, the default), the single-key
-readers —
+On the direct-RPC lane, the single-key readers —
 `read_chain`, `read_slru_chain`, `read_meta` — run as paged clustered
 scans from the target LSN downward that stop at the anchor client-side
 (`ChainFetchState`); `normalize_chain` re-orders equal-LSN image/delta
@@ -532,13 +527,11 @@ tablet-local reads after one slow read. Writes (`put_*`, materialiser
 installs, `advance_consistent_lsn`) always
 target the own branch_id, never an ancestor.
 
-**Boundary.** The per-segment `branch_id` binding (the read SQL's `$1`,
-rebound for each ancestor — never baked as a literal; see the
-`read_chain` comment in `page_store.rs`) plus the `lineage` vector are
-the one place reads are genuinely multi-branch. Writes are
-single-branch — write SQL bakes `branch_id` in as a literal and is
-memoized per branch (`BakedSql`). A simplification that hard-codes the
-write branch_id on the read path, or bakes it into the read SQL, would
+**Boundary.** The per-segment `branch_id` binding (rebound for each
+ancestor — never fixed; see the `read_chain` comment in `page_store.rs`)
+plus the `lineage` vector are the one place reads are genuinely
+multi-branch. Writes are single-branch. A simplification that hard-codes
+the write branch_id on the read path, or bakes it into the read SQL, would
 silently break branch reads — keep the lineage walk and its per-segment
 binding intact. `PageWriter` carries the lineage everywhere, and its
 cache fast paths only short-circuit when the cached anchor covers the
@@ -593,13 +586,11 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    for meta (`META_ROWS_PER_INSERT`), dispatched in parallel via
    `stream::iter(...).buffer_unordered(N)` with base N = 2/1/2
    (× `scale_factor`), then the `pending_gc` candidates the batch
-   produced. On the direct-RPC lane all four writes — `put_pages`,
-   `put_slru_pages`, `put_meta`, `gc_enqueue_candidates` — run as
-   PGSQL_UPSERT batches with per-row response verification (a dropped row
-   surfaces as a batch error, not a short count), chunked exactly as the
-   YSQL lane chunks them. Because the lane upserts and every
-   YSQL connection runs in upsert mode, a retry after partial-chunk
-   success cannot PK-conflict on either lane.
+   produced. All four writes — `put_pages`, `put_slru_pages`, `put_meta`,
+   `gc_enqueue_candidates` — run as PGSQL_UPSERT batches with per-row
+   response verification (a dropped row surfaces as a batch error, not a
+   short count). Because the writes upsert, a retry after partial-chunk
+   success cannot PK-conflict.
 7. On success, `mark_flushed` flips the snapshot's rows from unflushed
    → durable in place (the rows do NOT move; they stay cached for
    reads), `evict_to_capacity` sheds cold keys if `total_bytes` exceeds
@@ -1123,8 +1114,8 @@ pool sizes, worker counts, and the budgets above; 1.0 default, 0.25 fits
 a small dev box), `wait_lsn_timeout` (300 s), `wal_redo_timeout` (60 s),
 `safekeeper_pg_addr`, `listen_pg_addr` / `listen_http_addr` /
 `listen_https_addr` / `listen_grpc_addr`, `http_auth_type` /
-`pg_auth_type` / `grpc_auth_type`, and the `hot_path` /
-`tserver_rpc_addrs` fields of the shared YB connection block
+`pg_auth_type` / `grpc_auth_type`, and the `tserver_rpc_addrs` field of
+the shared YB connection block
 (`YbConnConfig`, `compute/libs/ysql_client/`).
 
 ## Compute ↔ pageserver timeouts

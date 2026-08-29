@@ -321,12 +321,6 @@ func WriteComputeConfigJSON(path string, c ComputeConfig) error {
 	return writeFile(path, data)
 }
 
-// defaultHotPath mirrors the Rust `HotPath::default()` (and
-// `launch.DefaultYbHotPath`): the lane an absent `hot_path` key selects, so it
-// is never rendered. Duplicated rather than imported because `launch` already
-// imports this package.
-const defaultHotPath = "yb_thin_client"
-
 // ybConnToStoreJSON serializes a YbConnConfig to the JSON object
 // `remote_storage::TypedRemoteStorageKind` deserializes, adding the
 // `type = "YbStore"` discriminator. compute_ctl reads it out of the compute
@@ -351,12 +345,6 @@ func ybConnToStoreJSON(c *config.YbConnConfig) map[string]any {
 	}
 	if c.DisableTransactionalWrites {
 		obj["disable_transactional_writes"] = true
-	}
-	// Only a non-default lane is emitted, mirroring `launch.ybInlineTOML`.
-	// The blob path talks YSQL regardless — it holds no hot-path client — but
-	// the key stays in the shared connection block, so the renderers agree.
-	if c.HotPath != nil && *c.HotPath != defaultHotPath {
-		obj["hot_path"] = *c.HotPath
 	}
 	if c.TserverRPCAddrs != nil {
 		obj["tserver_rpc_addrs"] = *c.TserverRPCAddrs

@@ -165,11 +165,6 @@ func TestYbInlineTOML(t *testing.T) {
 	if got != want {
 		t.Errorf("ybInlineTOML = %q, want %q", got, want)
 	}
-	hp := "ysql"
-	c.HotPath = &hp
-	if got := ybInlineTOML(&c); !strings.Contains(got, `hot_path = "ysql"`) {
-		t.Errorf("ysql hot_path not emitted: %q", got)
-	}
 }
 
 func TestMutableChanged(t *testing.T) {

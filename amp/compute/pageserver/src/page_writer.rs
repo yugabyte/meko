@@ -2648,8 +2648,12 @@ mod tests {
             sslmode: None,
             sslrootcert: None,
             disable_transactional_writes: false,
-            hot_path: ysql_client::HotPath::Ysql,
-            tserver_rpc_addrs: None,
+            tserver_rpc_addrs: Some(
+                std::env::var("YB_TEST_TSERVER_RPC")
+                    .unwrap_or_else(|_| format!("{host}:9100"))
+                    .parse()
+                    .unwrap(),
+            ),
             tsclient_read_sessions: None,
             tsclient_write_sessions: None,
             tsclient_sessions_per_conn: None,

@@ -40,9 +40,6 @@ const (
 	defaultYbPort   = 5433
 	defaultYbUser   = "yugabyte"
 	defaultYbDbname = "yb_storage"
-	// Mirrors Rust `HotPath::default()`. Kept out of the rendered config
-	// (see ybInlineTOML) so the default stays "say nothing, let Rust pick".
-	DefaultYbHotPath = "yb_thin_client"
 )
 
 // InitArgs are the flags of `yb_amp_local init` (the default, no-`--config`
@@ -51,7 +48,6 @@ type InitArgs struct {
 	YbDbname       string
 	YbHost         string
 	YbPort         uint16
-	YbHotPath      string // "yb_thin_client" (default) | "ysql"
 	PortBase       *uint16
 	NumPageservers uint16 // default 1; only the single-PS path is supported
 	Force          InitForceMode
@@ -59,18 +55,7 @@ type InitArgs struct {
 
 // ybInlineTOML renders the shared [*.yb] connection block as the inline-table
 // string stored on the pageserver/safekeeper templates, mirroring Rust
-// `YbConnConfig::to_inline_toml`. host_ports/user/dbname are always emitted;
-// hot_path only for a non-default lane.
-//
-// Emit it for any NON-DEFAULT lane, not just `ysql`. The Rust side's
-// `HotPath::default()` is `yb_thin_client`, so omitting the key already selects
-// the thin client and spelling it out would be redundant noise in every
-// generated config. Omitting *every other* lane too, though, made
-// `--yb-hot-path ysql` a silent no-op, leaving no way to select the YSQL
-// lane or fall back to it.
-//
-// Mirrors Rust `YbConnConfig::to_inline_toml`, which likewise renders only the
-// non-default lanes.
+// `YbConnConfig::to_inline_toml`.
 func ybInlineTOML(c *config.YbConnConfig) string {
 	q := func(s string) string {
 		s = strings.ReplaceAll(s, `\`, `\\`)
@@ -81,9 +66,6 @@ func ybInlineTOML(c *config.YbConnConfig) string {
 		"host_ports = " + q(c.HostPorts),
 		"user = " + q(c.User),
 		"dbname = " + q(c.Dbname),
-	}
-	if c.HotPath != nil && *c.HotPath != "" && *c.HotPath != DefaultYbHotPath {
-		parts = append(parts, "hot_path = "+q(*c.HotPath))
 	}
 	return "{ " + strings.Join(parts, ", ") + " }"
 }
@@ -252,10 +234,6 @@ func defaultYbConn(args InitArgs) config.YbConnConfig {
 		HostPorts: fmt.Sprintf("%s:%d", host, port),
 		User:      defaultYbUser,
 		Dbname:    dbname,
-	}
-	if args.YbHotPath != "" {
-		hp := args.YbHotPath
-		c.HotPath = &hp
 	}
 	return c
 }

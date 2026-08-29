@@ -755,16 +755,13 @@ async fn create_compute_page_store(
 /// materialiser `read_chain_durable` cache miss + materialiser
 /// `put_pages`. Schema already exists by the time this runs.
 ///
-/// Pool size 2: `put_pages` chunks each INSERT into 500-row sub-batches
-/// and dispatches `PARALLELISM = 2` of them at a time (see
-/// `PageStore::put_pages`). tokio-postgres pipelines them on the wire,
-/// but YB serialises any pipeline behind a single backend session —
-/// without independent connections one flush's chunks would run
-/// sequentially even though the round-trip is dominated by YB's tablet
-/// RPC + Raft replicate (~13 ms per ~490-row batch in TPC-C profiles).
-/// 2 connections lets the 2 chunks land on 2 distinct YB backends and
-/// complete in one wall-clock RTT instead of two. The materialiser
-/// shares this pool for its image INSERTs.
+/// Pool size 2, because YB serialises a pipeline behind a single backend
+/// session: without independent connections, concurrent work on this store
+/// runs sequentially even though the round trip is dominated by YB's tablet
+/// RPC + Raft replicate. The `put_*` writes that set this size have since
+/// moved to the thin-client lane, whose own `tsclient_read_sessions` /
+/// `tsclient_write_sessions` default to the same `scale_count(2, …)`; the
+/// YSQL pool keeps it for the lineage and meta-range reads left on it.
 async fn create_fpu_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
@@ -772,10 +769,13 @@ async fn create_fpu_page_store(
     // `PARALLELISM = 2` chunk dispatch in `PageStore::put_pages`,
     // which scales the same way.
     let pool_size = pageserver_api::config::scale_count(2, conf.scale_factor);
-    // The fast-upsert pool: `put_pages` + `put_slru_pages` +
-    // `put_meta` + the materialiser's image INSERTs all run here and
-    // depend on `yb_enable_upsert_mode = true` to skip
-    // read-before-write on partial-chunk retries.
+    // Historically the fast-upsert pool: `put_pages` + `put_slru_pages` +
+    // `put_meta` + the materialiser's image INSERTs ran here over YSQL and
+    // depended on `yb_enable_upsert_mode = true` to skip read-before-write on
+    // partial-chunk retries. Those writes are on the thin-client lane now
+    // (which upserts natively), so what is left on these connections is the
+    // lineage/meta SELECTs and the branch-state UPDATEs; the GUC no longer
+    // does anything here.
     let store = create_page_store_with_app_name(conf, "pageserver:fpu", pool_size, true).await?;
     info!(pool_size, "Internal PageStore connected");
     Ok(store)

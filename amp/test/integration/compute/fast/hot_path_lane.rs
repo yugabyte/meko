@@ -1,6 +1,5 @@
 //! Prove the page + WAL hot path actually rides the thin-RPC
-//! (`yb_thin_client`) lane on BOTH the safekeeper and the pageserver — not a
-//! silent fallback to the YSQL lane.
+//! (`yb_thin_client`) lane on BOTH the safekeeper and the pageserver.
 //!
 //! Both components expose a `path`-labeled latency histogram whose series
 //! only materializes once that lane serves an op:
@@ -13,10 +12,9 @@
 //!   2. restart the endpoint to drop the compute buffer cache, then read
 //!      the table back — a cold read that forces getpage (`read_chain`).
 //!
-//! Finally we require both lanes' counts to advance. If the traffic
-//! silently ran on the YSQL lane, the `yb_thin_client` count stays flat and
-//! this fails — the corruption gate can't catch that, since both lanes return
-//! identical bytes.
+//! Finally we require both counts to advance. A daemon that never reached
+//! the lane leaves them flat and this fails — the corruption gate can't catch
+//! that on its own, since the bytes come back correct either way.
 
 use std::time::{Duration, Instant};
 
@@ -25,9 +23,8 @@ use anyhow::{Context, bail};
 use crate::cluster::{Cluster, step};
 use crate::{db, tee_println};
 
-/// The hot-path transport under test. `yb_thin_client` is the thin-RPC lane
-/// the page + WAL hot path is meant to ride (the daemon default); its
-/// path-labeled metrics only appear once it serves an op.
+/// The hot-path transport under test: the thin-RPC lane the page + WAL hot
+/// path rides. Its path-labeled metrics only appear once it serves an op.
 const LANE: &str = "yb_thin_client";
 const PS_METRIC: &str = "pageserver_yb_store_op_seconds";
 const SK_METRIC: &str = "safekeeper_yb_wal_insert_seconds";
@@ -77,7 +74,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // The safekeeper WAL flush and the pageserver→YB page flush are
     // asynchronous (the page flush lags the CHECKPOINT), so poll each
     // lane's count until it advances rather than reading once.
-    step("wait for both lanes' op counts to advance");
+    step("wait for both components' lane op counts to advance");
     let deadline = Instant::now() + Duration::from_secs(45);
     let (mut ps_now, mut sk_now) = (ps_before, sk_before);
     loop {
@@ -105,8 +102,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
                 ));
             }
             bail!(
-                "after a write + CHECKPOINT + cold read: {} \
-                 — hot-path traffic silently ran on the YSQL lane",
+                "after a write + CHECKPOINT + cold read: {}",
                 stuck.join("; ")
             );
         }

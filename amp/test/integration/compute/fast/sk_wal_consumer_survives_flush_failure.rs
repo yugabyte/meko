@@ -89,9 +89,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if !sk_log_contains(c, "sk-wal-direct-flush-fail") {
         bail!(
             "the failpoint never fired — this test proves nothing unless the batch \
-             actually failed. Check that the harness runs the thin lane (hot_path = \
-             yb_thin_client, the default) and that the SK was built with \
-             --features testing."
+             actually failed. Check that the SK was built with --features testing."
         );
     }
     tee_println!("injected batch failure fired");

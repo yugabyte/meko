@@ -390,7 +390,6 @@ pub struct YbConnConfig {
     pub sslmode: Option<String>,           // None / "disable" => NoTls; else rustls
     pub sslrootcert: Option<String>,       // PEM CA bundle for verify-ca / verify-full
     pub disable_transactional_writes: bool,// write-connection GUC; default false
-    pub hot_path: HotPath,                 // yb_thin_client (default) vs ysql for hot paths
     pub tserver_rpc_addrs: Option<HostPorts>,
 }
 ```

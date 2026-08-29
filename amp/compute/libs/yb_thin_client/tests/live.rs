@@ -44,7 +44,6 @@ async fn ysql() -> YsqlClient {
         sslmode: std::env::var("YB_LIVE_YSQL_SSLMODE").ok(),
         sslrootcert: None,
         disable_transactional_writes: false,
-        hot_path: ysql_client::HotPath::Ysql,
         tserver_rpc_addrs: None,
         tsclient_read_sessions: None,
         tsclient_write_sessions: None,

@@ -360,7 +360,11 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
     ps_sk
         .env("YB_TEST_HOST", c.yb_host())
         .env("YB_TEST_PORT", c.yb_port().to_string())
-        .env("YB_TEST_DB", c.db_name());
+        .env("YB_TEST_DB", c.db_name())
+        // These modules open the hot-path lane now, so they need the tserver
+        // RPC endpoint too — without it they fall back to 127.0.0.1:9100 and
+        // the whole selection fails against a non-local YB.
+        .env("YB_TEST_TSERVER_RPC", format!("{}:9100", c.yb_host()));
     run_cargo_test(ps_sk, "pageserver/safekeeper unit tests").await?;
 
     // The endpoint supervisor's registry override read, against this run's
