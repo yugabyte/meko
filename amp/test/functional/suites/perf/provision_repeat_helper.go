@@ -38,21 +38,11 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 	t.SetPerfIdentity(id.core())
 
 	// Live baseline: the same workload on concurrent stacks from a prior release; best-effort — unresolvable falls back to the history gate.
-	lb := liveBaselineFromConfig(t.Options)
-	baselineTag := ""
+	baselineTag := resolveLiveArmTag(t, logf)
 	var baseAmp ampstack.Config
-	if lb.Enabled {
-		tag, err := resolveBaselineTag(t.Context, lb, portalGateFromConfig(t.Options).URL, currentAmpTag(t.Options))
-		switch {
-		case err != nil:
-			logf("perf: WARN live baseline unavailable (%v) — gating on history instead", err)
-		case tag == "" || tag == currentAmpTag(t.Options):
-			logf("perf: live baseline skipped (no prior release distinct from %q) — gating on history instead", orNone(currentAmpTag(t.Options)))
-		default:
-			baselineTag = tag
-			baseAmp = ampstack.FromConfig(t.Options.Derive(baselineOverrides(tag)))
-			logf("perf: live baseline arm: %d stack(s) on release %s, concurrent with the run's own", cfg.Provisions, tag)
-		}
+	if baselineTag != "" {
+		baseAmp = ampstack.FromConfig(t.Options.Derive(baselineOverrides(baselineTag)))
+		logf("perf: live baseline arm: %d stack(s) on release %s, concurrent with the run's own", cfg.Provisions, baselineTag)
 	}
 
 	// Provisions run concurrently: each is its own universe + amp stack + client

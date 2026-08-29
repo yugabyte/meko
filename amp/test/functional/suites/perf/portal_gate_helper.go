@@ -214,6 +214,17 @@ func emitAndGateAuto(t *core.T, cfg perfConfig, version, testName string, gated,
 	return emitAndGateHistory(t, cfg, version, testName, gated, info, id, true, logf)
 }
 
+// ybVersionOf is the YugabyteDB version the env detected — the axis the portal
+// buckets perf history by. version (the amp product version) matches nothing
+// there, so sending it makes the gate compare against an empty window and pass
+// vacuously.
+func ybVersionOf(t *core.T) string {
+	if t.Env != nil {
+		return t.Env.Versions().YB
+	}
+	return ""
+}
+
 // assert=false stamps the history comparison but never fails on it (the live baseline arm owns the verdict).
 func emitAndGateHistory(t *core.T, cfg perfConfig, version, testName string, gated, info []core.Datapoint, id Identity, assert bool, logf func(string, ...any)) error {
 	pg := portalGateFromConfig(t.Options)
@@ -226,7 +237,7 @@ func emitAndGateHistory(t *core.T, cfg perfConfig, version, testName string, gat
 		}
 		return emitAndGate(t, cfg, version, testName, gated, info, id, logf)
 	}
-	out, raw, err := portalGateCall(t.Context, pg, testName, version, gated, id)
+	out, raw, err := portalGateCall(t.Context, pg, testName, ybVersionOf(t), gated, id)
 	if err != nil {
 		if !assert {
 			logf("perf: WARN portal history unavailable (%v) — datapoints emitted without a comparison", err)

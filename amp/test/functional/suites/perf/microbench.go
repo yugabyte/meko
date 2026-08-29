@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
@@ -114,7 +115,7 @@ func init() {
 		OwningTeam: core.TeamCompute,
 		Description: "Time labelled DDL/bulk-DML phases (create, cold 200k insert, truncate + re-insert cycles, count, PK lookup, update, delete, drop) " +
 			"through an amp compute endpoint, and gate median(insert_after_truncate)/insert_cold against perf.microbench.max_phase_ratio — an intra-run ratio, so it asserts with no stored baseline.",
-		Params: []string{"perf.microbench", "perf.baseline_path", "perf.update_baseline", "perf.latency_rise_pct", "perf.ready_timeout"},
+		Params: []string{"perf.microbench", "perf.baseline", "perf.baseline_path", "perf.update_baseline", "perf.latency_rise_pct", "perf.ready_timeout"},
 		Run:    runMicrobench,
 	})
 }
@@ -131,6 +132,10 @@ func runMicrobench(t *core.T) error {
 	if !ok {
 		t.Skip("perf/microbench measures the amp compute endpoint: needs an env that serves one (sharedk8s / universe)")
 		return nil
+	}
+
+	if tag := resolveLiveArmTag(t, logf); tag != "" {
+		return runMicrobenchProvisioned(t, cfg, params, tag, logf)
 	}
 
 	id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsMicrobench(params))
@@ -183,6 +188,110 @@ func runMicrobench(t *core.T) error {
 		}
 		gateErr := emitAndGateAuto(t, cfg, microbenchVersion(t), testNameMicrobench, gated, info, id, logf)
 		return errors.Join(ratioErr, gateErr)
+	})
+}
+
+// runMicrobenchProvisioned is the live-baseline body: two self-provisioned
+// stacks — the current images and the tag release — time the same phases
+// concurrently, and the gate is the delta between them. The env's endpoint is
+// deliberately not measured here: the arms must be twins, and the env's stack
+// has no baseline twin.
+func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams, tag string, logf func(string, ...any)) error {
+	load := loadFieldsMicrobench(params)
+	load.Harness = provisionedHarness
+	id := identityFromConfig(t.Options, "", frameworkCommit(), load)
+	t.SetPerfIdentity(id.core())
+
+	cur, base, err := provisionLiveArms(t, cfg, tag, logf)
+	if cur != nil {
+		defer cur.teardown(logf)
+	}
+	if base != nil {
+		defer base.teardown(logf)
+	}
+	if err != nil {
+		return err
+	}
+
+	var curClient, baseClient *pg.Client
+	if err := t.Step("create_endpoints", func(*core.StepHandle) error {
+		var wg sync.WaitGroup
+		var curErr, baseErr error
+		wg.Add(1)
+		go func() { defer wg.Done(); curClient, curErr = cur.endpointClient(t.Context) }()
+		if base != nil {
+			wg.Add(1)
+			go func() { defer wg.Done(); baseClient, baseErr = base.endpointClient(t.Context) }()
+		}
+		wg.Wait()
+		if baseErr != nil {
+			logf("perf: WARN live baseline arm failed (%v) — gating on history instead", baseErr)
+			baseClient = nil
+		}
+		return curErr
+	}); err != nil {
+		return err
+	}
+	defer curClient.Close()
+	if baseClient != nil {
+		defer baseClient.Close()
+	}
+
+	table := "mb_" + t.ResourceSuffix()
+	phases := microbenchPhases(table, params)
+
+	var baseResults []phaseResult
+	var baseErr error
+	var wg sync.WaitGroup
+	if baseClient != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			blogf := func(f string, a ...any) { logf("[baseline] "+f, a...) }
+			baseResults, baseErr = runPhases(t.Context, baseClient, phases, blogf, nil)
+		}()
+	}
+	var results []phaseResult
+	stepErr := t.Step("run_phases", func(s *core.StepHandle) error {
+		stepper := func(name string, fn func(set func(string, any)) error) error {
+			return s.Step(name, func(h *core.StepHandle) error { return fn(h.Set) })
+		}
+		r, err := runPhases(t.Context, curClient, phases, logf, stepper)
+		results = r
+		s.Set("phases", len(results))
+		s.Set("rows", params.Rows)
+		s.Set("baseline", tag)
+		return err
+	})
+	wg.Wait()
+	attachPhases(t, results)
+	if stepErr != nil {
+		return stepErr
+	}
+	t.Chart(phaseChart(results))
+	if baseErr != nil {
+		logf("perf: WARN live baseline arm failed (%v) — gating on history instead", baseErr)
+		baseResults = nil
+	}
+
+	return t.Step("gate_phase_ratio", func(s *core.StepHandle) error {
+		gated, info, ratioErr := microbenchDatapoints(results, params)
+		if r, ok := phaseRatio(results, phaseInsertAfterTruncate, phaseInsertCold); ok {
+			s.Set("insert_after_truncate_ratio", fmt.Sprintf("%.2fx", r))
+		}
+		var lbErr error
+		baselineUp := len(baseResults) > 0
+		if baselineUp {
+			baseGated, _, _ := microbenchDatapoints(baseResults, params)
+			tableTxt, gerr := liveArmGate(gated, baseGated,
+				float64Thresholds{DropPct: cfg.ThroughputDropPct, RisePct: cfg.LatencyRisePct}, tag)
+			lbErr = gerr
+			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
+			info = append(info, liveArmDatapoints(baseGated)...)
+			logf("perf: live baseline gate for %s vs %s: %s", testNameMicrobench, tag, verdictWord(gerr))
+		}
+		gateErr := emitAndGateHistory(t, cfg, microbenchVersion(t), testNameMicrobench, gated, info, id, !baselineUp, logf)
+		return errors.Join(ratioErr, lbErr, gateErr)
 	})
 }
 
