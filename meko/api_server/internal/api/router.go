@@ -77,6 +77,12 @@ type serviceRegistry struct {
 	marketplaceRepo       *repository.MarketplaceRepo
 	marketplaceSvc        *service.MarketplaceService
 	marketplaceWelcomeURL string
+
+	// Deployments: agent deployments to a serverless runtime (AgentCore
+	// today). Routes are always registered; deploymentSvc.cfg.Enabled()
+	// gates create/byoc-init specifically (see DeploymentHandler).
+	deploymentRepo *repository.DeploymentRepo
+	deploymentSvc  *service.DeploymentService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -249,6 +255,17 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Error("marketplace: init failed; routes will 503", "error", mErr)
 	}
 
+	deploymentRepo := repository.NewDeploymentRepo(cfg.SystemDB)
+	deploymentSvc, dErr := service.NewDeploymentService(context.Background(), deploymentRepo, service.DeploymentConfig{
+		DefaultRegion:           cfg.DeploymentsRegion,
+		AgentImagesRepo:         cfg.LabsAgentImagesRepo,
+		ManagedExecutionRoleARN: cfg.DeploymentsManagedExecutionRoleARN,
+		MekoAWSAccountID:        cfg.DeploymentsMekoAWSAccountID,
+	})
+	if dErr != nil {
+		slog.Error("deployments: init failed", "error", dErr)
+	}
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:           accountRepo,
@@ -287,6 +304,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		marketplaceRepo:       marketplaceRepo,
 		marketplaceSvc:        marketplaceSvc,
 		marketplaceWelcomeURL: cfg.AWSMarketplaceWelcomeURL,
+		deploymentRepo:        deploymentRepo,
+		deploymentSvc:         deploymentSvc,
 	}
 }
 
@@ -472,8 +491,30 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes, cfg.EnableConversationSearch)
 	registerBillingRoutes(v1, datapackGroup, reg)
 	registerMarketplaceRoutes(v1, datapackGroup, reg)
+	registerDeploymentRoutes(datapackGroup, reg)
 
 	return e, reg, nil
+}
+
+// registerDeploymentRoutes wires the agent-deployment endpoints onto the
+// JWT-only group -- the same group /agents and /me/meko-tokens use, not
+// dpDirect (the PAT-accepting group): BYOC onboarding is an interactive
+// copy-paste flow and deployment creation triggers real AWS provisioning,
+// neither of which fits the scripted/headless use case dpDirect exists for.
+func registerDeploymentRoutes(g *echo.Group, reg *serviceRegistry) {
+	if reg.deploymentSvc == nil {
+		slog.Warn("deployment routes disabled (service init failed)")
+		return
+	}
+	h := handlers.NewDeploymentHandler(reg.deploymentSvc)
+	g.POST("/deployments", h.Create)
+	g.GET("/deployments", h.List)
+	g.GET("/deployments/:id", h.Get)
+	g.DELETE("/deployments/:id", h.Delete)
+	g.POST("/deployments/:id/invoke", h.Invoke)
+	g.POST("/deployments/byoc/init", h.StartBYOC)
+	g.POST("/deployments/:id/byoc/confirm", h.ConfirmBYOC)
+	slog.Info("deployment routes registered")
 }
 
 // registerMarketplaceRoutes wires the AWS Marketplace fulfillment +

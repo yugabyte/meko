@@ -127,6 +127,25 @@ type ServerConfig struct {
 	// GetEntitlements. Needed when the app pod's AWS account is not the
 	// Marketplace seller account. Empty for single-account deployments.
 	AWSMarketplaceRoleARN string
+
+	// Agent deployments (AWS Bedrock AgentCore). DeploymentsRegion defaults
+	// to us-east-1 when empty. Create / BYOC-init return a clear error
+	// until LabsAgentImagesRepo, DeploymentsManagedExecutionRoleARN,
+	// and DeploymentsMekoAWSAccountID are all set (service.DeploymentConfig.Enabled).
+	DeploymentsRegion string
+	// LabsAgentImagesRepo is the shared, CI-published ECR repo every
+	// deployable lab agent's image lives under, keyed by agent_slug:
+	// {LabsAgentImagesRepo}/{agent_slug}:latest (service.DeploymentConfig.ImageURI).
+	// Wiring up a new deployable lab needs no new env var here -- just a new
+	// entry in service.SupportedDeploymentAgentSlugs and an image published
+	// at the conventional path.
+	LabsAgentImagesRepo string
+	// DeploymentsManagedExecutionRoleARN is the Meko-owned IAM role
+	// AgentCore assumes to run managed-mode deployments' containers.
+	DeploymentsManagedExecutionRoleARN string
+	// DeploymentsMekoAWSAccountID is embedded as the trusted principal in
+	// every BYOC trust-policy template (see service/agentcore_client.go).
+	DeploymentsMekoAWSAccountID string
 	// MCPPATFlushInterval controls how often the background
 	// goroutine drains the in-memory last_used_at touch map onto the
 	// database. Zero (the default) falls back to
@@ -188,6 +207,12 @@ type ServerConfig struct {
 	BasePath string
 }
 
+// deploymentStatusPollInterval is how often runDeploymentStatusPoller checks
+// AWS for every deployment currently in status="deploying". CreateAgentRuntime
+// typically resolves in tens of seconds to a couple minutes, so this doesn't
+// need MCPPATFlushInterval's configurability -- a fixed cadence is fine.
+const deploymentStatusPollInterval = 15 * time.Second
+
 // defaultMCPPATFlushInterval is the fallback flush cadence used when
 // ServerConfig.MCPPATFlushInterval is zero. 30s balances staleness
 // in the UI against write amplification at the validation hot-path.
@@ -246,6 +271,10 @@ func Run(cfg ServerConfig) error {
 	flusherDone := make(chan struct{})
 	go runMCPPATFlusher(flusherCtx, reg, flushInterval, flusherDone)
 
+	deployPollerCtx, deployPollerCancel := context.WithCancel(context.Background())
+	deployPollerDone := make(chan struct{})
+	go runDeploymentStatusPoller(deployPollerCtx, reg, deploymentStatusPollInterval, deployPollerDone)
+
 	errCh := make(chan error, 1)
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.Port)
@@ -266,6 +295,8 @@ func Run(cfg ServerConfig) error {
 		if err != nil {
 			flusherCancel()
 			<-flusherDone
+			deployPollerCancel()
+			<-deployPollerDone
 			return err
 		}
 	}
@@ -277,11 +308,15 @@ func Run(cfg ServerConfig) error {
 	if err := e.Shutdown(ctx); err != nil {
 		flusherCancel()
 		<-flusherDone
+		deployPollerCancel()
+		<-deployPollerDone
 		return fmt.Errorf("server shutdown error: %w", err)
 	}
 
 	flusherCancel()
 	<-flusherDone
+	deployPollerCancel()
+	<-deployPollerDone
 
 	slog.Info("api server stopped")
 	return nil
@@ -339,6 +374,41 @@ func runMCPPATFlusher(
 				slog.Debug("mcp pat last_used flushed",
 					"rows_updated", n)
 			}
+		}
+	}
+}
+
+// runDeploymentStatusPoller drains DeploymentService.PollDeploying on a
+// fixed interval, same shape as runMCPPATFlusher above: exits cleanly when
+// ctx is cancelled, running one last pass against a fresh background
+// context before returning.
+func runDeploymentStatusPoller(
+	ctx context.Context,
+	reg *serviceRegistry,
+	interval time.Duration,
+	done chan<- struct{},
+) {
+	defer close(done)
+	if reg == nil || reg.deploymentSvc == nil {
+		slog.Warn("deployment status poller: registry/service nil, exiting")
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	slog.Info("deployment status poller started", "interval", interval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			finalCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			reg.deploymentSvc.PollDeploying(finalCtx)
+			cancel()
+			slog.Info("deployment status poller stopped")
+			return
+		case <-ticker.C:
+			reg.deploymentSvc.PollDeploying(ctx)
 		}
 	}
 }
