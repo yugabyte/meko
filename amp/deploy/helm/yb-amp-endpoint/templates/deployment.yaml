@@ -6,6 +6,13 @@ metadata:
     {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # The Deployment's own give-up clock, which Kubernetes defaults to 600s. It has
+  # to outlast the startupProbe budget below: otherwise a pod the kubelet is
+  # still legitimately waiting on gets Progressing=False/ProgressDeadlineExceeded
+  # at 10m, and anything waiting on condition=Available — `helm --wait`, the
+  # controller's deployer, the test harness — calls a healthy bootstrap a failed
+  # rollout.
+  progressDeadlineSeconds: {{ .Values.progressDeadlineSeconds }}
   # An endpoint is a single-writer compute: two pods for the same endpoint must
   # never run at once, or the surged pod fights the old one for the storage
   # layer's writer fence and crash-loops until the old is gone. So redeploy with
@@ -98,6 +105,26 @@ spec:
               protocol: TCP
             {{- end }}
             {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          # Bootstrap can take a long time and is NOT bounded by initdb: an
+          # endpoint coming up on a branch that already has data rebuilds from
+          # YugabyteDB — the pageserver re-attaches and pulls the branch's pages
+          # and WAL before Postgres listens. On a /data emptyDir that happens on
+          # every pod, so a resumed or rescheduled endpoint pays it in full.
+          #
+          # Without a startupProbe the liveness probe below owns that window, and
+          # it is sized for a HEALTHY compute (90s): a slower bootstrap gets the
+          # container killed and restarted — and since compute_ctl recreates
+          # pgdata on every start, the next attempt redoes the same work and is
+          # killed at the same point. A startupProbe suspends liveness until it
+          # first succeeds, which is exactly the distinction: "still starting" is
+          # not "hung".
+          startupProbe:
+            tcpSocket:
+              port: pg-compute
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
           {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
             tcpSocket:

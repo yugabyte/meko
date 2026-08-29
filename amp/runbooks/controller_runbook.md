@@ -49,7 +49,10 @@ curl -s "$BASE/tasks?limit=50&kind=create_endpoint" | jq -r '.tasks[] | select(.
 A deploy failure looks like:
 `deploy endpoint: helm upgrade --install yb-ep-<id> … --wait --timeout 10m0s: exit status 1: …`.
 That tells you the failure is in the **Helm deploy step**, almost always because the endpoint pod
-never became `Ready` (so `helm --wait` gave up). It does **not** tell you *why* the pod is unhealthy —
+never became `Ready` (so `helm --wait` gave up). The `10m0s` is `--deploy-timeout`'s default and moves
+with it; since #960 it also sets the pod's startupProbe budget and the Deployment's
+`progressDeadlineSeconds`, so a longer timeout really does buy the pod more time rather than just the
+caller. It does **not** tell you *why* the pod is unhealthy —
 that's the next layers. (A `helm … --wait` that fails fast with `Error: services "…" not found` is the
 same root cause: the release is rolling back because the pod isn't coming up.)
 
@@ -64,8 +67,8 @@ Three failure modes, three different next moves:
 
 | Pod state | What it means | Where to look |
 |---|---|---|
-| `CrashLoopBackOff` / `restartCount` climbing | a process inside the container exits non-zero on start | container logs (step 3) |
-| `Running` but `READY 0/1`, `restartCount=0` | container stays up but the readiness probe never passes | the service that backs the readiness probe; SC registration |
+| `CrashLoopBackOff` / `restartCount` climbing | a process inside the container exits non-zero on start. Since #960 this no longer covers "bootstrap took too long" — the kubelet does not kill a container inside its startup budget — so this is a real non-zero exit, e.g. the supervisor's own `BRANCH_ACTIVE_TIMEOUT` (180s) firing | container logs (step 3) |
+| `Running` but `READY 0/1`, `restartCount=0` | **usually still bootstrapping.** The startupProbe suspends liveness until the compute first listens, so a slow bootstrap now sits here rather than crash-looping (#960). Check the container log for progress before treating it as stuck; only once the startup budget is spent is the readiness probe the thing to chase | container logs; then the service behind the readiness probe; SC registration |
 | `ContainerCreating` / `Pending` | image pull, scheduling, PVC binding — including `Insufficient ephemeral-storage`, which means the pool cannot back this endpoint's 20 GiB/vCPU data volume (a 32-vCPU endpoint asks for 640 GiB; size the node pool's local SSDs to match). On a test cluster, pin a flat size instead: `controller.endpoint.diskSizeOverride=10Gi` | events; `describe pod` |
 
 Confirm with the container's terminated state:
@@ -95,8 +98,9 @@ docker run --rm 454529406029.dkr.ecr.us-west-2.amazonaws.com/amp/endpoint:<tag> 
 # 127.0.0.1:5433") — but a *config/binary* error surfaces BEFORE that and is the real signal.
 ```
 
-**(b) Catch the pod during the `helm --wait` window** — the controller's deploy waits up to 10 min, so
-the crash-looping pod exists for a while. Create one endpoint and watch it live:
+**(b) Catch the pod during the `helm --wait` window** — the controller's deploy waits for
+`--deploy-timeout` (10 min by default, 35m in the functional harness), so the unhealthy pod exists for
+a while. Create one endpoint and watch it live:
 ```bash
 # fire a create_endpoint via the API, then:
 until kubectl -n "$NS" get pods -o name | grep -q yb-ep; do sleep 2; done

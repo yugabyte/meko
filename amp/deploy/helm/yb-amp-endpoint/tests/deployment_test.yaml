@@ -217,7 +217,7 @@ tests:
       - exists:
           path: spec.template.metadata.annotations["checksum/config"]
 
-  - it: wires liveness + readiness probes to the compute port
+  - it: wires startup + liveness + readiness probes to the compute port
     template: templates/deployment.yaml
     asserts:
       - equal:
@@ -226,6 +226,31 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
           value: pg-compute
+      # The startupProbe is what keeps a slow bootstrap from being mistaken for a
+      # hung compute. An endpoint coming up on a branch that already has data
+      # rebuilds it from YugabyteDB before Postgres listens, which can far exceed
+      # the liveness budget; without this the container is killed mid-bootstrap,
+      # restarts from scratch, and loops forever.
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.tcpSocket.port
+          value: pg-compute
+      # periodSeconds * (failureThreshold - 1) is the bootstrap budget — the
+      # prober probes immediately and only then waits on the period, so N
+      # failures span N-1 periods. 10 * 60 = 600s. It must stay at or above the
+      # controller's deploy timeout, or the kubelet gives up on a pod the
+      # controller is still waiting for.
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 61
+      # And the Deployment's own clock has to outlast that budget, or a pod the
+      # kubelet is still waiting on is reported as a failed rollout at the k8s
+      # default of 600s.
+      - equal:
+          path: spec.progressDeadlineSeconds
+          value: 610
 
   - it: runs the postgres_exporter sidecar by default
     template: templates/deployment.yaml

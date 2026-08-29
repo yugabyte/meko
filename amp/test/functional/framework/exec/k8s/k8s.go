@@ -453,8 +453,14 @@ func (k *Kubectl) Describe(ctx context.Context, kind, name string) (string, erro
 }
 
 // troubleMarkers are the describe lines that say why a pod is not running.
+//
+// "Startup probe failed" is here because a slow bootstrap no longer shows up as
+// CrashLoopBackOff: the startupProbe suspends liveness while the compute is
+// coming up (#960), so a pod that never finishes sits Running/0-1 with
+// restartCount=0 and would otherwise return no marker at all.
 var troubleMarkers = []string{"FailedScheduling", "Insufficient", "ImagePull", "CrashLoopBackOff",
-	"FailedAttachVolume", "FailedMount", "OOMKilled", "Evicted", "untolerated taint"}
+	"FailedAttachVolume", "FailedMount", "OOMKilled", "Evicted", "untolerated taint",
+	"Startup probe failed"}
 
 // PodTrouble returns the most recent describe line that explains why a pod is
 // not running. "Pending" on its own is unactionable — a report has to say

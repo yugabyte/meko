@@ -814,7 +814,80 @@ type chartValues struct {
 	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
 	// selector — schedules anywhere).
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	// StartupProbe sizes how long the compute may take to listen before the
+	// liveness probe starts judging it. Derived from the deploy timeout rather
+	// than left to the chart, so raising --deploy-timeout for a slow cluster
+	// actually raises the budget the kubelet enforces (#960).
+	StartupProbe startupProbeValues `json:"startupProbe"`
+	// ProgressDeadlineSeconds must cover the startup budget too. The Deployment
+	// keeps Kubernetes' 600s default otherwise, and flips
+	// Progressing=False/ProgressDeadlineExceeded there — so a pod still
+	// legitimately inside a longer startup budget gets reported as a failed
+	// rollout by anything waiting on condition=Available.
+	ProgressDeadlineSeconds int `json:"progressDeadlineSeconds"`
 }
+
+// startupProbeValues mirrors the chart's startupProbe block. Only the budget is
+// set: `enabled` is deliberately left to the chart, so turning the probe off
+// stays a chart-level decision rather than something the controller pins on
+// every install.
+//
+// The period is what the kubelet spends waiting after the compute is actually
+// up, so it is kept short and the threshold carries the length.
+type startupProbeValues struct {
+	PeriodSeconds    int `json:"periodSeconds"`
+	FailureThreshold int `json:"failureThreshold"`
+}
+
+// startupProbeBudget converts a deploy timeout into the chart's
+// periodSeconds/failureThreshold pair.
+//
+// The kubelet must not give up before the deployer does. A probe budget shorter
+// than the deploy timeout is the bug this exists to prevent: it kills the
+// container mid-bootstrap, and raising --deploy-timeout achieves nothing because
+// the shorter bound still wins. QA runs 35m against the chart's standalone 10m
+// default, which is exactly that gap.
+//
+// The budget is `period * (threshold - 1)`, NOT `period * threshold`: the
+// kubelet's prober probes immediately on entering its loop and only then waits
+// on the period ticker, so N consecutive failures span N-1 periods. Sizing it
+// the other way puts the kill one period BEFORE the deploy timeout — the exact
+// failure this function exists to prevent, a period short of it rather than
+// minutes.
+//
+// Rounded up, then +1 for that first immediate probe, and floored so a very
+// short timeout cannot leave a compute less room than a plain `helm install`.
+func startupProbeBudget(timeout time.Duration) startupProbeValues {
+	const period = startupProbePeriodSeconds * time.Second
+	threshold := int((timeout+period-1)/period) + 1
+	if threshold < startupProbeMinFailureThreshold {
+		threshold = startupProbeMinFailureThreshold
+	}
+	return startupProbeValues{PeriodSeconds: startupProbePeriodSeconds, FailureThreshold: threshold}
+}
+
+// progressDeadlineFor sizes the Deployment's own give-up clock so it outlasts
+// the kubelet's startup budget. Equal would be a race between two clocks started
+// at slightly different moments, so it adds one period.
+func progressDeadlineFor(timeout time.Duration) int {
+	budget := startupProbeBudgetSeconds(startupProbeBudget(timeout))
+	return int(budget.Seconds()) + startupProbePeriodSeconds
+}
+
+// startupProbeBudgetSeconds is what the kubelet actually enforces for these
+// values. Shared with the tests so they cannot re-derive the formula and agree
+// with a wrong implementation.
+func startupProbeBudgetSeconds(v startupProbeValues) time.Duration {
+	return time.Duration(v.PeriodSeconds*(v.FailureThreshold-1)) * time.Second
+}
+
+const (
+	// startupProbePeriodSeconds matches the chart default; see startupProbeBudget.
+	startupProbePeriodSeconds = 10
+	// startupProbeMinFailureThreshold is the chart's own default, chosen so the
+	// floor budget is a round 10 minutes: 10 * (61 - 1) = 600s.
+	startupProbeMinFailureThreshold = 61
+)
 
 type persistenceValues struct {
 	// StorageClass provisions the endpoint's data volume as a PVC of that class;
@@ -927,8 +1000,12 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Resources:   resourceValues{CPU: cpu, Memory: memory},
 			Extensions:  extensionValuesFor(spec.Extensions),
 		},
-		Controller: controllerValues{URL: spec.ControllerURL},
-		Service:    serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
+		Controller:   controllerValues{URL: spec.ControllerURL},
+		Service:      serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
+		StartupProbe: startupProbeBudget(k.cfg.Timeout),
+		// Headroom over the startup budget: the rollout must not be declared
+		// failed while the kubelet is still legitimately waiting.
+		ProgressDeadlineSeconds: progressDeadlineFor(k.cfg.Timeout),
 	}
 	// Prefer a pre-existing Secret (keeps the plaintext password off the
 	// controller); fall back to the inline password for dev/test.

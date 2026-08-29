@@ -251,9 +251,34 @@ runDir:
   # -- emptyDir size limit for the scratch volume.
   sizeLimit: 10Gi
 
-# Liveness/readiness probes hit the compute_ctl HTTP status endpoint.
+# How long the compute gets to come up before the liveness probe starts judging
+# it. While this is failing, liveness is suspended; once it first passes,
+# liveness takes over.
+#
+# The budget the kubelet enforces is periodSeconds * (failureThreshold - 1), not
+# * failureThreshold: the prober probes immediately on entering its loop and only
+# then waits on the period, so N failures span N-1 periods. Here 10 * 60 = 600s,
+# a round 10 minutes, matching the controller's default deploy timeout — past
+# which the deployer gives up anyway.
+#
+# The controller overrides failureThreshold per deploy, from its own
+# --deploy-timeout, so the two cannot drift. This value is what a standalone
+# `helm install` gets, and it doubles as the controller's floor.
+startupProbe:
+  enabled: true
+  periodSeconds: 10
+  failureThreshold: 61
+# progressDeadlineSeconds is the Deployment's own give-up clock. Kubernetes
+# defaults it to 600s, which would flip Progressing=False while the kubelet is
+# still legitimately inside a longer startup budget — anything waiting on
+# condition=Available then reports a failed rollout for a pod that is fine. Kept
+# one period above the startup budget; the controller overrides it too.
+progressDeadlineSeconds: 610
+# Liveness and readiness are tcpSocket probes on the compute port.
 livenessProbe:
   enabled: true
+  # Only consulted once startupProbe has succeeded, so this is sized for a
+  # running compute going unresponsive, not for a slow bootstrap.
   initialDelaySeconds: 30
   periodSeconds: 15
   failureThreshold: 4

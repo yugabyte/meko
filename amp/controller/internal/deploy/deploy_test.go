@@ -481,3 +481,136 @@ func TestVerifyReadySkipsOutsideCluster(t *testing.T) {
 		t.Errorf("verifyReady outside a cluster = %v, want nil", err)
 	}
 }
+
+// TestStartupProbeBudgetTracksDeployTimeout pins the coupling that #960 is
+// about: the kubelet must not give up on a bootstrapping compute before the
+// deployer does. A budget shorter than the deploy timeout kills the container
+// mid-bootstrap, and raising --deploy-timeout achieves nothing because the
+// shorter bound still wins.
+//
+// Budgets are checked through startupProbeBudgetSeconds rather than recomputed
+// here: asserting against a formula written twice lets both copies be wrong
+// together, which is how the period*(threshold-1) off-by-one survived its first
+// round of tests.
+func TestStartupProbeBudgetTracksDeployTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		want    int
+	}{
+		// The binary default, and the chart's standalone default: same budget.
+		{"10m default", 10 * time.Minute, 61},
+		// What QA actually runs. The chart's hardcoded 10m would have become the
+		// binding constraint here — the whole point of deriving it.
+		{"35m as QA sets it", 35 * time.Minute, 211},
+		// Above the floor AND not a whole number of periods, so this one really
+		// does separate ceil from floor division: 11m is 66 periods exactly, +1
+		// for the immediate probe = 67. A floor-division mutant gives 67 too, so
+		// the case below is the one that pins rounding.
+		{"exactly on a period boundary", 11 * time.Minute, 67},
+		// 11m1s needs 67 periods (ceil), +1 = 68. Floor division yields 67 and a
+		// budget of 660s — under the 661s timeout. This is the rounding case.
+		{"rounds up past a period boundary", 11*time.Minute + time.Second, 68},
+		// A short timeout must not leave a compute worse off than a plain
+		// `helm install`.
+		{"floored at the chart default", time.Minute, 61},
+		{"zero is the floor, not zero", 0, 61},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := startupProbeBudget(tc.timeout)
+			if got.FailureThreshold != tc.want {
+				t.Errorf("failureThreshold = %d, want %d", got.FailureThreshold, tc.want)
+			}
+			if budget := startupProbeBudgetSeconds(got); budget < tc.timeout {
+				t.Errorf("probe budget %v is under the %v deploy timeout — the kubelet would "+
+					"kill the container before the deployer gives up", budget, tc.timeout)
+			}
+		})
+	}
+}
+
+// TestStartupProbeBudgetSecondsMatchesTheKubelet states the kubelet's own
+// arithmetic once, against hand-computed values, so the helper the other tests
+// lean on cannot drift.
+//
+// The prober calls doProbe immediately on entering its loop and only then waits
+// on the period ticker, so N consecutive failures span N-1 periods: with
+// period=10 and threshold=61 the 61st failure lands at t=600s, not t=610s.
+func TestStartupProbeBudgetSecondsMatchesTheKubelet(t *testing.T) {
+	for _, tc := range []struct {
+		threshold int
+		want      time.Duration
+	}{
+		{61, 600 * time.Second},
+		{211, 2100 * time.Second},
+		{2, 10 * time.Second},
+	} {
+		v := startupProbeValues{PeriodSeconds: 10, FailureThreshold: tc.threshold}
+		if got := startupProbeBudgetSeconds(v); got != tc.want {
+			t.Errorf("budget(threshold=%d) = %v, want %v", tc.threshold, got, tc.want)
+		}
+	}
+}
+
+// TestStartupProbeOutlastsTheLivenessWindow: liveness is sized for a RUNNING
+// compute (30s delay + 15s period * 4 = 90s). The startup budget has to exceed
+// that or the change buys nothing — not because liveness would take over
+// (it cannot; it stays suspended until the startupProbe first succeeds) but
+// because the startupProbe would then be the thing killing the container, and
+// sooner than the probe it replaced.
+func TestStartupProbeOutlastsTheLivenessWindow(t *testing.T) {
+	const livenessWindow = 90 * time.Second // 30 initialDelay + 15 period * 4 threshold
+	if budget := startupProbeBudgetSeconds(startupProbeBudget(0)); budget <= livenessWindow {
+		t.Errorf("floor budget %v does not outlast the %v liveness window: the startupProbe "+
+			"would kill the container earlier than the probe it replaces", budget, livenessWindow)
+	}
+}
+
+// TestProgressDeadlineOutlastsStartupBudget: the Deployment's give-up clock must
+// not fire while the kubelet is still waiting. Kubernetes defaults it to 600s,
+// so any startup budget past 10m needs this raised with it or `helm --wait` and
+// the harness's condition=Available check call a healthy bootstrap a failure.
+func TestProgressDeadlineOutlastsStartupBudget(t *testing.T) {
+	for _, timeout := range []time.Duration{0, 10 * time.Minute, 35 * time.Minute} {
+		budget := startupProbeBudgetSeconds(startupProbeBudget(timeout))
+		deadline := time.Duration(progressDeadlineFor(timeout)) * time.Second
+		if deadline <= budget {
+			t.Errorf("timeout %v: progressDeadline %v does not outlast the %v startup budget",
+				timeout, deadline, budget)
+		}
+		if deadline < timeout {
+			t.Errorf("timeout %v: progressDeadline %v is under the deploy timeout", timeout, deadline)
+		}
+	}
+}
+
+// TestKubernetesValuesStartupProbeFollowsConfiguredTimeout closes the gap the
+// pure-function tests leave: they pin startupProbeBudget's arithmetic, but not
+// that values() feeds it the DEPLOYER'S timeout. A hardcoded budget passes those
+// and still ships the #960 bug, because raising --deploy-timeout would no longer
+// move the bound the kubelet enforces.
+func TestKubernetesValuesStartupProbeFollowsConfiguredTimeout(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.Timeout = 35 * time.Minute // what QA runs; the chart's own default is 10m
+	k := NewKubernetesDeployer(cfg, nil)
+
+	v := k.values(testEndpointSpec(), "rel")
+
+	want := startupProbeBudget(cfg.Timeout)
+	if v.StartupProbe != want {
+		t.Errorf("StartupProbe = %+v, want %+v (derived from cfg.Timeout)", v.StartupProbe, want)
+	}
+	budget := startupProbeBudgetSeconds(v.StartupProbe)
+	if budget < cfg.Timeout {
+		t.Errorf("probe budget %v is under the configured %v deploy timeout", budget, cfg.Timeout)
+	}
+	// The bug in miniature: the chart's standalone default would be 10m here.
+	if budget == 10*time.Minute {
+		t.Error("budget did not move with cfg.Timeout — it is pinned to the chart default")
+	}
+	// The Deployment's own clock has to move with it, or the rollout is failed
+	// while the kubelet is still waiting.
+	if deadline := time.Duration(v.ProgressDeadlineSeconds) * time.Second; deadline <= budget {
+		t.Errorf("progressDeadline %v does not outlast the %v startup budget", deadline, budget)
+	}
+}

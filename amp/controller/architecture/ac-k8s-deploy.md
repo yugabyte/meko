@@ -289,6 +289,16 @@ no local-disk path yet).
   container must also carry a request == limit block (a small fixed reservation
   is fine) or the pod silently drops to Burstable.
 
+  It also derives the pod's **bootstrap budget** from `--deploy-timeout`:
+  `startupProbe.failureThreshold` and the Deployment's `progressDeadlineSeconds`.
+  Both exist so the two clocks that can kill a still-starting compute outlast the
+  one the deployer itself waits on. Without the startupProbe the liveness probe
+  owns the startup window (90s) and a slower bootstrap crash-loops; without the
+  progress deadline the Deployment reports `ProgressDeadlineExceeded` at
+  Kubernetes' 600s default while the kubelet is still legitimately waiting
+  (#960). The kubelet's budget is `periodSeconds * (failureThreshold - 1)`, not
+  the product — the prober probes once immediately, then on the period.
+
 Wired in `cmd/controller/main.go` (`buildProvisioning`): with `--deploy`, a
 `KubernetesDeployer` or `DockerDeployer` is built per `--deploy-driver` and passed
 to the API as `api.Provisioning.Deployer`. With `--deploy` off, the endpoint
@@ -364,6 +374,11 @@ The `--deploy*` block (env `AMP_DEPLOY*`), validated only when `--deploy` is set
 Common to both drivers: `--deploy`, `--deploy-driver`, `--deploy-yb-host-ports` /
 `-yb-user` / `-yb-dbname` / `-yb-password` (or `--deploy-yb-existing-secret`),
 `--deploy-controller-url`, `--deploy-timeout`.
+
+`--deploy-timeout` is not only the caller's patience: on the Kubernetes driver it
+also sets the pod's startupProbe budget and `progressDeadlineSeconds`, so raising
+it genuinely gives a slow bootstrap more room rather than just waiting longer for
+the same kill (#960).
 
 Kubernetes driver:
 
