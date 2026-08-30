@@ -469,7 +469,7 @@ fn start_pageserver(
     // materialiser). Compute reads stay off the conn that walreceiver
     // / materialiser writes pile onto, and vice versa.
     let compute_page_store = BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
-    let fpu_page_store = BACKGROUND_RUNTIME.block_on(create_fpu_page_store(conf))?;
+    let hot_path_page_store = BACKGROUND_RUNTIME.block_on(create_hot_path_page_store(conf))?;
     let gc_page_store = BACKGROUND_RUNTIME.block_on(create_gc_page_store(conf))?;
 
     // Up to this point no significant I/O has been done: this should have been fast.  Record
@@ -551,7 +551,7 @@ fn start_pageserver(
             remote_storage: remote_storage.clone(),
             basebackup_cache: Arc::clone(&basebackup_cache),
             compute_page_store: compute_page_store.clone(),
-            fpu_page_store: fpu_page_store.clone(),
+            hot_path_page_store: hot_path_page_store.clone(),
             gc_page_store: gc_page_store.clone(),
         },
         shutdown_pageserver.clone(),
@@ -762,7 +762,7 @@ async fn create_compute_page_store(
 /// moved to the thin-client lane, whose own `tsclient_read_sessions` /
 /// `tsclient_write_sessions` default to the same `scale_count(2, …)`; the
 /// YSQL pool keeps it for the lineage and meta-range reads left on it.
-async fn create_fpu_page_store(
+async fn create_hot_path_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
     // Base size of 2 scaled by `scale_factor`; mirrors the
@@ -776,13 +776,14 @@ async fn create_fpu_page_store(
     // (which upserts natively), so what is left on these connections is the
     // lineage/meta SELECTs and the branch-state UPDATEs; the GUC no longer
     // does anything here.
-    let store = create_page_store_with_app_name(conf, "pageserver:fpu", pool_size, true).await?;
+    let store =
+        create_page_store_with_app_name(conf, "pageserver:hot_path", pool_size, true).await?;
     info!(pool_size, "Internal PageStore connected");
     Ok(store)
 }
 
 /// Dedicated GC-drain pool (select + parallel trim DELETEs +
-/// dequeue), sized to `GC_ACTION_PARALLELISM`, isolated from the fpu
+/// dequeue), sized to `GC_ACTION_PARALLELISM`, isolated from the hot-path
 /// pool. No `yb_enable_upsert_mode` — the drain never INSERTs.
 async fn create_gc_page_store(
     conf: &'static PageServerConf,

@@ -97,7 +97,7 @@ behind internal writes:
   GetPage hot path (`PageWriter::scan_range` / `read_chain`). Compute
   backends issue parallel prefetches, and each lands on its own YSQL
   connection instead of serialising on one backend.
-- **`fpu_page_store`** (`application_name = "pageserver:fpu"`, pool
+- **`hot_path_page_store`** (`application_name = "pageserver:hot_path"`, pool
   of 2 × `scale_factor`) — walreceiver flushes, the materialiser's
   durable chain reads, and the materialiser's image writes. The flush's
   four writes — pages, SLRU, meta, and the `pending_gc` candidates that
@@ -108,8 +108,8 @@ behind internal writes:
   Each connection still runs `SET yb_enable_upsert_mode = true`, which is
   now vestigial: the GUC only skips YB's read-before-write on INSERT, and
   no production INSERT reaches these connections any more — what is left is
-  SELECTs, branch-state UPDATEs and GC DELETEs. The name and the flag
-  outlive their reason.
+  SELECTs, branch-state UPDATEs and GC DELETEs. The flag outlives its
+  reason; the pool was renamed off it.
 
 `PageStore` also opens direct-RPC table handles over `libs/yb_thin_client`
 (`PageStore::thinclient`, the batch-first client over the
@@ -579,11 +579,10 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    the same buffer): capture the ingest frontier, snapshot the
    unflushed prefix of `UnifiedPages` (an `Arc` bump per row, no data
    copy — rows stay visible to concurrent reads during the YB round
-   trip) plus the SLRU/meta buffers, then dispatch chunked multi-row
-   INSERTs against `amp_storage.pages` / `slru_pages` / `meta` on the
-   fpu store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`;
-   bind-parameter budget with `branch_id` baked as a literal) and 2000
-   for meta (`META_ROWS_PER_INSERT`), dispatched in parallel via
+   trip) plus the SLRU/meta buffers, then dispatch chunked writes
+   against `amp_storage.pages` / `slru_pages` / `meta` on the
+   hot-path store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`)
+   and 2000 for meta (`META_ROWS_PER_INSERT`), dispatched in parallel via
    `stream::iter(...).buffer_unordered(N)` with base N = 2/1/2
    (× `scale_factor`), then the `pending_gc` candidates the batch
    produced. All four writes — `put_pages`, `put_slru_pages`, `put_meta`,
@@ -729,7 +728,7 @@ two-phase pipeline:
 1. `redo_phase` — on the worker task, up to `redo_concurrency`
    (4 × `scale_factor`) concurrent `redo_one` futures. Each reads its
    chain from **durable sources only** — `read_chain_durable` for
-   relation keys (durable cache rows + YB via the fpu store, pre-flush
+   relation keys (durable cache rows + YB via the hot-path store, pre-flush
    rows excluded), `read_slru_chain_durable` for SLRU keys — then `parse_chain`
    splits `(base_img, records)` and
    `WalRedoManager::request_redo(key, actual_lsn, base_img, records,
@@ -760,7 +759,7 @@ two-phase pipeline:
    GC trim is `branch_id`-scoped, so collapsing ancestor deltas into a
    descendant's image never reclaims the ancestor's rows.
 2. `commit_phase` — spawned onto a separate task (bounded by
-   `BASE_MAX_INFLIGHT_INSERTS` = 2 × `scale_factor`, matching the fpu
+   `BASE_MAX_INFLIGHT_INSERTS` = 2 × `scale_factor`, matching the hot-path
    pool so concurrent batches land on distinct YB backends), so batch
    N+1's redo overlaps batch N's INSERT round trip. Relation images go
    to `pages` via `put_pages` and are then offered to the cache;

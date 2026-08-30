@@ -991,18 +991,18 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
     Bytes::copy_from_slice(&buf)
 }
 
-/// Rows per multi-row INSERT in `put_pages` / `put_slru_pages`.
-/// PostgreSQL caps a query at 65535 parameters; with `branch_id`
-/// baked into the SQL as a literal (this is a single-branch
-/// pageserver — see #16), the largest fan-out
-/// is `pages` at 10 params/row → 500×10 = 5000 params, well under.
-/// Chunks dispatch in parallel — tokio-postgres pipelines them on the
-/// shared connection so YB absorbs them concurrently.
+/// Rows per upsert batch in `put_pages` / `put_slru_pages` /
+/// `gc_enqueue_candidates`. The value is inherited from the multi-row INSERT
+/// these replaced, where PostgreSQL's 65535-parameter cap set the ceiling;
+/// on the thin lane it simply bounds how many rows ride one `Perform`.
+/// Only `put_pages` dispatches its chunks concurrently (base 2 ×
+/// `scale_factor`); `put_slru_pages` runs at base 1 and
+/// `gc_enqueue_candidates` strictly serially.
 const ROWS_PER_INSERT: usize = 500;
 
 /// Rows per chunk in `put_meta`. Larger than [`ROWS_PER_INSERT`] because
-/// meta binds only 4 columns/row and its payloads are mostly tiny rel-size
-/// sentinels.
+/// meta's payloads are mostly tiny rel-size sentinels, so a chunk of them
+/// is far smaller than a chunk of 8 KB pages.
 const META_ROWS_PER_INSERT: usize = 2000;
 
 /// Placement buckets in `amp_storage.pending_gc`'s hash key; must match
@@ -1601,7 +1601,8 @@ impl PageStore {
     /// the `put_*` writes it was added for now run on the thin-client lane,
     /// so no production INSERT reaches these connections any more — the
     /// remaining YSQL work is SELECTs, branch-state UPDATEs and GC DELETEs.
-    /// The flag (and the "fpu" naming) is kept until the pools are renamed.
+    /// The flag itself is kept: clearing it changes a live connection GUC,
+    /// which is worth its own commit rather than riding along with a rename.
     pub async fn connect_pooled(
         config: PageStoreConfig,
         application_name: &str,
@@ -2634,8 +2635,8 @@ impl PageStore {
 
     /// Insert GC candidates (the single insert path — `bucket_id` is
     /// computed here, input values ignored). Replayed duplicates dedup:
-    /// the candidate's identity is its PK and the connection runs upsert
-    /// mode, so a re-insert overwrites in place. The lone non-PK column
+    /// the candidate's identity is its PK and the write is an upsert, so a
+    /// replay overwrites in place. The lone non-PK column
     /// `relsize` is fixed by that identity (a shrink's size as of its
     /// `due_lsn`), so the overwrite stays byte-identical.
     pub async fn gc_enqueue_candidates(

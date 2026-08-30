@@ -188,7 +188,7 @@ sudo ss -tnp dst $YB_HOST 2>/dev/null | awk 'NR>1' \
 ```
 Cross-reference each pid against `ps -o pid,comm,args -p <pid>`. The pageserver pid's count is
 the YB pool size, and it scales with `scale_factor` — roughly `5 × scale_factor` (compute-reads and
-fpu at 2 each, plus the GC pool at 1, all × `scale_factor`).
+hot-path at 2 each, plus the GC pool at 1, all × `scale_factor`).
 
 **Which default applies depends on where the pageserver runs:**
 

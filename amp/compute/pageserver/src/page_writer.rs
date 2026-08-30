@@ -190,7 +190,7 @@ impl DeltaTally {
 /// Two `PageStore` handles, each on its own YSQL connection:
 /// - `compute_page_store` serves compute-facing reads
 ///   (`scan_range` / `read_chain`). Idle on cache hit.
-/// - `fpu_page_store` serves walreceiver writes (`flush*`) and
+/// - `hot_path_page_store` serves walreceiver writes (`flush*`) and
 ///   the image materialiser's cache-miss durable read
 ///   (`read_chain_durable`). Materialiser image writes also go via
 ///   this connection (held directly by `ImageMaterializer`).
@@ -209,7 +209,7 @@ pub struct PageWriter {
     /// single-segment lineage.
     lineage: Vec<LineageSegment>,
     compute_page_store: Arc<PageStore>,
-    fpu_page_store: Arc<PageStore>,
+    hot_path_page_store: Arc<PageStore>,
     policy: FlushPolicy,
     /// Per-key page cache + pre-flush buffer. Internally thread-safe
     /// — every method takes `&self`. Per-key state lives in a lock-free
@@ -420,7 +420,7 @@ impl PageWriter {
     pub fn new(
         branch_id: BranchId,
         compute_page_store: Arc<PageStore>,
-        fpu_page_store: Arc<PageStore>,
+        hot_path_page_store: Arc<PageStore>,
         policy: FlushPolicy,
         read_cache_bytes: usize,
         meta_cache_entries: usize,
@@ -429,7 +429,7 @@ impl PageWriter {
             branch_id,
             lineage: LineageSegment::single(branch_id),
             compute_page_store,
-            fpu_page_store,
+            hot_path_page_store,
             policy,
             pages: crate::unified_pages::UnifiedPages::new(read_cache_bytes),
             aux: PlMutex::new(AuxBuffers {
@@ -479,8 +479,8 @@ impl PageWriter {
     /// `Timeline::write_timeline_row_to_yb` (Phase 5b) and other
     /// callers that need to issue side-effects (the timeline-row upsert)
     /// on the same connection the flush path uses.
-    pub fn fpu_page_store(&self) -> &Arc<PageStore> {
-        &self.fpu_page_store
+    pub fn hot_path_page_store(&self) -> &Arc<PageStore> {
+        &self.hot_path_page_store
     }
 
     /// Bypass-throttle dc_lsn upsert for shutdown. The periodic flush
@@ -502,7 +502,7 @@ impl PageWriter {
         // noted for this record. `None` falls through to a NULL
         // column — the walreceiver re-derives prev on restart.
         let prev = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
-        self.fpu_page_store
+        self.hot_path_page_store
             .advance_consistent_lsn(self.branch_id, lsn, prev)
             .await?;
         self.consistent_lsn_watermark.store(observed, Relaxed);
@@ -562,7 +562,7 @@ impl PageWriter {
     ) {
         self.gc_trim_candidate_emitter = Some(Arc::new(GcTrimCandidateEmitter::new(
             self.branch_id,
-            Arc::clone(&self.fpu_page_store),
+            Arc::clone(&self.hot_path_page_store),
             applied_gc_cutoff,
             every_n_bases,
         )));
@@ -1464,7 +1464,7 @@ impl PageWriter {
         // `compute_page_store` is the whole point of the split: a
         // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
-            .fpu_page_store
+            .hot_path_page_store
             .read_chain_lineage(&self.lineage, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
@@ -1528,7 +1528,7 @@ impl PageWriter {
             .with_label_values(&["materializer_slru", "yb_blend"])
             .inc();
         let chain = self
-            .fpu_page_store
+            .hot_path_page_store
             .read_slru_chain_lineage(&self.lineage, kind, segno, blknum, target_lsn)
             .await?;
         // Both halves matter: an empty chain is a legitimate no-op, and the
@@ -1897,7 +1897,7 @@ impl PageWriter {
                     // Best-effort pairing — see force_upsert_consistent_lsn_if_advanced.
                     let prev_record_lsn = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
                     match self
-                        .fpu_page_store
+                        .hot_path_page_store
                         .advance_consistent_lsn(self.branch_id, lsn, prev_record_lsn)
                         .await
                     {
@@ -1946,22 +1946,22 @@ impl PageWriter {
         // All flush writes go via the internal conn. Compute getPage
         // never queues behind a 12 MiB INSERT.
         if !rel_rows.is_empty() {
-            self.fpu_page_store
+            self.hot_path_page_store
                 .put_pages(self.branch_id, rel_rows)
                 .await?;
         }
         if !slru_rows.is_empty() {
-            self.fpu_page_store
+            self.hot_path_page_store
                 .put_slru_pages(self.branch_id, slru_rows)
                 .await?;
         }
         if !meta_rows.is_empty() {
-            self.fpu_page_store
+            self.hot_path_page_store
                 .put_meta(self.branch_id, meta_rows)
                 .await?;
         }
         if !pending_gc_rows.is_empty() {
-            self.fpu_page_store
+            self.hot_path_page_store
                 .gc_enqueue_candidates(self.branch_id, pending_gc_rows)
                 .await?;
         }

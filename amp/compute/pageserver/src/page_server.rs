@@ -90,7 +90,7 @@ pub struct TenantSharedResources {
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Row-per-page YugabyteDB store dedicated to compute-facing
     /// reads (GetPage hot path: `PageWriter::scan_range` and
-    /// `PageWriter::read_chain`). Paired with `fpu_page_store`.
+    /// `PageWriter::read_chain`). Paired with `hot_path_page_store`.
     pub compute_page_store: Arc<crate::page_store::PageStore>,
     /// `PageStore` dedicated to internal traffic: walreceiver
     /// `PageWriter::flush` (parameterised batched INSERT), and the
@@ -98,10 +98,10 @@ pub struct TenantSharedResources {
     /// `put_pages`). Owning its own YSQL connection keeps walapply
     /// writes and materialiser work off the compute getPage path so
     /// reads stay isolated from internal load.
-    pub fpu_page_store: Arc<crate::page_store::PageStore>,
+    pub hot_path_page_store: Arc<crate::page_store::PageStore>,
     /// `PageStore` for the GC drain, with its own connections to
-    /// isolate drain load from `fpu_page_store`. Candidate INSERTs stay
-    /// on `fpu_page_store` (its `yb_enable_upsert_mode` fast path).
+    /// isolate drain load from `hot_path_page_store`. Candidate writes stay
+    /// on `hot_path_page_store`, alongside the page writes they trail.
     pub gc_page_store: Arc<crate::page_store::PageStore>,
 }
 
@@ -247,8 +247,8 @@ pub struct PageServer {
     /// `TenantSharedResources::compute_page_store`).
     pub(crate) compute_page_store: Arc<crate::page_store::PageStore>,
     /// Internal-traffic `PageStore` (see
-    /// `TenantSharedResources::fpu_page_store`).
-    pub(crate) fpu_page_store: Arc<crate::page_store::PageStore>,
+    /// `TenantSharedResources::hot_path_page_store`).
+    pub(crate) hot_path_page_store: Arc<crate::page_store::PageStore>,
     /// GC-drain `PageStore` (see
     /// `TenantSharedResources::gc_page_store`).
     pub(crate) gc_page_store: Arc<crate::page_store::PageStore>,
@@ -564,7 +564,7 @@ impl PageServer {
             remote_storage,
             basebackup_cache,
             compute_page_store,
-            fpu_page_store,
+            hot_path_page_store,
             gc_page_store,
         } = resources;
 
@@ -576,7 +576,7 @@ impl PageServer {
             remote_storage.clone(),
             basebackup_cache,
             compute_page_store,
-            fpu_page_store,
+            hot_path_page_store,
             gc_page_store,
         ));
 
@@ -818,7 +818,7 @@ impl PageServer {
                     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
                     let row = loop {
                         match self
-                            .fpu_page_store
+                            .hot_path_page_store
                             .create_branch_row(
                                 identity.branch_id,
                                 *ancestor_branch_id,
@@ -1217,7 +1217,7 @@ impl PageServer {
         remote_storage: GenericRemoteStorage,
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Arc<crate::page_store::PageStore>,
-        fpu_page_store: Arc<crate::page_store::PageStore>,
+        hot_path_page_store: Arc<crate::page_store::PageStore>,
         gc_page_store: Arc<crate::page_store::PageStore>,
     ) -> PageServer {
         PageServer {
@@ -1240,7 +1240,7 @@ impl PageServer {
             gc_block: Default::default(),
             basebackup_cache,
             compute_page_store,
-            fpu_page_store,
+            hot_path_page_store,
             gc_page_store,
         }
     }
@@ -1578,7 +1578,7 @@ impl PageServer {
             pagestream_throttle_metrics: self.pagestream_throttle_metrics.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
             compute_page_store: self.compute_page_store.clone(),
-            fpu_page_store: self.fpu_page_store.clone(),
+            hot_path_page_store: self.hot_path_page_store.clone(),
             gc_page_store: self.gc_page_store.clone(),
             lineage: None,
         }

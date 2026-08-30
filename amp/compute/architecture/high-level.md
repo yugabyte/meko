@@ -27,7 +27,7 @@ flowchart LR
 
     subgraph ps["Pageserver (stateless)"]
         cps["compute_page_store<br/>(reads + chain reconstruct)"]
-        fps["fpu_page_store<br/>(walreceiver ingest)"]
+        fps["hot_path_page_store<br/>(walreceiver ingest)"]
         mat["image materialiser"]
     end
 
@@ -71,7 +71,7 @@ A yb-amp install is:
   - `compute_page_store`: serves compute reads, running image-anchored
     LSN-chain reconstruction over `amp_storage.pages` /
     `amp_storage.slru_pages` / `amp_storage.meta`.
-  - `fpu_page_store`: the walreceiver ingestion path + image
+  - `hot_path_page_store`: the walreceiver ingestion path + image
     materialiser writes. Image materialisation runs as a background
     task that compacts long delta chains into walredo-applied images so
     subsequent reads don't re-walk the chain.

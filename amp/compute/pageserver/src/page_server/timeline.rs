@@ -74,8 +74,8 @@ pub struct TimelineResources {
     /// `TenantSharedResources::compute_page_store`).
     pub compute_page_store: Arc<crate::page_store::PageStore>,
     /// Internal-traffic `PageStore` (see
-    /// `TenantSharedResources::fpu_page_store`).
-    pub fpu_page_store: Arc<crate::page_store::PageStore>,
+    /// `TenantSharedResources::hot_path_page_store`).
+    pub hot_path_page_store: Arc<crate::page_store::PageStore>,
     /// GC-drain `PageStore` (see
     /// `TenantSharedResources::gc_page_store`).
     pub gc_page_store: Arc<crate::page_store::PageStore>,
@@ -981,7 +981,7 @@ impl Timeline {
         let Some(page_writer) = self.page_writer.clone() else {
             return Err(GetVectoredError::Other(anyhow::anyhow!(
                 "Timeline has no PageWriter — pageserver mode requires both \
-                 compute_page_store and fpu_page_store to be configured"
+                 compute_page_store and hot_path_page_store to be configured"
             )));
         };
         self.get_vectored_via_page_writer(page_writer, query, RedoAttemptType::ReadPage, ctx)
@@ -1288,7 +1288,7 @@ impl Timeline {
     /// already on disk.
     ///
     /// No-op when `page_writer` is None (upstream pageserver mode). The
-    /// upsert uses `fpu_page_store` so the bootstrap I/O doesn't
+    /// upsert uses `hot_path_page_store` so the bootstrap I/O doesn't
     /// land on the compute-reads connection.
     pub(crate) async fn write_timeline_row_to_yb(&self) -> anyhow::Result<()> {
         let Some(pw) = self.page_writer.as_ref() else {
@@ -1312,7 +1312,7 @@ impl Timeline {
             initdb_lsn: Some(self.initdb_lsn),
             prev_record_lsn: None,
         };
-        pw.fpu_page_store()
+        pw.hot_path_page_store()
             .update_branch_initial_state(&row)
             .await
             .context("update_branch_initial_state")?;
@@ -2026,7 +2026,7 @@ impl Timeline {
         };
 
         // PageWriter routes reads through `compute_page_store` and writes
-        // through `fpu_page_store` so compute getPage stays off the
+        // through `hot_path_page_store` so compute getPage stays off the
         // walreceiver/materialiser write conn.
         // Attach-replay quarantine (#240): latched true the first time a
         // walreceiver connection catches up to the safekeeper's
@@ -2044,7 +2044,7 @@ impl Timeline {
 
         let (page_writer, page_writer_flush_task, gc_trim_flush_task, image_materializer_task) = {
             let compute_ps = &resources.compute_page_store;
-            let internal_ps = &resources.fpu_page_store;
+            let internal_ps = &resources.hot_path_page_store;
             let pw_cfg = &conf.yb_page_writer;
             let mut writer = crate::page_writer::PageWriter::new(
                 branch_id,
@@ -3167,7 +3167,7 @@ impl TimelineWriter<'_> {
         let page_writer = self.tl.page_writer.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "Timeline has no PageWriter — pageserver mode requires both \
-                 compute_page_store and fpu_page_store to be configured"
+                 compute_page_store and hot_path_page_store to be configured"
             )
         })?;
         page_writer.put_serialized(batch).await?;

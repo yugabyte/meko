@@ -65,21 +65,22 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 /// INSERT futures can be outstanding at once.
 ///
 /// At 2: each materialiser `put_pages` carries ≤500 rows (one
-/// `ROWS_PER_INSERT` chunk) and therefore uses exactly one slot of
-/// the internal `PageStore` pool. With the fpu pool's base size of 2
-/// over in `pageserver.rs`, 2 in-flight INSERTs map to 2 distinct YB
-/// backends and roughly double the materialiser's INSERT-side throughput
-/// over a single connection (~38 K rows/s at ~13 ms / 490-row batch).
-/// Peak in-flight RAM is ~8 MB (2 × 500 × 8 KB image). Raise
-/// `scale_factor` to deepen the pipeline (and widen the fpu pool with
-/// it) on hosts that can absorb the concurrency.
+/// `ROWS_PER_INSERT` chunk) and rides one write session of the store's
+/// thin-client pool, which `tsclient_write_sessions` sizes — base 2 ×
+/// `scale_factor`, matching this cap so 2 in-flight batches get 2 sessions
+/// rather than queueing behind one. Measured at ~38 K rows/s (~13 ms per
+/// 490-row batch) when this was the YSQL pool's 2 connections. Peak
+/// in-flight RAM is ~8 MB (2 × 500 × 8 KB image). Raise `scale_factor` to
+/// deepen the pipeline (it widens the session pool with it) on hosts that
+/// can absorb the concurrency.
 /// Scaled by `PageServerConf::scale_factor`.
 const BASE_MAX_INFLIGHT_INSERTS: usize = 2;
 
 /// Maximum concurrent `redo_one` futures in flight within a single
-/// `materialize_batch`. Each future does an SQL `read_chain_durable`
-/// (against `fpu_page_store` — its own connection), a CPU
-/// WAL-record decode, and a walredo subprocess RPC.
+/// `materialize_batch`. Each future does a `read_chain_durable`
+/// (against `hot_path_page_store` — its own sessions, off the
+/// compute-facing store), a CPU WAL-record decode, and a walredo
+/// subprocess RPC.
 ///
 /// The walredo subprocess serialises its own apply phase via stdin /
 /// stdout mutexes — true CPU parallelism in walredo would need a
@@ -116,7 +117,7 @@ pub struct ImageMaterializer {
     /// the materialiser's own cache-miss `read_chain_durable`).
     /// Keeps every materialiser write off the compute getPage
     /// connection — that's the isolation we wanted.
-    fpu_page_store: Arc<PageStore>,
+    hot_path_page_store: Arc<PageStore>,
     walredo_mgr: Arc<WalRedoManager>,
     pg_version: PgMajorVersion,
     /// Shared with the write trigger in `PageWriter::put` — see
@@ -157,7 +158,7 @@ impl ImageMaterializer {
     pub(crate) fn spawn(
         branch_id: BranchId,
         page_writer: Arc<PageWriter>,
-        fpu_page_store: Arc<PageStore>,
+        hot_path_page_store: Arc<PageStore>,
         walredo_mgr: Arc<WalRedoManager>,
         pg_version: PgMajorVersion,
         mut rx: mpsc::Receiver<MaterializeJob>,
@@ -174,7 +175,7 @@ impl ImageMaterializer {
         let me = Arc::new(Self {
             branch_id,
             page_writer,
-            fpu_page_store,
+            hot_path_page_store,
             walredo_mgr,
             pg_version,
             in_flight,
@@ -356,7 +357,7 @@ impl ImageMaterializer {
     ///
     /// Redo runs up to `self.redo_concurrency` `redo_one` futures in
     /// parallel via `FuturesUnordered`. Each future reads its chain
-    /// from `fpu_page_store` (own YSQL connection — no contention
+    /// from `hot_path_page_store` (own YSQL connection — no contention
     /// with the walreceiver write path), decodes records, and calls
     /// walredo. The SQL reads and WAL decodes parallelise cleanly;
     /// walredo serialises its apply but pipelines IPC, so concurrent
@@ -526,7 +527,7 @@ impl ImageMaterializer {
 
         let t_insert_start = std::time::Instant::now();
         if !rel_images.is_empty() {
-            self.fpu_page_store
+            self.hot_path_page_store
                 .put_pages(self.branch_id, &rel_images)
                 .await
                 .context("put_pages")?;
@@ -553,7 +554,7 @@ impl ImageMaterializer {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            self.fpu_page_store
+            self.hot_path_page_store
                 .put_slru_pages(self.branch_id, &slru_rows)
                 .await
                 .context("put_slru_pages")?;
