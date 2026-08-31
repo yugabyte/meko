@@ -243,12 +243,15 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 	var baseResults []phaseResult
 	var baseErr error
 	var wg sync.WaitGroup
+	var pair *phaseBarrier
 	if baseClient != nil {
+		pair = newPhaseBarrier()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer pair.abandon(0)
 			blogf := func(f string, a ...any) { logf("[baseline] "+f, a...) }
-			baseResults, baseErr = runPhases(t.Context, baseClient, phases, blogf, nil)
+			baseResults, baseErr = runPhasesPaired(t.Context, baseClient, phases, blogf, nil, pair)
 		}()
 	}
 	var results []phaseResult
@@ -256,13 +259,14 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 		stepper := func(name string, fn func(set func(string, any)) error) error {
 			return s.Step(name, func(h *core.StepHandle) error { return fn(h.Set) })
 		}
-		r, err := runPhases(t.Context, curClient, phases, logf, stepper)
+		r, err := runPhasesPaired(t.Context, curClient, phases, logf, stepper, pair)
 		results = r
 		s.Set("phases", len(results))
 		s.Set("rows", params.Rows)
 		s.Set("baseline", tag)
 		return err
 	})
+	pair.abandon(0)
 	wg.Wait()
 	attachPhases(t, results)
 	if stepErr != nil {
@@ -283,7 +287,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 		baselineUp := len(baseResults) > 0
 		if baselineUp {
 			baseGated, _, _ := microbenchDatapoints(baseResults, params)
-			tableTxt, gerr := liveArmGate(gated, baseGated,
+			tableTxt, gerr := liveArmGate(gated, baseGated, nil, nil,
 				float64Thresholds{DropPct: cfg.ThroughputDropPct, RisePct: cfg.LatencyRisePct}, tag)
 			lbErr = gerr
 			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
@@ -355,8 +359,15 @@ type phaseStepper func(name string, fn func(set func(string, any)) error) error
 // the phases completed so far alongside any error, so a partial run still
 // reports its evidence.
 func runPhases(ctx context.Context, client pgExecer, phases []phase, logf func(string, ...any), stepper phaseStepper) ([]phaseResult, error) {
+	return runPhasesPaired(ctx, client, phases, logf, stepper, nil)
+}
+
+// runPhasesPaired rendezvouses with the partner arm before each phase, so both
+// arms measure it under the same cluster weather.
+func runPhasesPaired(ctx context.Context, client pgExecer, phases []phase, logf func(string, ...any), stepper phaseStepper, pair *phaseBarrier) ([]phaseResult, error) {
 	results := make([]phaseResult, 0, len(phases))
 	for _, ph := range phases {
+		pair.sync(0, ph.Name)
 		var ms float64
 		// The timing stays inside the step body: the step's span is the measured
 		// window, not a second measurement of it.

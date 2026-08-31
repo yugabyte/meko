@@ -249,6 +249,27 @@ func ReportResult(test Test, opts RunOptions, status Status, summary string) *Re
 	return result
 }
 
+// verifySharedInfra makes a FaultsSharedInfra test own the damage it leaves:
+// a green body with an unserving shared stack becomes a red final step.
+func verifySharedInfra(t *T, test Test, opts RunOptions) error {
+	if !test.Env.FaultsSharedInfra || !ProviderSharesInfra(opts.Provider) {
+		return nil
+	}
+	hc, ok := opts.Provider.(SharedInfraHealthChecker)
+	if !ok {
+		return nil
+	}
+	// Detached from the body budget, like Collect and setup teardown: a test that
+	// spent its timeout must not fail this for lack of time.
+	ctx, cancel := context.WithTimeout(context.Background(), ResolveSharedInfraProbeTimeout(opts.Config))
+	defer cancel()
+	err := hc.SharedInfraHealthy(ctx)
+	if errors.Is(err, ErrNoSharedInfraProbe) {
+		return nil
+	}
+	return t.Step("shared_infra_recovered", func(*StepHandle) error { return err })
+}
+
 // newResult builds the initial Result and per-test seed.
 func newResult(test Test, opts RunOptions) (*Result, *Seed) {
 	seed := opts.Seed.ForTest(test.Name)
@@ -351,10 +372,12 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 				setupTeardown = sr.Teardown
 			}
 		}
-		if test.Run == nil {
-			return nil
+		if test.Run != nil {
+			if err := test.Run(t); err != nil {
+				return err
+			}
 		}
-		return test.Run(t)
+		return verifySharedInfra(t, test, opts)
 	})
 
 	// Collect after RUN, before teardown (best-effort). It runs on its own

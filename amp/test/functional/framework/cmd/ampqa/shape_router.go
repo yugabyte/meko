@@ -98,6 +98,15 @@ func (r *shapeRouter) SharesInfraAcrossTests() bool {
 	return core.ProviderSharesInfra(r.primary)
 }
 
+// SharedInfraHealthy answers for the primary, reporting ErrNoSharedInfraProbe
+// when it cannot probe so the caller skips instead of recording a green check.
+func (r *shapeRouter) SharedInfraHealthy(ctx context.Context) error {
+	if hc, ok := r.primary.(core.SharedInfraHealthChecker); ok {
+		return hc.SharedInfraHealthy(ctx)
+	}
+	return core.ErrNoSharedInfraProbe
+}
+
 func (r *shapeRouter) StandingEnv() (*core.StandingEnv, bool) {
 	if sp, ok := r.primary.(standingProvider); ok {
 		return sp.StandingEnv()

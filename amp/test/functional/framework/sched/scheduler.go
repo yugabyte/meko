@@ -156,6 +156,12 @@ type scheduler struct {
 	// every other test the read side.
 	infraGate      sync.RWMutex
 	infraGateArmed bool
+
+	// poison: a faulting test left the shared stack unserving past its recovery
+	// budget; later tests fail fast with the culprit's name.
+	poisonMu  sync.Mutex
+	poisonBy  string
+	poisonErr error
 }
 
 // enterInfraGate takes this test's side of the gate and returns the release.
@@ -217,17 +223,53 @@ func (s *scheduler) releaseSlot() { <-s.slots }
 func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	test := s.tests[i]
 	defer s.enterInfraGate(test)()
+	if res := s.failIfInfraPoisoned(test); res != nil {
+		return res
+	}
 	lease, err := s.mgr.Acquire(ctx, s.leaseWeight(test.Env))
 	if err == nil {
 		defer lease.Release()
 	}
 	// If Acquire failed it was ctx cancellation; RunOne then surfaces the dead
 	// context as an env_failed during provisioning — no separate path needed.
-	if !s.acquireSlot(ctx) {
-		return core.RunWithEnvRetry(ctx, test, s.opts.RunOptions, core.RunOne)
+	if s.acquireSlot(ctx) {
+		defer s.releaseSlot()
 	}
-	defer s.releaseSlot()
-	return core.RunWithEnvRetry(ctx, test, s.opts.RunOptions, core.RunOne)
+	res := core.RunWithEnvRetry(ctx, test, s.opts.RunOptions, core.RunOne)
+	s.noteInfraOutcome(ctx, test, res)
+	return res
+}
+
+// noteInfraOutcome, still under the write gate, poisons the run when a failed
+// faulting test's shared stack does not serve within the recovery budget; a
+// passed result needs no probe, verifySharedInfra was its final step.
+func (s *scheduler) noteInfraOutcome(ctx context.Context, test core.Test, res *core.Result) {
+	if !s.infraGateArmed || !test.Env.FaultsSharedInfra || ctx.Err() != nil {
+		return
+	}
+	if res != nil && res.Status == core.StatusPassed {
+		return
+	}
+	hc, ok := s.opts.Provider.(core.SharedInfraHealthChecker)
+	if !ok {
+		return
+	}
+	if err := hc.SharedInfraHealthy(context.Background()); err != nil {
+		s.poisonMu.Lock()
+		s.poisonBy, s.poisonErr = test.Name, err
+		s.poisonMu.Unlock()
+	}
+}
+
+func (s *scheduler) failIfInfraPoisoned(test core.Test) *core.Result {
+	s.poisonMu.Lock()
+	by, err := s.poisonBy, s.poisonErr
+	s.poisonMu.Unlock()
+	if by == "" {
+		return nil
+	}
+	return core.ReportResult(test, s.opts.RunOptions, core.StatusEnvFailed,
+		fmt.Sprintf("shared control plane did not recover after %s: %v", by, err))
 }
 
 // runShared packs the shared tests onto at most ceil(N/perEnv) environments.
@@ -311,6 +353,10 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 			defer batch.Done()
 			defer func() { <-inFlight }()
 			defer s.enterInfraGate(s.tests[idx])()
+			if res := s.failIfInfraPoisoned(s.tests[idx]); res != nil {
+				s.results[idx] = res
+				return
+			}
 			// The shared env is not re-provisioned, but a body's env failure retries.
 			onEnv := func(c context.Context, t core.Test, o core.RunOptions) *core.Result {
 				return core.RunOneOnEnv(c, t, env, o)

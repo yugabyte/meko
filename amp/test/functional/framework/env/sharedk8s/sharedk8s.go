@@ -58,6 +58,12 @@ const (
 	// provisionRetries is how many extra attempts cluster/endpoint creation makes
 	// on a transient controller 5xx (concurrent-DDL deadlock, endpoint helm race).
 	provisionRetries = 4
+	// DefaultSharedInfraRecovery matches what the faulting suites allow their own
+	// post-chaos settle steps; ReadyTimeout is a provisioning budget and too short.
+	DefaultSharedInfraRecovery = 15 * time.Minute
+	// sharedInfraCanaryBudget bounds one probe attempt's cluster round trip; a
+	// healthy control plane serves it in well under a minute.
+	sharedInfraCanaryBudget = 4 * time.Minute
 )
 
 // Config is the env.sharedk8s.* configuration.
@@ -74,7 +80,9 @@ type Config struct {
 	PoolID            string // explicit pool id (skips name lookup)
 	ReadyTimeout      time.Duration
 	PGReadyTimeout    time.Duration
-	Product           string // recorded as the product version (no version endpoint exists)
+	// SharedInfraRecovery bounds the post-fault health probe; 0 → DefaultSharedInfraRecovery.
+	SharedInfraRecovery time.Duration
+	Product             string // recorded as the product version (no version endpoint exists)
 
 	// Deploy selects self-building k8s: when true this provider OWNS one
 	// run-scoped amp control plane, deploying the same ampstack.App exclusivek8s
@@ -121,22 +129,23 @@ func FromConfig(c *core.Config) Config {
 	}
 
 	return Config{
-		ControllerURL:     controllerURL,
-		Context:           ctx,
-		Namespace:         namespace,
-		ControllerService: c.GetString("env.sharedk8s.controller_service", DefaultControllerService),
-		ControllerPort:    c.GetInt("env.sharedk8s.controller_port", DefaultControllerPort),
-		EndpointPort:      c.GetInt("env.sharedk8s.endpoint_port", DefaultEndpointPort),
-		LocalPortBase:     c.GetInt("env.sharedk8s.local_port_base", DefaultLocalPortBase),
-		UserID:            c.GetString("env.sharedk8s.user_id", ""),
-		PoolName:          c.GetString("env.sharedk8s.pool_name", DefaultPoolName),
-		PoolID:            c.GetString("env.sharedk8s.pool_id", ""),
-		ReadyTimeout:      c.GetDuration("env.sharedk8s.controller_ready_timeout", 2*time.Minute),
-		PGReadyTimeout:    c.GetDuration("env.sharedk8s.pg_ready_timeout", 3*time.Minute),
-		Product:           c.GetString("versions.product", ""),
-		Deploy:            deploy,
-		DeployTimeout:     c.GetDuration("env.sharedk8s.deploy_timeout", amp.YBReadyTimeout+amp.ControllerReadyTimeout+2*time.Minute),
-		AmpStack:          amp,
+		ControllerURL:       controllerURL,
+		Context:             ctx,
+		Namespace:           namespace,
+		ControllerService:   c.GetString("env.sharedk8s.controller_service", DefaultControllerService),
+		ControllerPort:      c.GetInt("env.sharedk8s.controller_port", DefaultControllerPort),
+		EndpointPort:        c.GetInt("env.sharedk8s.endpoint_port", DefaultEndpointPort),
+		LocalPortBase:       c.GetInt("env.sharedk8s.local_port_base", DefaultLocalPortBase),
+		UserID:              c.GetString("env.sharedk8s.user_id", ""),
+		PoolName:            c.GetString("env.sharedk8s.pool_name", DefaultPoolName),
+		PoolID:              c.GetString("env.sharedk8s.pool_id", ""),
+		ReadyTimeout:        c.GetDuration("env.sharedk8s.controller_ready_timeout", 2*time.Minute),
+		PGReadyTimeout:      c.GetDuration("env.sharedk8s.pg_ready_timeout", 3*time.Minute),
+		SharedInfraRecovery: c.GetDuration("env.sharedk8s.shared_infra_recovery", DefaultSharedInfraRecovery),
+		Product:             c.GetString("versions.product", ""),
+		Deploy:              deploy,
+		DeployTimeout:       c.GetDuration("env.sharedk8s.deploy_timeout", amp.YBReadyTimeout+amp.ControllerReadyTimeout+2*time.Minute),
+		AmpStack:            amp,
 	}
 }
 
@@ -823,13 +832,83 @@ func (p *Provider) deleteCluster(ctx context.Context, e *Env) error {
 }
 
 func (p *Provider) waitControllerReady(ctx context.Context, cl *controller.Client) error {
-	wctx, cancel := context.WithTimeout(ctx, p.cfg.ReadyTimeout)
+	return p.waitController(ctx, cl, p.cfg.ReadyTimeout, true, func(ctx context.Context, cl *controller.Client) error {
+		return cl.Readyz(ctx)
+	})
+}
+
+// SharedInfraHealthy verifies the standing control plane can still do what the
+// next test will ask of it: answer readyz, serve a registry-backed read, and
+// COMPLETE A TASK. Reads alone are not enough — in run 0b3ce69b readyz and
+// ListStoragePools both answered in under a second while every following test
+// died creating a cluster, because task execution was what the nemesis had
+// wedged.
+//
+// No hang capture: a probe that runs during and after backing chaos would
+// SIGQUIT a controller that is merely waiting on a flattened backing, which is
+// the kill #598 narrowed this to avoid. The budget is the post-chaos recovery
+// one the faulting suites themselves allow, not the provisioning readiness one.
+func (p *Provider) SharedInfraHealthy(ctx context.Context) error {
+	cl, _, err := p.ctrl.get(ctx)
+	if err != nil {
+		return fmt.Errorf("shared infra health: reach controller: %w", err)
+	}
+	return p.waitController(ctx, cl, p.sharedInfraRecoveryBudget(), false, func(ctx context.Context, cl *controller.Client) error {
+		if err := cl.Readyz(ctx); err != nil {
+			return err
+		}
+		if _, err := cl.ListStoragePools(ctx, 1, 0); err != nil {
+			return err
+		}
+		return p.canaryCluster(ctx, cl)
+	})
+}
+
+// canaryCluster runs one create/delete round trip — the first thing every test
+// does — on its own bounded budget so a wedged task pipeline fails the probe
+// instead of each later test's provisioning timeout.
+func (p *Provider) canaryCluster(ctx context.Context, cl *controller.Client) error {
+	cctx, cancel := context.WithTimeout(ctx, sharedInfraCanaryBudget)
+	defer cancel()
+	user, err := p.ensureUser(cctx, cl)
+	if err != nil {
+		return fmt.Errorf("canary: %w", err)
+	}
+	poolID, err := p.ensurePool(cctx, cl, user)
+	if err != nil {
+		return fmt.Errorf("canary: %w", err)
+	}
+	name := "ampqa-health-" + randHex()
+	if _, err := cl.CreateClusterAndWait(cctx, poolID, controller.CreateClusterRequest{Name: name}); err != nil {
+		return fmt.Errorf("canary: create cluster %s: %w", name, err)
+	}
+	cluster, err := p.findCluster(cctx, cl, poolID, name)
+	if err != nil {
+		return fmt.Errorf("canary: %w", err)
+	}
+	if _, err := cl.DeleteClusterAndWait(cctx, poolID, cluster.ID); err != nil {
+		return fmt.Errorf("canary: delete cluster %s: %w", name, err)
+	}
+	return nil
+}
+
+// sharedInfraRecoveryBudget is how long a nemesis-flattened control plane has to
+// come back before the run treats it as dead.
+func (p *Provider) sharedInfraRecoveryBudget() time.Duration {
+	if p.cfg.SharedInfraRecovery > 0 {
+		return p.cfg.SharedInfraRecovery
+	}
+	return DefaultSharedInfraRecovery
+}
+
+func (p *Provider) waitController(ctx context.Context, cl *controller.Client, budget time.Duration, captureHang bool, probe func(context.Context, *controller.Client) error) error {
+	wctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var last error
 	started := time.Now()
 	reconnected := false
 	for {
-		if last = cl.Readyz(wctx); last == nil {
+		if last = probe(wctx, cl); last == nil {
 			return nil
 		}
 		// A pod replacement silently invalidates a direct (pod-IP) controller
@@ -837,7 +916,7 @@ func (p *Provider) waitControllerReady(ctx context.Context, cl *controller.Clien
 		// like a hang. Halfway through, re-resolve the address once and keep
 		// polling whatever answers — in run #213 the replacement pod was healthy
 		// within a minute while the old address stayed black-holed for twenty.
-		if !reconnected && time.Since(started) >= p.cfg.ReadyTimeout/2 {
+		if !reconnected && time.Since(started) >= budget/2 {
 			reconnected = true
 			if ncl, nurl, err := p.ctrl.reconnect(ctx); err != nil {
 				p.log("sharedk8s: controller unreachable (%v) and re-resolving its address failed: %v", last, err)
@@ -848,7 +927,9 @@ func (p *Provider) waitControllerReady(ctx context.Context, cl *controller.Clien
 		}
 		select {
 		case <-wctx.Done():
-			p.captureControllerHang(ctx, last)
+			if captureHang {
+				p.captureControllerHang(ctx, last)
+			}
 			return fmt.Errorf("controller not ready: %w (last: %v)", wctx.Err(), last)
 		case <-time.After(time.Second):
 		}

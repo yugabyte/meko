@@ -89,8 +89,10 @@ func init() {
 }
 
 type lifecycleRun struct {
-	t    *core.T
-	iter int
+	t        *core.T
+	iter     int
+	pair     *phaseBarrier
+	pairIter int
 	// baseline is the arm's release tag; "" = the run's own images.
 	baseline string
 	cl       *controller.Client
@@ -130,7 +132,7 @@ func runLifecycle(t *core.T) error {
 	id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsLifecycle(params))
 	t.SetPerfIdentity(id.core())
 
-	all, sizes, err := lifecycleIterations(t, cl, env, kube, params, "", logf)
+	all, sizes, err := lifecycleIterations(t, cl, env, kube, params, "", nil, logf)
 	if err != nil {
 		return err
 	}
@@ -163,14 +165,16 @@ func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf
 	var baseAll []phaseResult
 	var baseErr error
 	var wg sync.WaitGroup
+	var pair *phaseBarrier
 	if base != nil {
+		pair = newPhaseBarrier()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			baseAll, _, baseErr = lifecycleIterations(t, base.cl, base, base.kube, params, tag, logf)
+			baseAll, _, baseErr = lifecycleIterations(t, base.cl, base, base.kube, params, tag, pair, logf)
 		}()
 	}
-	all, sizes, err := lifecycleIterations(t, cur.cl, cur, cur.kube, params, "", logf)
+	all, sizes, err := lifecycleIterations(t, cur.cl, cur, cur.kube, params, "", pair, logf)
 	wg.Wait()
 	if err != nil {
 		return err
@@ -186,7 +190,7 @@ func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf
 // and collapses their results. baseline marks the arm's steps and suppresses
 // its attachments ("" = the run's own arm).
 func lifecycleIterations(t *core.T, cl *controller.Client, env ampMultitenantEnv, kube *k8s.Kubectl,
-	params lifecycleParams, baseline string, logf func(string, ...any)) ([]phaseResult, []float64, error) {
+	params lifecycleParams, baseline string, pair *phaseBarrier, logf func(string, ...any)) ([]phaseResult, []float64, error) {
 	iterations := max(params.Iterations, 1)
 	runs := make([]*lifecycleRun, iterations)
 	errs := make([]error, iterations)
@@ -195,7 +199,8 @@ func lifecycleIterations(t *core.T, cl *controller.Client, env ampMultitenantEnv
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			runs[i-1], errs[i-1] = runLifecycleIteration(t, cl, env, kube, params, i, iterations, baseline, logf)
+			defer pair.abandon(i)
+			runs[i-1], errs[i-1] = runLifecycleIteration(t, cl, env, kube, params, i, iterations, baseline, pair, logf)
 		}(i)
 	}
 	wg.Wait()
@@ -223,10 +228,11 @@ func lifecycleIterations(t *core.T, cl *controller.Client, env ampMultitenantEnv
 // shared; the cluster, branches and endpoints are the iteration's own), so the
 // spread is tenant-to-tenant and the wall clock stays one lifecycle.
 func runLifecycleIteration(t *core.T, cl *controller.Client, env ampMultitenantEnv, kube *k8s.Kubectl,
-	params lifecycleParams, iter, iterations int, baseline string, logf func(string, ...any)) (*lifecycleRun, error) {
+	params lifecycleParams, iter, iterations int, baseline string, pair *phaseBarrier, logf func(string, ...any)) (*lifecycleRun, error) {
 	r := &lifecycleRun{
 		t: t, cl: cl, env: env, poolID: env.AmpPoolID(),
 		params: params, logf: logf, baseline: baseline,
+		pair: pair, pairIter: iter,
 	}
 	if iterations > 1 {
 		r.iter = iter
@@ -283,6 +289,7 @@ func runLifecycleIteration(t *core.T, cl *controller.Client, env ampMultitenantE
 // Steps keep their bare name across iterations; the iteration is a step
 // parameter, so the report view is not spammed with i<N>_-prefixed rows.
 func (r *lifecycleRun) phase(name string, fn func() error) error {
+	r.pair.sync(r.pairIter, name)
 	return r.t.Step(name, func(s *core.StepHandle) error {
 		r.setIteration(s)
 		start := time.Now()
@@ -335,6 +342,7 @@ func (r *lifecycleRun) tenantParams() multitenantParams {
 }
 
 func (r *lifecycleRun) standUpTenant(kube *k8s.Kubectl, td *teardownStack) error {
+	r.pair.sync(r.pairIter, "create_tenant")
 	return r.t.Step("create_tenant", func(s *core.StepHandle) error {
 		r.setIteration(s)
 		ten, tm, err := createTenant(r.t, r.cl, r.env, r.poolID, max(r.iter-1, 0), r.tenantParams())
@@ -625,6 +633,7 @@ func gateLifecycle(t *core.T, p lifecycleParams, id Identity, results []phaseRes
 		if baselineUp {
 			baseGated, _, _ := lifecycleDatapoints(baseResults, nil, p)
 			tableTxt, gerr := liveArmGate(gated, baseGated,
+				lifecycleBestValues(results), lifecycleBestValues(baseResults),
 				float64Thresholds{DropPct: cfg.ThroughputDropPct, RisePct: cfg.LatencyRisePct}, tag)
 			lbErr = gerr
 			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
@@ -644,6 +653,18 @@ var trackedPhases = []string{
 	"fork_small", "fork_loaded", "load",
 	"fork_count_cold", "fork_count_warm", "fork_insert",
 	"delete_half", "count_after_delete", "drop_table", "delete_fork_branch",
+}
+
+// lifecycleBestValues is each tracked phase's best iteration, keyed like the
+// gated datapoints — the live-arm gate's second opinion against node-lottery medians.
+func lifecycleBestValues(results []phaseResult) map[string]float64 {
+	out := map[string]float64{}
+	for _, g := range trackedPhases {
+		if vals := groupValues(results, g); len(vals) > 0 {
+			out[lifecyclePrefix+g] = aggregate(vals).Min
+		}
+	}
+	return out
 }
 
 // Gates the MEDIAN of each tracked phase, never one sample; the per-iteration

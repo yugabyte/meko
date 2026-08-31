@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
@@ -62,3 +63,14 @@ func ProviderSharesInfra(prov EnvProvider) bool {
 	sp, ok := prov.(SharedInfraProvider)
 	return ok && sp.SharesInfraAcrossTests()
 }
+
+// SharedInfraHealthChecker is implemented by a shared-infra provider that can
+// verify the standing stack still serves; ctx bounds the whole wait. A provider
+// that cannot probe answers ErrNoSharedInfraProbe so callers skip rather than
+// record a check that never ran.
+type SharedInfraHealthChecker interface {
+	SharedInfraHealthy(ctx context.Context) error
+}
+
+// ErrNoSharedInfraProbe reports that this provider has no health probe.
+var ErrNoSharedInfraProbe = errors.New("provider has no shared-infra health probe")

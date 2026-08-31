@@ -197,19 +197,25 @@ func createPerfEndpoint(ctx context.Context, cl *controller.Client, suffix strin
 	if err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create storage pool %s: %w", perfPoolName, err)
 	}
+	return createPerfEndpointInPool(ctx, cl, pool.ID, suffix)
+}
+
+// createPerfEndpointInPool carves the cluster + endpoint into a pool the caller
+// already owns — the live-arm path, whose pool exists since provisioning.
+func createPerfEndpointInPool(ctx context.Context, cl *controller.Client, poolID, suffix string) (controller.Endpoint, error) {
 	name := perfClusterPrefix + suffix
-	if _, err := cl.CreateClusterAndWait(ctx, pool.ID, controller.CreateClusterRequest{Name: name}); err != nil {
+	if _, err := cl.CreateClusterAndWait(ctx, poolID, controller.CreateClusterRequest{Name: name}); err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create cluster %s: %w", name, err)
 	}
-	proj, err := findPerfCluster(ctx, cl, pool.ID, name)
+	proj, err := findPerfCluster(ctx, cl, poolID, name)
 	if err != nil {
 		return controller.Endpoint{}, err
 	}
 	branchID := proj.DefaultBranch.BranchID
-	if _, err := cl.CreateEndpointAndWait(ctx, pool.ID, proj.ID, branchID, controller.CreateEndpointRequest{Role: "read_write"}); err != nil {
+	if _, err := cl.CreateEndpointAndWait(ctx, poolID, proj.ID, branchID, controller.CreateEndpointRequest{Role: "read_write"}); err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create endpoint: %w", err)
 	}
-	eps, err := cl.ListAllEndpoints(ctx, pool.ID, proj.ID, branchID)
+	eps, err := cl.ListAllEndpoints(ctx, poolID, proj.ID, branchID)
 	if err != nil {
 		return controller.Endpoint{}, fmt.Errorf("list endpoints: %w", err)
 	}

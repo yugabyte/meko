@@ -25,6 +25,9 @@ const (
 	// chart rolls the StatefulSets in order. 1 node = 10m, 3 = 15m, 6 = 22m30s.
 	ProvisionPerExtraNode = 150 * time.Second
 	DefaultCollectTimeout = 2 * time.Minute
+	// DefaultSharedInfraProbeTimeout bounds the post-fault shared-stack probe; it
+	// must outlast the provider's own recovery budget, not the test's body.
+	DefaultSharedInfraProbeTimeout = 16 * time.Minute
 )
 
 // CategoryDefaultTimeout is the hard-coded fallback test timeout for a
@@ -101,6 +104,15 @@ func ResolveTeardownTimeout(cfg *Config) time.Duration {
 		return DefaultTeardownTimeout
 	}
 	return cfg.GetDuration("timeouts.teardown", DefaultTeardownTimeout)
+}
+
+// ResolveSharedInfraProbeTimeout resolves timeouts.shared_infra_probe from cfg,
+// else DefaultSharedInfraProbeTimeout. cfg may be nil.
+func ResolveSharedInfraProbeTimeout(cfg *Config) time.Duration {
+	if cfg == nil {
+		return DefaultSharedInfraProbeTimeout
+	}
+	return cfg.GetDuration("timeouts.shared_infra_probe", DefaultSharedInfraProbeTimeout)
 }
 
 // ResolveCollectTimeout resolves timeouts.collect from cfg, else

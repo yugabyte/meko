@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -98,10 +99,10 @@ func (a *liveArm) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (
 	return client, nil
 }
 
-// endpointClient carves the arm's own perf endpoint (user → pool → cluster →
-// endpoint) and connects to it — what a phase-timing workload needs.
+// endpointClient carves the arm's perf endpoint into the pool provisioning
+// already created and connects to it.
 func (a *liveArm) endpointClient(ctx context.Context) (*pg.Client, error) {
-	ep, err := createPerfEndpoint(ctx, a.cl, a.sfx)
+	ep, err := createPerfEndpointInPool(ctx, a.cl, a.poolID, a.sfx)
 	if err != nil {
 		return nil, err
 	}
@@ -208,9 +209,13 @@ func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, 
 // liveArmGate compares the two arms' gated datapoints by name: delta in the
 // worse direction, allowed by the direction's threshold (drop for
 // higher-is-better, rise for lower-is-better). Datapoints only one arm produced
-// are skipped — they have no counterpart to accuse. Returns the attachable
-// table and the verdict.
-func liveArmGate(current, base []core.Datapoint, thr float64Thresholds, tag string) (string, error) {
+// are skipped — they have no counterpart to accuse. curBest/baseBest carry each
+// name's best iteration: endpoint pods land on whatever node type the
+// autoscaler has (observed run 55349d45: highcpu-8 and standard-8 mixed within
+// one arm), so a median-only verdict gates the node lottery; a real regression
+// also slows the best draw. nil maps skip that check (single-sample suites).
+// Returns the attachable table and the verdict.
+func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]float64, thr float64Thresholds, tag string) (string, error) {
 	ref := map[string]core.Datapoint{}
 	for _, dp := range base {
 		ref[dp.Name] = dp
@@ -233,6 +238,21 @@ func liveArmGate(current, base []core.Datapoint, thr float64Thresholds, tag stri
 			allowed = thr.DropPct
 		}
 		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%%\n", dp.Name, dp.Value, rdp.Value, d, allowed)
+		// A percentage gate needs signal: one-shot ms-scale ops through two
+		// port-forwards jitter by tens of ms, so a violation must also clear an
+		// absolute floor.
+		if dp.Unit == "ms" && math.Abs(dp.Value-rdp.Value) < liveArmNoiseFloorMS {
+			continue
+		}
+		if curBest != nil && baseBest != nil && dp.Direction == core.LowerIsBetter {
+			cb, cok := curBest[dp.Name]
+			bb, bok := baseBest[dp.Name]
+			if cok && bok && cb > 0 && bb > 0 {
+				if bd, ok := regressionPct(bb, cb, dp.Direction); !ok || bd <= allowed {
+					continue
+				}
+			}
+		}
 		if allowed > 0 && d > allowed {
 			violations = append(violations, fmt.Sprintf("%s %+.1f%% vs the live %s baseline (allowed %.1f%%: current %.4g, baseline %.4g %s)",
 				dp.Name, d, tag, allowed, dp.Value, rdp.Value, dp.Unit))
@@ -242,6 +262,86 @@ func liveArmGate(current, base []core.Datapoint, thr float64Thresholds, tag stri
 		return b.String(), fmt.Errorf("perf regression vs the live baseline: %s", strings.Join(violations, "; "))
 	}
 	return b.String(), nil
+}
+
+// phaseBarrier pairs the arms' equally-numbered iterations phase by phase, so
+// each gated phase runs on both arms under the same cluster weather.
+type phaseBarrier struct {
+	mu      sync.Mutex
+	waiting map[string]chan struct{}
+	dead    map[int]chan struct{}
+}
+
+func newPhaseBarrier() *phaseBarrier {
+	return &phaseBarrier{waiting: map[string]chan struct{}{}, dead: map[int]chan struct{}{}}
+}
+
+// pairWaitCap bounds a wait for the partner arm; past it pairing is abandoned.
+const pairWaitCap = 10 * time.Minute
+
+// liveArmNoiseFloorMS is the smallest ms delta the live-arm gate treats as signal.
+const liveArmNoiseFloorMS = 250
+
+func (b *phaseBarrier) sync(iter int, name string) {
+	if b == nil {
+		return
+	}
+	key := fmt.Sprintf("%d/%s", iter, name)
+	b.mu.Lock()
+	deadCh := b.deadLocked(iter)
+	select {
+	case <-deadCh:
+		b.mu.Unlock()
+		return
+	default:
+	}
+	if ch, ok := b.waiting[key]; ok {
+		delete(b.waiting, key)
+		close(ch)
+		b.mu.Unlock()
+		return
+	}
+	ch := make(chan struct{})
+	b.waiting[key] = ch
+	b.mu.Unlock()
+	select {
+	case <-ch:
+	case <-deadCh:
+	case <-time.After(pairWaitCap):
+		b.abandon(iter)
+	}
+}
+
+// abandon releases an iteration's current and future waits (partner died or lagged out).
+func (b *phaseBarrier) abandon(iter int) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d := b.deadLocked(iter)
+	select {
+	case <-d:
+		return
+	default:
+	}
+	close(d)
+	prefix := fmt.Sprintf("%d/", iter)
+	for k, ch := range b.waiting {
+		if strings.HasPrefix(k, prefix) {
+			delete(b.waiting, k)
+			close(ch)
+		}
+	}
+}
+
+func (b *phaseBarrier) deadLocked(iter int) chan struct{} {
+	d, ok := b.dead[iter]
+	if !ok {
+		d = make(chan struct{})
+		b.dead[iter] = d
+	}
+	return d
 }
 
 // The baseline arm's values, .baseline-suffixed, for the report — never gated.

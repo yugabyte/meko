@@ -18,7 +18,7 @@ func TestLiveArmGateJudgesByDirection(t *testing.T) {
 		{Name: "x.tps", Value: 100, Unit: "tps", Direction: core.HigherIsBetter},
 		{Name: "x.lat", Value: 100, Unit: "ms", Direction: core.LowerIsBetter},
 	}
-	table, err := liveArmGate(cur, base, thr, "0.1.2-abc")
+	table, err := liveArmGate(cur, base, nil, nil, thr, "0.1.2-abc")
 	if err == nil || !strings.Contains(err.Error(), "x.tps") {
 		t.Fatalf("a 30%% throughput drop against a 20%% allowance must fail naming x.tps; got %v", err)
 	}
@@ -40,7 +40,7 @@ func TestLiveArmGateImprovementPasses(t *testing.T) {
 		{Name: "x.tps", Value: 100, Unit: "tps", Direction: core.HigherIsBetter},
 		{Name: "x.lat", Value: 100, Unit: "ms", Direction: core.LowerIsBetter},
 	}
-	if _, err := liveArmGate(cur, base, thr, "0.1.2-abc"); err != nil {
+	if _, err := liveArmGate(cur, base, nil, nil, thr, "0.1.2-abc"); err != nil {
 		t.Fatalf("an improvement on both axes must pass: %v", err)
 	}
 }

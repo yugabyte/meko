@@ -951,3 +951,45 @@ func TestGetTaskDoesNotRetryCallerDeadline(t *testing.T) {
 		t.Errorf("blocked %s past the caller deadline", elapsed)
 	}
 }
+
+// Tasks survive a controller restart, so a poll that cannot reach it keeps
+// polling: the task must still be observed once the controller answers again.
+func TestWaitTaskRidesOutAnUnreachableController(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	var calls int
+	f.on("GET /api/v1/tasks/t1", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= getTaskRetries+1 {
+			hijackDrop(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_endpoint", "status": "succeeded"})
+	})
+	task, err := f.client().WaitTask(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("an unreachable controller that comes back must not fail the wait: %v", err)
+	}
+	if task.Status != TaskSucceeded {
+		t.Errorf("status = %q, want succeeded", task.Status)
+	}
+}
+
+// A served API error is the controller answering, not a blip: it must fail at
+// once rather than burn the unreachable budget.
+func TestWaitTaskFailsFastOnAServedAPIError(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	f.on("GET /api/v1/tasks/t1", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"code": "not_found", "message": "no such task"})
+	})
+	start := time.Now()
+	var apiErr *APIError
+	_, err := f.client().WaitTask(context.Background(), "t1")
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("a 404 must surface as an *APIError, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Errorf("a served error must fail fast, took %s", elapsed)
+	}
+}

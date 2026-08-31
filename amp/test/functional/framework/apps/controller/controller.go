@@ -714,20 +714,37 @@ func (c *Client) WaitTask(ctx context.Context, taskID string) (Task, error) {
 	if maxBackoff <= 0 {
 		maxBackoff = DefaultPollMax
 	}
+	// Tasks survive a controller restart (the meko#578 contract), so a poll
+	// that cannot REACH the controller keeps polling for a bounded window — a
+	// pod reschedule takes about a minute — while a served HTTP error stays fatal.
+	var unreachableSince time.Time
 	for {
 		task, err := c.GetTask(ctx, taskID)
-		if err != nil {
-			return Task{}, err
-		}
-		switch task.Status {
-		case TaskSucceeded:
-			return task, nil
-		case TaskFailed:
-			msg := ""
-			if task.Error != nil {
-				msg = *task.Error
+		switch {
+		case err == nil:
+			unreachableSince = time.Time{}
+			switch task.Status {
+			case TaskSucceeded:
+				return task, nil
+			case TaskFailed:
+				msg := ""
+				if task.Error != nil {
+					msg = *task.Error
+				}
+				return task, fmt.Errorf("task %s (%s) failed: %s", task.ID, task.Kind, msg)
 			}
-			return task, fmt.Errorf("task %s (%s) failed: %s", task.ID, task.Kind, msg)
+		// APIError first: doJSON joins ctx.Err() onto it (#931) so a served 503
+		// survives cancellation, and losing it turns "backing is down" into
+		// "controller hung".
+		case errors.As(err, new(*APIError)), !isTransientConnErr(err):
+			return Task{}, err
+		default:
+			if unreachableSince.IsZero() {
+				unreachableSince = time.Now()
+			}
+			if time.Since(unreachableSince) > taskPollUnreachableBudget {
+				return Task{}, fmt.Errorf("task %s: controller unreachable for %s: %w", taskID, taskPollUnreachableBudget, err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -739,6 +756,10 @@ func (c *Client) WaitTask(ctx context.Context, taskID string) (Task, error) {
 		}
 	}
 }
+
+// taskPollUnreachableBudget bounds how long WaitTask rides out an unreachable
+// controller before giving up.
+const taskPollUnreachableBudget = 3 * time.Minute
 
 // CreateClusterAndWait creates a cluster and waits for its task to succeed.
 func (c *Client) CreateClusterAndWait(ctx context.Context, poolID string, req CreateClusterRequest) (Task, error) {

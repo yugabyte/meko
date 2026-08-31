@@ -392,3 +392,27 @@ func TestSchedulerFaultFlagIsInertOnUnsharedProvider(t *testing.T) {
 		t.Errorf("peak concurrency = %d, want >1: the gate must not serialise a provider that shares nothing", peak)
 	}
 }
+
+// unhealthyInfraProvider reports the shared stack as dead after the fault.
+type unhealthyInfraProvider struct {
+	sharedInfraProvider
+	err error
+}
+
+func (p *unhealthyInfraProvider) SharedInfraHealthy(context.Context) error { return p.err }
+
+// The regression that matters: a fault the stack recovered from must leave the
+// rest of the run alone.
+func TestSchedulerHealthyProbeDoesNotPoisonRun(t *testing.T) {
+	tests := []core.Test{
+		faultTest("chaos", func(*core.T) error { return fmt.Errorf("boom") }),
+		exclusiveTest("after", func(*core.T) error { return nil }),
+	}
+	_, results := sched.Run(context.Background(), tests, sched.Options{
+		Capacity: 4, PerEnvParallelism: 1,
+		RunOptions: core.RunOptions{Parallel: 1, Seed: core.NewRunSeed(1, true), Provider: &unhealthyInfraProvider{}},
+	})
+	if results[1].Status != core.StatusPassed {
+		t.Fatalf("a recovered stack must leave later tests alone, got %s (%s)", results[1].Status, results[1].ErrorSummary)
+	}
+}
