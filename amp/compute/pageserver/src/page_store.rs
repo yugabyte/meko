@@ -458,13 +458,117 @@ impl<T> BlockChainCollector<T> {
         }
         self.chains.last_mut().expect("pushed above").1.push(row);
     }
+
+    /// True once the block being collected is past its anchor, so further
+    /// rows for it are dropped. Only actionable by a read that pins one block.
+    fn chain_complete(&self) -> bool {
+        self.skipping
+    }
+}
+
+/// Drive a batched multi-op thin-lane block scan.
+///
+/// Every op rides one `Perform` and every continuation is pinned to the
+/// snapshot round 1 ran at, so the fan-out resolves at a SINGLE read point
+/// (#139); looping `read_scan` per op instead would take one read point each
+/// and let a concurrent GC drain splice two snapshots into one scan.
+///
+/// Paging is mandatory, not an optimisation: an op's scan spans tablets, and a
+/// tablet holding no matching row returns an EMPTY page plus a continuation —
+/// "nothing here", not "scan done".
+///
+/// `done` drops an op whose collector already holds what the caller needs.
+/// Only sound when an op pins ONE block: with a range, later blocks are still
+/// to come.
+async fn run_batched_block_scan(
+    client: &yb_thin_client::TsClient,
+    table: &yb_thin_client::TableHandle,
+    reads: &[yb_thin_client::RangeRead],
+    done: impl Fn(&BlockChainCollector<yb_thin_client::Row>) -> bool,
+    what: &str,
+    op_label: impl Fn(usize) -> String,
+) -> Result<Vec<BlockChainCollector<yb_thin_client::Row>>> {
+    for attempt in 1..=THIN_SCAN_RESTARTS {
+        let mut collectors: Vec<BlockChainCollector<yb_thin_client::Row>> = (0..reads.len())
+            .map(|_| BlockChainCollector::new())
+            .collect();
+        let mut paging: Vec<Option<bytes::Bytes>> = vec![None; reads.len()];
+        // Consecutive rounds an op returned nothing while still handing back a
+        // continuation. Crossing empty tablets legitimately does this a few
+        // times; forever means the token is not advancing.
+        let mut barren: Vec<usize> = vec![0; reads.len()];
+        let mut active: Vec<usize> = (0..reads.len()).collect();
+        let mut read_time_ht = 0u64;
+        let mut restart = false;
+
+        while !active.is_empty() {
+            let ops: Vec<yb_thin_client::ReadOp> = active
+                .iter()
+                .map(|&i| yb_thin_client::ReadOp {
+                    table,
+                    read: &reads[i],
+                    paging_state: paging[i].as_deref(),
+                })
+                .collect();
+            let batch = match client.read(&ops, read_time_ht).await {
+                Ok(b) => b,
+                // Only an UNPINNED batch heals a read-restart inside
+                // `TsClient::read`; from round 2 on every op is pinned.
+                Err(e) if e.is_read_restart() && attempt < THIN_SCAN_RESTARTS => {
+                    tracing::warn!(
+                        "thin-lane {what} read-restart (attempt \
+                         {attempt}/{THIN_SCAN_RESTARTS}), restarting the scan: {e}"
+                    );
+                    restart = true;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            read_time_ht = batch.used_read_time_ht;
+            // `active[slot]` below relies on this pairing.
+            anyhow::ensure!(
+                batch.ops.len() == active.len(),
+                "thin-lane {what} got {} results for {} ops — results are \
+                 positional, so a mismatch would truncate chains",
+                batch.ops.len(),
+                active.len()
+            );
+
+            let mut next: Vec<usize> = Vec::new();
+            for (slot, res) in batch.ops.into_iter().enumerate() {
+                let i = active[slot];
+                let got = res.rows.len();
+                feed_scan_rows(&mut collectors[i], res.rows)?;
+                if done(&collectors[i]) {
+                    continue;
+                }
+                if let Some(ps) = res.paging_state {
+                    barren[i] = if got == 0 { barren[i] + 1 } else { 0 };
+                    anyhow::ensure!(
+                        barren[i] <= THIN_SCAN_BARREN_ROUNDS,
+                        "thin-lane {what} for {} returned {} empty pages in a row while \
+                         still continuing — the continuation token is not advancing",
+                        op_label(i),
+                        barren[i]
+                    );
+                    paging[i] = Some(ps);
+                    next.push(i);
+                }
+            }
+            active = next;
+        }
+        if !restart {
+            return Ok(collectors);
+        }
+    }
+    unreachable!("the final scan attempt returns or propagates")
 }
 
 /// Rows per fetched page on direct-RPC multi-block range scans.
 const DIRECT_SCAN_PAGE_ROWS: u64 = 128;
 
-/// Whole-scan restarts for the batched thin-lane page scan
-/// ([`PageStore::scan_one_fork_thin`]). A read-restart on a *pinned* batch —
+/// Whole-scan restarts for a batched thin-lane block scan
+/// ([`run_batched_block_scan`]). A read-restart on a *pinned* batch —
 /// which every paging round after the first is — cannot be healed inside
 /// `TsClient::read`, so the scan driver retries the whole fan-out on a fresh
 /// read point. Mirrors the client's own `MAX_SCAN_RESTARTS`.
@@ -510,18 +614,18 @@ fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindVa
     }
 }
 
-/// The shared prefix of every thin `slru_pages` read: `branch_id` is the
+/// The shared prefix of every thin `slru_pages` read: `branch` is the
 /// whole hash key; kind/segno are range columns, bound as equality scan
 /// conds. Callers append their own `blknum`/`lsn` conds and targets.
 fn slru_segment_read(
     slru: &yb_thin_client::TableHandle,
-    branch_id: BranchId,
+    branch: &bytes::Bytes,
     kind_i: i16,
     segno_i: i64,
 ) -> Result<yb_thin_client::RangeRead> {
     use yb_thin_client::{BindValue, CondOp, RangeRead};
     Ok(
-        RangeRead::new(slru, vec![BindValue::Bytes(branch_id.to_bytes())])?
+        RangeRead::new(slru, vec![BindValue::Bytes(branch.clone())])?
             .cond(
                 slru,
                 "kind",
@@ -872,23 +976,6 @@ fn decode_meta_row<R: RowCells>(key: &[u8], r: &R) -> Result<MetaRow> {
             format!("meta row key={} lsn={lsn}", hex::encode(key))
         })?,
     })
-}
-
-/// [`assemble_page_scan`] for SLRU rows, keyed by blknum.
-fn assemble_slru_scan<R: RowCells>(
-    kind: SlruKind,
-    segno: u32,
-    collector: BlockChainCollector<R>,
-    where_: &str,
-) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
-    let mut by_block = HashMap::with_capacity(collector.chains.len());
-    for (blk, raw) in collector.chains {
-        let chain = assemble_slru_chain(kind, segno, blk as u32, raw, 1, where_)?;
-        if !chain.is_empty() {
-            by_block.insert(blk as u32, chain);
-        }
-    }
-    Ok(by_block)
 }
 
 impl ThinClientTables {
@@ -1918,87 +2005,23 @@ impl PageStore {
             );
         }
 
-        // Every bucket's read rides ONE `Perform`, and every continuation is
-        // pinned to the snapshot round 1 ran at — so the whole fan-out resolves
-        // at a SINGLE read point (#139), exactly as the one query it replaced
-        // did. Looping `read_scan` per bucket instead would be one RPC *and one
-        // read point* per bucket, letting a concurrent GC drain land between
-        // them and splice rows from two different snapshots into one scan.
-        // Same shape as the safekeeper's `fetch_chunks_thin` fan-out.
-        //
-        // Paging is mandatory, not an optimisation: an op's scan spans tablets,
-        // and a tablet holding no matching row returns an EMPTY page plus a
-        // continuation — "nothing here", not "scan done". Stopping at the first
-        // page would silently drop whole tablets' worth of blocks.
-        let mut fetched: Option<Vec<BlockChainCollector<yb_thin_client::Row>>> = None;
-        for attempt in 1..=THIN_SCAN_RESTARTS {
-            let mut collectors: Vec<BlockChainCollector<yb_thin_client::Row>> = (0..reads.len())
-                .map(|_| BlockChainCollector::new())
-                .collect();
-            let mut paging: Vec<Option<bytes::Bytes>> = vec![None; reads.len()];
-            // Consecutive rounds an op returned nothing while still handing back
-            // a continuation. Crossing empty tablets legitimately does this a
-            // few times; forever means the token is not advancing.
-            let mut barren: Vec<usize> = vec![0; reads.len()];
-            let mut active: Vec<usize> = (0..reads.len()).collect();
-            let mut read_time_ht = 0u64;
-            let mut restart = false;
-
-            while !active.is_empty() {
-                let ops: Vec<yb_thin_client::ReadOp> = active
-                    .iter()
-                    .map(|&i| yb_thin_client::ReadOp {
-                        table: pages.as_ref(),
-                        read: &reads[i],
-                        paging_state: paging[i].as_deref(),
-                    })
-                    .collect();
-                let batch = match p.client.read(&ops, read_time_ht).await {
-                    Ok(b) => b,
-                    // Only an UNPINNED batch heals a read-restart inside
-                    // `TsClient::read`; from round 2 on every op carries a
-                    // paging state, so the restart surfaces here and this loop
-                    // is the driver that owns it — drop the half-built
-                    // collectors and start over on a fresh read point.
-                    Err(e) if e.is_read_restart() && attempt < THIN_SCAN_RESTARTS => {
-                        tracing::warn!(
-                            "thin-lane page scan read-restart (attempt \
-                             {attempt}/{THIN_SCAN_RESTARTS}), restarting the scan: {e}"
-                        );
-                        restart = true;
-                        break;
-                    }
-                    Err(e) => return Err(e.into()),
-                };
-                read_time_ht = batch.used_read_time_ht;
-                let mut next: Vec<usize> = Vec::new();
-                for (slot, res) in batch.ops.into_iter().enumerate() {
-                    let Some(&i) = active.get(slot) else { continue };
-                    let got = res.rows.len();
-                    feed_scan_rows(&mut collectors[i], res.rows)?;
-                    if let Some(ps) = res.paging_state {
-                        barren[i] = if got == 0 { barren[i] + 1 } else { 0 };
-                        anyhow::ensure!(
-                            barren[i] <= THIN_SCAN_BARREN_ROUNDS,
-                            "thin-lane page scan for rel={rel} fork={fork} \
-                             blk=[{blk_lo},{blk_hi}) bucket={} returned {THIN_SCAN_BARREN_ROUNDS} \
-                             empty pages in a row while still continuing — the continuation \
-                             token is not advancing",
-                            buckets[i]
-                        );
-                        paging[i] = Some(ps);
-                        next.push(i);
-                    }
-                }
-                active = next;
-            }
-            if !restart {
-                fetched = Some(collectors);
-                break;
-            }
-        }
-        // The final attempt either converges or propagates its error above.
-        let collectors = fetched.expect("the final scan attempt returns or propagates");
+        // `done` stays false: an op covers a blknum RANGE, so a complete chain
+        // means only its FIRST block is done. Bounding these chains needs the
+        // same per-block split #1043 did for SLRU — deferred, see #1054.
+        let collectors = run_batched_block_scan(
+            &p.client,
+            pages,
+            &reads,
+            |_| false,
+            "page scan",
+            |i| {
+                format!(
+                    "rel={rel} fork={fork} blk=[{blk_lo},{blk_hi}) bucket={}",
+                    buckets[i]
+                )
+            },
+        )
+        .await?;
 
         // Blocks are disjoint across buckets (the bucket is a function of
         // blknum), so the per-bucket key maps never collide and `extend` cannot
@@ -2271,7 +2294,7 @@ impl PageStore {
     ) -> Result<Vec<SlruPageRow>> {
         use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = slru_segment_read(slru, branch_id, kind_i, segno_i)?
+        let read = slru_segment_read(slru, &branch_id.to_bytes(), kind_i, segno_i)?
             .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk_i))?
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
@@ -2302,27 +2325,49 @@ impl PageStore {
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
         use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = slru_segment_read(slru, branch_id, kind_i, segno_i)?
-            .cond(slru, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
-            .cond(slru, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
-            .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
-            .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
-            .limit(DIRECT_SCAN_PAGE_ROWS);
 
-        let collector = p
-            .client
-            .read_scan(
-                slru,
-                &read,
-                BlockChainCollector::new,
-                |collector, rows| -> anyhow::Result<bool> {
-                    feed_scan_rows(collector, rows)?;
-                    Ok(false)
-                },
-            )
-            .await?;
+        // One read per block: the anchor is per block and `read_scan` halts
+        // the whole scan rather than skipping ahead, so a range-wide read
+        // cannot stop without abandoning later blocks (#1042). They still ride
+        // one `Perform`, so this stays a single read point (#139).
+        let branch = branch_id.to_bytes();
+        let reads = (blk_lo..blk_hi)
+            .map(|blk| -> Result<yb_thin_client::RangeRead> {
+                Ok(slru_segment_read(slru, &branch, kind_i, segno_i)?
+                    .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk))?
+                    .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
+                    .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
+                    .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        assemble_slru_scan(kind, segno_i as u32, collector, "scan_slru_range_thin")
+        let collectors = run_batched_block_scan(
+            &p.client,
+            slru,
+            &reads,
+            |c| c.chain_complete(),
+            "slru scan",
+            |i| format!("kind={kind:?} segno={segno_i} blk={}", blk_lo + i as i64),
+        )
+        .await?;
+
+        // One op per block, so a collector holds at most one chain — none at all
+        // for a block with no version at or below `target`.
+        let mut by_block = HashMap::with_capacity(collectors.len());
+        for (blk, raw) in collectors.into_iter().flat_map(|c| c.chains) {
+            let chain = assemble_slru_chain(
+                kind,
+                segno_i as u32,
+                blk as u32,
+                raw,
+                1,
+                "scan_slru_range_thin",
+            )?;
+            if !chain.is_empty() {
+                by_block.insert(blk as u32, chain);
+            }
+        }
+        Ok(by_block)
     }
 
     /// Range scan over SLRU blocks in `range`. `range` must stay inside
@@ -4285,6 +4330,36 @@ mod block_chain_collector_tests {
             c.push(blk, lsn, will_init, lsn);
         }
         c.chains
+    }
+
+    /// Must not flip on the anchor row itself, must reset per block, and must
+    /// stay false without an anchor — there the scan has to page to the end.
+    #[test]
+    fn chain_complete_tracks_the_block_being_collected() {
+        let mut c = BlockChainCollector::new();
+        assert!(!c.chain_complete(), "nothing collected yet");
+
+        c.push(1, 90, false, 90);
+        assert!(!c.chain_complete(), "above the anchor");
+        c.push(1, 70, true, 70);
+        assert!(
+            !c.chain_complete(),
+            "the anchor row is itself part of the chain"
+        );
+        c.push(1, 60, false, 60);
+        assert!(c.chain_complete(), "past the anchor, the rest is dropped");
+
+        // Resetting per block is why the scan issues one read per block:
+        // stopping the whole scan on block 1 would abandon block 2.
+        c.push(2, 80, false, 80);
+        assert!(!c.chain_complete(), "a new block starts a fresh chain");
+
+        c.push(3, 30, false, 30);
+        c.push(3, 20, false, 20);
+        assert!(
+            !c.chain_complete(),
+            "a block with no anchor never completes"
+        );
     }
 
     #[test]

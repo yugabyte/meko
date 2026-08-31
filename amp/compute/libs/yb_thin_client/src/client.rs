@@ -774,7 +774,7 @@ impl TsClient {
     }
 
     /// Page a whole scan through the accumulator, all pages pinned to the
-    /// first page's snapshot. `on_page` returns `false` to stop early.
+    /// first page's snapshot. `on_page` returns `true` to stop early.
     pub async fn read_scan<A, E, F, G>(
         &self,
         table: &TableHandle,
