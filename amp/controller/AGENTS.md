@@ -16,6 +16,10 @@ with the design docs in [`architecture/`](architecture/):
   both `pkg/pglease` leases: `task:<id>` so two instances cannot execute one task,
   `endpoint:<id>` so two blocking tasks cannot touch one endpoint. Claiming,
   reclaim after a crash, and why losing a lease exits the process.
+- [`architecture/ac-endpoint-upgrade.md`](architecture/ac-endpoint-upgrade.md) —
+  **proposed** (#809): moving deployed endpoints onto a target version. A parent
+  task that owns rows in a new `subtasks` table and runs them itself, so one fleet
+  roll holds one task lease rather than one per endpoint. Not built yet.
 - [`architecture/ac-apis.md`](architecture/ac-apis.md) — the REST API: the
   OpenAPI v3 spec as source of truth, code generation, the served explorer, and
   how the API is tested through the generated client.
