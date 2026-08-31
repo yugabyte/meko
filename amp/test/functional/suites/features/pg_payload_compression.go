@@ -437,13 +437,17 @@ func runPayloadCompressionEnvelope(t *core.T) error {
 				return err
 			}
 		}
-		// CHECKPOINT then touch every row: the first write to a page after a
-		// checkpoint emits a full-page image, which is the row shape the whole
-		// compression win rests on.
-		if _, err := client.Exec(t, "CHECKPOINT"); err != nil {
-			return err
-		}
+		// VACUUM FULL then touch every row. The heap rewrite logs every page of
+		// the new relfilenode as an XLOG_FPI (log_newpages passes
+		// REGBUF_FORCE_IMAGE, so it emits one whatever full_page_writes is),
+		// which is the image row shape half the invariants below rest on; the
+		// updates that follow put deltas on that same relfilenode. The endpoint
+		// runs full_page_writes = off, so a first write after a checkpoint is no
+		// longer a source of images.
 		for _, table := range []string{compressible, random} {
+			if _, err := client.Exec(t, "VACUUM FULL "+table); err != nil {
+				return err
+			}
 			if _, err := client.Exec(t, fmt.Sprintf("UPDATE %s SET touched = touched + 1", table)); err != nil {
 				return err
 			}
@@ -495,6 +499,12 @@ func runPayloadCompressionEnvelope(t *core.T) error {
 			if st.rows == 0 {
 				return fmt.Errorf("%s: amp_storage.pages holds no rows for relnode %d on branch %s after a forced flush — the write never reached storage",
 					rel.label, relnode, branchID)
+			}
+			// Without this the image invariants are count(*) FILTER comparisons
+			// over an empty set and pass vacuously.
+			if st.imageRows == 0 {
+				return fmt.Errorf("%s: of %d rows in amp_storage.pages for relnode %d, none is an image — the VACUUM FULL rewrite's full-page images never reached storage, and the image invariants below cannot be checked",
+					rel.label, st.rows, relnode)
 			}
 			if err := checkEnvelope(st, rel.label); err != nil {
 				return err
@@ -552,7 +562,9 @@ func runPayloadCompressionSavesSpace(t *core.T) error {
 				return err
 			}
 		}
-		if _, err := client.Exec(t, "CHECKPOINT"); err != nil {
+		// VACUUM FULL for the images (see the envelope test), UPDATE for the
+		// deltas, so the mix the saving is measured over covers both paths.
+		if _, err := client.Exec(t, "VACUUM FULL "+table); err != nil {
 			return err
 		}
 		if _, err := client.Exec(t, fmt.Sprintf("UPDATE %s SET touched = touched + 1", table)); err != nil {

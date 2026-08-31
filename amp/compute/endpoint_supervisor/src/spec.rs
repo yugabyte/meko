@@ -64,8 +64,22 @@ pub fn render_compute_spec(
 
     // 1. Static defaults: the invariants of a yb-amp compute, not tuning.
     push("fsync", "off".into(), "bool");
+    // Durability lives in the YB rows the safekeeper writes, not in fsync'd
+    // Postgres pages, so full-page images are pure WAL overhead: every
+    // checkpoint re-arms them for the whole working set, and the safekeeper's
+    // WAL compression is tuned for a WAL that carries none.
+    push("full_page_writes", "off".into(), "bool");
     push("wal_level", "logical".into(), "enum");
-    push("wal_log_hints", "on".into(), "bool");
+    // Hint-bit FPIs are the other full-page images in the WAL, and
+    // `XLogSaveBufferForHint` forces them with REGBUF_FORCE_IMAGE, so
+    // `full_page_writes = off` above does not suppress them. Everything they
+    // make durable -- heap hint bits, index LP_DEAD kill bits, FSM page bits --
+    // is recomputed on demand when it is missing, and the VM/FSM truncation
+    // clears that `XLogHintBitIsNeeded()` also gates are reproduced by the
+    // pageserver itself (`ingest_xlog_smgr_truncate`). Torn pages, the reason
+    // upstream Postgres wants this on, cannot happen here: pages reach storage
+    // only through the WAL.
+    push("wal_log_hints", "off".into(), "bool");
     push("port", p.compute_port.to_string(), "integer");
     push("listen_addresses", "0.0.0.0".into(), "string");
     push("max_connections", "100".into(), "integer");
@@ -244,6 +258,34 @@ mod tests {
             spec["spec"]["cluster"]["roles"][0]["encrypted_password"],
             "md5deadbeef"
         );
+    }
+
+    /// The WAL-shape invariants: no full-page images from either source, because
+    /// durability is in the YB rows the safekeeper writes rather than in fsync'd
+    /// Postgres pages. `full_page_writes` is the one this block used to leave
+    /// unset, so k8s endpoints took Postgres' `on` and carried images the design
+    /// has no use for -- ~12x the WAL volume on random-update workloads --
+    /// and `wal_log_hints` was the second source, unaffected by the first being
+    /// off. Both stay defaults, not locks: a workload that wants either can set
+    /// it per endpoint.
+    #[test]
+    fn the_wal_invariants_are_defaults_the_operator_can_override() {
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(last_value(&spec, "fsync").as_deref(), Some("off"));
+        assert_eq!(
+            last_value(&spec, "full_page_writes").as_deref(),
+            Some("off")
+        );
+        assert_eq!(last_value(&spec, "wal_log_hints").as_deref(), Some("off"));
+        assert_eq!(last_value(&spec, "wal_level").as_deref(), Some("logical"));
+
+        let registry = BTreeMap::from([
+            ("full_page_writes".to_string(), "on".to_string()),
+            ("wal_log_hints".to_string(), "on".to_string()),
+        ]);
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &registry);
+        assert_eq!(last_value(&spec, "full_page_writes").as_deref(), Some("on"));
+        assert_eq!(last_value(&spec, "wal_log_hints").as_deref(), Some("on"));
     }
 
     /// The guard for the shape itself: the rendered file must deserialize into the
