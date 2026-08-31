@@ -203,7 +203,7 @@ func (b *PgBackend) CreateCluster(ctx context.Context, poolID uuid.UUID, name st
 //
 // The default-branch join filters tombstones inline; the cluster's own tombstone
 // filter is clusterLive, which callers append alongside their WHERE.
-const clusterSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at,
+const clusterSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at, p.engine,
 		b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.extensions, b.created_at
 	FROM amp_registry.clusters p
 	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
@@ -716,7 +716,7 @@ func scanCluster(r scanRow) (Cluster, error) {
 		defForkLSN    sql.NullString
 		defExtRaw     []byte
 	)
-	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt,
+	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt, &p.Engine,
 		&defClusterStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &defExtRaw, &def.CreatedAt); err != nil {
 		return Cluster{}, err
 	}

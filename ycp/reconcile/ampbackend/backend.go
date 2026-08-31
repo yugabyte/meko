@@ -233,6 +233,12 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 			clusterPath := join([]string{poolPath, cl.Name})
 			idx.cluster[clusterPath] = cl.Id
 			clAttrs := attrPutInt(attrPut(nil, "id", cl.Id.String()), "pg_version", cl.DefaultBranch.PgVersion)
+			// The engine the cluster was provisioned as. Reported so a desired
+			// state that named one can see it took effect, rather than the drop
+			// being invisible.
+			if cl.Engine != nil && *cl.Engine != "" {
+				clAttrs = attrPut(clAttrs, "engine", *cl.Engine)
+			}
 			// Extensions are opted in per branch; surface the cluster's
 			// default-branch set here as a convenience view (each branch reports its
 			// own copy via branchAttrs).

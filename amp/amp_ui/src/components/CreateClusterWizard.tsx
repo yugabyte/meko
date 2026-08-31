@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Stepper } from "@/components/ui/stepper";
 import { ComputeSizeField, type ComputeSize } from "@/components/ui/compute-size-field";
-import { EngineField } from "@/components/ui/engine-field";
+import { DB_ENGINES, EngineField, engineExtensions } from "@/components/ui/engine-field";
 import { ExtensionsField } from "@/components/ui/extensions-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
 import { isValidMemory } from "@/lib/compute";
@@ -76,6 +76,12 @@ export function CreateClusterWizard({
     }
   }, [open]);
 
+  // The controller unions the engine's bundle into the request's extensions, so
+  // the wizard shows them as already-on rather than sending them twice.
+  const fromEngine = engineExtensions(engine);
+  const engineLabel = DB_ENGINES.find((e) => e.id === engine)?.label ?? engine;
+  // What the cluster ends up with: the engine's bundle plus anything picked.
+  const allExtensions = [...fromEngine, ...extensions.filter((n) => !fromEngine.includes(n))];
   const poolName = pools.find((p) => p.id === poolId)?.name ?? "";
   const trimmedName = name.trim();
   // The compute step also needs a memory quantity the controller will accept: a
@@ -97,6 +103,7 @@ export function CreateClusterWizard({
         name: trimmedName,
         cpu: size.cpu.trim(),
         memory: size.memory.trim(),
+        engine,
         extensions,
       },
       {
@@ -178,9 +185,16 @@ export function CreateClusterWizard({
                 Enabled on the cluster's <code>main</code> branch — every compute on it
                 mounts them. You can add more later from a branch's Extensions dialog.
               </p>
+              {fromEngine.length > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {engineLabel} includes{" "}
+                  <span className="font-mono">{fromEngine.join(", ")}</span>.
+                </p>
+              )}
               <ExtensionsField
                 value={extensions}
                 onChange={setExtensions}
+                enabled={fromEngine}
                 showRestartTag={false}
               />
             </div>
@@ -198,12 +212,12 @@ export function CreateClusterWizard({
           {step === 3 && (
             <div className="space-y-2 rounded-lg border border-border">
               <ReviewRow k="Name" v={trimmedName || "—"} mono />
-              <ReviewRow k="Engine" v="PostgreSQL 18" />
+              <ReviewRow k="Engine" v={engineLabel} />
               <ReviewRow k="Shared pool" v={poolName} mono />
               <ReviewRow
                 k="Extensions"
-                v={extensions.length ? extensions.join(", ") : "None"}
-                mono={extensions.length > 0}
+                v={allExtensions.length ? allExtensions.join(", ") : "None"}
+                mono={allExtensions.length > 0}
               />
               <ReviewRow k="Writer compute" v={`${size.cpu} vCPU · ${size.memory}`} mono />
             </div>

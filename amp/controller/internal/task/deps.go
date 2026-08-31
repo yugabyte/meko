@@ -52,7 +52,7 @@ type StateStore interface {
 	// fork later inherits its parent's set, and every endpoint resolves against
 	// its own branch's row. A cluster-name collision within the pool, or a missing
 	// pool, is a real error (the step fails the task).
-	EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, extensions []string) error
+	EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string) error
 
 	// EnsureBranch creates a branch (a non-default branch) under clusterID, forked
 	// from parentBranchID at forkLSN, with the given id — or no-ops if it already

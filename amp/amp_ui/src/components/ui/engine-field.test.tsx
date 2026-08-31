@@ -1,43 +1,59 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { EngineField } from "@/components/ui/engine-field";
+import {
+  EngineField,
+  DB_ENGINES,
+  engineExtensions,
+} from "@/components/ui/engine-field";
+import catalog from "@/config/extensions.json";
 
-// The whole point of EngineField today: PostgreSQL is the only selectable
-// engine; every other engine is a disabled "Coming soon" roadmap tile. These
-// tests guard that contract so a future edit can't silently make Oracle/etc.
-// clickable (which would let a user "create" an unsupported cluster).
+// An engine is a named extension bundle the controller knows about. The
+// selectable set must therefore be exactly the generated catalog's engines —
+// offering one the controller would reject is a 400 the user cannot act on —
+// while genuinely unimplemented engines stay disabled roadmap tiles.
 afterEach(cleanup);
 
 describe("EngineField", () => {
-  it("makes PostgreSQL selectable and every other engine a disabled Coming-soon tile", () => {
-    const onChange = vi.fn();
-    render(<EngineField value="postgres" onChange={onChange} />);
-
-    const pg = screen.getByRole("button", { name: /postgresql/i });
-    expect((pg as HTMLButtonElement).disabled).toBe(false);
-
-    // The four roadmap engines are present, disabled, and labelled Coming soon.
-    for (const name of [/ai database/i, /oracle/i, /sql server/i, /documentdb/i]) {
-      const btn = screen.getByRole("button", { name });
-      expect((btn as HTMLButtonElement).disabled).toBe(true);
+  it("makes exactly the catalog's engines selectable", () => {
+    render(<EngineField value="postgres" onChange={vi.fn()} />);
+    for (const e of catalog.engines) {
+      const btn = screen.getByRole("button", { name: new RegExp(e.label, "i") });
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
     }
-    expect(screen.getAllByText(/coming soon/i)).toHaveLength(4);
   });
 
-  it("does not fire onChange when a Coming-soon engine is clicked", () => {
+  it("keeps unimplemented engines disabled and labelled Coming soon", () => {
     const onChange = vi.fn();
     render(<EngineField value="postgres" onChange={onChange} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /oracle/i }));
-    fireEvent.click(screen.getByRole("button", { name: /documentdb/i }));
+    const roadmap = DB_ENGINES.filter((e) => e.comingSoon);
+    expect(roadmap.length).toBeGreaterThan(0);
+    for (const e of roadmap) {
+      const btn = screen.getByRole("button", { name: new RegExp(e.label, "i") });
+      expect((btn as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(btn);
+    }
     expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/coming soon/i)).toHaveLength(roadmap.length);
   });
 
-  it("fires onChange with the engine id when an enabled engine is clicked", () => {
+  it("fires onChange with the engine id when a supported engine is clicked", () => {
     const onChange = vi.fn();
-    // Start on a different value so clicking PostgreSQL is a real selection.
-    render(<EngineField value="aidb" onChange={onChange} />);
-    fireEvent.click(screen.getByRole("button", { name: /postgresql/i }));
-    expect(onChange).toHaveBeenCalledWith("postgres");
+    render(<EngineField value="postgres" onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /ai database/i }));
+    expect(onChange).toHaveBeenCalledWith("aidb");
+  });
+
+  it("shows the bundle an engine seeds", () => {
+    render(<EngineField value="postgres" onChange={vi.fn()} />);
+    // AI Database is the multi-extension bundle; its card names what it brings.
+    expect(screen.getByText(/pgvector · age · pg_cron/)).toBeTruthy();
+  });
+
+  it("engineExtensions returns the catalog's bundle, and nothing for unknowns", () => {
+    expect(engineExtensions("aidb")).toEqual(["pgvector", "age", "pg_cron"]);
+    expect(engineExtensions("oracle")).toEqual(["hexabridge"]);
+    expect(engineExtensions("postgres")).toEqual([]);
+    expect(engineExtensions("mysql")).toEqual([]);
   });
 });

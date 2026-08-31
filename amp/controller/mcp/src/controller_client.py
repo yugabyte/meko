@@ -158,11 +158,14 @@ class ControllerClient:
         pool_id: str,
         name: str,
         pg_version: Optional[int] = None,
+        engine: Optional[str] = None,
         extensions: Optional[list[str]] = None,
     ) -> dict:
         body: dict[str, Any] = {"name": name}
         if pg_version is not None:
             body["pg_version"] = pg_version
+        if engine:
+            body["engine"] = engine
         if extensions:
             body["extensions"] = extensions
         return self._request(

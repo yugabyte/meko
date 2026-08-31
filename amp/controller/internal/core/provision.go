@@ -38,7 +38,7 @@ import (
 // A cluster-name collision within the pool surfaces as ErrConflict (the
 // clusters_name_per_pool unique index, which is not the ON CONFLICT target); a
 // missing pool surfaces as ErrNotFound (the FK on cluster.storage_pool_id).
-func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, extensions []string) error {
+func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string) error {
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -46,9 +46,10 @@ func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branch
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
+		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name, engine)
+		 VALUES ($1::uuid, $2::uuid, $3, $4)
 		 ON CONFLICT (id) DO NOTHING`,
-		clusterID.String(), poolID.String(), name); err != nil {
+		clusterID.String(), poolID.String(), name, normalizeEngine(engine)); err != nil {
 		return mapClusterErr("insert cluster", err)
 	}
 	// Seed the create-time externalized-extension set on the default branch row.

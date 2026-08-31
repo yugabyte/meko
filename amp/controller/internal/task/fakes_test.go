@@ -56,6 +56,9 @@ type fakeStateStore struct {
 	deletedBranches map[uuid.UUID]struct{}
 	deletedClusters map[uuid.UUID]struct{}
 
+	// clusterEngine records the engine each EnsureCluster was given, so a task
+	// test can assert the arg is carried rather than dropped.
+	clusterEngine     map[uuid.UUID]string
 	errEnsureCluster  error
 	errEnsureBranch   error
 	errEnsureEndpoint error
@@ -82,6 +85,7 @@ func newFakeStateStore() *fakeStateStore {
 		branchCluster:        map[uuid.UUID]uuid.UUID{},
 		branchParent:         map[uuid.UUID]uuid.UUID{},
 		branchExts:           map[uuid.UUID][]string{},
+		clusterEngine:        map[uuid.UUID]string{},
 		endpointExts:         map[uuid.UUID][]string{},
 		deletedBranches:      map[uuid.UUID]struct{}{},
 		deletedClusters:      map[uuid.UUID]struct{}{},
@@ -189,7 +193,7 @@ func (f *fakeStateStore) ChildBranchIDs(_ context.Context, clusterID, branchID u
 	return ids, nil
 }
 
-func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID uuid.UUID, _ string, _ int, extensions []string) error {
+func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID uuid.UUID, _ string, _ int, engine string, extensions []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensureClusterCalls++
@@ -198,6 +202,7 @@ func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID
 	}
 	f.createdBranches[branchID] = struct{}{}
 	f.branchCluster[branchID] = clusterID
+	f.clusterEngine[clusterID] = engine
 	if len(extensions) > 0 {
 		f.branchExts[branchID] = append([]string(nil), extensions...)
 	}

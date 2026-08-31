@@ -167,6 +167,26 @@ def test_create_cluster_includes_extensions_when_set(wire):
     assert handler.last_json() == {"name": "db", "extensions": ["pgvector"]}
 
 
+def test_create_cluster_includes_engine_when_set(wire):
+    handler = wire({f"POST {P}/clusters": (202, TASK)})
+    tools.create_cluster(pool_id="p1", name="db", engine="aidb")
+    assert handler.last_json() == {"name": "db", "engine": "aidb"}
+
+
+def test_create_cluster_engine_and_extensions_compose(wire):
+    """The controller unions the engine's bundle with `extensions`; the client
+    sends both verbatim rather than resolving the bundle itself."""
+    handler = wire({f"POST {P}/clusters": (202, TASK)})
+    tools.create_cluster(
+        pool_id="p1", name="db", engine="oracle", extensions=["pgvector"]
+    )
+    assert handler.last_json() == {
+        "name": "db",
+        "engine": "oracle",
+        "extensions": ["pgvector"],
+    }
+
+
 def test_add_branch_extensions_body(wire):
     handler = wire({f"POST {B}/extensions": (202, TASK)})
     tools.add_branch_extensions(

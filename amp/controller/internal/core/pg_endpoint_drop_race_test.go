@@ -66,7 +66,7 @@ func TestPgEndpointVsBranchDropSerializes(t *testing.T) {
 		t.Fatalf("create pool: %v", err)
 	}
 	clusterID, defaultBranchID := uuid.New(), uuid.New()
-	if err := b.EnsureCluster(ctx, sp.ID, clusterID, defaultBranchID, "endpoint-drop-race", 18, nil); err != nil {
+	if err := b.EnsureCluster(ctx, sp.ID, clusterID, defaultBranchID, "endpoint-drop-race", 18, "", nil); err != nil {
 		t.Fatalf("ensure cluster: %v", err)
 	}
 

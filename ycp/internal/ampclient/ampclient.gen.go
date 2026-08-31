@@ -18,6 +18,27 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CreateClusterRequestEngine.
+const (
+	Aidb     CreateClusterRequestEngine = "aidb"
+	Oracle   CreateClusterRequestEngine = "oracle"
+	Postgres CreateClusterRequestEngine = "postgres"
+)
+
+// Valid indicates whether the value is a known member of the CreateClusterRequestEngine enum.
+func (e CreateClusterRequestEngine) Valid() bool {
+	switch e {
+	case Aidb:
+		return true
+	case Oracle:
+		return true
+	case Postgres:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateEndpointRequestDiskType.
 const (
 	Local   CreateEndpointRequestDiskType = "local"
@@ -346,6 +367,11 @@ type Cluster struct {
 	CreatedAt     time.Time `json:"created_at"`
 	DefaultBranch Branch    `json:"default_branch"`
 
+	// Engine The engine the cluster was provisioned as (`postgres`, `aidb`,
+	// `oracle`) — see createCluster. Provenance: it named the extensions
+	// seeded at create, and is not re-derived when a branch adds more.
+	Engine *string `json:"engine,omitempty"`
+
 	// Extensions Externalized PostgreSQL extensions enabled on the cluster's default
 	// branch ("main"), by catalog name (e.g. `pgvector`), surfaced here as
 	// the cluster's set. Each branch carries its own set (a fork inherits its
@@ -393,6 +419,18 @@ type CreateBranchRequest struct {
 
 // CreateClusterRequest defines model for CreateClusterRequest.
 type CreateClusterRequest struct {
+	// Engine The database engine to provision as — a named bundle of externalized
+	// extensions. `postgres` (the default) seeds none, `aidb` seeds
+	// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+	// unioned with `extensions` and written onto the default branch, and the
+	// engine is recorded on the cluster and returned by getCluster /
+	// listClusters. An unknown engine is rejected (400), as is any non-default
+	// engine when externalized extensions are unavailable (e.g. the Docker
+	// driver). Recording it is provenance, not a constraint: extensions stay
+	// add-only per branch, so the bundle remains a subset of what the branch
+	// carries. See compute/architecture/extensions.md.
+	Engine *CreateClusterRequestEngine `json:"engine,omitempty"`
+
 	// Extensions Externalized PostgreSQL extensions to enable on the cluster's default
 	// branch ("main"), by catalog name (e.g. `pgvector`). Every endpoint on
 	// that branch mounts them, and a fork inherits the set; add more to a
@@ -412,12 +450,25 @@ type CreateClusterRequest struct {
 	// Kubernetes resource quantity and is applied as BOTH the request and the
 	// limit on the endpoint container, so the pod is scheduled with the
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
-	// defaults of 2 CPU cores and 4Gi of memory.
+	// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
+	// standard 8 GiB per vCPU).
 	Resources *EndpointResources `json:"resources,omitempty"`
 
 	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
 	WithWriter *bool `json:"with_writer,omitempty"`
 }
+
+// CreateClusterRequestEngine The database engine to provision as — a named bundle of externalized
+// extensions. `postgres` (the default) seeds none, `aidb` seeds
+// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+// unioned with `extensions` and written onto the default branch, and the
+// engine is recorded on the cluster and returned by getCluster /
+// listClusters. An unknown engine is rejected (400), as is any non-default
+// engine when externalized extensions are unavailable (e.g. the Docker
+// driver). Recording it is provenance, not a constraint: extensions stay
+// add-only per branch, so the bundle remains a subset of what the branch
+// carries. See compute/architecture/extensions.md.
+type CreateClusterRequestEngine string
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
 type CreateEndpointRequest struct {
@@ -483,7 +534,8 @@ type CreateEndpointRequest struct {
 	// Kubernetes resource quantity and is applied as BOTH the request and the
 	// limit on the endpoint container, so the pod is scheduled with the
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
-	// defaults of 2 CPU cores and 4Gi of memory.
+	// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
+	// standard 8 GiB per vCPU).
 	Resources *EndpointResources `json:"resources,omitempty"`
 
 	// Role The endpoint's role. A branch admits at most one read_write endpoint.
@@ -642,7 +694,8 @@ type Endpoint struct {
 	// Kubernetes resource quantity and is applied as BOTH the request and the
 	// limit on the endpoint container, so the pod is scheduled with the
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
-	// defaults of 2 CPU cores and 4Gi of memory.
+	// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
+	// standard 8 GiB per vCPU).
 	Resources *EndpointResources `json:"resources,omitempty"`
 	Role      EndpointRole       `json:"role"`
 
@@ -694,19 +747,29 @@ type EndpointList struct {
 // Kubernetes resource quantity and is applied as BOTH the request and the
 // limit on the endpoint container, so the pod is scheduled with the
 // **Guaranteed** QoS class. Omit the object (or either field) to take the
-// defaults of 2 CPU cores and 4Gi of memory.
+// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
+// standard 8 GiB per vCPU).
 type EndpointResources struct {
 	// Cpu CPU reservation as a Kubernetes quantity (e.g. "2", "1500m",
 	// "500m"). Applied as both the request and the limit. Defaults to "2"
 	// (2 cores) when omitted.
 	Cpu *string `json:"cpu,omitempty"`
 
-	// Memory Memory reservation as a Kubernetes quantity, with an explicit unit of
-	// Mi or larger (e.g. "4Gi", "512Mi", "1500M"). Applied as both the
-	// request and the limit. Defaults to "4Gi" when omitted. A unitless
-	// value is a byte count, so "4" would reserve four bytes and leave the
-	// endpoint unresizable; it is rejected with 400, as are the milli
-	// suffix and Ki/k.
+	// Memory Memory reservation as a Kubernetes quantity, with an explicit unit
+	// of Mi or larger (e.g. "16Gi", "512Mi", "1500M"). Applied as both the
+	// request and the limit. A unitless value is a byte count, so "4" would
+	// reserve four bytes and leave the endpoint unresizable; it is rejected
+	// with 400, as are the milli suffix and Ki/k.
+	//
+	// Omitted, it follows `cpu` at the control plane's memory-per-vCPU
+	// ratio — 8 GiB per core by default, so the 2-core default gets 16Gi
+	// and 8 cores get 64Gi. Naming only `cpu` is therefore enough.
+	//
+	// That ratio is also a **floor**: less memory per core is a `400`
+	// naming the minimum for the CPU asked for. More is accepted — a
+	// working set that needs it is a real request; less produces an
+	// endpoint that starts and then cannot hold its own cache, which
+	// surfaces as a slow database rather than a wrong request.
 	Memory *string `json:"memory,omitempty"`
 }
 
@@ -1058,7 +1121,8 @@ type ResizeEndpointRequest struct {
 	// Kubernetes resource quantity and is applied as BOTH the request and the
 	// limit on the endpoint container, so the pod is scheduled with the
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
-	// defaults of 2 CPU cores and 4Gi of memory.
+	// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
+	// standard 8 GiB per vCPU).
 	Resources EndpointResources `json:"resources"`
 }
 

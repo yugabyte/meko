@@ -89,9 +89,14 @@ type CreateClusterInput struct {
 	// Ignored when WithWriter is false.
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Engine is the named extension bundle to provision as ("postgres", "aidb",
+	// "oracle"). The handler validates it and folds its bundle into Extensions;
+	// this records what the cluster was created as. Empty means the default.
+	Engine string `json:"engine,omitempty"`
 	// Extensions is the cluster-wide externalized extension set (catalog names,
-	// pre-validated by the handler), stored on the default branch so every endpoint
-	// on the cluster mounts it. Empty leaves the cluster with catalog defaults only.
+	// pre-validated by the handler, including whatever Engine seeds), stored on
+	// the default branch so every endpoint on the cluster mounts it. Empty leaves
+	// the cluster with catalog defaults only.
 	Extensions []string `json:"extensions,omitempty"`
 }
 
@@ -110,6 +115,7 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Ta
 			BranchID:   branchID,
 			Name:       in.Name,
 			PgVersion:  in.PgVersion,
+			Engine:     in.Engine,
 			Extensions: in.Extensions,
 		}),
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{

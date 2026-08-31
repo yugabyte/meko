@@ -16,6 +16,26 @@ registry: quay.io/yugabyte
 base_image: amp-pg18-build
 pg_tag: v18
 
+# Engines — named bundles of the extensions below, offered as product flavours.
+# The controller resolves an engine to its bundle at createCluster and records
+# the engine on the cluster; the UI generates its picker from this list
+# (amp_ui/scripts/gen-extensions.py). Keep in step with
+# controller/internal/extensions/engines.go, which TestEngineTableMatchesManifest
+# enforces. Every name under `extensions:` must appear in the catalog below.
+engines:
+  - name: postgres
+    label: PostgreSQL
+    description: Plain PostgreSQL 18
+    extensions: []
+  - name: aidb
+    label: AI Database
+    description: Vector search, graph, and scheduled jobs
+    extensions: [pgvector, age, pg_cron]
+  - name: oracle
+    label: Oracle
+    description: Oracle compatibility layer
+    extensions: [hexabridge]
+
 extensions:
   - name: pgvector
     # Shown on the UI picker's card (generated into amp_ui's catalog).

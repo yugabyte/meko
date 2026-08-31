@@ -20,9 +20,15 @@ type CreateClusterArgs struct {
 	BranchID  uuid.UUID `json:"branch_id"`
 	Name      string    `json:"name"`
 	PgVersion int       `json:"pg_version"`
+	// Engine is the named extension bundle the cluster is provisioned as
+	// ("postgres", "aidb", "oracle"), recorded on the cluster row. The handler
+	// has already resolved its bundle into Extensions, so the step just stores
+	// it. Empty means the default engine.
+	Engine string `json:"engine,omitempty"`
 	// Extensions is the cluster-wide externalized extension set (catalog names,
-	// pre-validated by the handler), written onto the default branch row so every
-	// endpoint on the cluster resolves against it. Empty when none were requested.
+	// pre-validated by the handler, and already including whatever Engine seeds),
+	// written onto the default branch row so every endpoint on the cluster
+	// resolves against it. Empty when none were requested.
 	Extensions []string `json:"extensions,omitempty"`
 }
 
@@ -50,7 +56,7 @@ func buildCreateClusterStep(raw json.RawMessage, deps Deps) (Step, error) {
 func (*createClusterStep) Kind() string { return StepCreateCluster }
 
 func (s *createClusterStep) Execute(ctx context.Context) StepResult {
-	if err := s.state.EnsureCluster(ctx, s.PoolID, s.ClusterID, s.BranchID, s.Name, s.PgVersion, s.Extensions); err != nil {
+	if err := s.state.EnsureCluster(ctx, s.PoolID, s.ClusterID, s.BranchID, s.Name, s.PgVersion, s.Engine, s.Extensions); err != nil {
 		return Fail(fmt.Errorf("ensure cluster+default branch: %w", err))
 	}
 	return Ok(mustResult(map[string]string{"cluster_id": s.ClusterID.String(), "branch_id": s.BranchID.String()}))

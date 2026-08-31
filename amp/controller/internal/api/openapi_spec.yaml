@@ -1335,6 +1335,21 @@ components:
           description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
         resources:
           $ref: '#/components/schemas/EndpointResources'
+        engine:
+          type: string
+          enum: [postgres, aidb, oracle]
+          default: postgres
+          description: |
+            The database engine to provision as — a named bundle of externalized
+            extensions. `postgres` (the default) seeds none, `aidb` seeds
+            pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+            unioned with `extensions` and written onto the default branch, and the
+            engine is recorded on the cluster and returned by getCluster /
+            listClusters. An unknown engine is rejected (400), as is any non-default
+            engine when externalized extensions are unavailable (e.g. the Docker
+            driver). Recording it is provenance, not a constraint: extensions stay
+            add-only per branch, so the bundle remains a subset of what the branch
+            carries. See compute/architecture/extensions.md.
         extensions:
           type: array
           items:
@@ -1367,6 +1382,12 @@ components:
           format: date-time
         default_branch:
           $ref: '#/components/schemas/Branch'
+        engine:
+          type: string
+          description: |
+            The engine the cluster was provisioned as (`postgres`, `aidb`,
+            `oracle`) — see createCluster. Provenance: it named the extensions
+            seeded at create, and is not re-derived when a branch adds more.
         extensions:
           type: array
           items:

@@ -20,6 +20,27 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CreateClusterRequestEngine.
+const (
+	Aidb     CreateClusterRequestEngine = "aidb"
+	Oracle   CreateClusterRequestEngine = "oracle"
+	Postgres CreateClusterRequestEngine = "postgres"
+)
+
+// Valid indicates whether the value is a known member of the CreateClusterRequestEngine enum.
+func (e CreateClusterRequestEngine) Valid() bool {
+	switch e {
+	case Aidb:
+		return true
+	case Oracle:
+		return true
+	case Postgres:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateEndpointRequestDiskType.
 const (
 	Local   CreateEndpointRequestDiskType = "local"
@@ -348,6 +369,11 @@ type Cluster struct {
 	CreatedAt     time.Time `json:"created_at"`
 	DefaultBranch Branch    `json:"default_branch"`
 
+	// Engine The engine the cluster was provisioned as (`postgres`, `aidb`,
+	// `oracle`) — see createCluster. Provenance: it named the extensions
+	// seeded at create, and is not re-derived when a branch adds more.
+	Engine *string `json:"engine,omitempty"`
+
 	// Extensions Externalized PostgreSQL extensions enabled on the cluster's default
 	// branch ("main"), by catalog name (e.g. `pgvector`), surfaced here as
 	// the cluster's set. Each branch carries its own set (a fork inherits its
@@ -395,6 +421,18 @@ type CreateBranchRequest struct {
 
 // CreateClusterRequest defines model for CreateClusterRequest.
 type CreateClusterRequest struct {
+	// Engine The database engine to provision as — a named bundle of externalized
+	// extensions. `postgres` (the default) seeds none, `aidb` seeds
+	// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+	// unioned with `extensions` and written onto the default branch, and the
+	// engine is recorded on the cluster and returned by getCluster /
+	// listClusters. An unknown engine is rejected (400), as is any non-default
+	// engine when externalized extensions are unavailable (e.g. the Docker
+	// driver). Recording it is provenance, not a constraint: extensions stay
+	// add-only per branch, so the bundle remains a subset of what the branch
+	// carries. See compute/architecture/extensions.md.
+	Engine *CreateClusterRequestEngine `json:"engine,omitempty"`
+
 	// Extensions Externalized PostgreSQL extensions to enable on the cluster's default
 	// branch ("main"), by catalog name (e.g. `pgvector`). Every endpoint on
 	// that branch mounts them, and a fork inherits the set; add more to a
@@ -421,6 +459,18 @@ type CreateClusterRequest struct {
 	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
 	WithWriter *bool `json:"with_writer,omitempty"`
 }
+
+// CreateClusterRequestEngine The database engine to provision as — a named bundle of externalized
+// extensions. `postgres` (the default) seeds none, `aidb` seeds
+// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+// unioned with `extensions` and written onto the default branch, and the
+// engine is recorded on the cluster and returned by getCluster /
+// listClusters. An unknown engine is rejected (400), as is any non-default
+// engine when externalized extensions are unavailable (e.g. the Docker
+// driver). Recording it is provenance, not a constraint: extensions stay
+// add-only per branch, so the bundle remains a subset of what the branch
+// carries. See compute/architecture/extensions.md.
+type CreateClusterRequestEngine string
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
 type CreateEndpointRequest struct {

@@ -50,6 +50,7 @@ def create_cluster(
     pool_id: str,
     name: str,
     pg_version: Optional[int] = None,
+    engine: Optional[str] = None,
     extensions: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Create a cluster (and its default branch "main") in a pool. ASYNCHRONOUS.
@@ -60,14 +61,24 @@ def create_cluster(
     is currently accepted — any other value is rejected with 400, so omit it
     unless you have a reason to set it.
 
+    `engine` picks a named bundle of extensions to provision as: `postgres`
+    (default, seeds none), `aidb` (pgvector + age + pg_cron), or `oracle`
+    (hexabridge). It is unioned with `extensions`, so the two compose. The engine
+    is recorded on the cluster and returned by `get_cluster` / `list_clusters`;
+    it names what the cluster was created as and is not re-derived when a branch
+    adds extensions later. An unknown engine is rejected with 400.
+
     `extensions` enables externalized PostgreSQL extensions (by catalog name,
     e.g. `["pgvector"]`) on the cluster's default branch "main": every endpoint
     on that branch mounts them, and a fork inherits the set. Add more to a branch
     later with `add_branch_extensions`. An unknown name is rejected with 400, as
     is any value when the controller has no extension catalog (e.g. the Docker
-    driver).
+    driver) — which includes a non-default `engine`, since its bundle resolves to
+    the same catalog.
     """
-    return controller_client.create_cluster(pool_id, name, pg_version, extensions)
+    return controller_client.create_cluster(
+        pool_id, name, pg_version, engine, extensions
+    )
 
 
 def add_branch_extensions(

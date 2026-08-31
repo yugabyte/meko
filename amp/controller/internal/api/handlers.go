@@ -269,6 +269,27 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		}
 	}
 
+	// The engine is a named bundle over the same catalog: resolve it and union it
+	// into the requested set, so `engine` and `extensions` compose rather than
+	// one overriding the other. Validated through the same path, so a non-default
+	// engine on a controller with no catalog is the same clear 400 an explicit
+	// extension would get.
+	engine := core.DefaultEngine
+	if request.Body.Engine != nil {
+		engine = string(*request.Body.Engine)
+	}
+	engineExts, err := extensions.ResolveEngine(engine)
+	if err != nil {
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", err.Error()))}, nil
+	}
+	if len(engineExts) > 0 {
+		cleaned, errMsg := c.validateExtensions(engineExts)
+		if errMsg != "" {
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
+		}
+		exts = unionExtensions(exts, cleaned)
+	}
+
 	// Optionally provision the default branch's write endpoint in the same task
 	// ("create cluster" = the cluster + its writer), sized by resources. When with_writer
 	// is false (default), no endpoint is created — compute is a separate resource.
@@ -301,6 +322,7 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		WithWriter: withWriter,
 		CPU:        cpu,
 		Memory:     memory,
+		Engine:     engine,
 		Extensions: exts,
 	})
 	if err != nil {
@@ -1198,6 +1220,25 @@ func (c *Controllers) validateExtensions(names []string) (cleaned []string, errM
 	return cleaned, ""
 }
 
+// unionExtensions appends names from `add` that `base` does not already carry,
+// preserving base's order then add's. Both come from the catalog, so a plain
+// string compare is enough.
+func unionExtensions(base, add []string) []string {
+	seen := make(map[string]struct{}, len(base))
+	for _, n := range base {
+		seen[n] = struct{}{}
+	}
+	out := append([]string(nil), base...)
+	for _, n := range add {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
 func clusterToAPI(p core.Cluster) Cluster {
 	out := Cluster{
 		Id:            p.ID,
@@ -1205,6 +1246,10 @@ func clusterToAPI(p core.Cluster) Cluster {
 		Name:          p.Name,
 		CreatedAt:     p.CreatedAt,
 		DefaultBranch: branchToAPI(p.DefaultBranch),
+	}
+	if p.Engine != "" {
+		engine := p.Engine
+		out.Engine = &engine
 	}
 	// The extension set is chosen at the cluster level and applies to all
 	// branches; surface the default branch's set here as the cluster's set (a

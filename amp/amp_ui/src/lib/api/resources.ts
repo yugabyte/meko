@@ -167,11 +167,16 @@ export async function createCluster(
 // the writer; empty takes the controller default (2 cores / 4Gi).
 export function createClusterWithWriter(
   poolId: string,
-  input: { name: string; cpu?: string; memory?: string; extensions?: string[] },
+  input: { name: string; cpu?: string; memory?: string; engine?: string; extensions?: string[] },
 ): Promise<Task> {
   const body: Record<string, unknown> = { name: input.name, with_writer: true };
   if (input.cpu || input.memory) {
     body.resources = { cpu: input.cpu || undefined, memory: input.memory || undefined };
+  }
+  // The engine is a named extension bundle the controller resolves and unions
+  // into `extensions`, so the two compose and the client sends both verbatim.
+  if (input.engine) {
+    body.engine = input.engine;
   }
   // Seeds the `main` branch's set. Omitted rather than sent empty: [] and absent
   // mean the same to the controller, and absent is the quieter payload.

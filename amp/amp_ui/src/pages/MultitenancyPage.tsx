@@ -4,6 +4,7 @@
 // elsewhere — see useCurrentUser — so it isn't surfaced here.)
 
 import { useMemo, useState } from "react";
+import { engineLabel } from "@/components/ui/engine-field";
 import { useSearchParams } from "react-router-dom";
 import { GitBranch, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,7 @@ export default function MultitenancyPage() {
     () => clusters.data?.find((p) => p.name === dbName)?.id ?? "",
     [clusters.data, dbName],
   );
+  const cluster = clusters.data?.find((p) => p.name === dbName);
   const branches = useBranches(poolId || undefined, clusterId || undefined);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
 
@@ -158,7 +160,10 @@ export default function MultitenancyPage() {
             <div className="mb-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-4">
               {[
                 { k: "Cluster", v: dbName },
-                { k: "Engine", v: `PostgreSQL ${branches.data[0]?.pg_version ?? 18}` },
+                {
+                  k: "Engine",
+                  v: engineLabel(cluster?.engine, branches.data[0]?.pg_version),
+                },
                 { k: "Cluster ID", v: clusterId, mono: true },
                 { k: "Branches", v: String(branches.data.length) },
               ].map(({ k, v, mono }) => (

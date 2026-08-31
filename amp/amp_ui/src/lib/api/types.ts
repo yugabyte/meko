@@ -47,6 +47,10 @@ export type Cluster = {
   name: string;
   storage_pool_id: string;
   default_branch: Branch;
+  /** The engine the cluster was provisioned as ("postgres", "aidb", "oracle").
+   *  Provenance: it named the extensions seeded at create and is not
+   *  re-derived when a branch adds more. */
+  engine?: string;
   /** The default branch's extension set, surfaced as the cluster's. */
   extensions?: string[];
   created_at: string;

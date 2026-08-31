@@ -190,12 +190,14 @@ export function useCreateClusterWithWriter() {
       name: string;
       cpu?: string;
       memory?: string;
+      engine?: string;
       extensions?: string[];
     }) =>
       createClusterWithWriter(input.poolId, {
         name: input.name,
         cpu: input.cpu,
         memory: input.memory,
+        engine: input.engine,
         extensions: input.extensions,
       }),
     onSuccess: (_task, input) => {

@@ -68,9 +68,29 @@ type Cluster struct {
 	StoragePoolID uuid.UUID
 	Name          string
 	CreatedAt     time.Time
+	// Engine is the named extension bundle the cluster was provisioned as
+	// ("postgres", "aidb", "oracle"). Provenance, not a constraint: it seeds the
+	// default branch's extensions at create and is never re-derived. Empty only
+	// on a row written before the engine column existed.
+	Engine string
 	// DefaultBranch is the cluster's root branch (IsDefault). It is created with
 	// the cluster and always exists; reads populate it.
 	DefaultBranch Branch
+}
+
+// DefaultEngine is the engine a cluster gets when the create request names none.
+// It mirrors extensions.EnginePostgres — core deliberately does not import the
+// catalog (the `extensions []string` params would shadow it), so
+// TestDefaultEngineMatchesCatalog keeps the two in step.
+const DefaultEngine = "postgres"
+
+// normalizeEngine defaults an unset engine. The column is NOT NULL, and an
+// explicit "" would bypass its DEFAULT.
+func normalizeEngine(engine string) string {
+	if engine == "" {
+		return DefaultEngine
+	}
+	return engine
 }
 
 // Branch is one logical Postgres database's data — what Postgres itself calls a

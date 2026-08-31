@@ -423,7 +423,7 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 // EnsureCluster idempotently creates a cluster and its default branch with the
 // given ids. A repeated id is a no-op; a cluster-name collision within the pool
 // (a different id) is ErrConflict; a missing pool is ErrNotFound.
-func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, extensions []string) error {
+func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
@@ -451,7 +451,7 @@ func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchI
 		CreatedAt:  now,
 		Extensions: dedupSorted(extensions),
 	}
-	p := Cluster{ID: clusterID, StoragePoolID: poolID, Name: name, CreatedAt: now, DefaultBranch: def}
+	p := Cluster{ID: clusterID, StoragePoolID: poolID, Name: name, CreatedAt: now, Engine: normalizeEngine(engine), DefaultBranch: def}
 	m.clusters[clusterID] = p
 	m.branches[branchID] = def
 	m.clusterNames[nk] = struct{}{}

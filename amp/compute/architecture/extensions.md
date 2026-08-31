@@ -246,6 +246,34 @@ branch, and `addBranchExtensions`
   as the cluster's) and the `Branch` response (`getBranch`/`listBranches` return
   that branch's own set).
 
+## Engines
+
+An **engine** is a named bundle of these extensions, offered as a product flavour
+so a caller can ask for "AI Database" without knowing it means pgvector + age +
+pg_cron. `createCluster` takes an optional `engine`; the controller resolves its
+bundle, **unions it with any `extensions` in the same request** (the two compose,
+neither overrides the other), seeds the result onto the default branch, and
+records the engine on the cluster row (`amp_registry.clusters.engine`).
+
+| engine | seeds |
+|---|---|
+| `postgres` (default) | nothing |
+| `aidb` | pgvector, age, pg_cron |
+| `oracle` | hexabridge |
+
+The recorded engine is **provenance, not a constraint**: it names what the
+cluster was created as and is never re-derived. It cannot go stale either —
+`addBranchExtensions` only unions and there is no removal API, so an engine's
+bundle stays a subset of what its branches carry for the cluster's whole life.
+A non-default engine on a controller with no catalog is the same `400` an
+explicit extension would get, since the bundle resolves against this catalog.
+
+The engine table lives in three places, and two generated checks keep them in
+step: [`extensions.yaml`](../../deploy/extensions/extensions.yaml) is the source
+of truth, `TestEngineTableMatchesManifest` asserts
+[`engines.go`](../../controller/internal/extensions/engines.go) matches it, and
+the UI's picker is generated from it (see "Adding a new extension" below).
+
 ## Storage and fork behaviour
 
 Extension **data** (the catalog objects, index contents) is part of a branch's
@@ -306,7 +334,10 @@ audit / recreate.
    `src/config/extensions.json`. The controller exposes no catalog endpoint, so
    the picker ships the list; generating it from the manifest keeps the two from
    drifting, and `src/config/extensions.test.ts` fails if the checked-in file is
-   stale.
+   stale. To add or change an **engine**, edit the manifest's `engines:` block and
+   [`engines.go`](../../controller/internal/extensions/engines.go) together, then
+   regenerate — `TestEngineTableMatchesManifest` fails if they disagree, and the
+   openapi `engine` enum has its own check (`TestEngineEnumMatchesCatalog`).
 4. For a non-default extension, opt a branch in by passing
    `extensions: ["<name>"]` to `createCluster` (seeds the default branch), or
    `addBranchExtensions` on a branch later; every endpoint on that branch then
@@ -388,4 +419,9 @@ audit / recreate.
   on a branch; its catalog is generated from the manifest by
   [`gen-extensions.py`](../../amp_ui/scripts/gen-extensions.py) into
   `amp_ui/src/config/extensions.json`.
+- Engines: [`controller/internal/extensions/engines.go`](../../controller/internal/extensions/engines.go)
+  (the bundles), `engine` on `CreateClusterRequest` / `Cluster` in
+  [`openapi_spec.yaml`](../../controller/internal/api/openapi_spec.yaml),
+  [migration 0010](../../controller/migrations/0010_cluster_engine.up.sql)
+  (`amp_registry.clusters.engine`).
 - Patches: [`compute/image/patches/`](../image/patches/) (reused verbatim).
