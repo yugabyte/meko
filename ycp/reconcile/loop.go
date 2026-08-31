@@ -23,8 +23,19 @@ type Engine struct {
 	mu        sync.Mutex
 	cache     map[ResourceKey]int64      // last-applied generation, soft cache
 	failures  map[ResourceKey]*failState // per-resource backoff
-	permanent map[ResourceKey]error      // non-retryable, surfaced as drift
+	permanent map[ResourceKey]permMark   // non-retryable, surfaced as drift
 	seenState map[ResourceKey]stateStamp // when a resource entered its current state
+}
+
+// permMark is a non-retryable failure plus the desired generation it was
+// recorded against. The generation is what lets the mark expire: the verb cannot
+// succeed for the spec as written, so re-issuing it every tick is pointless — but
+// the operator can rewrite that spec, and the edit has to un-stick the resource.
+// Without it a refused create latches forever (its action stays planned, since
+// the resource never appears in List) and the corrected spec is never applied.
+type permMark struct {
+	err error
+	gen int64
 }
 
 type failState struct {
@@ -84,7 +95,7 @@ func New(backend Backend, opts Options) *Engine {
 		now:        opts.Now,
 		cache:      map[ResourceKey]int64{},
 		failures:   map[ResourceKey]*failState{},
-		permanent:  map[ResourceKey]error{},
+		permanent:  map[ResourceKey]permMark{},
 		seenState:  map[ResourceKey]stateStamp{},
 	}
 }
@@ -100,8 +111,8 @@ type Result struct {
 	Failed map[ResourceKey]error
 	// Permanent maps a resource to a non-retryable error (a verb the kind does
 	// not support, e.g. deleting a storage pool). The engine does not re-issue
-	// these; they are reported as drift, and unlike Failed they do not by
-	// themselves make the environment DEGRADED.
+	// these until the resource's spec changes; they are reported as drift, and
+	// unlike Failed they do not by themselves make the environment DEGRADED.
 	Permanent map[ResourceKey]error
 	// Stuck maps a resource that has sat non-Ready past StuckAfter to how long
 	// it has been in that state.
@@ -165,20 +176,22 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	}
 
 	// Surface permanent (known-unsupported) actions as drift and drop them from
-	// this tick's work, and forget any permanent mark whose action is no longer
-	// planned (its situation resolved — e.g. the pool was re-declared).
-	planned := make(map[ResourceKey]bool, len(mutate))
+	// this tick's work, and forget any permanent mark whose situation has moved
+	// on: its action is no longer planned (e.g. the pool was re-declared), or the
+	// spec has been rewritten since — a new generation is a new question, so the
+	// verb is asked again rather than staying latched on the old answer.
+	planned := make(map[ResourceKey]int64, len(mutate))
 	for _, a := range mutate {
-		planned[a.Key] = true
+		planned[a.Key] = a.Resource.Generation
 	}
 	e.mu.Lock()
-	for k := range e.permanent {
-		if !planned[k] {
+	for k, m := range e.permanent {
+		if gen, still := planned[k]; !still || gen != m.gen {
 			delete(e.permanent, k)
 		}
 	}
-	for k, err := range e.permanent {
-		res.Permanent[k] = err
+	for k, m := range e.permanent {
+		res.Permanent[k] = m.err
 	}
 	e.mu.Unlock()
 
@@ -228,7 +241,7 @@ func (e *Engine) filterEligible(actions []Action, actualByKey map[ResourceKey]Ac
 	var out []Action
 	for _, a := range actions {
 		if _, perm := e.permanent[a.Key]; perm {
-			continue // known-unsupported; reported as drift, never re-issued
+			continue // reported as drift; not re-issued until the spec changes
 		}
 		if f := e.failures[a.Key]; f != nil && now.Before(f.nextAttempt) {
 			continue
@@ -281,7 +294,7 @@ func (e *Engine) dispatch(ctx context.Context, actions []Action, res *Result) {
 			if err != nil {
 				if isPermanent(err) {
 					res.Permanent[a.Key] = err
-					e.recordPermanent(a.Key, err)
+					e.recordPermanent(a.Key, err, a.Resource.Generation)
 					return
 				}
 				res.Failed[a.Key] = err
@@ -316,14 +329,15 @@ func (e *Engine) recordSuccess(k ResourceKey, gen int64, t ActionType) {
 	}
 }
 
-// recordPermanent marks a key non-retryable and clears any backoff state: the
-// engine will skip its action on later ticks (surfacing it as drift) rather
-// than retrying a call that structurally cannot succeed.
-func (e *Engine) recordPermanent(k ResourceKey, err error) {
+// recordPermanent marks a key non-retryable at generation gen and clears any
+// backoff state: the engine skips its action on later ticks (surfacing it as
+// drift) rather than retrying a call that cannot succeed for this spec. Rewriting
+// the spec bumps the generation and retires the mark.
+func (e *Engine) recordPermanent(k ResourceKey, err error, gen int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.failures, k)
-	e.permanent[k] = err
+	e.permanent[k] = permMark{err: err, gen: gen}
 }
 
 func (e *Engine) recordFailure(k ResourceKey, err error) {

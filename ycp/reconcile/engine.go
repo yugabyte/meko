@@ -77,14 +77,15 @@ type Backend interface {
 	Parent(r api.DesiredResource) (ResourceKey, bool)
 }
 
-// PermanentError wraps a backend error the engine must not retry: the verb can
-// never succeed for this resource as declared — a kind with no delete path
-// (storage pools) or no update path (pools/clusters/branches), or a spec the
-// controller rejects outright (400). The engine
-// surfaces it as drift on the resource and stops re-issuing the call, instead of
-// flapping the environment to DEGRADED on an endless backoff of a call that will
-// always fail. Contrast a transient failure (task rejected, controller down),
-// which is retried.
+// PermanentError wraps a backend error the engine must not retry: the verb
+// cannot succeed for this resource as declared — a kind with no delete path
+// (storage pools) or no update path (pools and clusters), or a spec the
+// controller rejects outright (400). The engine surfaces it as drift on the
+// resource and stops re-issuing the call, instead of flapping the environment to
+// DEGRADED on an endless backoff of a call that will always fail. "As declared"
+// is the limit of it: a rewritten spec is a new question, so the next generation
+// retires the mark and the verb is asked again. Contrast a transient failure
+// (task rejected, controller down), which is retried on backoff.
 type PermanentError struct{ Err error }
 
 func (e *PermanentError) Error() string { return e.Err.Error() }

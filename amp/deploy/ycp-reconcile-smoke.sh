@@ -23,7 +23,16 @@
 #   4. waits for the agent to create them and report the endpoint READY in the
 #      environment's inventory (GET /environments), asserting the whole tree
 #      (storage-pool/cluster/branch/endpoint) shows up;
-#   5. withdraws the cluster subtree from desired state (leaving just the pool)
+#   5. (SMOKE_EXTENSIONS=1) enables an extension on the branch by editing its
+#      spec — the only path an operator has for a branch that already exists —
+#      and asserts the agent applies it: the branch reports it in
+#      attrs.extensions AND the endpoint the add redeploys comes back Ready with
+#      the extension mounted. The attr alone proves little, since
+#      add_branch_extensions unions the branch row before it touches any
+#      endpoint, so it converges even if every redeploy fails. Opt-in for the
+#      same reason as smoke-test.sh's extension scenario: the images and the
+#      controller catalog only exist under /ci amp_deploy_gke_extensions;
+#   6. withdraws the cluster subtree from desired state (leaving just the pool)
 #      and asserts the agent deletes it — the authoritative GC path.
 #
 # It leaves the pool in desired state on purpose: storage pools have no controller
@@ -33,7 +42,8 @@
 # Prereqs: kubectl (pointed at the cluster), curl, jq.
 #
 # Usage:
-#   NS=ci-pr-1 YCP_ENV_ID=amp-gke-smoke YCP_ADMIN_KEY=... amp/deploy/ycp-reconcile-smoke.sh
+#   NS=ci-pr-1 YCP_ENV_ID=amp-gke-smoke YCP_ADMIN_KEY=... [SMOKE_EXTENSIONS=1] \
+#     amp/deploy/ycp-reconcile-smoke.sh
 set -uo pipefail
 
 NS="${NS:?NS (namespace) is required}"
@@ -52,6 +62,12 @@ POOL_NAME="rec-pool-$SUFFIX"
 CLUSTER_NAME="recproj"
 BRANCH_NAME="main"
 EP_NAME="rw"
+# Enabled in a SECOND desired-state write, not seeded through the cluster spec,
+# so this exercises the addBranchExtensions path — the only one an operator has
+# for a branch that already exists.
+BRANCH_EXT="pgvector"
+# The file the extension's ImageVolume mounts, checked in the redeployed pod.
+BRANCH_EXT_FILE="/extensions/pgvector/share/postgresql/extension/vector.control"
 
 pass=0; fail=0
 hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
@@ -138,6 +154,67 @@ for want in cluster branch endpoint; do
     *) bad "inventory missing $want (kinds: ${kinds:-none})" ;;
   esac
 done
+
+# --- enable an extension on the existing branch (opt-in) ---
+if [ "${SMOKE_EXTENSIONS:-0}" != 1 ]; then
+  hdr "branch extensions"
+  printf '  \033[1;33mskip\033[0m extension assertions (SMOKE_EXTENSIONS != 1; needs /ci amp_deploy_gke_extensions)\n'
+else
+  # Editing the branch's spec bumps its generation, which is what gets the agent to
+  # call addBranchExtensions. That redeploys every endpoint on the branch, so give
+  # it the same budget as the endpoint deploy above.
+  hdr "enable $BRANCH_EXT on branch $BRANCH_NAME (desired-state edit)"
+  EP_ID=$(env_json | jq -r --arg n "$EP_NAME" \
+    '.resources[]?|select(.kind=="endpoint" and .name==$n)|.attrs.id' 2>/dev/null | head -1)
+  [ -n "$EP_ID" ] && ok "endpoint id ($EP_ID)" || bad "no endpoint id in the inventory"
+
+  WITH_EXT=$(jq -nc --argjson r "$DESIRED" --arg n "${POOL_NAME}/${CLUSTER_NAME}/${BRANCH_NAME}" --arg ext "$BRANCH_EXT" \
+    '[ $r[] | if .kind=="branch" and .name==$n then .spec.extensions=[$ext] else . end ]')
+  set_desired "$WITH_EXT" && ok "desired state updated with extensions" || bad "POST desired (extensions) failed"
+
+  exts=""
+  for ((i=0; i<60; i++)); do
+    exts=$(env_json | jq -r --arg n "$BRANCH_NAME" \
+      '.resources[]?|select(.kind=="branch" and .name==$n)|.attrs.extensions // empty' 2>/dev/null | head -1)
+    case ",${exts}," in *,"$BRANCH_EXT",*) break ;; esac
+    sleep 5
+  done
+  case ",${exts}," in
+    *,"$BRANCH_EXT",*) ok "branch attrs.extensions has $BRANCH_EXT (${exts})" ;;
+    *) bad "branch attrs.extensions='${exts:-none}' (want it to include $BRANCH_EXT)" ;;
+  esac
+
+  # The half the branch row cannot show. The add redeploys the endpoint (a new pod,
+  # since the ImageVolume set is fixed at pod start) and the agent cannot tell you
+  # whether that worked: the amp API does not report what an endpoint mounts, and
+  # the recorded address is never blanked, so the inventory keeps saying "ready".
+  # A pull failure on the extension image looks exactly like success from YCP.
+  #
+  # Wait the endpoint's whole startup budget, not the create-path budget above.
+  # This pod restarts onto a branch that already has data, so /data (an emptyDir)
+  # is rebuilt from YugabyteDB before Postgres listens — the case the endpoint's
+  # startupProbe is sized for (period 10s x threshold 61 = 610s, yb-amp-endpoint
+  # values.yaml). Giving up sooner would report a healthy pod as a failed redeploy.
+  hdr "endpoint $EP_NAME is redeployed Ready with $BRANCH_EXT mounted"
+  if [ -n "$EP_ID" ]; then
+    pod=""
+    for ((i=0; i<130; i++)); do
+      pod=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$EP_ID" | head -1)
+      [ -n "$pod" ] && [ "$(kubectl -n "$NS" get "$pod" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ] && break
+      pod=""
+      sleep 5
+    done
+    pod="${pod#pod/}"
+    [ -n "$pod" ] && ok "endpoint pod Ready after the redeploy ($pod)" \
+      || bad "endpoint pod for $EP_ID never came back Ready after addBranchExtensions"
+    if [ -n "$pod" ]; then
+      kubectl -n "$NS" exec "$pod" -- test -f "$BRANCH_EXT_FILE" 2>/dev/null \
+        && ok "$BRANCH_EXT ImageVolume mounted ($BRANCH_EXT_FILE)" \
+        || bad "$BRANCH_EXT not mounted in $pod — the redeploy did not take"
+    fi
+fi
+
+fi
 
 # --- authoritative GC: withdraw the cluster subtree, keep the pool ---
 hdr "withdraw cluster from desired -> agent deletes it (cascade)"

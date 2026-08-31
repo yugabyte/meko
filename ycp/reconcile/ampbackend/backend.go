@@ -17,6 +17,14 @@
 // apply time, the parent's server-assigned UUIDs — resolved from the index
 // List() builds — which amp needs in the request path but YCP desired state
 // (names only) cannot carry.
+//
+// A resource's spec is the matching amp create request (a pool's owner_user_id,
+// a cluster's pg_version/extensions, a branch's parent_branch_id/fork_point_lsn/
+// pg_settings, an endpoint's role/resources). A branch spec also takes
+// extensions — the externalized extensions every endpoint on it mounts — but
+// only once the branch exists: amp applies them with addBranchExtensions, a
+// separate call against a branch id no create has produced yet, so Create
+// refuses a spec that declares them rather than dropping the field.
 package ampbackend
 
 import (
@@ -25,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,20 +65,26 @@ type Backend struct {
 }
 
 // index maps a resource's hierarchical path to the controller UUIDs its
-// children need in their request paths.
+// children need in their request paths, plus the branch state Update diffs
+// against.
 type index struct {
 	pool     map[string]openapi_types.UUID // "<pool>"
 	cluster  map[string]openapi_types.UUID // "<pool>/<cluster>"
 	branch   map[string]openapi_types.UUID // "<pool>/<cluster>/<branch>"
 	endpoint map[string]openapi_types.UUID // full path
+	// branchRow is each branch as the controller last reported it, kept because
+	// Update diffs a branch spec against it: which extensions to add, and which
+	// other declared fields it did not apply.
+	branchRow map[string]ampclient.Branch
 }
 
 func newIndex() index {
 	return index{
-		pool:     map[string]openapi_types.UUID{},
-		cluster:  map[string]openapi_types.UUID{},
-		branch:   map[string]openapi_types.UUID{},
-		endpoint: map[string]openapi_types.UUID{},
+		pool:      map[string]openapi_types.UUID{},
+		cluster:   map[string]openapi_types.UUID{},
+		branch:    map[string]openapi_types.UUID{},
+		endpoint:  map[string]openapi_types.UUID{},
+		branchRow: map[string]ampclient.Branch{},
 	}
 }
 
@@ -146,8 +161,8 @@ func attrPutInt(m map[string]string, k string, v int) map[string]string {
 // branchAttrs reports a branch's amp id and durable details: pg version, the
 // LSN it was forked at, its lineage, and its externalized-extension set. The id
 // pairs with a fork's parent_branch_id so a UI can rebuild the fork tree. The
-// set is chosen at the cluster level and applies to all branches, but each
-// branch carries its own copy, so it is reported per branch.
+// extension set is per branch — seeded from the cluster, inherited on fork, and
+// added to later — so each branch reports its own.
 func branchAttrs(br ampclient.Branch) map[string]string {
 	var m map[string]string
 	m = attrPut(m, "id", br.BranchId.String())
@@ -241,6 +256,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 			for _, br := range branches.Branches {
 				branchPath := join([]string{poolPath, cl.Name, br.Name})
 				idx.branch[branchPath] = br.BranchId
+				idx.branchRow[branchPath] = br
 				out = append(out, reconcile.Actual{
 					Key:    reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
 					Parent: reconcile.ResourceKey{Kind: KindCluster, Name: clusterPath},
@@ -330,6 +346,19 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 			return b.api.CreateCluster(c, poolID, req)
 		})
 	case KindBranch:
+		// Extensions are not a create-time field: addBranchExtensions takes a branch
+		// id this call has not produced yet. Refuse rather than let json.Unmarshal
+		// drop the field into CreateBranchRequest, which has no place for it — a
+		// declared extension would otherwise vanish with no error anywhere.
+		spec, err := branchSpecOf(r)
+		if err != nil {
+			return err
+		}
+		if len(extensionSet(spec.Extensions)) > 0 {
+			return reconcile.Permanent(fmt.Errorf(
+				"create branch %q: extensions cannot be declared at branch create (a new branch inherits its parent's set) — declare them once the branch exists",
+				r.Name))
+		}
 		poolID, clusterID, ok := b.resolveCluster(idx, r.Name)
 		if !ok {
 			return fmt.Errorf("create branch %q: parent cluster not found", r.Name)
@@ -359,13 +388,23 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 	return fmt.Errorf("create: unknown kind %q", r.Kind)
 }
 
-// Update supports endpoint resize; the other kinds have no controller update
-// path, so a spec change to them is a permanent (non-retryable) error the
-// engine surfaces as drift rather than retrying forever.
+// Update carries the two spec changes this agent applies to a resource that
+// already exists: resizing an endpoint, and enabling externalized extensions on
+// a branch. Pools and clusters have no controller update path at all, so a spec
+// change to one is a permanent (non-retryable) error the engine surfaces as
+// drift rather than retrying forever; the branch fields Update does not apply
+// are reported the same way (see updateBranch).
 func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
-	if r.Kind != KindEndpoint {
-		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only endpoint resize)", r.Kind))
+	switch r.Kind {
+	case KindBranch:
+		return b.updateBranch(ctx, r)
+	case KindEndpoint:
+		return b.resizeEndpoint(ctx, r)
 	}
+	return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only endpoint resize and branch extensions)", r.Kind))
+}
+
+func (b *Backend) resizeEndpoint(ctx context.Context, r api.DesiredResource) error {
 	b.mu.RLock()
 	idx := b.idx
 	b.mu.RUnlock()
@@ -385,6 +424,135 @@ func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
 	return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
 		return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
 	})
+}
+
+// updateBranch applies the one branch change amp can make after create — adding
+// externalized extensions — and reports whatever else the spec declares that it
+// could not. The add is an absolute union, so re-issuing it (a replayed tick, an
+// add still in flight) is a no-op, which is what lets the engine drive it with
+// no new verb; only the missing names are sent, because every add redeploys the
+// branch's endpoints.
+//
+// Anything else the spec declares is create-time here, so a value the branch
+// does not already carry is drift, not work: a name dropped from extensions
+// cannot be removed at all (a branch's set only grows, deliberately, so a fork's
+// endpoints keep mounting what its inherited objects need), and pg_settings has
+// a controller verb this agent does not wire (see updateBranchSettings). Adds
+// are issued before drift is reported, so one unfixable field does not block the
+// rest.
+func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error {
+	spec, err := branchSpecOf(r)
+	if err != nil {
+		return err
+	}
+
+	b.mu.RLock()
+	idx := b.idx
+	b.mu.RUnlock()
+
+	poolID, clusterID, branchID, ok := b.resolveBranch(idx, r.Name)
+	if !ok {
+		return fmt.Errorf("update branch %q: branch not found", r.Name)
+	}
+	br := idx.branchRow[r.Name]
+	have := extensionSet(br.Extensions)
+	want := extensionSet(spec.Extensions)
+
+	if spec.Extensions != nil {
+		if add := sortedMissing(want, have); len(add) > 0 {
+			if err := b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+				return b.api.AddBranchExtensions(c, poolID, clusterID, branchID,
+					ampclient.AddBranchExtensionsRequest{Extensions: add})
+			}); err != nil {
+				return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(add, ","), r.Name, err)
+			}
+		}
+	}
+
+	var drift []string
+	if spec.Extensions != nil {
+		if extra := sortedMissing(have, want); len(extra) > 0 {
+			drift = append(drift, "extensions "+strings.Join(extra, ",")+" are enabled and cannot be removed")
+		}
+	}
+	drift = append(drift, unapplied(spec, br)...)
+	if len(drift) > 0 {
+		return reconcile.Permanent(fmt.Errorf("update branch %q: %s", r.Name, strings.Join(drift, "; ")))
+	}
+	return nil
+}
+
+// unapplied names the branch-spec fields whose declared value the controller does
+// not report, i.e. the ones this update did not and cannot apply. Without it a
+// spec whose extensions are already converged would report success on a
+// generation bump that changed something else entirely, and the engine would
+// latch that generation as applied.
+//
+// fork_point_lsn is deliberately not compared: a branch records the fork LSN the
+// controller resolved, which is not textually what a caller requested, so a
+// mismatch would not reliably mean drift.
+func unapplied(spec branchSpec, br ampclient.Branch) []string {
+	var out []string
+	if spec.PgSettings != nil {
+		have := map[string]string{}
+		if br.PgSettings != nil {
+			have = *br.PgSettings
+		}
+		for k, v := range *spec.PgSettings {
+			if cur, ok := have[k]; !ok || cur != v {
+				out = append(out, "pg_settings."+k)
+			}
+		}
+	}
+	if spec.ParentBranchId != nil && (br.ParentBranchId == nil || *br.ParentBranchId != *spec.ParentBranchId) {
+		out = append(out, "parent_branch_id")
+	}
+	sort.Strings(out)
+	return out
+}
+
+// branchSpec is a branch's desired spec as Update reads it: the field it can
+// apply (extensions) plus the ones it can only check (Create decodes the whole
+// thing into CreateBranchRequest instead). Every field is a pointer so an
+// omitted one — unmanaged — is distinguishable from a declared empty one.
+type branchSpec struct {
+	Extensions     *[]string           `json:"extensions"`
+	PgSettings     *map[string]string  `json:"pg_settings"`
+	ParentBranchId *openapi_types.UUID `json:"parent_branch_id"`
+}
+
+func branchSpecOf(r api.DesiredResource) (branchSpec, error) {
+	var spec branchSpec
+	err := unmarshalSpec(r, &spec)
+	return spec, err
+}
+
+// extensionSet turns a (possibly absent) extension list into a set, dropping
+// blanks so a stray "" is never sent to the controller as a name.
+func extensionSet(names *[]string) map[string]bool {
+	set := map[string]bool{}
+	if names == nil {
+		return set
+	}
+	for _, n := range *names {
+		if n = strings.TrimSpace(n); n != "" {
+			set[n] = true
+		}
+	}
+	return set
+}
+
+// sortedMissing returns the members of names that present lacks, in a stable
+// order (the controller logs what it was asked to add).
+func sortedMissing(names, present map[string]bool) []string {
+	var out []string
+	for n := range names {
+		if !present[n] {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Delete removes the resource. Deleting the top of a withdrawn subtree cascades

@@ -390,9 +390,15 @@ jobs:
       # the control plane and asserts the reconcile-agent creates the tree, reports
       # it READY, and GCs it on withdrawal — the amp API is never touched to make
       # resources. YCP_ENV_ID / YCP_ADMIN_KEY come from the ycp-up.sh step.
+      #
+      # SMOKE_EXTENSIONS gates the branch-extensions assertions on the same signal
+      # as the API smoke: without amp_deploy_gke_extensions the extension images
+      # were never pushed, so the redeploy would have nothing to pull.
       - name: Reconcile smoke (amp/deploy/ycp-reconcile-smoke.sh)
         if: env.YCP == '1'
-        run: NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" amp/deploy/ycp-reconcile-smoke.sh
+        env:
+          SMOKE_EXTENSIONS: ${{ (fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true') && '1' || '0' }}
+        run: NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/ycp-reconcile-smoke.sh
 
       - name: Dump controller/endpoint state on failure
         if: failure()

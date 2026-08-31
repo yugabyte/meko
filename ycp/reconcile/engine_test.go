@@ -282,6 +282,39 @@ func TestReconcilePermanentNotRetried(t *testing.T) {
 	}
 }
 
+// A create the backend refuses for the spec as declared must not wedge the
+// resource: its action stays planned every tick (the resource never appears in
+// List), so a mark keyed on the resource alone would never expire and the
+// corrected spec would never be applied — with the environment still reporting
+// READY, since permanent drift does not degrade it.
+func TestReconcilePermanentRetiredByNewGeneration(t *testing.T) {
+	f := newFake()
+	k := key("branch", "p/c/b")
+	f.perm[k] = true
+
+	e := New(f, Options{})
+	bad := []api.DesiredResource{d("branch", "p/c/b", 0)}
+
+	res, _ := e.Reconcile(context.Background(), bad, true)
+	if len(res.Permanent) != 1 || res.Created != 0 {
+		t.Fatalf("tick1: permanent=%d created=%d, want 1/0", len(res.Permanent), res.Created)
+	}
+	// Same spec, same generation: reported, not re-issued.
+	res, _ = e.Reconcile(context.Background(), bad, true)
+	if len(res.Permanent) != 1 || f.attempts[k] != 1 {
+		t.Fatalf("tick2: permanent=%d attempts=%d, want 1/1", len(res.Permanent), f.attempts[k])
+	}
+
+	// The operator fixes the spec. The bumped generation retires the mark, so the
+	// create is asked again — and now succeeds.
+	f.perm[k] = false
+	res, _ = e.Reconcile(context.Background(), []api.DesiredResource{d("branch", "p/c/b", 1)}, true)
+	if res.Created != 1 || len(res.Permanent) != 0 {
+		t.Fatalf("tick3: created=%d permanent=%d, want 1/0 — a corrected spec must un-stick the resource",
+			res.Created, len(res.Permanent))
+	}
+}
+
 // A resource that sits non-Ready in the same state past StuckAfter is flagged,
 // and the flag clears once it makes progress.
 func TestReconcileStuck(t *testing.T) {

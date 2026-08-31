@@ -222,3 +222,210 @@ func TestBadRequestIsPermanent(t *testing.T) {
 		t.Errorf("Create error = %v, want the controller's message carried through", err)
 	}
 }
+
+// calls records what a test's apply verbs sent to the fake controller.
+type calls struct {
+	posts []string                               // method+path of every mutating request
+	added []ampclient.AddBranchExtensionsRequest // addBranchExtensions bodies, in order
+}
+
+// listedTree stands up a controller serving one pool -> cluster -> branch whose
+// branch has the given extension set, runs List (which is what populates the id
+// index the apply verbs resolve against), and returns the backend plus what the
+// test's apply verbs go on to send.
+func listedTree(t *testing.T, branchExts []string) (*Backend, *calls) {
+	t.Helper()
+	const (
+		poolID    = "22222222-2222-2222-2222-222222222222"
+		clusterID = "33333333-3333-3333-3333-333333333333"
+		branchID  = "44444444-4444-4444-4444-444444444444"
+	)
+	exts, err := json.Marshal(branchExts)
+	if err != nil {
+		t.Fatalf("marshal extensions: %v", err)
+	}
+	got := &calls{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			got.posts = append(got.posts, r.Method+" "+p)
+		}
+		switch {
+		case strings.HasSuffix(p, "/branches") && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusAccepted)
+			io.WriteString(w, `{}`)
+		case strings.HasSuffix(p, "/extensions"):
+			if want := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/extensions"; p != want {
+				t.Errorf("addBranchExtensions path = %s, want %s", p, want)
+			}
+			var body ampclient.AddBranchExtensionsRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode add-extensions body: %v", err)
+			}
+			got.added = append(got.added, body)
+			w.WriteHeader(http.StatusAccepted)
+			io.WriteString(w, `{}`)
+		case strings.HasSuffix(p, "/endpoints"):
+			io.WriteString(w, `{"endpoints":[]}`)
+		case strings.HasSuffix(p, "/branches"):
+			io.WriteString(w, `{"branches":[{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"extensions":`+string(exts)+`,"pg_settings":{"work_mem":"32MB"},"created_at":"2026-01-01T00:00:00Z"}]}`)
+		case strings.HasSuffix(p, "/clusters"):
+			io.WriteString(w, `{"clusters":[{"id":"`+clusterID+`","name":"recproj","storage_pool_id":"`+poolID+`","created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"created_at":"2026-01-01T00:00:00Z"}}]}`)
+		case strings.HasSuffix(p, "/storage-pools"):
+			io.WriteString(w, `{"storage_pools":[{"id":"`+poolID+`","name":"pool-a","owner_user_id":"11111111-1111-1111-1111-111111111111","created_at":"2026-01-01T00:00:00Z"}]}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, p)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	b, err := New(srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := b.List(t.Context()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	return b, got
+}
+
+func branchRes(spec string) api.DesiredResource {
+	return api.DesiredResource{Kind: KindBranch, Name: "pool-a/recproj/main", Spec: json.RawMessage(spec)}
+}
+
+// Updating a branch enables only the declared extensions the controller does not
+// already report: the union is idempotent, but every add redeploys the branch's
+// endpoints, so re-sending a name that is already on would bounce compute for
+// nothing.
+func TestUpdateBranchAddsOnlyMissingExtensions(t *testing.T) {
+	b, got := listedTree(t, []string{"pgvector"})
+
+	if err := b.Update(t.Context(), branchRes(`{"extensions":["pgvector","pg_cron","age"]}`)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.added) != 1 {
+		t.Fatalf("addBranchExtensions calls = %d, want 1", len(got.added))
+	}
+	if got := got.added[0].Extensions; len(got) != 2 || got[0] != "age" || got[1] != "pg_cron" {
+		t.Errorf("added extensions = %v, want [age pg_cron]", got)
+	}
+}
+
+// A branch already carrying everything its spec declares is converged: no call,
+// so declaring a name a fork already inherited does not redeploy its endpoints.
+func TestUpdateBranchAlreadyConvergedIssuesNoCall(t *testing.T) {
+	b, got := listedTree(t, []string{"pgvector", "pg_cron"})
+
+	if err := b.Update(t.Context(), branchRes(`{"extensions":["pg_cron","pgvector"],"pg_settings":{"work_mem":"32MB"}}`)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.added) != 0 {
+		t.Fatalf("addBranchExtensions calls = %d, want 0", len(got.added))
+	}
+}
+
+// Converged extensions must not make the rest of the spec a silent success. A
+// generation bump that edited pg_settings reaches Update with nothing to add, and
+// reporting nil there would latch the generation as applied and lose the edit —
+// every branch update was drift before extensions were wired, and a change this
+// agent cannot apply still is.
+func TestUpdateBranchReportsFieldsItCannotApply(t *testing.T) {
+	b, got := listedTree(t, []string{"pgvector"})
+
+	err := b.Update(t.Context(), branchRes(`{"extensions":["pgvector"],"pg_settings":{"work_mem":"64MB"}}`))
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update err = %v, want a PermanentError", err)
+	}
+	if !strings.Contains(err.Error(), "pg_settings.work_mem") {
+		t.Errorf("Update err = %v, want it to name the setting it did not apply", err)
+	}
+	if len(got.added) != 0 {
+		t.Errorf("addBranchExtensions calls = %d, want 0 — the extension set was already converged", len(got.added))
+	}
+}
+
+// The adds a spec does ask for still go out when another field of the same spec
+// is unfixable, so one bad field does not block the rest.
+func TestUpdateBranchAppliesAddsBeforeReportingDrift(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	err := b.Update(t.Context(), branchRes(`{"extensions":["pgvector"],"pg_settings":{"work_mem":"64MB"}}`))
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update err = %v, want a PermanentError", err)
+	}
+	if len(got.added) != 1 || got.added[0].Extensions[0] != "pgvector" {
+		t.Errorf("added = %v, want pgvector issued despite the drift", got.added)
+	}
+}
+
+// A branch's set only grows, so a name dropped from the spec is drift the agent
+// reports and never retries — but the adds the same spec asks for still go out.
+func TestUpdateBranchReportsUnremovableExtensionAsPermanent(t *testing.T) {
+	b, got := listedTree(t, []string{"pgvector"})
+
+	err := b.Update(t.Context(), branchRes(`{"extensions":["pg_cron"]}`))
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update err = %v, want a PermanentError", err)
+	}
+	if !strings.Contains(err.Error(), "pgvector") {
+		t.Errorf("Update err = %v, want it to name pgvector", err)
+	}
+	if len(got.added) != 1 || got.added[0].Extensions[0] != "pg_cron" {
+		t.Errorf("added = %v, want the declared pg_cron issued anyway", got.added)
+	}
+}
+
+// Extensions are the only branch field the controller can change after create,
+// so a spec that changed anything else is drift, as it was before extensions
+// were wired up.
+func TestUpdateBranchWithoutExtensionsIsPermanent(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	err := b.Update(t.Context(), branchRes(`{"pg_settings":{"work_mem":"64MB"}}`))
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update err = %v, want a PermanentError", err)
+	}
+	if len(got.added) != 0 {
+		t.Fatalf("addBranchExtensions calls = %d, want 0", len(got.added))
+	}
+}
+
+// Extensions are not a create-time field, so a spec that declares them at branch
+// create is refused outright instead of being dropped into CreateBranchRequest,
+// which has no place for it. Permanent, so the engine reports the reason and
+// stops rather than retrying a create that can never carry them.
+func TestCreateBranchRefusesExtensions(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	err := b.Create(t.Context(), branchRes(`{"extensions":["pgvector"]}`))
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Create err = %v, want a PermanentError", err)
+	}
+	if !strings.Contains(err.Error(), "once the branch exists") {
+		t.Errorf("Create err = %v, want it to say when extensions can be declared", err)
+	}
+	if len(got.posts) != 0 {
+		t.Errorf("requests = %v, want none — the branch must not be created either", got.posts)
+	}
+}
+
+// A branch spec with no extensions still creates normally — the fork inherits
+// its parent's set, which is the only way a new branch gets one.
+func TestCreateBranchWithoutExtensionsProceeds(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	if err := b.Create(t.Context(), branchRes(`{"pg_settings":{"work_mem":"64MB"}}`)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want := "POST /storage-pools/22222222-2222-2222-2222-222222222222/clusters/33333333-3333-3333-3333-333333333333/branches"
+	if len(got.posts) != 1 || got.posts[0] != want {
+		t.Errorf("requests = %v, want [%s]", got.posts, want)
+	}
+}
