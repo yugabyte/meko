@@ -80,7 +80,10 @@ agent → YCP. YCP never dials into a customer cluster.
    authenticate with. YCP resolves the Meko release the data plane should run (six image
    references, pinned in `meko/api_server/internal/service/dataplane_release.go`), stores
    it as that environment's desired state, and returns the environment with an install
-   hint. The key id is unique fleet-wide: one key drives one environment.
+   hint. `GET /api/v1/environments/{id}` renders the same hint, so an operator who did
+   not run the commands there and then can still find them on the environment; the
+   `agent_base_url` the registration gave is stored for exactly that. The key id is
+   unique fleet-wide: one key drives one environment.
 2. **Enroll** — `meko-agent` starts in the customer cluster, reads its
    service-account token + cluster facts, and `POST`s `/agent/enroll` — like every
    agent call, authenticated with the API key. YCP resolves the environment bound to

@@ -53,6 +53,11 @@ func (h *EnvironmentHandler) List(c echo.Context) error {
 
 // Get returns one environment. Another account's environment is a 404, the same
 // as one that does not exist.
+//
+// The install hint rides along: register's copy is gone once the operator navigates
+// away, and nothing else can reproduce it. Rendered per request rather than stored,
+// from the environment's own agent base URL — or, for an environment registered
+// without one, from the address this call arrived on.
 func (h *EnvironmentHandler) Get(c echo.Context) error {
 	e, err := h.svc.Get(c.Param("id"), accountScope(c))
 	if err != nil {
@@ -61,6 +66,7 @@ func (h *EnvironmentHandler) Get(c echo.Context) error {
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
 	}
+	e.InstallHint = installHint(c, e)
 	return ok(c, http.StatusOK, e)
 }
 
@@ -88,7 +94,7 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 	}
 	body := map[string]any{
 		"environment":  e,
-		"install_hint": installHint(c, e, req.AgentBaseURL),
+		"install_hint": installHint(c, e),
 	}
 	return ok(c, http.StatusCreated, body)
 }

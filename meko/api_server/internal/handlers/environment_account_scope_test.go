@@ -32,12 +32,13 @@ var scopeRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
+	"agent_base_url",
 }
 
 func scopeRow(id, accountID string) *sqlmock.Rows {
 	return sqlmock.NewRows(scopeRowCols).AddRow(
 		envUUID, id, accountID, "cloud", "us-east-1", "READY", "", 0, "",
-		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "meko", "[]",
+		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "meko", "[]", nil,
 	)
 }
 

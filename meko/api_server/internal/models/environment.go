@@ -46,6 +46,16 @@ type Environment struct {
 	MaxDatapacks int             `json:"max_datapacks,omitempty"`
 	Live         bool            `json:"live"`
 
+	// AgentBaseURL is the YBM pass-through base this environment's agent dials, as
+	// the registration gave it. Stored only to render the install hint again later;
+	// not serialized, being YBM's address for itself.
+	AgentBaseURL string `json:"-"`
+	// InstallHint is the rendered attach-the-agent commands, for the operator who did
+	// not run them at registration. Computed by the handler — never stored, never
+	// scanned — and set on the get-one response only: a fleet list would carry a
+	// screenful of shell per row.
+	InstallHint string `json:"install_hint,omitempty"`
+
 	// Datapacks is no longer reported. Nothing can compute it: YCP stopped modelling
 	// datapacks, so the agent does not count them and ApplyStatus has nothing to set it
 	// from — it would be 0 for every environment registered from here on, and whatever

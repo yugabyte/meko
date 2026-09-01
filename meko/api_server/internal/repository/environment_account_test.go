@@ -27,6 +27,7 @@ var listRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
+	"agent_base_url",
 }
 
 // listAccount is the account every row here belongs to; the tests that need a
@@ -36,7 +37,7 @@ const listAccount = acctA
 func listRow(id string) *sqlmock.Rows {
 	return sqlmock.NewRows(listRowCols).AddRow(
 		envUUID, id, listAccount, "cloud", "us-east-1", "READY", "", 0, "",
-		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "meko", "[]",
+		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "meko", "[]", nil,
 	)
 }
 
@@ -81,7 +82,7 @@ func TestEnvironmentRepo_ListUnscopedHasNoFilter(t *testing.T) {
 	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
 		WillReturnRows(listRow("acme-prod").AddRow(
 			"22222222-2222-2222-2222-222222222222", "other-prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, keyB, time.Now(), "meko", "[]",
+			0, 400, "", nil, "", "", "[]", true, keyB, time.Now(), "meko", "[]", nil,
 		))
 
 	envs, err := repo.List("")
@@ -135,7 +136,7 @@ func TestEnvironmentRepo_GetUnscopedRefusesAmbiguousID(t *testing.T) {
 		WithArgs("prod").
 		WillReturnRows(listRow("prod").AddRow(
 			"33333333-3333-3333-3333-333333333333", "prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, keyB, time.Now(), "meko", "[]",
+			0, 400, "", nil, "", "", "[]", true, keyB, time.Now(), "meko", "[]", nil,
 		))
 
 	if _, err := repo.Get("", "prod"); !errors.Is(err, ErrAmbiguousID) {
@@ -323,7 +324,7 @@ func TestEnvironmentRepo_UnaccountedUsesTheSentinel(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).
 			AddRow("44444444-4444-4444-4444-444444444444"))
 	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).

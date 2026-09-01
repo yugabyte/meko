@@ -176,7 +176,8 @@ type RegisterEnvironmentRequest struct {
 	// AgentBaseURL is the public base the agent should dial YBM's pass-through on
 	// (e.g. "https://cloud.yugabyte.com/api/public/v1"). Used only to render the
 	// install hint; empty falls back to the address this register call arrived on,
-	// which is the direct-to-meko dev shape.
+	// which is the direct-to-meko dev shape. Stored with the environment, so a later
+	// read renders the same hint rather than a URL the agent cannot reach.
 	AgentBaseURL string `json:"agent_base_url,omitempty"`
 
 	// Desired overrides the desired state this environment starts with. An explicit
@@ -308,7 +309,7 @@ func (s *EnvironmentService) Register(
 		ID: id, Kind: kind, AccountID: accountID, Placement: placement, Region: req.Region,
 		State: state, MaxDatapacks: 400, CreatedAt: time.Now().UTC(),
 		Components: json.RawMessage("[]"), Resources: json.RawMessage("[]"),
-		APIKeyID: apiKey.String(),
+		APIKeyID: apiKey.String(), AgentBaseURL: strings.TrimSpace(req.AgentBaseURL),
 	}
 	// Insert stamps e.UUID, which the desired-state write below is keyed on. A name
 	// another account already holds is not a conflict: (account_id, id) is what is

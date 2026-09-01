@@ -18,6 +18,7 @@ var envRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
+	"agent_base_url",
 }
 
 // envRow builds a stored-environment row of the given id/kind with harmless
@@ -25,7 +26,7 @@ var envRowCols = []string{
 func envRow(id, kind string) *sqlmock.Rows {
 	return sqlmock.NewRows(envRowCols).AddRow(
 		envUUID, id, acctA, "cloud", "us-east-1", "PENDING", "", 0, "",
-		0, 400, "", nil, "", "", "[]", false, keyA, time.Now(), kind, "[]",
+		0, 400, "", nil, "", "", "[]", false, keyA, time.Now(), kind, "[]", nil,
 	)
 }
 

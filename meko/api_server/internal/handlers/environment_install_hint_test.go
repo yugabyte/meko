@@ -27,7 +27,8 @@ func hintForEnv(
 		req.Header.Set(k, v)
 	}
 	c := echo.New().NewContext(req, httptest.NewRecorder())
-	return installHint(c, e, agentBaseURL)
+	e.AgentBaseURL = agentBaseURL
+	return installHint(c, e)
 }
 
 // The hint is the only place an operator is told how to attach an agent, so it has to

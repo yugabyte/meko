@@ -96,7 +96,11 @@ paths:
       operationId: getEnvironment
       security: [{ aeonOIDC: ['fleet:read'] }]
       responses:
-        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Environment' } } } }
+        '200':
+          description: |
+            The environment, carrying the same `install_hint` register returned — the
+            console shows it until the operator has run it. The list omits it.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Environment' } } }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [environments]
@@ -372,6 +376,9 @@ components:
         mcp_base_url: { type: string, examples: ['https://acme.mcp.customer-domain'] }
         cert_fingerprint: { type: string }
         components: { type: array, items: { $ref: '#/components/schemas/Component' } }
+        install_hint:
+          type: string
+          description: Runnable install commands, kind-aware. Get-one only; absent from the list.
       required: [id, state, placement, region]
 
     Component:
@@ -394,7 +401,10 @@ components:
           description: The YBM API key the environment's agent authenticates with. One key = one environment.
         agent_base_url:
           type: string
-          description: YBM pass-through base for the install hint; absent ⇒ the address this call arrived on.
+          description: |
+            YBM pass-through base for the install hint; absent ⇒ the address this call arrived
+            on. Stored with the environment, so the hint a later get-one renders points the
+            agent at the same place.
         placement: { type: string, enum: [cloud, onprem] }
         region: { type: string }
         cluster_spec:
@@ -412,11 +422,10 @@ components:
         node_size: { type: string, examples: [m6i.2xlarge] }
 
     EnvironmentCreated:
-      allOf:
-        - $ref: '#/components/schemas/Environment'
-        - type: object
-          properties:
-            install_hint: { type: string, description: Runnable install commands, kind-aware. }
+      type: object
+      properties:
+        environment: { $ref: '#/components/schemas/Environment' }
+        install_hint: { type: string, description: Runnable install commands, kind-aware. }
 
     ClusterFacts:
       type: object

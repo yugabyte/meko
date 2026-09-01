@@ -11,11 +11,12 @@ import (
 	"meko/api_server/internal/models"
 )
 
-// registerRoutePath is the route this hint is generated from. Trimming it off the
-// request path is what yields the base path the control plane is mounted under, so
-// a YCP served at https://devcloud.yugabyte.com/ycp/ prints its own real URL rather
-// than a placeholder the operator has to know to replace.
-const registerRoutePath = "/api/v1/environments"
+// envRoutePath is the collection route every hint is generated under — register
+// posts to it, get-one reads a path beneath it. Trimming it off the request path is
+// what yields the base path the control plane is mounted under, so a YCP served at
+// https://devcloud.yugabyte.com/ycp/ prints its own real URL rather than a
+// placeholder the operator has to know to replace.
+const envRoutePath = "/api/v1/environments"
 
 // defaultAgentNamespace is where the install puts the agent when the operator does
 // not choose otherwise. Its own namespace, not the control plane's: the agent holds
@@ -27,16 +28,16 @@ const defaultAgentNamespace = "ycp-agent"
 // substitutes the real value; an operator reading the hint raw pastes their own.
 const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder, not a credential
 
-// installHint renders the commands that attach an agent to a freshly registered
-// environment. It is the only place an operator is told how to do this, so it has to
-// be runnable as printed, not a sketch.
+// installHint renders the commands that attach an agent to an environment. It is the
+// only place an operator is told how to do this, so it has to be runnable as printed,
+// not a sketch.
 //
 // The hint is kind-specific: a meko environment installs the meko-agent (a
 // component of the `meko` chart), an amp environment installs the amp controller
 // and its reconcile-agent (the yb-amp-controller chart's `agent` block) — the
 // agent is the sole YCP client and drives the controller over its REST API.
-func installHint(c echo.Context, e *models.Environment, agentBaseURL string) string {
-	url := agentURL(c, e.AccountID, agentBaseURL)
+func installHint(c echo.Context, e *models.Environment) string {
+	url := agentURL(c, e.AccountID, e.AgentBaseURL)
 	if e.Kind == "amp" {
 		return ampInstallHint(url, e.ID, e.Placement, e.AccountID)
 	}
@@ -208,7 +209,7 @@ func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 
 // agentURL is the base the agent dials. Registered through YBM (agent_base_url +
 // an account), that is YBM's agent pass-through for the account; otherwise it
-// falls back to the address this register call arrived on plus /api/v1 — the
+// falls back to the address this call arrived on plus /api/v1 — the
 // direct-to-meko shape a dev-mode agent uses.
 func agentURL(c echo.Context, accountID, agentBaseURL string) string {
 	if agentBaseURL != "" && accountID != "" {
@@ -246,7 +247,7 @@ func controlPlaneURL(c echo.Context) string {
 // path, since the handler layer is not told the --base-path value.
 func basePathOf(r *http.Request) string {
 	p := r.URL.Path
-	if i := strings.LastIndex(p, registerRoutePath); i > 0 {
+	if i := strings.LastIndex(p, envRoutePath); i > 0 {
 		return p[:i]
 	}
 	return ""

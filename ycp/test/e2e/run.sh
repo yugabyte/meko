@@ -16,6 +16,9 @@
 #   4b. a registration with nothing but a name seeds the WHOLE Meko stack: one
 #      meko-stack resource carrying all six pinned images, the MAGE-enabled YugabyteDB
 #      among them,
+#   4c. GET /environments/{id} hands back the same install hint register returned, so
+#      an operator who did not run it there and then can still find it -- including
+#      the YBM pass-through base a registration gave, which is stored for it,
 #   5. the agent enrolls -- authenticating with the dev-mode headers (the admin
 #      secret + that api_key_id; there is no YBM here to validate a real key) --
 #      and reports real cluster facts,
@@ -381,6 +384,38 @@ reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
 bound="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["environment"]["api_key_id"])')"
 [ "$bound" = "$API_KEY_ID" ] || die "register response binding is $bound, want $API_KEY_ID: ${reg:0:200}"
 echo "    environment bound to the api key id"
+
+# 4c. The install hint has to outlive the register response: an operator who did not
+#     paste it there and then reads it back off the environment, byte for byte. This
+#     registration sends no agent_base_url, so both renderings take the
+#     request-address fallback.
+reg_hint="$(printf '%s' "$reg" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["install_hint"])')"
+got_hint="$(api GET "/api/v1/environments/$ENV_NAME" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"].get("install_hint",""))')"
+[ -n "$got_hint" ] || die "GET /environments/$ENV_NAME returned no install hint"
+[ "$got_hint" = "$reg_hint" ] || die "the environment's install hint is not register's"
+echo "    the install hint reads back off the environment"
+
+#     A YBM-registered environment reads back the pass-through base its registration
+#     gave, which is the whole reason that value is stored: rendered from the request
+#     address instead, the hint would point its agent somewhere it cannot reach.
+#     Throwaway environment, like seed-check above — no agent attaches to it.
+hint_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+api POST /api/v1/environments -H 'content-type: application/json' \
+  -d '{"name":"hint-check","account_id":"11111111-1111-1111-1111-111111111111","placement":"cloud",
+       "region":"local","api_key_id":"'"$hint_key"'",
+       "agent_base_url":"https://cloud.yugabyte.com/api/public/v1"}' >/dev/null ||
+  die "registering hint-check failed"
+stored_hint="$(api GET /api/v1/environments/hint-check |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"].get("install_hint",""))')"
+api DELETE /api/v1/environments/hint-check >/dev/null 2>&1 || true
+want_url="agent.ycpUrl=https://cloud.yugabyte.com/api/public/v1"
+want_url="$want_url/accounts/11111111-1111-1111-1111-111111111111/ycp"
+case "$stored_hint" in
+  *"$want_url"*) echo "    a stored agent_base_url is what the hint dials" ;;
+  *) die "hint-check's hint does not dial its stored agent base url: ${stored_hint:0:400}" ;;
+esac
 
 log "deploying the agent (dev-mode headers: admin secret + api key id)"
 k apply -f "$(render "$E2E_DIR/agent.yaml")"

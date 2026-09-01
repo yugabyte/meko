@@ -73,6 +73,11 @@ type Environment struct {
 	// with -- an id, not the key itself, so it is not secret. Unique fleet-wide:
 	// one key drives one environment.
 	APIKeyID string `json:"api_key_id,omitempty"`
+
+	// InstallHint is the rendered commands that attach an agent to this environment,
+	// for a console showing them until the operator has run them. Present on get-one
+	// only; the fleet list omits it.
+	InstallHint string `json:"install_hint,omitempty"`
 }
 
 // ClusterSpec requests a brand-new cluster (provision mode, §7.1).

@@ -72,18 +72,18 @@ const envColumns = `e.uuid, e.id, e.account_id, e.placement, e.region, e.state, 
 	e.mcp_base_url, e.cert_fingerprint, COALESCE(e.components::text, '[]'), e.live,
 	(SELECT api_key_id FROM meko_system.environment_api_keys
 	   WHERE env_uuid = e.uuid AND status = 'active'),
-	e.created_at, COALESCE(e.kind, 'meko'), COALESCE(e.resources::text, '[]')`
+	e.created_at, COALESCE(e.kind, 'meko'), COALESCE(e.resources::text, '[]'), e.agent_base_url`
 
 func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, error) {
 	var e models.Environment
-	var region, k8sVersion, provider, agentVersion, mcpBaseURL, certFingerprint sql.NullString
+	var region, k8sVersion, provider, agentVersion, mcpBaseURL, certFingerprint, agentBaseURL sql.NullString
 	var apiKeyID sql.NullString
 	var lastHeartbeat sql.NullTime
 	var componentsText, resourcesText string
 	if err := row.Scan(&e.UUID, &e.ID, &e.AccountID, &e.Placement, &region, &e.State, &k8sVersion,
 		&e.NodeCount, &provider, &e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat,
 		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &apiKeyID,
-		&e.CreatedAt, &e.Kind, &resourcesText); err != nil {
+		&e.CreatedAt, &e.Kind, &resourcesText, &agentBaseURL); err != nil {
 		return nil, err
 	}
 	e.AccountID = accountFromStore(e.AccountID)
@@ -94,6 +94,7 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 	e.AgentVersion = agentVersion.String
 	e.MCPBaseURL = mcpBaseURL.String
 	e.CertFingerprint = certFingerprint.String
+	e.AgentBaseURL = agentBaseURL.String
 	if lastHeartbeat.Valid {
 		t := lastHeartbeat.Time
 		e.LastHeartbeatAt = &t
@@ -200,7 +201,7 @@ func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) 
 const envColumnsInsert = `id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
 	components, live, created_at,
-	kind, resources`
+	kind, resources, agent_base_url`
 
 // ErrAPIKeyBound is returned when a key binding would attach an api key that
 // another environment already holds, which environment_api_keys' primary key
@@ -253,13 +254,13 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 
 	err = tx.QueryRow(`
 		INSERT INTO meko_system.environments (`+envColumnsInsert+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING uuid`,
 		e.ID, account, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
 		e.CreatedAt, kind,
-		[]byte(resources)).Scan(&e.UUID)
+		[]byte(resources), nullStr(e.AgentBaseURL)).Scan(&e.UUID)
 	if err != nil {
 		if isUniqueViolationOf(err, accountIDUniqueConstraint) {
 			return fmt.Errorf("%w: %s", ErrEnvironmentExists, e.ID)

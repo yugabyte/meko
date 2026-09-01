@@ -18,6 +18,7 @@ var envRowColsK = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
+	"agent_base_url",
 }
 
 // Get reads the kind and the reported inventory back off the row.
@@ -34,7 +35,7 @@ func TestEnvironmentRepo_Get_ScansKindAndResources(t *testing.T) {
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows(envRowColsK).AddRow(
 			envUUID, "amp-acme", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", inventory,
+			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", inventory, nil,
 		))
 
 	e, err := repo.GetByUUID(envUUID)
@@ -65,7 +66,8 @@ func (a argContainsK) Match(v driver.Value) bool {
 	}
 }
 
-// Insert writes the kind ($18) and the resources inventory ($19).
+// Insert writes the kind ($18), the resources inventory ($19) and the agent base
+// URL ($20) — the last so a later GET renders the hint the registration returned.
 func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -78,7 +80,8 @@ func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	for i := range anyArgs {
 		anyArgs[i] = sqlmock.AnyArg()
 	}
-	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $18 kind, $19 resources
+	// $18 kind, $19 resources, $20 agent_base_url
+	args := append(anyArgs, "amp", argContainsK("storage_pool"), "https://cloud.yugabyte.com/api/public/v1")
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs(args...).
@@ -89,12 +92,13 @@ func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 
 	err = repo.Insert(&models.Environment{
 		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY", APIKeyID: keyA,
-		Resources: json.RawMessage(`[{"kind":"storage_pool","id":"pool-1"}]`),
+		Resources:    json.RawMessage(`[{"kind":"storage_pool","id":"pool-1"}]`),
+		AgentBaseURL: "https://cloud.yugabyte.com/api/public/v1",
 	})
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("kind/resources not persisted as expected: %v", err)
+		t.Errorf("kind/resources/agent_base_url not persisted as expected: %v", err)
 	}
 }
