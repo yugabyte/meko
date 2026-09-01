@@ -31,8 +31,12 @@ flowchart LR
         mat["image materialiser"]
     end
 
+    subgraph sup["Endpoint supervisor (PID 1 of the endpoint)"]
+        fen["write-lease holder<br/>(acquire + renew, 15s TTL)"]
+    end
+
     subgraph sc["Controller (stateless)"]
-        sct["generation fencing<br/>node/branch/endpoint registries"]
+        sct["node/branch/endpoint registries<br/>provisioning, migrations"]
     end
 
     subgraph yb["YugabyteDB cluster (stateful)"]
@@ -53,8 +57,10 @@ flowchart LR
     cps -- "chain reads" --> tblPages
     fps -- "page-row writes" --> tblPages
     mat -- "compact long chains<br/>(materialised images)" --> tblPages
-    cps -- "gen-fenced flush" --> tblState
-    sct -- "attach + generation" --> cps
+    cps -- "lease-fenced flush" --> tblState
+    fen -- "token_acquire / renew<br/>(resource_token)" --> tblSc
+    fen -- "POST /v1/write_token<br/>enforced before page writes" --> ps
+    fen -- "POST /v1/write_token<br/>enforced at every WAL flush" --> sk
     sct -- "state R/W" --> tblSc
     cps -- "initdb tar" --> tblBlob
     pg -- "basebackup fetch" --> cps
@@ -87,12 +93,17 @@ A yb-amp install is:
   configurations that try are rejected at boot and at runtime (see
   [`safekeeper.md`](safekeeper.md) §5).
 - **Controller** (`controller`, Go): the control plane — the branch/endpoint
-  registries, endpoint provisioning, and the product API. (Generation fencing
-  is the pageserver's own: it claims its generation from
-  `amp_storage.branch_state` at startup.) Its state
-  lives in the same YB database (`amp_registry` + `controller` schemas),
-  and it applies all schema migrations on startup. Documented under
+  registries, endpoint provisioning, and the product API. It owns the
+  `resource_token` store the write lease is taken from, but does not hold or
+  enforce the lease itself. Its state lives in the same YB database
+  (`amp_registry` + `controller` schemas), and it applies all schema migrations
+  on startup. Documented under
   [`../../controller/architecture/`](../../controller/architecture/).
+- **Endpoint supervisor** (`endpoint-supervisor`): PID 1 of the endpoint. It
+  acquires the branch's write lease before starting anything and pushes it to
+  the pageserver and the safekeeper, which enforce it against their own clocks —
+  at most one endpoint writes a branch. See
+  [`compute-fencing.md`](compute-fencing.md).
 - **YugabyteDB cluster**: the durable storage tier for everything
   above.
 
@@ -113,7 +124,8 @@ A yb-amp install is:
 | `compute_ctl` | Supervisor for the compute: applies the spec, starts/stops PG, runs catalog migrations. | `target/debug/compute-ctl` |
 | Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `amp_storage.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/safekeeper` |
 | Pageserver | Materializes pages from WAL into `amp_storage.*` rows and serves them to the compute on demand. | `target/debug/pageserver` |
-| Controller | Control plane: generation fencing, node/branch/endpoint registries, endpoint provisioning, schema migrations. | `controller` (Go, `controller/cmd/controller`) |
+| Endpoint supervisor | PID 1 of the endpoint: holds the branch's write lease and pushes it to the pageserver and safekeeper, renders their config, supervises them. | `target/debug/endpoint-supervisor` |
+| Controller | Control plane: node/branch/endpoint registries, endpoint provisioning, schema migrations, and the `resource_token` store the write lease is taken from. | `controller` (Go, `controller/cmd/controller`) |
 | YugabyteDB | Durable storage backend for everything yb-amp-internal. | external (`yugabyted`) |
 
 ## Write path (one INSERT from a client)
@@ -145,7 +157,8 @@ durability watermark.
 In parallel, the pageserver's walreceiver streams interpreted WAL from
 the safekeeper (`START_REPLICATION`) and writes page rows into
 `amp_storage.pages` / `slru_pages` / `meta`; its flushes advance
-`amp_storage.branch_state.consistent_lsn` under a generation fence.
+`amp_storage.branch_state.consistent_lsn` under the endpoint's write lease
+([`compute-fencing.md`](compute-fencing.md)).
 
 ## Read path (a page miss in the compute)
 
@@ -184,7 +197,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Relation pages | YB `amp_storage.pages` | one row per (block, LSN); images + deltas |
 | SLRU blocks | YB `amp_storage.slru_pages` | one row per (block, LSN) |
 | Metadata blobs (relsizes, dir listings, aux files, …) | YB `amp_storage.meta` | latest row ≤ LSN wins |
-| Per-branch pageserver state (LSNs, generation, ancestry) | YB `amp_storage.branch_state` | one generation-fenced row per branch |
+| Per-branch pageserver state (LSNs, ancestry) | YB `amp_storage.branch_state` | one row per branch, written under the endpoint's write lease |
 | Safekeeper control file | YB `amp_storage.branch_state` | one row per branch, typed columns |
 | Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, segno, chunk_offset)` all-range, pre-split into 6 |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
