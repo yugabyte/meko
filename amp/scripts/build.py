@@ -127,13 +127,14 @@ PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
 
 # contrib modules the cached install must carry because a compute preloads them
 # (postgres.mk installs them alongside PostgreSQL). A missing preload library is a
-# hard postmaster start failure, and the commit stamp above cannot see the contrib
-# list itself change.
-PRELOADED_CONTRIB = ["pg_stat_statements.so"]
+# hard postmaster start failure, a missing required one fails the CREATE EXTENSION
+# that needs it, and the commit stamp above cannot see the contrib list itself
+# change.
+PRELOADED_CONTRIB = ["pg_stat_statements.so", "tsm_system_rows.so"]
 
 
 def missing_preloaded_contrib():
-    """Preload-required contrib modules absent from the cached pg_install."""
+    """Committed contrib modules absent from the cached pg_install."""
     libdir = PG_INSTALL / "lib" / "postgresql"
     return [lib for lib in PRELOADED_CONTRIB if not (libdir / lib).is_file()]
 

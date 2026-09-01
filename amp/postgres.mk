@@ -120,6 +120,7 @@ postgres-install-%: postgres-configure-% \
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/amcheck install
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/test_decoding install
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_stat_statements install
+	$(MAKE) -C $(BUILD_DIR)/$*/contrib/tsm_system_rows install
 
 .PHONY: FORCE
 FORCE:
