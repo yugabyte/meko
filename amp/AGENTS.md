@@ -29,8 +29,8 @@ Read in this order:
    `reconstruct_key`, the round-trip-lossless path mapping.
 4. `compute/architecture/pageserver.md` — the row-per-page YugabyteDB
    storage design: image-anchored reads, the background image materialiser,
-   the getpage RPC, Key encoding, walredo, WAL ingest, the generation
-   handshake, and the implementation phases. yb-amp is single-shard.
+   the getpage RPC, Key encoding, walredo, WAL ingest, and the
+   implementation phases. yb-amp is single-shard.
 5. `compute/architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
@@ -119,8 +119,7 @@ Code anchors:
   connection drops internally and can replay an in-flight write whose
   commit status is unknown. New write paths must use `INSERT ... ON
   CONFLICT` (or `yb_enable_upsert_mode`), absolute `UPDATE`s (no `SET
-  col = col + 1`), generation-fenced `UPDATE`s, or `WHERE`-keyed
-  `DELETE`s. See
+  col = col + 1`), or `WHERE`-keyed `DELETE`s. See
   [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
 - **Reviewing a PR? Follow [`REVIEW.md`](REVIEW.md).** It is the
   checklist for amp-specific review.

@@ -155,8 +155,9 @@ writes are synchronous today and move onto the task framework under #113.
   branch `register` call. cAmp records the recipe, deploys the endpoint, records the
   address, and clears the recipe — it never reaches into the endpoint's
   pageserver/safekeeper directly.
-- **Generation** is claimed by the pageserver itself at startup; it is never
-  pinned and never issued by the controller.
+- **Fencing** is the endpoint's write lease, taken by its supervisor and
+  enforced by the daemons themselves; no generation is pinned or issued by the
+  controller.
 - **Controller calls used:** record a branch, keyed by `branch_id`
   (the `record_branch_recipe` step, by cAmp).
 - **Direction (planned).** The SC is being integrated into amp-controller and the

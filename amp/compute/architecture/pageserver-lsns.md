@@ -21,7 +21,7 @@ They answer different questions and must never be substituted for each other:
 | Watermark | Advances when | Answers |
 |---|---|---|
 | **`applied_lsn`** (eager, in-memory) | walreceiver puts a record batch into the `PageWriter` buffer (`put_batch` → `applied_lsn.fetch_max`) | "Can a read at LSN X be served from buffer+YB right now?" Read-path waits (`wait_lsn`, GetPage@LSN, `compute_image_consistent_lsn`) use this so reads never stall behind YB INSERT latency. |
-| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback, the walreceiver `START_REPLICATION` resume position, the HTTP API — reads this. |
+| **`consistent_lsn`** (durable, gap-free) | an absolute `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn`, taken under the endpoint's write lease, succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback, the walreceiver `START_REPLICATION` resume position, the HTTP API — reads this. |
 
 `applied_lsn ≥ consistent_lsn` at all times; the gap is exactly the contents
 of the in-RAM `PageWriter` buffer. Advertising `applied_lsn` to the
@@ -39,7 +39,7 @@ flowchart LR
     WR -->|walingest put_batch| AL[applied_lsn<br>#40;in-memory, eager#41;]
     WR -->|put_batch rows| BUF[PageWriter buffer]
     BUF -->|flush INSERT| YB[(YB pages/slru/meta)]
-    BUF -->|gen-fenced UPDATE| TS[branch_state row<br>consistent_lsn column]
+    BUF -->|absolute UPDATE<br>under the write lease| TS[branch_state row<br>consistent_lsn column]
     TS -->|publish slot| CL[consistent_lsn<br>#40;remote_state slot#41;]
     AL -->|finish_write| LR[last_record_lsn<br>#40;eager, with prev#41;]
     LR -->|note_record_lsn| PW_HIST[record_lsn_history]
@@ -176,7 +176,7 @@ keeps no durable local state.
    everything ≤ frontier is durable in the page tables.
 4. If the frontier moved past `consistent_lsn_watermark` AND at least
    `policy.max_age` (default 5 s) elapsed since the last UPDATE, the
-   gen-fenced `PageStore::advance_consistent_lsn` UPDATE writes
+   absolute `PageStore::advance_consistent_lsn` UPDATE writes
    `branch_state.consistent_lsn` (and `prev_record_lsn`). On `Updated`,
    `consistent_lsn_watermark` stores the frontier and
    `publish_consistent_lsn` bumps the in-memory slot.
@@ -476,7 +476,7 @@ PageWriter::flush (periodic FlushTask / size trigger)
          → try_write_rows → YB INSERT into pages/slru/meta
          → mark_flushed(snapshot); flush_horizon_lsn := frontier
          → consistent_lsn_observed.fetch_max(frontier)
-         → throttled (max_age), gen-fenced advance_consistent_lsn UPDATE
+         → throttled (max_age), absolute advance_consistent_lsn UPDATE
               → consistent_lsn_watermark := frontier
               → publish_consistent_lsn → remote_state slot bumps
 ```

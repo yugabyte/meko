@@ -103,7 +103,7 @@ yb -c "CREATE DATABASE \"$DB\"" >/dev/null
 echo "==> Starting controller ($AMP_NAME) on port $AMP_HOST_PORT (docker runtime)"
 # --user root + the mounted socket let controller's Docker provisioner launch endpoints;
 # the endpoints join $NET so controller and the client can reach them. The controller
-# owns cluster control in-process (generation authority + registries, served on :8080)
+# owns cluster control in-process (branch/endpoint registries, served on :8080)
 # and provisions its own DB's schemas on startup — no separate controller.
 # The endpoint image supplies its own supervisor. Rebuild the image to pick up
 # supervisor changes — $ENDPOINT_IMAGE is not rebuilt by this script.

@@ -116,8 +116,10 @@ frontier and the bound on WAL GC. It is held **in memory only**:
 - **advanced** by `PageserverFeedback.consistent_lsn` on the
   replication stream.
 
-Both sources carry the same fact. The pageserver commits the generation-fenced
-`advance_consistent_lsn` UPDATE *before* publishing the value as feedback, so
+Both sources carry the same fact. The pageserver commits the
+`advance_consistent_lsn` UPDATE — absolute, and taken under the endpoint's write
+lease ([`compute-fencing.md`](compute-fencing.md)) — *before* publishing the
+value as feedback, so
 every floor the safekeeper ever holds is one the pageserver has already made
 durable. A safekeeper crash therefore resumes at or above where it stopped
 trimming, which is why no safekeeper-side copy has to be persisted — and why

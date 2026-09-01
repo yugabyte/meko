@@ -14,7 +14,7 @@ deploy/
 
 | Process        | Role                                                      | Backed by  |
 |----------------|----------------------------------------------------------|------------|
-| `controller`   | the control plane: REST API + task worker + the storage-layer control surface (generation authority, registries, `yb_storage` provisioning) | YugabyteDB |
+| `controller`   | the control plane: REST API + task worker + the storage-layer control surface (branch/endpoint registries, the `resource_token` store, `yb_storage` provisioning) | YugabyteDB |
 | `docker` (CLI) | lets controller's Docker `deploy.Deployer` launch endpoint containers (amp-controller.md §5.6) | — |
 
 `tini` runs as PID 1 to forward signals and reap orphans.

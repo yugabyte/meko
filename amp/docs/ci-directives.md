@@ -46,7 +46,7 @@ consistency, read-write, WAL, durability, or image-materialiser paths, so it's
 caught *before* merge — concretely (non-exhaustive):
 
 - **LSNs & consistency** — `consistent_lsn`, `prev_record_lsn`, record-boundary
-  math, `branch_state`, flush/commit LSN tracking, generation fencing.
+  math, `branch_state`, flush/commit LSN tracking, write-lease fencing.
 - **Read/write path** — `page_store` / `page_writer`, getpage, `UnifiedPages`,
   the smgr extension's page reads or WAL writes.
 - **WAL** — safekeeper WAL ingest/read, `yb_wal_storage`, WAL apply / replay /

@@ -32,13 +32,13 @@ before moving on — a silent half-failure here surfaces as a confusing error th
    `pageserver.toml` carries `branch_id`. On a fresh repo this is
    normal: `yb_amp_local start` prints `Skipping pageserver …: no timeline identity yet` and
    branch creation bakes the identity in and starts the pageserver itself. Manual
-   deployments must write the identity before spawning. The generation is not in the
-   toml — the process claims it from `amp_storage.branch_state` at startup, and will
-   refuse to start if that row is missing (the controller provisions it at branch
-   create). How to create the branch comes from the same row, not the toml.
+   deployments must write the identity before spawning. The process reads
+   `amp_storage.branch_state` at startup and will refuse to start if that row is
+   missing (the controller provisions it at branch create). How to create the
+   branch comes from the same row, not the toml.
    Checkpoint once started: `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
 4. **Register SK with the SC** (see "Manual registration"). The pageserver needs no
-   registration step — it claims its generation itself on every start.
+   registration step — it reads its branch row on every start.
 5. **Create the branch** (via `yb_amp_local cluster create` for a new lineage, or
    `branch create --ancestor-branch-id` to fork one; that seeds
    `amp_storage.branch_state`, and the pageserver bootstraps from it — a NULL ancestor means
@@ -55,7 +55,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | PS/SK/compute_ctl: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
-| PS exits at startup: `pageserver.toml must set branch_id/generation` | single-branch identity missing — launcher hasn't assigned one (run `cluster create` / `branch create`, or write the identity into pageserver.toml) | — |
+| PS exits at startup: `pageserver.toml must set branch_id` | single-branch identity missing — launcher hasn't assigned one (run `cluster create` / `branch create`, or write the identity into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no branch_state row` | the controller never provisioned the branch (wiped YB DB, or the pageserver started without `branch create`) | — |
 | SK exits at startup: `YB-WAL mode requires --branch-id (single-branch-per-process)` | single-branch identity missing from `safekeeper.toml` — the SK serves one branch and scopes its load to it. Provisioned SKs get `branch_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set it alongside `yb_storage_conn` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |

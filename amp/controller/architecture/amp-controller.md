@@ -227,8 +227,10 @@ Exactly one of each runs per placement group (§1):
   boundary is one placement group, one controller (§1); it owns the lifecycle of
   everything below it and exposes the API (§3) that an agent layer (§12) will consume.
 - **storage-layer control surface** — branch and endpoint bookkeeping in the flat
-  rendering the storage layer uses. (Generation fencing is not its job: the
-  pageserver claims its own generation from `amp_storage.branch_state`. The
+  rendering the storage layer uses. (Fencing is not its job: at most one writer
+  per branch is the endpoint's write lease, which the endpoint supervisor takes
+  from the `resource_token` store and the daemons enforce themselves — see
+  [`compute-fencing.md`](../../compute/architecture/compute-fencing.md). The
   safekeeper is endpoint-owned and not registered with it either.) amp-controller
   owns this **in-process** (§11.1), and it reads and writes the *same* `branch` and
   `endpoint` tables the product API does — there is no separate registry to drift
@@ -739,8 +741,10 @@ no new external dependency (principle 2).
 The storage-layer control functions live directly in amp-controller (Go), not in
 a separate binary: branch and endpoint bookkeeping, and provisioning of the whole
 `yb_storage` DB (its `amp_registry`, `controller`, and `amp_storage` schemas) via
-the controller's golang-migrate migrations. Generation fencing is not among them —
-the pageserver claims its own generation from `amp_storage.branch_state`.
+the controller's golang-migrate migrations. Fencing is not among them — the
+controller hosts the `resource_token` store, but the lease is taken by the
+endpoint supervisor and enforced by the pageserver and safekeeper
+([`compute-fencing.md`](../../compute/architecture/compute-fencing.md)).
 
 **Decision: the storage layer's view is a RENDERING of the product model, not a
 registry of its own.** There is one `branches` table and one `endpoints` table,
@@ -788,14 +792,14 @@ the upstream multi-tenant machinery is dropped.
 | API surface | What it does | amp posture |
 |---|---|---|
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
-| ~~Generation authority~~ | Removed: the pageserver claims its own generation from `amp_storage.branch_state` |
+| ~~Generation authority~~ | Removed: at most one writer per branch is the endpoint's write lease now, taken from the controller's `resource_token` store and enforced by the pageserver and safekeeper themselves ([compute-fencing.md](../../compute/architecture/compute-fencing.md)) | **Removed** |
 | ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
 
 | API surface | What it does | Used by yb-amp today | amp-controller posture |
 |---|---|---|---|
-| Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; it fences with a generation it claims itself) | Import flows only | **Reuse** (import only) |
+| Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; it is fenced by the endpoint's write lease instead) | Import flows only | **Reuse** (import only) |
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
-| ~~Generation debug ops~~ | Issue/inspect generations | No — the pageserver claims its own | **Removed** |
+| ~~Generation debug ops~~ | Issue/inspect generations | No — fencing is the endpoint's write lease | **Removed** |
 | ~~Compute-endpoint registry~~ | Launcher endpoint rows | No longer exists | **Folded in** — the launcher creates endpoints through `/api/v1` like any other client, so they are rows in the endpoint table (§10.1) subject to the schema-enforced invariants of §10.2 (notably `endpoints_one_writer_per_branch`) |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
@@ -832,16 +836,23 @@ the upstream multi-tenant machinery is dropped.
   cascade, still serving, and with its pages and WAL due to be reclaimed by
   branch-drop GC.
 
-Generations remain load-bearing in our topology: replacement is the recovery
-primitive (§5.3), so an old and a new pageserver for the same branch can
-briefly coexist during a replace — generation fencing is what keeps the stale
-one from corrupting storage state.
+Fencing remains load-bearing in our topology: replacement is the recovery
+primitive (§5.3), so an old and a new pageserver for the same branch can briefly
+coexist during a replace, and the endpoint's write lease is what is meant to keep
+the stale one out. It is a deadline the daemon holds and compares against its own
+clock, so a *well-behaved* stale process removes itself rather than waiting to be
+told — but nothing on the YB write path checks the token server-side, so the
+fence is cooperative and does not stop a writer wedged mid-write. On that
+specific point it is weaker than the column predicate it replaced, which the
+database enforced on every statement. See
+[compute-fencing.md](../../compute/architecture/compute-fencing.md) §"Known gaps".
 
 ### 11.4 Notes
 
-- **No upcall API.** Generation fencing does not ride an upcall API — the
-  pageserver claims its generation directly from `amp_storage.branch_state`, and
-  the `re-attach`/`validate` upcalls were removed.
+- **No upcall API.** Fencing does not ride an upcall API — the endpoint
+  supervisor takes the lease from the `resource_token` store and pushes it to the
+  daemons over their own HTTP surfaces, and the `re-attach`/`validate` upcalls
+  were removed.
   The pageserver wants `control_plane_api` set but makes no runtime callbacks, so a
   placeholder URL is fine.
 - **Scale shape.** One pageserver per branch means node count tracks endpoint

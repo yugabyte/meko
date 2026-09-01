@@ -111,7 +111,7 @@ A yb-amp install is:
 > `YsqlClient` must be idempotent. The client retries connection drops
 > internally and may replay an in-flight write whose commit status is
 > unknown. Use `INSERT ... ON CONFLICT` (or upsert mode), absolute
-> updates, and generation-fenced writes — never bare INSERTs or
+> updates, and key-scoped DELETEs — never bare INSERTs or
 > relative `SET col = col + 1`. See
 > [`yugabyte.md`](yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent)
 > for the full contract.

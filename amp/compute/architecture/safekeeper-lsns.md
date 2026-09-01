@@ -88,8 +88,9 @@ pageserver feedback (`Timeline::update_consistent_lsn`, monotonic max).
 `handle_elected` additionally floors it at `timeline_start_lsn`, so a fresh
 timeline doesn't pin the horizon at 0. The safekeeper never writes it back.
 
-**Why no safekeeper-side copy:** the pageserver commits its generation-fenced
-`advance_consistent_lsn` UPDATE *before* echoing the same value as
+**Why no safekeeper-side copy:** the pageserver commits its
+`advance_consistent_lsn` UPDATE — absolute, and taken under the endpoint's write
+lease ([`compute-fencing.md`](compute-fencing.md)) — *before* echoing the same value as
 `PageserverFeedback.consistent_lsn`, so every value the safekeeper ever
 holds is already durable in a column the pageserver owns. Restart therefore
 resumes at or above the last floor trimmed on, and WAL trimming keeps working
@@ -410,7 +411,7 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
    (`= flush_lsn`).
 4. Pageserver ingests; its applied frontier races ahead at WAL speed while
    its durable slot waits for flushes.
-5. After each successful gen-fenced `advance_consistent_lsn`, the
+5. After each successful `advance_consistent_lsn`, the
    pageserver's next `PageserverFeedback.consistent_lsn` advances.
 6. Safekeeper bumps `consistent_lsn` immediately and
    `calc_horizon_lsn` allows WAL removal up to it.

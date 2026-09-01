@@ -498,8 +498,18 @@ or one whose data has already been reclaimed.
 The controller also **deletes** it, as the first step of reclaiming a dropped
 branch (`controller/internal/branchgc`): it is the row that pins an ancestor's GC
 cutoff at this branch's fork point, so removing it is what lets the parent's own
-GC advance again, and a pageserver that somehow outlived its branch then finds no
-row for its generation-fenced writes to match and fences itself out.
+GC advance again.
+
+The row's absence is a hard stop only at **attach**: `get_branch_seed` returning
+nothing bails the pageserver out before it opens the branch. Under a pageserver
+that is already running it is not — `advance_consistent_lsn`'s "no branch_state
+row" is warned and the flush loop continues, `publish_gc_cutoff`'s becomes a GC
+backoff-and-retry, and the page writes themselves never read this row, so the
+process keeps ingesting into a branch whose data is being reclaimed. The write
+lease does not close that either: `token_acquire` grants unconditionally to the
+current holder, so a supervisor stranded with its endpoint keeps renewing.
+Deleting the row is therefore how the parent's GC is unpinned, not how a
+surviving writer is stopped.
 
 Because the row is shared, **its presence is not a per-daemon signal**. What
 tells a daemon whether *its own* state exists is whether its group is

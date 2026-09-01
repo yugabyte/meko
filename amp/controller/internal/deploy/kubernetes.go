@@ -964,7 +964,7 @@ type resourceValues struct {
 
 // values builds the per-endpoint Helm values. With spec.ControllerURL set the
 // endpoint runs the controller-coordinated path; without it, it self-manages.
-// Either way the pageserver claims its own generation and reads how to create
+// Either way the pageserver reads its own branch row and how to create
 // the branch from the controller-seeded branch_state row.
 func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValues {
 	pgVersion := spec.PgVersion

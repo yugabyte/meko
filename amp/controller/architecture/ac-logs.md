@@ -12,8 +12,8 @@ re-instrument-everything one.
 
 The gap it closes: those logs live only in the container runtime's node-local
 files. `kubectl logs` reaches them while the pod exists and loses them the moment
-it is rescheduled — exactly when a compute crash-loop or a generation-fence
-failure most needs explaining — and it cannot search across pods, which a getpage
+it is rescheduled — exactly when a compute crash-loop or a daemon exiting on an
+expired write lease most needs explaining — and it cannot search across pods, which a getpage
 failure spanning compute_ctl, pageserver and safekeeper requires.
 
 ## Pipeline

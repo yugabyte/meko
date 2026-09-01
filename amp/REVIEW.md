@@ -16,8 +16,7 @@ compute_ctl). Correctness is the dominant concern here:
   dropped connections and can replay an in-flight statement whose commit status
   is unknown. New write paths need `INSERT ... ON CONFLICT` (or
   `yb_enable_upsert_mode`), absolute `UPDATE`s (never `SET col = col + 1`),
-  generation-fenced `UPDATE`s, `WHERE`-keyed `DELETE`s, and `IF NOT EXISTS` on
-  DDL. A non-idempotent statement is a latent corruption bug even if it passes
+  `WHERE`-keyed `DELETE`s, and `IF NOT EXISTS` on DDL. A non-idempotent statement is a latent corruption bug even if it passes
   tests. See
   [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
   This holds for **test SQL too** — fixtures go through the same client and the
@@ -34,9 +33,15 @@ compute_ctl). Correctness is the dominant concern here:
 **Control plane** (`controller/`). The concerns are cluster-state consistency,
 not row-level storage:
 
-- Changes to generation authority, the node/branch/endpoint registries, or the
-  `yb_storage` schema provisioning on controller startup should be checked
-  against [`controller/architecture/sc-integration.md`](controller/architecture/sc-integration.md).
+- Changes to the node/branch/endpoint registries or the `yb_storage` schema
+  provisioning on controller startup should be checked against
+  [`controller/architecture/sc-integration.md`](controller/architecture/sc-integration.md);
+  changes to the `resource_token` store against **both**
+  [`compute/architecture/compute-fencing.md`](compute/architecture/compute-fencing.md)
+  (the endpoint write lease) and
+  [`controller/architecture/ac-locking.md`](controller/architecture/ac-locking.md)
+  (the control plane's task and endpoint locks) — they lease the same rows through
+  the same `token_acquire` / `token_release`.
 - YB writes here follow the same idempotency contract as above.
 
 **Deploy / Kubernetes** (`deploy/`). Mostly operational correctness:

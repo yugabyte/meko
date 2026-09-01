@@ -157,7 +157,7 @@ type DeployConfig struct {
 	// controller-managed controller (e.g. http://host.docker.internal:50051).
 	// When set, the endpoint runs the controller-coordinated path
 	// (controller-cluster-create.md). Empty = the endpoint runs
-	// controller-free. Either way the pageserver claims its own generation.
+	// controller-free. Either way the pageserver reads its own branch row.
 	ControllerURL string
 
 	// The universe the deployed endpoints use as their durable backend. This is

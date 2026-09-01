@@ -220,8 +220,9 @@ Two consequences worth knowing:
 - **`init` discards local storage state**, so use it when you want a clean
   instance, not to repair a running one. `start` never drops the database:
   pageservers are rediscovered from `endpoints/*/pageserver/pageserver.toml` and
-  claim a generation against `amp_storage.branch_state`, so resetting the database
-  without also clearing those directories would break every subsequent start.
+  expect their `amp_storage.branch_state` row to exist — a daemon that finds no
+  row fails loudly — so resetting the database without also clearing those
+  directories would break every subsequent start.
   Reset both together, which is exactly what `init` does.
 - **Only a loopback cluster is reset.** If `--yb-host` points somewhere remote,
   `init` says so and leaves that database alone rather than dropping a cluster

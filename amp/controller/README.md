@@ -47,7 +47,7 @@ controller/
   internal/core/      domain layer: Backend interface + YBDB and in-memory impls
   internal/task/      write-ahead task framework (types, store, registry, worker)
   internal/process/   subprocess supervision (spawn, restart with backoff, clean stop)
-  internal/registry/          the storage-layer control surface (generation authority + registries)
+  internal/registry/          the storage layer's per-branch state (amp_storage.branch_state)
   internal/helm/      one-shot helm CLI wrapper (upgrade --install / uninstall)
   internal/deploy/    endpoint provisioner: Kubernetes/Helm or Docker (synchronous deploy/retire)
   migrations/         embedded raw-SQL migrations (golang-migrate)
@@ -112,9 +112,11 @@ and, per user, their storage pools, clusters, branches, and endpoints. See
 ## Storage-layer control
 
 The controller owns cluster control for the storage layer: the branch and
-endpoint records, and **provisioning** of the shared `yb_storage` database (all
-its schemas) on startup. Generation authority is not among them — the pageserver
-claims its own from `amp_storage.branch_state`.
+endpoint records, **provisioning** of the shared `yb_storage` database (all its
+schemas) on startup, and the `resource_token` store. It issues no fence itself —
+the endpoint supervisor takes a lease from that store and pushes it to the
+pageserver and safekeeper, which enforce it
+([`compute/architecture/compute-fencing.md`](../compute/architecture/compute-fencing.md)).
 
 None of it has an HTTP surface of its own. Branches and endpoints are `/api/v1`
 resources, and `amp_storage.branch_state` is seeded in-process by the task

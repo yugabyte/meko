@@ -78,7 +78,8 @@ pub struct TimelineState<CTRL: control_file::Storage> {
     ///
     /// Deliberately not persisted here. The pageserver already records it
     /// authoritatively in `amp_storage.branch_state.consistent_lsn`, which it
-    /// writes — generation-fenced — *before* echoing the same value back as
+    /// writes — absolutely, under the endpoint's write lease — *before* echoing
+    /// the same value back as
     /// `PageserverFeedback.consistent_lsn`. So every value this holds is
     /// one the pageserver has already committed: seeded from that column at
     /// startup, advanced by feedback thereafter, and a crash can only resume at

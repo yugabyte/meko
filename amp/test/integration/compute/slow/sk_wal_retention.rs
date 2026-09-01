@@ -99,7 +99,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // ---- 2. trimming never passes the durable frontier ------------------
     //
     // The safety direction. The segment holding `consistent_lsn` — the
-    // pageserver's gen-fenced durability commit point — must still be
+    // pageserver's durability commit point — must still be
     // present, or WAL it may still replay has been deleted.
     let frontier = c
         .consistent_lsn(&branch)
