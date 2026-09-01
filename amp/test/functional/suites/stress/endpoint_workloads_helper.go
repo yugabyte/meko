@@ -188,6 +188,9 @@ func benchbaseOnEndpoint(ex exec.RemoteExecutor, runDir string, tenantIndex int,
 		Warehouses: cfg.BenchWarehouses,
 		Terminals:  cfg.BenchTerminals,
 		Duration:   cfg.WorkloadRunTime,
+		// Per-tenant: concurrent tpcc tenants share runDir, and the default
+		// benchbase.out (and its .exit twin) would collide.
+		LogPath: fmt.Sprintf("benchbase-t%d.out", tenantIndex),
 	}
 	var mu sync.Mutex
 	var raw string

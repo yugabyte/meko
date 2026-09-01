@@ -431,14 +431,21 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 		case wd.err != nil:
 			// A Setup failure, or a body error marked core.EnvFail, is not a product signal.
 			result.Status = StatusFailed
+			result.ErrorSummary = wd.err.Error()
 			if setupFailed || IsEnvFailure(wd.err) {
 				result.Status = StatusEnvFailed
+			} else if reason, ok := attestConnDrop(env, wd.err); ok {
+				result.Status = StatusEnvFailed
+				result.ErrorSummary += " [" + reason + "]"
 			}
-			result.ErrorSummary = wd.err.Error()
 		case failed:
 			result.Status = StatusFailed
 			if failErr != nil {
 				result.ErrorSummary = failErr.Error()
+				if reason, ok := attestConnDrop(env, failErr); ok {
+					result.Status = StatusEnvFailed
+					result.ErrorSummary += " [" + reason + "]"
+				}
 			}
 		default:
 			result.Status = StatusPassed

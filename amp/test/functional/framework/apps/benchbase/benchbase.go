@@ -96,6 +96,8 @@ type RunSpec struct {
 	MaxHeap string // java -Xmx (e.g. "8g"); empty → DefaultMaxHeap
 	LogPath string // stdout+stderr capture; empty → benchbase.out under RunDir
 
+	PollInterval time.Duration // detached-run poll cadence; empty → 5s
+
 	// LoadBalance, when non-nil, forces the YugabyteDB smart-driver URL's
 	// load-balance flag on/off (the fork's sample configs ship load-balance=true).
 	// Set it false for an in-cluster (k8s) target reached through a Service: the
@@ -186,6 +188,13 @@ func (s RunSpec) ResolvedLogPath() string {
 	return path.Join(s.RunDir, s.logPath())
 }
 
+func (s RunSpec) pollInterval() time.Duration {
+	if s.PollInterval > 0 {
+		return s.PollInterval
+	}
+	return 5 * time.Second
+}
+
 func phase(p *bool) bool { return p == nil || *p }
 
 // Ptr is a helper for setting the optional Create/Load/Execute phase flags.
@@ -268,44 +277,118 @@ func BuildRunCommand(spec RunSpec) string {
 	return b.String()
 }
 
+// ExitPath is where the detached wrapper records the benchmark's exit code,
+// next to the log on the target.
+func (s RunSpec) ExitPath() string { return s.ResolvedLogPath() + ".exit" }
+
+// BuildStartCommand renders the detached launch: the whole run (sed patches,
+// java, log redirect) goes into a nohup'd shell that records its exit code,
+// and only the wrapper's pid comes back. A benchmark held on a live exec
+// stream dies with that stream (kubectl exec through the API server drops on
+// multi-minute sessions); a detached one survives it.
+func BuildStartCommand(spec RunSpec) string {
+	inner := BuildRunCommand(spec) + "; echo $? > " + shellQuote(spec.ExitPath())
+	// ";" not "&&": with "rm && nohup … & echo $!" the "&" grabs the whole list,
+	// so $! would be a wrapping subshell and rm would race the first poll.
+	return "rm -f " + shellQuote(spec.ExitPath()) +
+		"; nohup sh -c " + shellQuote(inner) + " >/dev/null 2>&1 & echo $!"
+}
+
+// A dropped poll must not kill the run, but a target that stopped answering
+// entirely has to surface eventually.
+const maxConsecutivePollErrors = 24
+
 // Run patches the config, runs the benchmark to completion on ex, and parses
 // the summary. It checks the jar is present first, returning missingJarHint
-// (naming the artifact route) rather than a bare exec failure. Result.Raw
-// always carries the captured output, even on failure.
+// (naming the artifact route) rather than a bare exec failure. The benchmark
+// runs detached on the target and is watched by short polls, so a dropped
+// exec stream costs one poll, never the run. Result.Raw always carries the
+// captured output, even on failure.
 func Run(ctx context.Context, ex exec.RemoteExecutor, spec RunSpec) (Result, error) {
 	if err := checkAvailable(ctx, ex, spec); err != nil {
 		return Result{}, err
 	}
-	res, err := ex.Run(ctx, BuildRunCommand(spec))
+	res, err := ex.Run(ctx, BuildStartCommand(spec))
 	if err != nil {
-		return Result{}, fmt.Errorf("benchbase run: %w", err)
+		return Result{}, fmt.Errorf("benchbase start: %w", err)
 	}
-	out := res.Stdout + res.Stderr
-	if res.ExitCode != 0 {
-		// The benchmark's own stdout/stderr was redirected into logPath inside the
-		// target; the exec transport only carried its own "exited N" message. Cat
-		// the log so the real Java/BenchBase failure lands in Raw and the error.
+	pid := strings.TrimSpace(res.Stdout)
+	if res.ExitCode != 0 || pid == "" {
+		return Result{}, fmt.Errorf("benchbase start exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stdout+res.Stderr))
+	}
+	exitCode, err := waitDetached(ctx, ex, spec, pid)
+	if err != nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		raw := readLog(rctx, ex, spec)
+		cancel()
+		return Result{Raw: raw}, err
+	}
+	if exitCode != 0 {
 		logTxt := readLog(ctx, ex, spec)
-		raw := out
-		if logTxt != "" {
-			raw = out + "\n--- " + spec.logPath() + " ---\n" + logTxt
-		}
-		detail := strings.TrimSpace(res.Stderr)
+		raw := "--- " + spec.logPath() + " ---\n" + logTxt
+		detail := tailLines(logTxt, 3)
 		if c := causeLine(logTxt); c != "" {
 			detail = c
-		} else if t := tailLines(logTxt, 3); t != "" {
-			detail = t
 		}
-		return Result{Raw: raw}, fmt.Errorf("benchbase run exited %d: %s", res.ExitCode, detail)
+		if detail == "" {
+			detail = "no output in " + spec.ResolvedLogPath() + " (setup failed before java, or the log is unreadable)"
+		}
+		return Result{Raw: raw}, fmt.Errorf("benchbase run exited %d: %s", exitCode, detail)
 	}
 	// The authoritative numbers are in the summary JSON BenchBase writes under
-	// results/; fall back to the captured stdout when it can't be read.
+	// results/; fall back to the log when it can't be read.
 	summary := readSummary(ctx, ex, spec)
-	raw := out
-	if summary != "" {
-		raw = out + "\n" + summary
+	raw := summary
+	if raw == "" {
+		raw = readLog(ctx, ex, spec)
 	}
 	return parseSummary(raw), nil
+}
+
+// waitDetached polls the exit file / wrapper pid until the run ends. Poll
+// failures are tolerated up to maxConsecutivePollErrors; ctx cancellation
+// kills the wrapper best-effort.
+func waitDetached(ctx context.Context, ex exec.RemoteExecutor, spec RunSpec, pid string) (int, error) {
+	probe := "cat " + shellQuote(spec.ExitPath()) + " 2>/dev/null" +
+		" || (kill -0 " + pid + " 2>/dev/null && echo RUNNING || echo GONE)"
+	pollErrs := 0
+	gone := false
+	for {
+		select {
+		case <-ctx.Done():
+			// Children first: killing the wrapper reparents the JVM and orphans it.
+			kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			_, _ = ex.Run(kctx, "pkill -9 -P "+pid+" 2>/dev/null; kill -9 "+pid+" 2>/dev/null")
+			cancel()
+			return 0, fmt.Errorf("benchbase run abandoned: %w", ctx.Err())
+		case <-time.After(spec.pollInterval()):
+		}
+		res, err := ex.Run(ctx, probe)
+		if err != nil || res.ExitCode != 0 {
+			pollErrs++
+			if pollErrs >= maxConsecutivePollErrors {
+				return 0, fmt.Errorf("benchbase run unwatchable, %d consecutive poll failures, last: %v (%s)", pollErrs, err, strings.TrimSpace(res.Stderr))
+			}
+			continue
+		}
+		pollErrs = 0
+		switch out := strings.TrimSpace(res.Stdout); out {
+		case "RUNNING":
+			gone = false
+		case "GONE":
+			// One grace poll: the exit-file write may have raced the pid check.
+			if gone {
+				return 0, fmt.Errorf("benchbase process (pid %s) disappeared without writing %s, killed externally", pid, spec.ExitPath())
+			}
+			gone = true
+		default:
+			code, cerr := strconv.Atoi(out)
+			if cerr != nil {
+				return 0, fmt.Errorf("benchbase exit file %s holds %q, not an exit code", spec.ExitPath(), out)
+			}
+			return code, nil
+		}
+	}
 }
 
 // checkAvailable detects a missing benchbase.jar on the target.

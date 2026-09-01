@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,10 +25,16 @@ type scriptExec struct {
 type rule struct {
 	match string
 	res   exec.Result
+	fn    func() exec.Result
 }
 
 func (s *scriptExec) on(match string, res exec.Result) *scriptExec {
-	s.rules = append(s.rules, rule{match, res})
+	s.rules = append(s.rules, rule{match: match, res: res})
+	return s
+}
+
+func (s *scriptExec) onFunc(match string, fn func() exec.Result) *scriptExec {
+	s.rules = append(s.rules, rule{match: match, fn: fn})
 	return s
 }
 
@@ -37,6 +44,9 @@ func (s *scriptExec) Run(_ context.Context, cmd string) (exec.Result, error) {
 	s.commands = append(s.commands, cmd)
 	for _, r := range s.rules {
 		if strings.Contains(cmd, r.match) {
+			if r.fn != nil {
+				return r.fn(), nil
+			}
 			return r.res, nil
 		}
 	}
@@ -55,12 +65,13 @@ func (s *scriptExec) recorded() []string {
 
 func spec() benchbase.RunSpec {
 	return benchbase.RunSpec{
-		RunDir:     "/opt/benchbase-yugabyte",
-		Benchmark:  benchbase.TPCC,
-		Conn:       pg.ConnInfo{Host: "10.0.0.9", Port: 5433, User: "yugabyte", Password: "pw", Database: "amp"},
-		Warehouses: 2,
-		Terminals:  4,
-		Duration:   30 * time.Second,
+		RunDir:       "/opt/benchbase-yugabyte",
+		Benchmark:    benchbase.TPCC,
+		Conn:         pg.ConnInfo{Host: "10.0.0.9", Port: 5433, User: "yugabyte", Password: "pw", Database: "amp"},
+		Warehouses:   2,
+		Terminals:    4,
+		Duration:     30 * time.Second,
+		PollInterval: time.Millisecond,
 	}
 }
 
@@ -206,9 +217,10 @@ const summaryJSON = `{
 
 func TestRunParsesSummary(t *testing.T) {
 	ex := &scriptExec{}
-	ex.on("test -f", exec.Result{ExitCode: 0})                                    // jar present
-	ex.on("java -Xmx", exec.Result{ExitCode: 0, Stdout: "Benchmark complete.\n"}) // run
-	ex.on("summary.json", exec.Result{ExitCode: 0, Stdout: summaryJSON})          // results summary
+	ex.on("test -f", exec.Result{ExitCode: 0})                           // jar present
+	ex.on("nohup", exec.Result{ExitCode: 0, Stdout: "4242\n"})           // detached start -> pid
+	ex.on("benchbase.out.exit", exec.Result{ExitCode: 0, Stdout: "0\n"}) // finished ok
+	ex.on("summary.json", exec.Result{ExitCode: 0, Stdout: summaryJSON}) // results summary
 	res, err := benchbase.Run(context.Background(), ex, spec())
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -228,8 +240,8 @@ func TestRunParsesSummary(t *testing.T) {
 	if res.P95LatencyUS != 25000.0 {
 		t.Errorf("p95 latency = %v, want 25000", res.P95LatencyUS)
 	}
-	if !strings.Contains(res.Raw, "Benchmark complete") {
-		t.Error("Raw must carry the captured stdout")
+	if !strings.Contains(res.Raw, "Throughput") {
+		t.Error("Raw must carry the summary")
 	}
 }
 
@@ -248,7 +260,9 @@ func TestRunMissingJarNamesArtifactRoute(t *testing.T) {
 func TestRunExitNonZeroKeepsRawOutput(t *testing.T) {
 	ex := &scriptExec{}
 	ex.on("test -f", exec.Result{ExitCode: 0})
-	ex.on("java -Xmx", exec.Result{ExitCode: 1, Stdout: "starting...\n", Stderr: "connection refused\n"})
+	ex.on("nohup", exec.Result{ExitCode: 0, Stdout: "4242\n"})
+	ex.on("benchbase.out.exit", exec.Result{ExitCode: 0, Stdout: "1\n"})
+	ex.on("benchbase.out", exec.Result{ExitCode: 0, Stdout: "starting...\nconnection refused\n"})
 	res, err := benchbase.Run(context.Background(), ex, spec())
 	if err == nil {
 		t.Fatal("want an error on non-zero exit")
@@ -261,8 +275,10 @@ func TestRunExitNonZeroKeepsRawOutput(t *testing.T) {
 func TestRunUnparseableSummaryLeavesZeroFields(t *testing.T) {
 	ex := &scriptExec{}
 	ex.on("test -f", exec.Result{ExitCode: 0})
-	ex.on("java -Xmx", exec.Result{ExitCode: 0, Stdout: "no numbers here\n"})
+	ex.on("nohup", exec.Result{ExitCode: 0, Stdout: "4242\n"})
+	ex.on("benchbase.out.exit", exec.Result{ExitCode: 0, Stdout: "0\n"})
 	ex.on("summary.json", exec.Result{ExitCode: 1}) // no summary file
+	ex.on("benchbase.out", exec.Result{ExitCode: 0, Stdout: "no numbers here\n"})
 	res, err := benchbase.Run(context.Background(), ex, spec())
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -301,5 +317,53 @@ func TestResolvedLogPathIncludesTheRunDir(t *testing.T) {
 	cmd := benchbase.BuildRunCommand(spec)
 	if !strings.Contains(cmd, "> 'benchbase.out'") {
 		t.Errorf("run command does not redirect into the log this path names: %s", cmd)
+	}
+}
+
+// The "&" must bind to the nohup command only: with "rm && nohup … &" the
+// backgrounded job is the whole list, $! is a wrapping subshell, and rm races
+// the first poll of a stale exit file.
+func TestBuildStartCommandDetachesOnlyTheNohup(t *testing.T) {
+	got := benchbase.BuildStartCommand(spec())
+	if !strings.Contains(got, "'; nohup sh -c ") {
+		t.Errorf("rm must complete synchronously before the detached start:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "& echo $!") {
+		t.Errorf("the start must background nohup and return its pid:\n%s", got)
+	}
+	if !strings.Contains(got, "rm -f '/opt/benchbase-yugabyte/benchbase.out.exit'") {
+		t.Errorf("a stale exit file must be removed first:\n%s", got)
+	}
+}
+
+func TestRunSurvivesRunningPollsBeforeExit(t *testing.T) {
+	ex := &scriptExec{}
+	ex.on("test -f", exec.Result{ExitCode: 0})
+	ex.on("nohup", exec.Result{ExitCode: 0, Stdout: "4242\n"})
+	var polls atomic.Int32
+	ex.onFunc("benchbase.out.exit", func() exec.Result {
+		if polls.Add(1) < 3 {
+			return exec.Result{ExitCode: 0, Stdout: "RUNNING\n"}
+		}
+		return exec.Result{ExitCode: 0, Stdout: "0\n"}
+	})
+	ex.on("summary.json", exec.Result{ExitCode: 0, Stdout: summaryJSON})
+	if _, err := benchbase.Run(context.Background(), ex, spec()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if polls.Load() < 3 {
+		t.Fatalf("expected at least 3 polls, got %d", polls.Load())
+	}
+}
+
+// A pid gone with no exit file gets one grace poll, then is reported killed.
+func TestRunReportsExternallyKilledProcess(t *testing.T) {
+	ex := &scriptExec{}
+	ex.on("test -f", exec.Result{ExitCode: 0})
+	ex.on("nohup", exec.Result{ExitCode: 0, Stdout: "4242\n"})
+	ex.on("benchbase.out.exit", exec.Result{ExitCode: 0, Stdout: "GONE\n"})
+	_, err := benchbase.Run(context.Background(), ex, spec())
+	if err == nil || !strings.Contains(err.Error(), "killed externally") {
+		t.Fatalf("want the externally-killed verdict, got: %v", err)
 	}
 }

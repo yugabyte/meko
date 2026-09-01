@@ -130,7 +130,12 @@ occurred, and the distinction drives what to do next:
 `env_failed` / `skipped` mean the test never got a fair run — never read them as
 a pass. A test that provisions its own backing inside the body marks that
 failure with `core.EnvFail` / `core.AsEnvFailure` so it lands as `env_failed`
-too.
+too. One more route: a body failure that the pg client marked as a severed
+connection (`pg.TransportError`) is reclassified `env_failed` when the env
+attests the compute survived it — same pod uid, no container restarts, same
+postmaster, postgres answering again (`core/conndrop.go`,
+`env/sharedk8s/conndrop.go`); anything short of full attestation stays
+`failed`.
 
 **Env-failure retries** (`core/retry.go`). A test whose environment failed for a
 SCHEDULING-CLASS reason — pod unschedulable, insufficient cpu/memory,

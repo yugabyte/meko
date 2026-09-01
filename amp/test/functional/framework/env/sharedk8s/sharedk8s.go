@@ -706,6 +706,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		},
 	}
 	env.ownCtrl = p.ownControllerConn()
+	env.capturePGPod(ctx)
 	return env, nil
 }
 
@@ -764,7 +765,7 @@ func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, er
 	if v := p.detectProduct(ctx, ci); v != "" {
 		product = v
 	}
-	return &Env{
+	env := &Env{
 		controllerURL: url,
 		versions:      core.DetectedVersions{Product: product, YB: p.detectYB(ctx, ci)},
 		pg:            ci,
@@ -778,7 +779,9 @@ func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, er
 		kube:          p.kube,
 		logf:          p.logf,
 		handles:       core.EnvHandles{Namespace: p.cfg.Namespace, Cluster: proj.ID, Endpoint: eps[0].ID},
-	}, nil
+	}
+	env.capturePGPod(ctx)
+	return env, nil
 }
 
 // Teardown deletes the per-test cluster (cascade) and closes the per-test pg
@@ -1248,6 +1251,11 @@ type Env struct {
 	// several at once.
 	pgMu sync.Mutex
 
+	// pgPod is AttestPGConnDrop's baseline (conndrop.go), guarded by pgMu.
+	pgPod *pgPodSnap
+	// pgProbe overrides the postmaster start-time query in tests.
+	pgProbe func(ctx context.Context, ci pg.ConnInfo) (string, error)
+
 	// samplers holds the per-test server-metrics samplers (servermetrics.go).
 	samplers serverSamplers
 
@@ -1594,6 +1602,7 @@ func (e *Env) RestartCompute(ctx context.Context) error {
 	e.pgMu.Lock()
 	e.swapPG(ci, pf)
 	e.pgMu.Unlock()
+	e.capturePGPod(ctx)
 	return nil
 }
 

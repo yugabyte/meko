@@ -89,7 +89,10 @@ quietly.
 - The status taxonomy (`passed` / `failed` / `env_failed` / `broken` /
   `timed_out` / `skipped`) is set by **where** the failure happened: assertion →
   failed; harness panic → broken; provisioning failure → env_failed; watchdog →
-  timed_out. Report faithfully.
+  timed_out. Report faithfully. A mid-statement connection drop the env can
+  attest as harness transport (compute pod, restarts, and postmaster all
+  unchanged, postgres answering) also lands env_failed — see
+  `core/conndrop.go`; an unattested one stays failed.
 - Every test execution gets a **seed** driving all randomness (workloads, nemesis
   sequence/timing/targets). It is recorded; `--seed` replays exactly. Chaos and
   workloads must derive their randomness from the seed, never from wall-clock or

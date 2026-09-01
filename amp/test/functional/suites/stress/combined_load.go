@@ -450,9 +450,10 @@ func (r *combinedRun) dataLoadSpec(skipWorkload, skipDDL bool) sampleapp.RunSpec
 	}
 }
 
-// benchWorkload builds the BenchBase TPC-C workload. BenchBase runs to completion
-// (create+load+execute) in one blocking call; its report_kill attaches the
-// captured output (there is no long-lived process to kill).
+// benchWorkload builds the BenchBase TPC-C workload. Run blocks to completion
+// but the benchmark itself is detached on the target and watched by polls; a
+// cancelled context kills the detached JVM (benchbase.waitDetached), and
+// report_kill attaches the captured output.
 func (r *combinedRun) benchWorkload() *managedWorkload {
 	spec := benchbase.RunSpec{
 		RunDir:     r.benchbaseDir,

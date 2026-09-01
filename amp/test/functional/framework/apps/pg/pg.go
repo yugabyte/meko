@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -127,6 +128,39 @@ type Session interface {
 	Close()
 }
 
+// TransportError marks a driver error that reads as a severed connection: the
+// socket died under the client with no answer from the server. Deliberately
+// absent: "connection refused" (ConnectPG's own recovery path), timeouts, and
+// every SQLSTATE-carrying error (the server answered, so the transport worked).
+type TransportError struct{ Err error }
+
+func (e *TransportError) Error() string { return e.Err.Error() }
+func (e *TransportError) Unwrap() error { return e.Err }
+
+var transportMarkers = []string{
+	"unexpected eof",
+	"connection reset by peer",
+	"broken pipe",
+	"conn closed",
+	"use of closed network connection",
+}
+
+func wrapTransport(err error) error {
+	if err == nil {
+		return nil
+	}
+	low := strings.ToLower(err.Error())
+	if strings.Contains(low, "connection refused") {
+		return err
+	}
+	for _, m := range transportMarkers {
+		if strings.Contains(low, m) {
+			return &TransportError{Err: err}
+		}
+	}
+	return err
+}
+
 // Pin takes one connection out of the pool and keeps it.
 //
 // Close returns it. Every query on the result runs on that one backend, so its
@@ -146,7 +180,7 @@ type pinned struct {
 func (p *pinned) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	tag, err := p.conn.Exec(ctx, sql, args...)
 	if err != nil {
-		return 0, fmt.Errorf("exec %q: %w", truncate(sql), err)
+		return 0, fmt.Errorf("exec %q: %w", truncate(sql), wrapTransport(err))
 	}
 	return tag.RowsAffected(), nil
 }
@@ -154,7 +188,7 @@ func (p *pinned) Exec(ctx context.Context, sql string, args ...any) (int64, erro
 func (p *pinned) QueryInt(ctx context.Context, sql string, args ...any) (int64, error) {
 	var v int64
 	if err := p.conn.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return 0, fmt.Errorf("query int %q: %w", truncate(sql), err)
+		return 0, fmt.Errorf("query int %q: %w", truncate(sql), wrapTransport(err))
 	}
 	return v, nil
 }
@@ -162,7 +196,7 @@ func (p *pinned) QueryInt(ctx context.Context, sql string, args ...any) (int64, 
 func (p *pinned) QueryString(ctx context.Context, sql string, args ...any) (string, error) {
 	var v string
 	if err := p.conn.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return "", fmt.Errorf("query string %q: %w", truncate(sql), err)
+		return "", fmt.Errorf("query string %q: %w", truncate(sql), wrapTransport(err))
 	}
 	return v, nil
 }
@@ -192,7 +226,7 @@ func (c *Client) Pool() *pgxpool.Pool { return c.pool }
 func (c *Client) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	tag, err := c.pool.Exec(ctx, sql, args...)
 	if err != nil {
-		return 0, fmt.Errorf("exec %q: %w", truncate(sql), err)
+		return 0, fmt.Errorf("exec %q: %w", truncate(sql), wrapTransport(err))
 	}
 	return tag.RowsAffected(), nil
 }
@@ -203,7 +237,7 @@ func (c *Client) Exec(ctx context.Context, sql string, args ...any) (int64, erro
 func (c *Client) CopyFrom(ctx context.Context, table string, columns []string, src pgx.CopyFromSource) (int64, error) {
 	n, err := c.pool.CopyFrom(ctx, pgx.Identifier{table}, columns, src)
 	if err != nil {
-		return n, fmt.Errorf("copy into %s: %w", table, err)
+		return n, fmt.Errorf("copy into %s: %w", table, wrapTransport(err))
 	}
 	return n, nil
 }
@@ -212,7 +246,7 @@ func (c *Client) CopyFrom(ctx context.Context, table string, columns []string, s
 func (c *Client) Query(ctx context.Context, scan func(pgx.Rows) error, sql string, args ...any) error {
 	rows, err := c.pool.Query(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("query %q: %w", truncate(sql), err)
+		return fmt.Errorf("query %q: %w", truncate(sql), wrapTransport(err))
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -220,14 +254,14 @@ func (c *Client) Query(ctx context.Context, scan func(pgx.Rows) error, sql strin
 			return fmt.Errorf("scan %q: %w", truncate(sql), err)
 		}
 	}
-	return rows.Err()
+	return wrapTransport(rows.Err())
 }
 
 // QueryInt runs a query returning a single int64.
 func (c *Client) QueryInt(ctx context.Context, sql string, args ...any) (int64, error) {
 	var v int64
 	if err := c.pool.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return 0, fmt.Errorf("query int %q: %w", truncate(sql), err)
+		return 0, fmt.Errorf("query int %q: %w", truncate(sql), wrapTransport(err))
 	}
 	return v, nil
 }
@@ -236,7 +270,7 @@ func (c *Client) QueryInt(ctx context.Context, sql string, args ...any) (int64, 
 func (c *Client) QueryString(ctx context.Context, sql string, args ...any) (string, error) {
 	var v string
 	if err := c.pool.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return "", fmt.Errorf("query string %q: %w", truncate(sql), err)
+		return "", fmt.Errorf("query string %q: %w", truncate(sql), wrapTransport(err))
 	}
 	return v, nil
 }
