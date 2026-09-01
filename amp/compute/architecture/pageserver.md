@@ -194,13 +194,13 @@ terms do different jobs:
 
 Consequences to know:
 
-- Every query binds `bucket_id` to a single **VALUE**. A chain read has a
-  known blknum, so it binds the whole 7-column prefix and hits one tablet.
-  A blknum *range* scan touches one bucket per 2MB stretch it spans, so
-  callers loop over `page_buckets_for_range` and merge; whole-fork and
-  cross-fork operations fan out over all six. One bucket per query is
-  forced — `RangeRead::new_range` binds one value per key column and the
-  shim's `range_values` ABI has no set form.
+- Every query binds `bucket_id` to a single **VALUE**. A read with a known
+  blknum binds the whole 7-column prefix and hits one tablet, and the
+  thin-lane per-fork scan is one such read per block. A scattered key set
+  partitions its blknums by `page_bucket_id` and sends one bucket-pinned
+  query per group; whole-fork and cross-fork operations fan out over all
+  six. One bucket per query is forced — `RangeRead::new_range` binds one
+  value per key column and the shim's `range_values` ABI has no set form.
 - The CHECK never fires on the hot path — thin-client writes go
   straight to DocDB and never reach it. A mis-computed bucket is worse
   than in `pending_gc` (a missed candidate): the row lands outside the key
@@ -470,9 +470,9 @@ ASC on the storage side, the SQL readers order it DESC). It relies
 on the `lsn DESC` clustering, so a forward scan surfaces the newest
 version first — `read_meta` takes just `limit(1)`, and the chain readers
 truncate at the first `will_init` anchor. One-forknum multi-block scans
-run as a single clustered range scan with per-block anchor-stop
-collection (`BlockChainCollector`); the paging envelope pins every
-continuation to the first page's snapshot (`read_time_ht`), and paging
+issue one bound single-block read per block, batched onto one `Perform`,
+so each stops at its own anchor (`BlockChainCollector`); the paging
+envelope pins every continuation to the first page's snapshot (`read_time_ht`), and paging
 must run until a reader signals stop or the range is exhausted — a scan
 cut short mid-chain drops the base image and reconstructs a partial page
 (the `yb_thin_client` `read_scan` loop stops iff its `on_page` callback

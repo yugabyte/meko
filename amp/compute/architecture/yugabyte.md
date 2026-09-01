@@ -381,9 +381,10 @@ CREATE TABLE amp_storage.pages (
 
 Because `bucket_id` leads the key, **every** query against `pages` binds
 it to a single value. A chain read knows its blknum and so binds the
-entire 7-column prefix (one tablet); a blknum range scan touches one
-bucket per 2MB stretch and loops over `page_buckets_for_range`;
-whole-fork and cross-fork operations fan out over all six. One bucket per
+entire 7-column prefix (one tablet), and the thin-lane per-fork scan is
+one such read per block, so each stops at its own anchor. A scattered key
+set partitions its blknums by `page_bucket_id`, one bucket-pinned query per
+group; whole-fork and cross-fork operations fan out over all six. One bucket per
 query is forced: the range-key bind takes one value per column, with no
 set form. See [`pageserver.md`](pageserver.md) "Why the
 bucket" for the function's design and the salt's failure mode.

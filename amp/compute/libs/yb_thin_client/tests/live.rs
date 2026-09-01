@@ -1128,9 +1128,8 @@ fn pages_bucket_of(relnode: i64, blknum: i64) -> i16 {
 /// The schema is the post-bucketization one: all-range key led by `bucket_id`,
 /// pre-split into 6 tablets. `N` deliberately spans several 2MB stretches, so
 /// the fork's blocks live in several buckets on DIFFERENT tablets and a
-/// correct scan is one bucket-pinned read each — mirroring how
-/// `PageStore::scan_one_fork` now fans out over `page_buckets_for_range`.
-/// A single unpinned read would leave the leading key column unbound.
+/// correct scan is one bucket-pinned read each. A single unpinned read would
+/// leave the leading key column unbound.
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_pages_multipage_scan() {

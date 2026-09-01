@@ -35,9 +35,11 @@
 //! one contiguous run and a per-fork scan is still a range scan.
 //!
 //! Because the bucket is `(… + blknum / PAGE_BUCKET_STRIDE) % PAGE_BUCKETS`,
-//! a read whose blknum is known (a chain read) binds the whole key prefix
-//! and touches one tablet, while a blknum *range* scan touches one bucket
-//! per 2MB stretch it spans, capped at `PAGE_BUCKETS`. Every query here
+//! a read whose blknum is known binds the whole key prefix and touches one
+//! tablet, while a blknum *range* scan touches one bucket per 2MB stretch it
+//! spans, capped at `PAGE_BUCKETS`. The thin-lane per-fork scan takes the
+//! first shape — one bound read per block, so each stops at its own anchor
+//! (#1054). Every query here
 //! binds bucket_id as a single VALUE and callers that span buckets loop —
 //! [`yb_thin_client::RangeRead::new_range`] binds one value per key column,
 //! and the shim's `range_values` ABI has no set form.
@@ -564,9 +566,6 @@ async fn run_batched_block_scan(
     unreachable!("the final scan attempt returns or propagates")
 }
 
-/// Rows per fetched page on direct-RPC multi-block range scans.
-const DIRECT_SCAN_PAGE_ROWS: u64 = 128;
-
 /// Whole-scan restarts for a batched thin-lane block scan
 /// ([`run_batched_block_scan`]). A read-restart on a *pinned* batch —
 /// which every paging round after the first is — cannot be healed inside
@@ -612,6 +611,38 @@ fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindVa
         yb_thin_client::ValueType::I32 => yb_thin_client::BindValue::I32(v as i32),
         _ => yb_thin_client::BindValue::I64(v),
     }
+}
+
+/// The bound key prefix selecting ONE page's chain in `pages`: all seven
+/// leading key columns, so the rows it spans are exactly that page's versions
+/// and the read is a single clustered seek on one tablet. Callers append the
+/// `lsn` bound, targets and limit that decide how much of the chain they want.
+///
+/// Shared by [`PageStore::read_chain_thin`] and
+/// [`PageStore::scan_one_fork_thin`] rather than restated: the bind ORDER is
+/// the primary key's, and a drifted copy would read the wrong span.
+fn page_chain_read(
+    pages: &yb_thin_client::TableHandle,
+    branch: &bytes::Bytes,
+    sp: i64,
+    db: i64,
+    rel: i64,
+    fork: i16,
+    blk: i64,
+) -> Result<yb_thin_client::RangeRead> {
+    use yb_thin_client::{BindValue, RangeRead};
+    Ok(RangeRead::new_range(
+        pages,
+        vec![
+            int_bind_thin(pages.col("bucket_id")?, page_bucket_id(rel, blk) as i64),
+            BindValue::Bytes(branch.clone()),
+            int_bind_thin(pages.col("spcnode")?, sp),
+            int_bind_thin(pages.col("dbnode")?, db),
+            int_bind_thin(pages.col("relnode")?, rel),
+            int_bind_thin(pages.col("forknum")?, fork as i64),
+            BindValue::I64(blk),
+        ],
+    )?)
 }
 
 /// The shared prefix of every thin `slru_pages` read: `branch` is the
@@ -943,28 +974,6 @@ fn feed_scan_rows<R: RowCells>(collector: &mut BlockChainCollector<R>, rows: Vec
     Ok(())
 }
 
-/// Assemble a one-fork multi-block scan's collected per-block chains
-/// into the keyed map [`PageStore::scan_range`] returns. Used by the
-/// direct-RPC lane.
-fn assemble_page_scan<R: RowCells>(
-    sp: i64,
-    db: i64,
-    rel: i64,
-    fork: i16,
-    collector: BlockChainCollector<R>,
-    where_: &str,
-) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
-    let mut by_key = HashMap::with_capacity(collector.chains.len());
-    for (blk, raw) in collector.chains {
-        let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
-        let chain = assemble_page_chain(key, raw, 1, where_)?;
-        if !chain.is_empty() {
-            by_key.insert(key, chain);
-        }
-    }
-    Ok(by_key)
-}
-
 /// Decode a `meta` row fetched with targets `[lsn, payload]` for `key`.
 /// Used by the direct-RPC lane.
 fn decode_meta_row<R: RowCells>(key: &[u8], r: &R) -> Result<MetaRow> {
@@ -1136,9 +1145,7 @@ pub use pageserver_api::config::GC_SWEEP_MAX_ROWS_PER_DELETE;
 /// (`dump-pages` pins its queries with the same function). Defined once in
 /// `pageserver_api` — a second copy of a frozen key function is how rows go
 /// missing.
-pub use pageserver_api::pages_bucket::{
-    PAGE_BUCKET_STRIDE, PAGE_BUCKETS, page_bucket_id, page_buckets_for_range,
-};
+pub use pageserver_api::pages_bucket::{PAGE_BUCKET_STRIDE, PAGE_BUCKETS, page_bucket_id};
 
 /// GC candidate kind — the `pending_gc.gc_kind` column. Each variant maps
 /// 1:1 to the act function it dispatches to:
@@ -1926,28 +1933,12 @@ impl PageStore {
         blk: i64,
         target: i64,
     ) -> Result<Vec<Arc<PageRow>>> {
-        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        use yb_thin_client::{BindValue, CondOp};
         let pages = &p.pages;
-        // All-range key, so the prefix goes in as `range_values` (there is no
-        // hash key to bind). A known blknum determines the bucket, so all
-        // seven leading key columns are bound and this stays a single-tablet
-        // clustered read — `blknum` is part of the prefix now rather than a
-        // trailing `cond`.
-        let read = RangeRead::new_range(
-            pages,
-            vec![
-                int_bind_thin(pages.col("bucket_id")?, page_bucket_id(rel, blk) as i64),
-                BindValue::Bytes(branch_id.to_bytes()),
-                int_bind_thin(pages.col("spcnode")?, sp),
-                int_bind_thin(pages.col("dbnode")?, db),
-                int_bind_thin(pages.col("relnode")?, rel),
-                int_bind_thin(pages.col("forknum")?, fork as i64),
-                BindValue::I64(blk),
-            ],
-        )?
-        .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
-        .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
-        .limit(DIRECT_CHAIN_PAGE_ROWS);
+        let read = page_chain_read(pages, &branch_id.to_bytes(), sp, db, rel, fork, blk)?
+            .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
+            .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
+            .limit(DIRECT_CHAIN_PAGE_ROWS);
         let raw = fetch_chain_rows_thin(&p.client, pages, read, 0, 2).await?;
 
         let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
@@ -1969,73 +1960,53 @@ impl PageStore {
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
         use yb_thin_client::{BindValue, CondOp, RangeRead};
         let pages = &p.pages;
-        // A blknum span can cross 2MB stretch boundaries, so it can live in
-        // several buckets. `bucket_id` leads the key, so it cannot be a `cond`
-        // and cannot be an IN-list either — it has to be one bound read per
-        // bucket. In practice that is 1, or 2 when the span straddles a
-        // stretch boundary: `max_get_vectored_keys` caps a vectored read at 32
-        // blocks against a 256-block stride.
-        let buckets = page_buckets_for_range(rel, blk_lo, blk_hi);
-        if buckets.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let mut reads: Vec<RangeRead> = Vec::with_capacity(buckets.len());
-        let branch_b = branch_id.to_bytes();
-        for &bucket in &buckets {
-            reads.push(
-                RangeRead::new_range(
-                    pages,
-                    vec![
-                        int_bind_thin(pages.col("bucket_id")?, bucket as i64),
-                        BindValue::Bytes(branch_b.clone()),
-                        int_bind_thin(pages.col("spcnode")?, sp),
-                        int_bind_thin(pages.col("dbnode")?, db),
-                        int_bind_thin(pages.col("relnode")?, rel),
-                        int_bind_thin(pages.col("forknum")?, fork as i64),
-                    ],
-                )?
-                .cond(pages, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
-                .cond(pages, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
-                .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
-                .targets(
-                    pages,
-                    &["blknum", "lsn", "is_image", "will_init", "payload"],
-                )?
-                .limit(DIRECT_SCAN_PAGE_ROWS),
-            );
-        }
 
-        // `done` stays false: an op covers a blknum RANGE, so a complete chain
-        // means only its FIRST block is done. Bounding these chains needs the
-        // same per-block split #1043 did for SLRU — deferred, see #1054.
+        // One read per block, for the reason `scan_slru_range_thin` is (#1042):
+        // the anchor is per block, and the early stop halts the whole scan. The
+        // reads ride one `Perform`, so the fan-out resolves at one read point.
+        let branch_b = branch_id.to_bytes();
+        let reads = (blk_lo..blk_hi)
+            .map(|blk| -> Result<RangeRead> {
+                Ok(page_chain_read(pages, &branch_b, sp, db, rel, fork, blk)?
+                    .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
+                    .targets(
+                        pages,
+                        &["blknum", "lsn", "is_image", "will_init", "payload"],
+                    )?
+                    .limit(DIRECT_CHAIN_PAGE_ROWS))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let collectors = run_batched_block_scan(
             &p.client,
             pages,
             &reads,
-            |_| false,
+            |c| c.chain_complete(),
             "page scan",
-            |i| {
-                format!(
-                    "rel={rel} fork={fork} blk=[{blk_lo},{blk_hi}) bucket={}",
-                    buckets[i]
-                )
-            },
+            |i| format!("rel={rel} fork={fork} blk={}", blk_lo + i as i64),
         )
         .await?;
 
-        // Blocks are disjoint across buckets (the bucket is a function of
-        // blknum), so the per-bucket key maps never collide and `extend` cannot
-        // clobber a chain.
-        let mut by_key = HashMap::new();
-        for collector in collectors {
-            by_key.extend(assemble_page_scan(
-                sp,
-                db,
-                rel,
-                fork,
-                collector,
-                "scan_range_thin",
-            )?);
+        // One op per block, so the op index names the block and a collector
+        // holds at most one chain. Key on that index rather than on the blknum
+        // the server projected back — a mis-projected row would otherwise file
+        // a chain under another block's key and serve those pages as this
+        // block's — and check the projection agrees.
+        let mut by_key = HashMap::with_capacity(collectors.len());
+        for (i, collector) in collectors.into_iter().enumerate() {
+            let blk = blk_lo + i as i64;
+            let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
+            for (got, raw) in collector.chains {
+                anyhow::ensure!(
+                    got == blk,
+                    "thin-lane page scan rel={rel} fork={fork} op for blk={blk} \
+                     returned rows for blk={got}"
+                );
+                let chain = assemble_page_chain(key, raw, 1, "scan_range_thin")?;
+                if !chain.is_empty() {
+                    by_key.insert(key, chain);
+                }
+            }
         }
         Ok(by_key)
     }
@@ -5207,6 +5178,68 @@ mod tests {
             assert_eq!(chain.len(), 2);
             assert_eq!(chain[0].lsn, Lsn(20));
             assert_eq!(chain[1].lsn, Lsn(10));
+        }
+        drop_schema(&store, &schema).await;
+    }
+
+    /// One read per block derives the bucket per block, so a range straddling a
+    /// 2MB stretch boundary must still find every block, and each block must
+    /// trim at its OWN anchor rather than the range's shallowest.
+    ///
+    /// Each block carries pre-anchor history deeper than `DIRECT_CHAIN_PAGE_ROWS`,
+    /// so a stop predicate that fired before the anchor would return a short
+    /// chain here. It does NOT distinguish stopping from reading on and
+    /// discarding — that is a fetch-side property with no API-visible effect.
+    #[tokio::test]
+    async fn scan_range_spans_stretch_boundary_and_trims_at_each_block_anchor() {
+        let (store, schema) = make_store("scan_stretch").await;
+        let branch = rand_branch();
+        let rel = 16384u32;
+        // 250..262 straddles blknum 256, so the blocks land in two buckets.
+        let lo = 250u32;
+        let hi = 262u32;
+        assert_ne!(
+            page_bucket_id(rel as i64, lo as i64),
+            page_bucket_id(rel as i64, hi as i64 - 1),
+            "range must straddle a stretch boundary for this test to mean anything"
+        );
+
+        // Per block: 40 shadowed rows below the anchor (deeper than the 32-row
+        // page, so the anchor is not reachable in one fetch), the anchor image,
+        // then blk-lo+1 deltas above it — a different depth per block.
+        let mut rows = Vec::new();
+        for blk in lo..hi {
+            let k = page_key(1663, 5, rel, 0, blk);
+            rows.push(page_row(k.clone(), 2, true, true, b"shadowed-img"));
+            for d in 0..40u64 {
+                rows.push(page_row(k.clone(), 4 + d * 2, false, false, b"shadowed-d"));
+            }
+            rows.push(page_row(k.clone(), 1000, true, true, b"img"));
+            for d in 0..=(blk - lo) {
+                rows.push(page_row(k.clone(), 1010 + d as u64, false, false, b"d"));
+            }
+        }
+        store.put_pages(branch, &rows).await.unwrap();
+
+        let range = Key::from_slice(&page_key(1663, 5, rel, 0, lo))
+            ..Key::from_slice(&page_key(1663, 5, rel, 0, hi));
+        let got = store.scan_range(branch, range, Lsn(100000)).await.unwrap();
+        assert_eq!(got.len(), (hi - lo) as usize);
+        for blk in lo..hi {
+            let chain = &got[&Key::from_slice(&page_key(1663, 5, rel, 0, blk))];
+            assert_eq!(
+                chain.len(),
+                (blk - lo) as usize + 2,
+                "blk={blk} must return its own deltas plus its anchor image, \
+                 and nothing shadowed by that anchor"
+            );
+            let anchor = chain.last().unwrap();
+            assert!(anchor.will_init, "blk={blk} ends at its anchor");
+            assert_eq!(
+                anchor.lsn,
+                Lsn(1000),
+                "blk={blk} anchors on the newer image"
+            );
         }
         drop_schema(&store, &schema).await;
     }
