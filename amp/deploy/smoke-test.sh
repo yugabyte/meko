@@ -45,9 +45,11 @@
 # Requires the cluster's ImageVolume feature gate and images pushed by
 # deploy/extensions/build.sh.
 #
-# It cleans up everything it creates (its cluster is torn down by the cascade
-# delete it exercises; the pool/user rows and any stray endpoint Helm releases are
-# removed at the end). Re-runnable. Pass KEEP=1 to leave resources for inspection.
+# Its cluster is torn down by the cascade delete it exercises, and cleanup()
+# uninstalls any stray endpoint Helm releases. The pool and user rows are NOT
+# removed — the API has no delete for either (#1083) — so the run reuses one
+# well-known pool rather than creating a fresh one it could never reclaim.
+# Re-runnable. Pass KEEP=1 to leave resources for inspection.
 #
 # Prereqs: kubectl (pointed at the cluster), curl, jq; a controller deployed in
 # $NS (deploy/up.sh) with the endpoint deployer enabled. psql is NOT needed
@@ -64,7 +66,24 @@ PF_PORT="${PF_PORT:-18080}"
 # Path to psql INSIDE the endpoint pod (PG v18 install; not needed on the host).
 PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
 KEEP="${KEEP:-0}"
-SUFFIX="smoke-$$"
+# storage_pools.name is UNIQUE and a pool can be neither deleted nor renamed
+# through the API (#1083), so any name this script picks is claimed forever. The
+# old name came from $$ — a container PID, small and recurring — so a repeat made
+# createStoragePool a 409 no run could recover from (#1082).
+#
+# A unique name per run would fix that collision and leak a permanent row every
+# run, which is worse: ycp lists pools unpaged and gets the oldest 100
+# (ampbackend/backend.go -> defaultPageLimit, ordered created_at), so past that a
+# YCP-managed pool drops off the page, Diff reads it as absent, and its cluster
+# create fails "parent pool not found". So the pool is ONE fixed row, created on
+# the first run and reused by every later one.
+POOL_NAME="pool-smoke"
+# The cluster IS deletable and clusters_name_per_pool is partial on
+# `dropped_at IS NULL`, so a per-run cluster name leaves nothing that blocks
+# reuse, and a run that dies mid-way cannot wedge the next one on a live
+# duplicate.
+SUFFIX="smoke-$(date +%s)-${RANDOM}"
+PROJ_NAME="proj-${SUFFIX}"
 
 ROOT_URL="http://127.0.0.1:${PF_PORT}"
 BASE="${ROOT_URL}/api/v1"
@@ -72,6 +91,40 @@ PASS=0; FAIL=0
 ok()  { printf '  \033[0;32mPASS\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad() { printf '  \033[0;31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
+
+# POST json and assign the created id to the named variable. On failure it
+# leaves that empty and puts the status + body in LAST_ERR, so the log says why.
+# A bare `curl -sf | jq` prints nothing on an HTTP error, which left two dev
+# promotions undiagnosable from the Jenkins console alone (#1079).
+#
+# The id comes back through a nameref rather than stdout: `VAR=$(post_id ...)`
+# would run the body in a subshell, and LAST_ERR set there never reaches here.
+LAST_ERR=""
+post_id() {
+  local __var="$1" url="$2" body="$3" out code
+  out=$(curl -s -w '\n%{http_code}' --max-time 30 -X POST "$url" \
+        -H 'Content-Type: application/json' -d "$body" 2>&1) || true
+  code="${out##*$'\n'}"
+  out="${out%$'\n'*}"
+  if [ "$code" = 200 ] || [ "$code" = 201 ]; then
+    local id
+    id=$(printf '%s' "$out" | jq -r '.id // empty' 2>/dev/null) || id=""
+    printf -v "$__var" '%s' "$id"
+    # A 2xx carrying no usable id is still a failure. Without this the caller
+    # printed a bare FAIL with no reason — the symptom #1079 is about — and jq's
+    # own error goes to stderr this does not capture, so an unparseable body
+    # lands here too.
+    if [ -n "$id" ]; then
+      LAST_ERR=""
+    else
+      LAST_ERR="code=$code but no .id in body=$(printf '%s' "$out" | tr -d '\n' | head -c 300)"
+    fi
+    return 0
+  fi
+  LAST_ERR="code=$code body=$(printf '%s' "$out" | tr -d '\n' | head -c 300)"
+  printf -v "$__var" '%s' ''
+  return 0
+}
 
 PF_PID=""
 cleanup() {
@@ -145,19 +198,29 @@ curl -sf "$ROOT_URL/healthz" >/dev/null && ok "healthz 200" || bad "healthz"
 curl -sf "$ROOT_URL/readyz"  >/dev/null && ok "readyz 200"  || bad "readyz"
 
 hdr "user + storage pool (synchronous 201)"
-USER=$(curl -sf -X POST "$BASE/users" -H 'Content-Type: application/json' -d '{}' | jq -r '.id')
-[ -n "$USER" ] && ok "createUser 201 ($USER)" || bad "createUser"
-POOL=$(curl -sf -X POST "$BASE/storage-pools" -H 'Content-Type: application/json' \
-        -d "{\"name\":\"pool-$SUFFIX\",\"owner_user_id\":\"$USER\"}" | jq -r '.id')
-[ -n "$POOL" ] && ok "createStoragePool 201 ($POOL)" || bad "createStoragePool"
+post_id USER "$BASE/users" '{}'
+[ -n "$USER" ] && ok "createUser 201 ($USER)" || bad "createUser $LAST_ERR"
+# One fixed pool, reused across runs (see the note by POOL_NAME). The first run
+# creates it; every later run gets a 409 and looks the existing one up, which is
+# the normal path — not an error.
+post_id POOL "$BASE/storage-pools" \
+        "{\"name\":\"$POOL_NAME\",\"owner_user_id\":\"$USER\"}"
+if [ -n "$POOL" ]; then
+  ok "createStoragePool 201 ($POOL)"
+else
+  POOL=$(curl -sf "$BASE/storage-pools" \
+         | jq -r --arg n "$POOL_NAME" '.storage_pools[]|select(.name==$n)|.id' | head -1)
+  [ -n "$POOL" ] && ok "storage pool reused ($POOL)" \
+                 || bad "createStoragePool $LAST_ERR (and no existing $POOL_NAME to reuse)"
+fi
 
 hdr "createCluster -> 202 + Task + Location -> task succeeded -> materialized"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"proj"}')
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" "{\"name\":\"$PROJ_NAME\"}")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createCluster code=$code (want 202)"
 [[ "$loc" == /api/v1/tasks/* ]] && ok "Location: $loc" || bad "Location header: '$loc'"
 [ "$(curl -sf "$BASE/tasks/$tid" | jq -r .kind)" = create_cluster ] && ok "task kind=create_cluster" || bad "task kind"
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_cluster succeeded" || bad "create_cluster task=$st"
-PROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="proj")|.id')
+PROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r --arg n "$PROJ_NAME" '.clusters[]|select(.name==$n)|.id')
 DEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -r '.default_branch.branch_id')
 [ -n "$PROJ" ] && [ -n "$DEF" ] && ok "materialized proj=$PROJ default_branch=$DEF" || bad "cluster not materialized"
 
@@ -270,7 +333,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/tasks?status=bogus")
 [ "$code" = 400 ] && ok "listTasks?status=bogus -> 400" || bad "invalid status -> $code (want 400)"
 
 hdr "duplicate cluster name -> task FAILS (not a synchronous 409)"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"proj"}')
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" "{\"name\":\"$PROJ_NAME\"}")
 [ "$code" = 202 ] && ok "dup-name accepted 202" || bad "dup-name code=$code"
 st=$(poll_task "$tid" 30); [ "$st" = failed ] && ok "duplicate name -> task failed" || bad "dup name task=$st (want failed)"
 

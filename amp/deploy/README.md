@@ -350,7 +350,10 @@ It also asserts the contract edges (`GET /tasks` filters + a bad
 child fork → `409`, and `delete_cluster` cascading). `createUser` /
 `createStoragePool` are checked to stay synchronous `201`.
 
-It cleans up everything it creates and exits non-zero on any failure.
+It tears down the cluster it creates and any stray endpoint releases, and exits
+non-zero on any failure. It does **not** remove the pool or user rows — the API
+has no delete for either — so it reuses one well-known pool (`pool-smoke`)
+rather than leaking one per run.
 
 ```sh
 # prereqs: kubectl (pointed at the cluster), curl, jq; a controller deployed in $NS
