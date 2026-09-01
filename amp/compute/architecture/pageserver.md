@@ -471,7 +471,7 @@ on the `lsn DESC` clustering, so a forward scan surfaces the newest
 version first — `read_meta` takes just `limit(1)`, and the chain readers
 truncate at the first `will_init` anchor. One-forknum multi-block scans
 issue one bound single-block read per block, batched onto one `Perform`,
-so each stops at its own anchor (`BlockChainCollector`); the paging
+so each stops at its own anchor (`ChainCollector`); the paging
 envelope pins every continuation to the first page's snapshot (`read_time_ht`), and paging
 must run until a reader signals stop or the range is exhausted — a scan
 cut short mid-chain drops the base image and reconstructs a partial page
@@ -487,7 +487,13 @@ Per-op latency is split by lane in
 
 Every chain is validated as it is assembled (`assert_chain_step`):
 LSN non-increasing, image-before-delta on ties, nothing below a
-`will_init` anchor. Blends of cache + YB rows are deduplicated by LSN
+`will_init` anchor. A batched block scan adds one more, before the rows
+are a chain at all: each op binds one block, so `ChainCollector` refuses
+a row whose `blknum` is not the one its op asked for. Both the `pages`
+and `slru_pages` readers rely on that — accepting such a row would file
+one block's chain under another's key and serve it as that page.
+
+Blends of cache + YB rows are deduplicated by LSN
 (`dedup_page_chain_by_lsn`); two same-LSN collisions are legitimate (a
 materialised image stamped at the LSN of the delta it folded, or the
 same flushed delta seen in both cache and YB), but two *distinct*

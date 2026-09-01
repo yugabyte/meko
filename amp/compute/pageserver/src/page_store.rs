@@ -420,50 +420,55 @@ pub struct ThinClientTables {
     pub pending_gc: Arc<yb_thin_client::TableHandle>,
 }
 
-/// Per-block chain accumulation over a multi-block clustered range
-/// scan. Rows arrive in PK order — `blknum ASC`, then `lsn DESC` with
-/// equal-LSN ties delta-before-image — so once a block's `will_init`
-/// anchor and its tie group are in hand, the rest of that block's
-/// (shadowed) history streams past without being buffered.
-struct BlockChainCollector<T> {
-    chains: Vec<(i64, Vec<T>)>,
+/// Anchor-stop accumulation for ONE block's chain over a clustered scan.
+/// Rows arrive `lsn DESC`, image before delta on an equal-LSN tie (the PKs are
+/// `is_image DESC`), so once the `will_init` anchor and its tie group are in
+/// hand the rest of that block's (shadowed) history streams past unbuffered.
+struct ChainCollector<T> {
+    blk: i64,
+    rows: Vec<T>,
     anchor_lsn: Option<i64>,
     skipping: bool,
 }
 
-impl<T> BlockChainCollector<T> {
-    fn new() -> Self {
-        BlockChainCollector {
-            chains: Vec::new(),
+impl<T> ChainCollector<T> {
+    fn new(blk: i64) -> Self {
+        ChainCollector {
+            blk,
+            rows: Vec::new(),
             anchor_lsn: None,
             skipping: false,
         }
     }
 
-    fn push(&mut self, blk: i64, lsn: i64, will_init: bool, row: T) {
-        if self.chains.last().is_none_or(|(b, _)| *b != blk) {
-            self.chains.push((blk, Vec::new()));
-            self.anchor_lsn = None;
-            self.skipping = false;
-        }
+    /// The op binds `blk`, so a row for any other block means the server
+    /// answered a different question than the one asked. Refuse it: filing it
+    /// here would serve another block's pages as this one's.
+    fn push(&mut self, blk: i64, lsn: i64, will_init: bool, row: T) -> Result<()> {
+        anyhow::ensure!(
+            blk == self.blk,
+            "chain scan op bound blk={} but a row came back for blk={blk}",
+            self.blk
+        );
         if self.skipping {
-            return;
+            return Ok(());
         }
         if let Some(anchor) = self.anchor_lsn {
             if lsn < anchor {
                 self.skipping = true;
-                return;
+                return Ok(());
             }
         }
         if self.anchor_lsn.is_none() && will_init {
             self.anchor_lsn = Some(lsn);
         }
-        self.chains.last_mut().expect("pushed above").1.push(row);
+        self.rows.push(row);
+        Ok(())
     }
 
-    /// True once the block being collected is past its anchor, so further
-    /// rows for it are dropped. Only actionable by a read that pins one block.
-    fn chain_complete(&self) -> bool {
+    /// True once the chain is past its anchor, so further rows are dropped and
+    /// the op can stop paging.
+    fn complete(&self) -> bool {
         self.skipping
     }
 }
@@ -479,27 +484,27 @@ impl<T> BlockChainCollector<T> {
 /// tablet holding no matching row returns an EMPTY page plus a continuation —
 /// "nothing here", not "scan done".
 ///
-/// `done` drops an op whose collector already holds what the caller needs.
-/// Only sound when an op pins ONE block: with a range, later blocks are still
-/// to come.
+/// `block_reads[i]` is `(blk, read)` — the read bound to that one block. One
+/// read per block is what lets each stop at its own anchor and what the
+/// returned chains are keyed by; pairing them keeps the two from drifting.
 async fn run_batched_block_scan(
     client: &yb_thin_client::TsClient,
     table: &yb_thin_client::TableHandle,
-    reads: &[yb_thin_client::RangeRead],
-    done: impl Fn(&BlockChainCollector<yb_thin_client::Row>) -> bool,
+    block_reads: &[(i64, yb_thin_client::RangeRead)],
     what: &str,
     op_label: impl Fn(usize) -> String,
-) -> Result<Vec<BlockChainCollector<yb_thin_client::Row>>> {
+) -> Result<Vec<Vec<yb_thin_client::Row>>> {
     for attempt in 1..=THIN_SCAN_RESTARTS {
-        let mut collectors: Vec<BlockChainCollector<yb_thin_client::Row>> = (0..reads.len())
-            .map(|_| BlockChainCollector::new())
+        let mut collectors: Vec<ChainCollector<yb_thin_client::Row>> = block_reads
+            .iter()
+            .map(|&(blk, _)| ChainCollector::new(blk))
             .collect();
-        let mut paging: Vec<Option<bytes::Bytes>> = vec![None; reads.len()];
+        let mut paging: Vec<Option<bytes::Bytes>> = vec![None; block_reads.len()];
         // Consecutive rounds an op returned nothing while still handing back a
         // continuation. Crossing empty tablets legitimately does this a few
         // times; forever means the token is not advancing.
-        let mut barren: Vec<usize> = vec![0; reads.len()];
-        let mut active: Vec<usize> = (0..reads.len()).collect();
+        let mut barren: Vec<usize> = vec![0; block_reads.len()];
+        let mut active: Vec<usize> = (0..block_reads.len()).collect();
         let mut read_time_ht = 0u64;
         let mut restart = false;
 
@@ -508,7 +513,7 @@ async fn run_batched_block_scan(
                 .iter()
                 .map(|&i| yb_thin_client::ReadOp {
                     table,
-                    read: &reads[i],
+                    read: &block_reads[i].1,
                     paging_state: paging[i].as_deref(),
                 })
                 .collect();
@@ -540,8 +545,9 @@ async fn run_batched_block_scan(
             for (slot, res) in batch.ops.into_iter().enumerate() {
                 let i = active[slot];
                 let got = res.rows.len();
-                feed_scan_rows(&mut collectors[i], res.rows)?;
-                if done(&collectors[i]) {
+                feed_scan_rows(&mut collectors[i], res.rows)
+                    .with_context(|| format!("thin-lane {what} for {}", op_label(i)))?;
+                if collectors[i].complete() {
                     continue;
                 }
                 if let Some(ps) = res.paging_state {
@@ -560,7 +566,7 @@ async fn run_batched_block_scan(
             active = next;
         }
         if !restart {
-            return Ok(collectors);
+            return Ok(collectors.into_iter().map(|c| c.rows).collect());
         }
     }
     unreachable!("the final scan attempt returns or propagates")
@@ -675,9 +681,10 @@ fn slru_segment_read(
 /// Normalize a chain fetched in DocDB storage order into SQL result
 /// order and trim it to the served prefix.
 ///
-/// The pages/slru PKs cluster `(lsn DESC, is_image ASC)`, so a direct-RPC
-/// clustered scan yields equal-LSN pairs delta-before-image, while the SQL readers
-/// order `is_image DESC` (image first). A stable sort fixes the ties,
+/// The pages/slru PKs cluster `(lsn DESC, is_image DESC)`, matching the SQL
+/// readers' `ORDER BY lsn DESC, is_image DESC` — image before delta on a tie.
+/// The stable sort re-establishes that for any caller whose rows arrived
+/// otherwise,
 /// then the walk mirrors the SQL readers: validate order per step
 /// ([`assert_chain_step`]) and stop at the first `will_init` row — an
 /// equal-LSN delta sorted after its image, and everything below the
@@ -964,12 +971,12 @@ fn assemble_slru_chain<R: RowCells>(
 /// Feed one fetched page of a multi-block scan (targets
 /// `[blknum, lsn, is_image, will_init, payload]`) into the per-block
 /// collector. Used by the direct-RPC scan loops.
-fn feed_scan_rows<R: RowCells>(collector: &mut BlockChainCollector<R>, rows: Vec<R>) -> Result<()> {
+fn feed_scan_rows<R: RowCells>(collector: &mut ChainCollector<R>, rows: Vec<R>) -> Result<()> {
     for row in rows {
         let blk = row.cell_i64(0)?;
         let lsn = row.cell_i64(1)?;
         let will_init = row.cell_bool(3)?;
-        collector.push(blk, lsn, will_init, row);
+        collector.push(blk, lsn, will_init, row)?;
     }
     Ok(())
 }
@@ -1965,47 +1972,32 @@ impl PageStore {
         // the anchor is per block, and the early stop halts the whole scan. The
         // reads ride one `Perform`, so the fan-out resolves at one read point.
         let branch_b = branch_id.to_bytes();
-        let reads = (blk_lo..blk_hi)
-            .map(|blk| -> Result<RangeRead> {
-                Ok(page_chain_read(pages, &branch_b, sp, db, rel, fork, blk)?
-                    .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
-                    .targets(
-                        pages,
-                        &["blknum", "lsn", "is_image", "will_init", "payload"],
-                    )?
-                    .limit(DIRECT_CHAIN_PAGE_ROWS))
+        let block_reads = (blk_lo..blk_hi)
+            .map(|blk| -> Result<(i64, RangeRead)> {
+                Ok((
+                    blk,
+                    page_chain_read(pages, &branch_b, sp, db, rel, fork, blk)?
+                        .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
+                        .targets(
+                            pages,
+                            &["blknum", "lsn", "is_image", "will_init", "payload"],
+                        )?
+                        .limit(DIRECT_CHAIN_PAGE_ROWS),
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let collectors = run_batched_block_scan(
-            &p.client,
-            pages,
-            &reads,
-            |c| c.chain_complete(),
-            "page scan",
-            |i| format!("rel={rel} fork={fork} blk={}", blk_lo + i as i64),
-        )
+        let chains = run_batched_block_scan(&p.client, pages, &block_reads, "page scan", |i| {
+            format!("rel={rel} fork={fork} blk={}", block_reads[i].0)
+        })
         .await?;
 
-        // One op per block, so the op index names the block and a collector
-        // holds at most one chain. Key on that index rather than on the blknum
-        // the server projected back — a mis-projected row would otherwise file
-        // a chain under another block's key and serve those pages as this
-        // block's — and check the projection agrees.
-        let mut by_key = HashMap::with_capacity(collectors.len());
-        for (i, collector) in collectors.into_iter().enumerate() {
-            let blk = blk_lo + i as i64;
+        let mut by_key = HashMap::with_capacity(chains.len());
+        for (&(blk, _), raw) in block_reads.iter().zip(chains) {
             let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
-            for (got, raw) in collector.chains {
-                anyhow::ensure!(
-                    got == blk,
-                    "thin-lane page scan rel={rel} fork={fork} op for blk={blk} \
-                     returned rows for blk={got}"
-                );
-                let chain = assemble_page_chain(key, raw, 1, "scan_range_thin")?;
-                if !chain.is_empty() {
-                    by_key.insert(key, chain);
-                }
+            let chain = assemble_page_chain(key, raw, 1, "scan_range_thin")?;
+            if !chain.is_empty() {
+                by_key.insert(key, chain);
             }
         }
         Ok(by_key)
@@ -2300,32 +2292,28 @@ impl PageStore {
         // One read per block: the anchor is per block and `read_scan` halts
         // the whole scan rather than skipping ahead, so a range-wide read
         // cannot stop without abandoning later blocks (#1042). They still ride
-        // one `Perform`, so this stays a single read point (#139).
+        // one `Perform`, so the fan-out resolves at one read point.
         let branch = branch_id.to_bytes();
-        let reads = (blk_lo..blk_hi)
-            .map(|blk| -> Result<yb_thin_client::RangeRead> {
-                Ok(slru_segment_read(slru, &branch, kind_i, segno_i)?
-                    .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk))?
-                    .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
-                    .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
-                    .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS))
+        let block_reads = (blk_lo..blk_hi)
+            .map(|blk| -> Result<(i64, yb_thin_client::RangeRead)> {
+                Ok((
+                    blk,
+                    slru_segment_read(slru, &branch, kind_i, segno_i)?
+                        .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk))?
+                        .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
+                        .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
+                        .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS),
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let collectors = run_batched_block_scan(
-            &p.client,
-            slru,
-            &reads,
-            |c| c.chain_complete(),
-            "slru scan",
-            |i| format!("kind={kind:?} segno={segno_i} blk={}", blk_lo + i as i64),
-        )
+        let chains = run_batched_block_scan(&p.client, slru, &block_reads, "slru scan", |i| {
+            format!("kind={kind:?} segno={segno_i} blk={}", block_reads[i].0)
+        })
         .await?;
 
-        // One op per block, so a collector holds at most one chain — none at all
-        // for a block with no version at or below `target`.
-        let mut by_block = HashMap::with_capacity(collectors.len());
-        for (blk, raw) in collectors.into_iter().flat_map(|c| c.chains) {
+        let mut by_block = HashMap::with_capacity(chains.len());
+        for (&(blk, _), raw) in block_reads.iter().zip(chains) {
             let chain = assemble_slru_chain(
                 kind,
                 segno_i as u32,
@@ -4224,9 +4212,9 @@ fn assert_chain_step(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) 
 
 #[cfg(test)]
 mod normalize_chain_tests {
-    //! [`normalize_chain`] turns direct-lane storage order (`lsn DESC,
-    //! is_image ASC` — delta before image on an LSN tie) into the SQL
-    //! readers' result order (`is_image DESC`) and trims at the anchor.
+    //! [`normalize_chain`] re-establishes the SQL readers' result order
+    //! (`lsn DESC, is_image DESC` — image before delta on a tie) and trims
+    //! at the anchor.
     use super::*;
 
     fn walk(rows: &[(u64, bool, bool)]) -> Vec<(u64, bool, bool)> {
@@ -4289,71 +4277,65 @@ mod normalize_chain_tests {
 }
 
 #[cfg(test)]
-mod block_chain_collector_tests {
-    //! [`BlockChainCollector`] consumes a multi-block scan in PK order
-    //! and must stop buffering a block once its anchor tie group is
-    //! complete, while resetting state at each block boundary.
+mod chain_collector_tests {
+    //! [`ChainCollector`] consumes ONE block's chain in PK order and must stop
+    //! buffering once the anchor's tie group is complete.
     use super::*;
 
-    fn collect(rows: &[(i64, i64, bool)]) -> Vec<(i64, Vec<i64>)> {
-        let mut c = BlockChainCollector::new();
-        for &(blk, lsn, will_init) in rows {
-            c.push(blk, lsn, will_init, lsn);
+    fn collect(blk: i64, rows: &[(i64, bool)]) -> Vec<i64> {
+        let mut c = ChainCollector::new(blk);
+        for &(lsn, will_init) in rows {
+            c.push(blk, lsn, will_init, lsn).unwrap();
         }
-        c.chains
+        c.rows
     }
 
-    /// Must not flip on the anchor row itself, must reset per block, and must
-    /// stay false without an anchor — there the scan has to page to the end.
+    /// Must not flip on the anchor row itself, and must stay false without an
+    /// anchor — there the scan has to page to the end.
     #[test]
-    fn chain_complete_tracks_the_block_being_collected() {
-        let mut c = BlockChainCollector::new();
-        assert!(!c.chain_complete(), "nothing collected yet");
-
-        c.push(1, 90, false, 90);
-        assert!(!c.chain_complete(), "above the anchor");
-        c.push(1, 70, true, 70);
-        assert!(
-            !c.chain_complete(),
-            "the anchor row is itself part of the chain"
-        );
-        c.push(1, 60, false, 60);
-        assert!(c.chain_complete(), "past the anchor, the rest is dropped");
-
-        // Resetting per block is why the scan issues one read per block:
-        // stopping the whole scan on block 1 would abandon block 2.
-        c.push(2, 80, false, 80);
-        assert!(!c.chain_complete(), "a new block starts a fresh chain");
-
-        c.push(3, 30, false, 30);
-        c.push(3, 20, false, 20);
-        assert!(
-            !c.chain_complete(),
-            "a block with no anchor never completes"
-        );
+    fn complete_tracks_the_anchor() {
+        let mut c = ChainCollector::new(1);
+        assert!(!c.complete(), "nothing collected yet");
+        c.push(1, 90, false, 90).unwrap();
+        assert!(!c.complete(), "above the anchor");
+        c.push(1, 70, true, 70).unwrap();
+        assert!(!c.complete(), "the anchor row is itself part of the chain");
+        c.push(1, 60, false, 60).unwrap();
+        assert!(c.complete(), "past the anchor, the rest is dropped");
     }
 
     #[test]
-    fn skips_below_anchor_history_and_resets_per_block() {
-        let rows = [
-            // block 1: deltas above an anchor at 70, shadowed history below.
-            (1, 90, false),
-            (1, 70, true),
-            (1, 60, false),
-            (1, 50, true),
-            // block 2: anchor tie group — the equal-LSN sibling at the
-            // anchor LSN is kept (normalize_chain sorts and trims it).
-            (2, 80, false),
-            (2, 80, true),
-            (2, 40, false),
-            // block 3: no anchor — full chain kept.
-            (3, 30, false),
-            (3, 20, false),
-        ];
+    fn a_chain_with_no_anchor_never_completes() {
+        let mut c = ChainCollector::new(3);
+        c.push(3, 30, false, 30).unwrap();
+        c.push(3, 20, false, 20).unwrap();
+        assert!(!c.complete());
+    }
+
+    #[test]
+    fn drops_history_below_the_anchor_but_keeps_its_tie_group() {
         assert_eq!(
-            collect(&rows),
-            vec![(1, vec![90, 70]), (2, vec![80, 80]), (3, vec![30, 20]),]
+            collect(1, &[(90, false), (70, true), (60, false), (50, true)]),
+            vec![90, 70]
         );
+        // The equal-LSN sibling at the anchor LSN survives here;
+        // `normalize_chain` sorts and trims it.
+        assert_eq!(
+            collect(2, &[(80, false), (80, true), (40, false)]),
+            vec![80, 80]
+        );
+    }
+
+    /// The op binds one block, so a row for another block means the server
+    /// answered a different question — filing it here would serve that block's
+    /// pages as this one's.
+    #[test]
+    fn rejects_a_row_for_another_block() {
+        let mut c = ChainCollector::new(7);
+        c.push(7, 90, false, 90).unwrap();
+        let err = c.push(8, 80, false, 80).unwrap_err().to_string();
+        assert!(err.contains("bound blk=7"), "{err}");
+        assert!(err.contains("blk=8"), "{err}");
     }
 }
 
