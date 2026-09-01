@@ -317,9 +317,10 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 
 // inventory maps a tick's result to the flat resource inventory YCP renders in
 // the console, folding each resource's reason-for-not-converging (Failed,
-// Stuck, or Permanent drift) onto its row. A create/delete that failed for a
-// resource not in actual (a create that never landed, a pool that cannot be
-// deleted) is emitted as its own row so the reason is still visible.
+// Stuck, Permanent drift, or an Updating task still in flight) onto its row. A
+// create/delete that failed for a resource not in actual (a create that never
+// landed, a pool that cannot be deleted) is emitted as its own row so the reason
+// is still visible.
 func inventory(res reconcile.Result) []api.ResourceStatus {
 	inActual := make(map[reconcile.ResourceKey]bool, len(res.Actual))
 	out := make([]api.ResourceStatus, 0, len(res.Actual))
@@ -343,6 +344,11 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 			rs.Error = fmt.Sprintf("no progress: %q for %s", act.State, d.Round(time.Second))
 		} else if err, ok := res.Permanent[act.Key]; ok {
 			rs.State, rs.Error = "drift", err.Error()
+		} else if err, ok := res.Updating[act.Key]; ok {
+			// An update the controller is still working on. Not an error — the state
+			// says what is happening, so "generation 3 declared, 1 applied" is legible
+			// rather than something an operator has to infer from a stale attr.
+			rs.State, rs.Error = "updating", err.Error()
 		}
 		out = append(out, rs)
 	}

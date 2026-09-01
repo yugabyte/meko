@@ -61,7 +61,7 @@ func TestServiceCreateClusterNoWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
-	if tk.Kind != KindCreateCluster {
+	if tk.Kind != KindCreateCluster.String() {
 		t.Errorf("kind = %q, want %q", tk.Kind, KindCreateCluster)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
@@ -147,7 +147,7 @@ func TestServiceBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Branch: %v", err)
 	}
-	if tk.Kind != KindBranch {
+	if tk.Kind != KindBranch.String() {
 		t.Errorf("kind = %q, want %q", tk.Kind, KindBranch)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
@@ -196,7 +196,7 @@ func TestServiceCreateEndpointDefaultsRole(t *testing.T) {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	if tk.Kind != KindCreateEndpoint || len(steps) != 1 || steps[0].Kind != StepCreateEndpoint {
+	if tk.Kind != KindCreateEndpoint.String() || len(steps) != 1 || steps[0].Kind != StepCreateEndpoint {
 		t.Fatalf("task = kind %q with steps %v, want one create_endpoint step", tk.Kind, stepKinds(steps))
 	}
 	var ep CreateEndpointArgs
@@ -223,7 +223,7 @@ func TestServiceDeleteEndpoint(t *testing.T) {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	if tk.Kind != KindDeleteEndpoint || len(steps) != 1 || steps[0].Kind != StepDeleteEndpoint {
+	if tk.Kind != KindDeleteEndpoint.String() || len(steps) != 1 || steps[0].Kind != StepDeleteEndpoint {
 		t.Fatalf("task = kind %q with steps %v, want one delete_endpoint step", tk.Kind, stepKinds(steps))
 	}
 	var del DeleteEndpointArgs
@@ -242,7 +242,7 @@ func TestServiceDeleteBranch(t *testing.T) {
 		t.Fatalf("DeleteBranch: %v", err)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	if tk.Kind != KindDeleteBranch || len(steps) != 1 || steps[0].Kind != StepDeleteBranch {
+	if tk.Kind != KindDeleteBranch.String() || len(steps) != 1 || steps[0].Kind != StepDeleteBranch {
 		t.Fatalf("task = kind %q with steps %v, want one delete_branch step", tk.Kind, stepKinds(steps))
 	}
 	var del DeleteBranchArgs
@@ -264,7 +264,7 @@ func TestServiceDeleteCluster(t *testing.T) {
 		t.Fatalf("DeleteCluster: %v", err)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	if tk.Kind != KindDeleteCluster || len(steps) != 1 || steps[0].Kind != StepDeleteCluster {
+	if tk.Kind != KindDeleteCluster.String() || len(steps) != 1 || steps[0].Kind != StepDeleteCluster {
 		t.Fatalf("task = kind %q with steps %v, want one delete_cluster step", tk.Kind, stepKinds(steps))
 	}
 	var del DeleteClusterArgs
@@ -320,12 +320,12 @@ func TestMemStoreList(t *testing.T) {
 	}
 
 	// Filter by kind: only the two delete_cluster tasks (a1, b1).
-	byKind, total, _ := svc.List(t.Context(), TaskFilter{Kind: KindDeleteCluster}, 10, 0)
+	byKind, total, _ := svc.List(t.Context(), TaskFilter{Kind: KindDeleteCluster.String()}, 10, 0)
 	if total != 2 {
 		t.Fatalf("kind filter total = %d, want 2", total)
 	}
 	for _, tk := range byKind {
-		if tk.Kind != KindDeleteCluster {
+		if tk.Kind != KindDeleteCluster.String() {
 			t.Errorf("kind filter returned a %q task", tk.Kind)
 		}
 	}

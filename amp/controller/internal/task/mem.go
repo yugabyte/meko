@@ -57,14 +57,15 @@ func (s *MemStore) Seed(t *Task, steps []*StepRecord) {
 func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// First-writer-wins resize lock (mirrors the PgStore partial unique index):
-	// reject a resize_endpoint task while a non-terminal one exists for the same
-	// endpoint (target_ref). The lock releases when that task reaches terminal.
-	if spec.Kind == KindResizeEndpoint && spec.TargetRef != nil {
+	// First-writer-wins (mirrors the PgStore partial unique indexes): reject a task
+	// of a locked kind while a non-terminal one exists for the same target_ref. The
+	// lock releases when that task reaches terminal. Neither store names a kind —
+	// both read Kind.lockIndex — so the two cannot drift as kinds are added.
+	if spec.Kind.lockIndex != "" && spec.TargetRef != nil {
 		for _, t := range s.tasks {
-			if t.Kind == KindResizeEndpoint && t.TargetRef != nil && *t.TargetRef == *spec.TargetRef &&
+			if t.Kind == spec.Kind.name && t.TargetRef != nil && *t.TargetRef == *spec.TargetRef &&
 				(t.Status == StatusPending || t.Status == StatusRunning) {
-				return nil, ErrResizeInProgress
+				return nil, spec.Kind.inProgress
 			}
 		}
 	}
@@ -88,7 +89,8 @@ func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 	}
 	t := &Task{
 		ID:        id,
-		Kind:      spec.Kind,
+		Kind:      spec.Kind.name,
+		YCP:       spec.YCP,
 		Status:    StatusPending,
 		ClusterID: spec.ClusterID,
 		TargetRef: spec.TargetRef,

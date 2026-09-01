@@ -277,17 +277,27 @@ argument against raising the TTL.
 ## Still to do: resize returns 202, not 409
 
 The resize contract has not moved. A second concurrent resize is still refused at
-plan time by `tasks_one_active_resize_per_endpoint`, and
-`ErrResizeInProgress`/`isResizeLockViolation` still map it to `409`. The endpoint
-lock runs *underneath* that today: it is what stops a resize racing a create or a
-delete, which the index never covered.
+plan time, and `409` is still the answer. The endpoint lock runs *underneath* that
+today: it is what stops a resize racing a create or a delete, which the index never
+covered.
 
-Turning the refusal into a `202` plus a task that waits is the rest of [meko#839](https://github.com/yugabyte/meko/issues/839).
-Acquiring at execution time means there is nothing to refuse at plan time, so the
-409 stops being the only safe answer — it existed because a second resize would
-otherwise race. When that lands, the index, the classifier, `ErrResizeInProgress`
-and the pinned unique-index inventory test go with it, which is what removes the
-[meko#400](https://github.com/yugabyte/meko/issues/400) trap rather than generalizing it. See [`ac-apis.md`](ac-apis.md).
+What did move is that the plan-time refusal is no longer resize-only.
+`add_branch_extensions` needs the same lock — the reconcile agent re-issues an
+update until the controller confirms it, and that task redeploys every endpoint on
+its branch ([`ac-ycp.md`](ac-ycp.md)) — so the mechanism is now per-kind:
+`Kind.lockIndex` names the partial unique index and `Kind.inProgress` the conflict
+it reports, `taskLockViolation` (formerly `isResizeLockViolation`) classifies by
+kind, and `TestPgUniqueConstraintsOnTask` derives the expected index set from
+`allKinds` instead of pinning a literal.
+
+Turning the refusal into a `202` plus a task that waits is still the rest of
+[meko#839](https://github.com/yugabyte/meko/issues/839). Acquiring at execution
+time means there is nothing to refuse at plan time, so the 409 stops being the only
+safe answer — it existed because a second resize would otherwise race. When that
+lands, both indexes, the classifier and the per-kind conflicts go with it, which is
+what finally removes the [meko#400](https://github.com/yugabyte/meko/issues/400)
+trap; until then it is contained by classifying on the kind, whose index predicates
+are disjoint. See [`ac-apis.md`](ac-apis.md).
 
 ## Testing
 

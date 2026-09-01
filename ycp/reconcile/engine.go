@@ -8,8 +8,14 @@
 // The loop is level-triggered. Correctness comes from re-reading actual state
 // every tick and diffing it against desired, not from state held between ticks:
 // a restarted agent rebuilds everything from the next List() + desired-state
-// fetch. The only in-process state is a soft cache of last-applied generations,
-// used to skip no-op ticks; losing it costs at most one redundant reconcile
+// fetch.
+//
+// A backend that echoes the generation it last applied (Actual.ObservedGen) makes
+// that literally true for updates too, which is the point: a generation held only
+// in this process and written from an accepted-but-unfinished call is a claim the
+// engine cannot check, and an update whose async work then failed used to latch as
+// applied forever. The in-process cache of last-applied generations remains as a
+// floor for what did complete; losing it costs at most one redundant reconcile
 // pass, never correctness.
 package reconcile
 
@@ -42,9 +48,17 @@ type Actual struct {
 	// withdrawn subtree (the backend cascades the rest).
 	Parent ResourceKey
 	// ObservedGen is the generation the backend last applied for this resource,
-	// echoed back so the engine can tell an up-to-date resource from a stale
-	// one without its own store. Zero if the backend does not echo it, in which
-	// case the engine falls back to its in-process last-applied cache.
+	// echoed back so the engine can tell an up-to-date resource from a stale one
+	// without its own store. Zero if the backend does not echo it (or has applied
+	// nothing yet), in which case only the engine's in-process last-applied cache
+	// speaks for the resource.
+	//
+	// The echo is what makes an update self-heal: it is durable and written from
+	// what the backend actually DID, where the cache is written from what a call
+	// accepted. Those differ whenever the work is asynchronous, which is why a
+	// backend whose verbs plan tasks must report them Pending rather than applied
+	// (see PendingError) — otherwise the cache records a generation for work that
+	// then failed, and no later tick revisits it (meko#985).
 	ObservedGen int64
 	// Ready is true when the resource is healthy/usable and its children may be
 	// created. State is the backend's free-form status for reporting.
@@ -100,6 +114,29 @@ func isPermanent(err error) bool {
 	return errors.As(err, &p)
 }
 
+// PendingError wraps a backend outcome that is neither success nor failure: the
+// verb was not issued because the previous one for this resource is still in
+// flight. The work is progressing, so the engine must not record it as applied
+// (nothing has been), must not back off (nothing failed), and must not degrade
+// the environment — it reports the resource as updating and re-checks next tick.
+//
+// It exists because every mutating controller call is asynchronous: without it the
+// only way to tell "the task is still running" from "the task failed" would be a
+// timer, which cannot distinguish a slow success from a fast failure.
+type PendingError struct{ Err error }
+
+func (e *PendingError) Error() string { return e.Err.Error() }
+func (e *PendingError) Unwrap() error { return e.Err }
+
+// Pending marks err as work already in flight. Backends return it when they find
+// the previous attempt's task still non-terminal.
+func Pending(err error) error { return &PendingError{Err: err} }
+
+func isPending(err error) bool {
+	var p *PendingError
+	return errors.As(err, &p)
+}
+
 // ActionType is the verb the engine chose for a resource this tick.
 type ActionType int
 
@@ -135,13 +172,15 @@ type Action struct {
 // engine's last-applied generation cache — no ordering, gating, or I/O. This is
 // the heart of the engine and is unit-tested in isolation.
 //
-//   - desired, not in actual                -> Create
-//   - desired, in actual, effGen < desiredGen -> Update
+//   - desired, not in actual                  -> Create
+//   - desired, in actual, effGen < desiredGen  -> Update
 //   - desired, in actual, effGen >= desiredGen -> Noop (the cheap path)
-//   - in actual, not desired                -> Delete
+//   - in actual, not desired                   -> Delete
 //
 // effGen is max(actual.ObservedGen, cached), so the engine converges whether or
-// not the backend echoes an observed generation.
+// not the backend echoes an observed generation. The cache is safe as a floor
+// because it only ever records work that completed: a backend that plans async
+// work reports it Pending, which records nothing.
 func Diff(desired []api.DesiredResource, actual []Actual, cache map[ResourceKey]int64) []Action {
 	desiredByKey := make(map[ResourceKey]api.DesiredResource, len(desired))
 	for _, d := range desired {

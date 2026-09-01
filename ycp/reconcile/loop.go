@@ -21,9 +21,10 @@ type Engine struct {
 	now        func() time.Time
 
 	mu        sync.Mutex
-	cache     map[ResourceKey]int64      // last-applied generation, soft cache
+	cache     map[ResourceKey]int64      // last-applied generation; fallback for a backend that cannot echo
 	failures  map[ResourceKey]*failState // per-resource backoff
 	permanent map[ResourceKey]permMark   // non-retryable, surfaced as drift
+	updating  map[ResourceKey]updateMark // update issued, not yet confirmed applied
 	seenState map[ResourceKey]stateStamp // when a resource entered its current state
 }
 
@@ -48,6 +49,16 @@ type failState struct {
 // the engine can flag one that has sat non-Ready past StuckAfter.
 type stateStamp struct {
 	state string
+	since time.Time
+}
+
+// updateMark records that a resource's update for generation gen is in flight in
+// the backend, and since when. The timestamp is what lets work that never
+// terminates — a wedged worker whose task stays `running` forever, the one case
+// reading the task's status cannot resolve — be reported as stuck rather than
+// pending indefinitely. A new generation restarts the clock.
+type updateMark struct {
+	gen   int64
 	since time.Time
 }
 
@@ -96,6 +107,7 @@ func New(backend Backend, opts Options) *Engine {
 		cache:      map[ResourceKey]int64{},
 		failures:   map[ResourceKey]*failState{},
 		permanent:  map[ResourceKey]permMark{},
+		updating:   map[ResourceKey]updateMark{},
 		seenState:  map[ResourceKey]stateStamp{},
 	}
 }
@@ -114,8 +126,15 @@ type Result struct {
 	// these until the resource's spec changes; they are reported as drift, and
 	// unlike Failed they do not by themselves make the environment DEGRADED.
 	Permanent map[ResourceKey]error
-	// Stuck maps a resource that has sat non-Ready past StuckAfter to how long
-	// it has been in that state.
+	// Updating maps a resource whose update the backend has issued but cannot yet
+	// confirm — it just planned the work, or the work it planned earlier is still
+	// running. Neither applied nor failed: it does not back off, does not degrade
+	// the environment, and is reported so an operator sees why a generation has not
+	// landed yet.
+	Updating map[ResourceKey]error
+	// Stuck maps a resource making no progress to how long it has been that way:
+	// one that has sat non-Ready in the same backend state past StuckAfter, or one
+	// whose update has been Updating that long (a task that never terminates).
 	Stuck map[ResourceKey]time.Duration
 	// Actual is the state read at the start of the tick, so the agent can
 	// report inventory without a second List.
@@ -142,12 +161,23 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 
 	e.mu.Lock()
 	actions := Diff(desired, actual, e.cache)
-	stuck := e.trackStuck(actual)
+	// Which updates this tick still wants, so trackStuck can drop the in-flight
+	// mark of one that has since converged (the echo caught up, so no update is
+	// planned and dispatch will never clear the mark itself) or whose spec has been
+	// rewritten (a new generation is a new wait).
+	plannedUpdates := map[ResourceKey]int64{}
+	for _, a := range actions {
+		if a.Type == ActionUpdate {
+			plannedUpdates[a.Key] = a.Resource.Generation
+		}
+	}
+	stuck := e.trackStuck(actual, plannedUpdates)
 	e.mu.Unlock()
 
 	res := Result{
 		Failed:    map[ResourceKey]error{},
 		Permanent: map[ResourceKey]error{},
+		Updating:  map[ResourceKey]error{},
 		Stuck:     stuck,
 		Actual:    actual,
 	}
@@ -193,6 +223,21 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	for k, m := range e.permanent {
 		res.Permanent[k] = m.err
 	}
+	// A resource with nothing planned has converged (or is gone), so its backoff
+	// ladder and in-flight mark are spent. Dropping them here is what clears them on
+	// an async path at all: the success signal there is the echo advancing, which
+	// makes the resource a no-op and so never reaches dispatch. Left behind, a stale
+	// ladder would delay the resource's NEXT update by up to MaxBackoff.
+	for k := range e.failures {
+		if _, still := planned[k]; !still {
+			delete(e.failures, k)
+		}
+	}
+	for k := range e.updating {
+		if _, still := planned[k]; !still {
+			delete(e.updating, k)
+		}
+	}
 	e.mu.Unlock()
 
 	eligible := e.filterEligible(mutate, actualByKey)
@@ -204,10 +249,13 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	return res, nil
 }
 
-// trackStuck updates the per-resource state timeline from this tick's actual
-// and returns the resources that have sat non-Ready in the same state past
-// StuckAfter. Caller holds e.mu.
-func (e *Engine) trackStuck(actual []Actual) map[ResourceKey]time.Duration {
+// trackStuck updates the per-resource state timeline from this tick's actual and
+// returns everything making no progress past StuckAfter: a resource sitting
+// non-Ready in the same backend state, and one whose update has been in flight
+// that long. plannedUpdates is this tick's wanted updates, used to retire the
+// in-flight mark of a resource that has converged or had its spec rewritten.
+// Caller holds e.mu.
+func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int64) map[ResourceKey]time.Duration {
 	now := e.now()
 	seen := make(map[ResourceKey]bool, len(actual))
 	stuck := map[ResourceKey]time.Duration{}
@@ -227,6 +275,21 @@ func (e *Engine) trackStuck(actual []Actual) map[ResourceKey]time.Duration {
 	for k := range e.seenState {
 		if !seen[k] {
 			delete(e.seenState, k)
+		}
+	}
+	// An update the backend keeps reporting in flight is progress as far as its
+	// task's status goes, but past StuckAfter it is a wedged worker, not a slow one
+	// — the one no-progress case reading the task cannot detect. Reported through
+	// the same Stuck channel, so it degrades the environment with a reason instead
+	// of sitting "updating" forever.
+	for k, m := range e.updating {
+		gen, planned := plannedUpdates[k]
+		if !seen[k] || !planned || gen != m.gen {
+			delete(e.updating, k)
+			continue
+		}
+		if age := now.Sub(m.since); age >= e.stuckAfter {
+			stuck[k] = age
 		}
 	}
 	return stuck
@@ -297,6 +360,15 @@ func (e *Engine) dispatch(ctx context.Context, actions []Action, res *Result) {
 					e.recordPermanent(a.Key, err, a.Resource.Generation)
 					return
 				}
+				if isPending(err) {
+					// Neither applied nor failed: the backend has work in flight for this
+					// resource. Record nothing that pretends otherwise — no cache write
+					// (nothing has landed) and no backoff (nothing failed) — and let the
+					// next tick ask the backend again.
+					res.Updating[a.Key] = err
+					e.recordUpdating(a.Key, a.Resource.Generation)
+					return
+				}
 				res.Failed[a.Key] = err
 				e.recordFailure(a.Key, err)
 				return
@@ -320,6 +392,7 @@ func (e *Engine) recordSuccess(k ResourceKey, gen int64, t ActionType) {
 	defer e.mu.Unlock()
 	delete(e.failures, k)
 	delete(e.permanent, k)
+	delete(e.updating, k)
 	if t == ActionDelete {
 		delete(e.cache, k)
 		return
@@ -337,12 +410,35 @@ func (e *Engine) recordPermanent(k ResourceKey, err error, gen int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.failures, k)
+	delete(e.updating, k)
 	e.permanent[k] = permMark{err: err, gen: gen}
+}
+
+// recordUpdating stamps a resource's in-flight update, keeping the existing
+// timestamp while the generation is unchanged so trackStuck measures the whole
+// wait rather than restarting it each tick.
+//
+// It deliberately does NOT clear the backoff ladder. On an async path every
+// failure is preceded by a Pending — the tick that issues reports pending, and only
+// a later tick reads the task's failure — so clearing here would reset the count
+// on every attempt and pin the backoff at its first rung forever. A resize the
+// controller can never satisfy would then plan a task every BaseBackoff, and each
+// add_branch_extensions task redeploys every endpoint on its branch. The ladder is
+// cleared by success, by a permanent mark, and by the resource going quiet (see
+// Reconcile's pruning).
+func (e *Engine) recordUpdating(k ResourceKey, gen int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if m, ok := e.updating[k]; ok && m.gen == gen {
+		return
+	}
+	e.updating[k] = updateMark{gen: gen, since: e.now()}
 }
 
 func (e *Engine) recordFailure(k ResourceKey, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	delete(e.updating, k)
 	f := e.failures[k]
 	if f == nil {
 		f = &failState{}

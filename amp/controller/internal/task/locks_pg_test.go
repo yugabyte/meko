@@ -233,7 +233,7 @@ func pgReg(steps ...*pgStep) *Registry {
 
 // seedTask writes one task with a single step of the given kind, the way the API
 // would plan it.
-func seedTask(t *testing.T, s *PgStore, kind, stepKind, endpoint string) *Task {
+func seedTask(t *testing.T, s *PgStore, kind Kind, stepKind, endpoint string) *Task {
 	t.Helper()
 	id := uuid.New()
 	args, err := json.Marshal(map[string]string{"task_id": id.String()})
@@ -327,7 +327,7 @@ func TestPgCrashedControllerHoldsItsTaskUntilTheLeaseLapses(t *testing.T) {
 	store := NewPgStore(pool)
 
 	step := &pgStep{kind: "work"}
-	task := seedTask(t, store, "test", step.kind, "")
+	task := seedTask(t, store, Kind{"test", "", "", nil}, step.kind, "")
 
 	// Controller A claimed it and died with the step in flight. Nothing releases
 	// the lease and nothing renews it.
@@ -376,7 +376,7 @@ func TestPgGracefulRestartHandsTheTaskOverAtOnce(t *testing.T) {
 	store := NewPgStore(pool)
 
 	step := &pgStep{kind: "work", block: make(chan struct{})}
-	task := seedTask(t, store, "test", step.kind, "")
+	task := seedTask(t, store, Kind{"test", "", "", nil}, step.kind, "")
 
 	first := startController(t, pool, pgReg(step))
 	waitForStatus(t, store, task.ID, StatusRunning, 10*time.Second)

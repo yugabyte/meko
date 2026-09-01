@@ -177,11 +177,16 @@ type ResourceStatus struct {
 	Parent string `json:"parent,omitempty"`
 	State  string `json:"state,omitempty"`
 	// Error is why this resource is not converged, when the agent can say: the
-	// controller's rejection of a create/update/delete, a resource stuck
-	// non-Ready past the reconcile deadline, or drift the agent cannot fix
-	// (a kind with no update/delete path). Empty when the resource is fine.
-	// Without it a stuck resource reads as a bare state in the console and the
-	// reason lives only in the agent's and controller's logs.
+	// controller's rejection of a create/update/delete, the error a completed-but-
+	// failed async task reported, a resource stuck non-Ready past the reconcile
+	// deadline, or drift the agent cannot fix (a kind with no update/delete path).
+	// Empty when the resource is fine. Without it a stuck resource reads as a bare
+	// state in the console and the reason lives only in the agent's and
+	// controller's logs.
+	//
+	// It also carries the detail behind a non-error State the agent sets, notably
+	// "updating" — what the in-flight task is, so a generation that has not landed
+	// yet is distinguishable from one that never will.
 	Error string `json:"error,omitempty"`
 	// Attrs are kind-specific details the backend observed, reported verbatim
 	// for the console/API to render: every resource's backend id (an amp UUID,

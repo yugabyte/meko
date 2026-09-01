@@ -1,0 +1,523 @@
+package ampbackend
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"meko/ycp/internal/ampclient"
+	"meko/ycp/internal/api"
+	"meko/ycp/reconcile"
+)
+
+// These tests cover the half of meko#985 the controller cannot: how the agent
+// reads the echoed generation, how it distinguishes an update still in flight
+// from one whose task failed, and that it never treats a 202 as proof of work.
+
+const (
+	genPoolID     = "22222222-2222-2222-2222-222222222222"
+	genClusterID  = "33333333-3333-3333-3333-333333333333"
+	genBranchID   = "44444444-4444-4444-4444-444444444444"
+	genEndpointID = "55555555-5555-5555-5555-555555555555"
+	genTaskID     = "77777777-7777-7777-7777-777777777777"
+
+	genBranchPath   = "pool-a/recproj/main"
+	genEndpointPath = "pool-a/recproj/main/rw"
+)
+
+// genServer is a stub controller for the update path: it lists one
+// pool/cluster/branch/endpoint tree with a scriptable echoed generation, hands
+// back a Task from every mutating call, and answers GET /tasks/{id} with a
+// scriptable status.
+type genServer struct {
+	// echoed ycp_generation on the branch and endpoint rows; nil renders `null`.
+	branchGen   *int64
+	endpointGen *int64
+	// taskStatus / taskError script GET /tasks/{id}. An empty taskStatus makes the
+	// server 404 the task, i.e. "the controller no longer knows it".
+	taskStatus string
+	taskError  string
+	// mutateStatus overrides the status code the two mutating calls return.
+	mutateStatus int
+
+	resizes  []ampclient.ResizeEndpointRequest
+	extAdds  []ampclient.AddBranchExtensionsRequest
+	taskGets int
+}
+
+func (g *genServer) start(t *testing.T) *Backend {
+	t.Helper()
+	if g.mutateStatus == 0 {
+		g.mutateStatus = http.StatusAccepted
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(p, "/tasks/"):
+			g.taskGets++
+			if g.taskStatus == "" {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"error":{"code":"not_found","message":"unknown task"}}`)
+				return
+			}
+			body := map[string]any{"id": genTaskID, "kind": "resize_endpoint", "status": g.taskStatus,
+				"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}
+			if g.taskError != "" {
+				body["error"] = g.taskError
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		case strings.HasSuffix(p, "/resize"):
+			var req ampclient.ResizeEndpointRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode resize body: %v", err)
+			}
+			g.resizes = append(g.resizes, req)
+			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/extensions"):
+			var req ampclient.AddBranchExtensionsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode add-extensions body: %v", err)
+			}
+			g.extAdds = append(g.extAdds, req)
+			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/endpoints"):
+			io.WriteString(w, `{"endpoints":[{"id":"`+genEndpointID+`","name":"rw","branch_id":"`+genBranchID+
+				`","cluster_id":"`+genClusterID+`","role":"read_write","address":"ep.host:5433",`+
+				`"resources":{"cpu":"2","memory":"4Gi"},"ycp_generation":`+jsonGen(g.endpointGen)+
+				`,"created_at":"2026-01-01T00:00:00Z"}]}`)
+		case strings.HasSuffix(p, "/branches"):
+			io.WriteString(w, `{"branches":[{"branch_id":"`+genBranchID+`","cluster_id":"`+genClusterID+
+				`","name":"main","is_default":true,"pg_version":18,"extensions":["pgvector"],`+
+				`"ycp_generation":`+jsonGen(g.branchGen)+`,"created_at":"2026-01-01T00:00:00Z"}]}`)
+		case strings.HasSuffix(p, "/clusters"):
+			io.WriteString(w, `{"clusters":[{"id":"`+genClusterID+`","name":"recproj","storage_pool_id":"`+genPoolID+
+				`","created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+genBranchID+
+				`","cluster_id":"`+genClusterID+`","name":"main","is_default":true,"pg_version":18,`+
+				`"created_at":"2026-01-01T00:00:00Z"}}]}`)
+		case strings.HasSuffix(p, "/storage-pools"):
+			io.WriteString(w, `{"storage_pools":[{"id":"`+genPoolID+
+				`","name":"pool-a","owner_user_id":"11111111-1111-1111-1111-111111111111",`+
+				`"created_at":"2026-01-01T00:00:00Z"}]}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, p)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	b, err := New(srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := b.List(t.Context()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	return b
+}
+
+// writeMutateResponse answers a mutating call with the scripted status, carrying a
+// Task on a 2xx so the agent has something to follow.
+func (g *genServer) writeMutateResponse(w http.ResponseWriter) {
+	w.WriteHeader(g.mutateStatus)
+	if g.mutateStatus < 300 {
+		io.WriteString(w, `{"id":"`+genTaskID+`","kind":"resize_endpoint","status":"pending",`+
+			`"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
+		return
+	}
+	io.WriteString(w, `{"error":{"code":"conflict","message":"a task is already in progress"}}`)
+}
+
+func jsonGen(gen *int64) string {
+	if gen == nil {
+		return "null"
+	}
+	b, _ := json.Marshal(*gen)
+	return string(b)
+}
+
+func gen64(v int64) *int64 { return &v }
+
+// mustIssue asserts an Update issued its call. A successful issue reports Pending,
+// not nil: a 202 means the controller planned a task, so the update is in flight,
+// and calling that "applied" is the claim meko#985 is about.
+func mustIssue(t *testing.T, err error) {
+	t.Helper()
+	var pending *reconcile.PendingError
+	if !errors.As(err, &pending) {
+		t.Fatalf("Update = %v (%T), want a PendingError reporting the task it planned", err, err)
+	}
+}
+
+func resizeRes(gen int64) api.DesiredResource {
+	return api.DesiredResource{Kind: KindEndpoint, Name: genEndpointPath, Generation: gen,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"}}`)}
+}
+
+func extRes(gen int64) api.DesiredResource {
+	return api.DesiredResource{Kind: KindBranch, Name: genBranchPath, Generation: gen,
+		Spec: json.RawMessage(`{"extensions":["pgvector","pg_cron"]}`)}
+}
+
+// The echo, read off the resource: a branch and an endpoint report the generation
+// the controller has fully applied, and pools and clusters report nothing — they
+// have no update path, so they keep the engine's cache fallback.
+func TestListEchoesAppliedGeneration(t *testing.T) {
+	g := &genServer{branchGen: gen64(3), endpointGen: gen64(2)}
+	b := g.start(t)
+
+	actuals, err := b.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byKind := map[string]reconcile.Actual{}
+	for _, a := range actuals {
+		byKind[a.Key.Kind] = a
+	}
+
+	for kind, want := range map[string]int64{KindBranch: 3, KindEndpoint: 2} {
+		if got := byKind[kind].ObservedGen; got != want {
+			t.Errorf("%s ObservedGen = %d, want %d", kind, got, want)
+		}
+	}
+	// Also visible in the inventory an operator reads.
+	if got := byKind[KindBranch].Attrs["applied_generation"]; got != "3" {
+		t.Errorf("branch applied_generation attr = %q, want 3", got)
+	}
+	if got := byKind[KindEndpoint].Attrs["applied_generation"]; got != "2" {
+		t.Errorf("endpoint applied_generation attr = %q, want 2", got)
+	}
+
+	// Pools and clusters have no update path, so they echo nothing and rely on the
+	// engine's cache alone.
+	for _, kind := range []string{KindPool, KindCluster} {
+		if got := byKind[kind].ObservedGen; got != 0 {
+			t.Errorf("%s ObservedGen = %d, want 0 (no update path, so no echo)", kind, got)
+		}
+	}
+}
+
+// A NULL column is generation 0 — no YCP update has been applied — and reports no
+// applied_generation attr, so the inventory does not claim a number for a resource
+// nothing has updated.
+func TestListEchoesZeroForNeverUpdatedRows(t *testing.T) {
+	g := &genServer{} // both ycp_generation columns null
+	b := g.start(t)
+
+	actuals, err := b.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, a := range actuals {
+		if a.Key.Kind != KindBranch && a.Key.Kind != KindEndpoint {
+			continue
+		}
+		if a.ObservedGen != 0 {
+			t.Errorf("%s ObservedGen = %d, want 0", a.Key, a.ObservedGen)
+		}
+		if _, ok := a.Attrs["applied_generation"]; ok {
+			t.Errorf("%s reports applied_generation for a null column: %v", a.Key, a.Attrs)
+		}
+	}
+}
+
+// Both update paths must tell the controller which generation they are applying —
+// it is the value the task stamps on the row, so an update that omits it can
+// never converge.
+func TestUpdateSendsAppliedGeneration(t *testing.T) {
+	t.Run("endpoint resize", func(t *testing.T) {
+		g := &genServer{endpointGen: gen64(1)}
+		b := g.start(t)
+		mustIssue(t, b.Update(t.Context(), resizeRes(4)))
+		if len(g.resizes) != 1 {
+			t.Fatalf("resize calls = %d, want 1", len(g.resizes))
+		}
+		if got := g.resizes[0].YcpGeneration; got == nil || *got != 4 {
+			t.Errorf("resize ycp_generation = %v, want 4", got)
+		}
+	})
+
+	t.Run("branch extensions", func(t *testing.T) {
+		g := &genServer{branchGen: gen64(1)}
+		b := g.start(t)
+		mustIssue(t, b.Update(t.Context(), extRes(4)))
+		if len(g.extAdds) != 1 {
+			t.Fatalf("add-extensions calls = %d, want 1", len(g.extAdds))
+		}
+		if got := g.extAdds[0].YcpGeneration; got == nil || *got != 4 {
+			t.Errorf("add-extensions ycp_generation = %v, want 4", got)
+		}
+	})
+}
+
+// While the task the last update planned is still running, the next tick must
+// report pending: issuing again would plan duplicate work, and reporting failure
+// would degrade an environment that is converging fine. This is the case a timer
+// cannot tell from a failure.
+func TestUpdatePendingWhileTaskRunning(t *testing.T) {
+	for _, status := range []string{"pending", "running"} {
+		t.Run(status, func(t *testing.T) {
+			g := &genServer{endpointGen: gen64(1), taskStatus: status}
+			b := g.start(t)
+
+			mustIssue(t, b.Update(t.Context(), resizeRes(4)))
+			err := b.Update(t.Context(), resizeRes(4))
+			var pending *reconcile.PendingError
+			if !errors.As(err, &pending) {
+				t.Fatalf("second Update err = %v (%T), want a PendingError", err, err)
+			}
+			if len(g.resizes) != 1 {
+				t.Errorf("resize calls = %d, want 1 — the second tick must not re-issue", len(g.resizes))
+			}
+			if g.taskGets != 1 {
+				t.Errorf("task reads = %d, want 1", g.taskGets)
+			}
+		})
+	}
+}
+
+// The failure a 202 could not report. Once the task is terminal-failed the agent
+// must surface the controller's own error as an ordinary retryable failure — that
+// is what engages the engine's backoff and degrades the environment with a reason,
+// where before the tick reported success and latched the generation.
+func TestUpdateFailedTaskSurfacesItsError(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1), taskStatus: "failed", taskError: "node has insufficient cpu"}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), resizeRes(4)))
+	err := b.Update(t.Context(), resizeRes(4))
+	if err == nil {
+		t.Fatal("Update after a failed task = nil, want the task's error")
+	}
+	if !strings.Contains(err.Error(), "node has insufficient cpu") {
+		t.Errorf("err = %v, want it to carry the task's own error", err)
+	}
+	// Retryable, not permanent: the next attempt may well succeed.
+	var perm *reconcile.PermanentError
+	var pending *reconcile.PendingError
+	if errors.As(err, &perm) || errors.As(err, &pending) {
+		t.Errorf("err = %v, want a plain retryable error", err)
+	}
+	// And the failed task is forgotten, so the tick after the backoff re-issues.
+	mustIssue(t, b.Update(t.Context(), resizeRes(4)))
+	if len(g.resizes) != 2 {
+		t.Errorf("resize calls = %d, want 2 (the failure must not wedge the resource)", len(g.resizes))
+	}
+}
+
+// A task the controller no longer knows (its log was pruned) leaves nothing to
+// wait for. The echoed generation is the authority on whether the work landed, so
+// the agent re-issues rather than reporting pending forever.
+func TestUpdateForgottenTaskReissues(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1)} // taskStatus "" => 404
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), resizeRes(4)))
+	mustIssue(t, b.Update(t.Context(), resizeRes(4)))
+	if len(g.resizes) != 2 {
+		t.Errorf("resize calls = %d, want 2", len(g.resizes))
+	}
+}
+
+// On the UPDATE path a 409 is the kind's first-writer-wins lock saying a task is
+// already doing this work — pending, not done. Counting it as success is the latch
+// this change removes, and it is what an agent restart mid-task hits.
+func TestUpdateConflictIsPending(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1), mutateStatus: http.StatusConflict}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), resizeRes(4))
+	var pending *reconcile.PendingError
+	if !errors.As(err, &pending) {
+		t.Fatalf("Update on 409 = %v (%T), want a PendingError", err, err)
+	}
+}
+
+// Create keeps the opposite reading of 409 — there it means the resource already
+// exists, and presence-based diffing covers it, so treating it as success is
+// right. The two paths must not be collapsed.
+func TestCreateConflictStaysSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		io.WriteString(w, `{"error":{"code":"conflict","message":"already exists"}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	b, err := New(srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := b.Create(t.Context(), api.DesiredResource{Kind: KindPool, Name: "pool-a", Spec: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("Create on 409 = %v, want success", err)
+	}
+}
+
+// The enumeration guard. Every kind is either one Update refuses outright, or one
+// that both sends a generation and has that generation echoed back by List —
+// there is no third option, because a kind that accepts updates without the echo
+// is exactly the silent latch of meko#985.
+//
+// A kind added to updateFuncs without the plumbing fails here rather than in
+// production.
+func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
+	specs := map[string]api.DesiredResource{
+		KindPool:     {Kind: KindPool, Name: "pool-a", Generation: 4, Spec: json.RawMessage(`{}`)},
+		KindCluster:  {Kind: KindCluster, Name: "pool-a/recproj", Generation: 4, Spec: json.RawMessage(`{}`)},
+		KindBranch:   extRes(4),
+		KindEndpoint: resizeRes(4),
+	}
+	// Every kind this backend maps has to be here, or the guard below silently
+	// covers less than it claims — in either direction, since a kind absent from
+	// specs is asserted neither updatable nor permanent.
+	for _, kind := range allKinds {
+		if _, ok := specs[kind]; !ok {
+			t.Fatalf("backend maps kind %q but this test has no spec for it — add one", kind)
+		}
+	}
+	for kind := range updateFuncs {
+		if _, ok := specs[kind]; !ok {
+			t.Fatalf("updateFuncs has %q but this test has no spec for it — add one", kind)
+		}
+	}
+
+	for kind, res := range specs {
+		t.Run(kind, func(t *testing.T) {
+			g := &genServer{branchGen: gen64(1), endpointGen: gen64(1)}
+			b := g.start(t)
+
+			err := b.Update(t.Context(), res)
+			var perm *reconcile.PermanentError
+			if _, updatable := updateFuncs[kind]; !updatable {
+				if !errors.As(err, &perm) {
+					t.Fatalf("Update on non-updatable %s = %v, want a PermanentError", kind, err)
+				}
+				return
+			}
+			mustIssue(t, err)
+
+			// It sent a generation...
+			var sent *int64
+			switch kind {
+			case KindEndpoint:
+				if len(g.resizes) != 1 {
+					t.Fatalf("%s: mutating calls = %d, want 1", kind, len(g.resizes))
+				}
+				sent = g.resizes[0].YcpGeneration
+			case KindBranch:
+				if len(g.extAdds) != 1 {
+					t.Fatalf("%s: mutating calls = %d, want 1", kind, len(g.extAdds))
+				}
+				sent = g.extAdds[0].YcpGeneration
+			default:
+				t.Fatalf("%s is updatable but this test does not know how to read its request body", kind)
+			}
+			if sent == nil || *sent != res.Generation {
+				t.Errorf("%s sent ycp_generation = %v, want %d", kind, sent, res.Generation)
+			}
+
+			// ...and List echoes one back for it, so the engine has something durable
+			// to compare against instead of falling back to its in-process cache.
+			actuals, err := b.List(t.Context())
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			var echoed bool
+			for _, a := range actuals {
+				if a.Key.Kind == kind {
+					echoed = a.ObservedGen == 1 // what the fixture reports
+					break
+				}
+			}
+			if !echoed {
+				t.Errorf("%s is updatable but List echoes no ObservedGen for it", kind)
+			}
+		})
+	}
+}
+
+// The branch latch the echo exists to remove, reached through the one path that
+// used to skip the controller entirely.
+//
+// add_branch_extensions unions the branch row BEFORE it redeploys the branch's
+// endpoints, so a tick that lands after the union sees nothing missing. If that
+// meant "converged", the engine would cache the generation and Noop the branch
+// forever — while the task that unioned the row may still fail redeploying an
+// endpoint, leaving ycp_generation unstamped and the endpoints on the old set.
+// An agent restart makes it certain: the in-flight task id is gone, so the 409
+// cannot save it either.
+func TestUpdateBranchIssuesWhileTheGenerationIsUnrecorded(t *testing.T) {
+	// The row already carries what the spec declares — the union landed — but the
+	// generation has not been echoed back.
+	g := &genServer{branchGen: nil}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindBranch, Name: genBranchPath, Generation: 4,
+		Spec: json.RawMessage(`{"extensions":["pgvector"]}`),
+	})
+	mustIssue(t, err)
+
+	if len(g.extAdds) != 1 {
+		t.Fatalf("add-extensions calls = %d, want 1 — nothing missing must not read as converged", len(g.extAdds))
+	}
+	// The full declared set, since there is no delta to send: the union is absolute,
+	// so the row is unchanged and only an endpoint that never got the redeploy moves.
+	if got := g.extAdds[0].Extensions; len(got) != 1 || got[0] != "pgvector" {
+		t.Errorf("sent extensions = %v, want the full declared set [pgvector]", got)
+	}
+	if got := g.extAdds[0].YcpGeneration; got == nil || *got != 4 {
+		t.Errorf("sent ycp_generation = %v, want 4", got)
+	}
+}
+
+// Once the controller has recorded the generation there is nothing left to do, so
+// no call goes out — the re-issue above is bounded by the echo, not unconditional.
+func TestUpdateBranchIssuesNothingOnceTheGenerationIsRecorded(t *testing.T) {
+	g := &genServer{branchGen: gen64(4)}
+	b := g.start(t)
+
+	if err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindBranch, Name: genBranchPath, Generation: 4,
+		Spec: json.RawMessage(`{"extensions":["pgvector"]}`),
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(g.extAdds) != 0 {
+		t.Errorf("add-extensions calls = %d, want 0 once the row confirms the generation", len(g.extAdds))
+	}
+}
+
+// A generation that declares something no verb here can apply never fully lands,
+// so this update must not claim it: stamping would echo back at the desired
+// generation and Noop the resource forever, losing the drift. The add still goes
+// out — one unfixable field does not block the rest — just without a generation.
+func TestUpdateBranchWithDriftClaimsNoGeneration(t *testing.T) {
+	g := &genServer{branchGen: gen64(1)}
+	b := g.start(t)
+
+	// pg_settings is create-time here, so declaring a value the branch does not
+	// carry is drift; the extensions add is real work alongside it.
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindBranch, Name: genBranchPath, Generation: 4,
+		Spec: json.RawMessage(`{"extensions":["pgvector","pg_cron"],"pg_settings":{"work_mem":"64MB"}}`),
+	})
+
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update = %v (%T), want the drift reported as permanent", err, err)
+	}
+	if !strings.Contains(err.Error(), "pg_settings.work_mem") {
+		t.Errorf("err = %v, want it to name the field it cannot apply", err)
+	}
+	if len(g.extAdds) != 1 {
+		t.Fatalf("add-extensions calls = %d, want the add still issued", len(g.extAdds))
+	}
+	if got := g.extAdds[0].YcpGeneration; got != nil {
+		t.Errorf("sent ycp_generation = %d, want none — this generation is not fully applied", *got)
+	}
+}

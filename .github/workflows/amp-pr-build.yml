@@ -643,10 +643,13 @@ jobs:
           docker logs yugabyte 2>&1 | tail -50
           exit 1
 
+      # TestMigrateRoundTrip walks every migration up/down/up; the other TestMigrate*
+      # tests cover statements it cannot, since it runs against an empty database
+      # and so never matches a data-repair UPDATE.
       - name: Migration up/down/up round-trip
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
-        run: go -C amp/controller test ./internal/db/... -run TestMigrateRoundTrip -v
+        run: go -C amp/controller test ./internal/db/... -run TestMigrate -v
 
       # Everything in internal/task that needs a live database (the TestPg* tests):
       # the resize lock's unique-violation -> 409 mapping, which MemStore can't

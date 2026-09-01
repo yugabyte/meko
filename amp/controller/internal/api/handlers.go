@@ -440,12 +440,19 @@ func (c *Controllers) AddBranchExtensions(ctx context.Context, request AddBranch
 	}
 
 	t, err := c.tasks.AddBranchExtensions(ctx, task.AddBranchExtensionsInput{
-		PoolID:     request.PoolId,
-		ClusterID:  request.ClusterId,
-		BranchID:   request.BranchId,
-		Extensions: exts,
+		PoolID:        request.PoolId,
+		ClusterID:     request.ClusterId,
+		BranchID:      request.BranchId,
+		Extensions:    exts,
+		YCPGeneration: request.Body.YcpGeneration,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, task.ErrBranchExtensionsInProgress):
+		// First-writer-wins: the in-flight add holds the branch until it is terminal.
+		// It redeploys every endpoint on the branch, so admitting a second would run
+		// concurrent upgrades of the same release.
+		return AddBranchExtensions409JSONResponse{ConflictJSONResponse(apiError("conflict", "an extension add is already in progress for this branch"))}, nil
+	case err != nil:
 		return nil, fmt.Errorf("add branch extensions task: %w", err)
 	}
 
@@ -1101,10 +1108,11 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	// resources, and resizes the running pod in place; its result reports the
 	// in-place outcome.
 	t, err := c.tasks.ResizeEndpoint(ctx, task.ResizeEndpointInput{
-		ClusterID:  request.ClusterId,
-		EndpointID: request.EndpointId,
-		CPU:        cpu,
-		Memory:     memory,
+		ClusterID:     request.ClusterId,
+		EndpointID:    request.EndpointId,
+		CPU:           cpu,
+		Memory:        memory,
+		YCPGeneration: request.Body.YcpGeneration,
 	})
 	switch {
 	case errors.Is(err, task.ErrResizeInProgress):
@@ -1296,6 +1304,9 @@ func branchToAPI(b core.Branch) Branch {
 		wt := WriteTokenSettings(b.WriteTokenSettings)
 		out.WriteTokenSettings = &wt
 	}
+	// The highest YCP generation fully applied to this branch, so the reconcile
+	// agent can tell an update that landed from one whose task never finished.
+	out.YcpGeneration = b.YCPGeneration
 	return out
 }
 
@@ -1341,6 +1352,7 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 			out.ExtendedConfig = &ext
 		}
 	}
+	out.YcpGeneration = e.YCPGeneration
 	return out
 }
 
@@ -1385,6 +1397,11 @@ func taskToAPI(t *task.Task) Task {
 		if err := json.Unmarshal(t.Params, &v); err == nil {
 			out.Params = &v
 		}
+	}
+	// The generation this task applies, so "which generation is in flight" is
+	// readable on the task rather than only inside the opaque params blob.
+	if t.YCP != nil {
+		out.YcpGeneration = &t.YCP.Generation
 	}
 	return out
 }

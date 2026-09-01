@@ -143,7 +143,7 @@ func TestServiceCreateMigrationTargetPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VoyagerCreateMigrationTarget: %v", err)
 	}
-	if tk.Kind != KindVoyagerCreateMigrationTarget || tk.ID == uuid.Nil {
+	if tk.Kind != KindVoyagerCreateMigrationTarget.String() || tk.ID == uuid.Nil {
 		t.Fatalf("task = (%q, %s), want %q with stable id", tk.Kind, tk.ID, KindVoyagerCreateMigrationTarget)
 	}
 	if len(store.specs) != 1 || store.specs[0].ID != tk.ID {

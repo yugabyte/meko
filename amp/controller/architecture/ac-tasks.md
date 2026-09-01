@@ -165,11 +165,11 @@ double-apply or error.
 | `create_branch` | parent, cluster, branch ids, name, fork LSN, pg_version | Fork a branch into a new branch (records ancestry). | `EnsureBranch`: same `ON CONFLICT (pk) DO NOTHING`; a missing parent or name collision is a real error. |
 | `record_branch_recipe` | cluster, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). A fork's ancestor interlock is inside this step's single transaction (`registry.RecordBranch`). The abort it provokes is re-run by the worker (see the interlock-retry invariant below), so a fork racing any other writer of the ancestor's row — a drop, another fork, an endpoint create on it, or GC advancing its cutoff — is not a task failure. |
 | `create_endpoint` | endpoint, cluster, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-cluster, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved by the API handler — 2 cores by default, with memory following CPU at the control plane's memory-per-vCPU ratio, and a pair below that ratio refused — and carried in the args, so a reclaim/replay redeploys the same size. Every planner that appends this step resolves them the same way (cluster create, fork-with-writer, Voyager target), because a step that reaches the deployer with an empty size lands on its fallback instead. |
-| `resize_endpoint` | endpoint id, cpu, memory | Change the endpoint's compute reservation: persist the new size to the endpoint `config`, then resize the **running pod in place** (`internal/task/step_resize_endpoint.go`). Records the in-place outcome on the step result. | Persist-first, then resize: `UpdateEndpointResources` is an absolute jsonb merge and the deployer resize is idempotent, so a replay converges. The DB write lands before the live resize, so even if the in-place step is deferred/infeasible a controller-driven redeploy still lands the new size. The deployer does **not** patch the Deployment template (that would trigger a rollout and recreate the pod — the opposite of in-place); an involuntary recreate before the next redeploy comes back at the old size (durable in DB, converges). **First-writer-wins lock**: the partial unique index `tasks_one_active_resize_per_endpoint` (migration 0004) admits at most one non-terminal `resize_endpoint` per endpoint (`target_ref`); a concurrent one is `ErrResizeInProgress` → `409`. The lock self-releases when the task reaches terminal (a crashed task is reclaimed by its lease, so it can't wedge). |
+| `resize_endpoint` | endpoint id, cpu, memory | Change the endpoint's compute reservation: persist the new size to the endpoint `config`, then resize the **running pod in place** (`internal/task/step_resize_endpoint.go`). Records the in-place outcome on the step result. | Persist-first, then resize: `UpdateEndpointResources` is an absolute jsonb merge and the deployer resize is idempotent, so a replay converges. The DB write lands before the live resize, so even if the in-place step is deferred/infeasible a controller-driven redeploy still lands the new size. The deployer does **not** patch the Deployment template (that would trigger a rollout and recreate the pod — the opposite of in-place); an involuntary recreate before the next redeploy comes back at the old size (durable in DB, converges). **First-writer-wins lock**: the partial unique index `tasks_one_active_resize_per_endpoint` (migration 0001) admits at most one non-terminal `resize_endpoint` per endpoint (`target_ref`); a concurrent one is `ErrResizeInProgress` → `409`. The lock self-releases when the task reaches terminal (a crashed task is reclaimed by its lease, so it can't wedge). |
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
 | `delete_branch` | cluster, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
 | `delete_cluster` | cluster id | Cascade-delete a cluster: enumerate **all** the cluster's endpoints, retire each (instance + record), then delete the cluster — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForCluster`). Cascade order is **endpoints → branches → cluster**; `DeleteCluster` nulls the branches' in-cluster parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
-| `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy every endpoint on the branch** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. |
+| `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy every endpoint on the branch** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. **First-writer-wins lock**: `tasks_one_active_ext_add_per_branch` (migration 0014) admits at most one non-terminal `add_branch_extensions` per branch (`target_ref`); a concurrent one is `ErrBranchExtensionsInProgress` → `409`. Needed because the reconcile agent re-issues an update until the row confirms it, and this task redeploys every endpoint on the branch — two at once would run concurrent upgrades of the same release. |
 
 `delete_branch` and `delete_cluster` are **single self-contained steps**, not a
 planned per-endpoint fan-out, because the worker has no dynamic sub-step
@@ -178,6 +178,25 @@ one step enumerates and retires them itself. Both require a deployer (they retir
 running instances, mirroring `delete_endpoint`).
 
 A few invariants worth calling out:
+
+- **A task can declare the YCP generation it applies, and the *worker* stamps it
+  after the last step succeeds.** `tasks.ycp_resource` / `ycp_resource_id` /
+  `ycp_generation` (migration 0013) name the endpoint or branch row and the
+  generation; `execute` writes it through `StateStore` between the step loop and
+  `CompleteTask`, so the recorded value means the work landed rather than that the
+  handler returned `202` ([ac-ycp.md](ac-ycp.md)). Not a step, deliberately: a step
+  is one more thing each planner must remember and one more place a task can fail
+  with the work already done. `Service.createWithID` derives it from the kind, so a
+  planner passes nothing extra, and the write is `GREATEST(...)` so an older task
+  completing late cannot regress it.
+- **A task `Kind` carries its own metadata, declared with unkeyed literals.**
+  `Kind{name, ycpResource, lockIndex}` — which resource `target_ref` names for YCP,
+  and which partial unique index locks the kind — so adding a kind does not compile
+  until both are answered, and both first-writer-wins checks (`PgStore`, `MemStore`)
+  read `lockIndex` instead of naming a kind, so they cannot drift.
+  `TestPgUniqueConstraintsOnTask` derives its expectation from `allKinds`, so a
+  `lockIndex` with no index in the schema — or an index no kind names, whose
+  `23505` would surface as a 500 — fails there.
 
 - **`create_endpoint` records the row before it deploys.** The record claims the
   single-writer slot (a second writer is rejected by the partial unique index
@@ -359,7 +378,7 @@ their own task-store fake. The tests cover
 
 The `TestPg*` tests need a real database because `MemStore` cannot stand in.
 `store_pg_test.go` covers the resize lock's `SQLSTATE 23505 → ErrResizeInProgress →
-409` mapping (`TestPgResizeLock`) and the schema assumption it rests on
+409` mapping (`TestPgTaskLocks`, over every locked kind) and the schema assumption it rests on
 (`TestPgUniqueConstraintsOnTask`, below); `locks_pg_test.go` covers the lease
 timings that `MemLocks` deliberately does not model
 ([`ac-locking.md`](ac-locking.md)). `MemStore` rejects
@@ -380,15 +399,17 @@ portable field to read a constraint name from** — and scraping it out of the
 message text only trades a silent break for a brittle one.
 
 So identify a violation by SQLSTATE plus **what the statement was doing**, not by
-name. `isResizeLockViolation` takes the `TaskSpec` being inserted and reports the
-lock for `23505` on a `resize_endpoint` task with a `target_ref`; that is exact
-because the only other unique constraint on `task` is its primary key, whose
-conflict `Create` already absorbs with `ON CONFLICT (id) DO NOTHING`. Since that
-is an assumption about the schema, `TestPgUniqueConstraintsOnTask` asserts the
-live table's unique-index inventory is exactly `{task_pkey,
-tasks_one_active_resize_per_endpoint}` — add a unique index to `task` and it fails,
-pointing at the classifier that now has to discriminate. The other mappings in
-`core/pg.go` already switch on `Code` alone and are unaffected.
+name. `taskLockViolation` takes the `TaskSpec` being inserted and reports that
+kind's `inProgress` conflict for a `23505` on a kind declaring a `lockIndex` with a
+`target_ref`. That stays exact with more than one lock because the indexes'
+predicates each name one kind, so a violation from this INSERT can only be the
+index for the kind being inserted; the only other unique constraint on `task` is
+its primary key, whose conflict `Create` already absorbs with `ON CONFLICT (id) DO
+NOTHING`. Since that is an assumption about the schema,
+`TestPgUniqueConstraintsOnTask` derives the expected inventory from `allKinds` —
+`task_pkey` plus every declared `lockIndex` — so a lock with no index, or an index
+no kind names, fails there. The other mappings in `core/pg.go` already switch on
+`Code` alone and are unaffected.
 
 What is otherwise **not** unit-tested here is the rest of `PgStore`'s SQL (the
 claim/lease query, the transactional `Create` writes, the `step_ids`-ordered

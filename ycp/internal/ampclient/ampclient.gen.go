@@ -301,6 +301,14 @@ type AddBranchExtensionsRequest struct {
 	// unknown name is rejected (400). Every existing endpoint on the branch is
 	// redeployed to mount the new set. See compute/architecture/extensions.md.
 	Extensions []string `json:"extensions"`
+
+	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
+	// applies. Recorded on the target resource by the task worker once every step
+	// of the task has succeeded, and echoed back as the resource's
+	// `ycp_generation` — so the reconcile agent can tell an update that landed
+	// from one whose asynchronous task never finished. Omit it: it is for the
+	// reconcile agent, and any other caller leaves the recorded value untouched.
+	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
 // Branch defines model for Branch.
@@ -349,6 +357,15 @@ type Branch struct {
 	// Empty means the supervisor's own defaults. Read when an endpoint
 	// starts.
 	WriteTokenSettings *WriteTokenSettings `json:"write_token_settings,omitempty"`
+
+	// YcpGeneration The highest YCP desired-state generation fully applied to this resource,
+	// written by the task worker only after every step of the task carrying it
+	// succeeded — so it means the work landed, not that a `202` was returned.
+	// Monotonic: a task carrying an older generation that completes after a newer
+	// one leaves the newer value standing. `null` when no YCP update has ever been
+	// applied, which is every resource YCP does not manage and every one it has
+	// only created.
+	YcpGeneration *YCPGenerationObserved `json:"ycp_generation,omitempty"`
 }
 
 // BranchList defines model for BranchList.
@@ -728,6 +745,15 @@ type Endpoint struct {
 
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
 	TailnetAddress string `json:"tailnet_address"`
+
+	// YcpGeneration The highest YCP desired-state generation fully applied to this resource,
+	// written by the task worker only after every step of the task carrying it
+	// succeeded — so it means the work landed, not that a `202` was returned.
+	// Monotonic: a task carrying an older generation that completes after a newer
+	// one leaves the newer value standing. `null` when no YCP update has ever been
+	// applied, which is every resource YCP does not manage and every one it has
+	// only created.
+	YcpGeneration *YCPGenerationObserved `json:"ycp_generation,omitempty"`
 }
 
 // EndpointRole defines model for Endpoint.Role.
@@ -1124,6 +1150,14 @@ type ResizeEndpointRequest struct {
 	// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
 	// standard 8 GiB per vCPU).
 	Resources EndpointResources `json:"resources"`
+
+	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
+	// applies. Recorded on the target resource by the task worker once every step
+	// of the task has succeeded, and echoed back as the resource's
+	// `ycp_generation` — so the reconcile agent can tell an update that landed
+	// from one whose asynchronous task never finished. Omit it: it is for the
+	// reconcile agent, and any other caller leaves the recorded value untouched.
+	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
 // SettingNotApplied One stored setting that is not in force, and why.
@@ -1203,6 +1237,14 @@ type Task struct {
 	Status    TaskStatus  `json:"status"`
 	TargetRef *string     `json:"target_ref,omitempty"`
 	UpdatedAt time.Time   `json:"updated_at"`
+
+	// YcpGeneration The YCP desired-state generation this task applies to its target, when
+	// it was planned from YCP desired state; `null` for a task an operator or
+	// the UI planned directly. Stamped onto the target resource (as its own
+	// `ycp_generation`) once every step has succeeded, so a task that is
+	// `failed` here has NOT advanced it. `kind` and `target_ref` say which
+	// resource.
+	YcpGeneration *int64 `json:"ycp_generation,omitempty"`
 }
 
 // TaskStatus defines model for Task.Status.
@@ -1351,6 +1393,23 @@ type Version struct {
 // Empty means the supervisor's own defaults. Read when an endpoint
 // starts.
 type WriteTokenSettings map[string]interface{}
+
+// YCPGenerationApplied The YCP (Yugabyte Control Plane) desired-state generation this call
+// applies. Recorded on the target resource by the task worker once every step
+// of the task has succeeded, and echoed back as the resource's
+// `ycp_generation` — so the reconcile agent can tell an update that landed
+// from one whose asynchronous task never finished. Omit it: it is for the
+// reconcile agent, and any other caller leaves the recorded value untouched.
+type YCPGenerationApplied = int64
+
+// YCPGenerationObserved The highest YCP desired-state generation fully applied to this resource,
+// written by the task worker only after every step of the task carrying it
+// succeeded — so it means the work landed, not that a `202` was returned.
+// Monotonic: a task carrying an older generation that completes after a newer
+// one leaves the newer value standing. `null` when no YCP update has ever been
+// applied, which is every resource YCP does not manage and every one it has
+// only created.
+type YCPGenerationObserved = int64
 
 // BranchId defines model for BranchId.
 type BranchId = openapi_types.UUID
@@ -5161,6 +5220,7 @@ type AddBranchExtensionsResponse struct {
 	JSON202      *Accepted
 	JSON400      *BadRequest
 	JSON404      *NotFound
+	JSON409      *Conflict
 	JSON500      *InternalError
 	JSON503      *ServiceUnavailable
 }
@@ -7170,6 +7230,13 @@ func ParseAddBranchExtensionsResponse(rsp *http.Response) (*AddBranchExtensionsR
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError

@@ -118,6 +118,19 @@ type StateStore interface {
 	// write, paired with the deployer's live pod resize.
 	UpdateEndpointResources(ctx context.Context, endpointID uuid.UUID, cpu, memory string) error
 
+	// SetEndpointYCPGeneration records the YCP desired-state generation fully
+	// applied to an endpoint. The worker calls it after every step of the task
+	// carrying it has succeeded, so the stored value means the work landed rather
+	// than that the controller returned 202 — which is what lets the reconcile agent
+	// re-issue an update whose task failed instead of latching it as applied
+	// (meko#985). MONOTONIC: a task carrying an older generation that completes after
+	// a newer one leaves the newer value standing. Absent row is a no-op.
+	SetEndpointYCPGeneration(ctx context.Context, endpointID uuid.UUID, gen int64) error
+
+	// SetBranchYCPGeneration is SetEndpointYCPGeneration for a branch. A tombstoned
+	// branch is skipped — nothing will reconcile it again.
+	SetBranchYCPGeneration(ctx context.Context, branchID uuid.UUID, gen int64) error
+
 	// EndpointIDsForBranch returns the ids of every endpoint on the
 	// (clusterID, branchID) branch. It is the cascade-delete enumeration the
 	// delete_branch step runs at Execute time (so a concurrently-added endpoint is

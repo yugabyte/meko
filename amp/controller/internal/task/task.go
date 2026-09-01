@@ -39,10 +39,41 @@ type Task struct {
 	// expiry is not here: ownership is a lease in amp_registry.resource_token
 	// (architecture/ac-locking.md), and a copy of the expiry would have to be
 	// re-stamped on every renewal to stay true.
-	Owner     *string
+	Owner *string
+	// YCP is the resource row and generation this task applies, when it was
+	// planned from YCP desired state; nil for a task an operator or the UI planned
+	// directly. The worker stamps it once every step has succeeded — see YCPTarget.
+	YCP       *YCPTarget
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// YCPTarget is the resource row a task stamps with the YCP desired-state
+// generation it applies, once every one of its steps has succeeded.
+//
+// It exists because a 202 means "task planned", not "task done": the reconcile
+// agent used to record the generation as applied the moment the controller
+// answered, so a task that failed afterwards left the resource unconverged with
+// the agent reporting healthy forever (meko#985). Stamping from the worker, after
+// the last step, makes the recorded generation mean the work actually landed —
+// which is what lets the agent re-issue an update whose task failed.
+//
+// On the task rather than in a step's args so that "this task applies generation
+// N to this resource" is a property of the task: queryable in the task log,
+// returnable on GET /tasks/{id}, and impossible for a planner to half-wire.
+type YCPTarget struct {
+	// Resource is which table ID names: "endpoint" or "branch". Derived from the
+	// task's Kind (see Kind.ycpResource), never passed by a planner.
+	Resource   string
+	ID         uuid.UUID
+	Generation int64
+}
+
+// YCP resource values, the two kinds YCP drives as an update.
+const (
+	YCPResourceEndpoint = "endpoint"
+	YCPResourceBranch   = "branch"
+)
 
 // StepRecord is one row of the `task_step` table: the persisted state of one
 // idempotent step, keyed by its own id (referenced from Task.StepIDs, which fixes
@@ -78,11 +109,14 @@ type StepSpec struct {
 // converges on replay.
 type TaskSpec struct {
 	ID        uuid.UUID
-	Kind      string
+	Kind      Kind
 	ClusterID *uuid.UUID
 	TargetRef *string
 	Params    json.RawMessage
-	Steps     []StepSpec
+	// YCP is derived by Service.createWithID from the kind and the request's
+	// generation, not set by planners. Nil for a task YCP did not drive.
+	YCP   *YCPTarget
+	Steps []StepSpec
 }
 
 // Step is one executable step in a task: a unit of work that carries its own

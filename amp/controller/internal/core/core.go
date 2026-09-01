@@ -124,6 +124,13 @@ type Branch struct {
 	// (`ttl_ms`, `renew_seconds`). On the branch because the lease is one row per
 	// branch and every endpoint on it contends for that row. Nil when unset.
 	WriteTokenSettings map[string]any
+	// YCPGeneration is the highest YCP desired-state generation fully applied to
+	// this branch, echoed back so the reconcile agent can tell an applied update
+	// from one whose async task never finished (meko#985). Written by the worker
+	// once every step of the task carrying it succeeded, never from the 202. Nil
+	// when no YCP update has been applied — a resource YCP does not manage, or one
+	// it has only ever created.
+	YCPGeneration *int64
 }
 
 // EffectivePgSettings is the settings an endpoint's compute actually runs with:
@@ -189,6 +196,13 @@ type Endpoint struct {
 	CPU       string
 	Memory    string
 	CreatedAt time.Time
+	// YCPGeneration is the highest YCP desired-state generation fully applied to
+	// this endpoint, echoed back so the reconcile agent can tell an applied update
+	// from one whose async task never finished (meko#985). Written by the worker
+	// once every step of the task carrying it succeeded, never from the 202. Nil
+	// when no YCP update has been applied — a resource YCP does not manage, or one
+	// it has only ever created.
+	YCPGeneration *int64
 }
 
 // EndpointDeploy is the minimal record the add_branch_extensions step needs to

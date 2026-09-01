@@ -677,6 +677,40 @@ func (m *MemBackend) UpdateEndpointResources(_ context.Context, endpointID uuid.
 	return nil
 }
 
+// SetEndpointYCPGeneration mirrors PgBackend's monotonic write: GREATEST, so a
+// task carrying an older generation that completes late cannot drag the value
+// backwards. Absent endpoint is a no-op.
+func (m *MemBackend) SetEndpointYCPGeneration(_ context.Context, endpointID uuid.UUID, gen int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		ep.YCPGeneration = maxYCPGeneration(ep.YCPGeneration, gen)
+		m.endpoints[endpointID] = ep
+	}
+	return nil
+}
+
+// SetBranchYCPGeneration is the branch twin. Absent branch is a no-op.
+func (m *MemBackend) SetBranchYCPGeneration(_ context.Context, branchID uuid.UUID, gen int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if br, ok := m.branches[branchID]; ok {
+		br.YCPGeneration = maxYCPGeneration(br.YCPGeneration, gen)
+		m.branches[branchID] = br
+	}
+	return nil
+}
+
+// maxYCPGeneration is the Go half of `GREATEST(COALESCE(col, 0), gen)`: a nil
+// current value counts as zero, and the result is always a fresh pointer so two
+// rows can never share one.
+func maxYCPGeneration(current *int64, gen int64) *int64 {
+	if current != nil && *current > gen {
+		gen = *current
+	}
+	return &gen
+}
+
 // UpdateBranchSettings stores the branch-wide settings the caller named,
 // mirroring PgBackend: nil leaves a surface alone, an empty map clears it.
 // Absent branch is a no-op.

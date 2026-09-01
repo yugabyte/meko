@@ -356,7 +356,11 @@ paths:
         (an already-enabled extension is a no-op). Cheap validation is synchronous:
         `400` for an empty list, an unknown extension name, or when externalized
         extensions are unavailable (e.g. the Docker driver); `404` if the pool,
-        cluster, or branch does not exist. See compute/architecture/extensions.md.
+        cluster, or branch does not exist. **First-writer-wins**: while an add for
+        this branch is in flight, a concurrent one is rejected with `409` until the
+        first reaches a terminal state — the task redeploys every endpoint on the
+        branch, so two at once would run concurrent upgrades of the same release.
+        See compute/architecture/extensions.md.
       requestBody:
         required: true
         content:
@@ -370,6 +374,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -1414,6 +1420,8 @@ components:
             name (e.g. `pgvector`). Unioned into the branch's set (idempotent); an
             unknown name is rejected (400). Every existing endpoint on the branch is
             redeployed to mount the new set. See compute/architecture/extensions.md.
+        ycp_generation:
+          $ref: '#/components/schemas/YCPGenerationApplied'
 
     ClusterList:
       type: object
@@ -1476,6 +1484,8 @@ components:
             `pg_settings` merge over these and win on a key both define.
         write_token_settings:
           $ref: '#/components/schemas/WriteTokenSettings'
+        ycp_generation:
+          $ref: '#/components/schemas/YCPGenerationObserved'
         created_at:
           type: string
           format: date-time
@@ -1575,6 +1585,8 @@ components:
         safekeeper_settings:
           $ref: '#/components/schemas/DaemonSettings'
           description: This endpoint's safekeeper overrides, as stored.
+        ycp_generation:
+          $ref: '#/components/schemas/YCPGenerationObserved'
         created_at:
           type: string
           format: date-time
@@ -1612,6 +1624,31 @@ components:
           $ref: '#/components/schemas/DaemonSettings'
         safekeeper_settings:
           $ref: '#/components/schemas/DaemonSettings'
+
+    YCPGenerationApplied:
+      type: integer
+      format: int64
+      nullable: true
+      description: |
+        The YCP (Yugabyte Control Plane) desired-state generation this call
+        applies. Recorded on the target resource by the task worker once every step
+        of the task has succeeded, and echoed back as the resource's
+        `ycp_generation` — so the reconcile agent can tell an update that landed
+        from one whose asynchronous task never finished. Omit it: it is for the
+        reconcile agent, and any other caller leaves the recorded value untouched.
+
+    YCPGenerationObserved:
+      type: integer
+      format: int64
+      nullable: true
+      description: |
+        The highest YCP desired-state generation fully applied to this resource,
+        written by the task worker only after every step of the task carrying it
+        succeeded — so it means the work landed, not that a `202` was returned.
+        Monotonic: a task carrying an older generation that completes after a newer
+        one leaves the newer value standing. `null` when no YCP update has ever been
+        applied, which is every resource YCP does not manage and every one it has
+        only created.
 
     WriteTokenSettings:
       type: object
@@ -1907,6 +1944,8 @@ components:
       properties:
         resources:
           $ref: '#/components/schemas/EndpointResources'
+        ycp_generation:
+          $ref: '#/components/schemas/YCPGenerationApplied'
 
     Task:
       type: object
@@ -1939,6 +1978,17 @@ components:
         error:
           type: string
           nullable: true
+        ycp_generation:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            The YCP desired-state generation this task applies to its target, when
+            it was planned from YCP desired state; `null` for a task an operator or
+            the UI planned directly. Stamped onto the target resource (as its own
+            `ycp_generation`) once every step has succeeded, so a task that is
+            `failed` here has NOT advanced it. `kind` and `target_ref` say which
+            resource.
         created_at:
           type: string
           format: date-time

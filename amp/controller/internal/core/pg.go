@@ -336,7 +336,7 @@ func (b *PgBackend) getBranchByID(ctx context.Context, clusterID, branchID uuid.
 // `b`, so a column added to the projection cannot reach one scanBranch caller
 // and miss another — which is exactly how a query and its scanner drift out of
 // step and start answering 500.
-const branchColumns = `b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.write_token_settings, b.extensions, b.created_at`
+const branchColumns = `b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.write_token_settings, b.extensions, b.ycp_generation, b.created_at`
 
 // branchSelect joins branch -> cluster -> storage_pools so a branch is only
 // visible through the cluster (and pool) it belongs to. Tombstoned clusters are
@@ -485,7 +485,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a cluster.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.created_at
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.ycp_generation, e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -577,6 +577,43 @@ func (b *PgBackend) UpdateEndpointResources(ctx context.Context, endpointID uuid
 		endpointID.String(), cpu, memory)
 	if err != nil {
 		return fmt.Errorf("update endpoint resources: %w", err)
+	}
+	return nil
+}
+
+// SetEndpointYCPGeneration records the YCP desired-state generation fully applied
+// to an endpoint (meko#985). Called by the task worker once every step of the
+// task carrying it succeeded, so the value means "the work landed" rather than
+// "the controller accepted a 202" — which is what lets the reconcile agent
+// re-issue an update whose task failed instead of latching it as applied.
+//
+// MONOTONIC, not an assignment: GREATEST keeps the higher value, so a task
+// carrying an older generation that completes after a newer one cannot drag the
+// column backwards and make the agent re-apply what already landed. Idempotent;
+// an absent row is a no-op.
+func (b *PgBackend) SetEndpointYCPGeneration(ctx context.Context, endpointID uuid.UUID, gen int64) error {
+	_, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints
+		    SET ycp_generation = GREATEST(COALESCE(ycp_generation, 0), $2::bigint)
+		  WHERE id = $1::uuid`,
+		endpointID.String(), gen)
+	if err != nil {
+		return fmt.Errorf("set endpoint ycp generation: %w", err)
+	}
+	return nil
+}
+
+// SetBranchYCPGeneration is SetEndpointYCPGeneration for a branch. A tombstoned
+// branch is skipped: its row survives the drop forever (a branch id is never
+// reused) and nothing will reconcile it again.
+func (b *PgBackend) SetBranchYCPGeneration(ctx context.Context, branchID uuid.UUID, gen int64) error {
+	_, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.branches
+		    SET ycp_generation = GREATEST(COALESCE(ycp_generation, 0), $2::bigint)
+		  WHERE branch_id = $1::uuid AND dropped_at IS NULL`,
+		branchID.String(), gen)
+	if err != nil {
+		return fmt.Errorf("set branch ycp generation: %w", err)
 	}
 	return nil
 }
@@ -784,10 +821,14 @@ func scanBranch(r scanRow) (Branch, error) {
 		settingsRaw []byte
 		leaseRaw    []byte
 		extRaw      []byte
+		ycpGen      sql.NullInt64 // NULL until a YCP update has been applied
 		br          Branch
 	)
-	if err := r.Scan(&clusterStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &leaseRaw, &extRaw, &br.CreatedAt); err != nil {
+	if err := r.Scan(&clusterStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &leaseRaw, &extRaw, &ycpGen, &br.CreatedAt); err != nil {
 		return Branch{}, err
+	}
+	if ycpGen.Valid {
+		br.YCPGeneration = &ycpGen.Int64
 	}
 	clusterID, err := uuid.Parse(clusterStr)
 	if err != nil {
@@ -829,11 +870,15 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		settingsRaw []byte
 		psRaw       []byte
 		skRaw       []byte
+		ycpGen      sql.NullInt64 // NULL until a YCP update has been applied
 		ep          Endpoint
 	)
 	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory,
-		&settingsRaw, &psRaw, &skRaw, &ep.Extended, &ep.CreatedAt); err != nil {
+		&settingsRaw, &psRaw, &skRaw, &ep.Extended, &ycpGen, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
+	}
+	if ycpGen.Valid {
+		ep.YCPGeneration = &ycpGen.Int64
 	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {

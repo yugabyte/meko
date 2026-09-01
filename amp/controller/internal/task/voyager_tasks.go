@@ -18,10 +18,12 @@ import (
 // exactly like the core planners; the launcher/target steps that execute them
 // live in the voyager_step_*.go files.
 
-// Voyager task kinds — the task.kind values for the migration operations.
-const (
-	KindVoyagerStartMigrationRun     = "start_migration_run"
-	KindVoyagerCreateMigrationTarget = "create_migration_target"
+// Voyager task kinds. YCP does not model migrations, so neither carries a
+// ycpResource; neither is first-writer-wins either (a second run is a distinct
+// attempt, not a conflict).
+var (
+	KindVoyagerStartMigrationRun     = Kind{"start_migration_run", "", "", nil}
+	KindVoyagerCreateMigrationTarget = Kind{"create_migration_target", "", "", nil}
 )
 
 // VoyagerStartMigrationRunInput is the immutable launch request persisted in

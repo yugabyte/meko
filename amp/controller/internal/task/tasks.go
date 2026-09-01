@@ -22,18 +22,71 @@ import (
 // worker rebuilds them via the Registry. The default Postgres major version
 // yb-amp targets is v18.
 
-// Task kinds — the task.kind values. Each corresponds to a user-visible
-// operation whose status the API exposes (GET /tasks/{id}).
-const (
-	KindCreateCluster       = "create_cluster"
-	KindBranch              = "branch"
-	KindCreateEndpoint      = "create_endpoint"
-	KindResizeEndpoint      = "resize_endpoint"
-	KindDeleteEndpoint      = "delete_endpoint"
-	KindDeleteBranch        = "delete_branch"
-	KindDeleteCluster       = "delete_cluster"
-	KindAddBranchExtensions = "add_branch_extensions"
+// Kind is a task kind — the persisted task.kind value, one per user-visible
+// operation whose status the API exposes (GET /tasks/{id}) — plus the metadata the
+// framework treats that kind by, so neither lives in a list somewhere else.
+//
+// Declared with UNKEYED literals on purpose: `Kind{"upgrade_endpoint"}` does not
+// compile, so adding a kind means answering both questions instead of inheriting a
+// zero value that quietly says "nothing special about this one" (meko#985).
+//
+// Only TaskSpec.Kind is a Kind. Task.Kind — read back from the store — stays a
+// plain string: typing that side too would need a name -> Kind lookup on every
+// scan, i.e. the hand-maintained registry this replaces.
+type Kind struct {
+	name string
+	// ycpResource is what target_ref names for this kind when the request carried
+	// a YCP desired-state generation: "endpoint", "branch", or "" for a kind YCP
+	// never drives. Non-empty is what makes createWithID derive a YCPTarget and the
+	// worker stamp the row on completion.
+	ycpResource string
+	// lockIndex is the partial unique index on `tasks` enforcing at most one
+	// non-terminal task of this kind per target_ref (first-writer-wins), or "" when
+	// the kind has no such lock. Named here rather than derived from the kind, so
+	// TestPgUniqueConstraintsOnTask can compare this set against the live schema
+	// without a naming convention.
+	lockIndex string
+	// inProgress is the typed conflict Store.Create returns when lockIndex rejects
+	// an insert, and so the message behind the API's 409. It rides on the kind for
+	// the same reason lockIndex does: selecting it anywhere else means a second
+	// axis that can disagree with the gate, and a locked kind would answer with
+	// another kind's wording. nil for a kind with no lock, where it is never read.
+	inProgress error
+}
+
+// String is the persisted task.kind value.
+func (k Kind) String() string { return k.name }
+
+var (
+	KindCreateCluster  = Kind{"create_cluster", "", "", nil}
+	KindBranch         = Kind{"branch", "", "", nil}
+	KindCreateEndpoint = Kind{"create_endpoint", "", "", nil}
+	// resize_endpoint and add_branch_extensions are the two kinds YCP drives as an
+	// UPDATE, so they are the two that stamp a generation. Creates and deletes
+	// self-heal through presence — the next diff sees the resource absent or still
+	// there — and so need no echo.
+	KindResizeEndpoint      = Kind{"resize_endpoint", "endpoint", "tasks_one_active_resize_per_endpoint", ErrResizeInProgress}
+	KindDeleteEndpoint      = Kind{"delete_endpoint", "", "", nil}
+	KindDeleteBranch        = Kind{"delete_branch", "", "", nil}
+	KindDeleteCluster       = Kind{"delete_cluster", "", "", nil}
+	KindAddBranchExtensions = Kind{"add_branch_extensions", "branch", "tasks_one_active_ext_add_per_branch", ErrBranchExtensionsInProgress}
 )
+
+// allKinds is every task kind, and the only enumeration of them.
+// TestPgUniqueConstraintsOnTask derives its expectation from it, so a lockIndex
+// with no index in the schema — or an index no kind names — fails there.
+var allKinds = []Kind{
+	KindCreateCluster,
+	KindBranch,
+	KindCreateEndpoint,
+	KindResizeEndpoint,
+	KindDeleteEndpoint,
+	KindDeleteBranch,
+	KindDeleteCluster,
+	KindAddBranchExtensions,
+	KindVoyagerStartMigrationRun,
+	KindVoyagerCreateMigrationTarget,
+}
 
 // Service records tasks against a Store and reads them back. It is the dependency
 // API mutation handlers (and anything else that initiates a task) take instead of
@@ -273,7 +326,13 @@ type ResizeEndpointInput struct {
 	EndpointID uuid.UUID `json:"endpoint_id"`
 	CPU        string    `json:"cpu"`
 	Memory     string    `json:"memory"`
+	// YCPGeneration is the desired-state generation this resize applies, when the
+	// caller is the reconcile agent; nil for an operator or the UI. createWithID
+	// turns it into the task's YCPTarget.
+	YCPGeneration *int64 `json:"ycp_generation,omitempty"`
 }
+
+func (in ResizeEndpointInput) ycpGeneration() *int64 { return in.YCPGeneration }
 
 // ResizeEndpoint records a resize_endpoint task: a single resize_endpoint step
 // that persists the new size to the endpoint's config (durable across redeploys)
@@ -348,7 +407,12 @@ type AddBranchExtensionsInput struct {
 	ClusterID  uuid.UUID `json:"cluster_id"`
 	BranchID   uuid.UUID `json:"branch_id"`
 	Extensions []string  `json:"extensions"`
+	// YCPGeneration is the desired-state generation this add applies, when the
+	// caller is the reconcile agent; nil otherwise. See ResizeEndpointInput.
+	YCPGeneration *int64 `json:"ycp_generation,omitempty"`
 }
+
+func (in AddBranchExtensionsInput) ycpGeneration() *int64 { return in.YCPGeneration }
 
 // AddBranchExtensions records an add_branch_extensions task: a single,
 // self-contained step that unions the names into the branch's durable set and
@@ -363,7 +427,10 @@ func (s *Service) AddBranchExtensions(ctx context.Context, in AddBranchExtension
 			Extensions: in.Extensions,
 		}),
 	}
-	return s.create(ctx, KindAddBranchExtensions, in, in.BranchID, "", steps)
+	// target_ref is the branch id: it is what the first-writer-wins index locks on
+	// and what the derived YCPTarget stamps. It used to be empty, with the branch id
+	// passed where clusterID belongs.
+	return s.create(ctx, KindAddBranchExtensions, in, in.ClusterID, in.BranchID.String(), steps)
 }
 
 // EndpointDeployName is the deployer's stable instance handle for an endpoint
@@ -393,15 +460,29 @@ const defaultBranchName = "main"
 // empty targetRef is left unstamped), and persists the task + its steps via the
 // Store. clusterID is taken by value and the address of a copy is stored, so
 // callers can pass a field directly.
-func (s *Service) create(ctx context.Context, kind string, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
+func (s *Service) create(ctx context.Context, kind Kind, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
 	return s.createWithID(ctx, uuid.Nil, kind, params, clusterID, targetRef, steps)
+}
+
+// ycpGenerationCarrier is implemented by every task input whose kind YCP drives
+// as an update: it reports the desired-state generation the request is applying,
+// or nil when the caller is not YCP (an operator, the UI). One method rather than
+// a field so createWithID can reach it through `params any`.
+type ycpGenerationCarrier interface {
+	ycpGeneration() *int64
 }
 
 // createWithID is the stable-id form of create, used by planners whose step args
 // must refer to the task before Store.Create is called (the migration
 // launchers). A zero taskID defers id assignment to the store; a fixed one is
 // honored and replays converge on the original plan.
-func (s *Service) createWithID(ctx context.Context, taskID uuid.UUID, kind string, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
+//
+// It is also the one funnel every planner goes through, which is why the YCP
+// stamp is DERIVED here rather than assembled by each planner: the ingredients
+// are already all in this signature (the kind says which resource target_ref
+// names, target_ref is that resource's id, and params carries the generation), so
+// a new planner cannot wire the task but forget the stamp.
+func (s *Service) createWithID(ctx context.Context, taskID uuid.UUID, kind Kind, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s params: %w", kind, err)
@@ -414,6 +495,31 @@ func (s *Service) createWithID(ctx context.Context, taskID uuid.UUID, kind strin
 	if targetRef != "" {
 		ref := targetRef
 		spec.TargetRef = &ref
+	}
+	if kind.ycpResource != "" {
+		// Checked whenever the kind declares a resource, even for a caller carrying
+		// no generation: it is the input TYPE that has to be able to carry one, so a
+		// kind wired without it fails on its first call — in any unit test of the
+		// planner — instead of the day a YCP-driven request happens to arrive.
+		carrier, ok := params.(ycpGenerationCarrier)
+		if !ok {
+			return nil, fmt.Errorf("task kind %s declares ycpResource %q but %T cannot carry a generation",
+				kind, kind.ycpResource, params)
+		}
+		if kind.ycpResource != YCPResourceEndpoint && kind.ycpResource != YCPResourceBranch {
+			// Only reachable by declaring a Kind with a resource the worker cannot
+			// stamp. Caught here, at the first call of that kind, rather than as a
+			// task the worker keeps reclaiming and failing.
+			return nil, fmt.Errorf("task kind %s declares unknown ycpResource %q", kind, kind.ycpResource)
+		}
+		if gen := carrier.ycpGeneration(); gen != nil {
+			id, err := uuid.Parse(targetRef)
+			if err != nil {
+				return nil, fmt.Errorf("task kind %s applies YCP generation %d but its target_ref %q is not the %s id: %w",
+					kind, *gen, targetRef, kind.ycpResource, err)
+			}
+			spec.YCP = &YCPTarget{Resource: kind.ycpResource, ID: id, Generation: *gen}
+		}
 	}
 	return s.store.Create(ctx, spec)
 }

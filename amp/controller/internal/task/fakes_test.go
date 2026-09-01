@@ -42,8 +42,12 @@ type fakeStateStore struct {
 	createdEndpoints           map[uuid.UUID]string   // endpoint id -> role
 	endpointAddresses          map[uuid.UUID]string
 	endpointResources          map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
-	deletedEndpoints           map[uuid.UUID]struct{}
-	existingWriterBranch       map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
+	// The applied YCP generation the worker stamped, per resource. Monotonic, like
+	// the real GREATEST write, so a test can assert a late older task cannot regress it.
+	endpointYCPGeneration map[uuid.UUID]int64
+	branchYCPGeneration   map[uuid.UUID]int64
+	deletedEndpoints      map[uuid.UUID]struct{}
+	existingWriterBranch  map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 
 	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
 	// EndpointIDsForBranch / EndpointIDsForCluster can enumerate children and the
@@ -317,6 +321,30 @@ func (f *fakeStateStore) UpdateEndpointResources(_ context.Context, endpointID u
 		f.endpointResources = map[uuid.UUID][2]string{}
 	}
 	f.endpointResources[endpointID] = [2]string{cpu, memory}
+	return nil
+}
+
+func (f *fakeStateStore) SetEndpointYCPGeneration(_ context.Context, endpointID uuid.UUID, gen int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endpointYCPGeneration == nil {
+		f.endpointYCPGeneration = map[uuid.UUID]int64{}
+	}
+	if cur, ok := f.endpointYCPGeneration[endpointID]; !ok || gen > cur {
+		f.endpointYCPGeneration[endpointID] = gen
+	}
+	return nil
+}
+
+func (f *fakeStateStore) SetBranchYCPGeneration(_ context.Context, branchID uuid.UUID, gen int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.branchYCPGeneration == nil {
+		f.branchYCPGeneration = map[uuid.UUID]int64{}
+	}
+	if cur, ok := f.branchYCPGeneration[branchID]; !ok || gen > cur {
+		f.branchYCPGeneration[branchID] = gen
+	}
 	return nil
 }
 

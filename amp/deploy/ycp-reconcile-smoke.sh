@@ -23,16 +23,27 @@
 #   4. waits for the agent to create them and report the endpoint READY in the
 #      environment's inventory (GET /environments), asserting the whole tree
 #      (storage-pool/cluster/branch/endpoint) shows up;
-#   5. (SMOKE_EXTENSIONS=1) enables an extension on the branch by editing its
+#   5. edits the endpoint's spec to the size it is already running at — a real
+#      generation bump whose resize is a no-op — and asserts the whole stamp path
+#      runs: nothing is reported before any update (a create stamps nothing), the
+#      generation appears in attrs.applied_generation once the task has run, and
+#      the resource settles back to ready instead of being re-issued. It does not
+#      catch a controller that stamped on the 202 rather than on completion —
+#      that window is not sampled, and is covered by the unit tests (meko#985);
+#   6. (SMOKE_EXTENSIONS=1) enables an extension on the branch by editing its
 #      spec — the only path an operator has for a branch that already exists —
 #      and asserts the agent applies it: the branch reports it in
 #      attrs.extensions AND the endpoint the add redeploys comes back Ready with
 #      the extension mounted. The attr alone proves little, since
 #      add_branch_extensions unions the branch row before it touches any
-#      endpoint, so it converges even if every redeploy fails. Opt-in for the
+#      endpoint, so it converges even if every redeploy fails. Then re-declares
+#      the same extension (an inert edit that still bumps the generation) and
+#      asserts the endpoint pod's uid is UNCHANGED — the agent re-sends the full
+#      set when a generation is unrecorded, which is only safe because an
+#      unchanged set re-renders to an identical manifest. Opt-in for the
 #      same reason as smoke-test.sh's extension scenario: the images and the
 #      controller catalog only exist under /ci amp_deploy_gke_extensions;
-#   6. withdraws the cluster subtree from desired state (leaving just the pool)
+#   7. withdraws the cluster subtree from desired state (leaving just the pool)
 #      and asserts the agent deletes it — the authoritative GC path.
 #
 # It leaves the pool in desired state on purpose: storage pools have no controller
@@ -155,6 +166,71 @@ for want in cluster branch endpoint; do
   esac
 done
 
+# --- the applied generation: a completed task, not a 202, advances it ---
+# The point of meko#985. Every mutating controller call is asynchronous, so a 202
+# only means "task planned"; the agent used to record the generation as applied on
+# that alone, and a task that then failed left the resource unconverged while the
+# inventory said healthy. The controller now stamps the row after the task's last
+# step succeeds and echoes it as attrs.applied_generation.
+#
+# Driven by an endpoint spec edit, because that is the resize path the issue names.
+# The declared size is whatever the endpoint is ALREADY running at, read from the
+# inventory: that still bumps the generation (the spec changed), so the whole
+# stamp path runs, while the resize itself is a no-op at the target size — no
+# node-capacity or in-place-shrink risk in a smoke test.
+hdr "endpoint $EP_NAME reports attrs.applied_generation after a spec edit"
+ep_attr() {
+  env_json | jq -r --arg n "$EP_NAME" --arg k "$1" \
+    ".resources[]?|select(.kind==\"endpoint\" and .name==\$n)|.attrs[\$k] // empty" 2>/dev/null | head -1
+}
+
+# A create stamps nothing: creates self-heal through presence, so they need no echo.
+gen0=$(ep_attr applied_generation)
+[ -z "$gen0" ] && ok "no applied_generation before any update (a create does not stamp)" \
+  || bad "applied_generation=$gen0 before any update, want none"
+
+cur_cpu=$(ep_attr cpu); cur_mem=$(ep_attr memory)
+if [ -z "$cur_cpu" ] || [ -z "$cur_mem" ]; then
+  bad "endpoint reports no cpu/memory in the inventory (cpu='${cur_cpu:-}' memory='${cur_mem:-}')"
+else
+  ok "endpoint runs at cpu=$cur_cpu memory=$cur_mem"
+  RESIZED=$(jq -nc --argjson r "$DESIRED" \
+    --arg n "${POOL_NAME}/${CLUSTER_NAME}/${BRANCH_NAME}/${EP_NAME}" \
+    --arg cpu "$cur_cpu" --arg mem "$cur_mem" \
+    '[ $r[] | if .kind=="endpoint" and .name==$n
+              then .spec.resources={cpu:$cpu, memory:$mem} else . end ]')
+  set_desired "$RESIZED" && ok "desired state updated with the endpoint's own size" \
+    || bad "POST desired (resize) failed"
+  # Later edits build on this, not on the original: re-posting DESIRED would drop
+  # the resources field again, which is another spec change and another resize.
+  DESIRED="$RESIZED"
+
+  gen=""
+  for ((i=0; i<60; i++)); do
+    gen=$(ep_attr applied_generation)
+    [ -n "$gen" ] && [ "$gen" != 0 ] && break
+    sleep 5
+  done
+  [ -n "$gen" ] && [ "$gen" != 0 ] \
+    && ok "endpoint attrs.applied_generation=$gen (the task completed and stamped it)" \
+    || bad "endpoint attrs.applied_generation='${gen:-none}' — the resize task never stamped the row"
+
+  # And it settles: once the row confirms, the agent stops re-issuing, so the
+  # resource reports plain "ready" rather than staying "updating" or degraded.
+  state=""; estate=""
+  for ((i=0; i<24; i++)); do
+    ej=$(env_json)
+    state=$(printf '%s' "$ej" | jq -r '.state // empty' 2>/dev/null)
+    estate=$(printf '%s' "$ej" | jq -r --arg n "$EP_NAME" \
+      '.resources[]?|select(.kind=="endpoint" and .name==$n)|.state // empty' 2>/dev/null | head -1)
+    [ "$state" = READY ] && [ "$estate" = ready ] && break
+    sleep 5
+  done
+  [ "$state" = READY ] && [ "$estate" = ready ] \
+    && ok "environment READY and endpoint state=ready after the update settled" \
+    || bad "environment=$state endpoint=$estate after the update (want READY/ready)"
+fi
+
 # --- enable an extension on the existing branch (opt-in) ---
 if [ "${SMOKE_EXTENSIONS:-0}" != 1 ]; then
   hdr "branch extensions"
@@ -211,6 +287,57 @@ else
       kubectl -n "$NS" exec "$pod" -- test -f "$BRANCH_EXT_FILE" 2>/dev/null \
         && ok "$BRANCH_EXT ImageVolume mounted ($BRANCH_EXT_FILE)" \
         || bad "$BRANCH_EXT not mounted in $pod — the redeploy did not take"
+    fi
+
+    # --- a generation bump that changes no extension must NOT bounce compute ---
+    #
+    # The agent re-sends the branch's full declared set whenever the generation is
+    # still unrecorded, even with nothing to add — that is the only way a completing
+    # task can stamp it, and without it a branch whose row was unioned by a task
+    # that then failed reports converged at a generation no endpoint applied
+    # (meko#985). It rests on the redeploy being a no-op when the set is unchanged:
+    # the union is absolute, so the row does not move, and the endpoint re-renders
+    # to an identical manifest.
+    #
+    # If that is wrong, every generation bump on a branch with extensions restarts
+    # every endpoint on it — a user-visible outage, and invisible to every other
+    # assertion here, since the pod comes back Ready either way. So compare the
+    # pod's UID: a restart mints a new one.
+    #
+    # The bump is a duplicate name in the declared list. jsonb `IS DISTINCT FROM`
+    # sees a changed spec and bumps the generation, while extensionSet dedupes to
+    # the same set — an inert edit, which is exactly the case under test.
+    if [ -n "$pod" ]; then
+      hdr "a no-delta generation bump does not restart endpoint $EP_NAME"
+      before_uid=$(kubectl -n "$NS" get "pod/$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+      before_gen=$(env_json | jq -r --arg n "$BRANCH_NAME" \
+        '.resources[]?|select(.kind=="branch" and .name==$n)|.attrs.applied_generation // empty' 2>/dev/null | head -1)
+      [ -n "$before_uid" ] && ok "endpoint pod uid before the bump ($before_uid, branch generation ${before_gen:-none})" \
+        || bad "could not read the endpoint pod's uid"
+
+      DUP_EXT=$(jq -nc --argjson r "$DESIRED" --arg n "${POOL_NAME}/${CLUSTER_NAME}/${BRANCH_NAME}" --arg ext "$BRANCH_EXT" \
+        '[ $r[] | if .kind=="branch" and .name==$n then .spec.extensions=[$ext,$ext] else . end ]')
+      set_desired "$DUP_EXT" && ok "desired state re-declares $BRANCH_EXT (inert edit, bumps the generation)" \
+        || bad "POST desired (duplicate extension) failed"
+      DESIRED="$DUP_EXT"
+
+      after_gen=""
+      for ((i=0; i<60; i++)); do
+        after_gen=$(env_json | jq -r --arg n "$BRANCH_NAME" \
+          '.resources[]?|select(.kind=="branch" and .name==$n)|.attrs.applied_generation // empty' 2>/dev/null | head -1)
+        [ -n "$after_gen" ] && [ "$after_gen" != "${before_gen:-}" ] && break
+        sleep 5
+      done
+      [ -n "$after_gen" ] && [ "$after_gen" != "${before_gen:-}" ] \
+        && ok "branch attrs.applied_generation advanced to $after_gen (the re-send stamped it)" \
+        || bad "branch attrs.applied_generation='${after_gen:-none}' did not advance past '${before_gen:-none}'"
+
+      after_uid=$(kubectl -n "$NS" get "pod/$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+      if [ "$after_uid" = "$before_uid" ]; then
+        ok "endpoint pod was not restarted by the no-delta bump ($after_uid)"
+      else
+        bad "endpoint pod restarted for an unchanged extension set (uid ${before_uid} -> ${after_uid:-gone}) — the re-send bounces compute"
+      fi
     fi
 fi
 

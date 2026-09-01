@@ -22,16 +22,20 @@ import (
 // tasks_one_active_resize_per_endpoint (PgStore) / a guarded check (MemStore).
 var ErrResizeInProgress = errors.New("a resize is already in progress for this endpoint")
 
-// resizeLockConstraint is the partial unique index that enforces the resize lock
-// (migration 0004). A second non-terminal resize_endpoint task for the same
-// endpoint violates it. Named here for the schema guard in the tests, which is
-// what lets isResizeLockViolation classify structurally (see below).
-const resizeLockConstraint = "tasks_one_active_resize_per_endpoint"
+// ErrBranchExtensionsInProgress is the add_branch_extensions twin: the in-flight
+// add holds the branch until it reaches a terminal status. It matters more than a
+// duplicate add's own cost, because the step redeploys every endpoint on the
+// branch — two concurrent tasks would run concurrent helm upgrades of the same
+// release. The reconcile agent re-issues the add until the controller confirms the
+// generation (meko#985), including once the branch row already carries the names,
+// so a second tick during that redeploy pass is exactly when this fires.
+var ErrBranchExtensionsInProgress = errors.New("an extension add is already in progress for this branch")
 
-// isResizeLockViolation reports whether inserting spec failed because the resize
-// lock rejected it — a concurrent resize of the same endpoint.
+// taskLockViolation reports the typed conflict when inserting spec failed because
+// that kind's first-writer-wins lock rejected it, or nil when the error is
+// something else.
 //
-// It identifies the lock by SQLSTATE and the task being inserted, never by the
+// It identifies the lock by SQLSTATE and the KIND being inserted, never by the
 // constraint's name, because there is no portable field to read that name from:
 // upstream PostgreSQL raises the unique violation with errtableconstraint(),
 // which fills the wire protocol's `C` field that pgx exposes as ConstraintName,
@@ -40,18 +44,65 @@ const resizeLockConstraint = "tasks_one_active_resize_per_endpoint"
 // is what made every concurrent resize a 500 instead of a 409 (#400), and keying
 // on the message text instead would just trade a silent break for a brittle one.
 //
-// Structural classification is sound here because a unique violation from that
-// INSERT can only be this lock: the only other unique constraint on task is its
-// primary key, whose conflict ON CONFLICT (id) DO NOTHING already absorbs.
-// TestPgUniqueConstraintsOnTask pins that inventory against the live schema, so
-// adding a second unique index on task fails the build rather than silently
-// widening what this reports as a resize conflict.
-func isResizeLockViolation(spec TaskSpec, err error) bool {
-	if spec.Kind != KindResizeEndpoint || spec.TargetRef == nil {
-		return false
+// Classifying by kind stays exact with more than one lock because the indexes'
+// predicates are kind-DISJOINT — each names one kind — so a unique violation from
+// this INSERT can only be the index for the kind being inserted. The only other
+// unique constraint on tasks is its primary key, whose conflict
+// ON CONFLICT (id) DO NOTHING already absorbs. TestPgUniqueConstraintsOnTask
+// holds that inventory and the kinds' declared lockIndex names in agreement
+// against the live schema, in both directions.
+func taskLockViolation(spec TaskSpec, err error) error {
+	if spec.Kind.lockIndex == "" || spec.TargetRef == nil {
+		return nil
 	}
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505" // 23505: unique_violation
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" { // 23505: unique_violation
+		return nil
+	}
+	return spec.Kind.inProgress
+}
+
+// ycpResourceArg, ycpResourceIDArg and ycpGenerationArg render a task's optional
+// YCP stamp as three nullable bind parameters. Nil target -> three NULLs, i.e. a
+// task YCP did not drive.
+func ycpResourceArg(y *YCPTarget) *string {
+	if y == nil {
+		return nil
+	}
+	return &y.Resource
+}
+
+func ycpResourceIDArg(y *YCPTarget) *string {
+	if y == nil {
+		return nil
+	}
+	id := y.ID.String()
+	return &id
+}
+
+func ycpGenerationArg(y *YCPTarget) *int64 {
+	if y == nil {
+		return nil
+	}
+	return &y.Generation
+}
+
+// scanYCPTarget reassembles the stamp from its three columns. They are written
+// together and only together, so a partially-set row is corruption rather than a
+// state to tolerate.
+func scanYCPTarget(resource, resourceID *string, generation *int64) (*YCPTarget, error) {
+	if resource == nil && resourceID == nil && generation == nil {
+		return nil, nil
+	}
+	if resource == nil || resourceID == nil || generation == nil {
+		return nil, fmt.Errorf("task has a partial ycp stamp (resource=%v id=%v generation=%v)",
+			resource, resourceID, generation)
+	}
+	id, err := uuid.Parse(*resourceID)
+	if err != nil {
+		return nil, fmt.Errorf("parse task ycp_resource_id: %w", err)
+	}
+	return &YCPTarget{Resource: *resource, ID: id, Generation: *generation}, nil
 }
 
 // Store persists tasks and their steps. Every method is written to be
@@ -141,7 +192,8 @@ var _ Store = (*PgStore)(nil)
 // every fresh install create it only to lose it.
 // Cleanup: https://github.com/yugabyte/meko/issues/975
 const taskColumns = `id::text, kind, status::text, cluster_id::text, target_ref,
-	params, step_ids::text[], error, owner, created_at, updated_at`
+	params, step_ids::text[], error, owner, ycp_resource, ycp_resource_id::text, ycp_generation,
+	created_at, updated_at`
 
 func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	taskID := spec.ID
@@ -172,16 +224,18 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	// The task first (the steps' task_id FK points at it), carrying the ordered
 	// step ids; then the steps themselves.
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO tasks (id, kind, status, cluster_id, target_ref, params, step_ids)
-		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb, $6::uuid[])
+		`INSERT INTO tasks (id, kind, status, cluster_id, target_ref, params, step_ids,
+		                    ycp_resource, ycp_resource_id, ycp_generation)
+		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb, $6::uuid[], $7, $8::uuid, $9)
 		 ON CONFLICT (id) DO NOTHING`,
-		taskID.String(), spec.Kind, clusterArg, spec.TargetRef, []byte(params), stepIDs)
+		taskID.String(), spec.Kind.name, clusterArg, spec.TargetRef, []byte(params), stepIDs,
+		ycpResourceArg(spec.YCP), ycpResourceIDArg(spec.YCP), ycpGenerationArg(spec.YCP))
 	if err != nil {
-		// The first-writer-wins resize lock: a second in-flight resize of the same
-		// endpoint violates the partial unique index, which we surface as a typed
-		// conflict for the API to turn into a 409.
-		if isResizeLockViolation(spec, err) {
-			return nil, ErrResizeInProgress
+		// A first-writer-wins lock: a second non-terminal task of this kind for the
+		// same target_ref violates the kind's partial unique index, which we surface
+		// as a typed conflict for the API to turn into a 409.
+		if lockErr := taskLockViolation(spec, err); lockErr != nil {
+			return nil, lockErr
 		}
 		return nil, fmt.Errorf("insert task: %w", err)
 	}
@@ -446,12 +500,21 @@ func scanTask(r row) (*Task, error) {
 		clusterStr *string
 		params     []byte
 		stepIDStrs []string
+		ycpRes     *string
+		ycpResID   *string
+		ycpGen     *int64
 		t          Task
 	)
 	if err := r.Scan(&idStr, &t.Kind, &statusStr, &clusterStr, &t.TargetRef,
-		&params, &stepIDStrs, &t.Error, &t.Owner, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&params, &stepIDStrs, &t.Error, &t.Owner, &ycpRes, &ycpResID, &ycpGen,
+		&t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
+	ycp, err := scanYCPTarget(ycpRes, ycpResID, ycpGen)
+	if err != nil {
+		return nil, err
+	}
+	t.YCP = ycp
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse task id: %w", err)

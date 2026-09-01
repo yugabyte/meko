@@ -423,7 +423,49 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		}
 		stepLog.Debug("step succeeded")
 	}
+	// Every step succeeded, so the generation the task declared has actually been
+	// applied — stamp it before the task goes terminal. This is the whole reason a
+	// failed async task no longer latches as applied (meko#985), and it is here
+	// rather than in a per-task step so that no planner can wire the task and forget
+	// the stamp.
+	if err := w.stampYCPGeneration(ctx, logger, t); err != nil {
+		return err
+	}
 	return w.store.CompleteTask(ctx, t.ID, w.owner)
+}
+
+// stampYCPGeneration records the applied YCP desired-state generation on the
+// resource the task named, for a task planned from YCP desired state; a no-op for
+// every other task.
+//
+// Not inside CompleteTask's transaction, and it does not need to be: a crash
+// between the two leaves the task reclaimable, and the reclaim skips every
+// already-succeeded step and re-runs this, whose write is an absolute monotonic
+// UPDATE. An unknown resource is a task failure rather than a silent skip — the
+// value is only trustworthy if every stamp that was supposed to happen did.
+func (w *Worker) stampYCPGeneration(ctx context.Context, logger *slog.Logger, t *Task) error {
+	if t.YCP == nil {
+		return nil
+	}
+	state := w.registry.deps.State
+	if state == nil {
+		return fmt.Errorf("task declares a ycp generation but no state store is configured")
+	}
+	var err error
+	switch t.YCP.Resource {
+	case YCPResourceEndpoint:
+		err = state.SetEndpointYCPGeneration(ctx, t.YCP.ID, t.YCP.Generation)
+	case YCPResourceBranch:
+		err = state.SetBranchYCPGeneration(ctx, t.YCP.ID, t.YCP.Generation)
+	default:
+		return fmt.Errorf("unknown ycp resource %q on task %s", t.YCP.Resource, t.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("stamp ycp generation on %s %s: %w", t.YCP.Resource, t.YCP.ID, err)
+	}
+	logger.Debug("ycp generation stamped",
+		"ycp_resource", t.YCP.Resource, "ycp_resource_id", t.YCP.ID.String(), "ycp_generation", t.YCP.Generation)
+	return nil
 }
 
 // lockFor takes the resource lock a step declares, waiting out a holder. It returns

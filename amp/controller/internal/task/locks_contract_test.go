@@ -56,14 +56,14 @@ func locksContract(t *testing.T, newLocks func(owner string) Locks) {
 		lock := EndpointLock(uuid.NewString())
 		first, second := uuid.New(), uuid.New()
 
-		held, err := locks.AcquireResource(t.Context(), lock, first, KindResizeEndpoint)
+		held, err := locks.AcquireResource(t.Context(), lock, first, KindResizeEndpoint.String())
 		if err != nil {
 			t.Fatalf("first task refused: %v", err)
 		}
 		t.Cleanup(func() { _ = held.Release(context.WithoutCancel(t.Context())) })
 
 		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
-		_, err = locks.AcquireResource(ctx, lock, second, KindDeleteEndpoint)
+		_, err = locks.AcquireResource(ctx, lock, second, KindDeleteEndpoint.String())
 		cancel()
 		if !errors.Is(err, ErrLockHeld) {
 			t.Errorf("second task got err=%v, want ErrLockHeld", err)
@@ -72,7 +72,7 @@ func locksContract(t *testing.T, newLocks func(owner string) Locks) {
 		if err := held.Release(t.Context()); err != nil {
 			t.Fatalf("Release: %v", err)
 		}
-		taken, err := locks.AcquireResource(t.Context(), lock, second, KindDeleteEndpoint)
+		taken, err := locks.AcquireResource(t.Context(), lock, second, KindDeleteEndpoint.String())
 		if err != nil {
 			t.Fatalf("after release the second task was refused: %v", err)
 		}
@@ -83,13 +83,13 @@ func locksContract(t *testing.T, newLocks func(owner string) Locks) {
 		locks := newLocks("one-process")
 		a, b := EndpointLock(uuid.NewString()), EndpointLock(uuid.NewString())
 
-		ha, err := locks.AcquireResource(t.Context(), a, uuid.New(), KindResizeEndpoint)
+		ha, err := locks.AcquireResource(t.Context(), a, uuid.New(), KindResizeEndpoint.String())
 		if err != nil {
 			t.Fatalf("lock on endpoint a: %v", err)
 		}
 		t.Cleanup(func() { _ = ha.Release(context.WithoutCancel(t.Context())) })
 
-		hb, err := locks.AcquireResource(t.Context(), b, uuid.New(), KindResizeEndpoint)
+		hb, err := locks.AcquireResource(t.Context(), b, uuid.New(), KindResizeEndpoint.String())
 		if err != nil {
 			t.Fatalf("lock on a different endpoint was refused: %v", err)
 		}
@@ -103,7 +103,7 @@ func locksContract(t *testing.T, newLocks func(owner string) Locks) {
 		lock := EndpointLock(uuid.NewString())
 		task := uuid.New()
 
-		held, err := locks.AcquireResource(t.Context(), lock, task, KindResizeEndpoint)
+		held, err := locks.AcquireResource(t.Context(), lock, task, KindResizeEndpoint.String())
 		if err != nil {
 			t.Fatalf("AcquireResource: %v", err)
 		}
@@ -113,7 +113,7 @@ func locksContract(t *testing.T, newLocks func(owner string) Locks) {
 		if !strings.Contains(got, task.String()) {
 			t.Errorf("holder = %q, want it to name task %s", got, task)
 		}
-		if !strings.Contains(got, KindResizeEndpoint) {
+		if !strings.Contains(got, KindResizeEndpoint.String()) {
 			t.Errorf("holder = %q, want it to name the kind %s", got, KindResizeEndpoint)
 		}
 	})

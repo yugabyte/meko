@@ -50,7 +50,7 @@ func TestEndpointLockAdmitsOneTaskAtATime(t *testing.T) {
 	lock := EndpointLock(uuid.NewString())
 	first, second := uuid.New(), uuid.New()
 
-	held, err := locks.AcquireResource(t.Context(), lock, first, KindResizeEndpoint)
+	held, err := locks.AcquireResource(t.Context(), lock, first, KindResizeEndpoint.String())
 	if err != nil {
 		t.Fatalf("first task was refused the endpoint lock: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestEndpointLockAdmitsOneTaskAtATime(t *testing.T) {
 	// outright — the contended endpoint is a queue you join.
 	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := locks.AcquireResource(waitCtx, lock, second, KindDeleteEndpoint); !errors.Is(err, ErrLockHeld) {
+	if _, err := locks.AcquireResource(waitCtx, lock, second, KindDeleteEndpoint.String()); !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("second task's bounded wait ended with err=%v, want ErrLockHeld", err)
 	}
 
@@ -67,7 +67,7 @@ func TestEndpointLockAdmitsOneTaskAtATime(t *testing.T) {
 	if err := held.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := locks.AcquireResource(t.Context(), lock, second, KindDeleteEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), lock, second, KindDeleteEndpoint.String()); err != nil {
 		t.Fatalf("after release the second task was still refused: %v", err)
 	}
 }
@@ -77,10 +77,10 @@ func TestEndpointLockIsPerEndpoint(t *testing.T) {
 	locks := store.Locks(ownerID())
 	a, b := EndpointLock(uuid.NewString()), EndpointLock(uuid.NewString())
 
-	if _, err := locks.AcquireResource(t.Context(), a, uuid.New(), KindResizeEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), a, uuid.New(), KindResizeEndpoint.String()); err != nil {
 		t.Fatalf("lock on endpoint a: %v", err)
 	}
-	if _, err := locks.AcquireResource(t.Context(), b, uuid.New(), KindResizeEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), b, uuid.New(), KindResizeEndpoint.String()); err != nil {
 		t.Errorf("lock on a different endpoint was refused: %v — the lock must not be global", err)
 	}
 }
@@ -95,12 +95,12 @@ func TestEndpointLockOwnerNamesTheTask(t *testing.T) {
 	lock := EndpointLock(uuid.NewString())
 	holder := uuid.New()
 
-	if _, err := locks.AcquireResource(t.Context(), lock, holder, KindResizeEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), lock, holder, KindResizeEndpoint.String()); err != nil {
 		t.Fatalf("AcquireResource: %v", err)
 	}
 	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := locks.AcquireResource(waitCtx, lock, uuid.New(), KindDeleteEndpoint); !errors.Is(err, ErrLockHeld) {
+	if _, err := locks.AcquireResource(waitCtx, lock, uuid.New(), KindDeleteEndpoint.String()); !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("a second task in the same process was granted the lock (err=%v); the owner must name the task", err)
 	}
 
@@ -246,12 +246,12 @@ func TestEndpointLockIsRetakenAfterTheHolderDies(t *testing.T) {
 	lock := EndpointLock(uuid.NewString())
 	task := uuid.New()
 
-	if _, err := dead.AcquireResource(t.Context(), lock, task, KindResizeEndpoint); err != nil {
+	if _, err := dead.AcquireResource(t.Context(), lock, task, KindResizeEndpoint.String()); err != nil {
 		t.Fatalf("AcquireResource: %v", err)
 	}
 	store.locks.expire(lock.Key()) // proc-a died holding it
 
-	if _, err := alive.AcquireResource(t.Context(), lock, task, KindResizeEndpoint); err != nil {
+	if _, err := alive.AcquireResource(t.Context(), lock, task, KindResizeEndpoint.String()); err != nil {
 		t.Fatalf("the same task re-run elsewhere was refused its own lock: %v", err)
 	}
 }
@@ -266,7 +266,7 @@ func TestEndpointLockRefusesASecondLeaseToItsOwnHolder(t *testing.T) {
 	lock := EndpointLock(uuid.NewString())
 	task := uuid.New()
 
-	held, err := locks.AcquireResource(t.Context(), lock, task, KindResizeEndpoint)
+	held, err := locks.AcquireResource(t.Context(), lock, task, KindResizeEndpoint.String())
 	if err != nil {
 		t.Fatalf("AcquireResource: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestEndpointLockRefusesASecondLeaseToItsOwnHolder(t *testing.T) {
 			store.locks.expire(lock.Key())
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-		_, err := locks.AcquireResource(ctx, lock, task, KindResizeEndpoint)
+		_, err := locks.AcquireResource(ctx, lock, task, KindResizeEndpoint.String())
 		cancel()
 		if !errors.Is(err, ErrLockHeld) {
 			t.Errorf("second acquire %s got err=%v, want ErrLockHeld", when, err)
@@ -285,7 +285,7 @@ func TestEndpointLockRefusesASecondLeaseToItsOwnHolder(t *testing.T) {
 	if err := held.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := locks.AcquireResource(t.Context(), lock, task, KindResizeEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), lock, task, KindResizeEndpoint.String()); err != nil {
 		t.Errorf("after release the holder was still refused: %v", err)
 	}
 }
@@ -298,12 +298,12 @@ func TestReleaseAfterLossDoesNotUnfenceTheSuccessor(t *testing.T) {
 	lock := EndpointLock(uuid.NewString())
 	first, second := uuid.New(), uuid.New()
 
-	loser, err := locks.AcquireResource(t.Context(), lock, first, KindResizeEndpoint)
+	loser, err := locks.AcquireResource(t.Context(), lock, first, KindResizeEndpoint.String())
 	if err != nil {
 		t.Fatalf("AcquireResource: %v", err)
 	}
 	store.locks.expire(lock.Key())
-	if _, err := locks.AcquireResource(t.Context(), lock, second, KindDeleteEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), lock, second, KindDeleteEndpoint.String()); err != nil {
 		t.Fatalf("takeover: %v", err)
 	}
 

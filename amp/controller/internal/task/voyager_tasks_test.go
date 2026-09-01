@@ -26,7 +26,7 @@ func TestMemStoreUsesPreassignedTaskID(t *testing.T) {
 	store := NewMemStore()
 	id := uuid.New()
 	first, err := store.Create(t.Context(), TaskSpec{
-		ID: id, Kind: "first", Steps: []StepSpec{{Kind: KindNoop}},
+		ID: id, Kind: Kind{"first", "", "", nil}, Steps: []StepSpec{{Kind: KindNoop}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -38,7 +38,7 @@ func TestMemStoreUsesPreassignedTaskID(t *testing.T) {
 	// Reusing the stable id returns the original write-ahead plan, not a second
 	// set of steps under the same task.
 	replayed, err := store.Create(t.Context(), TaskSpec{
-		ID: id, Kind: "replacement", Steps: []StepSpec{{Kind: "replacement"}},
+		ID: id, Kind: Kind{"replacement", "", "", nil}, Steps: []StepSpec{{Kind: "replacement"}},
 	})
 	if err != nil {
 		t.Fatalf("replayed Create: %v", err)
@@ -47,7 +47,7 @@ func TestMemStoreUsesPreassignedTaskID(t *testing.T) {
 		t.Fatalf("replayed task = %+v, want original durable plan %+v", replayed, first)
 	}
 
-	generated, err := store.Create(t.Context(), TaskSpec{Kind: KindNoop})
+	generated, err := store.Create(t.Context(), TaskSpec{Kind: Kind{"noop", "", "", nil}})
 	if err != nil {
 		t.Fatalf("Create with zero id: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestServiceStartMigrationRunPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VoyagerStartMigrationRun: %v", err)
 	}
-	if tk.Kind != KindVoyagerStartMigrationRun || tk.ClusterID != nil ||
+	if tk.Kind != KindVoyagerStartMigrationRun.String() || tk.ClusterID != nil ||
 		tk.TargetRef == nil || *tk.TargetRef != in.MigrationID.String() {
 		t.Fatalf("task = %+v, want project-less migration-targeted launcher", tk)
 	}

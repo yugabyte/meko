@@ -166,7 +166,7 @@ func TestWorkerFailsATaskThatCannotGetItsLock(t *testing.T) {
 	w := testWorkerMax(store, locks, reg, 1)
 
 	// Somebody else holds the endpoint and never gives it back.
-	if _, err := locks.AcquireResource(t.Context(), endpoint, uuid.New(), KindCreateEndpoint); err != nil {
+	if _, err := locks.AcquireResource(t.Context(), endpoint, uuid.New(), KindCreateEndpoint.String()); err != nil {
 		t.Fatalf("seeding the holder: %v", err)
 	}
 

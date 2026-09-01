@@ -41,7 +41,7 @@ func TestResizeLock(t *testing.T) {
 		s := NewMemStore()
 		ref := ep
 		// A previously-completed resize for the same endpoint must not block.
-		s.Seed(&Task{ID: uuid.New(), Kind: KindResizeEndpoint, Status: StatusSucceeded, TargetRef: &ref}, nil)
+		s.Seed(&Task{ID: uuid.New(), Kind: KindResizeEndpoint.String(), Status: StatusSucceeded, TargetRef: &ref}, nil)
 		if _, err := s.Create(t.Context(), resizeSpec(ep)); err != nil {
 			t.Fatalf("resize after a terminal one = %v, want admitted", err)
 		}

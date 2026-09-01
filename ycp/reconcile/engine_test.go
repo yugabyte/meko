@@ -56,20 +56,42 @@ func TestDiff(t *testing.T) {
 	}
 }
 
-// A backend that echoes gen 0 (does not report observed generation) must still
-// reach a no-op once the engine's own cache records the applied generation.
+// A backend that cannot echo an observed generation (amp's pools and clusters
+// report 0) must still reach a no-op once the engine's own cache records the
+// applied generation. The cache is only a floor for work that COMPLETED — a
+// backend planning async work reports Pending, which records nothing — so it can
+// never mask a stale resource.
 func TestDiffFallsBackToCache(t *testing.T) {
 	desired := []api.DesiredResource{d("cluster", "c", 7)}
-	actual := []Actual{{Key: key("cluster", "c"), ObservedGen: 0}}
+	actual := []Actual{{Key: key("cluster", "c")}} // no echo
 
 	// No cache yet -> update.
 	if got := Diff(desired, actual, map[ResourceKey]int64{}); got[0].Type != ActionUpdate {
 		t.Fatalf("without cache: got %s, want update", got[0].Type)
 	}
-	// Cache records applied 7 -> no-op even though backend echoes 0.
+	// Cache records applied 7 -> no-op.
 	cache := map[ResourceKey]int64{key("cluster", "c"): 7}
 	if got := Diff(desired, actual, cache); got[0].Type != ActionNoop {
 		t.Fatalf("with cache: got %s, want noop", got[0].Type)
+	}
+}
+
+// The echo is what makes an update self-heal across a restart: with the cache
+// cold, a resource the backend reports as up to date is a no-op, and one it
+// reports behind is re-issued. Before the echo existed the first case cost a
+// redundant pass on every restart and the second never happened at all.
+func TestDiffUsesTheEchoWithAColdCache(t *testing.T) {
+	desired := []api.DesiredResource{d("endpoint", "e", 4)}
+	cold := map[ResourceKey]int64{}
+
+	behind := []Actual{{Key: key("endpoint", "e"), ObservedGen: 1}}
+	if got := Diff(desired, behind, cold); got[0].Type != ActionUpdate {
+		t.Fatalf("echo behind desired: got %s, want update", got[0].Type)
+	}
+
+	current := []Actual{{Key: key("endpoint", "e"), ObservedGen: 4}}
+	if got := Diff(desired, current, cold); got[0].Type != ActionNoop {
+		t.Fatalf("echo at desired: got %s, want noop", got[0].Type)
 	}
 }
 
@@ -81,6 +103,7 @@ type fakeBackend struct {
 	parents  map[ResourceKey]ResourceKey
 	failCall map[ResourceKey]int  // remaining forced failures per key
 	perm     map[ResourceKey]bool // keys whose verb returns a PermanentError
+	pending  map[ResourceKey]bool // keys whose verb returns a PendingError
 
 	attempts map[ResourceKey]int // every verb call, success or not
 	creates  []ResourceKey
@@ -93,6 +116,7 @@ func newFake() *fakeBackend {
 		parents:  map[ResourceKey]ResourceKey{},
 		failCall: map[ResourceKey]int{},
 		perm:     map[ResourceKey]bool{},
+		pending:  map[ResourceKey]bool{},
 		attempts: map[ResourceKey]int{},
 	}
 }
@@ -116,6 +140,9 @@ func (f *fakeBackend) maybeReject(k ResourceKey) error {
 	f.attempts[k]++
 	if f.perm[k] {
 		return Permanent(errors.New("unsupported"))
+	}
+	if f.pending[k] {
+		return Pending(errors.New("task still running"))
 	}
 	if f.failCall[k] > 0 {
 		f.failCall[k]--
@@ -341,5 +368,239 @@ func TestReconcileStuck(t *testing.T) {
 	now = now.Add(time.Minute)
 	if res, _ := e.Reconcile(context.Background(), desired, true); len(res.Stuck) != 0 {
 		t.Fatalf("tick3: stuck=%d, want 0 after becoming ready", len(res.Stuck))
+	}
+}
+
+// A backend reporting Pending means the work it was asked for is already in
+// flight. That is neither applied nor failed, so the tick must record it as
+// updating and touch nothing else: no cache write (the update has not landed, so
+// a later tick still has to check), and no backoff (nothing failed, so the
+// environment must not go DEGRADED for a task that is converging fine).
+func TestReconcilePendingIsNeitherAppliedNorFailed(t *testing.T) {
+	f := newFake()
+	ep := key("endpoint", "p/c/main/rw")
+	f.actual = []Actual{{Key: ep, ObservedGen: 1, Ready: true, State: "ready"}}
+	f.pending[ep] = true
+	desired := []api.DesiredResource{d("endpoint", "p/c/main/rw", 2)}
+
+	now := time.Unix(0, 0)
+	e := New(f, Options{Now: func() time.Time { return now }, StuckAfter: time.Minute})
+
+	res, err := e.Reconcile(context.Background(), desired, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Updating) != 1 || res.Updating[ep] == nil {
+		t.Fatalf("updating = %v, want the endpoint reported", res.Updating)
+	}
+	if len(res.Failed) != 0 || len(res.Permanent) != 0 || res.Updated != 0 {
+		t.Fatalf("failed=%v permanent=%v updated=%d, want none of those", res.Failed, res.Permanent, res.Updated)
+	}
+	// No backoff was recorded, so the next tick re-checks immediately rather than
+	// waiting out a penalty for something that did not fail.
+	if _, backing := e.failures[ep]; backing {
+		t.Error("a pending update recorded a backoff")
+	}
+	// And nothing was cached as applied: the echo is still behind, so the tick
+	// after this one must ask again.
+	if gen, cached := e.cache[ep]; cached {
+		t.Errorf("a pending update cached generation %d as applied", gen)
+	}
+
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if len(res.Updating) != 1 {
+		t.Fatalf("tick2 updating = %v, want the endpoint still reported", res.Updating)
+	}
+	if f.attempts[ep] != 2 {
+		t.Errorf("attempts = %d, want 2 — a pending resource is re-checked every tick", f.attempts[ep])
+	}
+}
+
+// A task that never terminates is the one no-progress case reading the task's
+// status cannot detect: the controller keeps answering "running". Past StuckAfter
+// the engine reports it through Stuck, so the environment degrades with a reason
+// instead of sitting "updating" forever.
+func TestReconcilePendingTooLongIsStuck(t *testing.T) {
+	f := newFake()
+	ep := key("endpoint", "p/c/main/rw")
+	// Ready and in a steady state, so the non-Ready stuck rule cannot fire — this
+	// has to be caught by how long the update has been pending.
+	f.actual = []Actual{{Key: ep, ObservedGen: 1, Ready: true, State: "ready"}}
+	f.pending[ep] = true
+	desired := []api.DesiredResource{d("endpoint", "p/c/main/rw", 2)}
+
+	now := time.Unix(0, 0)
+	e := New(f, Options{Now: func() time.Time { return now }, StuckAfter: time.Minute})
+
+	if res, _ := e.Reconcile(context.Background(), desired, true); len(res.Stuck) != 0 {
+		t.Fatalf("tick1: stuck=%v, want none — the update has only just been issued", res.Stuck)
+	}
+	now = now.Add(2 * time.Minute)
+	res, _ := e.Reconcile(context.Background(), desired, true)
+	if len(res.Stuck) != 1 || res.Stuck[ep] < time.Minute {
+		t.Fatalf("tick2: stuck=%v, want the endpoint flagged for a wedged update", res.Stuck)
+	}
+
+	// The task finally lands: the mark clears, so the resource stops being stuck
+	// rather than staying flagged on a stale timestamp.
+	f.pending[ep] = false
+	f.actual = []Actual{{Key: ep, ObservedGen: 2, Ready: true, State: "ready"}}
+	now = now.Add(time.Minute)
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if len(res.Stuck) != 0 || len(res.Updating) != 0 {
+		t.Fatalf("tick3: stuck=%v updating=%v, want both empty once the echo catches up", res.Stuck, res.Updating)
+	}
+	if res.NoOp != 1 {
+		t.Errorf("tick3: noop=%d, want 1 — the echoed generation now matches desired", res.NoOp)
+	}
+}
+
+// The whole point of the echo, end to end through the engine, against a backend
+// that behaves like a real async one: it reports Pending when it issues, then the
+// task's failure, and the echo only advances once work actually lands.
+//
+// The failure is what used to be invisible. The 202 was recorded as applied, so no
+// later tick revisited the resource and nothing degraded the environment.
+func TestReconcileAsyncUpdateFailureSelfHeals(t *testing.T) {
+	f := newFake()
+	ep := key("endpoint", "p/c/main/rw")
+	f.actual = []Actual{{Key: ep, ObservedGen: 1, Ready: true, State: "ready"}}
+	desired := []api.DesiredResource{d("endpoint", "p/c/main/rw", 2)}
+
+	now := time.Unix(0, 0)
+	e := New(f, Options{Now: func() time.Time { return now }, BaseBackoff: time.Second})
+
+	// Tick 1: the update is issued. Pending, because a 202 is not evidence.
+	f.pending[ep] = true
+	res, _ := e.Reconcile(context.Background(), desired, true)
+	if len(res.Updating) != 1 || res.Updated != 0 {
+		t.Fatalf("tick1: updating=%v updated=%d, want the update reported in flight", res.Updating, res.Updated)
+	}
+	if _, cached := e.cache[ep]; cached {
+		t.Fatal("tick1 cached a generation for work that has not landed")
+	}
+
+	// Tick 2: the backend reads the task and finds it failed. Now it is a real
+	// failure — reported, and backed off.
+	now = now.Add(time.Second)
+	f.pending[ep] = false
+	f.failCall[ep] = 1
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if len(res.Failed) != 1 {
+		t.Fatalf("tick2: failed=%v, want the task's failure surfaced", res.Failed)
+	}
+	if len(res.Updating) != 0 {
+		t.Errorf("tick2: updating=%v, want empty once the task is terminal", res.Updating)
+	}
+
+	// Tick 3, inside the backoff: nothing re-issued, so a permanently-failing task
+	// cannot become a task per tick.
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if f.attempts[ep] != 2 {
+		t.Errorf("attempts inside the backoff = %d, want 2", f.attempts[ep])
+	}
+
+	// Tick 4, past the backoff: re-issued, because the echo is still behind.
+	now = now.Add(2 * time.Second)
+	f.pending[ep] = true
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if len(res.Updating) != 1 {
+		t.Fatalf("tick4: updating=%v, want the update re-issued", res.Updating)
+	}
+	if f.attempts[ep] != 3 {
+		t.Errorf("attempts = %d, want 3", f.attempts[ep])
+	}
+
+	// The task lands: the echo advances and the engine stops.
+	now = now.Add(time.Second)
+	f.pending[ep] = false
+	f.actual = []Actual{{Key: ep, ObservedGen: 2, Ready: true, State: "ready"}}
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if res.NoOp != 1 || res.Updated != 0 || len(res.Updating) != 0 {
+		t.Fatalf("final tick: noop=%d updated=%d updating=%v, want a clean no-op",
+			res.NoOp, res.Updated, res.Updating)
+	}
+}
+
+// An update that keeps failing must back off exponentially. On an async path every
+// failure is preceded by a Pending — the issuing tick reports pending, a later one
+// reads the task's failure — so a ladder that resets on the pending would sit on its
+// first rung forever and plan a task every BaseBackoff, each add_branch_extensions
+// one redeploying every endpoint on its branch.
+func TestReconcileAsyncFailureBackoffClimbs(t *testing.T) {
+	f := newFake()
+	ep := key("endpoint", "p/c/main/rw")
+	f.actual = []Actual{{Key: ep, ObservedGen: 1, Ready: true, State: "ready"}}
+	desired := []api.DesiredResource{d("endpoint", "p/c/main/rw", 2)}
+
+	now := time.Unix(0, 0)
+	base := time.Second
+	e := New(f, Options{Now: func() time.Time { return now }, BaseBackoff: base, MaxBackoff: time.Hour})
+
+	// Three issue -> fail cycles, each waiting out the backoff the last one set.
+	var waits []time.Duration
+	for attempt := 0; attempt < 3; attempt++ {
+		f.pending[ep] = true
+		if res, _ := e.Reconcile(context.Background(), desired, true); len(res.Updating) != 1 {
+			t.Fatalf("attempt %d: updating=%v, want the update issued", attempt, res.Updating)
+		}
+		now = now.Add(time.Millisecond)
+		f.pending[ep] = false
+		f.failCall[ep] = 1
+		if res, _ := e.Reconcile(context.Background(), desired, true); len(res.Failed) != 1 {
+			t.Fatalf("attempt %d: failed=%v, want the task's failure", attempt, res.Failed)
+		}
+
+		e.mu.Lock()
+		wait := e.failures[ep].nextAttempt.Sub(now)
+		e.mu.Unlock()
+		waits = append(waits, wait)
+		now = now.Add(wait)
+	}
+
+	for i := 1; i < len(waits); i++ {
+		if waits[i] <= waits[i-1] {
+			t.Fatalf("backoff waits = %v, want each longer than the last", waits)
+		}
+	}
+	if waits[0] != base {
+		t.Errorf("first wait = %v, want BaseBackoff %v", waits[0], base)
+	}
+}
+
+// The ladder must not outlive the failure. Once the resource converges nothing is
+// dispatched for it — the echo advancing makes it a no-op — so without pruning a
+// spent ladder would delay its next update by up to MaxBackoff.
+func TestReconcileClearsBackoffOnceConverged(t *testing.T) {
+	f := newFake()
+	ep := key("endpoint", "p/c/main/rw")
+	f.actual = []Actual{{Key: ep, ObservedGen: 1, Ready: true, State: "ready"}}
+	desired := []api.DesiredResource{d("endpoint", "p/c/main/rw", 2)}
+
+	now := time.Unix(0, 0)
+	e := New(f, Options{Now: func() time.Time { return now }, BaseBackoff: time.Hour})
+
+	f.failCall[ep] = 1
+	if res, _ := e.Reconcile(context.Background(), desired, true); len(res.Failed) != 1 {
+		t.Fatalf("failed=%v, want the update to fail", res.Failed)
+	}
+	e.mu.Lock()
+	_, backing := e.failures[ep]
+	e.mu.Unlock()
+	if !backing {
+		t.Fatal("no backoff recorded after a failure")
+	}
+
+	// The echo catches up: the resource is a no-op and never reaches dispatch.
+	f.actual = []Actual{{Key: ep, ObservedGen: 2, Ready: true, State: "ready"}}
+	now = now.Add(time.Second)
+	if res, _ := e.Reconcile(context.Background(), desired, true); res.NoOp != 1 {
+		t.Fatalf("noop=%d, want 1", res.NoOp)
+	}
+	e.mu.Lock()
+	_, stillBacking := e.failures[ep]
+	e.mu.Unlock()
+	if stillBacking {
+		t.Error("the spent backoff ladder outlived the failure it came from")
 	}
 }

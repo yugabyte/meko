@@ -1,7 +1,7 @@
 # ac — YCP integration (reconcile-agent)
 
 **Status:** Draft
-**Last updated:** 2026-08-27
+**Last updated:** 2026-08-31
 
 How an amp controller is driven by **YCP** (the Yugabyte Control Plane — meko's
 `api_server` run with `--control-plane-mode`), so a fleet operator declares an amp
@@ -53,14 +53,20 @@ user on first use.
 
 Each heartbeat carries per-resource health, not just the inventory, so an
 operator sees *why* a resource has not converged without reading agent or
-controller logs. The engine distinguishes three cases and the agent folds each
+controller logs. The engine distinguishes four cases and the agent folds each
 onto the resource's `ResourceStatus.Error` (`ycp/internal/api`):
 
-- **Failed** — a retryable rejection (the controller refused a create/resize, a
-  task failed). Retried on backoff; makes the environment `DEGRADED`.
-- **Stuck** — a resource sat non-Ready in the same backend state past
-  `Options.StuckAfter` (default 10m), e.g. an endpoint that never provisions.
-  Also `DEGRADED`, with a "no progress" reason.
+- **Failed** — a retryable rejection (the controller refused a create/resize, or
+  the task it planned reached `failed`, whose own error is carried through).
+  Retried on backoff; makes the environment `DEGRADED`.
+- **Updating** — an update the backend has issued but cannot yet confirm: it just
+  planned the task, or the task it planned earlier is still `pending`/`running`.
+  Neither applied nor failed, so nothing is re-issued, nothing backs off, and it
+  does **not** degrade the environment. Reported as the resource's `updating` state.
+- **Stuck** — no progress past `Options.StuckAfter` (default 10m): a resource sat
+  non-Ready in the same backend state (an endpoint that never provisions), or an
+  update stayed `Updating` that long — a wedged worker, the one case reading the
+  task's status cannot detect. Also `DEGRADED`, with a "no progress" reason.
 - **Permanent drift** — a verb that cannot succeed for the spec as declared: a
   storage pool has no delete, pools and clusters have no update, a branch's
   `extensions` cannot be removed (and is the one field it cannot be *created*
@@ -79,10 +85,69 @@ branch's `extensions` (opted in per branch — seeded at create, inherited on fo
 the default branch's set is also mirrored on the cluster); a branch's `fork_lsn`,
 `parent_branch_id`,
 `is_default`; and an endpoint's `role`, `address`, `tailnet_address`, `cpu`,
-`memory`. A branch's `id`
+`memory`. A branch and an endpoint also report `applied_generation` — see below.
+A branch's `id`
 pairs with a fork's `parent_branch_id` so a console can rebuild the fork tree
 (the containment tree is already derivable from `ID`/`Parent`). The controller
 exposes no live/head LSN, so the only LSN reported is the branch fork point.
+
+## The applied generation
+
+Every mutating controller call is asynchronous, so `202` means *task planned*, not
+*task done*. The engine is level-triggered on **existence** — a failed create
+leaves the resource absent and a failed delete leaves it present, so the next diff
+re-issues both — but an update's only staleness signal is the generation. Holding
+that in the agent and writing it from the 202 meant a task that failed afterwards
+left the resource unconverged with the agent reporting healthy, permanently
+(meko#985).
+
+So the controller records it and echoes it back, the `metadata.generation` /
+`status.observedGeneration` split `Actual.ObservedGen` was designed around:
+
+- `amp_registry.endpoints.ycp_generation` and `.branches.ycp_generation` hold the
+  highest generation **fully applied** to the row — the kinds with an update path;
+  creates and deletes self-heal through presence and need no echo.
+- A task declares the generation it applies (`tasks.ycp_resource` /
+  `ycp_resource_id` / `ycp_generation`) and the **worker** stamps the row after
+  every step has succeeded, never the handler that planned it. The write is
+  `GREATEST(...)`, so an older task completing late cannot regress it. See
+  [ac-tasks.md](ac-tasks.md).
+- `ampbackend.List` reads it into `Actual.ObservedGen` for those two kinds; pools
+  and clusters have no update path and report 0.
+
+**A 202 is reported as Pending, not applied**, and that is what makes the rest
+safe. `Engine.cache` is still a floor for `effGen`, since a backend that cannot echo
+has nothing else — but it is now only ever written for work that *completed*,
+because an `ampbackend` verb that plans a task returns `reconcile.Pending`, which
+records nothing.
+
+A branch is the case that forces this. `add_branch_extensions` unions the branch row
+**before** it redeploys the branch's endpoints, so a tick landing after the union
+sees nothing missing. Treating that as converged would cache the generation and
+no-op the branch forever, while the task that unioned the row may still fail on a
+redeploy — the same latch, reached from the other side. So the add goes out whenever
+the generation is still unrecorded, carrying the full declared set when there is no
+delta: the union is absolute, so the row does not move and a converged endpoint
+renders an identical manifest, but the completing task can finally stamp the
+generation, and an endpoint the first task never reached gets its redeploy.
+
+Distinguishing **Updating** from **Failed** on later ticks needs no timer, because
+the `202` body is the `Task`. The backend keeps that task id per resource and reads
+its status before issuing anything: non-terminal → `Pending` again, nothing
+re-issued; `failed` → the task's own error, so the backoff engages and the console
+shows something actionable; `succeeded`, or a task the controller has forgotten →
+re-issue, since the echo is the authority on whether the work landed. A `409` on
+the update path is also pending: a first-writer-wins lock is held by a task already
+doing this work. The map is in-process and lost on restart, which is safe — without
+an entry the update is simply re-issued, and both updatable kinds answer that
+`409`.
+
+Adding an update path keeps this by construction. Every `Backend.Update` arm hands
+its call to one `applyUpdate` helper that owns the task lookup, the verdict and
+recording the new task, so an arm bypassing it loses the whole mechanism rather
+than one detail; `updateFuncs` is the only place the updatable set is written down;
+and a table-driven test walks `allKinds` asserting each is either `Permanent` on
+`Update` or both sends a generation and has one echoed back.
 
 The agent binds the controller with capped retry/backoff at startup (a binding
 *conflict* is still fatal), so a fresh install where the controller is not yet up
@@ -198,6 +263,12 @@ only that directive pushes the extension images.
 ## Deferred
 
 - Request-time binding enforcement (gating mutating controller calls on the bind).
+- Self-healing a partial redeploy inside `add_branch_extensions`: the union lands, an
+  endpoint redeploy fails, and the branch reports the new set while that endpoint still
+  mounts the old one. Now visible (the task fails, so the branch degrades with the
+  redeploy's error) but not converged, because the next update finds nothing missing
+  and issues no call — the amp `Endpoint` schema exposes no extension list to compare
+  against. [#1057](https://github.com/yugabyte/meko/issues/1057).
 - Cluster facts beyond the basics in the agent's status report.
 - A meko backend for the same agent (selected by environment kind), retiring the
   standalone meko stack agent.

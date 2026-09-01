@@ -53,6 +53,11 @@ const (
 	KindEndpoint = "endpoint"
 )
 
+// allKinds is every kind this backend maps. TestUpdatableKindsEchoTheirGeneration
+// walks it, so a kind added above without a case in that test fails rather than
+// going unasserted in either direction.
+var allKinds = []string{KindPool, KindCluster, KindBranch, KindEndpoint}
+
 const sep = "/"
 
 // Backend drives one amp controller. Safe for concurrent use within a tick:
@@ -62,6 +67,23 @@ type Backend struct {
 
 	mu  sync.RWMutex
 	idx index
+	// inflight is the task the last update for a resource planned, so the next tick
+	// can ask the controller how it went instead of guessing. In-process and lost on
+	// restart, which is safe because losing it only costs the verdict, never the
+	// convergence: an update whose generation the controller has not recorded is
+	// re-issued regardless, and a task still holding the resource answers 409, which
+	// this path reads as pending.
+	inflight map[reconcile.ResourceKey]openapi_types.UUID
+}
+
+// updateFuncs is every kind Update can converge, mapped to how. It is the one
+// place that set is written down: Update dispatches through it, and
+// TestUpdatableKindsEchoTheirGeneration walks it to assert each of those kinds also
+// has its applied generation echoed by List — a kind that accepts updates without
+// the echo is the silent latch meko#985 is about.
+var updateFuncs = map[string]func(*Backend, context.Context, api.DesiredResource) error{
+	KindBranch:   (*Backend).updateBranch,
+	KindEndpoint: (*Backend).resizeEndpoint,
 }
 
 // index maps a resource's hierarchical path to the controller UUIDs its
@@ -106,7 +128,7 @@ func New(baseURL, authToken string, httpDoer ampclient.HttpRequestDoer) (*Backen
 	if err != nil {
 		return nil, err
 	}
-	return &Backend{api: c, idx: newIndex()}, nil
+	return &Backend{api: c, idx: newIndex(), inflight: map[reconcile.ResourceKey]openapi_types.UUID{}}, nil
 }
 
 // Parent returns the resource's parent key derived from its path.
@@ -149,6 +171,16 @@ func attrPut(m map[string]string, k, v string) map[string]string {
 	return m
 }
 
+// observedGen reads the controller's echoed ycp_generation. A NULL column means
+// no YCP update has been applied to the row, which is generation 0. Only the kinds
+// in updateFuncs echo one; the rest report 0 and rely on the engine's cache.
+func observedGen(echoed *int64) int64 {
+	if echoed == nil {
+		return 0
+	}
+	return *echoed
+}
+
 // attrPutInt is attrPut for an int, skipping the zero value so an unset
 // pg_version is not reported as "0".
 func attrPutInt(m map[string]string, k string, v int) map[string]string {
@@ -179,7 +211,19 @@ func branchAttrs(br ampclient.Branch) map[string]string {
 	if br.Extensions != nil && len(*br.Extensions) > 0 {
 		m = attrPut(m, "extensions", strings.Join(*br.Extensions, ","))
 	}
+	m = attrPutAppliedGen(m, br.YcpGeneration)
 	return m
+}
+
+// attrPutAppliedGen reports the generation the controller has fully applied, so an
+// operator reading the inventory can see how far behind a resource is instead of
+// inferring it from a stale attr. Omitted when the controller has applied no YCP
+// update to the row, which is the same as reporting nothing.
+func attrPutAppliedGen(m map[string]string, echoed *int64) map[string]string {
+	if echoed == nil {
+		return m
+	}
+	return attrPut(m, "applied_generation", strconv.FormatInt(*echoed, 10))
 }
 
 // endpointAttrs reports a compute endpoint's amp id, role, connection
@@ -198,6 +242,7 @@ func endpointAttrs(ep ampclient.Endpoint) map[string]string {
 			m = attrPut(m, "memory", *ep.Resources.Memory)
 		}
 	}
+	m = attrPutAppliedGen(m, ep.YcpGeneration)
 	return m
 }
 
@@ -264,11 +309,12 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 				idx.branch[branchPath] = br.BranchId
 				idx.branchRow[branchPath] = br
 				out = append(out, reconcile.Actual{
-					Key:    reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
-					Parent: reconcile.ResourceKey{Kind: KindCluster, Name: clusterPath},
-					Ready:  true,
-					State:  "ready",
-					Attrs:  branchAttrs(br),
+					Key:         reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
+					Parent:      reconcile.ResourceKey{Kind: KindCluster, Name: clusterPath},
+					ObservedGen: observedGen(br.YcpGeneration),
+					Ready:       true,
+					State:       "ready",
+					Attrs:       branchAttrs(br),
 				})
 
 				var endpoints ampclient.EndpointList
@@ -290,11 +336,12 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 						state = "ready"
 					}
 					out = append(out, reconcile.Actual{
-						Key:    reconcile.ResourceKey{Kind: KindEndpoint, Name: epPath},
-						Parent: reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
-						Ready:  ready,
-						State:  state,
-						Attrs:  endpointAttrs(ep),
+						Key:         reconcile.ResourceKey{Kind: KindEndpoint, Name: epPath},
+						Parent:      reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
+						ObservedGen: observedGen(ep.YcpGeneration),
+						Ready:       ready,
+						State:       state,
+						Attrs:       endpointAttrs(ep),
 					})
 				}
 			}
@@ -401,13 +448,130 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 // drift rather than retrying forever; the branch fields Update does not apply
 // are reported the same way (see updateBranch).
 func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
-	switch r.Kind {
-	case KindBranch:
-		return b.updateBranch(ctx, r)
-	case KindEndpoint:
-		return b.resizeEndpoint(ctx, r)
+	apply, ok := updateFuncs[r.Kind]
+	if !ok {
+		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only endpoint resize and branch extensions)", r.Kind))
 	}
-	return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only endpoint resize and branch extensions)", r.Kind))
+	return apply(b, ctx, r)
+}
+
+// applyUpdate is the one seam every Update arm goes through, so none of them can
+// be written without the bookkeeping that makes an async update converge.
+//
+// It owns what a caller must not have to remember: reading the previous attempt's
+// task before issuing anything — so an in-flight one reports pending and a failed
+// one reports the controller's own error, instead of being silently retried
+// forever — and recording the task the 202 planned for the next tick to read.
+//
+// The generation reaches the request body through the closure's argument rather
+// than being set here, because each verb has its own request type and there is no
+// field to assign generically. Passing it in means an arm cannot receive the
+// generation and quietly drop it without that being visible at the call site;
+// TestUpdateSendsAppliedGeneration checks it actually lands in the body.
+//
+// A new update path hands its call here and gets all of it. One that bypasses this
+// gets none of it — a whole missing mechanism rather than a subtle omission.
+func (b *Backend) applyUpdate(ctx context.Context, key reconcile.ResourceKey, gen int64,
+	call func(ctx context.Context, gen int64) (*http.Response, error)) error {
+
+	if taskID, ok := b.inflightTask(key); ok {
+		status, taskErr, err := b.taskOutcome(ctx, taskID)
+		switch {
+		case err != nil:
+			return fmt.Errorf("read task %s for %s: %w", taskID, key, err)
+		case status == taskStatusPending || status == taskStatusRunning:
+			return reconcile.Pending(fmt.Errorf("controller task %s is %s", taskID, status))
+		case status == taskStatusFailed:
+			// The failure the 202 could not report. Clearing the entry lets the next
+			// tick re-issue after the engine's backoff.
+			b.clearInflight(key)
+			return fmt.Errorf("controller task %s failed: %s", taskID, taskErr)
+		default:
+			// Succeeded, yet the caller still sees the resource as stale — the engine
+			// only plans an update when the echoed generation is behind. Fall through
+			// and re-issue rather than reporting converged on the task's word.
+			b.clearInflight(key)
+		}
+	}
+
+	resp, err := call(ctx, gen)
+	if err != nil {
+		return err
+	}
+	taskID, err := b.mutateTask(resp)
+	if err != nil {
+		return err
+	}
+	if taskID == nil {
+		// Accepted with no task to follow, so there is nothing further to wait on
+		// and nothing this backend can add: report it applied and let the echo be
+		// the authority on the next tick.
+		return nil
+	}
+	b.setInflight(key, *taskID)
+	// PENDING, not success. A 202 means the task is planned, so the update is now
+	// in flight — saying "applied" here is the exact claim meko#985 is about, and it
+	// is what let the engine cache a generation for work that then failed. An update
+	// only records as applied by returning nil, which happens when this backend
+	// started no work at all.
+	return reconcile.Pending(fmt.Errorf("controller task %s planned for generation %d", *taskID, gen))
+}
+
+func (b *Backend) inflightTask(key reconcile.ResourceKey) (openapi_types.UUID, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	id, ok := b.inflight[key]
+	return id, ok
+}
+
+func (b *Backend) setInflight(key reconcile.ResourceKey, id openapi_types.UUID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.inflight[key] = id
+}
+
+func (b *Backend) clearInflight(key reconcile.ResourceKey) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.inflight, key)
+}
+
+// Controller task statuses (openapi_spec.yaml: Task.status).
+const (
+	taskStatusPending   = "pending"
+	taskStatusRunning   = "running"
+	taskStatusSucceeded = "succeeded"
+	taskStatusFailed    = "failed"
+)
+
+// taskOutcome reads a planned task's status and, when it failed, its error. A
+// task the controller no longer knows (404 — its log was pruned) is reported
+// succeeded: there is nothing left to wait for, and the echoed generation is the
+// authority on whether the work landed.
+func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (status, taskErr string, err error) {
+	resp, err := b.api.GetTask(ctx, taskID)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return taskStatusSucceeded, "", nil
+	}
+	if resp.StatusCode >= 300 {
+		return "", "", httpErr(resp.StatusCode, body)
+	}
+	var t ampclient.Task
+	if err := json.Unmarshal(body, &t); err != nil {
+		return "", "", fmt.Errorf("decode task: %w", err)
+	}
+	if t.Error != nil {
+		taskErr = *t.Error
+	}
+	if taskErr == "" {
+		taskErr = "no error reported"
+	}
+	return string(t.Status), taskErr, nil
 }
 
 func (b *Backend) resizeEndpoint(ctx context.Context, r api.DesiredResource) error {
@@ -427,17 +591,21 @@ func (b *Backend) resizeEndpoint(ctx context.Context, r api.DesiredResource) err
 	if err := unmarshalSpec(r, &req); err != nil {
 		return err
 	}
-	return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
-		return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
-	})
+	return b.applyUpdate(ctx, reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}, r.Generation,
+		func(c context.Context, gen int64) (*http.Response, error) {
+			req.YcpGeneration = &gen
+			return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
+		})
 }
 
 // updateBranch applies the one branch change amp can make after create — adding
 // externalized extensions — and reports whatever else the spec declares that it
 // could not. The add is an absolute union, so re-issuing it (a replayed tick, an
 // add still in flight) is a no-op, which is what lets the engine drive it with
-// no new verb; only the missing names are sent, because every add redeploys the
-// branch's endpoints.
+// no new verb. Only the missing names are sent, because every add redeploys the
+// branch's endpoints — except when there is nothing missing and the generation is
+// still unrecorded, where the full set goes out so the completing task can stamp
+// it (see the note in the body).
 //
 // Anything else the spec declares is create-time here, so a value the branch
 // does not already carry is drift, not work: a name dropped from extensions
@@ -464,17 +632,12 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 	have := extensionSet(br.Extensions)
 	want := extensionSet(spec.Extensions)
 
-	if spec.Extensions != nil {
-		if add := sortedMissing(want, have); len(add) > 0 {
-			if err := b.mutate(ctx, func(c context.Context) (*http.Response, error) {
-				return b.api.AddBranchExtensions(c, poolID, clusterID, branchID,
-					ampclient.AddBranchExtensionsRequest{Extensions: add})
-			}); err != nil {
-				return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(add, ","), r.Name, err)
-			}
-		}
-	}
-
+	// Drift is computed BEFORE anything is issued, because it decides whether this
+	// update may claim the generation at all. The generation asserts the whole spec
+	// landed; a spec declaring something no verb here can apply never fully lands,
+	// so claiming it would stamp the row, echo back at the desired generation, and
+	// have the engine Noop the resource forever — silently converged at a generation
+	// that was never met, which is the failure this whole change removes.
 	var drift []string
 	if spec.Extensions != nil {
 		if extra := sortedMissing(have, want); len(extra) > 0 {
@@ -482,10 +645,63 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 		}
 	}
 	drift = append(drift, unapplied(spec, br)...)
+
+	if spec.Extensions != nil {
+		// Send only the missing names when there are any: every add redeploys the
+		// branch's endpoints, so re-sending a name already on would bounce compute.
+		//
+		// When nothing is missing but the generation has not been echoed back, send
+		// the full declared set anyway. The union is absolute, so the row does not
+		// change and an endpoint already mounting the set renders an identical
+		// manifest — but it is the only way this generation can ever be recorded, and
+		// without it a branch whose row was unioned by a task that then failed (or
+		// whose task this agent lost track of across a restart) reports converged at a
+		// generation no endpoint ever applied. It also re-drives the redeploy pass for
+		// an endpoint the first task never reached.
+		send := sortedMissing(want, have)
+		if len(send) == 0 && b.generationBehind(r, br.YcpGeneration) {
+			send = sortedKeys(want)
+		}
+		if len(send) > 0 {
+			gen := r.Generation
+			if len(drift) > 0 {
+				gen = 0 // claim nothing; see the drift note above
+			}
+			if err := b.applyUpdate(ctx, reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}, gen,
+				func(c context.Context, gen int64) (*http.Response, error) {
+					req := ampclient.AddBranchExtensionsRequest{Extensions: send}
+					if gen > 0 {
+						req.YcpGeneration = &gen
+					}
+					return b.api.AddBranchExtensions(c, poolID, clusterID, branchID, req)
+				}); err != nil && len(drift) == 0 {
+				return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(send, ","), r.Name, err)
+			}
+		}
+	}
+
 	if len(drift) > 0 {
 		return reconcile.Permanent(fmt.Errorf("update branch %q: %s", r.Name, strings.Join(drift, "; ")))
 	}
 	return nil
+}
+
+// generationBehind reports whether the controller has yet to record the generation
+// this update is applying. Generation 0 is never behind: the engine only plans an
+// update once the desired generation exceeds what was echoed, so a resource at 0
+// is never here in the first place.
+func (b *Backend) generationBehind(r api.DesiredResource, echoed *int64) bool {
+	return r.Generation > observedGen(echoed)
+}
+
+// sortedKeys is the whole set, in the stable order the controller logs.
+func sortedKeys(names map[string]bool) []string {
+	out := make([]string, 0, len(names))
+	for n := range names {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // unapplied names the branch-spec fields whose declared value the controller does
@@ -673,12 +889,42 @@ func (b *Backend) getJSON(ctx context.Context, call func(context.Context) (*http
 	return nil
 }
 
-// mutate issues a create/update/delete. 2xx and 409 (already exists / in
+// mutateTask classifies an update's response and returns the task it planned, so
+// applyUpdate can follow it. A nil task with a nil error means "accepted, but no
+// task to follow": the body was not a Task.
+//
+// The status mapping differs from mutate in the one place that matters: a 409 is
+// Pending, not success. On the update path it means the kind's first-writer-wins
+// lock is held by a task already doing this work, and counting that as applied is
+// exactly the latch this change removes. 400 stays permanent.
+func (b *Backend) mutateTask(resp *http.Response) (*openapi_types.UUID, error) {
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	switch {
+	case resp.StatusCode == http.StatusConflict:
+		return nil, reconcile.Pending(fmt.Errorf("a task already holds this resource: %s", httpErr(resp.StatusCode, body)))
+	case resp.StatusCode == http.StatusBadRequest:
+		return nil, reconcile.Permanent(httpErr(resp.StatusCode, body))
+	case resp.StatusCode >= 300:
+		return nil, httpErr(resp.StatusCode, body)
+	}
+	var t ampclient.Task
+	if err := json.Unmarshal(body, &t); err != nil || t.Id == (openapi_types.UUID{}) {
+		// A 2xx carrying no task to follow. Accepted, and the echoed generation is
+		// the authority on whether the work landed anyway — so not an error.
+		return nil, nil
+	}
+	return &t.Id, nil
+}
+
+// mutate issues a create/delete. 2xx and 409 (already exists / in
 // flight) are success; any other non-2xx is an error carrying the controller's
 // message so a failed task surfaces in the tick result. A 400 is permanent: the
 // controller is refusing the spec as declared (an endpoint memory quantity with
 // no unit, say), so every retry sends the same rejected body — surface it as
 // drift instead of backing off forever.
+//
+// Updates go through mutateTask instead — see its 409 note.
 func (b *Backend) mutate(ctx context.Context, call func(context.Context) (*http.Response, error)) error {
 	resp, err := call(ctx)
 	if err != nil {
