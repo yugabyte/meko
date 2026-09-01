@@ -223,65 +223,25 @@ func portString(port int) string {
 	return strconv.Itoa(port)
 }
 
+// assessCommand runs the AMP-owned assess scripts baked into the Voyager
+// image. AMP compute is PostgreSQL, so yb-voyager assess-migration's
+// YugabyteDB compatibility analysis does not apply. A re-assessment reuses this
+// migration's shared export volume, so assess.sh clears the prior attempt's
+// assessment output before regenerating (the start-clean analogue of migrate.sh)
+// — a re-run is a clean redo instead of failing on leftover assessment state.
 func assessCommand() string {
 	return `set -euo pipefail
-yb-voyager assess-migration \
-  --source-db-type "$SOURCE_DB_TYPE" \
-  --source-db-host "$SOURCE_HOST" --source-db-port "$SOURCE_PORT" \
-  --source-db-user "$SOURCE_USER" --source-db-name "$SOURCE_DB" \
-  --source-db-schema "$SOURCE_SCHEMAS" \
-  --export-dir "$EXPORT_DIR" \
-  --iops-capture-interval 0 \
-  --yes`
+/opt/amp/voyager/assess.sh`
 }
 
-// TODO(voyager): Verify and implement Voyager's required schema rerun flags
-// before promising that a failed migrate command can resume from this shared
-// export directory. A rerun may otherwise fail at a schema step before data
-// import gets a chance to resume.
+// migrateCommand runs the AMP migrate script baked into the Voyager image.
+// The script still calls stock yb-voyager export/import; the sequence is no
+// longer inlined here. A retry reuses this migration's shared export PVC and
+// its target, so migrate.sh runs every yb-voyager phase with --start-clean
+// (and import data with --truncate-tables): each attempt is a full, clean redo
+// rather than a resume, which is what lets a re-run on the same migration
+// succeed instead of failing on the prior attempt's leftover export state.
 func migrateCommand() string {
 	return `set -euo pipefail
-
-yb-voyager export schema \
-  --source-db-type "$SOURCE_DB_TYPE" \
-  --source-db-host "$SOURCE_HOST" --source-db-port "$SOURCE_PORT" \
-  --source-db-user "$SOURCE_USER" --source-db-name "$SOURCE_DB" \
-  --source-db-schema "$SOURCE_SCHEMAS" \
-  --export-dir "$EXPORT_DIR" --yes
-
-PGPASSWORD="$TARGET_DB_PASSWORD" psql \
-  -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$TARGET_USER" -d postgres \
-  --set=ON_ERROR_STOP=1 --set=target_db="$TARGET_DB" <<'VOYAGER_SQL'
-SELECT format('CREATE DATABASE %I', :'target_db')
-WHERE NOT EXISTS (
-  SELECT 1 FROM pg_database WHERE datname = :'target_db'
-)
-\gexec
-VOYAGER_SQL
-
-yb-voyager import schema \
-  --target-db-type yugabytedb-amp \
-  --target-db-host "$TARGET_HOST" --target-db-port "$TARGET_PORT" \
-  --target-db-user "$TARGET_USER" --target-db-name "$TARGET_DB" \
-  --export-dir "$EXPORT_DIR" --yes
-
-yb-voyager export data \
-  --source-db-type "$SOURCE_DB_TYPE" \
-  --source-db-host "$SOURCE_HOST" --source-db-port "$SOURCE_PORT" \
-  --source-db-user "$SOURCE_USER" --source-db-name "$SOURCE_DB" \
-  --source-db-schema "$SOURCE_SCHEMAS" \
-  --export-dir "$EXPORT_DIR" --yes
-
-yb-voyager import data \
-  --target-db-type yugabytedb-amp \
-  --target-db-host "$TARGET_HOST" --target-db-port "$TARGET_PORT" \
-  --target-db-user "$TARGET_USER" --target-db-name "$TARGET_DB" \
-  --parallel-jobs "$PARALLEL_JOBS" \
-  --export-dir "$EXPORT_DIR" --yes
-
-yb-voyager finalize-schema-post-data-import \
-  --target-db-type yugabytedb-amp \
-  --target-db-host "$TARGET_HOST" --target-db-port "$TARGET_PORT" \
-  --target-db-user "$TARGET_USER" --target-db-name "$TARGET_DB" \
-  --export-dir "$EXPORT_DIR" --yes`
+/opt/amp/voyager/migrate.sh`
 }

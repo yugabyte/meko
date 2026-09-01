@@ -542,6 +542,18 @@ errors:
 source is 16 vCPU → 16 vCPU compute. That heuristic lives in the agent, not the
 controller.)
 
+Because AMP's assess scripts emit a **lean, PostgreSQL → PostgreSQL** payload
+(see `deploy/voyager/README.md`), several of the projected fields are
+structurally present but empty: `source_database.*` is `0`,
+`sizing_recommendation.{colocated_tables,sharded_tables}` are `[]`, `issues`
+is `[]` (no schema/conversion analysis is performed), and `source_environment`
+is empty (the scripts do not emit it — the parser never read it). The payload
+keeps only what drives provisioning — `migration_complexity`,
+`sizing_recommendation.{num_nodes, vcpu_per_node, memory_per_node_gb}`, and
+`notes` (the vCPU detection method and confidence are surfaced there). The
+parser is unchanged; omitted YugabyteDB-specific fields simply unmarshal to
+their zero value.
+
 ## 5. Job execution
 
 ### 5.1 `VoyagerJobRunner` abstraction (deployer-agnostic)
@@ -600,11 +612,13 @@ Driver notes:
 
 ### 5.2 Job pod anatomy
 
-- **Image**: `yugabytedb/yb-voyager` — but the POC needs the
-  `YB_VOYAGER_MIGRATION_UUID` patch (§8), so until it merges: a one-off image
-  built from the patched branch. Image ref in controller config.
-- **Entrypoints**: two small shell scripts (`assess.sh`, `migrate.sh`) rendered
-  from a ConfigMap the controller manages — no image rebuild to iterate.
+- **Image**: `yb-amp/voyager` (`deploy/voyager/Dockerfile`) — voyager for
+  migrate, plus AMP assess scripts baked in at `/opt/amp/voyager/`. Image ref
+  in controller config. The POC still needs the `YB_VOYAGER_MIGRATION_UUID`
+  patch (§8) for migrate.
+- **Entrypoints**: `assess.sh` is embedded in the image (it does **not** call
+  `yb-voyager assess-migration`; see `deploy/voyager/README.md`). `migrate.sh`
+  still runs the stock voyager export/import sequence.
 - **Env (both operations)**:
 
 | Env | Value |
@@ -619,43 +633,25 @@ Driver notes:
 
 ### 5.3 Command sequences
 
-`assess.sh`:
+`assess.sh` (image path `/opt/amp/voyager/assess.sh`) — AMP-owned scripts, not
+`yb-voyager assess-migration`. AMP compute is PostgreSQL, so YB compatibility
+analysis does not apply; the scripts report complexity `LOW` and a source-matched
+vCPU recommendation, then write the same phase-1 control-plane rows.
 
 ```bash
-yb-voyager assess-migration \
-  --source-db-type postgresql \
-  --source-db-host "$SOURCE_HOST" --source-db-port "$SOURCE_PORT" \
-  --source-db-user "$SOURCE_USER" --source-db-name "$SOURCE_DB" \
-  --source-db-schema "$SOURCE_SCHEMAS" \
-  --export-dir "$EXPORT_DIR" \
-  --iops-capture-interval 0 \
-  --yes
+/opt/amp/voyager/assess.sh
 ```
 
-`migrate.sh` (any non-zero exit fails the job → run `failed`):
+`migrate.sh` (image path `/opt/amp/voyager/migrate.sh`; any non-zero exit
+fails the job → run `failed`). The script still runs stock voyager
+export/import; the sequence lives in the image, not the controller.
 
 ```bash
-set -euo pipefail
-
-yb-voyager export schema  <source flags> --export-dir "$EXPORT_DIR" --yes
-
-# Target database may not exist on a fresh endpoint; create it idempotently.
-PGPASSWORD="$TARGET_DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" \
-  -U "$TARGET_USER" -d postgres \
-  -tc "SELECT 1 FROM pg_database WHERE datname='$TARGET_DB'" | grep -q 1 \
-  || PGPASSWORD="$TARGET_DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" \
-       -U "$TARGET_USER" -d postgres -c "CREATE DATABASE \"$TARGET_DB\""
-
-yb-voyager import schema  --target-db-type yugabytedb-amp <target flags> \
-                          --export-dir "$EXPORT_DIR" --yes
-yb-voyager export data    <source flags> --export-dir "$EXPORT_DIR" --yes
-yb-voyager import data    --target-db-type yugabytedb-amp <target flags> \
-                          --parallel-jobs "$PARALLEL_JOBS" \
-                          --export-dir "$EXPORT_DIR" --yes
-yb-voyager finalize-schema-post-data-import \
-                          --target-db-type yugabytedb-amp <target flags> \
-                          --export-dir "$EXPORT_DIR" --yes
+/opt/amp/voyager/migrate.sh
 ```
+
+Sequence inside the script: export schema → idempotent `CREATE DATABASE` →
+import schema → export data → import data → finalize-schema-post-data-import.
 
 Deliberate choices: `analyze-schema` is **skipped** (assessment already covers
 issues; the yugabyted UI's analysis view has no consumer here);
@@ -868,7 +864,9 @@ image is built from the patched branch.
    steps `attach_target_to_migration`, `ensure_migration_run`,
    `launch_voyager_job`; register in `registry.go`.
 5. `internal/deploy/` (or sibling package): `VoyagerJobRunner` with kubernetes +
-   docker impls; ConfigMap-rendered `assess.sh` / `migrate.sh`.
+   docker impls; assess entrypoint is `/opt/amp/voyager/assess.sh` and migrate
+   is `/opt/amp/voyager/migrate.sh`, both baked into the image
+   (`deploy/voyager/scripts/`).
 6. Config: voyager DB conn string, job image ref, PVC size/storage-class,
    default `parallel_jobs`, job namespace.
 7. Helm chart: add `batch/jobs` (+ `pods/log`) to the controller Role.
@@ -900,10 +898,10 @@ Deliberate POC shortcuts to revisit before anything production-shaped:
    watcher (or task-framework requeue) so terminal states land without polls.
 6. **Upstream the `YB_VOYAGER_MIGRATION_UUID` patch** and return to the stock
    `yugabytedb/yb-voyager` image.
-7. **Assessment tuned for AMP**: assessment targets YugabyteDB semantics
-   (3-node cluster sizing, YB-version-gated issues). Map recommendations to a
-   single PG compute size server-side, and re-evaluate which issue categories
-   apply to a `yugabytedb-amp` target.
+7. **Assessment tuned for AMP**: the assess job now runs the embedded scripts
+   in `deploy/voyager/scripts/` instead of `yb-voyager assess-migration`. The
+   remaining gap is mapping `-1` (undetected source vCPU) to a default compute
+   size server-side, and deciding whether any issue categories should return.
 8. **Sources & modes**: Oracle/MySQL sources (ora2pg in the job image), live
    migration (voyager's yugabyted control plane is offline-only today — a
    bigger reuse question).

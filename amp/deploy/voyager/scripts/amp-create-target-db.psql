@@ -1,0 +1,9 @@
+-- Idempotent CREATE DATABASE for a fresh AMP endpoint.
+-- Run against the target's `postgres` database. :target_db is the AMP
+-- migration target name. format(%I) quotes it so a name with capitals or
+-- punctuation cannot break out of the identifier.
+SELECT format('CREATE DATABASE %I', :'target_db')
+WHERE NOT EXISTS (
+  SELECT 1 FROM pg_database WHERE datname = :'target_db'
+)
+\gexec

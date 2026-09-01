@@ -1,3 +1,10 @@
+# Voyager job image for AMP: yb-voyager plus AMP job scripts.
+#
+# Assess does NOT run `yb-voyager assess-migration`. The assess job entrypoint
+# is /opt/amp/voyager/assess.sh. Migrate is /opt/amp/voyager/migrate.sh, which
+# still runs the stock yb-voyager export/import sequence. Both are COPY'd from
+# deploy/voyager/scripts/.
+#
 # Build a self-contained PostgreSQL-capable Voyager image from a remote branch.
 #
 # Run from the amp repository root:
@@ -80,6 +87,11 @@ RUN (yes | ./install-yb-voyager \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# AMP job scripts. assess.sh replaces yb-voyager assess-migration; migrate.sh
+# wraps the stock export/import sequence. The job runner executes these paths.
+COPY deploy/voyager/scripts/ /opt/amp/voyager/
+RUN chmod 0755 /opt/amp/voyager/*.sh
+
 # Run migrations unprivileged, matching the other AMP images (the endpoint runs
 # as `yugabyte`). yb-voyager lives in /usr/local/bin and its config in
 # /etc/yb-voyager, both world-readable, so a non-root user can still run it. The
@@ -90,7 +102,7 @@ RUN (yes | ./install-yb-voyager \
 RUN groupadd --gid 1000 yugabyte && \
     useradd --uid 1000 --gid 1000 --create-home --home-dir /home/yugabyte yugabyte && \
     mkdir -p /voyager/export && \
-    chown -R yugabyte:yugabyte /voyager
+    chown -R yugabyte:yugabyte /voyager /opt/amp/voyager
 
 USER yugabyte
 WORKDIR /home/yugabyte

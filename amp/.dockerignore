@@ -40,6 +40,8 @@ controller/*
 # deploy/controller bakes the endpoint Helm chart into the controller image (the k8s
 # deploy runtime installs it with `helm upgrade --install`).
 !deploy/helm/
+# deploy/voyager bakes AMP assess scripts into the Voyager job image.
+!deploy/voyager/
 # deploy/controller packages the prebuilt bundle from `make controller-bundle`.
 !target/controller-bundle/
 # cargo must read every workspace member's manifest to load the workspace.

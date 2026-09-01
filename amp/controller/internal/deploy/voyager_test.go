@@ -126,47 +126,22 @@ func TestVoyagerAssessEnvironmentIncludesEmptyTargetFields(t *testing.T) {
 func TestVoyagerCommandComposition(t *testing.T) {
 	assess := assessCommand()
 	for _, want := range []string{
-		"yb-voyager assess-migration",
-		`--source-db-type "$SOURCE_DB_TYPE"`,
-		`--source-db-schema "$SOURCE_SCHEMAS"`,
-		"--iops-capture-interval 0",
+		"/opt/amp/voyager/assess.sh",
 	} {
 		if !strings.Contains(assess, want) {
 			t.Errorf("assess command does not contain %q", want)
 		}
 	}
+	if strings.Contains(assess, "yb-voyager assess-migration") {
+		t.Error("assess command still invokes yb-voyager assess-migration")
+	}
 
 	migrate := migrateCommand()
-	inOrder := []string{
-		"yb-voyager export schema",
-		"SELECT format('CREATE DATABASE %I'",
-		"yb-voyager import schema",
-		"yb-voyager export data",
-		"yb-voyager import data",
-		"yb-voyager finalize-schema-post-data-import",
+	if !strings.Contains(migrate, "/opt/amp/voyager/migrate.sh") {
+		t.Error("migrate command does not invoke /opt/amp/voyager/migrate.sh")
 	}
-	last := -1
-	for _, want := range inOrder {
-		at := strings.Index(migrate, want)
-		if at < 0 {
-			t.Fatalf("migrate command does not contain %q", want)
-		}
-		if at <= last {
-			t.Fatalf("%q is out of order in migrate command", want)
-		}
-		last = at
-	}
-	for _, want := range []string{
-		"--target-db-type yugabytedb-amp",
-		`--target-db-port "$TARGET_PORT"`,
-		`--parallel-jobs "$PARALLEL_JOBS"`,
-		`--set=target_db="$TARGET_DB"`,
-		`datname = :'target_db'`,
-		`--export-dir "$EXPORT_DIR"`,
-	} {
-		if !strings.Contains(migrate, want) {
-			t.Errorf("migrate command does not contain %q", want)
-		}
+	if strings.Contains(migrate, "yb-voyager export schema") {
+		t.Error("migrate command still inlines the yb-voyager sequence")
 	}
 	for _, password := range []string{"source-secret", "target-secret"} {
 		if strings.Contains(migrate, password) || strings.Contains(assess, password) {

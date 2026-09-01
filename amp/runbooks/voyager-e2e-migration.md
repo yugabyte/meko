@@ -47,8 +47,15 @@ make controller-bundle BUILD_TYPE=release
 docker build -t yb-amp/controller:dev -f deploy/controller/Dockerfile .
 ```
 
-Build or pull the endpoint and Voyager images according to your local AMP /
-Voyager development setup before continuing.
+Build the Voyager job image (embeds `/opt/amp/voyager/assess.sh` and
+`/opt/amp/voyager/migrate.sh`):
+
+```bash
+docker build -t yb-amp/voyager:dev -f deploy/voyager/Dockerfile .
+```
+
+Build or pull the endpoint image according to your local AMP development
+setup before continuing.
 
 ## 2. Define local configuration
 
@@ -63,8 +70,10 @@ export YB_CONTAINER=voyager-yb
 export SOURCE_CONTAINER=voyager-source-pg
 export CONTROLLER_CONTAINER=voyager-controller
 
-# Set this to the actual image built or published for the compatible Voyager version.
-export VOYAGER_IMAGE='yugabytedb/yb-voyager:latest'
+# Must be the AMP Voyager image (deploy/voyager/Dockerfile), which embeds
+# /opt/amp/voyager/assess.sh and /opt/amp/voyager/migrate.sh.
+# Stock yugabytedb/yb-voyager cannot run these AMP entrypoints.
+export VOYAGER_IMAGE='yb-amp/voyager:dev'
 
 # This is intentionally a test-only credential.
 export SOURCE_PASSWORD='change-this-local-test-password'
