@@ -498,9 +498,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetInt("functional.upgrade.rows", -1); got != features.DefaultUpgradeRows {
 		t.Errorf("functional.upgrade.rows = %d, want %d", got, features.DefaultUpgradeRows)
 	}
-	// Present and empty: naming a specific previous release has no sane default,
-	// and an empty value is what skips the upgrade test.
-	for _, k := range []string{"functional.upgrade.from_controller_image", "functional.upgrade.from_endpoint_image"} {
+	// Present and empty: the upgrade test resolves the previous release from the
+	// portal unless these name it.
+	for _, k := range []string{"functional.upgrade.from_controller_image", "functional.upgrade.from_endpoint_image", "functional.upgrade.portal_url"} {
 		if got := cfg.GetString(k, "__MISSING__"); got != "" {
 			t.Errorf("%s = %q, want present and empty", k, got)
 		}

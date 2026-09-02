@@ -9,14 +9,20 @@
 // passed on 2026-08-13). The seed then failed on a fork point, since fixed by
 // seeding on the cluster's own branch. Next run should reach the upgrade.
 //
-// To RUN rather than skip, all of these must hold, and each skip names the one
-// that failed:
-//   - functional.upgrade.from_controller_image and from_endpoint_image are set
-//     (the previous release; adjacent releases only, chart and controller move in
-//     lockstep) and differ from the images the run upgrades TO
-//   - the env can name its backing YugabyteDB, which only deploy mode can do; an
-//     attached standing control plane's backing is not ours to give a second
-//     control plane
+// The release to upgrade FROM needs no configuration. The run's env.ampstack
+// images are the release under test; the previous release is the newest one the
+// report portal lists that is older than it (framework/releases), and a branch
+// build (custom-<sha>), which is ahead of every release, upgrades from the newest
+// release there is. functional.upgrade.from_controller_image and
+// from_endpoint_image override that lookup; adjacent releases only, since the
+// chart and the controller move in lockstep.
+//
+// This test never touches the run's shared control plane or its backing. It
+// provisions its own YugabyteDB and deploys its own control plane on the previous
+// release, so the shared environment keeps running the images under test while
+// this one is upgraded. That is why it needs an environment that can name its
+// backing (deploy mode); attached to a standing control plane it skips, since
+// that control plane's backing is not ours to give a second one.
 package features
 
 import (
@@ -31,6 +37,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/releases"
 )
 
 const (
@@ -43,6 +50,9 @@ const (
 	upgradeVFactor = 7
 	// upgradePodReadTimeout bounds the kubectl reads that resolve an endpoint pod.
 	upgradePodReadTimeout = 2 * time.Minute
+	// upgradeReleaseFetchTimeout bounds the portal read that names the previous
+	// release. The portal is reference data here, not the system under test.
+	upgradeReleaseFetchTimeout = 1 * time.Minute
 	// DefaultUpgradeRows is the functional.upgrade.rows default.
 	DefaultUpgradeRows = 2000
 )
@@ -55,8 +65,8 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "upgrade"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "In-place control-plane upgrade: deploy the previous release, seed checksummed data through an endpoint, upgrade the controller image, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, and a new endpoint gets the post-upgrade image.",
-		Params:      []string{"functional", "functional.upgrade", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
+		Description: "In-place control-plane upgrade on its own backing and control plane, apart from the shared environment: resolve the previous release from the report portal (or functional.upgrade.from_*_image), deploy it, seed checksummed data through an endpoint, upgrade the controller image to the release under test, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, and a new endpoint gets the post-upgrade image.",
+		Params:      []string{"functional", "functional.upgrade", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     45 * time.Minute,
 		Run:         runAmpUpgrade,
 	})
@@ -72,6 +82,7 @@ type upgradeRun struct {
 	toController   string
 	toEndpoint     string
 	rows           int
+	portalURL      string
 
 	fromVersion string
 
@@ -128,18 +139,10 @@ func runAmpUpgrade(t *core.T) error {
 		toController:   acfg.ControllerImage,
 		toEndpoint:     acfg.EndpointImage,
 		rows:           t.Options.GetInt("functional.upgrade.rows", DefaultUpgradeRows),
-	}
-	// The chart and the controller move in lockstep, so only adjacent releases are
-	// a supported from-image pair.
-	if u.fromController == "" || u.fromEndpoint == "" {
-		t.Skip("in-place upgrade needs both functional.upgrade.from_controller_image and functional.upgrade.from_endpoint_image (the previous release's images) to deploy the pre-upgrade control plane; one or both are empty")
-		return nil
+		portalURL:      upgradePortalURL(t.Options),
 	}
 	if u.rows < 1 {
 		return fmt.Errorf("functional.upgrade.rows is %d: the seed verification would pass on an empty table and prove nothing about the pre-upgrade data, so at least 1 row is required", u.rows)
-	}
-	if err := u.checkUpgradeIsReal(); err != nil {
-		return err
 	}
 	if reason, ok := gateUpgradeBacking(t.Context, t.Env); !ok {
 		t.Skip(reason)
@@ -167,6 +170,18 @@ func runAmpUpgrade(t *core.T) error {
 	f.reg = openRunReapRegistry(f.logf)
 	u.f = f
 
+	// Resolved before any infrastructure is stood up: a portal that names no
+	// previous release must not cost a universe first.
+	var fromErr error
+	_ = t.Step("resolve_from_release", func(h *core.StepHandle) error {
+		u.step = h
+		fromErr = u.resolveFrom(t.Context)
+		return fromErr
+	})
+	if fromErr != nil {
+		return fromErr
+	}
+
 	step := func(name string, fn func() error) error {
 		return t.Step(name, func(h *core.StepHandle) error {
 			u.step = h
@@ -185,6 +200,80 @@ func runAmpUpgrade(t *core.T) error {
 		{"new_endpoint_uses_new_image", u.newEndpointUsesNewImage},
 	}
 	return runLifecycle(t.Context, step, f.td, phases, f.logf, f.collectDiagnostics, f.onTeardownDone)
+}
+
+// upgradePortalURL is the portal the previous release is read from: this test's
+// own knob, falling back to the run's portal. The fallback cannot be GetString's
+// default: the knob is declared "" in default.yaml, so a present empty string is
+// what GetString returns and the default never fires.
+func upgradePortalURL(c *core.Config) string {
+	if url := strings.TrimSpace(c.GetString("functional.upgrade.portal_url", "")); url != "" {
+		return url
+	}
+	return strings.TrimSpace(c.GetString("report.portal.url", ""))
+}
+
+// resolveFrom fills in whichever from-image the config left empty with the
+// previous release's, then checks the pair is a real upgrade.
+func (u *upgradeRun) resolveFrom(ctx context.Context) error {
+	u.set("to_controller_image", u.toController)
+	u.set("to_endpoint_image", u.toEndpoint)
+	if u.fromController == "" || u.fromEndpoint == "" {
+		if u.portalURL == "" {
+			return core.AsEnvFailure(fmt.Errorf("no report portal to read the previous release from (report.portal.url and functional.upgrade.portal_url are both empty), and functional.upgrade.from_controller_image / from_endpoint_image do not name it either; the pre-upgrade control plane has no images to deploy"))
+		}
+		fctx, cancel := context.WithTimeout(ctx, upgradeReleaseFetchTimeout)
+		defer cancel()
+		list, err := releases.New(u.portalURL).WithLogf(u.f.logf).List(fctx, upgradeReleaseListLimit)
+		if err != nil {
+			return core.AsEnvFailure(fmt.Errorf("read the release list from the report portal %q: %w. Set functional.upgrade.from_controller_image and from_endpoint_image to name the previous release when the portal cannot be reached", u.portalURL, err))
+		}
+		prev, err := previousRelease(list, u.toController)
+		if err != nil {
+			return core.AsEnvFailure(err)
+		}
+		if u.fromController == "" {
+			u.fromController = prev.ControllerImage()
+		}
+		if u.fromEndpoint == "" {
+			u.fromEndpoint = prev.EndpointImage()
+		}
+		u.set("from_release", prev.Tag)
+		u.f.logf("upgrade: previous release %s resolved from %s (upgrading to %s)", prev.Tag, u.portalURL, u.toController)
+	}
+	u.set("from_controller_image", u.fromController)
+	u.set("from_endpoint_image", u.fromEndpoint)
+	return u.checkUpgradeIsReal()
+}
+
+// upgradeReleaseListLimit leaves room for a run pinned to an older release.
+const upgradeReleaseListLimit = 20
+
+// previousRelease picks, from a newest-first release list, the release to
+// upgrade FROM when upgrading TO toImage.
+//
+// A release tag under test takes the newest release strictly older than it. Any
+// other tag (custom-<sha>, br-<topic>-<sha>) is a branch build ahead of every
+// release, so the previous release is the newest one the portal has.
+func previousRelease(list []releases.Release, toImage string) (releases.Release, error) {
+	toTag := toImage
+	if i := strings.LastIndex(toImage, ":"); i >= 0 {
+		toTag = toImage[i+1:]
+	}
+	toVersion, _, isRelease := releases.ParseTag(toTag)
+	for _, r := range list {
+		if r.Tag == toTag {
+			continue
+		}
+		if isRelease && releases.Compare(r.Version, toVersion) >= 0 {
+			continue
+		}
+		return r, nil
+	}
+	if isRelease {
+		return releases.Release{}, fmt.Errorf("the report portal lists %d release(s) and none is older than %s, the release under test, so there is no previous release to upgrade from; set functional.upgrade.from_controller_image and from_endpoint_image to name one", len(list), toTag)
+	}
+	return releases.Release{}, fmt.Errorf("the report portal lists no release other than %s to upgrade from; set functional.upgrade.from_controller_image and from_endpoint_image to name one", toTag)
 }
 
 // checkUpgradeIsReal rejects an identical from/to image pair: re-applying the

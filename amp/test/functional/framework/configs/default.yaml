@@ -411,13 +411,17 @@ functional:
   gin_search:
     rows: 5000
     extra_rows: 1000
-  # features/amp_upgrade: the release to upgrade FROM. No default is possible (it
-  # names a specific previous release), and an empty value skips the test. The
-  # images to upgrade TO are the run's ordinary env.ampstack.*_image. Use adjacent
-  # releases only: chart and controller move in lockstep.
+  # features/amp_upgrade: in-place upgrade from the previous release to the run's
+  # env.ampstack.*_image, on the test's own backing and control plane. The
+  # previous release is resolved from the report portal's /releases: the newest
+  # release older than the one under test, or the newest release at all when the
+  # run tests a branch build. from_*_image override that lookup (adjacent
+  # releases only: chart and controller move in lockstep). portal_url empty →
+  # report.portal.url.
   upgrade:
     from_controller_image: ""
     from_endpoint_image: ""
+    portal_url: ""
     rows: 2000
   # features/amp_upgrade_chain: rolling upgrades across REAL releases.
   # hops upgrades in a row, so hops+1 releases are installed and walked, oldest
