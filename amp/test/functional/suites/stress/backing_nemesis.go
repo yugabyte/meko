@@ -153,7 +153,7 @@ func runBackingNemesis(t *core.T) error {
 
 	// meko#727: reads answer from the pageserver while no COMMIT returns.
 	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
-		waited, err := awaitWritePath(t.Context, env, fleet.Tenants, params.SettleTimeout, params.PayloadBytes)
+		waited, err := awaitWritePath(t.Context, env, fleet.Tenants, nil, params.SettleTimeout, params.PayloadBytes)
 		if err != nil {
 			return fmt.Errorf("the write path never came back (cf. meko#727): %w", err)
 		}

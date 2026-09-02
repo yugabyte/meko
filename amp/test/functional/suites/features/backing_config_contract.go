@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -154,15 +155,32 @@ func (a *ampFeatureRun) tserverFlags(ctx context.Context) (map[string]string, er
 	if pod == "" {
 		return nil, core.EnvFail("no tserver pod found in namespace %q", kube.Namespace())
 	}
-	res, err := kube.ForPod(pod, "").Run(ctx, `curl -sf 'http://127.0.0.1:9000/varz?raw' || wget -qO- 'http://127.0.0.1:9000/varz?raw'`)
-	if err != nil {
-		return nil, fmt.Errorf("read /varz from %s: %w", pod, err)
+	// curl through kubectl exec fails transiently and the tserver image has no
+	// wget to fall back on, so retry the same call.
+	deadline := time.Now().Add(varzReadBudget)
+	for {
+		res, err := kube.ForPod(pod, "").Run(ctx, `curl -sf 'http://127.0.0.1:9000/varz?raw'`)
+		if err == nil && res.ExitCode == 0 {
+			return parseVarz(res.Stdout), nil
+		}
+		if err == nil {
+			err = fmt.Errorf("curl exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return nil, fmt.Errorf("read /varz from %s: %w", pod, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("read /varz from %s: %w", pod, err)
+		case <-time.After(varzReadInterval):
+		}
 	}
-	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("read /varz from %s exited %d: %s", pod, res.ExitCode, strings.TrimSpace(res.Stderr))
-	}
-	return parseVarz(res.Stdout), nil
 }
+
+const (
+	varzReadBudget   = 30 * time.Second
+	varzReadInterval = 2 * time.Second
+)
 
 // parseVarz turns "--flag=value" lines into a map.
 func parseVarz(raw string) map[string]string {

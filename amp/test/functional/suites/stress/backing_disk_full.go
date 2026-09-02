@@ -225,7 +225,7 @@ func runBackingDiskFull(t *core.T) error {
 	}
 
 	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
-		waited, err := awaitWritePath(t.Context, env, fleet.Tenants, params.SettleTimeout, params.PayloadBytes)
+		waited, err := awaitWritePath(t.Context, env, fleet.Tenants, journals, params.SettleTimeout, params.PayloadBytes)
 		if err != nil {
 			return fmt.Errorf("the write path never came back after the disks were freed: %w", err)
 		}

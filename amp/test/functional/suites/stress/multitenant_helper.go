@@ -467,18 +467,26 @@ const (
 )
 
 // A lapsed write token restarts Postgres, so a window opened at fault-stop times that.
-func awaitWritePath(ctx context.Context, env ampTenantEnv, tenants []tenant, settle time.Duration, payloadBytes int) (time.Duration, error) {
+// journals, when the caller holds storage to an exact set, receives every probe
+// row's outcome; nil when a row count is all that is verified afterwards.
+func awaitWritePath(ctx context.Context, env ampTenantEnv, tenants []tenant, journals []*AckJournal, settle time.Duration, payloadBytes int) (time.Duration, error) {
 	start := time.Now()
 	deadline := start.Add(settle)
 	pending := make([]*tenant, 0, len(tenants))
 	for i := range tenants {
 		pending = append(pending, &tenants[i])
 	}
+	journalFor := func(ten *tenant) *AckJournal {
+		if journals == nil {
+			return nil
+		}
+		return journals[ten.Index]
+	}
 	for {
 		var still []*tenant
 		var lastErr error
 		for _, ten := range pending {
-			if err := probeWrite(ctx, env, ten, payloadBytes); err != nil {
+			if err := probeWrite(ctx, env, ten, journalFor(ten), payloadBytes); err != nil {
 				still = append(still, ten)
 				lastErr = err
 			}
@@ -503,7 +511,9 @@ func awaitWritePath(ctx context.Context, env ampTenantEnv, tenants []tenant, set
 }
 
 // One row on the writers' own id scheme, so verify_data cannot tell it apart.
-func probeWrite(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes int) error {
+// An exact-set verifier can, so the row is journaled (j may be nil): a probe that
+// errors may still have committed, which is a legal unknown, not an unissued id.
+func probeWrite(ctx context.Context, env ampTenantEnv, ten *tenant, j *AckJournal, payloadBytes int) error {
 	if ten.Conn == nil {
 		conn, err := env.ConnectEndpoint(ctx, ten.Endpoint)
 		if err != nil {
@@ -515,13 +525,20 @@ func probeWrite(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes
 	attemptCtx, cancel := context.WithTimeout(ctx, writeProbeTimeout)
 	defer cancel()
 	id := ten.nextRowID()
+	value := id * 7
 	atomic.AddInt64(&ten.Attempted, 1)
 	_, err := ten.Conn.Exec(attemptCtx, fmt.Sprintf(
 		"INSERT INTO %s (id, v, pad) VALUES ($1, $2, repeat('t', $3::int)) ON CONFLICT (id) DO NOTHING", ten.Table),
-		id, id*7, payloadBytes)
+		id, value, payloadBytes)
 	if err == nil {
 		atomic.AddInt64(&ten.Written, 1)
+		if j != nil {
+			j.RecordAcked(id, value)
+		}
 		return nil
+	}
+	if j != nil {
+		j.RecordUnknown(id, value)
 	}
 	atomic.AddInt64(&ten.WriteErrors, 1)
 	if ctx.Err() != nil {
