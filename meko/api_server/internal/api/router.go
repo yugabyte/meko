@@ -71,6 +71,10 @@ type serviceRegistry struct {
 	// envSvc is nil unless control-plane mode is enabled (--control-plane-mode);
 	// the YCP fleet + agent routes are registered only when it is non-nil.
 	envSvc *service.EnvironmentService
+	// metricsSvc reads an environment's amp series from the control plane's
+	// metrics store. Built alongside envSvc, and non-nil with an empty URL when
+	// none is configured — the route then 503s rather than disappearing.
+	metricsSvc *service.MetricsService
 
 	// Marketplace: nil until AWS_MARKETPLACE_PRODUCT_CODE is set.
 	// Route registration guards on marketplaceSvc.Enabled().
@@ -226,9 +230,14 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	// YCP fleet registry (BYOC control plane). Enabled only in control-plane mode.
 	var envSvc *service.EnvironmentService
+	var metricsSvc *service.MetricsService
 	if cfg.ControlPlaneMode {
 		envSvc = service.NewEnvironmentService(repository.NewEnvironmentRepo(cfg.SystemDB), cfg.BootstrapDefaults)
+		metricsSvc = service.NewMetricsService(cfg.MetricsURL)
 		slog.Info("control-plane mode enabled (YCP fleet + agent routes)")
+		if !metricsSvc.Configured() {
+			slog.Warn("environment metrics disabled (set --metrics-url / MEKO_METRICS_URL to enable)")
+		}
 	}
 
 	artifactRepo := repository.NewArtifactRepo(cfg.DB)
@@ -301,6 +310,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		ampSvc:                ampSvc,
 		ampRegistrationRepo:   ampRegistrationRepo,
 		envSvc:                envSvc,
+		metricsSvc:            metricsSvc,
 		marketplaceRepo:       marketplaceRepo,
 		marketplaceSvc:        marketplaceSvc,
 		marketplaceWelcomeURL: cfg.AWSMarketplaceWelcomeURL,
@@ -426,6 +436,8 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.DELETE("/environments/:id", envH.Deregister)
 		fleet.GET("/environments/:id/desired", envH.GetDesired)
 		fleet.POST("/environments/:id/desired", envH.SetDesired)
+		fleet.GET("/environments/:id/metrics",
+			handlers.NewEnvironmentMetricsHandler(reg.envSvc, reg.metricsSvc).Get)
 		fleet.GET("/entitlements", envH.Entitlements)
 		// The agent surface has no account header — the key id names the environment
 		// on its own — so it hangs off v1 directly with its own auth pair rather

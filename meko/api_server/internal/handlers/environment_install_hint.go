@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/models"
+	"meko/api_server/internal/service"
 )
 
 // envRoutePath is the collection route every hint is generated under — register
@@ -91,18 +92,21 @@ const ampInstallNamespace = "amp"
 const ampAPIKeySecretName = "amp-agent-api-key" //nolint:gosec // a Secret NAME, not a credential
 
 // sentinelAccountID is the all-zeros account the fleet registry defaults to when
-// YCP runs without YBM to attribute an environment to (see the column comment in
-// 000001_fleet_registry.up.sql).
-const sentinelAccountID = "00000000-0000-0000-0000-000000000000"
+// YCP runs without YBM to attribute an environment to.
+const sentinelAccountID = service.SentinelAccountID
 
 // metricsIdentityArgs are the --set arguments that stamp this environment's
 // identity on every series the OTel collectors scrape (ac-metrics.md). The
 // account is dropped when it is the standalone sentinel: the same zeros on every
 // series is worse than no label at all.
+//
+// service.MetricsAccountID decides that, rather than a comparison here, because
+// the metrics read path applies the same rule to build its query — the label a
+// hint stamps and the label a query matches on have to be the one decision.
 func metricsIdentityArgs(envID, accountID string) []string {
 	args := []string{"otel.environmentId=" + envID}
-	if accountID != "" && accountID != sentinelAccountID {
-		args = append(args, "otel.accountId="+accountID)
+	if account := service.MetricsAccountID(accountID); account != "" {
+		args = append(args, "otel.accountId="+account)
 	}
 	return args
 }

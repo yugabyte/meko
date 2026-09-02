@@ -101,6 +101,11 @@ apiServer:
     SYSTEM_DB_USER_NAME: ycp
     SYSTEM_DB_NAME: ycp
     SYSTEM_DB_SSL_MODE: disable
+    # Prometheus-compatible query API for GET /environments/{id}/metrics. Deliberately
+    # unset here: the address is per-deployment (in the YBM control plane it is that
+    # cluster's Thanos), and unset leaves the route answering 503 rather than pointing
+    # a fleet at a store that is not there. Set it in the deploy that knows, e.g.
+    #   MEKO_METRICS_URL: http://thanos-query-frontend.monitoring-core.svc.cluster.local:9090/api/v1
 
 # The data-plane components below are already suppressed by `mode: ycp`; setting
 # enabled=false as well makes the intent explicit and keeps `helm get values`

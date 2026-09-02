@@ -84,6 +84,12 @@ type ServerConfig struct {
 	// console, the ycp e2e and an operator's curl rely on, so it is off by default.
 	RequireAccountHeader bool
 
+	// MetricsURL is the Prometheus-compatible query API the environment metrics
+	// route reads (the control plane's Thanos). Empty leaves the route registered
+	// and answering 503 rather than absent, so a control plane brought up before
+	// the monitoring wiring says why instead of 404ing.
+	MetricsURL string
+
 	// YBAAPIToken authenticates read-only calls to YugabyteDB Anywhere
 	// (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. When empty, the
 	// /admin/dataplane endpoint reports the data plane as not configured.

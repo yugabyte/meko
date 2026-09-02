@@ -172,6 +172,14 @@ func run() error {
 			"Hands the fleet-admin credential to anyone who can load the console, so only for "+
 			"a control plane whose console is already the trust boundary (internal LB, tailnet).")
 
+	// Prometheus-compatible query API backing GET /environments/:id/metrics. In the
+	// YBM control plane this is the in-cluster Thanos, which takes no credentials —
+	// a NetworkPolicy is what gates it — so this is a plain URL and not a secret.
+	metricsURL := flag.String("metrics-url",
+		envOrDefault("MEKO_METRICS_URL", ""),
+		"Prometheus-compatible query API root (e.g. http://thanos-query-frontend.monitoring-core.svc.cluster.local:9090/api/v1) "+
+			"for the environment metrics route. Empty makes that route 503.")
+
 	requireAccountHeader := flag.Bool("require-account-header",
 		envBoolOrDefault("MEKO_REQUIRE_ACCOUNT_HEADER", false),
 		"reject fleet calls that do not carry X-Meko-Account-ID, instead of serving them "+
@@ -501,6 +509,7 @@ func run() error {
 		AdminAPIKey:                        *adminAPIKey,
 		ConsoleEmbedAdminSecret:            *consoleEmbedAdminSecret,
 		RequireAccountHeader:               *requireAccountHeader,
+		MetricsURL:                         *metricsURL,
 		YBAAPIToken:                        *ybaAPIToken,
 		MCPPATFlushInterval:                *mcpPATFlushInterval,
 		PATRateLimitPerMin:                 *patRateLimitPerMin,

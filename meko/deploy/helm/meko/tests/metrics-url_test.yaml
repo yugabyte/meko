@@ -1,0 +1,69 @@
+# apiServer.config.MEKO_METRICS_URL points the environment metrics route at the
+# control plane's Prometheus-compatible store. Two things have to hold:
+#
+#   1. Unset, the env entry does not render at all. It is a configMapKeyRef, and a
+#      reference to a key the ConfigMap does not hold blocks the pod from starting —
+#      so an install that configures no metrics store must not gain the reference.
+#      The route then answers 503, which is the intended state, not a broken pod.
+#   2. Set, the key reaches the ConfigMap (which ranges over apiServer.config) and
+#      the Deployment reads it from there, so the two halves cannot drift apart.
+#
+#   helm unittest charts/meko
+suite: api-server metrics url
+templates:
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+tests:
+  - it: does not reference the metrics url when none is configured
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-ycp.yaml
+    set:
+      apiServer.image.tag: t
+      global.imageRegistry: reg.example.com
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_METRICS_URL
+            valueFrom:
+              configMapKeyRef:
+                name: meko-api-server-config
+                key: MEKO_METRICS_URL
+
+  - it: reads the metrics url from the config map when configured
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-ycp.yaml
+    set:
+      apiServer.image.tag: t
+      global.imageRegistry: reg.example.com
+      apiServer.config.MEKO_METRICS_URL: http://thanos.example:9090/api/v1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_METRICS_URL
+            valueFrom:
+              configMapKeyRef:
+                name: meko-api-server-config
+                key: MEKO_METRICS_URL
+
+  - it: carries the configured metrics url into the config map
+    template: templates/api-server/configmap.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-ycp.yaml
+    set:
+      apiServer.image.tag: t
+      global.imageRegistry: reg.example.com
+      apiServer.config.MEKO_METRICS_URL: http://thanos.example:9090/api/v1
+    asserts:
+      - equal:
+          path: data.MEKO_METRICS_URL
+          value: http://thanos.example:9090/api/v1

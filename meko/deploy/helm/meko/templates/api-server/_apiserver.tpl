@@ -139,6 +139,14 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
 - name: MEKO_YCP_BASE_PATH
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: MEKO_YCP_BASE_PATH } }
 {{- end }}
+{{- /* Metrics query API for the environment metrics route (--metrics-url). Emitted
+       only when apiServer.config carries the key, for the same reason as the base
+       path above: a configMapKeyRef to a key the ConfigMap does not hold blocks the
+       pod from starting. Unset simply leaves the route answering 503. */}}
+{{- if $c.config.MEKO_METRICS_URL }}
+- name: MEKO_METRICS_URL
+  valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: MEKO_METRICS_URL } }
+{{- end }}
 {{- if $c.cognito.enabled }}
 - name: COGNITO_REGION
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: COGNITO_REGION } }
