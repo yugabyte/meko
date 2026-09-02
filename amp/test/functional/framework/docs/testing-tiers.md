@@ -6,7 +6,7 @@ untagged and run on demand — see the Perf bullet):
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — all eleven `suites/stress` scenarios: `load_sustain` (workloadgen
+- **`stress`** — all fourteen `suites/stress` scenarios: `load_sustain` (workloadgen
   soak), `combined_load` (four parallel workloads under chaos on a co-located YB
   backing), `backing_maintenance` (workloads through a rolling restart, a gflag
   change, a data move and a YugabyteDB upgrade), `backing_backup_restore`
@@ -15,7 +15,9 @@ untagged and run on demand — see the Perf bullet):
   `branch_churn` (many tenants, many branches), the nemesis / durability
   scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
   `wal_tail_nemesis`, `control_plane_nemesis`,
-  `commit_durability`) and `bulk_load_kill` (one large write killed mid-flight).
+  `commit_durability`), `bulk_load_kill` (one large write killed mid-flight) and
+  `backing_disk_full` (the backing's data disks filled, every INSERT held to an
+  answer, then freed).
   Scheduled as its own tier so the report portal gets a Stress
   column; the `Category: core.Stress` tests in `suites/features` are **not** in it
   (they belong to `regression` and would double-report).

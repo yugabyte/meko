@@ -53,7 +53,10 @@ func init() {
 
 func runAmpExtensionPgvector(t *core.T) error {
 	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
-		return []phase{{"extension_pgvector", a.extensionPgvector}}
+		return []phase{
+			{"extension_pgvector", a.extensionPgvector},
+			{"extension_survives_restart", a.extensionSurvivesRestart},
+		}
 	})
 }
 
@@ -206,4 +209,31 @@ func extensionsUnavailable(err error) bool {
 		return false
 	}
 	return strings.Contains(apiErr.Message, "externalized extensions are not supported")
+}
+
+// extensionSurvivesRestart rolls the base endpoint's pod and reruns the distance
+// query: the ImageVolume must be remounted and the extension usable on the
+// rescheduled compute, which is what an endpoint upgrade also relies on.
+func (a *ampFeatureRun) extensionSurvivesRestart(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	ep, ok := lastEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID)
+	if !ok {
+		return fmt.Errorf("the base branch has no endpoint to restart")
+	}
+	c, ok, err := a.restartEndpointCompute(ctx, ep)
+	if err != nil || !ok {
+		return err
+	}
+	defer c.Close()
+	n, err := c.QueryInt(ctx, "SELECT count(*) FROM pg_extension WHERE extname = $1", pgvectorSQLName)
+	if err != nil {
+		return fmt.Errorf("read pg_extension after the restart: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("pg_extension has %d rows for %q after the compute restart, want 1", n, pgvectorSQLName)
+	}
+	return assertVectorOrder(ctx, c, "the base branch after a compute restart")
 }

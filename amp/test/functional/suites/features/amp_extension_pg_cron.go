@@ -34,13 +34,16 @@ func init() {
 
 func runAmpExtensionPgCron(t *core.T) error {
 	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
-		return []phase{{"extension_pg_cron", func(ctx context.Context) error {
-			cl, err := a.f.controllerClient(ctx)
-			if err != nil {
-				return err
-			}
-			return extensionPgCronSteps(ctx, cl, a.proj, a.f.endpointSQL, a.f.t.Skip)
-		}}}
+		return []phase{
+			{"extension_pg_cron", func(ctx context.Context) error {
+				cl, err := a.f.controllerClient(ctx)
+				if err != nil {
+					return err
+				}
+				return extensionPgCronSteps(ctx, cl, a.proj, a.f.endpointSQL, a.f.t.Skip)
+			}},
+			{"scheduler_survives_restart", a.cronSurvivesRestart},
+		}
 	})
 }
 
@@ -125,4 +128,44 @@ func extensionPgCronSteps(ctx context.Context, cl ampCtl, proj ampCluster, conne
 		return fmt.Errorf("job %d is still in cron.job after cron.unschedule returned success", jobID)
 	}
 	return nil
+}
+
+// cronSurvivesRestart rolls the compute and asserts the launcher is back and a
+// job scheduled on the new compute fires.
+func (a *ampFeatureRun) cronSurvivesRestart(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	ep, ok := lastEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID)
+	if !ok {
+		return fmt.Errorf("the branch has no endpoint to restart")
+	}
+	c, ok, err := a.restartEndpointCompute(ctx, ep)
+	if err != nil || !ok {
+		return err
+	}
+	defer c.Close()
+	if n, err := c.QueryInt(ctx, "SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'pg_cron launcher'"); err != nil {
+		return fmt.Errorf("look for the pg_cron launcher after the restart: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("no 'pg_cron launcher' backend is running on the restarted compute")
+	}
+	if _, err := c.Exec(ctx, "CREATE TABLE "+cronTable+"_restart (fired_at timestamptz NOT NULL DEFAULT now())"); err != nil {
+		return fmt.Errorf("create the fired-marker table: %w", err)
+	}
+	jobID, err := c.QueryInt(ctx, "SELECT cron.schedule('amp-restart', '* * * * *', $$INSERT INTO "+cronTable+"_restart DEFAULT VALUES$$)")
+	if err != nil {
+		return fmt.Errorf("cron.schedule after the restart: %w", err)
+	}
+	err = a.f.t.WaitFor("the post-restart cron job to fire", cronFireTimeout, 5*time.Second, func() (bool, error) {
+		n, err := c.QueryInt(ctx, "SELECT count(*) FROM "+cronTable+"_restart")
+		return n > 0, err
+	})
+	if err != nil {
+		runs, _ := c.QueryInt(ctx, "SELECT count(*) FROM cron.job_run_details WHERE jobid = $1", jobID)
+		return fmt.Errorf("the every-minute job scheduled after the compute restart never fired within %s (job_run_details rows: %d): %w", cronFireTimeout, runs, err)
+	}
+	_, err = c.Exec(ctx, "SELECT cron.unschedule($1::bigint)", jobID)
+	return err
 }

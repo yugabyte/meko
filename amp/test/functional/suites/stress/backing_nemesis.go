@@ -36,15 +36,19 @@ type backingNemesisParams struct {
 	PayloadBytes  int
 	// ResumeDuration: the post-chaos write window (the meko#727 probe).
 	ResumeDuration time.Duration
+	// ControlPlaneRecoveryMax bounds the controller's error window after the
+	// last kill (meko#961).
+	ControlPlaneRecoveryMax time.Duration
 }
 
 func backingNemesisParamsFromConfig(c *core.Config) backingNemesisParams {
 	return backingNemesisParams{
-		Tenants:        c.GetInt("stress.backing_nemesis.tenants", 3),
-		Duration:       c.GetDuration("stress.backing_nemesis.duration", 3*time.Minute),
-		SettleTimeout:  c.GetDuration("stress.backing_nemesis.settle_timeout", 10*time.Minute),
-		PayloadBytes:   c.GetInt("stress.backing_nemesis.payload_bytes", 256),
-		ResumeDuration: c.GetDuration("stress.backing_nemesis.resume_duration", 30*time.Second),
+		Tenants:                 c.GetInt("stress.backing_nemesis.tenants", 3),
+		Duration:                c.GetDuration("stress.backing_nemesis.duration", 3*time.Minute),
+		SettleTimeout:           c.GetDuration("stress.backing_nemesis.settle_timeout", 10*time.Minute),
+		PayloadBytes:            c.GetInt("stress.backing_nemesis.payload_bytes", 256),
+		ResumeDuration:          c.GetDuration("stress.backing_nemesis.resume_duration", 30*time.Second),
+		ControlPlaneRecoveryMax: c.GetDuration("stress.backing_nemesis.control_plane_recovery_max", 2*time.Minute),
 	}
 }
 
@@ -90,6 +94,8 @@ func runBackingNemesis(t *core.T) error {
 		return err
 	}
 
+	var cpRecovery time.Duration
+	cpMeasured := false
 	if err := t.Step("chaos_on_backing", func(s *core.StepHandle) error {
 		kube := backingEnv.BackingKube()
 		pods, err := backingPods(t, kube)
@@ -99,8 +105,27 @@ func runBackingNemesis(t *core.T) error {
 		if len(pods) == 0 {
 			return fmt.Errorf("no backing pod matched any known selector in namespace %q", kube.Namespace())
 		}
-		return chaosOnPods(t, s, env, fleet, kube, pods, "backing-nemesis",
+		probe := newControlPlaneProbe(fleet.cl, fleet.poolID)
+		probe.Start(t.Context)
+		chaosErr := chaosOnPods(t, s, env, fleet, kube, pods, "backing-nemesis",
 			params.Duration, params.PayloadBytes, logf)
+		if chaosErr != nil {
+			probe.Abort()
+			return chaosErr
+		}
+		chaosEnd := time.Now()
+		cpRecovery, cpMeasured = probe.Stop(chaosEnd, params.SettleTimeout)
+		tally, bad := probe.Summary()
+		s.Set("control_plane_probe", tally)
+		s.Set("control_plane_recovery", cpRecovery.Round(time.Second).String())
+		s.Set("control_plane_recovery_measured", cpMeasured)
+		if cpMeasured {
+			t.Metric("control_plane_recovery_seconds", cpRecovery.Seconds(), "s")
+		}
+		if bad > 0 {
+			return fmt.Errorf("the controller answered %d non-503 5xx response(s) while the backing was being killed (%s); an unreachable store is a retryable 503, never a 500 (meko#886)", bad, tally)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -158,6 +183,13 @@ func runBackingNemesis(t *core.T) error {
 			return err
 		}
 		s.Set("ready_after", waited.Round(time.Second).String())
+		if !cpMeasured {
+			return fmt.Errorf("the controller never answered a probe 2xx in the %s after the last backing pod kill, so its recovery could not be measured (meko#961)", params.SettleTimeout)
+		}
+		if cpRecovery > params.ControlPlaneRecoveryMax {
+			return fmt.Errorf("the controller kept answering errors for %s after the last backing pod kill, over the %s allowed; its pool must drop a departed backing pod within seconds, not minutes (meko#961)",
+				cpRecovery.Round(time.Second), params.ControlPlaneRecoveryMax)
+		}
 		before := len(fleet.Tenants)
 		if err := fleet.Create(t, 1); err != nil {
 			return fmt.Errorf("the control plane cannot create a tenant after the chaos: %w", err)

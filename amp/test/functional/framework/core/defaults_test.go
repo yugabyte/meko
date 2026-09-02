@@ -1263,8 +1263,42 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if actions := cfg.GetStringSlice("stress.combined.chaos_actions", nil); strings.Join(actions, ",") != "pod_delete,process_kill,process_restart" {
 		t.Errorf("stress.combined.chaos_actions = %v, want [pod_delete process_kill process_restart]", actions)
 	}
-	if d := cfg.GetStringSlice("stress.storage_proc_nemesis.daemons", nil); strings.Join(d, ",") != "pageserver,safekeeper" {
-		t.Errorf("stress.storage_proc_nemesis.daemons = %v, want [pageserver safekeeper]", d)
+	if d := cfg.GetStringSlice("stress.storage_proc_nemesis.daemons", nil); strings.Join(d, ",") != "pageserver,safekeeper,compute_ctl" {
+		t.Errorf("stress.storage_proc_nemesis.daemons = %v, want [pageserver safekeeper compute_ctl]", d)
+	}
+	if got := cfg.GetDuration("stress.backing_nemesis.control_plane_recovery_max", -1); got != 2*time.Minute {
+		t.Errorf("stress.backing_nemesis.control_plane_recovery_max = %s, want 2m", got)
+	}
+	diskFullInts := map[string]int{
+		"stress.backing_disk_full.tenants":       2,
+		"stress.backing_disk_full.keep_free_mib": 16,
+		"stress.backing_disk_full.payload_bytes": 256,
+	}
+	for key, want := range diskFullInts {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	diskFullDurations := map[string]time.Duration{
+		"stress.backing_disk_full.baseline_duration": 20 * time.Second,
+		"stress.backing_disk_full.fault_duration":    90 * time.Second,
+		"stress.backing_disk_full.stall_limit":       60 * time.Second,
+		"stress.backing_disk_full.settle_timeout":    10 * time.Minute,
+		"stress.backing_disk_full.resume_duration":   30 * time.Second,
+	}
+	for key, want := range diskFullDurations {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+	if got := cfg.GetString("stress.backing_disk_full.fill", ""); got != "all" {
+		t.Errorf("stress.backing_disk_full.fill = %q, want all", got)
+	}
+	if got := cfg.GetStringSlice("functional.backing_contract.settings", nil); strings.Join(got, ",") != "guc:yb_enable_cbo=on,gflag:ysql_enable_auto_analyze=true" {
+		t.Errorf("functional.backing_contract.settings = %v", got)
+	}
+	if got := cfg.GetDuration("functional.failed_create_reclaim.sweep_timeout", -1); got != 45*time.Minute {
+		t.Errorf("functional.failed_create_reclaim.sweep_timeout = %s, want 45m", got)
 	}
 
 	// --- stress/backing_maintenance ---

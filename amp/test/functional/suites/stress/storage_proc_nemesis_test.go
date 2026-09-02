@@ -125,7 +125,7 @@ func TestStorageKillPlanIsSeedDriven(t *testing.T) {
 		if a[i] != b[i] {
 			t.Fatalf("same seed produced %v then %v", a, b)
 		}
-		if !storageDaemonNames[a[i].Daemon] {
+		if _, ok := storageDaemonNames[a[i].Daemon]; !ok {
 			t.Errorf("plan targets %q, which is not a storage daemon", a[i].Daemon)
 		}
 		if a[i].Tenant < 0 || a[i].Tenant >= 3 {
@@ -154,9 +154,19 @@ func TestValidateStorageDaemons(t *testing.T) {
 	if err := validateStorageDaemons(nil); err == nil {
 		t.Error("an empty daemon list must fail: nothing would be faulted")
 	}
-	// compute_ctl is supervised too, but killing it is a compute fault, not this test's.
-	if err := validateStorageDaemons([]string{"compute_ctl"}); err == nil {
-		t.Error("compute_ctl must be rejected as a target")
+	if err := validateStorageDaemons([]string{"compute_ctl"}); err != nil {
+		t.Errorf("compute_ctl rejected: %v", err)
+	}
+	// boot.rs spawns the compute_ctl service as the compute-ctl binary; pgrep -x
+	// on the service name finds nothing and the run would pass having killed
+	// nothing.
+	if got := daemonProcess("compute_ctl"); got != "compute-ctl" {
+		t.Errorf("daemonProcess(compute_ctl) = %q, want compute-ctl", got)
+	}
+	// postgres is compute-ctl's child, not the supervisor's: it is not respawned
+	// in place, so the same-pod assertion does not apply to it.
+	if err := validateStorageDaemons([]string{"postgres"}); err == nil {
+		t.Error("postgres must be rejected as a target")
 	}
 }
 

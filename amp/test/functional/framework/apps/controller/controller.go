@@ -115,6 +115,10 @@ func New(baseURL string, opts ...Option) *Client {
 // BaseURL is the controller root URL.
 func (c *Client) BaseURL() string { return c.baseURL }
 
+// HTTPClient is the transport the client reaches the controller with, for a
+// caller that must issue a raw request over the same route.
+func (c *Client) HTTPClient() *http.Client { return c.hc }
+
 // --- resource types (only the fields the framework consumes) ---
 
 // User is an unauthenticated identity.
@@ -177,10 +181,12 @@ type CreateBranchRequest struct {
 
 // Cluster is a database in a pool, with its default branch.
 type Cluster struct {
-	ID            string `json:"id"`
-	StoragePoolID string `json:"storage_pool_id"`
-	Name          string `json:"name"`
-	DefaultBranch Branch `json:"default_branch"`
+	ID            string   `json:"id"`
+	StoragePoolID string   `json:"storage_pool_id"`
+	Name          string   `json:"name"`
+	DefaultBranch Branch   `json:"default_branch"`
+	Engine        string   `json:"engine"`
+	Extensions    []string `json:"extensions"`
 }
 
 // CreateClusterRequest creates a cluster (and its default branch "main").
@@ -193,6 +199,9 @@ type CreateClusterRequest struct {
 	// to a branch later with AddBranchExtensions. Rejected with 400 on a
 	// controller without an extension catalog.
 	Extensions []string `json:"extensions,omitempty"`
+	// Engine names a bundle of catalog extensions seeded onto the default branch
+	// (postgres, aidb, oracle); it unions with Extensions.
+	Engine string `json:"engine,omitempty"`
 }
 
 // AddBranchExtensionsRequest enables more externalized extensions on an existing
@@ -658,7 +667,9 @@ func isTransientConnErr(err error) bool {
 	return strings.Contains(msg, "EOF") ||
 		strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "i/o timeout")
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "Could not connect to server") ||
+		strings.Contains(msg, "Failed to connect to")
 }
 
 // ListTasksOptions filters listTasks.

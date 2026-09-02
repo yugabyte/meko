@@ -24,7 +24,7 @@ import (
 // That is a separate capability with no product commitment and no other test.
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
-	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements",
+	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements", "tsm_system_rows",
 }
 
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
@@ -440,6 +440,11 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 	}
 	if _, err := c.Exec(ctx, "SELECT bt_index_check(($1 || '_pkey')::regclass)", table); err != nil {
 		return fmt.Errorf("amcheck bt_index_check over the canary table's primary key: %w", err)
+	}
+	if n, err := c.QueryInt(ctx, "SELECT count(*) FROM "+table+" TABLESAMPLE SYSTEM_ROWS(5)"); err != nil {
+		return fmt.Errorf("tsm_system_rows TABLESAMPLE over the canary table, which documentdb depends on: %w", err)
+	} else if n != 5 {
+		return fmt.Errorf("TABLESAMPLE SYSTEM_ROWS(5) returned %d rows out of 20, want exactly 5", n)
 	}
 
 	return nil

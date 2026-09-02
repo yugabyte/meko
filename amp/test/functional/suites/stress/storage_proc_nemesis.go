@@ -53,11 +53,21 @@ const (
 	supervisorRestartWindow = 180 * time.Second
 )
 
-// storageDaemonNames are the supervised children this test may aim at. They are
-// process names, not patterns: the supervisor spawns them as bare binaries
-// (compute/endpoint_supervisor/src/boot.rs:273-294). compute_ctl is left alone —
-// killing it is a compute fault, which amp_nemesis already covers.
-var storageDaemonNames = map[string]bool{"pageserver": true, "safekeeper": true}
+// storageDaemonNames maps each supervised child this test may aim at to its
+// process name (boot.rs services(): safekeeper, pageserver, compute_ctl, the
+// last spawned as the `compute-ctl` binary). compute_ctl takes its postmaster
+// down with it (meko#898) and the supervisor must respawn it in place like the
+// storage daemons. postgres itself is compute-ctl's child, not the supervisor's,
+// so it is not a target here.
+var storageDaemonNames = map[string]string{"pageserver": "pageserver", "safekeeper": "safekeeper", "compute_ctl": "compute-ctl"}
+
+// daemonProcess is the `comm` a service name is killed and re-found by.
+func daemonProcess(service string) string {
+	if p, ok := storageDaemonNames[service]; ok {
+		return p
+	}
+	return service
+}
 
 // killConfirmTimeout bounds how long a killed pid may still be listed. The
 // supervisor respawns after a 2s backoff, so this only has to outlast the kill
@@ -85,7 +95,7 @@ func storageProcParamsFromConfig(c *core.Config) storageProcParams {
 		Tenants:          c.GetInt("stress.storage_proc_nemesis.tenants", 2),
 		BaselineDuration: c.GetDuration("stress.storage_proc_nemesis.baseline_duration", 20*time.Second),
 		FaultDuration:    c.GetDuration("stress.storage_proc_nemesis.fault_duration", 90*time.Second),
-		Daemons:          c.GetStringSlice("stress.storage_proc_nemesis.daemons", []string{"pageserver", "safekeeper"}),
+		Daemons:          c.GetStringSlice("stress.storage_proc_nemesis.daemons", []string{"pageserver", "safekeeper", "compute_ctl"}),
 		KillsPerDaemon:   c.GetInt("stress.storage_proc_nemesis.kills_per_daemon", 1),
 		KillGap:          c.GetDuration("stress.storage_proc_nemesis.kill_gap", 15*time.Second),
 		SettleTimeout:    c.GetDuration("stress.storage_proc_nemesis.settle_timeout", 10*time.Minute),
@@ -208,8 +218,8 @@ func validateStorageDaemons(daemons []string) error {
 		return fmt.Errorf("stress.storage_proc_nemesis.daemons is empty, so no fault would be injected at all")
 	}
 	for _, d := range daemons {
-		if !storageDaemonNames[d] {
-			return fmt.Errorf("stress.storage_proc_nemesis.daemons names %q, which is not a storage daemon the endpoint supervisor runs (pageserver, safekeeper)", d)
+		if _, ok := storageDaemonNames[d]; !ok {
+			return fmt.Errorf("stress.storage_proc_nemesis.daemons names %q, which is not a child the endpoint supervisor runs (pageserver, safekeeper, compute_ctl)", d)
 		}
 	}
 	return nil
@@ -333,7 +343,7 @@ func killStorageDaemons(t *core.T, s *core.StepHandle, env ampTenantEnv, kube *k
 // sent, not that anything died.
 func killDaemonOnce(t *core.T, ex *k8s.Kubectl, daemon string) (killRecord, error) {
 	rec := killRecord{Daemon: daemon}
-	before, err := daemonPIDs(t.Context, ex, daemon)
+	before, err := daemonPIDs(t.Context, ex, daemonProcess(daemon))
 	if err != nil {
 		return rec, err
 	}
@@ -349,7 +359,7 @@ func killDaemonOnce(t *core.T, ex *k8s.Kubectl, daemon string) (killRecord, erro
 	start := time.Now()
 	err = t.WaitFor(fmt.Sprintf("%s pid(s) %s to disappear", daemon, joinPIDs(before, ",")),
 		killConfirmTimeout, pidPollInterval, func() (bool, error) {
-			now, err := daemonPIDs(t.Context, ex, daemon)
+			now, err := daemonPIDs(t.Context, ex, daemonProcess(daemon))
 			if err != nil {
 				return false, err
 			}
@@ -375,7 +385,7 @@ func assertDaemonsRestarted(t *core.T, s *core.StepHandle, kube *k8s.Kubectl,
 		var back []int
 		err := t.WaitFor(fmt.Sprintf("%s to be respawned in pod %s", rec.Daemon, rec.Pod),
 			params.SettleTimeout, pidPollInterval, func() (bool, error) {
-				now, err := daemonPIDs(t.Context, ex, rec.Daemon)
+				now, err := daemonPIDs(t.Context, ex, daemonProcess(rec.Daemon))
 				if err != nil {
 					// The pod is replaced only past the restart budget; until the
 					// exec works again there is nothing to conclude.

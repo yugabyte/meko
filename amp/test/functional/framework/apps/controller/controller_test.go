@@ -878,6 +878,9 @@ func TestIsTransientConnErrClassifiesTimeouts(t *testing.T) {
 		want bool
 	}{
 		{"relay exec dial timeout", relayTimeout, true},
+		// The controller pod is being rescheduled (a node scale-down): curl in the
+		// relay pod gets exit 7 with this text and no wrapped errno.
+		{"relay curl cannot connect", errors.New(`curl GET /api/v1/tasks/cfa33b92 exited 7: curl: (7) Failed to connect to amp-controller port 8080 after 0 ms: Could not connect to server`), true},
 		{"net deadline", os.ErrDeadlineExceeded, true},
 		{"syscall timeout", syscall.ETIMEDOUT, true},
 		{"net.Error that times out", &net.DNSError{IsTimeout: true}, true},

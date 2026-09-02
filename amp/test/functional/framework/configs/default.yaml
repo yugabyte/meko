@@ -346,6 +346,18 @@ functional:
     endpoint_password: "cloud_admin"
     endpoint_db: "postgres"
     endpoint_sslmode: ""
+  # backing_contract pins the YugabyteDB settings AMP's storage schema depends
+  # on, as source:name=value; guc: reads pg_settings on the amp storage database,
+  # gflag: reads a tserver's /varz (meko#970: auto analyze off left
+  # amp_storage.pages unanalyzed and GC deletes planned as 20-minute SeqScans).
+  backing_contract:
+    settings: ["guc:yb_enable_cbo=on", "gflag:ysql_enable_auto_analyze=true"]
+  # failed_create_reclaim: sweep_timeout bounds how long the orphan sweeper may
+  # take to remove a failed-create endpoint. The controller leaves an orphan alone
+  # for gc-grace (30m) so a fresh failure can be inspected, then sweeps every
+  # gc-interval (5m).
+  failed_create_reclaim:
+    sweep_timeout: "45m"
   # The extension set the release commits to shipping, pinned here rather than
   # read back from the database (a test that enumerates pg_available_extensions
   # cannot detect a missing extension).
@@ -369,6 +381,7 @@ functional:
       - btree_gin
       - amcheck
       - pg_stat_statements
+      - tsm_system_rows
     catalog:
       - "pgvector:vector"
       - "pg_cron:pg_cron"
@@ -1264,6 +1277,31 @@ stress:
     payload_bytes: 256
     # resume_duration is the throughput window after recovery, not a budget for it.
     resume_duration: "30s"
+    # control_plane_recovery_max bounds how long the controller may keep answering
+    # errors after the last backing pod kill (meko#961: ~2m of 503 while the
+    # endpoints served normally). Any 500 during the window fails outright
+    # (meko#886: an unreachable store is a 503, never a 500).
+    control_plane_recovery_max: "2m"
+  # backing_disk_full: fills every backing data disk to within a few MiB, writes
+  # through amp, and holds each statement to erroring or committing inside
+  # stall_limit. A COMMIT parked forever on a full backing (meko#727 signature)
+  # is the failure; once the disks are freed writes must resume and every
+  # acknowledged row must be present.
+  backing_disk_full:
+    tenants: 2
+    baseline_duration: "20s"
+    # fault_duration is the write window while the disks are full.
+    fault_duration: "90s"
+    # stall_limit is how long one INSERT may take before it counts as hung.
+    stall_limit: "60s"
+    # keep_free_mib is what the filler leaves on each data disk.
+    keep_free_mib: 16
+    # fill is "all" (every backing pod, the write path has nowhere to go) or
+    # "one" (a single pod, RF should absorb it and writes must keep flowing).
+    fill: "all"
+    settle_timeout: "10m"
+    resume_duration: "30s"
+    payload_bytes: 256
   # commit_durability: journals every commit's acknowledgement per id under faults,
   # then holds storage to the EXACT acked set. A count check cannot do this: a lost
   # acked row net-cancelled by an unacknowledged one passes it.
@@ -1286,8 +1324,11 @@ stress:
     baseline_duration: "20s"
     # fault_duration is the write window the kills land inside.
     fault_duration: "90s"
-    # daemons are the supervised children aimed at; only these two are storage.
-    daemons: ["pageserver", "safekeeper"]
+    # daemons are the supervisor's children aimed at (boot.rs services()).
+    # compute_ctl runs as the compute-ctl binary and takes its postmaster down
+    # with it (meko#898); the supervisor must respawn it in place like the two
+    # storage daemons.
+    daemons: ["pageserver", "safekeeper", "compute_ctl"]
     # kills_per_daemon stays under the supervisor's budget of 5 restarts per
     # 180s, above which it exits and the pod is recreated instead.
     kills_per_daemon: 1

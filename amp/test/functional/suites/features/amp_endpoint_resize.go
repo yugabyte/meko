@@ -233,6 +233,7 @@ func (a *ampFeatureRun) endpointResizeInPlace(ctx context.Context) error {
 		return err
 	}
 
+	var cgroupErr error
 	if outcome == controller.ResizeCompleted {
 		podAfter, err := endpointPodIdentity(ctx, probe, ep.ID)
 		if err != nil {
@@ -246,6 +247,7 @@ func (a *ampFeatureRun) endpointResizeInPlace(ctx context.Context) error {
 			return fmt.Errorf("in-place resize reported %q but pod %s went from %d to %d container restarts — a completed in-place resize must not restart a container",
 				outcome, podAfter.name, podBefore.restarts, podAfter.restarts)
 		}
+		cgroupErr = assertPodCgroup(ctx, probe.kube, podAfter.name, resizeCPUB, resizeMemoryB)
 	} else {
 		a.f.logf("in-place outcome %q (not %q): the pod-identity assertions do not apply; the size %s/%s stayed persisted and converges on the next redeploy",
 			outcome, controller.ResizeCompleted, resizeCPUB, resizeMemoryB)
@@ -261,7 +263,7 @@ func (a *ampFeatureRun) endpointResizeInPlace(ctx context.Context) error {
 	if rows != 1 {
 		return fmt.Errorf("across the resize the pinned connection sees %d rows in %s, want 1", rows, resizeHeldTable)
 	}
-	return nil
+	return cgroupErr
 }
 
 // endpointPGClient opens a pooled SQL client to an endpoint, concretely typed (not
