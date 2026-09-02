@@ -207,7 +207,7 @@ For full Langfuse traces across all datapacks, select **Observe**. See [Observab
 
 ## Next steps
 
-Explore the following advanced capabilities to fully leverage Meko's persistent memory and knowledge graph.
+Explore the following advanced capabilities to use Meko's persistent memory and shared knowledge.
 
 {{< card-group >}}
   {{< card

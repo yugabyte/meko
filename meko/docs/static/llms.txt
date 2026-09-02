@@ -15,29 +15,30 @@
     "meko": {
       "url": "https://mcp.mekodata.ai/mcp",
       "headers": {
-        "API_KEY": "<paste-your-api-key>"
+        "Authorization": "Bearer <paste-your-api-key>",
+        "User-Agent": "meko-mcp-installer/1.0"
       }
     }
   }
 }
 ```
 
-3. Preferred for Cursor, Claude Code, Claude Desktop, and Codex — portal one-liner (also installs agent skills / hooks where supported):
+3. Preferred for Cursor, Claude Code, Claude Desktop, Codex, and Kiro — installer command (also installs agent skills and hooks where supported; requires Node.js 20.18.1 or newer):
 
 ```sh
-npx @yugabytedb/meko-mcp --client <client> --url "https://mcp.mekodata.ai/mcp" --api-key <paste-your-api-key>
+npx @yugabytedb/meko-mcp@latest --client <client> --url "https://mcp.mekodata.ai/mcp" --api-key <paste-your-api-key>
 ```
 
-Replace `<client>` with `cursor`, `claude-code`, `claude-desktop`, or `codex`. VS Code and other MCP clients use the manual JSON config above (see Connect via IDE).
+Replace `<client>` with `cursor`, `claude-code`, `claude-desktop`, `codex`, or `kiro`. VS Code and other MCP clients use the manual JSON config above (see Connect via IDE).
 
 OAuth (URL only, no API key) works for clients with a custom-connector flow; that path is on-demand unless skills are installed separately.
 
 ### Routing
 
 - One MCP URL for every datapack: `https://mcp.mekodata.ai/mcp`. Pass `datapack_id` (or name) on tool calls to select a datapack; do not invent per-datapack URLs.
-- Auth header name is `API_KEY` (not `Authorization` / Bearer). Key prefix is `mko_tkn_`.
+- Send API keys as `Authorization: Bearer <key>` and include a `User-Agent` header. The key prefix is `mko_tkn_`.
 - There is no released Python SDK. "Connect your AI app" / framework SDKs are under development. Integrate via MCP until those ship.
-- Supported IDE / coding clients today: Cursor, Claude Code, Claude Desktop, Codex, VS Code.
+- Supported IDE and coding clients today: Cursor, Claude Code, Claude Desktop, Codex, Kiro, VS Code.
 - Tool catalog and calling conventions: [Meko MCP Server](/reference/mcp-server/). Do not send retired tool-level `scope` arguments.
 
 ### Suggested first tools
@@ -56,10 +57,9 @@ OAuth (URL only, no API key) works for clients with a custom-connector flow; tha
 ## Core Concepts
 
 - [Datapacks](/architecture/core-concepts/datapacks/): Use when explaining isolation — one datapack bundles memory, knowledge, conversations, traces, and credentials
-- [Memory](/architecture/core-concepts/memory/): Use when storing or recalling durable facts via vectors + graph (MAGE)
+- [Memory](/architecture/core-concepts/memory/): Use when storing or recalling durable facts through hybrid semantic, keyword, and entity-aware retrieval
 - [Learnings](/architecture/core-concepts/learnings/): Use when promoting private memory into collective memory or shared knowledge
 - [Knowledge Bases](/architecture/core-concepts/knowledgebase/): Use when describing RAG over uploaded documents (`pg_dist_rag`)
-- [Graph RAG](/architecture/core-concepts/graph-rag/): Use when answering entity-relationship / graph traversal questions over memory
 - [Traces](/architecture/core-concepts/traces/): Use when explaining observability, conversation history, and chain-of-thought audit
 
 ## Architecture
@@ -69,14 +69,14 @@ OAuth (URL only, no API key) works for clients with a custom-connector flow; tha
 ## Guides
 
 - [WorkbenchLM](/guides/workbench-lm/): Use when trying Meko in the portal chat with no local MCP install
-- [Working with Memory](/guides/working-with-memory/): Use when adding, searching, listing, or promoting memories over MCP
+- [Working with Memory](/guides/working-with-memory/): Use when adding, searching, inspecting recent memories, or promoting memories over MCP
 - [Working with Knowledge Bases](/guides/working-with-knowledge-bases/): Use when building or querying document collections for RAG
 - [Working with Artifacts](/guides/working-with-artifacts/): Use when storing or retrieving agent-generated files (`artifact_put` / `artifact_get`) across sessions or agents
 - [Observability](/guides/observability/): Use when locating decision traces and conversation history in the portal
 
 ## Integrations
 
-- [Connect via IDE](/integrations/connect-to-ai-agent/): Use when configuring Cursor, Claude Code, Claude Desktop, Codex, VS Code, or another MCP client
+- [Connect via IDE](/integrations/connect-to-ai-agent/): Use when configuring Cursor, Claude Code, Claude Desktop, Codex, Kiro, VS Code, or another MCP client
 - [Connect Programmatically](/integrations/connect-programmatically/): Use when wiring an MCP-capable framework to `https://mcp.mekodata.ai/mcp` (no Python SDK yet; fuller framework guides under development)
 
 ## Examples

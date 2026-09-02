@@ -16,11 +16,11 @@ If you have problems with your setup, check the following common issues:
 
 - Node version.
 
-    Ensure you have the correct version of Node (Node.js 18.0 or newer) installed.
+    Ensure you have Node.js 20.18.1 or newer installed. Installer 2.2.0 checks this before changing client configuration.
 
 - Claude Desktop.
     - Restart is required after editing your configuration.
-    - `--allow-http` flag is required in [manual setup](../../integrations/connect-to-ai-agent/#manual-setup-1).
+    - Use the pinned `mcp-remote@0.1.38` bridge from the [manual setup](../../integrations/connect-to-ai-agent/#manual-setup-1). Older bridge versions can fail with “Server disconnected.”
 
 - Agent answers but never calls Meko tools.
 
@@ -36,9 +36,21 @@ If you have problems with your setup, check the following common issues:
 
     You can always work around this by explicitly asking your agent to save ("save this conversation to Meko") or remember ("remember this") — those requests are never best-effort.
 
-- Cursor or Codex misses conversations during automatic capture.
+- Automatic capture is behind or reports a failure.
 
-    In v2.1.0, Cursor's ordinary archive and new-chat workflows don't reliably emit the lifecycle events the capture hooks expect. Codex hooks run, but the capture worker doesn't yet parse Codex `response_item` transcript records. Explicitly ask Meko to save important conversations or remember critical facts; don't rely on complete automatic capture in these clients.
+    Installer 2.2.0 keeps failed exchanges in a local outbox and retries them without advancing the capture cursor. Check the current state:
+
+    ```bash
+    npx @yugabytedb/meko-mcp@latest --capture-status
+    ```
+
+    Add `--json` for machine-readable output. A healthy or catching-up state exits `0`; retrying exits `2`; a problem that needs action exits `3`. Resolve the reported authentication, quota, permission, or server problem, then start another session so capture can retry.
+
+- Kiro doesn't capture a conversation.
+
+    Kiro IDE runs workspace hooks only after you trust the workspace. Kiro CLI 2.x must also use the installer-managed `meko-default` agent. Rerun the installer with `--client kiro`, trust the workspace, and check `npx @yugabytedb/meko-mcp@latest --capture-status`.
+
+    Kiro hooks include prompts and final responses, but Kiro doesn't expose tool calls or hidden reasoning through these events.
 
 - Claude Code still uses old Meko skill behavior after an upgrade.
 
@@ -65,9 +77,9 @@ If you have problems with your setup, check the following common issues:
 
     Tool-level `scope` (`"read"`, `"write"`, `"admin"`) was retired. Stop sending it in custom integrations, and rerun the installer or refresh the skills plugin so hooks and skills stop sending it too. A temporary compatibility shim currently strips the argument from older clients, but that shim will be removed in a future release. This is unrelated to installer flags such as `--scope user|project`.
 
-- SessionStart reports a persistent capture failure.
+- SessionStart reports a persistent capture failure on an older installer.
 
-    Quota failures and HTTP `402`/`403` responses deliberately keep the capture watermark in place so no transcript range is silently marked as saved. Resolve the quota, billing, permission, or authentication problem and retry; a successful capture clears the warning.
+    Upgrade to installer 2.2.0, then use `npx @yugabytedb/meko-mcp@latest --capture-status` for the current failure and queued-exchange count. Quota failures and HTTP `402`/`403` responses keep the capture cursor in place so no transcript range is silently marked as saved.
 
 ## Report an issue
 

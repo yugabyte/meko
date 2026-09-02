@@ -6,17 +6,17 @@ weight: 4300
 ---
 Meko's memory system gives agents persistent recall across sessions.
 
-This guide covers memory operations you drive from a coding agent over MCP: add a memory, search for relevant memories, and list everything stored for the current user in a datapack.
+This guide covers memory operations you drive from a coding agent over MCP: add a memory, search for relevant memories, and inspect recently stored memories.
 
-Meko can also move memories into shared, institutional knowledge through a separate review flow (learnings, collective memory, and shared knowledge). That lifecycle, including how candidates are identified and promoted from **Learnings** in the Meko UI, is described in [Learnings](../../architecture/core-concepts/learnings/). For how extraction and dual storage (vectors + graph) work under the hood, see [Memory](../../architecture/core-concepts/memory/).
+Meko can also move memories into shared, institutional knowledge through a separate review flow. That lifecycle, including how candidates are identified and promoted from **Learnings** in the Meko UI, is described in [Learnings](../../architecture/core-concepts/learnings/). For information on how extraction and hybrid retrieval work, see [Memory](../../architecture/core-concepts/memory/).
 
 > [!NOTE] Knowledge base composition
 >
 > Private memories are one part of a datapack's knowledge base. The other major component is source data, which includes unstructured files (text, PDFs, documents) and structured sources (databases, tabular data). See [Knowledge bases](../../architecture/core-concepts/knowledgebase/).
 
-> [!NOTE] Underlying storage
+> [!NOTE] Memory retrieval
 >
-> Memories are stored in a semantic graph with graph edges for entity relationships (for example, _John_ likes _bananas_) and document chunks with vectors for similarity search. That combination supports retrieval by relationship and by meaning, not only by exact text match.
+> Memory search combines semantic similarity, keyword matching, and entity-aware ranking. It returns memory results without graph relations.
 
 ## Add memories
 
@@ -32,7 +32,7 @@ Please remember that I like to take vacations at tropical beach locations, on a 
 Remember this coding preference: I prefer Python type hints and use pytest for testing
 ```
 
-The MCP server calls `memory_add` behind the scenes, which uses an LLM to extract entities and relationships from your text.
+The MCP server calls `memory_add` behind the scenes and stores the durable fact for later retrieval.
 
 ### Automatically, from saved conversations
 
@@ -78,26 +78,25 @@ meko datapack search_memories --name my-datapack --user_prompt "vacation prefere
 
 ### How search works
 
-Memory search combines two strategies:
+Memory search combines three signals:
 
-1. **Vector similarity**. Finds memories with semantically similar embeddings.
-2. **Graph traversal**. Finds related entities and relationships. For example, searching for "vacation" might also surface memories about "travel budget" through graph connections.
+1. **Semantic similarity** finds memories with related meaning.
+1. **Keyword matching** gives exact terms more weight.
+1. **Entity boosting** raises memories that mention the named people, projects, or tools in the query.
 
-Results from both strategies are combined and ranked, allowing a memory to be retrieved not just by exact match, but by semantic similarity as well. For example, the memory _"John likes bananas"_ can be surfaced in response to not only the query _"who likes banana?"_ but also a semantic query like _"Who likes fruits?"_
+Meko combines and ranks these signals. For example, the memory _"John likes bananas"_ can match the exact query _"Who likes bananas?"_ and the related query _"Who likes fruit?"_
 
-## View all memories
+## View recent memories
 
-To see every memory Meko has stored for you in a datapack, ask your coding agent in plain language. For example:
-
-```text
-List every memory Meko has for me in my default datapack.
-```
+To inspect your recent memories in a datapack, ask your coding agent in plain language. For example:
 
 ```text
-Show all memories stored for me in this datapack — I want the complete list, not just the top matches.
+Show my recent Meko memories in the default datapack.
 ```
 
-You should see the agent use the [MCP tool](../../reference/mcp-server/#memory-tools) `memory_get_all` to return the full list across your agent namespaces (not ranked like search), which is useful for auditing or building a memory dashboard.
+`memory_get_all` returns roughly 20 recent rows and a `total` count across your agent namespaces. It isn't a complete list, and MCP doesn't currently provide a complete memory export. Use `memory_search` to find older memories or `memory_get_by_id` when you know an exact ID.
+
+Don't call `memory_get_all` repeatedly or add pagination arguments. The tool returns the same recent window and rejects unsupported pagination fields.
 
 ## Promote memories to shared knowledge
 

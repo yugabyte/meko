@@ -128,9 +128,9 @@ To clear your pin and return to your account default, reply with `clear` or `non
 
 If your pinned datapack is deleted or you lose access, Meko fails gracefully rather than silently writing elsewhere. Run the selector to pick an accessible datapack, or clear the pin.
 
-> [!NOTE] Cursor and Codex in v2.1.0
+> [!NOTE] Cursor, Codex, and Kiro
 >
-> These clients don't have a guided datapack selector. You can still name a datapack directly in a prompt without changing your pin (for example, "save this conversation to the research datapack"). To set or change your default pin, use Claude Code or Desktop's selector.
+> These clients don't have a guided datapack selector. You can still name a datapack directly in a prompt without changing your pin (for example, "save this conversation to the research datapack"). To set or change your default pin, use Claude Code or Claude Desktop's selector.
 
 ## Manage datapacks
 

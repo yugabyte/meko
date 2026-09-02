@@ -30,7 +30,7 @@ A [datapack](../core-concepts/datapacks/) is the isolation unit for agent data i
 | Capability | Powered by (internal) | API |
 | :--------- | :-------------------- | :--- |
 | Conversation history | PostgreSQL (YugabyteDB YSQL) | `conversation_*` tools |
-| Memory | Graph memory + vector search (pgvector, hnswlib) | `memory_*` tools |
+| Memory | Durable facts with hybrid semantic, keyword, and entity-aware retrieval | `memory_*` tools |
 | Knowledge base | RAG pipeline (pg_dist_rag) + vector search | `knowledgebase_*` tools |
 | Decision traces | LLM reasoning traces and execution logs | Observability dashboard |
 | Observability, security, RBAC | Spans the full stack, not bolted on per-component | — |
@@ -45,7 +45,7 @@ Without Meko, building an agentic application typically requires wiring together
 
 - A relational database for structured data
 - A vector database for embeddings and similarity search
-- A graph database for entity relationships
+- A search system for memory retrieval
 - Per-database observability, security, and RBAC
 - Custom integration code for stitching together search results from each database
 

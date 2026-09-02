@@ -1,7 +1,7 @@
 ---
 title: Connect to an AI agent
 linkTitle: AI agents
-description: Integrate Meko with Cursor, Claude Desktop, Claude Code, Codex, and more
+description: Integrate Meko with Cursor, Claude Desktop, Claude Code, Codex, Kiro, and more
 weight: 3010
 type: docs
 ---
@@ -16,10 +16,12 @@ Integrate with AI agents for interactive use cases, such as saving personal, tea
 
 Every client uses the MCP server URL `https://mcp.mekodata.ai/mcp`. The **Datapacks > Connect** dialog also shows this URL.
 
+The automated installer requires Node.js 20.18.1 or newer.
+
 Choose one authentication method for each client:
 
 - **API key:** In the portal, open **Settings > API Keys > Generate API key**. Name the key, then copy or download it before you close the dialog. The key starts with `mko_tkn_`, and Meko shows it only once. In the instructions below, replace `<paste-your-api-key>` with this key.
-- **OAuth:** Add the MCP server URL without an API key or authentication headers. The client opens your browser so you can sign in to the Meko portal.
+- **OAuth:** Add the MCP server URL without an API key or authentication headers. The client opens your browser so you can sign in to the Meko portal. OAuth works only when the client registers a callback that Meko accepts. Use an API key for command-line clients and Kiro.
 
 Use an API key for command-line clients, CI, and scripts. Command-line OAuth uses a local callback that Meko currently rejects, and unattended clients can't open a browser when an OAuth session expires.
 
@@ -128,7 +130,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
           "command": "npx",
           "args": [
             "-y",
-            "mcp-remote",
+            "mcp-remote@0.1.38",
             "https://mcp.mekodata.ai/mcp",
             "--transport",
             "http-only",
@@ -188,7 +190,7 @@ How you remove Meko from Claude Desktop depends on how you installed it, because
 Run the following:
 
 ```bash
-npx @yugabytedb/meko-mcp --client claude-desktop --uninstall
+npx @yugabytedb/meko-mcp@latest --client claude-desktop --uninstall
 ```
 
 If you installed under a non-default server name, pass `--server-name <name>`. The uninstall removes only the MCP server entry; if you also imported a Meko skill bundle, remove it manually via **Settings > Extensions**.
@@ -334,6 +336,52 @@ In Codex Desktop:
     ```text
     List my datapacks in Meko
     ```
+
+## Kiro IDE and CLI
+
+Kiro IDE and `kiro-cli` share their MCP configuration, skills, and hooks. One install configures both:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --client kiro
+```
+
+The `kiro-cli` and `kiro-ide` aliases run the same install. If you set `$KIRO_HOME`, the installer uses that directory instead of `~/.kiro`.
+
+The installer uses API-key authentication because Kiro registers a local OAuth callback that Meko rejects. It also installs the Meko skill, steering, and both Kiro hook formats for durable capture.
+
+### Manual setup
+
+If you only need an on-demand MCP connection, add this entry to `~/.kiro/settings/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "meko": {
+      "url": "https://mcp.mekodata.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer <paste-your-api-key>",
+        "User-Agent": "meko-mcp-installer/1.0"
+      }
+    }
+  }
+}
+```
+
+Replace `<paste-your-api-key>` with the key you saved from **Settings > API Keys**, then protect the file because it contains the key:
+
+```bash
+chmod 600 ~/.kiro/settings/mcp.json
+```
+
+Manual setup doesn't install the Meko skill, steering, or capture hooks. Use the automated installer when you want Meko to capture conversations and apply its behavioral guidance.
+
+Kiro hooks expose user prompts and final assistant responses. They don't expose tool calls or hidden reasoning, so those details aren't included in automatic capture.
+
+### Uninstall
+
+```bash
+npx @yugabytedb/meko-mcp@latest --client kiro --uninstall
+```
 
 ## VS Code
 

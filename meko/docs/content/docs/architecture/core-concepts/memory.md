@@ -1,11 +1,11 @@
 ---
 title: Memory
 linkTitle: Memory
-description: Long-term memory for AI agents using mem0 and graph storage
+description: Long-term memory for AI agents with hybrid retrieval
 weight: 20
 ---
 
-Memory in Meko gives agents persistent, long-term recall of facts, preferences, and relationships extracted from conversations. Unlike conversation history (which stores raw messages), memory stores *derived knowledge* - the key facts and entities that an LLM extracts from interactions.
+Memory in Meko gives agents persistent, long-term recall of facts, preferences, and decisions extracted from conversations. Unlike conversation history, which stores raw messages, memory stores the focused facts that an LLM extracts from interactions.
 
 ## How it works
 
@@ -16,11 +16,11 @@ Memories are created two ways:
 
 Either way, Meko does the following with the text:
 
-1. Extracts entities and relationships from the text using an LLM.
-1. Stores vector embeddings in the vector store for semantic similarity search.
-1. Stores graph relationships in Meko AGE for entity-relationship queries.
+1. Uses an LLM to extract focused, durable facts.
+1. Stores the facts and their vector embeddings for retrieval.
+1. Indexes the text so searches can combine semantic similarity with keyword and named-entity signals.
 
-This dual storage means memories can be found both by semantic similarity ("find memories about vacation preferences") and by graph traversal ("what entities are related to this user?").
+This hybrid retrieval helps an agent find a memory by meaning while giving extra weight to exact terms and named entities in the query.
 
 > [!NOTE] Extraction is asynchronous and best-effort
 >
@@ -38,7 +38,7 @@ Store a new memory from text.
 "I like to take vacations at tropical beach locations, on a budget"
 ```
 
-Behind the scenes, this calls `memory.add()` which extracts entities (user, tropical beaches, budget travel) and stores both vector embeddings and graph edges.
+Behind the scenes, this calls `memory_add`, which stores the durable preference and makes it available to later searches.
 
 The same extraction runs automatically whenever a conversation turn is saved (see [How it works](#how-it-works) above) — you don't have to explicitly say "remember this" for a fact to become a memory, though doing so is more reliable.
 
@@ -50,11 +50,11 @@ Find relevant memories using semantic similarity search. A single search spans t
 "What are my vacation preferences?"
 ```
 
-This searches both the vector store (pgvector) and the graph store (Meko AGE), combining results for comprehensive recall.
+This combines semantic similarity, keyword matching, and an entity boost, then returns the highest-ranked memories.
 
-### Get memories
+### Get recent memories
 
-Retrieve all memories stored for the authenticated user in a datapack, across the clients that wrote them. This is useful for auditing or displaying a memory dashboard.
+`memory_get_all` returns a recent window of roughly 20 memories and the total count for the authenticated user in a datapack. It isn't a complete list or export. Use `memory_search` to find older memories, or `memory_get_by_id` when you know the exact memory ID.
 
 ### Clear memories
 
@@ -64,12 +64,12 @@ Remove memories written under an agent ID, optionally narrowed by run ID. This i
 
 |      | Memory | Conversation History |
 | :--- | :----- | :------------------- |
-| **What's stored** | Extracted facts and relationships | Raw messages (user + assistant) |
+| **What's stored** | Extracted facts, preferences, and decisions | Raw messages (user + assistant) |
 | **How it's created** | LLM extracts from conversations | Stored verbatim |
-| **Search method** | Semantic similarity + graph traversal | Chronological lookup |
+| **Search method** | Semantic, keyword, and entity-aware ranking | Chronological lookup |
 | **Use case** | "Remember my preferences across sessions" | "Show me what was said in the last chat" |
 
 ## Next steps
 
-- [Work with memory](../../../guides/working-with-memory/) - How to add, search, and list memories
-- [Graph RAG](../graph-rag/) - How Apache AGE powers entity-relationship memory
+- [Work with memory](../../../guides/working-with-memory/) - How to add, search, and inspect memories
+- [Memory retrieval](../memory-retrieval/) - How Meko ranks memory search results

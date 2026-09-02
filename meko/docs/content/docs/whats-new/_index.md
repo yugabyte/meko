@@ -8,7 +8,7 @@ body_class: full-width
 notoc: true
 ---
 
-Highlights from recent releases on each of Meko's two tracks. For the full history, see the [Changelog](../changelog/).
+Highlights from recent Meko releases. For the full history, see the [Changelog](../changelog/).
 
 {{< card-group variant="half" >}}
   {{< card
@@ -18,9 +18,9 @@ Highlights from recent releases on each of Meko's two tracks. For the full histo
     cta="View release notes &rarr;"
   >}}
   {{< card
-    href="changelog/installer/v2.1.0/"
-    title="Installer v2.1.0 — July 28, 2026"
-    desc="Reliable installs, a 23-tool MCP surface, corrected cross-agent reads, and a published skills plugin."
+    href="changelog/installer/v2.2.0/"
+    title="Installer v2.2.0 — August 31, 2026"
+    desc="Kiro support, durable capture, safer memory guidance, and independent installer and skills releases."
     cta="View release notes &rarr;"
   >}}
 {{< /card-group >}}
@@ -34,18 +34,17 @@ Highlights from recent releases on each of Meko's two tracks. For the full histo
 - **Claude Desktop recall works on plain questions** — the Meko skill now activates for simple recall prompts, and adding messages to a conversation from Claude Desktop no longer errors.
 - **AMP cluster tools, opt-in** — cluster, branch, and compute management tools are available behind an early-access flag, prefixed with `amp_`.
 
-## Installer, MCP server, and skills — v2.1.0
+## Installer and public skills — v2.2.0
 
-- **Cross-agent reads work as expected** — `memory_search`, `memory_get_all`, and `conversation_list` span all of your agent namespaces within a datapack, so agents no longer fan out one search per agent.
-- **Production is the default for fresh installs** — with no existing Meko configuration and no `--url`, the installer points at `https://mcp.mekodata.ai/mcp`.
-- **A tighter 23-tool surface** — experimental conversation-search tools stay hidden unless you enable them, and the remaining tool contracts are more precise.
-- **A self-contained skills plugin** — behavioral skills, hooks, and connector metadata ship as a complete Claude Code plugin from [`yugabyte/meko-skills`](https://github.com/yugabyte/meko-skills).
-- **Memory promotion asks first** — promoting to team memory previews the exact memories, explains visibility, and requires explicit confirmation.
-- **Capture failures stay visible** — quota and HTTP `402`/`403` failures no longer advance the capture watermark, so the next session reports the problem instead of silently skipping turns.
+- **Kiro IDE and CLI support** — one install configures Kiro's shared MCP and skills locations and installs durable capture hooks.
+- **Capture survives delivery failures** — Claude Code, Cursor, Codex, and Kiro keep failed exchanges in a local outbox. `npx @yugabytedb/meko-mcp@latest --capture-status` shows whether capture is healthy, catching up, retrying, or needs action.
+- **Codex transcripts now capture correctly** — Codex uses `codex:<repo>` ownership and holds incomplete turns for retry instead of advancing past them.
+- **Safer memory guidance** — agents distinguish failed searches from empty results, keep retrieval evidence bounded, verify writes, and treat `memory_get_all` as a recent window rather than an export.
+- **Independent releases** — the public skills plugin and MCP server are each now released independently from the installer and Desktop extension.
 
-> [!NOTE] Breaking change
+> [!NOTE] Upgrade Claude Desktop's Node.js runtime
 >
-> Tool-level `scope` is retired — stop sending `scope="read"`, `"write"`, or `"admin"` on MCP tool calls. Authorization comes from your authenticated identity and datapack grants instead. A temporary shim strips the argument from older clients; see [Installer v2.1.0](../changelog/installer/v2.1.0/) for the upgrade path.
+> Installer 2.2.0 requires Node.js 20.18.1 or newer and pins `mcp-remote@0.1.38`. See [Installer v2.2.0](../changelog/installer/v2.2.0/) for the full changes.
 
 ## Keep up
 
@@ -59,7 +58,7 @@ Highlights from recent releases on each of Meko's two tracks. For the full histo
   {{< card
     href="changelog/installer/"
     title="Installer release notes"
-    desc="Full release history for the Installer, MCP server, and agent skills."
+    desc="Full release history for the installer and public agent skills."
     cta="View releases &rarr;"
   >}}
 {{< /card-group >}}

@@ -53,7 +53,7 @@ To use OAuth, enter only the MCP server URL. The client opens your browser so yo
 
 > [!NOTE] OAuth not supported from the command line
 >
-> Command-line clients use a local `http://127.0.0.1` callback for OAuth. Meko currently rejects this callback, and registration returns an HTML `403 Forbidden` error. Use an API key for command-line clients. Desktop and IDE clients use their own URL scheme or a hosted callback, so OAuth works for them.
+> Clients that register a local `http://127.0.0.1` callback receive an HTML `403 Forbidden` error. This includes command-line clients and Kiro IDE. Use an API key for those clients. Claude Desktop's custom connector uses a supported callback and can use OAuth.
 
 ## API key
 
@@ -107,6 +107,10 @@ Some clients need the `mcp-remote` helper to connect to a remote MCP server. In 
     href="integrations/connect-to-ai-agent/#open-ai-codex-desktop"
     title="Codex Desktop"
     logo="logos/integrations/codex.svg"
+  >}}
+  {{< card
+    href="integrations/connect-to-ai-agent/#kiro-ide-and-cli"
+    title="Kiro IDE and CLI"
   >}}
   {{< card
     href="integrations/connect-to-ai-agent/#vs-code"

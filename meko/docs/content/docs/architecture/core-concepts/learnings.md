@@ -17,7 +17,7 @@ The pipeline has three stages.
 
 ### 1. Extraction
 
-As an agent has conversations, Meko extracts entities, relationships, and facts and stores them as [memories](../memory/) tagged with the writing agent. The authenticated user's other clients can retrieve those memories with `memory_search` and `memory_get_all`; other datapack members can't read them until they are promoted.
+As an agent has conversations, Meko extracts durable facts and stores them as [memories](../memory/) tagged with the writing agent. The authenticated user's other clients can retrieve those memories using `memory_search`; other datapack members can't read them until they are promoted. `memory_get_all` provides a recent window for review, not a complete export.
 
 ### 2. Learning identification
 
@@ -29,7 +29,7 @@ Meko summarizes the datapack's knowledge base and identifies the memories that a
 
 A reviewer promotes a learning into one or both of the institutional destinations:
 
-- **Collective Memory** &mdash; entity and relationship content that joins the shared graph and vector store. Other agents retrieve it the same way they retrieve their own memory: through semantic and graph search.
+- **Collective Memory** &mdash; promoted memory content that becomes available to every datapack member via the shared knowledge layer.
 - **Shared Knowledge** &mdash; document-style or factual content that joins the [knowledge base](../knowledgebase/) and is retrieved through RAG.
 
 Both destinations sit inside the same datapack, so promoted content is bounded by the datapack's tenancy. A learning is never shared across datapacks.
@@ -50,7 +50,7 @@ This separation is what makes Meko's collective memory model auditable. Every pr
 
 Collective Memory and Shared Knowledge serve different retrieval patterns:
 
-- A learning like _"Customers in the Northeast region prefer Tuesday delivery windows"_ is best stored as Collective Memory, because the retrieval value comes from graph traversal and entity similarity.
+- A learning like _"Customers in the Northeast region prefer Tuesday delivery windows"_ is best stored as Collective Memory because it is a concise fact that agents should retrieve directly.
 - A learning like _"The 2026 Q1 incident response playbook supersedes the 2025 version"_ is best stored as Shared Knowledge, because the retrieval value comes from chunked semantic search over a document corpus.
 
 Reviewers choose the destination at promotion time. A learning can be promoted to both.
