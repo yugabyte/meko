@@ -30,10 +30,7 @@ import (
 const (
 	DefaultNodes        = 3
 	DefaultAdvertise    = "private" // peers/YSQL advertise on the private IP (in-VPC coordinator)
-	DefaultNumDBs       = 4
-	DefaultTablesPerDB  = 3
 	DefaultRowsPerTable = 2000
-	DefaultTablets      = 3
 	DefaultConcurrency  = 4
 	DefaultPgVersion    = 0 // 0 → let the controller choose the endpoint's PG version
 
@@ -70,11 +67,8 @@ type Config struct {
 	InstanceType string // "" → inherit the aws default
 	Advertise    string // "private" | "public": which IP nodes advertise / YSQL is reached at
 
-	// Workload shape (both layers).
-	NumDBs       int
-	TablesPerDB  int
+	// Workload shape.
 	RowsPerTable int
-	Tablets      int
 	Concurrency  int
 	PgVersion    int // amp cluster/endpoint PG version (0 → controller default)
 
@@ -99,14 +93,11 @@ type Config struct {
 	ClusterDeploy    bool
 	ClusterDeployDir string // remote parent dir the release unpacks under
 
-	// YBA target (reused from env.universe.yba.*), for amp_on_yba_universe.
-	YBAURL        string
-	YBACustomer   string
-	YBAToken      string
-	UniverseRef   string // universe name or UUID to attach
-	YBAInsecure   bool
-	YBAOwned      bool           // true → the yba test may create/delete the universe
-	YBACreateSpec map[string]any // owned + no ref → CreateUniverse spec (functional.yba.create_spec)
+	// YBA target (reused from env.universe.yba.*).
+	YBAURL      string
+	YBACustomer string
+	YBAToken    string
+	UniverseRef string // universe name or UUID to attach
 }
 
 // FromConfig reads functional.* (and the reused env.universe.yba.* / versions.*)
@@ -116,10 +107,7 @@ func FromConfig(c *core.Config) Config {
 		Nodes:        c.GetInt("functional.nodes", DefaultNodes),
 		InstanceType: c.GetString("functional.instance_type", ""),
 		Advertise:    c.GetString("functional.advertise", DefaultAdvertise),
-		NumDBs:       c.GetInt("functional.dbs", DefaultNumDBs),
-		TablesPerDB:  c.GetInt("functional.tables_per_db", DefaultTablesPerDB),
 		RowsPerTable: c.GetInt("functional.rows_per_table", DefaultRowsPerTable),
-		Tablets:      c.GetInt("functional.tablets", DefaultTablets),
 		Concurrency:  c.GetInt("functional.concurrency", DefaultConcurrency),
 		PgVersion:    c.GetInt("functional.pg_version", DefaultPgVersion),
 
@@ -136,13 +124,10 @@ func FromConfig(c *core.Config) Config {
 		ClusterDeploy:     c.GetBool("functional.cluster.deploy", DefaultClusterDeploy),
 		ClusterDeployDir:  c.GetString("functional.cluster.deploy_dir", DefaultClusterDeployDir),
 
-		YBAURL:        c.GetString("env.universe.yba.url", ""),
-		YBACustomer:   c.GetString("env.universe.yba.customer_uuid", ""),
-		YBAToken:      c.GetString("env.universe.yba.api_token", ""),
-		UniverseRef:   c.GetString("env.universe.yba.universe", ""),
-		YBAInsecure:   c.GetBool("env.universe.yba.insecure_tls", true),
-		YBAOwned:      c.GetBool("env.universe.owned", false),
-		YBACreateSpec: c.GetMap("functional.yba.create_spec", nil),
+		YBAURL:      c.GetString("env.universe.yba.url", ""),
+		YBACustomer: c.GetString("env.universe.yba.customer_uuid", ""),
+		YBAToken:    c.GetString("env.universe.yba.api_token", ""),
+		UniverseRef: c.GetString("env.universe.yba.universe", ""),
 	}
 }
 
@@ -154,8 +139,8 @@ func ampConfigured(c *core.Config) bool {
 	return a.ControllerChart != "" || a.ControllerManifest != ""
 }
 
-// gateAWS returns a skip reason (and false) unless the AWS-backed foundation
-// tests may run: amp is deployable. AWS itself is always usable via the shared
+// gateAWS returns a skip reason (and false) unless the AWS-backed shapes may
+// run: amp is deployable. AWS itself is always usable via the shared
 // dev-VPC defaults, so no AWS gate is needed.
 func (cfg Config) gateAWS(c *core.Config) (string, bool) {
 	if !ampConfigured(c) {
@@ -164,24 +149,8 @@ func (cfg Config) gateAWS(c *core.Config) (string, bool) {
 	return "", true
 }
 
-// gateYBA returns a skip reason (and false) unless the YBA-universe foundation
-// test may run: amp deployable, and a YBA target reachable (url +
-// customer + token) with either a universe to attach or owned+a create spec.
-func (cfg Config) gateYBA(c *core.Config) (string, bool) {
-	if r, ok := cfg.gateAWS(c); !ok {
-		return r, false
-	}
-	if cfg.YBAURL == "" || cfg.YBACustomer == "" || cfg.YBAToken == "" {
-		return "YBA not configured: set env.universe.yba.url, customer_uuid and api_token", false
-	}
-	if cfg.UniverseRef == "" && !(cfg.YBAOwned && len(cfg.YBACreateSpec) > 0) {
-		return "no universe target: set env.universe.yba.universe to attach, or env.universe.owned + functional.yba.create_spec to create", false
-	}
-	return "", true
-}
-
 // gateYBAProvisioned returns a skip reason (and false) unless the
-// stand-up-our-own-YBA foundation test may run: amp deployable, a k8s
+// stand-up-our-own-YBA shape may run: amp deployable, a k8s
 // cluster to deploy the YBA into (apps.ybastack.kubecontext or kubeconfig set),
 // and the deploy/provider secrets resolvable. The provider secrets differ by
 // apps.yba.provider_type: the aws backing needs the AWS access/secret keys, the
@@ -245,7 +214,7 @@ func (cfg Config) gateYBAProvisioned(c *core.Config) (string, bool) {
 }
 
 // gateYBK8s returns a skip reason (and false) unless the co-located
-// YB-in-k8s foundation test may run: amp deployable, and a k8s cluster
+// YB-in-k8s shape may run: amp deployable, and a k8s cluster
 // to deploy into (apps.ybk8s.kubecontext/kubeconfig, or the reused
 // env.ampstack.context). No cloud VM credentials are needed — it is pure k8s.
 // For genuine co-location the amp deploy must target the SAME cluster, so set

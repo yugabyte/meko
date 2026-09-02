@@ -299,26 +299,19 @@ env:
     # initial deploy can: a long-lived env may have scaled its pool down.
     controller_roll_timeout: 20m
 
-# --- Functional suite: amp-on-backing tests (suites/functional) ---
-# End-to-end: for one YugabyteDB backing store, provision the cluster, run a
-# YB-native workload (layer 1), deploy amp on it (ampstack external), run a
-# workload through amp compute (layer 2), cross-check, tear down as one unit.
-# Self-provisions real infra, so each test needs its own config present (amp:
-# env.ampstack.controller_chart; amp_on_yba_universe: env.universe.yba.* + a
-# universe; amp_on_yba_provisioned: a k8s cluster
-# [apps.ybastack.kubecontext/kubeconfig] + quay & AWS secrets).
+# --- Functional suite (suites/features) ---
+# The backing shape and workload knobs the tests that stand up their own backing
+# read (also the StandUp path behind `ampqa setup` and the presets suite). Those
+# tests self-provision real infra, so they need env.ampstack.controller_chart and
+# their shape's own config present.
 functional:
   # Backing-cluster host shape (awsvm tests); override env.awsvm.*/apps.cloud.aws.*.
   nodes: 3
   instance_type: ""
   # IP nodes advertise / the coordinator reaches YSQL at: "private" or "public".
   advertise: "private"
-  # Workload shape (both layers): databases/schemas, tables per namespace, rows
-  # per table, tablets per table (YB-native SPLIT INTO N TABLETS). Small = cheap.
-  dbs: 4
-  tables_per_db: 3
+  # Workload shape: rows per table. Small = cheap.
   rows_per_table: 2000
-  tablets: 3
   # Bounded parallelism across namespaces.
   concurrency: 4
   # amp cluster/endpoint PG version (0 → the controller chooses).
@@ -745,8 +738,7 @@ apps:
 
   # apps/ybk8s: YugabyteDB-in-Kubernetes deploy App. Stands up a YB cluster in a
   # per-run namespace via the upstream `yugabyte` helm chart, for the cheapest
-  # fully-GCP CO-LOCATED mode (YB + amp in one GKE cluster). Powers
-  # functional/amp_on_yb_k8s.
+  # fully-GCP CO-LOCATED mode (YB + amp in one GKE cluster).
   ybk8s:
     # kubecontext empty → env.sharedk8s.context, then env.ampstack.context (the
     # context the run already provides), then the ambient current context. For

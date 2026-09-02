@@ -53,7 +53,7 @@ func TestManifestSurfacesTestsAndTags(t *testing.T) {
 		t.Fatal("manifest lists no tests")
 	}
 
-	var sawPreset, sawFoundation bool
+	var sawPreset, sawRunnable bool
 	for _, tc := range m.Data.Tests {
 		if tc.Suite == "presets" {
 			sawPreset = true
@@ -61,8 +61,8 @@ func TestManifestSurfacesTestsAndTags(t *testing.T) {
 				t.Errorf("preset %s: has_run=%v has_setup=%v, want setup-only (false/true)", tc.Name, tc.HasRun, tc.HasSetup)
 			}
 		}
-		if tc.Name == "features/amp_on_yb_k8s" {
-			sawFoundation = true
+		if tc.Name == "features/pg_roundtrip" {
+			sawRunnable = true
 			if !tc.HasRun {
 				t.Errorf("%s: has_run=false, want a runnable body", tc.Name)
 			}
@@ -71,8 +71,8 @@ func TestManifestSurfacesTestsAndTags(t *testing.T) {
 	if !sawPreset {
 		t.Error("no presets test surfaced in manifest")
 	}
-	if !sawFoundation {
-		t.Error("features/amp_on_yb_k8s not surfaced in manifest")
+	if !sawRunnable {
+		t.Error("features/pg_roundtrip not surfaced in manifest")
 	}
 }
 

@@ -1,14 +1,9 @@
-// Package functional registers real functional tests. The light tests here run
-// against any env that serves an amp compute endpoint, and skip cleanly via
-// a type-assert on the environment when none is provisioned (dry-run/fake). The
-// heavier amp-on-backing tests (backing.go) are end-to-end: for one YugabyteDB
-// backing store they provision the cluster, run a YB-native workload (layer 1),
-// deploy amp on it (ampstack external), run a workload through amp compute
-// (layer 2), cross-check, and tear everything down as one unit. They
-// self-provision real infrastructure, so they are opt-in behind
-// each shape's config gate (backing_config.go). The
-// shared provision-and-prepare machinery (standup.go) also backs the presets
-// suite. All tests are blank-imported by cmd/ampqa.
+// Package functional registers real functional tests. They run against any env
+// that serves an amp compute endpoint, and skip cleanly via a type-assert on the
+// environment when none is provisioned (dry-run/fake). The tests that need their
+// own backing stand it up through the shared provision-and-prepare machinery
+// (standup_helper.go), which also backs the presets suite. All tests are
+// blank-imported by cmd/ampqa.
 package features
 
 import (

@@ -10,7 +10,7 @@ import (
 )
 
 // Standing-environment shapes StandUp can produce, reusing the same
-// provisioners the foundation run tests use. These are the values the presets
+// provisioners StandUp drives. These are the values the presets
 // suite passes and that a StandingEnv records as its Shape.
 const (
 	ShapeYugabyted = "yugabyted" // yugabyted cluster on cloud VMs (cloud = env.vm.cloud)
@@ -20,8 +20,8 @@ const (
 )
 
 // shapeProvisioner maps a standing-env shape to its backing provisioner and the
-// gate that decides whether it may run — the exact pair the foundation run
-// tests wire, so setup and run stand the backing up through identical code.
+// gate that decides whether it may run, so every caller stands the backing up
+// through identical code.
 func (cfg Config) shapeProvisioner(shape string) (backingProvisioner, func(*core.Config) (string, bool), error) {
 	switch shape {
 	case ShapeYugabyted:
@@ -39,7 +39,7 @@ func (cfg Config) shapeProvisioner(shape string) (backingProvisioner, func(*core
 
 // StandUp is the reusable provision-and-prepare phase behind `ampqa setup` and
 // the presets suite: it stands up a backing YugabyteDB cluster of the named
-// shape (reusing the foundation provisioners, no duplication), deploys the amp
+// shape, deploys the amp
 // control plane on it, and returns a StandingEnv describing the running
 // environment plus the teardown that reaps everything. `ampqa setup` leaves the
 // environment up (discarding the teardown); a normal `run` would invoke it. It
@@ -50,7 +50,7 @@ func StandUp(t *core.T, shape string) (*core.SetupResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Same double-provision guard the foundation run bodies use: StandUp
+	// The double-provision guard: StandUp
 	// self-provisions its OWN backing, so if it is ever invoked with an env layer
 	// that already stood up real infra (a provisioning universe.Env), running it
 	// would double-provision. Under `ampqa setup` t.Env is nil (no provider

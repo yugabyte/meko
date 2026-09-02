@@ -3,15 +3,15 @@
 // branch copy-on-write isolation, the endpoint lifecycle, and (the headline)
 // compute restart across shared storage. Each stands up a co-located
 // YugabyteDB-in-k8s backing plus the amp control plane (the cheapest fully-k8s
-// mode, reusing the same provisionYBK8s + deployAmp the amp_on_yb_k8s foundation
-// test uses), then drives the resource ladder user → pool → cluster → branch →
-// endpoint and asserts a specific product guarantee.
+// mode, reusing the same provisionYBK8s + deployAmp StandUp uses), then drives
+// the resource ladder user → pool → cluster → branch → endpoint and asserts a
+// specific product guarantee.
 //
 // The stand-up + guaranteed LIFO teardown (endpoints/branches retired by the
 // cluster-delete cascade, then the amp namespace, then the backing namespace +
 // PVCs) is shared here; the three tests differ only in their feature phases. They
 // SKIP cleanly unless a k8s cluster is configured — the
-// same gate the foundation tests use.
+// same gate StandUp uses.
 package features
 
 import (

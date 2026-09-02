@@ -2,16 +2,12 @@ package features
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log"
-	"net/http"
 	"path"
-	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyte"
@@ -248,52 +244,10 @@ func (cfg Config) provisionYBK8s(ctx context.Context, t *core.T, td *teardownSta
 	return ybbacking.FromYBK8s(conn, info.TailnetAddrs, inCluster), plan, nil
 }
 
-// provisionYBAUniverse: attach an existing YBA universe (env.universe.yba.universe)
-// or, when owned with a create spec, create one; a delete cleanup is registered
-// only when the universe is owned.
-// It is a foundation RUN provisioner only (not a setup-only preset shape), so it
-// returns no reap.Plan — its teardown always runs in-process.
-func (cfg Config) provisionYBAUniverse(ctx context.Context, t *core.T, td *teardownStack, logf func(string, ...any)) (ybbacking.BackingStore, *reap.Plan, error) {
-	cl := yba.New(cfg.YBAURL, cfg.YBACustomer, cfg.YBAToken, yba.WithHTTPClient(ybaHTTPClient(cfg.YBAInsecure)))
-
-	var u yba.Universe
-	if cfg.UniverseRef != "" {
-		got, err := cl.GetUniverse(ctx, cfg.UniverseRef)
-		if err != nil {
-			return nil, nil, fmt.Errorf("attach universe %q: %w", cfg.UniverseRef, err)
-		}
-		u = got
-	} else {
-		ref, err := cl.CreateUniverseAndWait(ctx, cfg.YBACreateSpec)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create universe: %w", err)
-		}
-		got, err := cl.GetUniverse(ctx, ref.ResourceUUID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("resolve created universe %s: %w", ref.ResourceUUID, err)
-		}
-		u = got
-	}
-
-	if cfg.YBAOwned {
-		id := u.UniverseUUID
-		td.push("delete owned universe", func(ctx context.Context) error {
-			_, err := cl.DeleteUniverseAndWait(ctx, id)
-			return err
-		})
-	}
-
-	bs, err := ybbacking.FromYBAUniverse(u)
-	if err != nil {
-		return nil, nil, err
-	}
-	return bs, nil, nil
-}
-
 // provisionYBAProvisioned stands up an OWNED YBA + universe via env/universe's
 // provision_yba mode and adapts the resulting endpoint into a backing store. The
 // deploy→provider→universe flow and its guaranteed, partial-safe teardown live
-// in the env; this registers that teardown on the foundation stack the instant
+// in the env; this registers that teardown on the teardown stack the instant
 // provisioning returns, so the YBA + universe are always reaped.
 func (cfg Config) provisionYBAProvisioned(ctx context.Context, t *core.T, td *teardownStack, logf func(string, ...any)) (ybbacking.BackingStore, *reap.Plan, error) {
 	secrets, err := core.NewSecrets(t.Options)
@@ -362,14 +316,4 @@ func ybaReapPlan(h universe.ProvisionedHandles) *reap.Plan {
 		p.Cloud = &reap.CloudReap{Cloud: h.ProviderType, RunTag: h.RunTag, Region: h.Region}
 	}
 	return p
-}
-
-// ybaHTTPClient builds the YBA HTTP client, skipping TLS verification when the
-// server is self-signed (the common dev case).
-func ybaHTTPClient(insecure bool) *http.Client {
-	hc := &http.Client{Timeout: 60 * time.Second}
-	if insecure {
-		hc.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // YBA is commonly self-signed; opt-in via config
-	}
-	return hc
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/amp/test/functional/framework/apps/workloadgen"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/reap"
@@ -28,118 +27,6 @@ const pgReadyTimeout = 5 * time.Minute
 // freshly autoscaled node (10 to 19 minutes observed on amp-dev, meko#698)
 // against a warm median of seconds.
 const endpointReadyTimeout = 20 * time.Minute
-
-func init() {
-	core.Register(core.Test{
-		Name:        "features/amp_on_yugabyted_aws",
-		Suite:       "features",
-		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		OwningTeam:  core.TeamControlPlane,
-		Description: "End-to-end amp-on-backing: awsvm host → yugabyted cluster → layer-1 + layer-2 workloads → teardown.",
-		Params:      []string{"functional", "env.ampstack", "env.vm", "env.awsvm", "apps.cloud.aws"},
-		Run:         runAmpOnYugabytedAWS,
-	})
-	core.Register(core.Test{
-		Name:        "features/amp_on_raw_yugabyte_aws",
-		Suite:       "features",
-		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		OwningTeam:  core.TeamControlPlane,
-		Description: "End-to-end amp-on-backing: awsvm host → raw master + tserver cluster → layer-1 + layer-2 workloads → teardown.",
-		Params:      []string{"functional", "env.ampstack", "env.vm", "env.awsvm", "apps.cloud.aws"},
-		Run:         runAmpOnRawYugabyteAWS,
-	})
-	core.Register(core.Test{
-		Name:        "features/amp_on_yba_universe",
-		Suite:       "features",
-		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		OwningTeam:  core.TeamControlPlane,
-		Description: "End-to-end amp-on-backing: attach or create a YBA universe → layer-1 + layer-2 workloads → teardown.",
-		Params:      []string{"functional", "env.ampstack", "env.universe", "apps.yba"},
-		Run:         runAmpOnYBAUniverse,
-	})
-	core.Register(core.Test{
-		Name:        "features/amp_on_yba_provisioned",
-		Suite:       "features",
-		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		OwningTeam:  core.TeamControlPlane,
-		Description: "End-to-end amp-on-backing: stand up an owned YBA in k8s → create a provider + universe → layer-1 + layer-2 → teardown.",
-		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba"},
-		Run:         runAmpOnYBAProvisioned,
-	})
-	core.Register(core.Test{
-		Name:        "features/amp_on_yb_k8s",
-		Suite:       "features",
-		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
-		OwningTeam:  core.TeamControlPlane,
-		Description: "End-to-end amp-on-backing: deploy YugabyteDB in k8s co-located with amp → layer-1 + layer-2 workloads → teardown.",
-		Params:      []string{"functional", "env.ampstack", "apps.ybk8s"},
-		Run:         runAmpOnYBK8s,
-	})
-}
-
-// runAmpOnYugabytedAWS: awsvm host → yugabyted cluster → layers 1+2 → teardown.
-func runAmpOnYugabytedAWS(t *core.T) error {
-	cfg := FromConfig(t.Options)
-	if reason, ok := cfg.gateAWS(t.Options); !ok {
-		t.Skip(reason)
-		return nil
-	}
-	return runFoundation(t, cfg, cfg.provisionYugabytedOnAWS)
-}
-
-// runAmpOnRawYugabyteAWS: awsvm host → raw master+tserver cluster → layers 1+2
-// → teardown.
-func runAmpOnRawYugabyteAWS(t *core.T) error {
-	cfg := FromConfig(t.Options)
-	if reason, ok := cfg.gateAWS(t.Options); !ok {
-		t.Skip(reason)
-		return nil
-	}
-	return runFoundation(t, cfg, cfg.provisionRawYugabyteOnAWS)
-}
-
-// runAmpOnYBAUniverse: attach/create a YBA universe → layers 1+2 → teardown
-// (delete only if owned).
-func runAmpOnYBAUniverse(t *core.T) error {
-	cfg := FromConfig(t.Options)
-	if reason, ok := cfg.gateYBA(t.Options); !ok {
-		t.Skip(reason)
-		return nil
-	}
-	return runFoundation(t, cfg, cfg.provisionYBAUniverse)
-}
-
-// runAmpOnYBAProvisioned: stand up an OWNED YBA in k8s → create a provider +
-// universe on it → layers 1+2 → teardown (delete universe + tear the YBA down).
-// The whole deploy→provider→universe flow (and its guaranteed, partial-safe
-// cleanup) lives in env/universe's provision_yba mode; this provisioner just
-// drives it and adapts the resulting endpoint into a backing store.
-func runAmpOnYBAProvisioned(t *core.T) error {
-	cfg := FromConfig(t.Options)
-	if reason, ok := cfg.gateYBAProvisioned(t.Options); !ok {
-		t.Skip(reason)
-		return nil
-	}
-	return runFoundation(t, cfg, cfg.provisionYBAProvisioned)
-}
-
-// runAmpOnYBK8s: deploy a YugabyteDB cluster IN k8s and deploy amp into the
-// SAME cluster pointed at the in-cluster YB Service DNS (co-location) → layers
-// 1+2 → teardown (namespace + PVCs). The cheapest fully-GCP co-located mode:
-// amp↔YB traffic never leaves the cluster; no cloud VM creds needed.
-func runAmpOnYBK8s(t *core.T) error {
-	cfg := FromConfig(t.Options)
-	if reason, ok := cfg.gateYBK8s(t.Options); !ok {
-		t.Skip(reason)
-		return nil
-	}
-	return runFoundation(t, cfg, cfg.provisionYBK8s)
-}
 
 // backingProvisioner stands up the backing YugabyteDB cluster, registers its
 // teardown (cluster destroy + host terminate / universe delete) on td, and
@@ -165,12 +52,11 @@ var realInfraProvisionModes = map[string]bool{
 // concrete universe package and unit-testable with a bare fake.
 type modeReporter interface{ Mode() string }
 
-// gateNoDoubleProvision skips a foundation test when the env RunOne already
-// resolved is itself a real-infra universe.Env in a provisioning mode. Every
-// foundation test self-provisions its OWN backing in its body (package doc);
-// if RunOne's env layer ALSO provisioned real infra under one of
-// realInfraProvisionModes, running the body would provision a SECOND real
-// backing on top of the first — the double-provision (and double-spend)
+// gateNoDoubleProvision skips a self-provisioning test when the env RunOne
+// already resolved is itself a real-infra universe.Env in a provisioning mode.
+// Such a test stands its OWN backing up in its body; if RunOne's env layer ALSO
+// provisioned real infra under one of realInfraProvisionModes, running the body
+// would provision a SECOND real backing on top of the first — the double-provision (and double-spend)
 // footgun this guard exists to catch. The happy path is untouched: --fake-env
 // resolves the fake env (no Mode method at all), and an attach_yba /
 // attach_address env reports a mode outside realInfraProvisionModes.
@@ -183,39 +69,10 @@ func gateNoDoubleProvision(env core.Environment) (string, bool) {
 	if !realInfraProvisionModes[mode] {
 		return "", true
 	}
-	return fmt.Sprintf("foundation tests self-provision their backing; run with --fake-env to avoid double-provisioning — env.universe.mode=%s would double-provision", mode), false
+	return fmt.Sprintf("this test self-provisions its backing; run with --fake-env to avoid double-provisioning — env.universe.mode=%s would double-provision", mode), false
 }
 
-// runFoundation encodes the whole 6-step foundation lifecycle generically. It
-// owns the guaranteed-cleanup discipline: a LIFO teardown stack that runs every
-// registered cleanup even when a middle phase fails, on an independent deadline,
-// surfacing the first real error.
-func runFoundation(t *core.T, cfg Config, prov backingProvisioner) error {
-	if reason, ok := gateNoDoubleProvision(t.Env); !ok {
-		t.Skip(reason)
-		return nil
-	}
-	flowLogf, rlog := newFlowLog(t.Masker())
-	f := &flow{t: t, cfg: cfg, prov: prov, td: &teardownStack{}, logf: flowLogf, rlog: rlog}
-	// A run tears its own infra down in-process on the happy path, but a killed
-	// (SIGKILL) or hung run never reaches that teardown. Recording the same
-	// reap.Plan `ampqa setup` records makes such a run recoverable via `ampqa env
-	// ls` / `ampqa env reap`; a clean teardown removes the record below.
-	f.reg = openRunReapRegistry(f.logf)
-	step := func(name string, fn func() error) error {
-		return t.Step(name, func(*core.StepHandle) error { return fn() })
-	}
-	phases := []phase{
-		{"provision_backing", f.provisionBacking},
-		{"workload_yb_native", f.workloadNative},
-		{"deploy_amp", f.deployAmp},
-		{"workload_amp_compute", f.workloadAmp},
-		{"cross_layer_sanity", f.crossLayer},
-	}
-	return runLifecycle(t.Context, step, f.td, phases, f.logf, f.collectDiagnostics, f.onTeardownDone)
-}
-
-// --- guaranteed-cleanup engine (unit-tested in foundation_test.go) ---
+// --- guaranteed-cleanup engine ---
 
 // stepRunner runs a named phase, surfacing the portal/stdout timeline. The real
 // flow wraps t.Step; unit tests pass a trivial runner.
@@ -257,7 +114,7 @@ func (s *teardownStack) run(ctx context.Context, logf func(string, ...any)) erro
 		c := fns[i]
 		if err := c.fn(ctx); err != nil {
 			if logf != nil {
-				logf("foundation teardown: %s (best-effort): %v", c.name, err)
+				logf("teardown: %s (best-effort): %v", c.name, err)
 			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s: %w", c.name, err)
@@ -319,9 +176,8 @@ type flow struct {
 	// backing + amp — see runAmpFeature's attach-vs-self-provision decision.
 	ampEnv ampControlPlane
 
-	store  ybbacking.BackingStore
-	native NativeReport
-	reap   *reap.Plan // reap handles the backing provisioner recorded (StandUp reads it)
+	store ybbacking.BackingStore
+	reap  *reap.Plan // reap handles the backing provisioner recorded (StandUp reads it)
 
 	// reg + regID are the crash-recovery net for a `run` (nil under StandUp, which
 	// records its own plan in cmd/ampqa/setup). A non-empty backing plan is
@@ -337,9 +193,6 @@ func (f *flow) register(name string, fn func(context.Context) error) { f.td.push
 // suffix is the per-invocation unique token every resource name embeds
 // (seed + nonce; see core.T.ResourceSuffix).
 func (f *flow) suffix() string { return f.t.ResourceSuffix() }
-
-// sqlPrefix is the SQL-identifier-safe name prefix for databases/tables.
-func (f *flow) sqlPrefix() string { return "fnd_" + f.suffix() }
 
 // namespace is the DNS-safe amp namespace (labelled ampqa-managed by ampstack).
 func (f *flow) namespace() string { return "ampqa-fnd-" + f.suffix() }
@@ -394,13 +247,13 @@ func (f *flow) addAmpNamespaceToReapPlan(namespace string) {
 		Data:     map[string]string{"reap_plan": planJSON},
 	})
 	if err != nil {
-		f.logf("foundation: re-record crash-recovery reap plan for %s (best-effort): %v", namespace, err)
+		f.logf("re-record crash-recovery reap plan for %s (best-effort): %v", namespace, err)
 		return
 	}
 	old := f.regID
 	f.regID = entry.ID
 	if _, err := f.reg.Remove(old); err != nil {
-		f.logf("foundation: remove superseded crash-recovery reap record %s (best-effort): %v", old, err)
+		f.logf("remove superseded crash-recovery reap record %s (best-effort): %v", old, err)
 	}
 }
 
@@ -418,7 +271,7 @@ func (f *flow) clearReapRecord() {
 		return
 	}
 	if _, err := f.reg.Remove(f.regID); err != nil && f.logf != nil {
-		f.logf("foundation: remove crash-recovery reap record %s (best-effort): %v", f.regID, err)
+		f.logf("remove crash-recovery reap record %s (best-effort): %v", f.regID, err)
 	}
 }
 
@@ -444,7 +297,7 @@ func recordRunReapPlan(reg *registry.Registry, backing *reap.Plan, ampContext, a
 	})
 	if err != nil {
 		if logf != nil {
-			logf("foundation: record crash-recovery reap plan (best-effort): %v", err)
+			logf("record crash-recovery reap plan (best-effort): %v", err)
 		}
 		return ""
 	}
@@ -458,7 +311,7 @@ func openRunReapRegistry(logf func(string, ...any)) *registry.Registry {
 	path, err := registry.DefaultPath()
 	if err != nil {
 		if logf != nil {
-			logf("foundation: reap registry unavailable, crash-recovery record disabled (best-effort): %v", err)
+			logf("reap registry unavailable, crash-recovery record disabled (best-effort): %v", err)
 		}
 		return nil
 	}
@@ -477,60 +330,6 @@ func (f *flow) waitBackingReady(ctx context.Context) error {
 		return fmt.Errorf("backing YSQL not ready: %w", err)
 	}
 	return nil
-}
-
-// workloadNative runs the layer-1 YB-native workload against the backing
-// cluster: several databases, tablet-split DDL, DDL/DML variations, and a
-// workloadgen load + checksum verify.
-func (f *flow) workloadNative(ctx context.Context) error {
-	base := f.store.ConnInfo()
-	admin, err := connectPG(ctx, base)
-	if err != nil {
-		return fmt.Errorf("connect backing maintenance db: %w", err)
-	}
-	defer admin.Close()
-
-	spec := NativeSpec{
-		Prefix:       f.sqlPrefix(),
-		NumDBs:       f.cfg.NumDBs,
-		TablesPerDB:  f.cfg.TablesPerDB,
-		RowsPerTable: f.cfg.RowsPerTable,
-		Tablets:      f.cfg.Tablets,
-		Seed:         f.t.Seed.Fork("native").Value(),
-		Concurrency:  f.cfg.Concurrency,
-	}
-	// The DROP DATABASE cleanups RunNative registers run at final teardown,
-	// after admin's pool above is closed by this function's defer — they must
-	// reconnect fresh rather than reuse admin (AGENTS.md: teardown discipline).
-	reconnectAdmin := func(ctx context.Context) (Querier, func(), error) {
-		cl, err := connectPG(ctx, base)
-		if err != nil {
-			return nil, nil, fmt.Errorf("reconnect backing maintenance db: %w", err)
-		}
-		return cl.Pool(), cl.Close, nil
-	}
-	report, err := RunNative(ctx, admin.Pool(), f.connector(base), reconnectAdmin, f.register, spec, f.logf)
-	if err != nil {
-		return err
-	}
-	if !report.OK {
-		return fmt.Errorf("layer-1 workloadgen verify failed on %d database(s)", countBadDBs(report))
-	}
-	f.native = report
-	return nil
-}
-
-// connector opens a Querier scoped to a named database on the backing cluster.
-func (f *flow) connector(base pg.ConnInfo) Connector {
-	return func(ctx context.Context, db string) (Querier, func(), error) {
-		ci := base
-		ci.Database = db
-		cl, err := connectPG(ctx, ci)
-		if err != nil {
-			return nil, nil, err
-		}
-		return cl.Pool(), cl.Close, nil
-	}
 }
 
 // deployAmp stands up the amp control plane on the backing cluster (ampstack
@@ -580,129 +379,6 @@ func (f *flow) controllerClient(ctx context.Context) (*controller.Client, error)
 		return nil, fmt.Errorf("amp controller unreachable: %w", err)
 	}
 	return cl, nil
-}
-
-// workloadAmp runs the layer-2 workload through amp's compute: create a cluster
-// + endpoint via the controller, connect to the endpoint's Postgres, and run a
-// parallel multi-schema DDL/DML exercise plus a workloadgen load + verify. The
-// cluster delete (cascade) is registered so the endpoint is retired on teardown.
-func (f *flow) workloadAmp(ctx context.Context) error {
-	cl, err := f.controllerClient(ctx)
-	if err != nil {
-		return err
-	}
-	user, err := cl.CreateUser(ctx, controller.CreateUserRequest{IsAdmin: true})
-	if err != nil {
-		return fmt.Errorf("create amp user: %w", err)
-	}
-	pool, err := cl.CreateStoragePool(ctx, controller.CreateStoragePoolRequest{
-		Name:        "fnd-" + f.suffix(),
-		OwnerUserID: user.ID,
-	})
-	if err != nil {
-		return fmt.Errorf("create amp storage pool: %w", err)
-	}
-
-	projName := "fnd-" + f.suffix()
-	if _, err := cl.CreateClusterAndWait(ctx, pool.ID, controller.CreateClusterRequest{
-		Name:      projName,
-		PgVersion: f.cfg.PgVersion,
-	}); err != nil {
-		return fmt.Errorf("create amp cluster: %w", err)
-	}
-	proj, err := findCluster(ctx, cl, pool.ID, projName)
-	if err != nil {
-		return err
-	}
-	f.register("delete amp cluster", func(ctx context.Context) error {
-		_, e := cl.DeleteClusterAndWait(ctx, pool.ID, proj.ID)
-		return e
-	})
-
-	branchID := proj.DefaultBranch.BranchID
-	if _, err := cl.CreateEndpointAndWait(ctx, pool.ID, proj.ID, branchID, controller.CreateEndpointRequest{Role: "read_write"}); err != nil {
-		return fmt.Errorf("create amp endpoint: %w", err)
-	}
-	eps, err := cl.ListAllEndpoints(ctx, pool.ID, proj.ID, branchID)
-	if err != nil {
-		return fmt.Errorf("list amp endpoints: %w", err)
-	}
-	if len(eps) == 0 {
-		return fmt.Errorf("create amp endpoint reported success but the branch lists no endpoint afterwards")
-	}
-	ci, err := f.endpointConnInfo(eps[0])
-	if err != nil {
-		return err
-	}
-	client, err := connectPG(ctx, ci)
-	if err != nil {
-		return fmt.Errorf("connect amp endpoint %s: %w", eps[0].Address, err)
-	}
-	defer client.Close()
-
-	report, err := RunAmpCompute(ctx, client.Pool(), AmpSpec{
-		Prefix:       f.sqlPrefix(),
-		NumSchemas:   f.cfg.NumDBs,
-		TablesPerSet: f.cfg.TablesPerDB,
-		RowsPerTable: f.cfg.RowsPerTable,
-		Seed:         f.t.Seed.Fork("amp").Value(),
-		Concurrency:  f.cfg.Concurrency,
-	})
-	if err != nil {
-		return err
-	}
-	if !report.OK {
-		return fmt.Errorf("layer-2 workloadgen verify failed against amp compute")
-	}
-	return nil
-}
-
-// crossLayer asserts both layers are healthy and the amp deploy actually used
-// the external cluster: the controller answers /healthz, amp's storage database
-// exists on the backing cluster, and the backing cluster is still serving its
-// own layer-1 data.
-func (f *flow) crossLayer(ctx context.Context) error {
-	cl, err := f.controllerClient(ctx)
-	if err != nil {
-		return err
-	}
-	if err := cl.Healthz(ctx); err != nil {
-		return fmt.Errorf("amp controller not healthy: %w", err)
-	}
-
-	base := f.store.ConnInfo()
-	admin, err := connectPG(ctx, base)
-	if err != nil {
-		return fmt.Errorf("connect backing to verify amp storage: %w", err)
-	}
-	defer admin.Close()
-
-	storageDB := f.t.Options.GetString("env.ampstack.db_name", ampstack.DefaultDBName)
-	n, err := admin.QueryInt(ctx, "SELECT count(*) FROM pg_database WHERE datname=$1", storageDB)
-	if err != nil {
-		return fmt.Errorf("check amp storage db on backing: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("amp storage database %q not found on the backing cluster (deploy did not use the external store)", storageDB)
-	}
-
-	if len(f.native.DBs) == 0 {
-		return fmt.Errorf("no layer-1 databases were recorded to re-verify (workload_yb_native should have populated at least one)")
-	}
-	db := f.native.DBs[0]
-	q, closeFn, err := f.connector(base)(ctx, db.DBName)
-	if err != nil {
-		return fmt.Errorf("reconnect layer-1 db %s: %w", db.DBName, err)
-	}
-	defer closeFn()
-	report, err := workloadgen.Verify(ctx, q, db.Spec, f.t.Seed.Fork("native").Value())
-	if err != nil {
-		return fmt.Errorf("re-verify layer-1 db %s: %w", db.DBName, err)
-	}
-	if !report.OK {
-		return fmt.Errorf("backing cluster no longer serving its layer-1 data in db %s", db.DBName)
-	}
-	return nil
 }
 
 // endpointConnInfo builds a pg.ConnInfo for an amp endpoint address ("host" or
@@ -815,36 +491,6 @@ func connectStorageConn(ctx context.Context, resolve, refresh func(context.Conte
 	}
 }
 
-func findCluster(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Cluster, error) {
-	const page = 100
-	for offset := 0; ; offset += page {
-		list, err := cl.ListClusters(ctx, poolID, page, offset)
-		if err != nil {
-			return controller.Cluster{}, fmt.Errorf("list clusters: %w", err)
-		}
-		for _, p := range list.Clusters {
-			if p.Name == name {
-				return p, nil
-			}
-		}
-		if list.Count < page || offset+len(list.Clusters) >= list.Total {
-			return controller.Cluster{}, fmt.Errorf("cluster %q not found after create", name)
-		}
-	}
-}
-
-func countBadDBs(r NativeReport) int {
-	n := 0
-	for _, db := range r.DBs {
-		if !db.Report.OK {
-			n++
-		}
-	}
-	return n
-}
-
-// discardSink drops collected blobs — the scheduler collects separately before
-// teardown, so cluster Destroy inside a cleanup does not need a live sink.
 type discardSink struct{}
 
 func (discardSink) Add(string, string, []byte) error { return nil }

@@ -29,6 +29,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Prove storage/compute separation: delete an endpoint and recreate it on the same branch, asserting the dataset survives.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

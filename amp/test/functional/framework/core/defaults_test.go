@@ -422,17 +422,8 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if fcfg.Advertise != features.DefaultAdvertise {
 		t.Errorf("functional Advertise = %q, want %q", fcfg.Advertise, features.DefaultAdvertise)
 	}
-	if fcfg.NumDBs != features.DefaultNumDBs {
-		t.Errorf("functional NumDBs = %d, want %d", fcfg.NumDBs, features.DefaultNumDBs)
-	}
-	if fcfg.TablesPerDB != features.DefaultTablesPerDB {
-		t.Errorf("functional TablesPerDB = %d, want %d", fcfg.TablesPerDB, features.DefaultTablesPerDB)
-	}
 	if fcfg.RowsPerTable != features.DefaultRowsPerTable {
 		t.Errorf("functional RowsPerTable = %d, want %d", fcfg.RowsPerTable, features.DefaultRowsPerTable)
-	}
-	if fcfg.Tablets != features.DefaultTablets {
-		t.Errorf("functional Tablets = %d, want %d", fcfg.Tablets, features.DefaultTablets)
 	}
 	if fcfg.Concurrency != features.DefaultConcurrency {
 		t.Errorf("functional Concurrency = %d, want %d", fcfg.Concurrency, features.DefaultConcurrency)

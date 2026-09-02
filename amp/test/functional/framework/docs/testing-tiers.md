@@ -24,8 +24,8 @@ untagged and run on demand — see the Perf bullet):
 - **`perf`** — the baseline-gated benchmarks in `suites/perf` (`tpcc`, `pgbench`,
   `sysbench`), with version/image comparison + bisect + history/trend.
 
-Extended tests that fit no lane (foundation end-to-ends, upgrade, chaos
-one-offs) are **untagged** and run on demand by name or `--testr`.
+The `scale` tests in `suites/perf` fit no scheduled lane and run on demand by
+name or `--testr`.
 
 `ampqa collect --tag <tier>` is the source of truth for what's in each. The `canary` suite (engine self-test) and `presets` (setup-only
 dev-env menus) are deliberately untagged — they're selected by `--suite` / name,
@@ -33,9 +33,13 @@ not by tier.
 
 ---
 
-## `regression` — every PR / master change (11 tests)
+## `regression` — every PR / master change (64 tests)
 
-Fast, deterministic, each asserting a distinct core guarantee. Env-portable: the
+Fast, deterministic, each asserting a distinct core guarantee. The table below is
+the core-guarantee subset; the tier also carries the amp-feature tests
+(`amp_branch_isolation`, `amp_endpoint_lifecycle`, `amp_compute_restart`), the
+control-plane upgrade tests (`amp_upgrade`, `amp_upgrade_chain`) and the extension
+/ PG-compatibility matrix. Env-portable: the
 tests depend on env *capabilities* (`pgEnv` to reach the endpoint's Postgres, plus
 `computeRestarter` for the restart tests), not a concrete env — so the same tests
 run against a self-built or a standing control plane alike:
@@ -75,19 +79,9 @@ merge (note exit `4` = all-skipped, which the gate must treat as a failure).
 
 ## Extended tests — on demand, by name
 
-Beyond the three lanes: real deployments across clouds/backings, chaos, and long
-runs. Untagged; select by name or `--testr`, each with the env overlay its tests
-need (a single run would demand every cloud credential at once). They are:
+The `stress` and `perf` tiers also run on demand, each with the env overlay its
+tests need (a single run would demand every cloud credential at once):
 
-- **Foundation on k8s** — end-to-end (backing → amp → workloads → teardown) on the
-  k8s-hosted backing: `amp_on_yb_k8s`. The cross-cloud / VM / YBA foundation tests
-  (`amp_on_yugabyted_aws`, `amp_on_raw_yugabyte_aws`, `amp_on_yba_universe`,
-  `amp_on_yba_provisioned`) run on demand by name when that
-  cloud infra is available. (A
-  second k8s check — yugabyted in k8s pods, via the `ybpod` backing — is planned
-  but not yet a registered test.)
-- **amp features on real k8s** — `amp_branch_isolation`, `amp_endpoint_lifecycle`,
-  `amp_compute_restart`.
 - **Stress** (also `--tag stress`) — `combined_load` (parallel workloads +
   chaos/nemesis against an exclusive universe), `backing_maintenance` (the same
   co-located backing under PLANNED maintenance instead of chaos),
@@ -124,9 +118,6 @@ need (a single run would demand every cloud credential at once). They are:
 Example (one env at a time):
 
 ```
-ampqa run --testr '^features/amp_on_yb_k8s$'                         -c gke.yaml
-# cross-cloud/VM foundation (untagged — on demand, needs the cloud infra):
-ampqa run --testr '^features/amp_on_(yugabyted|raw_yugabyte)_aws$'   -c aws.yaml
 ampqa run --tag stress -c gke.yaml -o stress.combined.enabled=bool:true
 ampqa run --tag perf   -c gke.yaml -o perf.enabled=bool:true
 ```

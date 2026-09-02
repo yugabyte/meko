@@ -30,6 +30,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Storage/compute separation: restart an endpoint's compute pod and assert the checksummed dataset survived.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
