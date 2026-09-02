@@ -13,8 +13,8 @@ name: Reconcile-agent image
 # (a fork, or before they are configured) the job still BUILDS the image with
 # --no-push and stays green, so main cannot go red waiting on secret setup.
 #
-#   - QUAY_USER  — the robot account name, e.g. yugabyte+ycp_ci
-#   - QUAY_TOKEN — its token
+#   - QUAY_AMP_TOKEN — the robot pair as "user:token", the secret every pushing
+#     workflow here uses. QUAY_USER stays unset; the build script splits the pair.
 #
 # The Quay repository must exist and the robot must have write on it before the
 # first push.
@@ -51,13 +51,20 @@ jobs:
       # the job is still a real compile+package check on forks and before setup.
       - name: Build and push
         env:
-          QUAY_USER: ${{ secrets.QUAY_USER }}
-          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
         run: |
+          # Only a main build may move the floating `latest` tag: a no-TAG
+          # amp/deploy/up-gke.sh deploy resolves it, so a dispatch from a branch
+          # would otherwise become what that deploy pulls.
+          latest=()
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            latest=(--no-latest)
+            echo "::notice::not on main — tagging custom-<sha> only, leaving :latest alone"
+          fi
           if [ -n "${QUAY_TOKEN}" ]; then
             echo "::notice::pushing quay.io/yugabyte/ycp-reconciler-agent"
-            ./ycp/build-reconciler-agent-image.sh
+            ./ycp/build-reconciler-agent-image.sh "${latest[@]}"
           else
-            echo "::warning::QUAY_TOKEN not set — building the reconcile-agent image but skipping the push"
-            ./ycp/build-reconciler-agent-image.sh --no-push
+            echo "::warning::QUAY_AMP_TOKEN not set — building the reconcile-agent image but skipping the push"
+            ./ycp/build-reconciler-agent-image.sh --no-push "${latest[@]}"
           fi

@@ -194,21 +194,23 @@ the same set, and `charts/meko/tests/agent-rbac_test.yaml` pins it.
 
 `meko/meko-api-server` is not published to ECR on merge, but there is now an
 **on-demand build** of the control-plane image: `meko/api_server/build-image.sh`
-builds it and pushes `quay.io/yugabyte/ycp-api-server` (tags `custom-<sha>` +
-`latest`), wrapped by `.github/workflows/meko-control-plane-image.yml` on `main`
-and `workflow_dispatch` — build-only, staying green, when the `QUAY_TOKEN` secret
-is absent. Before this it was purely hand-built, which caused two false starts —
-an image without `--control-plane-mode`, then one without
+builds it and pushes `quay.io/yugabyte/ycp-api-server` (`custom-<sha>`, plus
+`latest` only on a `main` build), wrapped by
+`.github/workflows/meko-control-plane-image.yml` on `main` and
+`workflow_dispatch` — build-only, staying green, when the `QUAY_AMP_TOKEN`
+secret is absent. Before this it was purely hand-built, which caused two false
+starts — an image without `--control-plane-mode`, then one without
 `-only-controlplane-migrate`. The e2e also builds it from source on every PR
 touching `ycp/`, so the flags cannot silently disappear.
 
 The **reconcile-agent** (`cmd/reconcile-agent`, the amp backend) ships the same
 on-demand way: `ycp/build-reconciler-agent-image.sh` pushes
-`quay.io/yugabyte/ycp-reconciler-agent` (tags `custom-<sha>` + `latest`), wrapped
-by `.github/workflows/ycp-reconciler-agent-image.yml` on `main` and
-`workflow_dispatch`, build-only when `QUAY_TOKEN` is absent. Quay rather than the
-ECR registry `meko-agent` uses, so a cluster pulls it without ECR cross-account
-pull-secret setup — the same reason the control plane ships on Quay.
+`quay.io/yugabyte/ycp-reconciler-agent` (`custom-<sha>`, plus `latest` only on a
+`main` build), wrapped by
+`.github/workflows/ycp-reconciler-agent-image.yml` on `main` and
+`workflow_dispatch`, build-only when `QUAY_AMP_TOKEN` is absent. Quay rather
+than the ECR registry `meko-agent` uses, so a cluster pulls it without ECR
+cross-account pull-secret setup — the same reason the control plane ships on Quay.
 
 ## Open
 
@@ -216,7 +218,7 @@ pull-secret setup — the same reason the control plane ships on Quay.
 |---|---|
 | meko-devops#42 | Chart ergonomics, remainder. `mode: agent`, the mode presets and the runbook landed (#40, #41, #43, #47); Secrets are still out-of-band and the storage class is still per-cluster |
 | meko#401 follow-ups | The lockout class is gone outright: the agent authenticates every call with a YBM API key and enrollment is an idempotent check-in, so there is no earned credential to lose and nothing to rotate. Still open in the design: no CA pinning, and `cert_fingerprint` is decorative |
-| [meko#572](https://github.com/yugabyte/meko/issues/572) | Nothing publishes `meko/meko-api-server`. The control plane is the one YCP component whose image is hand-built — and the pinned data-plane release now names a commit build of it, so every registered environment depends on a tag no CI job produced |
+| [meko#572](https://github.com/yugabyte/meko/issues/572) | `meko-control-plane-image.yml` now publishes the control-plane image on merge to `main`, so new tags are CI-produced. The pinned data-plane release still names an older hand-built commit tag, so registered environments depend on it until that pin moves |
 
 Known gaps not yet filed:
 
@@ -242,12 +244,10 @@ Known gaps not yet filed:
 
 ## Next
 
-1. Rebuild and push `meko/meko-api-server` from `main`, then redeploy `ycp-system`
-   off a real tag instead of a branch build.
+1. Redeploy `ycp-system` off a CI-published `custom-<sha>` tag instead of the
+   hand-built one it runs today, and move the pinned data-plane release to it.
 2. ~~Wire an api-server image build into CI~~ — done: `meko/api_server/build-image.sh`
-   + `meko-control-plane-image.yml` publish `quay.io/yugabyte/ycp-api-server`. Still
-   to do: configure the `QUAY_USER`/`QUAY_TOKEN` robot secret so the push is not
-   skipped.
+   + `meko-control-plane-image.yml` publish `quay.io/yugabyte/ycp-api-server`.
 3. meko-devops#42 remainder — Secrets, and a storage class that is not per-cluster
    guesswork.
 
