@@ -540,8 +540,151 @@ tests:
           path: spec.config.exporters.otlphttp/logs.tls.insecure
           value: false
 
+  # Off-cluster shipping is one switch: otel.byoc.enabled. Default OFF, so a plain
+  # install ships logs to VictoriaLogs alone — no datadog exporter, no shaping, no
+  # key env, no secret dependency.
+  - it: does not ship logs off-cluster by default, keeping VictoriaLogs primary
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - notExists:
+          path: spec.config.exporters.datadog
+      - notExists:
+          path: spec.config.processors.transform/severity
+      - notExists:
+          path: spec.config.processors.transform/datadog
+      - equal:
+          path: spec.config.service.pipelines.logs.processors
+          value: [memory_limiter, k8sattributes, batch]
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [otlphttp/logs]
+      - notContains:
+          path: spec.env
+          content:
+            name: DD_API_KEY
+
+  # byoc.enabled turns on the direct datadog exporter for logs (alongside
+  # metrics->Thanos on the metrics collectors). Added to the SAME logs pipeline as
+  # the VictoriaLogs exporter, so VictoriaLogs stays primary and Datadog is a
+  # second sink.
+  - it: fans logs out to datadog when byoc is enabled, keeping VictoriaLogs primary
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.exporters.datadog.api.site
+          value: us3.datadoghq.com
+      # The key is read from env, never rendered inline.
+      - equal:
+          path: spec.config.exporters.datadog.api.key
+          value: ${env:DD_API_KEY}
+      # A Datadog outage must not back up the shared pipeline.
+      - equal:
+          path: spec.config.exporters.datadog.sending_queue.enabled
+          value: true
+      # Both exporters on the one pipeline; memory_limiter still first, shaping added.
+      - equal:
+          path: spec.config.service.pipelines.logs.processors
+          value: [memory_limiter, k8sattributes, transform/severity, transform/datadog, batch]
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [otlphttp/logs, datadog]
+
+  # The api key is injected from a Secret via secretKeyRef — required, not
+  # optional: an empty key fails the exporter's startup validation and takes the
+  # whole logs daemonset (VictoriaLogs export included) down with it.
+  - it: injects the datadog api key from a secret when byoc is enabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.datadog.apiKeySecret.name: my-dd-secret
+      otel.datadog.apiKeySecret.key: token
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - contains:
+          path: spec.env
+          content:
+            name: DD_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-dd-secret
+                key: token
+
+  # ddsource, service and tags are what Datadog groups on. Fleet identity, when
+  # set, rides along as ddtags so a log and its metrics share one scope.
+  - it: shapes ddsource, service and identity tags for datadog
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.environmentId: amp-acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.processors.transform/datadog.log_statements[0].statements[0]
+          value: 'set(attributes["datadog.log.source"], resource.attributes["k8s.container.name"]) where resource.attributes["k8s.container.name"] != nil'
+      - equal:
+          path: spec.config.processors.transform/datadog.log_statements[0].statements[1]
+          value: 'set(attributes["ddtags"], "env:amp-acme-prod,account:3f2b1c00-0000-0000-0000-000000000009")'
+
+  # No environment/account => no empty ddtags stamped.
+  - it: stamps no ddtags when there is no fleet identity
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - notContains:
+          path: spec.config.processors.transform/datadog.log_statements[0].statements
+          content: 'set(attributes["ddtags"], "")'
+
+  # The secret name/key default so the deploy tooling and the chart agree on where
+  # the api key lives.
+  - it: defaults the datadog secret name and key
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - contains:
+          path: spec.env
+          content:
+            name: DD_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: datadog-api
+                key: api-key
+
   # memory_limiter has to run before anything else, or a log storm OOMs the
-  # node's collector before the limiter ever sees it.
+  # node's collector before the limiter ever sees it. With byoc off (the default)
+  # this is the whole processor chain.
   - it: runs memory_limiter first in the logs pipeline
     capabilities:
       apiVersions:

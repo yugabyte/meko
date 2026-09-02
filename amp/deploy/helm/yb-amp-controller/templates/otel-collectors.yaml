@@ -368,6 +368,21 @@ reference nil-pointers and fails the upgrade outright.
 {{- /* Defaulted for the same --reuse-values reason: an unset logsEndpoint reaches
        hasPrefix as nil and fails the render on a type error. */}}
 {{- $logsEndpoint := .Values.otel.logsEndpoint | default "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}
+{{- /* Datadog logs fan-out — gated on byoc.enabled, the single switch for shipping
+       telemetry off-cluster: metrics to Thanos (the metrics collectors above) and
+       logs to Datadog (here). The site and api-key Secret are plain config,
+       consumed only when byoc is on. `dig` for the --reuse-values path: an install
+       predating these keys has an otel map with no `datadog`/`byoc`, and a direct
+       reference nil-pointers the render. $ddTags carries the same fleet identity
+       the metrics collectors stamp, so a log and its metrics share one scope. */}}
+{{- $byocEnabled := dig "byoc" "enabled" false .Values.otel }}
+{{- $ddSite := dig "datadog" "site" "us3.datadoghq.com" .Values.otel }}
+{{- $ddSecretName := dig "datadog" "apiKeySecret" "name" "datadog-api" .Values.otel }}
+{{- $ddSecretKey := dig "datadog" "apiKeySecret" "key" "api-key" .Values.otel }}
+{{- $ddTags := list }}
+{{- if $envID }}{{ $ddTags = append $ddTags (printf "env:%s" $envID) }}{{ end }}
+{{- if $acctID }}{{ $ddTags = append $ddTags (printf "account:%s" $acctID) }}{{ end }}
+{{- $ddTagsStr := $ddTags | join "," }}
 ---
 apiVersion: opentelemetry.io/v1beta1
 kind: OpenTelemetryCollector
@@ -400,6 +415,17 @@ spec:
       valueFrom:
         fieldRef:
           fieldPath: spec.nodeName
+    {{- if $byocEnabled }}
+    # secretKeyRef, not inline, keeps the key out of the rendered CR. Required, not
+    # optional: the datadog exporter fails startup validation on an empty key and
+    # takes the whole daemonset — VictoriaLogs export included — down with it, so
+    # the datadog-api Secret must exist before a byoc-enabled install.
+    - name: DD_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: {{ $ddSecretName | quote }}
+          key: {{ $ddSecretKey | quote }}
+    {{- end }}
   volumes:
     - name: varlogpods
       hostPath:
@@ -481,6 +507,55 @@ spec:
         pod_association:
           - sources: [{from: resource_attribute, name: k8s.pod.uid}]
           - sources: [{from: resource_attribute, name: k8s.namespace.name}, {from: resource_attribute, name: k8s.pod.name}]
+      {{- if $byocEnabled }}
+      # Datadog shaping runs after k8sattributes (it reads the container name and
+      # `component` label that processor attaches) and before batch. Both are
+      # best-effort (error_mode: ignore): a line that doesn't match ships unshaped
+      # rather than dropping, and is skipped entirely when byoc (hence the datadog
+      # exporter) is off.
+      transform/severity:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              # Lift the app's level word out of the structured line, then map it
+              # onto Datadog's status vocabulary. Rust `tracing` and the Go slog
+              # controller both emit "level":"WORD" in JSON; a text-format line
+              # simply won't match and keeps no status.
+              - set(cache["lvl"], ExtractPatterns(body, "\"level\"\\s*:\\s*\"(?P<lvl>[A-Za-z]+)\"")["lvl"]) where IsMatch(body, "\"level\"\\s*:\\s*\"")
+              - set(severity_text, "critical") where cache["lvl"] == "FATAL" or cache["lvl"] == "CRITICAL"
+              - set(severity_text, "error") where cache["lvl"] == "ERROR" or cache["lvl"] == "SEVERE"
+              - set(severity_text, "warn") where cache["lvl"] == "WARN" or cache["lvl"] == "WARNING"
+              - set(severity_text, "info") where cache["lvl"] == "INFO"
+              - set(severity_text, "debug") where cache["lvl"] == "DEBUG"
+              - set(severity_text, "trace") where cache["lvl"] == "TRACE"
+              # severity_number is the field Datadog actually reads for `status`.
+              - set(severity_number, SEVERITY_NUMBER_FATAL) where severity_text == "critical"
+              - set(severity_number, SEVERITY_NUMBER_ERROR) where severity_text == "error"
+              - set(severity_number, SEVERITY_NUMBER_WARN) where severity_text == "warn"
+              - set(severity_number, SEVERITY_NUMBER_INFO) where severity_text == "info"
+              - set(severity_number, SEVERITY_NUMBER_DEBUG) where severity_text == "debug"
+              - set(severity_number, SEVERITY_NUMBER_TRACE) where severity_text == "trace"
+      transform/datadog:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              # ddsource drives Datadog's integration pipelines and facets; amp's
+              # container name (endpoint/controller/mcp/ui/postgres-exporter) is the
+              # natural source.
+              - set(attributes["datadog.log.source"], resource.attributes["k8s.container.name"]) where resource.attributes["k8s.container.name"] != nil
+              {{- if $ddTagsStr }}
+              # Fleet identity as Datadog tags, mirroring the metrics collectors'
+              # environment_id/account_id labels so a log and its metrics join.
+              - set(attributes["ddtags"], {{ $ddTagsStr | quote }})
+              {{- end }}
+          - context: resource
+            statements:
+              # Datadog `service` = the amp component, falling back to the container.
+              - set(attributes["service.name"], attributes["component"]) where attributes["service.name"] == nil and attributes["component"] != nil
+              - set(attributes["service.name"], attributes["k8s.container.name"]) where attributes["service.name"] == nil and attributes["k8s.container.name"] != nil
+      {{- end }}
       batch: {}
     exporters:
       otlphttp/logs:
@@ -488,12 +563,35 @@ spec:
         tls:
           # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
           insecure: {{ if hasPrefix "https://" $logsEndpoint }}false{{ else }}true{{ end }}
+      {{- if $byocEnabled }}
+      # Fan-out to Datadog IN ADDITION to VictoriaLogs. The api key comes from
+      # ${env:DD_API_KEY} (secretKeyRef above). sending_queue + retry_on_failure
+      # cap the blast radius of a Datadog outage: a failed POST is queued and
+      # retried on this exporter alone, never backing up the otlphttp/logs exporter
+      # that shares the pipeline. host_metadata is off — it is for host tiles, not
+      # a logs-only forwarder.
+      datadog:
+        api:
+          site: {{ $ddSite | quote }}
+          key: ${env:DD_API_KEY}
+        host_metadata:
+          enabled: false
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          queue_size: 100
+          num_consumers: 10
+      {{- end }}
     service:
       extensions: [health_check, file_storage/checkpoints]
       pipelines:
         logs:
           receivers: [filelog]
-          processors: [memory_limiter, k8sattributes, batch]
-          exporters: [otlphttp/logs]
+          processors: [memory_limiter, k8sattributes{{ if $byocEnabled }}, transform/severity, transform/datadog{{ end }}, batch]
+          exporters: [otlphttp/logs{{ if $byocEnabled }}, datadog{{ end }}]
 {{- end }}
 {{- end }}

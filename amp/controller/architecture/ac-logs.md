@@ -1,7 +1,7 @@
 # ac — Logs
 
 **Status:** Draft
-**Last updated:** 2026-08-17
+**Last updated:** 2026-08-27
 
 How amp's container logs leave the node and reach a searchable store. The
 guiding finding mirrors [`ac-metrics.md`](ac-metrics.md): **every amp component
@@ -21,15 +21,20 @@ failure spanning compute_ctl, pageserver and safekeeper requires.
 ```
  sources (stdout)                collect                     store        visualize
  ┌──────────────────────┐
- │ amp controller       │
- │ compute pod          │   ┌────────────────────────┐  ┌──────────────┐  ┌───────┐
- │   pageserver         │──►│ OTel Collector         │─►│ VictoriaLogs │─►│Grafana│
- │   safekeeper         │   │ (daemonset, per node)  │  │              │  │       │
- │   compute_ctl        │   │ filelog → k8sattributes│  └──────────────┘  └───────┘
- │   postgres           │   │        → otlphttp      │
+ │ amp controller       │                                 ┌──────────────┐  ┌───────┐
+ │ compute pod          │   ┌────────────────────────┐ ┌►│ VictoriaLogs │─►│Grafana│
+ │   pageserver         │──►│ OTel Collector         │─┤ └──────────────┘  └───────┘
+ │   safekeeper         │   │ (daemonset, per node)  │ │ ┌──────────────┐
+ │   compute_ctl        │   │ filelog → k8sattributes│ └►│ Datadog logs │ (byoc)
+ │   postgres           │   │  → otlphttp [+ datadog]│   └──────────────┘
  │   postgres_exporter  │   └────────────────────────┘
  └──────────────────────┘         reads /var/log/pods
 ```
+
+VictoriaLogs is the primary, in-cluster store. Datadog is a second sink on the
+same pipeline, added only when `otel.byoc.enabled` (off by default) — the single
+switch that also ships metrics off-cluster to Thanos. When on, the same lines
+land in both stores without a second tail of the node.
 
 The kubelet already writes every container's stdout/stderr to
 `/var/log/pods/<ns>_<pod>_<uid>/<container>/N.log`. The collector tails those
@@ -119,6 +124,47 @@ the scheme, matching the metrics exporters: plaintext for in-cluster `http://`,
 verified for `https://`. Any OTLP/HTTP logs receiver works — the store is not
 baked in.
 
+### Datadog fan-out (gated on `otel.byoc.enabled`, off by default)
+
+`otel.byoc.enabled` is the single switch for shipping telemetry off-cluster to
+the yugabyte-cloud managed backends — metrics to Thanos (the metrics collectors,
+[`ac-metrics.md`](ac-metrics.md)) and, here, logs to Datadog. Off by default: a
+normal install ships only to the in-cluster stores. When on, a second `datadog`
+exporter joins the *same* logs pipeline, so a line reaches both VictoriaLogs and
+Datadog off one tail of the node. This is a *sink*, not a store swap: VictoriaLogs
+stays the in-cluster store (the Loki/CloudWatch/Datadog-as-store decision in the
+[`amp-monitoring` DESIGN](../../deploy/helm/amp-monitoring/DESIGN.md) is
+unchanged); Datadog is where the wider fleet's logs converge. Logs go **direct**
+to Datadog's US3 intake (a public SaaS); metrics instead reach the *internal*
+Thanos through the BYOC PrivateLink door — hence two different auth secrets.
+
+- **Shaping.** Two best-effort processors (`error_mode: ignore`) run after
+  `k8sattributes`, before `batch`: `transform/severity` lifts the app's level
+  word out of the structured line onto Datadog's reserved `status`, and
+  `transform/datadog` sets `ddsource` from the container name
+  (`endpoint`/`controller`/`mcp`/`ui`/`postgres-exporter`), `service` from the
+  amp `component`, and — when `otel.environmentId`/`accountId` are set — `ddtags`
+  with the same fleet identity the metrics collectors stamp, so a log and its
+  metrics share one scope. Both gate on `otel.byoc.enabled`.
+- **The api key is a hard dependency.** The exporter validates its key at
+  collector startup and fails on an empty one; because it shares the daemonset
+  with the VictoriaLogs exporter, a missing key takes the **whole** log pipeline
+  down, not just the Datadog fan-out. So the key is read from a Secret
+  (`otel.datadog.apiKeySecret`, `DD_API_KEY` via `secretKeyRef`, never inline)
+  that **must exist before a byoc-enabled install**. `otel.datadog` has no
+  `enabled` of its own — it is pure config (`site`, `apiKeySecret`), consumed
+  only when byoc is on.
+- **Blast radius.** The exporter has its own `sending_queue` + `retry_on_failure`,
+  so a Datadog outage queues and retries on that exporter alone and never backs
+  up the VictoriaLogs export sharing the pipeline. `site` is `us3.datadoghq.com`
+  by default (the yugabyte-cloud tenant).
+- **Two secrets, one switch.** `otel.byoc.enabled` turns on *both* fan-outs, so a
+  byoc-enabled install needs **both** the `datadog-api` key (logs → Datadog)
+  **and** the `byoc-metrics-auth` BasicAuth credential (metrics → Thanos,
+  [`ac-metrics.md`](ac-metrics.md)) present first — a missing either fails the
+  collectors that reference it to start. Off by default, so a plain or dev
+  install carries neither dependency.
+
 ### RBAC — namespaced, deliberately
 
 `k8sattributes` resolves a pod's workload through its ReplicaSet, so the
@@ -146,8 +192,19 @@ rejected alternatives (Loki, CloudWatch Logs) are in that chart's
 ```sh
 helm upgrade --install amp-monitoring deploy/helm/amp-monitoring -n amp-dev
 
+# Default: in-cluster stores only — no Datadog, no Secret needed.
 helm upgrade --install amp deploy/helm/yb-amp-controller -n amp-dev \
   --set otel.enabled=true \
+  --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
+
+# Off-cluster (metrics -> Thanos, logs -> Datadog): flip otel.byoc.enabled and
+# create BOTH secrets first — a missing either bricks the collectors that read it.
+kubectl -n amp-dev create secret generic datadog-api \
+  --from-literal=api-key='<datadog api key>'
+kubectl -n amp-dev create secret generic byoc-metrics-auth \
+  --from-literal=password='<byoc htpasswd password>'
+helm upgrade --install amp deploy/helm/yb-amp-controller -n amp-dev \
+  --set otel.enabled=true --set otel.byoc.enabled=true \
   --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
 ```
 

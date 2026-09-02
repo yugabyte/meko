@@ -339,22 +339,32 @@ otel:
   # standalone YCP, whose all-zeros sentinel account would label every series
   # identically.
   accountId: ""
-  # Fan scraped metrics out to an external OTLP/HTTP ingress IN ADDITION to
-  # remoteWriteEndpoint — e.g. the BYOC metrics door that lands in Thanos in the
-  # yugabyte-cloud control plane, reached over an AWS PrivateLink endpoint. Off
-  # by default: only a deployment that should ship metrics off-cluster turns it
-  # on. When enabled, both metrics collectors gain a `basicauth/byoc` extension,
-  # a `transform/byoc` processor that stamps the `source` label, and an
-  # `otlphttp/byoc` exporter, and read the BasicAuth password from a Secret.
+  # The single switch for shipping telemetry OFF-cluster to the yugabyte-cloud
+  # managed backends, IN ADDITION to the in-cluster stores. Off by default: a
+  # normal install ships only to VictoriaMetrics/VictoriaLogs and needs no external
+  # credentials. When enabled, BOTH fan-outs turn on together, each needing its own
+  # out-of-band Secret:
+  #   - metrics also -> YBM Thanos, over the BYOC OTLP door on an AWS PrivateLink
+  #     endpoint. Both metrics collectors gain a `basicauth/byoc` extension, a
+  #     `transform/byoc` processor stamping the `source` label, and an
+  #     `otlphttp/byoc` exporter to metricsEndpoint. Auth: passwordSecret below
+  #     (BasicAuth — the "metrics ingest auth").
+  #   - logs also -> Datadog US3, direct. The logs daemonset gains severity/tag
+  #     shaping and a `datadog` exporter. Auth: datadog.apiKeySecret below (the
+  #     Datadog API key).
+  # So a byoc-enabled install needs BOTH Secrets present first (byoc-metrics-auth
+  # AND datadog-api) — a missing either fails the collectors that reference it to
+  # start. Thanos is internal so it needs the ingress door; Datadog is a public
+  # SaaS so logs go straight there.
   byoc:
     enabled: false
-    # -- Full OTLP/HTTP metrics POST URL.
+    # -- Full OTLP/HTTP metrics POST URL (lands in Thanos).
     metricsEndpoint: "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"
     # -- BasicAuth username the ingress nginx checks against its htpasswd.
     username: "byoc"
     source: "amp"
-    # -- Secret in the release namespace holding the BasicAuth password. Create
-    # it out-of-band before install (same convention as agent.apiKeySecret):
+    # -- Secret in the release namespace holding the BasicAuth password for the
+    # metrics door. Create it out-of-band before a byoc-enabled install:
     #   kubectl -n <ns> create secret generic byoc-metrics-auth \
     #     --from-literal=password='<byoc htpasswd password>'
     passwordSecret:
@@ -368,6 +378,25 @@ otel:
   # tainted nodes — the daemonset has to be schedulable there or those nodes'
   # logs are silently missing.
   logsTolerations: []
+  # Datadog config for the logs fan-out. It has NO `enabled` of its own — the
+  # `datadog` exporter is gated on byoc.enabled above (logs -> Datadog US3 is one
+  # half of the byoc off-cluster shipping). These are just the sink's parameters,
+  # consumed only when byoc is on. The apiKeySecret MUST exist in the release
+  # namespace before a byoc-enabled install: the exporter validates its key at
+  # collector startup and fails on an empty one, which — because it shares the one
+  # logs daemonset with the VictoriaLogs exporter — takes the WHOLE log pipeline
+  # down. Create it out-of-band (same convention as byoc.passwordSecret):
+  #   kubectl -n <ns> create secret generic datadog-api \
+  #     --from-literal=api-key='<datadog api key>'
+  datadog:
+    # -- Datadog site (regional intake). Matches the yugabyte-cloud control
+    # plane's us3 tenant; change it for a different Datadog org.
+    site: "us3.datadoghq.com"
+    # -- Secret in the release namespace holding the Datadog API key. Referenced
+    # via secretKeyRef so the key never lands in the rendered CR.
+    apiKeySecret:
+      name: "datadog-api"
+      key: "api-key"
   # -- Also scrape per-pod cAdvisor resource metrics (CPU/mem/net) for the
   # endpoint pods, via each node's kubelet. Feeds the whole "amp — Pod resources"
   # dashboard (all 7 panels); the controller, postgres and storage dashboards do

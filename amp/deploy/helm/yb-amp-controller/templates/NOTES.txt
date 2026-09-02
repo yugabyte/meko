@@ -64,6 +64,28 @@ MCP server disabled (mcp.enabled=false).
 Metrics collectors are deployed (otel.enabled), remote-writing to:
 
     {{ .Values.otel.remoteWriteEndpoint }}
+{{- if dig "byoc" "enabled" false .Values.otel }}
+
+BYOC off-cluster shipping is ON (otel.byoc.enabled) — in addition to the
+in-cluster stores it also sends:
+  - metrics -> {{ dig "byoc" "metricsEndpoint" "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics" .Values.otel }} (YBM Thanos)
+{{- if dig "collectors" "logs" "enabled" true .Values.otel }}
+  - logs    -> Datadog ({{ dig "datadog" "site" "us3.datadoghq.com" .Values.otel }})
+{{- end }}
+
+This REQUIRES the Secret(s) below in namespace {{ .Release.Namespace }}, read by the
+collectors via secretKeyRef — a missing one fails those pods to start, taking the
+in-cluster VictoriaMetrics/VictoriaLogs export down with them:
+
+    kubectl -n {{ .Release.Namespace }} create secret generic {{ dig "byoc" "passwordSecret" "name" "byoc-metrics-auth" .Values.otel }} \
+      --from-literal={{ dig "byoc" "passwordSecret" "key" "password" .Values.otel }}='<byoc htpasswd password>'
+{{- if dig "collectors" "logs" "enabled" true .Values.otel }}
+    kubectl -n {{ .Release.Namespace }} create secret generic {{ dig "datadog" "apiKeySecret" "name" "datadog-api" .Values.otel }} \
+      --from-literal={{ dig "datadog" "apiKeySecret" "key" "api-key" .Values.otel }}='<datadog api key>'
+{{- end }}
+
+Leave otel.byoc.enabled unset (the default) to ship only to the in-cluster stores.
+{{- end }}
 {{- else }}
 
 WARNING: metrics collectors were SKIPPED. otel.enabled is true, but this
