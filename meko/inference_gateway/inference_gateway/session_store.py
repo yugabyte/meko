@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import Deque, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 
 Message = Tuple[str, str]  # (role, content)
@@ -32,6 +32,11 @@ class _SessionState:
     # next turn ("no, that's wrong") and re-answer with the cache bypassed.
     last_was_cache_hit: bool = False
     last_cache_query: Optional[str] = None
+    # Agentic chat (MEKO-407 Phase 2): the one confirm-tier tool call the
+    # model proposed this session that awaits user approval. Executed (and
+    # cleared) by POST /chat/confirm-action; a newer proposal replaces an
+    # older unconfirmed one — at most one pending action per session.
+    pending_action: Optional[Dict[str, Any]] = None
 
 
 class InMemorySessionStore:
@@ -93,6 +98,32 @@ class InMemorySessionStore:
             if state is None:
                 return False, None
             return state.last_was_cache_hit, state.last_cache_query
+
+    async def set_pending_action(
+        self, session_id: str, action: Optional[Dict[str, Any]],
+    ) -> None:
+        """Store the session's ONE pending confirm-tier action (replaces any
+        previous unconfirmed proposal). None clears it — a turn that proposes
+        nothing must invalidate an earlier unconfirmed proposal, or its
+        action_id stays claimable after the UI has dropped the card."""
+        async with self._lock:
+            state = self._touch_locked(session_id)
+            state.pending_action = dict(action) if action is not None else None
+
+    async def pop_pending_action(self, session_id: str, action_id: str) -> Optional[Dict[str, Any]]:
+        """Atomically claim-and-clear the pending action IF `action_id`
+        matches. Returns None when there is no pending action or the id is
+        stale (a newer proposal replaced it) — the caller must treat that as
+        'nothing to execute'."""
+        async with self._lock:
+            state = self._sessions.get(session_id)
+            if state is None or state.pending_action is None:
+                return None
+            if state.pending_action.get("action_id") != action_id:
+                return None
+            action, state.pending_action = state.pending_action, None
+            self._sessions.move_to_end(session_id)
+            return action
 
     # --- internal ---
 

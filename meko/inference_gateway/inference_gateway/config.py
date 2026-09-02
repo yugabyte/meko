@@ -72,6 +72,74 @@ DEFAULT_MEMORY_TOP_K = 5
 # getting cut off; tune down if you want to bound the per-turn cost.
 DEFAULT_LLM_MAX_TOKENS = 8192
 
+# --- Agentic chat (MEKO-407, Phase 0) ---------------------------------------
+#
+# When MEKO_AGENTIC_CHAT is enabled, the main LLM call gets a curated set of
+# READ-ONLY Meko MCP tools bound to it, so intents that preset retrieval can't
+# satisfy ("list all my memories", "describe datapack X") are answered by the
+# model calling the right tool instead of a semantic search. Plain Q&A is
+# unaffected: if the model makes no tool call, the turn costs exactly what it
+# does today. Retrieval (contextual prominence search / KB+memory) still runs
+# first, unchanged.
+#
+# Auto-executed tools. Reads, plus ONE write: `memory_add` (Phase 1), which
+# the guidance restricts to explicit save intent ("remember this") — the MCP
+# server's extraction already captures conversationally-stated facts, so an
+# eager memory_add would only write duplicates. No artifact tools (WorkbenchLM
+# has no artifacts UX, and artifact_get's large-file path writes to the
+# gateway pod's filesystem). Retrieval tools the gateway already ran
+# (contextual_prominence_search) are deliberately absent so the model
+# doesn't re-run them.
+DEFAULT_AGENT_TOOLS: tuple[str, ...] = (
+    "memory_get_all",
+    "memory_get_by_id",
+    "memory_search",
+    "memory_add",
+    "knowledgebase_search",
+    "conversation_get",
+    "conversation_list",
+    "datapack_list",
+    "datapack_describe",
+)
+
+# Confirm-tier tools (Phase 2): the model may PROPOSE these, but the gateway
+# never executes them on the model's say-so — the turn returns a
+# `pending_action` the user must approve in the UI (POST /chat/confirm-action).
+#
+# Every call is pinned to the datapack the WorkbenchLM chat is scoped to
+# (datapack_id is gateway-forced on all agent tool calls), and the Meko API
+# underneath enforces the caller's grant (e.g. memory_promote requires
+# owner/maintainer and 403s otherwise). Deliberately absent:
+# datapack_create (a WorkbenchLM chat is already scoped to one datapack —
+# creating new ones doesn't fit this surface), memory_update (deferred),
+# and the highest-blast-radius tools (memory_delete_all, datapack_delete).
+DEFAULT_AGENT_CONFIRM_TOOLS: tuple[str, ...] = (
+    "memory_delete_by_id",
+    "memory_promote",
+    "datapack_update",
+)
+
+# AMP (Postgres databases) tool sets, appended to the two tiers above ONLY
+# when SHOW_PG_AMP is true — the same env var that gates AMP in meko-ui,
+# api-server, and the MCP server's own tool registration, so the gate
+# composes at both layers (a flag-off MCP deployment doesn't list these
+# tools at all; a flag-off gateway won't offer them even if listed).
+AMP_AGENT_READ_TOOLS: tuple[str, ...] = (
+    "amp_cluster_list", "amp_cluster_get",
+    "amp_branch_list", "amp_branch_get",
+    "amp_compute_list", "amp_compute_get",
+)
+AMP_AGENT_CONFIRM_TOOLS: tuple[str, ...] = (
+    "amp_cluster_create", "amp_cluster_delete",
+    "amp_branch_create", "amp_branch_delete",
+    "amp_compute_create", "amp_compute_delete",
+)
+
+# Max tool-execution rounds per turn. Each round is one extra LLM call; the
+# cap bounds worst-case latency/cost. After the cap, the model is forced to
+# answer with whatever it has.
+DEFAULT_MAX_TOOL_ROUNDS = 3
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -96,3 +164,13 @@ class AppConfig:
     # env var name (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH) with the MCP server's own
     # flag so one setting toggles both sides of the integration together. Default off.
     contextual_prominence_search_enabled: bool = False
+    # Agentic chat (MEKO-407): bind agent_tools (auto-executed) and
+    # agent_confirm_tools (propose-only; user must approve via
+    # /chat/confirm-action) onto the main LLM call so the model can satisfy
+    # tool-shaped intents itself. Gated by MEKO_AGENTIC_CHAT; default off.
+    # Retrieval is unchanged either way. main.py appends the AMP tool sets
+    # to both tiers when SHOW_PG_AMP is true.
+    agentic_chat_enabled: bool = False
+    agent_tools: tuple[str, ...] = DEFAULT_AGENT_TOOLS
+    agent_confirm_tools: tuple[str, ...] = DEFAULT_AGENT_CONFIRM_TOOLS
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS

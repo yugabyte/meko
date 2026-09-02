@@ -162,7 +162,40 @@ export type GatewayChatResponse = {
    *  so users see what ran and how long it took without opening the
    *  full trace drawer. */
   processing_steps?: ProcessingStep[];
+  /** Agentic chat (MEKO-407 Phase 2): a confirm-tier action the model
+   *  proposed this turn. NOT executed — render a confirmation card and
+   *  resolve it via `confirmAction`. Null/absent when nothing is pending. */
+  pending_action?: PendingAction | null;
 };
+
+/** A confirm-tier tool call awaiting the user's Allow/Deny. The args were
+ *  frozen by the gateway at proposal time (identity fields enforced
+ *  server-side); Allow executes exactly these args, Deny discards them. */
+export type PendingAction = {
+  action_id: string;
+  tool_name: string;
+  args?: Record<string, unknown>;
+};
+
+export type ConfirmActionResponse = {
+  /** "executed" | "cancelled" | "error" */
+  status: string;
+  detail?: string;
+  /** Parsed tool result on success (shape is tool-specific). */
+  result?: unknown;
+};
+
+/** Resolve a pending agentic action: approve=true executes it with the
+ *  frozen args, approve=false discards it without touching MCP. */
+export async function confirmAction(body: {
+  session_id: string;
+  action_id: string;
+  user_token: string;
+  approve: boolean;
+}): Promise<ConfirmActionResponse> {
+  const { data } = await client.post<ConfirmActionResponse>("/chat/confirm-action", body);
+  return data;
+}
 
 export async function postChat(body: GatewayChatRequest): Promise<GatewayChatResponse> {
   const { data } = await client.post<GatewayChatResponse>("/chat", body);

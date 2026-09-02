@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,6 +10,13 @@ import (
 
 	"meko/api_server/internal/repository"
 )
+
+// ErrAMPNotRegistered distinguishes "no AMP controller registered" from
+// controller failures, so handlers can map it to a dedicated status/code
+// instead of the catch-all AMP_ERROR and clients (UI, MCP, inference
+// gateway) don't have to string-match the message.
+var ErrAMPNotRegistered = errors.New(
+	"AMP is not registered; an admin must register the AMP controller first")
 
 // AMPService orchestrates AMP database provisioning for a datapack. It owns the
 // datapack->pool mapping (meko_system.amp_datapack_pool) and drives the AMP
@@ -39,7 +47,7 @@ func (s *AMPService) client(ctx context.Context) (*AMPClient, error) {
 		return nil, err
 	}
 	if reg == nil || strings.TrimSpace(reg.BaseURL) == "" {
-		return nil, fmt.Errorf("AMP is not registered; an admin must register the AMP controller first")
+		return nil, ErrAMPNotRegistered
 	}
 	return NewAMPClient(reg.BaseURL, s.httpClient), nil
 }
@@ -140,16 +148,21 @@ func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClust
 // ListClusters returns the clusters in a datapack's AMP pool. If no pool has
 // been provisioned yet, it returns an empty slice (no AMP call).
 func (s *AMPService) ListClusters(ctx context.Context, datapackID string) ([]AMPCluster, error) {
+	// Resolve the controller registration BEFORE the no-pool early return:
+	// list is the availability probe agents run ahead of a create, and an
+	// unprovisioned datapack (no pool yet) is exactly the first-time case —
+	// it must answer AMP_NOT_REGISTERED, not an empty list, when no
+	// controller is registered.
+	c, err := s.client(ctx)
+	if err != nil {
+		return nil, err
+	}
 	mapping, err := s.repo.GetByDatapack(ctx, datapackID)
 	if err != nil {
 		return nil, err
 	}
 	if mapping == nil {
 		return []AMPCluster{}, nil
-	}
-	c, err := s.client(ctx)
-	if err != nil {
-		return nil, err
 	}
 	return c.ListClusters(ctx, mapping.SharedPoolID)
 }

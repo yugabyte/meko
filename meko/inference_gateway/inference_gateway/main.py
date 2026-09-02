@@ -18,12 +18,17 @@ import uvicorn
 
 from .app import create_app
 from .config import (
+    AMP_AGENT_CONFIRM_TOOLS,
+    AMP_AGENT_READ_TOOLS,
+    DEFAULT_AGENT_CONFIRM_TOOLS,
     DEFAULT_AGENT_ID,
+    DEFAULT_AGENT_TOOLS,
     DEFAULT_AWS_REGION,
     DEFAULT_BEDROCK_MODEL,
     DEFAULT_CONV_SUMMARY_BEDROCK_MODEL,
     DEFAULT_CORS_ORIGINS,
     DEFAULT_MAX_HISTORY_MESSAGES,
+    DEFAULT_MAX_TOOL_ROUNDS,
     DEFAULT_MCP_ENDPOINT,
     DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_MEMORY_TOP_K,
@@ -114,6 +119,45 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
              "tool instead of separate knowledgebase_search + memory_search calls. Shares "
              "the MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH env var with the MCP server.",
     )
+    p.add_argument(
+        "--agentic-chat",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MEKO_AGENTIC_CHAT", "").strip().lower()
+        in ("1", "true", "yes"),
+        help="Agentic chat (MEKO-407, Phase 0): bind a curated set of read-only Meko "
+             "MCP tools onto the main LLM call so tool-shaped intents ('list all my "
+             "memories') are answered by calling the right tool. Retrieval is unchanged; "
+             "plain Q&A costs the same as today. Default off.",
+    )
+    p.add_argument(
+        "--agent-tools",
+        default=os.getenv("INFERENCE_AGENT_TOOLS", ""),
+        help="Comma-separated override of the auto-executed tool allowlist bound in "
+             "agentic-chat mode. Empty -> the built-in DEFAULT_AGENT_TOOLS.",
+    )
+    p.add_argument(
+        "--agent-confirm-tools",
+        default=os.getenv("INFERENCE_AGENT_CONFIRM_TOOLS", ""),
+        help="Comma-separated override of the confirm-tier tools (proposed by the "
+             "model, executed only after the user approves via /chat/confirm-action). "
+             "Empty -> the built-in DEFAULT_AGENT_CONFIRM_TOOLS.",
+    )
+    p.add_argument(
+        "--show-pg-amp",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("SHOW_PG_AMP", "").strip().lower() in ("1", "true", "yes"),
+        help="Append the AMP (Postgres databases) tool sets to the agentic-chat "
+             "tiers (reads auto-execute, create/delete require confirmation). "
+             "Shares the SHOW_PG_AMP env var with meko-ui, api-server, and the "
+             "MCP server's own AMP tool registration.",
+    )
+    p.add_argument(
+        "--max-tool-rounds",
+        type=int,
+        default=int(os.getenv("INFERENCE_MAX_TOOL_ROUNDS", str(DEFAULT_MAX_TOOL_ROUNDS))),
+        help="Max tool-execution rounds per turn in agentic-chat mode (each round "
+             "is one extra LLM call).",
+    )
     args = p.parse_args(argv)
 
     # Pick a sensible default model per provider when the user didn't set one.
@@ -140,6 +184,27 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
     else:
         origins = tuple(args.cors_origins)
 
+    agent_tools = (
+        tuple(t.strip() for t in args.agent_tools.split(",") if t.strip())
+        if args.agent_tools.strip()
+        else DEFAULT_AGENT_TOOLS
+    )
+    agent_confirm_tools = (
+        tuple(t.strip() for t in args.agent_confirm_tools.split(",") if t.strip())
+        if args.agent_confirm_tools.strip()
+        else DEFAULT_AGENT_CONFIRM_TOOLS
+    )
+    # AMP tools ride the SHOW_PG_AMP gate: reads auto-execute, writes go to
+    # the confirm tier. The MCP server only lists them when its own
+    # SHOW_PG_AMP is set, so the gate composes at both layers.
+    if args.show_pg_amp:
+        agent_tools = agent_tools + tuple(
+            t for t in AMP_AGENT_READ_TOOLS if t not in agent_tools
+        )
+        agent_confirm_tools = agent_confirm_tools + tuple(
+            t for t in AMP_AGENT_CONFIRM_TOOLS if t not in agent_confirm_tools
+        )
+
     cfg = AppConfig(
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
@@ -153,6 +218,10 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         llm_max_tokens=args.llm_max_tokens,
         conv_summary_model=args.conv_summary_model,
         contextual_prominence_search_enabled=args.enable_contextual_prominence_search,
+        agentic_chat_enabled=args.agentic_chat,
+        agent_tools=agent_tools,
+        agent_confirm_tools=agent_confirm_tools,
+        max_tool_rounds=args.max_tool_rounds,
     )
     return cfg, args.log_level
 

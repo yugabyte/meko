@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -19,6 +20,16 @@ type AMPHandler struct {
 
 func NewAMPHandler(svc *service.AMPService) *AMPHandler {
 	return &AMPHandler{svc: svc}
+}
+
+// ampError maps an AMP service failure to HTTP: a missing controller
+// registration gets its own status/code (412 AMP_NOT_REGISTERED) so callers
+// can tell "an admin must register AMP first" apart from controller errors.
+func ampError(c echo.Context, err error) error {
+	if errors.Is(err, service.ErrAMPNotRegistered) {
+		return apiError(c, http.StatusPreconditionFailed, "AMP_NOT_REGISTERED", err.Error())
+	}
+	return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 }
 
 type createClusterRequest struct {
@@ -78,7 +89,7 @@ func (h *AMPHandler) CreateCluster(c echo.Context) error {
 		cluster, err = h.svc.CreateCluster(c.Request().Context(), in)
 	}
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusCreated, cluster)
 }
@@ -91,7 +102,7 @@ func (h *AMPHandler) ListClusters(c echo.Context) error {
 	}
 	clusters, err := h.svc.ListClusters(c.Request().Context(), datapackID)
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, clusters)
 }
@@ -100,7 +111,7 @@ func (h *AMPHandler) ListClusters(c echo.Context) error {
 func (h *AMPHandler) GetCluster(c echo.Context) error {
 	cluster, err := h.svc.GetCluster(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"))
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, cluster)
 }
@@ -110,7 +121,7 @@ func (h *AMPHandler) GetCluster(c echo.Context) error {
 // completes.
 func (h *AMPHandler) DeleteCluster(c echo.Context) error {
 	if err := h.svc.DeleteCluster(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id")); err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, map[string]any{"id": c.Param("cluster_id"), "deleted": true})
 }
@@ -119,7 +130,7 @@ func (h *AMPHandler) DeleteCluster(c echo.Context) error {
 func (h *AMPHandler) ListBranches(c echo.Context) error {
 	branches, err := h.svc.ListBranches(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"))
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, branches)
 }
@@ -142,7 +153,7 @@ func (h *AMPHandler) CreateBranch(c echo.Context) error {
 	branch, err := h.svc.CreateBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"),
 		service.CreateBranchInput{Name: req.Name, ParentBranch: req.ParentBranch, ForkPointLSN: req.ForkPointLSN})
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusCreated, branch)
 }
@@ -151,7 +162,7 @@ func (h *AMPHandler) CreateBranch(c echo.Context) error {
 func (h *AMPHandler) GetBranch(c echo.Context) error {
 	branch, err := h.svc.GetBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"))
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, branch)
 }
@@ -160,7 +171,7 @@ func (h *AMPHandler) GetBranch(c echo.Context) error {
 // Cascades to the branch's compute; blocks until the AMP task completes.
 func (h *AMPHandler) DeleteBranch(c echo.Context) error {
 	if err := h.svc.DeleteBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id")); err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, map[string]any{"id": c.Param("branch_id"), "deleted": true})
 }
@@ -169,7 +180,7 @@ func (h *AMPHandler) DeleteBranch(c echo.Context) error {
 func (h *AMPHandler) ListCompute(c echo.Context) error {
 	instances, err := h.svc.ListCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"))
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, instances)
 }
@@ -178,7 +189,7 @@ func (h *AMPHandler) ListCompute(c echo.Context) error {
 func (h *AMPHandler) GetCompute(c echo.Context) error {
 	instance, err := h.svc.GetCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), c.Param("compute_id"))
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, instance)
 }
@@ -187,7 +198,7 @@ func (h *AMPHandler) GetCompute(c echo.Context) error {
 // Blocks until the AMP task completes.
 func (h *AMPHandler) DeleteCompute(c echo.Context) error {
 	if err := h.svc.DeleteCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), c.Param("compute_id")); err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, map[string]any{"id": c.Param("compute_id"), "deleted": true})
 }
@@ -212,7 +223,7 @@ func (h *AMPHandler) CreateCompute(c echo.Context) error {
 	}
 	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), role, strings.TrimSpace(req.CPU), strings.TrimSpace(req.Memory))
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusCreated, instance)
 }
@@ -238,7 +249,7 @@ func (h *AMPHandler) ResizeCompute(c echo.Context) error {
 	}
 	result, err := h.svc.ResizeCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), c.Param("compute_id"), cpu, memory)
 	if err != nil {
-		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+		return ampError(c, err)
 	}
 	return ok(c, http.StatusOK, result)
 }

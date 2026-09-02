@@ -157,6 +157,17 @@ class ChatRequest(BaseModel):
     )
 
 
+class PendingActionOut(BaseModel):
+    """A confirm-tier tool call the model proposed this turn (agentic chat,
+    MEKO-407 Phase 2). NOT executed — the UI renders a confirmation card;
+    POST /chat/confirm-action executes it with `approve=true` or discards it
+    with `approve=false`."""
+
+    action_id: str
+    tool_name: str
+    args: Dict[str, Any] = {}
+
+
 class ChatResponse(BaseModel):
     """Body of a successful POST /chat response."""
 
@@ -185,6 +196,8 @@ class ChatResponse(BaseModel):
     # below the structured hits so the user can see what happened in
     # which order without opening the full trace drawer.
     processing_steps: list[ProcessingStepOut] = []
+    # Agentic chat: a proposed action awaiting user confirmation, or null.
+    pending_action: Optional[PendingActionOut] = None
 
 
 @router.get("/healthz")
@@ -254,7 +267,100 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         memory_hits=[MemoryHitOut(**h._asdict()) for h in result.memory_hits],
         kb_hits=[KbHitOut(**h._asdict()) for h in result.kb_hits],
         processing_steps=[ProcessingStepOut(**s._asdict()) for s in result.processing_steps],
+        pending_action=(
+            PendingActionOut(**result.pending_action) if result.pending_action else None
+        ),
     )
+
+
+class ConfirmActionRequest(BaseModel):
+    """Body for POST /chat/confirm-action — resolve a pending agentic action."""
+
+    session_id: str = Field(..., min_length=1)
+    action_id: str = Field(..., min_length=1)
+    user_token: str = Field(..., min_length=1, description="Bearer token forwarded to MCP.")
+    approve: bool = Field(default=True, description="False discards the action without executing.")
+
+
+class ConfirmActionResponse(BaseModel):
+    # "executed" | "cancelled" | "error"
+    status: str
+    detail: str = ""
+    # Parsed tool result on success (shape is tool-specific).
+    result: Optional[Any] = None
+
+
+@router.post("/chat/confirm-action", response_model=ConfirmActionResponse)
+async def confirm_action(req: ConfirmActionRequest, request: Request) -> ConfirmActionResponse:
+    """Execute (or discard) the ONE pending confirm-tier action for a session.
+
+    The action's arguments were frozen — identity already gateway-enforced —
+    when the model proposed it; the model has no further say here. A stale
+    or unknown action_id is a 404 (e.g. a newer proposal replaced it)."""
+    cfg: AppConfig = request.app.state.config
+    session_store: InMemorySessionStore = request.app.state.session_store
+
+    action = await session_store.pop_pending_action(req.session_id, req.action_id)
+    if action is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending action with that id — it may have expired or been replaced.",
+        )
+
+    if not req.approve:
+        logger.info("confirm-action: user cancelled %s (%s)", action["tool_name"], req.action_id)
+        return ConfirmActionResponse(status="cancelled")
+
+    try:
+        tools = await build_mcp_tools(cfg.mcp_endpoint, req.user_token)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MCP tool discovery failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"MCP tool discovery failed: {exc}") from exc
+
+    tool = tools.get(action["tool_name"])
+    if tool is None:
+        raise HTTPException(
+            status_code=502, detail=f"{action['tool_name']} tool unavailable",
+        )
+
+    try:
+        raw = await tool.ainvoke(action["args"])
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("confirm-action: %s failed", action["tool_name"])
+        return ConfirmActionResponse(status="error", detail=str(exc))
+
+    payload: Any
+    if isinstance(raw, str):
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = raw
+    else:
+        payload = raw
+    if isinstance(payload, dict) and payload.get("error"):
+        return ConfirmActionResponse(
+            status="error",
+            detail=str(payload.get("detail") or payload["error"]),
+            result=payload,
+        )
+
+    # Best-effort: record the confirmed action as a turn so the conversation
+    # (and downstream memory extraction) reflects what actually happened.
+    addmsg = tools.get("conversation_add_message")
+    conversation_id = action["args"].get("conversation_id") or ""
+    if addmsg is not None and conversation_id:
+        try:
+            await addmsg.ainvoke({
+                "conversation_id": conversation_id,
+                "agent_id": cfg.agent_id,
+                "input": f"[User approved action: {action['tool_name']}]",
+                "output": json.dumps(payload, default=str)[:2000],
+            })
+        except Exception:  # noqa: BLE001
+            logger.warning("confirm-action: recording turn failed", exc_info=True)
+
+    logger.info("confirm-action: executed %s (%s)", action["tool_name"], req.action_id)
+    return ConfirmActionResponse(status="executed", result=payload)
 
 
 class IndexConversationRequest(BaseModel):

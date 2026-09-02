@@ -166,7 +166,17 @@ deep-links.
 | `--agent-id` | `INFERENCE_AGENT_ID` | `agent` | Hard-coded by the meko MCP convention. |
 | `--max-history` | `INFERENCE_MAX_HISTORY` | `10` | per-session sliding window (messages, not turns) |
 | `--memory-top-k` | `INFERENCE_MEMORY_TOP_K` | `5` | passed to `memory_search` |
+| `--agentic-chat` | `MEKO_AGENTIC_CHAT` | off | Agentic chat (MEKO-407): router + tool loop + confirm-tier actions. Off ⇒ behavior identical to the preset pipeline. |
+| `--agent-tools` | `INFERENCE_AGENT_TOOLS` (comma-sep) | curated read tier (see `config.py`) | auto-executed MCP tools in agentic mode |
+| `--agent-confirm-tools` | `INFERENCE_AGENT_CONFIRM_TOOLS` (comma-sep) | `memory_delete_by_id`, `memory_promote`, `datapack_update` | propose-only; user must approve via `POST /chat/confirm-action` |
+| `--show-pg-amp` | `SHOW_PG_AMP` | off | appends the AMP cluster/branch/compute tool sets to both tiers (same env var as meko-ui / api-server / MCP) |
+| `--max-tool-rounds` | `INFERENCE_MAX_TOOL_ROUNDS` | `3` | tool-execution rounds per agentic turn; after the cap a final no-tools answer is forced |
 | `--log-level` | `INFERENCE_LOG_LEVEL` | `INFO` | |
+
+With `MEKO_AGENTIC_CHAT` on, `POST /chat` may return a `pending_action` (a
+confirm-tier tool call the model proposed but the gateway did NOT execute);
+`POST /chat/confirm-action` executes or discards it with the frozen,
+identity-pinned arguments.
 
 ## Tests
 
@@ -181,6 +191,10 @@ Smoke tests cover:
 - a second turn reuses `conversation_id` and includes prior history
 - a `memory_search` failure degrades cleanly to no-context (no exception)
 - a missing required tool (`conversation_create`) raises a clear error
+- `tests/test_agentic_chat.py`: the agentic tool loop — flag-off parity,
+  gateway-enforced identity, router routing/fallbacks, router-scoped
+  binding, confirm-tier propose-not-execute, pending-action lifecycle,
+  and the `/chat/confirm-action` endpoint
 
 No network or LLM credentials are needed for `pytest` — all upstream calls
 are mocked.
@@ -202,9 +216,10 @@ inference_gateway/
 │   ├── session_store.py   # in-memory sliding window + conv_id map
 │   ├── chain.py           # 6-step run_chat_turn
 │   └── routes/
-│       └── chat.py        # POST /chat, GET /healthz
+│       └── chat.py        # POST /chat, POST /chat/confirm-action, GET /healthz
 └── tests/
-    └── test_chain_smoke.py
+    ├── test_chain_smoke.py
+    └── test_agentic_chat.py
 ```
 
 ## Constraints / known limits (v1)
@@ -213,6 +228,11 @@ inference_gateway/
   response. Acceptable for Playground; SSE is a follow-up.
 - **In-memory session store.** A process restart drops history. A second
   gateway instance behind a load balancer doesn't see the same sessions.
+  This also holds the ONE pending confirm-tier action per session
+  (agentic chat), which must survive from `POST /chat` to
+  `POST /chat/confirm-action` — so the gateway is **single-replica** until
+  a shared store or session affinity is added: with more replicas, the
+  confirm can land on a pod that never saw the proposal and 404s.
   Move to Redis if/when this hurts.
 - **Best-effort persistence.** A failure to call
   `conversation_add_message` does *not* fail the user's request; the

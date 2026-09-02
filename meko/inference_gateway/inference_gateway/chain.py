@@ -34,10 +34,11 @@ import json
 import logging
 import re
 import time
+import uuid as _uuid_mod
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from .config import AppConfig
@@ -264,6 +265,44 @@ Knowledge (from `knowledgebase_search`):
 
 Prior conversation (from `context_search`):
 {conversation_context}
+"""
+
+# Appended to the system prompt only in agentic-chat mode (MEKO-407 Phase 0).
+# Distilled from the meko-mcp-server skills (tools cookbook doctrine) — the
+# same guidance the Meko MCP skills give coding agents, condensed for WorkbenchLM.
+AGENT_GUIDANCE = """
+Tools: you can call the provided Meko tools when the user's request is about
+their Meko data itself — listing or fetching memories, conversations, or
+datapacks — rather than a question answerable from the context above.
+
+Rules, in order:
+  - The Memories and Knowledge sections above were ALREADY retrieved for
+    this question. Do not re-run memory_search or knowledgebase_search for
+    the same query; only call tools for intents that context cannot satisfy
+    (e.g. "list ALL my memories" -> memory_get_all, "show my datapacks" ->
+    datapack_list, "describe datapack X" -> datapack_describe).
+  - memory_add: call it ONLY when the user explicitly asks to save
+    something ("remember this", "save this as a memory") — pass their
+    words verbatim, one fact per call. Facts the user merely states in
+    conversation are captured automatically by the server; adding them
+    yourself creates duplicates.
+  - Some tools require user confirmation (updating/deleting/promoting
+    things). When you call one, it is NOT executed — the user is shown a
+    confirmation card instead. Tell them plainly what will happen and
+    that they need to confirm. Propose at most ONE such action per
+    message, and only when the user clearly asked for it. All actions
+    apply to the datapack this chat is scoped to; you cannot create
+    datapacks or operate on other datapacks from here.
+  - Never invent identifiers. Obtain datapack_id / conversation_id /
+    memory_id values from a listing tool first; the server fills in
+    agent_id and the active conversation automatically.
+  - Before proposing an AMP create/delete (cluster/branch/compute), verify
+    AMP is available with a read first (e.g. amp_cluster_list). If any AMP
+    tool returns AMP_NOT_REGISTERED, do NOT propose the action — tell the
+    user their deployment is not registered to the AMP service and an
+    admin must register the AMP controller (Meko Admin console) first.
+  - After tool results arrive, answer from them directly. Do not call more
+    tools than needed.
 """
 
 
@@ -503,6 +542,11 @@ class ChatTurnResult(NamedTuple):
     memory_hits: Tuple[MemoryHit, ...] = ()
     kb_hits: Tuple[KbHit, ...] = ()
     processing_steps: Tuple[ProcessingStep, ...] = ()
+    # Agentic chat (MEKO-407 Phase 2): a confirm-tier tool call the model
+    # proposed this turn. NOT executed — the UI renders a confirmation card
+    # and POST /chat/confirm-action executes it on approval. Shape:
+    # {"action_id", "tool_name", "args"}. None when nothing is pending.
+    pending_action: Optional[Dict[str, Any]] = None
 
 
 _CONV_SUMMARY_SYSTEM = (
@@ -604,6 +648,275 @@ async def _classify_followup(model: BaseChatModel, prior_query: str, message: st
             exc_info=exc,
         )
     return "other"
+
+
+_TOOL_ROUTE_SYSTEM = (
+    "You route ONE user message for a data workbench. Reply with EXACTLY one word.\n"
+    "- cps : the default. A unified search already covers the user's memories, "
+    "knowledge base, and past conversations; every question is answerable this "
+    "way unless the user explicitly wants a tool.\n"
+    "- <tool name> : ONLY when the message explicitly asks to act (create / "
+    "delete / update / promote / list / describe something a tool covers) or "
+    "explicitly names memory search or knowledge-base search.\n"
+    "Tools: {tools}\n"
+    "Reply with only 'cps' or one tool name from that list. When unsure: cps."
+)
+
+
+async def _route_tool_decision(
+    model: BaseChatModel,
+    user_message: str,
+    cfg: AppConfig,
+    steps: List["ProcessingStep"],
+    datapack_id: Optional[str] = None,
+) -> Optional[str]:
+    """Phase 3 router: the small summary model decides whether this turn is
+    the default CPS search or explicitly wants an agent tool. Returns the
+    tool name (turn must reach the tool loop — the conversation cache may
+    not short-circuit it) or None for the default search path.
+
+    Defaults to None on any error or unrecognized output, so routing can
+    only ever ADD the tool path, never break the search path.
+    """
+    allowed = tuple(cfg.agent_tools) + tuple(cfg.agent_confirm_tools)
+    start = time.monotonic()
+    routed: Optional[str] = None
+    raw = ""
+    try:
+        result = await model.ainvoke([
+            SystemMessage(content=_TOOL_ROUTE_SYSTEM.format(tools=", ".join(allowed))),
+            HumanMessage(content=user_message),
+        ])
+        raw = _coerce_text(result.content).strip().lower()
+        # Scan rather than exact-match: small models often wrap the answer
+        # in a sentence. Longest names first so amp_cluster_list can't be
+        # shadowed by a shorter name embedded in it.
+        for name in sorted(allowed, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(name)}\b", raw):
+                routed = name
+                break
+    except Exception as exc:  # noqa: BLE001 — router is best-effort
+        logger.warning("tool route failed (defaulting to cps): %s", _format_exc_chain(exc))
+    steps.append(
+        ProcessingStep(
+            "tool_route",
+            int((time.monotonic() - start) * 1000),
+            "ok",
+            f"{routed or 'cps'} ({cfg.conv_summary_model or cfg.llm_model})",
+            query=user_message,
+        )
+    )
+    logger.info(
+        "tool route: %s (datapack=%s, %d tools offered, raw=%r)",
+        routed or "cps", datapack_id, len(allowed), raw[:200],
+    )
+    return routed
+
+
+def _merge_agent_tool_args(tool, model_args: dict, *, agent_id: str,
+                           conversation_id: str, datapack_id: Optional[str]) -> dict:
+    """Merge the model-proposed tool arguments with server-enforced identity.
+
+    `agent_id`, `conversation_id`, and `datapack_id` are ALWAYS set by the
+    gateway (schema-permitting), never trusted from the model — the same
+    discipline the preset pipeline uses, and the skills' guard against
+    orphan writes / cross-datapack reads. Only keys the tool's schema
+    actually declares are injected, so tools without (say) `agent_id`
+    don't get an unexpected argument.
+    """
+    merged = dict(model_args or {})
+    try:
+        schema_keys = set(tool.args.keys())
+    except Exception:  # noqa: BLE001 — schema introspection is best-effort
+        schema_keys = set(merged)
+    if "agent_id" in schema_keys:
+        merged["agent_id"] = agent_id
+    if "conversation_id" in schema_keys:
+        merged["conversation_id"] = conversation_id
+    if "datapack_id" in schema_keys:
+        if datapack_id:
+            merged["datapack_id"] = datapack_id
+        else:
+            # No datapack scope on this turn: STRIP any model-proposed value
+            # so MCP resolves the caller's active datapack — a model-chosen
+            # id must never survive, or the "never trusted" guarantee above
+            # has a hole exactly when the chat is unscoped.
+            merged.pop("datapack_id", None)
+    return merged
+
+
+def _scoped_tool_names(cfg: AppConfig, routed_tool: Optional[str]) -> Tuple[str, ...]:
+    """Router-scoped binding: which tool schemas ride on this turn's LLM call.
+
+    Schemas are re-sent on every round, so the bind list IS the per-turn
+    token cost (~24 tools ≈ 4.5k tokens). The router's verdict prunes it:
+
+    - cps / no route  → the Meko auto tier only (reads + memory_add)
+    - amp_* route     → the whole AMP family + the two search reads
+    - Meko confirm    → the Meko auto tier + exactly the routed tool
+
+    Scoping narrows which schemas the model SEES; the confirm tier (what may
+    auto-execute vs. propose) still comes from cfg.agent_confirm_tools, so a
+    scoped-in confirm tool proposes a pending action exactly as before. The
+    trade-off is deliberate: a misrouted action turn answers in prose instead
+    of proposing (the user rephrases), in exchange for ~50% fewer prompt
+    tokens on every agentic turn.
+    """
+    auto = tuple(cfg.agent_tools)
+    meko_auto = tuple(t for t in auto if not t.startswith("amp_"))
+    if routed_tool and routed_tool.startswith("amp_"):
+        amp_family = tuple(
+            t for t in (*auto, *cfg.agent_confirm_tools) if t.startswith("amp_")
+        )
+        searches = tuple(
+            t for t in ("memory_search", "knowledgebase_search") if t in auto
+        )
+        return amp_family + searches
+    if routed_tool and routed_tool in cfg.agent_confirm_tools:
+        return meko_auto + (routed_tool,)
+    return meko_auto
+
+
+async def _agentic_llm_invoke(
+    *,
+    cfg: AppConfig,
+    llm: BaseChatModel,
+    tools_by_name: Dict[str, BaseTool],
+    messages: List[BaseMessage],
+    steps: List[ProcessingStep],
+    conversation_id: str,
+    datapack_id: Optional[str],
+    routed_tool: Optional[str] = None,
+) -> Tuple[Any, List[Any], Optional[Dict[str, Any]]]:
+    """The agentic-chat (MEKO-407) LLM invocation: the answer call with the
+    agent toolset bound — `cfg.agent_tools` auto-execute,
+    `cfg.agent_confirm_tools` only ever PROPOSE (Phase 2).
+
+    Returns ``(final_result, all_llm_results, pending_action)`` — the results
+    list so the caller can sum token usage across rounds into one Langfuse
+    observation, and the pending action (if the model proposed a confirm-tier
+    call) for the caller to stash in the session store and surface to the UI.
+
+    Shape: the tool-decision call IS the answer call. If the model answers
+    directly, this costs exactly one LLM call — identical to the preset
+    pipeline. Each round of tool calls costs one extra LLM call, capped at
+    ``cfg.max_tool_rounds``; after the cap the model is invoked once more
+    WITHOUT tools so the turn always ends in an answer.
+    """
+    confirm_names = set(cfg.agent_confirm_tools)
+    bind_names = _scoped_tool_names(cfg, routed_tool)
+    toolset = [tools_by_name[n] for n in bind_names if n in tools_by_name]
+    if not toolset:
+        logger.warning("agentic chat enabled but no allowlisted tools resolved; plain invoke")
+        result = await llm.ainvoke(messages)
+        return result, [result], None
+    by_name = {t.name: t for t in toolset}
+    llm_with_tools = llm.bind_tools(toolset)
+    logger.info(
+        "agentic chat: bound %d/%d tool schemas (route=%s, datapack=%s)",
+        len(toolset), len(cfg.agent_tools) + len(cfg.agent_confirm_tools),
+        routed_tool or "cps", datapack_id,
+    )
+
+    results: List[Any] = []
+    result = None
+    pending_action: Optional[Dict[str, Any]] = None
+    for _round in range(cfg.max_tool_rounds):
+        result = await llm_with_tools.ainvoke(messages)
+        results.append(result)
+        tool_calls = list(getattr(result, "tool_calls", None) or [])
+        if not tool_calls:
+            logger.info("agentic chat round %d: no tool calls — answering", _round + 1)
+            return result, results, pending_action
+
+        logger.info(
+            "agentic chat round %d (datapack=%s): model requested %s",
+            _round + 1, datapack_id,
+            "; ".join(
+                f"{tc.get('name')}({_truncate(json.dumps(tc.get('args') or {}, default=str), 400)})"
+                for tc in tool_calls
+            ),
+        )
+        messages.append(result)
+        for tc in tool_calls:
+            name = tc.get("name") or ""
+            call_id = tc.get("id") or f"call_{len(messages)}"
+            model_args = tc.get("args") or {}
+            tool = by_name.get(name)
+            step_start = time.monotonic()
+            if tool is None:
+                # Model asked for something outside the allowlist — answer
+                # with a structured error so it can recover, never crash.
+                content = json.dumps({"error": "tool_not_available",
+                                      "detail": f"{name} is not available here"})
+                status, note = "error", "not in allowlist"
+                merged = model_args
+            elif name in confirm_names:
+                # Phase 2: confirm-tier tools are NEVER executed on the
+                # model's say-so. Record ONE pending action (identity already
+                # gateway-enforced) for the user to approve in the UI, and
+                # tell the model so it describes the pending action.
+                merged = _merge_agent_tool_args(
+                    tool, model_args, agent_id=cfg.agent_id,
+                    conversation_id=conversation_id, datapack_id=datapack_id,
+                )
+                if pending_action is None:
+                    pending_action = {
+                        "action_id": _uuid_mod.uuid4().hex,
+                        "tool_name": name,
+                        "args": dict(merged),
+                    }
+                    content = json.dumps({
+                        "status": "confirmation_required",
+                        "detail": (
+                            "This action was NOT executed. The user is being "
+                            "shown a confirmation card; describe exactly what "
+                            "will happen and ask them to confirm."
+                        ),
+                    })
+                    status, note = "skipped", "awaiting user confirmation"
+                else:
+                    content = json.dumps({
+                        "error": "pending_action_exists",
+                        "detail": "Only one action can await confirmation at a time.",
+                    })
+                    status, note = "error", "second confirm-tier call dropped"
+            else:
+                merged = _merge_agent_tool_args(
+                    tool, model_args, agent_id=cfg.agent_id,
+                    conversation_id=conversation_id, datapack_id=datapack_id,
+                )
+                try:
+                    out = await tool.ainvoke(merged)
+                    content = out if isinstance(out, str) else json.dumps(out, default=str)
+                    status, note = "ok", f"{len(content)} chars"
+                except Exception as exc:  # noqa: BLE001 — surface to the model, don't crash the turn
+                    logger.warning("agent tool %s failed: %s", name, exc)
+                    content = json.dumps({"error": "tool_failed", "detail": str(exc)})
+                    status, note = "error", str(exc)[:200]
+            logger.info(
+                "agent_tool %s: %s (%s) in %dms args=%s",
+                name, status, note,
+                int((time.monotonic() - step_start) * 1000),
+                _truncate(json.dumps(merged, default=str), 400),
+            )
+            steps.append(
+                ProcessingStep(
+                    f"agent_tool:{name}",
+                    int((time.monotonic() - step_start) * 1000),
+                    status, note, tool_args=dict(merged),
+                )
+            )
+            messages.append(ToolMessage(content=content, tool_call_id=call_id, name=name))
+
+    # Round cap exhausted with the model still asking for tools: force a
+    # final answer with the tool results gathered so far (no tools bound,
+    # so it cannot ask again).
+    logger.info("agentic chat: tool-round cap (%d) reached; forcing final answer",
+                cfg.max_tool_rounds)
+    result = await llm.ainvoke(messages)
+    results.append(result)
+    return result, results, pending_action
 
 
 async def run_chat_turn(
@@ -772,6 +1085,14 @@ async def run_chat_turn(
     # enable_memory_search=False does further below.
     if tone or strictness or focus:
         bypass = True
+    # Phase 3 router verdict; scopes both the cache bypass (below) and which
+    # tool schemas _agentic_llm_invoke binds. None → the default cps route.
+    # route_bypass forces the grounded legacy retrieval (no conversation
+    # tier) WITHOUT claiming the user rejected a cache answer — `bypass`
+    # alone feeds `rejected_cache` telemetry, which must stay tied to real
+    # rejections (the answered_from tag dashboards read).
+    routed_tool: Optional[str] = None
+    route_bypass = False
     if _is_trivial_query(user_message):
         logger.info(
             "skipping retrieval for trivial query session=%s len=%d",
@@ -798,6 +1119,20 @@ async def run_chat_turn(
                 "review config supplied" if (tone or strictness or focus) else "user rejected cache answer"
             )
             steps.append(ProcessingStep("conversation_search", 0, "skipped", bypass_reason, query=user_message))
+
+        # Phase 3 (MEKO_AGENTIC_CHAT): cheap-model tool router. CPS stays the
+        # default search; when the summary model says the user explicitly
+        # wants a tool, force the grounded legacy retrieval with the
+        # conversation tier skipped — a cache hit would end the turn before
+        # the tool loop ever ran (a repeated "create a cluster" must act
+        # again, not replay the old answer).
+        if cfg.agentic_chat_enabled and not bypass:
+            routed_tool = await _route_tool_decision(
+                summary_llm or llm, user_message, cfg, steps,
+                datapack_id=datapack_id,
+            )
+            if routed_tool:
+                route_bypass = True
 
         # 2. Retrieval. Two paths, chosen by cfg.contextual_prominence_search_enabled
         #    (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH — this gateway's OWN
@@ -828,7 +1163,7 @@ async def run_chat_turn(
         #    this turn, same tradeoff `bypass` already makes.
         use_unified_search = (
             cfg.contextual_prominence_search_enabled
-            and not bypass
+            and not (bypass or route_bypass)
             and enable_knowledge_base is not False
             and enable_memory_search is not False
         )
@@ -850,7 +1185,7 @@ async def run_chat_turn(
                 conversation_id=conversation_id,
                 datapack_id=datapack_id,
                 steps=steps,
-                skip_conversation=bypass,
+                skip_conversation=bypass or route_bypass,
             )
             memory_hits = []
         else:
@@ -941,6 +1276,12 @@ async def run_chat_turn(
             # types "no, that's wrong", we re-answer this query with the cache
             # bypassed.
             await session_store.set_cache_state(session_id, True, user_message)
+            # This early return skips the full-LLM path's unconditional
+            # set_pending_action, so clear the slot here too — the UI drops
+            # its card on every response, and a stale action_id must not
+            # stay claimable via /chat/confirm-action after that.
+            if cfg.agentic_chat_enabled:
+                await session_store.set_pending_action(session_id, None)
             await session_store.append(session_id, "user", user_message)
             await session_store.append(session_id, "assistant", assistant_text)
             return ChatTurnResult(
@@ -1032,21 +1373,22 @@ async def run_chat_turn(
     # full history per turn was the dominant input-token cost. The system
     # prompt's "response length" hint advertises the same budget set in
     # `cfg.llm_max_tokens` so the model self-paces (~4 chars per token).
+    system_content = system_template.format(
+        memory_context=memory_context or "(none yet)",
+        kb_context=kb_context or "(none yet)",
+        conversation_context=conversation_context or "(none yet)",
+        max_tokens=cfg.llm_max_tokens,
+        max_chars=cfg.llm_max_tokens * 4,
+        # Unused extra kwarg for every template except
+        # REVIEW_AGENT_SYSTEM_TEMPLATE (str.format only errors on a
+        # referenced-but-missing key, never on an unused one).
+        focus_block=_render_focus_block(focus),
+        tone_strictness_block=_render_tone_strictness_block(tone, strictness),
+    )
+    if cfg.agentic_chat_enabled:
+        system_content += AGENT_GUIDANCE
     messages: List[BaseMessage] = [
-        SystemMessage(
-            content=system_template.format(
-                memory_context=memory_context or "(none yet)",
-                kb_context=kb_context or "(none yet)",
-                conversation_context=conversation_context or "(none yet)",
-                max_tokens=cfg.llm_max_tokens,
-                max_chars=cfg.llm_max_tokens * 4,
-                # Unused extra kwarg for every template except
-                # REVIEW_AGENT_SYSTEM_TEMPLATE (str.format only errors on a
-                # referenced-but-missing key, never on an unused one).
-                focus_block=_render_focus_block(focus),
-                tone_strictness_block=_render_tone_strictness_block(tone, strictness),
-            )
-        ),
+        SystemMessage(content=system_content),
         HumanMessage(content=user_message),
     ]
 
@@ -1058,8 +1400,24 @@ async def run_chat_turn(
     )
 
     llm_start = time.monotonic()
+    llm_results: List[Any] = []
+    pending_action: Optional[Dict[str, Any]] = None
     try:
-        result = await llm.ainvoke(messages)
+        if cfg.agentic_chat_enabled:
+            result, llm_results, pending_action = await _agentic_llm_invoke(
+                cfg=cfg, llm=llm, tools_by_name=tools_by_name,
+                messages=messages, steps=steps,
+                conversation_id=conversation_id, datapack_id=datapack_id,
+                routed_tool=routed_tool,
+            )
+            # One pending action per session: a newer proposal replaces an
+            # older unconfirmed one, and a turn with NO proposal clears it —
+            # otherwise the earlier action_id stays claimable via
+            # /chat/confirm-action after the UI has already dropped its card.
+            await session_store.set_pending_action(session_id, pending_action)
+        else:
+            result = await llm.ainvoke(messages)
+            llm_results = [result]
     except Exception as exc:
         logger.warning(
             "run_chat_turn: LLM invocation FAILED session=%s conversation_id=%s "
@@ -1077,7 +1435,10 @@ async def run_chat_turn(
         )
         raise
     steps.append(
-        ProcessingStep("llm_invoke", int((time.monotonic() - llm_start) * 1000), "ok")
+        ProcessingStep(
+            "llm_invoke", int((time.monotonic() - llm_start) * 1000), "ok",
+            f"{len(llm_results)} llm round(s)" if len(llm_results) > 1 else "",
+        )
     )
     assistant_text = _coerce_text(result.content)
 
@@ -1096,7 +1457,22 @@ async def run_chat_turn(
     # summarization" when KB search returns conversation-history hits
     # (they're rendered into `kb_context` and synthesised inline), so
     # one observation covers both.
-    in_tok, out_tok, tot_tok, model_id = _usage_from_langchain_result(result)
+    #
+    # Agentic multi-round turns: only rounds 2+ are counted — the rounds
+    # that read tool results and synthesize the answer. Round 1 (the
+    # tool-decision call) is deliberately excluded from track_token_usage
+    # for now (product decision: meter the answer-generation cost, keep
+    # single-round turns identical to the preset pipeline). The full
+    # per-round spend remains visible in provider billing and gateway logs.
+    tracked_results = llm_results if len(llm_results) <= 1 else llm_results[1:]
+    in_tok = out_tok = tot_tok = 0
+    model_id: Optional[str] = None
+    for _res in tracked_results:
+        _i, _o, _t, _m = _usage_from_langchain_result(_res)
+        in_tok += _i
+        out_tok += _o
+        tot_tok += _t
+        model_id = model_id or _m
 
     # 5. Persistence.
     #
@@ -1194,6 +1570,7 @@ async def run_chat_turn(
         memory_hits=tuple(memory_hits),
         kb_hits=tuple(kb_hits),
         processing_steps=tuple(steps),
+        pending_action=pending_action,
     )
 
 

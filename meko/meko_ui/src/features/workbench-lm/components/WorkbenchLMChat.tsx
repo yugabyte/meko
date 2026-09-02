@@ -13,9 +13,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Download } from "lucide-react";
-import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
+import { confirmAction, getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
+import type { PendingAction } from "@/lib/inferenceGateway";
 import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { useAccountUsage, ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
+import { DATAPACKS_QUERY_KEY } from "@/features/datapacks/hooks/useDatapacks";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
 import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
@@ -25,6 +27,10 @@ import { TELEMETRY_CLIENT_WORKBENCH, TELEMETRY_EVENTS } from "@/lib/telemetry/ev
 import { trackEvent } from "@/lib/telemetry/rudderstack";
 import { ChatBubble, ThinkingBubble } from "./workbench-lm-chat/ChatBubble";
 import { ChatInput } from "./workbench-lm-chat/ChatInput";
+import {
+  PendingActionCard,
+  describeActionResult,
+} from "./workbench-lm-chat/PendingActionCard";
 import { EmptyState } from "./workbench-lm-chat/EmptyState";
 import { downloadChat } from "./workbench-lm-chat/downloadChat";
 import type { KnowledgeReadiness, Message } from "./workbench-lm-chat/types";
@@ -104,6 +110,11 @@ export function WorkbenchLMChat({
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Agentic chat (MEKO-407 Phase 2): the one confirm-tier action the model
+  // proposed and the gateway froze without executing. Rendered as an
+  // Allow/Deny card above the input; resolved via /chat/confirm-action.
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Reset chat state whenever the active datapack changes — keeps the
@@ -115,6 +126,7 @@ export function WorkbenchLMChat({
     setConversationId(null);
     setInput("");
     setError(null);
+    setPendingAction(null);
   }, [datapackId]);
 
   // Resume / reset the chat based on the page's "loaded thread" state.
@@ -153,6 +165,7 @@ export function WorkbenchLMChat({
       setSessionId(null);
       setInput("");
       setError(null);
+      setPendingAction(null);
       return;
     }
     const synthesised: Message[] = [];
@@ -273,6 +286,10 @@ export function WorkbenchLMChat({
         });
         if (resp.session_id) setSessionId(resp.session_id);
         if (resp.conversation_id) setConversationId(resp.conversation_id);
+        // Latest turn wins: a new proposal replaces the card; a turn with
+        // no proposal clears it (the gateway mirrors this server-side —
+        // every agentic turn overwrites the stored action, None included).
+        setPendingAction(resp.pending_action ?? null);
         // conversation_started: only on the first turn, once the gateway has
         // minted the new conversation_id.
         if (isFirstMessage && resp.conversation_id) {
@@ -338,6 +355,52 @@ export function WorkbenchLMChat({
       conversationCount,
       currentUser?.email,
     ],
+  );
+
+  // Resolve the pending confirm-tier action. Deny discards it server-side
+  // (nothing executed); Allow executes the frozen args and the outcome lands
+  // in the transcript as an assistant line.
+  const resolvePendingAction = useCallback(
+    async (approve: boolean) => {
+      if (!pendingAction || !userToken || !sessionId || confirmingAction) return;
+      setConfirmingAction(true);
+      setError(null);
+      try {
+        const resp = await confirmAction({
+          session_id: sessionId,
+          action_id: pendingAction.action_id,
+          user_token: userToken,
+          approve,
+        });
+        let line: string;
+        if (resp.status === "executed") {
+          line = describeActionResult(pendingAction);
+          // The executed action mutated server state other views cache behind
+          // a staleTime — refetch what it touched (mirrors send()'s
+          // ACCOUNT_USAGE invalidation).
+          if (pendingAction.tool_name === "datapack_update") {
+            void queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] });
+          } else if (pendingAction.tool_name.startsWith("amp_") && datapackId) {
+            void queryClient.invalidateQueries({ queryKey: ["amp"] });
+          }
+        } else if (resp.status === "cancelled") {
+          line = "Okay — no action taken.";
+        } else {
+          line = `The action could not be completed: ${resp.detail || "unknown error"}`;
+        }
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), role: "assistant", content: line },
+        ]);
+        onTurnComplete?.();
+      } catch (err) {
+        setError(getInferenceGatewayErrorMessage(err));
+      } finally {
+        setPendingAction(null);
+        setConfirmingAction(false);
+      }
+    },
+    [pendingAction, userToken, sessionId, confirmingAction, onTurnComplete, datapackId],
   );
 
   const handleSubmit = useCallback(() => {
@@ -434,6 +497,15 @@ export function WorkbenchLMChat({
           </div>
         )}
       </div>
+
+      {pendingAction ? (
+        <PendingActionCard
+          action={pendingAction}
+          busy={confirmingAction}
+          onAllow={() => void resolvePendingAction(true)}
+          onDeny={() => void resolvePendingAction(false)}
+        />
+      ) : null}
 
       {error && (
         <div className="mx-auto w-full max-w-3xl px-6 pb-2">

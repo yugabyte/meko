@@ -15,6 +15,8 @@ export const PREPROCESS_NAMES = new Set([
   "knowledgebase_search",
   "conversation_search",
   "context_assemble",
+  // Agentic chat (MEKO-407): the router's route decision precedes retrieval.
+  "tool_route",
 ]);
 
 /** Steps rendered under the "Execute" phase. */
@@ -36,7 +38,8 @@ export function groupStepsByPhase(steps: ProcessingStep[]): {
   const execute: ProcessingStep[] = [];
   for (const s of steps) {
     if (PREPROCESS_NAMES.has(s.name)) preprocess.push(s);
-    else if (EXECUTE_NAMES.has(s.name)) execute.push(s);
+    // Agentic tool executions are dynamic names (agent_tool:<mcp tool>).
+    else if (EXECUTE_NAMES.has(s.name) || s.name.startsWith("agent_tool:")) execute.push(s);
   }
   return { preprocess, execute };
 }
@@ -198,7 +201,12 @@ export function prettifyStepName(name: string): string {
       return "conversation.persist";
     case "llm_invoke":
       return "llm.completion";
+    case "tool_route":
+      return "tool.route";
     default:
+      if (name.startsWith("agent_tool:")) {
+        return `tool.${name.slice("agent_tool:".length)}`;
+      }
       return name;
   }
 }
@@ -211,9 +219,11 @@ export function stepKindLabel(name: string): string {
     name === "memory_add"
   )
     return "DB";
-  if (name === "llm_invoke" || name === "conversation_summarize") return "LLM";
+  if (name === "llm_invoke" || name === "conversation_summarize" || name === "tool_route")
+    return "LLM";
   if (name === "context_assemble") return "FMT";
   if (name === "conversation_add_message") return "LOG";
+  if (name.startsWith("agent_tool:")) return "MCP";
   return "";
 }
 
@@ -242,7 +252,15 @@ export function stepSummary(step: ProcessingStep): string {
       return "Persisted message to conversation log";
     case "llm_invoke":
       return "Called the model";
+    case "tool_route":
+      return step.detail ? `Routed to ${step.detail}` : "Routed the turn";
     default:
+      if (step.name.startsWith("agent_tool:")) {
+        const tool = step.name.slice("agent_tool:".length);
+        return step.status === "skipped"
+          ? `Proposed ${tool} (awaiting confirmation)`
+          : `Executed ${tool}`;
+      }
       return "";
   }
 }
