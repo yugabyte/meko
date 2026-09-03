@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -951,20 +950,6 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		extended = raw
 	}
 
-	// Connectivity: an nlb_* mode makes the deployer add a Postgres-only Service
-	// behind its own cloud load balancer. Validated here so a bad mode or CIDR is
-	// a synchronous 400 rather than a task that fails minutes later.
-	// The body is optional (openapi_spec.yaml required: false), so an empty POST
-	// leaves request.Body nil — the default-everything create path.
-	var connectivityReq *EndpointConnectivity
-	if request.Body != nil {
-		connectivityReq = request.Body.Connectivity
-	}
-	connectivity, allowedCIDRs, apiErr := endpointConnectivity(connectivityReq, c.prov.Deployer)
-	if apiErr != nil {
-		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
-	}
-
 	// Plan the work as an async task and return 202 + the Task. The endpoint row,
 	// its deploy, and the address record are all created by the worker's
 	// create_endpoint step; the single-writer rule (a duplicate read_write
@@ -981,8 +966,6 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		PgSettings:         pgSettings,
 		PageserverSettings: pageserverSettings,
 		SafekeeperSettings: safekeeperSettings,
-		Connectivity:       connectivity,
-		AllowedCIDRs:       allowedCIDRs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -1365,58 +1348,6 @@ func branchToAPI(b core.Branch) Branch {
 	return out
 }
 
-// endpointConnectivity validates a create request's connectivity block and
-// returns the mode plus its source ranges. A nil block means cluster_ip, which
-// is what every endpoint created before this option behaves as.
-//
-// dep is the configured deployer: only one that implements
-// deploy.ConnectivitySupporter renders the load-balancer Service, so under
-// --deploy-driver=docker or =local an nlb_* mode is refused here rather than
-// persisted and reported back as an exposure the endpoint does not have.
-func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string, []string, *Error) {
-	if in == nil {
-		return "", nil, nil
-	}
-	mode := deploy.ConnectivityClusterIP
-	if in.Mode != nil {
-		mode = string(*in.Mode)
-	}
-	switch mode {
-	case deploy.ConnectivityClusterIP, deploy.ConnectivityNLBInternal, deploy.ConnectivityNLBExternal:
-	default:
-		e := apiError("invalid_request", fmt.Sprintf("connectivity.mode must be one of cluster_ip, nlb_internal, nlb_external (got %q)", mode))
-		return "", nil, &e
-	}
-	var cidrs []string
-	if in.AllowedCidrs != nil {
-		for _, c := range *in.AllowedCidrs {
-			c = strings.TrimSpace(c)
-			if c == "" {
-				continue
-			}
-			// A bare IP is the common mistake and AWS rejects it, so catch it here
-			// where the caller still gets a useful message.
-			if _, _, err := net.ParseCIDR(c); err != nil {
-				e := apiError("invalid_request", fmt.Sprintf("connectivity.allowed_cidrs: %q is not a valid CIDR (a prefix length is required, e.g. %s/32)", c, c))
-				return "", nil, &e
-			}
-			cidrs = append(cidrs, c)
-		}
-	}
-	if len(cidrs) > 0 && mode == deploy.ConnectivityClusterIP {
-		e := apiError("invalid_request", "connectivity.allowed_cidrs applies only to the nlb_internal and nlb_external modes")
-		return "", nil, &e
-	}
-	if mode == deploy.ConnectivityNLBInternal || mode == deploy.ConnectivityNLBExternal {
-		cs, ok := dep.(deploy.ConnectivitySupporter)
-		if !ok || !cs.SupportsConnectivity() {
-			e := apiError("unsupported_connectivity", fmt.Sprintf("connectivity.mode %q needs the kubernetes deploy driver; this controller cannot provision a load balancer", mode))
-			return "", nil, &e
-		}
-	}
-	return mode, cidrs, nil
-}
-
 func endpointToAPI(e core.Endpoint) Endpoint {
 	// Report the *effective* reservation: an endpoint created before resize
 	// existed has no cpu/memory in its config (stored as ""), but the pod still
@@ -1439,15 +1370,6 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 		TailnetAddress: e.TailnetAddress,
 		Resources:      &EndpointResources{Cpu: &cpu, Memory: &memory},
 		CreatedAt:      e.CreatedAt,
-	}
-	if e.Connectivity != "" {
-		mode := EndpointConnectivityMode(e.Connectivity)
-		conn := EndpointConnectivity{Mode: &mode}
-		if len(e.AllowedCIDRs) > 0 {
-			cidrs := e.AllowedCIDRs
-			conn.AllowedCidrs = &cidrs
-		}
-		out.Connectivity = &conn
 	}
 	if len(e.PgSettings) > 0 {
 		out.PgSettings = &e.PgSettings

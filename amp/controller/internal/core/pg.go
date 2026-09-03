@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -564,7 +563,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a cluster.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.ycp_generation, e.created_at
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.ycp_generation, e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -949,24 +948,12 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		settingsRaw []byte
 		psRaw       []byte
 		skRaw       []byte
-		cidrsRaw    []byte
 		ycpGen      sql.NullInt64 // NULL until a YCP update has been applied
 		ep          Endpoint
 	)
 	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory,
-		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &ycpGen, &ep.CreatedAt); err != nil {
+		&settingsRaw, &psRaw, &skRaw, &ep.Extended, &ycpGen, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
-	}
-	// A malformed allowed_cidrs is not worth failing the read over — the endpoint
-	// and its address are still valid, and the source ranges that matter live on
-	// the Service — but it is written by the controller from values ParseCIDR
-	// already accepted, so it means the row was edited by hand or something is
-	// wrong upstream. Never silent.
-	if len(cidrsRaw) > 0 {
-		if err := json.Unmarshal(cidrsRaw, &ep.AllowedCIDRs); err != nil {
-			slog.Default().Warn("endpoint config.allowed_cidrs is not a JSON string array; ignoring it",
-				"endpoint", idStr, "error", err, "raw", string(cidrsRaw))
-		}
 	}
 	if ycpGen.Valid {
 		ep.YCPGeneration = &ycpGen.Int64

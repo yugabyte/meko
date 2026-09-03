@@ -634,9 +634,10 @@ type PortForward struct {
 	// restart re-launches kubectl for this same target/ports. Set for every
 	// forward the Kubectl factory builds; nil only in hand-built test handles,
 	// which then behave exactly as before (one process, dead stays dead).
-	restart  func(ctx context.Context) (Process, error)
-	restarts atomic.Int64
-	logf     func(string, ...any)
+	restart    func(ctx context.Context) (Process, error)
+	restarts   atomic.Int64
+	restarting atomic.Bool
+	logf       func(string, ...any)
 
 	// out keeps the tail of what kubectl said. Everything that goes wrong with a
 	// forward — "Unable to listen on port … address already in use", "lost
@@ -771,6 +772,7 @@ func (pf *PortForward) supervise(waitErr error) bool {
 		pf.cancel = cancel
 		pf.procMu.Unlock()
 		oldCancel()
+		pf.restarting.Store(false)
 		n := pf.restarts.Add(1)
 		pf.record(fmt.Sprintf("ampqa: port-forward %s died (%v); re-established on %s (restart %d)",
 			pf.target, waitErr, pf.LocalAddr(), n))
@@ -797,6 +799,9 @@ func (pf *PortForward) readUntilExit(ready chan<- error) error {
 		line := sc.Text()
 		pf.record(line)
 		if pf.ready.Load() {
+			if forwardLostItsPod(line) {
+				pf.killForRestart(proc, line)
+			}
 			continue // drain remaining output, keeping the tail for diagnostics
 		}
 		if strings.Contains(line, "Forwarding from") {
@@ -830,6 +835,44 @@ const (
 	portForwardRestartAttempts = 10
 	portForwardRestartDelay    = 500 * time.Millisecond
 )
+
+// forwardLostPodMarkers are what kubectl says about the FORWARD itself when its
+// pod is gone: it stays up and keeps accepting, so every later request EOFs until
+// a relaunch re-resolves the target.
+var forwardLostPodMarkers = []string{
+	"lost connection to pod",
+	"error upgrading connection",
+}
+
+// forwardLostItsPod excludes kubectl's per-connection "an error occurred
+// forwarding N -> M: ..." line first. The kubelet's reason lands inside it
+// ("container not running (id)"), so matching on the reason would tear down a
+// shared forward — and every other connection through it — over one dropped
+// stream that the caller's own retry already covers.
+func forwardLostItsPod(line string) bool {
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "an error occurred forwarding") {
+		return false
+	}
+	for _, m := range forwardLostPodMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// killForRestart ends the current kubectl so watch/supervise relaunches it.
+func (pf *PortForward) killForRestart(proc Process, line string) {
+	if !pf.restarting.CompareAndSwap(false, true) {
+		return
+	}
+	pf.record(fmt.Sprintf("ampqa: port-forward %s lost its pod (%s); relaunching", pf.target, strings.TrimSpace(line)))
+	if pf.logf != nil {
+		pf.logf("k8s: port-forward %s lost its pod (%s); relaunching", pf.target, strings.TrimSpace(line))
+	}
+	_ = proc.Kill()
+}
 
 // parseForwardPort extracts the local port from a kubectl readiness line like
 // "Forwarding from 127.0.0.1:54123 -> 5432" (or an IPv6 "[::1]:54123 -> 5432").

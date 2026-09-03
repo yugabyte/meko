@@ -42,6 +42,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
@@ -256,9 +257,12 @@ type Deployer struct {
 	bootstrap     func(ctx context.Context, cl *yba.Client, creds yba.BootstrapCreds, timeout time.Duration) (yba.BootstrapResult, error)
 	probeURL      func(ctx context.Context, url string) bool
 
-	mu          sync.Mutex
-	createdCRBs []string
-	pf          *k8s.PortForward
+	mu            sync.Mutex
+	createdCRBs   []string
+	pf            *k8s.PortForward
+	lastReforward time.Time
+	reforwardMu   sync.Mutex
+	forwardBroken atomic.Bool
 }
 
 // New builds a Deployer for cfg using the real kubectl/helm/aws binaries. runTag
@@ -625,7 +629,7 @@ func (d *Deployer) infoTransport() http.RoundTripper {
 	if d.cfg.InsecureTLS {
 		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // YBA is commonly self-signed
 	}
-	return &revivingTransport{base: base, host: d.forwardHost, logf: d.log}
+	return &revivingTransport{base: base, host: d.forwardHost, markBroken: func() { d.forwardBroken.Store(true) }, logf: d.log}
 }
 
 // Teardown removes everything Deploy created, best-effort and LIFO, on its own

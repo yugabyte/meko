@@ -231,27 +231,6 @@ service:
   annotations: {}
   # -- Also publish the internal HTTP APIs (pageserver/safekeeper) on the Service.
   exposeInternalHttp: false
-  # -- Client reachability for the Postgres port. `cluster_ip` (default) leaves
-  # the endpoint reachable only in-cluster (and over the tailnet, if the Service
-  # is tailnet-exposed). `nlb_internal` / `nlb_external` add a SECOND,
-  # Postgres-only Service fronted by an AWS Network Load Balancer — internal
-  # (VPC-routable) or internet-facing. The pageserver/safekeeper/supervisor ports
-  # are deliberately never published on it: the supervisor's settings API is
-  # unauthenticated and can restart Postgres.
-  connectivity: cluster_ip
-  # -- Which cloud's load-balancer annotations to render for the `nlb_*` modes:
-  # `aws`, `gcp` or `azure`. The controller detects it from the cluster's nodes
-  # and sets it; it only has to be given by hand for a bare `helm install`.
-  # Required for `nlb_internal` — every provider defaults a LoadBalancer Service
-  # to internet-facing, so an unknown cloud would silently publish something the
-  # caller asked to keep private, and the render fails instead.
-  cloud: ""
-  # -- CIDRs allowed to reach the load balancer (`loadBalancerSourceRanges`).
-  # Portable: a core Service field, honoured on every cloud.
-  # Empty means no restriction, which for `nlb_external` puts Postgres on the
-  # public internet behind password auth alone — set this for anything but a
-  # deliberate open test endpoint.
-  allowedCidrs: []
 
 # Endpoint data volume (/data: the compute's pgdata, the LFC cache, logs and
 # pidfiles). All durable state is in YugabyteDB, so by default this is ephemeral

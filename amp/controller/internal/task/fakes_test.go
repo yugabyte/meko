@@ -76,11 +76,6 @@ type fakeStateStore struct {
 type branchRef struct {
 	clusterID uuid.UUID
 	branchID  uuid.UUID
-	// Connectivity/allowedCIDRs mirror what the real backends select out of the
-	// endpoint config: a redeploy renders from this record alone, so a test can
-	// only catch a dropped exposure if the fake carries it.
-	connectivity string
-	allowedCIDRs []string
 }
 
 func newFakeStateStore() *fakeStateStore {
@@ -149,12 +144,7 @@ func (f *fakeStateStore) BranchEndpointDeploys(_ context.Context, clusterID, bra
 	var out []core.EndpointDeploy
 	for id, ref := range f.endpointBranch {
 		if ref.clusterID == clusterID && ref.branchID == branchID {
-			out = append(out, core.EndpointDeploy{
-				ID:           id,
-				BranchID:     ref.branchID,
-				Connectivity: ref.connectivity,
-				AllowedCIDRs: ref.allowedCIDRs,
-			})
+			out = append(out, core.EndpointDeploy{ID: id, BranchID: ref.branchID})
 		}
 	}
 	return out, nil
@@ -175,19 +165,6 @@ func (f *fakeStateStore) seedEndpoint(endpointID, clusterID, branchID uuid.UUID)
 	defer f.mu.Unlock()
 	f.endpointBranch[endpointID] = branchRef{clusterID: clusterID, branchID: branchID}
 	f.createdEndpoints[endpointID] = "read_only"
-}
-
-// seedEndpointWithConnectivity is seedEndpoint for an endpoint whose exposure a
-// redeploy has to preserve.
-func (f *fakeStateStore) seedEndpointWithConnectivity(endpointID, clusterID, branchID uuid.UUID, connectivity string, cidrs []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.endpointBranch[endpointID] = branchRef{
-		clusterID:    clusterID,
-		branchID:     branchID,
-		connectivity: connectivity,
-		allowedCIDRs: cidrs,
-	}
 }
 
 // seedBranch registers a live branch under clusterID. Test helper.

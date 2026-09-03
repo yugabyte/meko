@@ -547,3 +547,111 @@ func TestPortForwardDoesNotRestartAfterClose(t *testing.T) {
 		t.Error("a closed forward must report dead")
 	}
 }
+
+// The failure that cost the 0.260902.0 stress run: the pod behind a running
+// forward goes away, kubectl keeps listening, and every later request is
+// accepted and then EOFs. Only a relaunch re-resolves the target.
+func TestPortForwardRelaunchesWhenItLosesItsPod(t *testing.T) {
+	sr := &scriptRunner{}
+	pr1, pw1 := io.Pipe()
+	first := &fakeProc{out: pr1, killed: make(chan struct{})}
+	pr2, pw2 := io.Pipe()
+	second := &fakeProc{out: pr2, killed: make(chan struct{})}
+	var mu sync.Mutex
+	n := 0
+	k := testKubectl(sr).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		n++
+		if n == 1 {
+			go func() { _, _ = pw1.Write([]byte("Forwarding from 127.0.0.1:18081 -> 8080\n")) }()
+			return first, nil
+		}
+		go func() { _, _ = pw2.Write([]byte("Forwarding from 127.0.0.1:18081 -> 8080\n")) }()
+		return second, nil
+	})
+	pf, err := k.PortForward(context.Background(), "svc/yugaware", 18081, 8080)
+	if err != nil {
+		t.Fatalf("port-forward: %v", err)
+	}
+	defer pf.Close()
+
+	_, _ = pw1.Write([]byte("E0903 09:44:01.000000   12345 portforward.go:413] lost connection to pod\n"))
+	select {
+	case <-first.killed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a forward that lost its pod must be killed so the supervisor relaunches it")
+	}
+	pw1.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for pf.Restarts() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pf.Restarts() == 0 {
+		t.Fatal("the forward was not re-established after losing its pod")
+	}
+	if !pf.Alive() {
+		t.Error("the handle must stay alive across the relaunch")
+	}
+	if !strings.Contains(pf.Output(), "lost its pod") {
+		t.Errorf("output %q does not record why the forward was relaunched", pf.Output())
+	}
+}
+
+// Per-connection forwarding noise is transient; relaunching on it would drop
+// every other connection through the same forward.
+func TestPortForwardKeepsGoingOnTransientForwardingErrors(t *testing.T) {
+	sr := &scriptRunner{}
+	pr, pw := io.Pipe()
+	proc := &fakeProc{out: pr, killed: make(chan struct{})}
+	starts := 0
+	var mu sync.Mutex
+	k := testKubectl(sr).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		mu.Lock()
+		starts++
+		mu.Unlock()
+		go func() { _, _ = pw.Write([]byte("Forwarding from 127.0.0.1:18082 -> 8080\n")) }()
+		return proc, nil
+	})
+	pf, err := k.PortForward(context.Background(), "svc/yugaware", 18082, 8080)
+	if err != nil {
+		t.Fatalf("port-forward: %v", err)
+	}
+	defer pf.Close()
+
+	_, _ = pw.Write([]byte("E0903 09:44:01.000000 1 portforward.go:233] an error occurred forwarding 18082 -> 8080: error creating error stream\n"))
+	_, _ = pw.Write([]byte("E0903 09:44:02.000000 1 portforward.go:233] an error occurred forwarding 18082 -> 8080: error forwarding port 8080 to pod abc, uid : container not running (abc)\n"))
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-proc.killed:
+		t.Fatal("a transient forwarding error must not tear the forward down")
+	default:
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 1 {
+		t.Errorf("kubectl started %d times, want 1", starts)
+	}
+}
+
+func TestForwardLostItsPod(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"E0903 portforward.go:413] lost connection to pod", true},
+		{"error upgrading connection: pods \"yugaware-0\" not found", true},
+		{"an error occurred forwarding 38757 -> 80: error creating error stream", false},
+		// The kubelet's reason rides inside kubectl's per-connection line; one
+		// dropped stream must not tear down a forward everything else shares.
+		{"an error occurred forwarding 38757 -> 80: error forwarding port 80 to pod abc, uid : container not running (abc)", false},
+		{"an error occurred forwarding 38757 -> 80: error forwarding port 80 to pod abc: pod not found", false},
+		{"Forwarding from 127.0.0.1:38757 -> 80", false},
+		{"Handling connection for 38757", false},
+	} {
+		if got := forwardLostItsPod(tc.line); got != tc.want {
+			t.Errorf("forwardLostItsPod(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}

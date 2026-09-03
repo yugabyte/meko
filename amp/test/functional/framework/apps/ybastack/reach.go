@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -42,6 +43,10 @@ const (
 	// address into minutes of waiting.
 	directProbeAttempts = 3
 	directProbeDelay    = 3 * time.Second
+	// reforwardAttempts rides out a yugaware pod that is still being rescheduled.
+	reforwardAttempts = 4
+	reforwardDelay    = 5 * time.Second
+	reforwardCooldown = 3 * time.Second
 )
 
 // reachPlatform decides the URL every later call uses: the load-balancer ingress
@@ -138,14 +143,28 @@ func (d *Deployer) forwardHost(ctx context.Context, force bool) (string, error) 
 	if pf == nil {
 		return "", fmt.Errorf("yba was not reached over a port-forward")
 	}
-	if !force && pf.Alive() {
+	// A break an earlier request reported is repaired before this one is sent.
+	if !force && !d.forwardBroken.Load() && pf.Alive() {
 		return pf.LocalAddr(), nil
+	}
+	// Serialised, then re-checked: concurrent pollers all see the one broken
+	// tunnel, and whoever waited here takes the relaunch the first one did.
+	d.reforwardMu.Lock()
+	defer d.reforwardMu.Unlock()
+	d.mu.Lock()
+	fresh := time.Since(d.lastReforward) < reforwardCooldown
+	addr := d.pf.LocalAddr()
+	d.mu.Unlock()
+	if fresh {
+		return addr, nil
 	}
 	if _, err := d.forwardPlatform(ctx); err != nil {
 		return "", err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.lastReforward = time.Now()
+	d.forwardBroken.Store(false)
 	return d.pf.LocalAddr(), nil
 }
 
@@ -186,46 +205,81 @@ func (d *Deployer) probeHTTP(ctx context.Context, url string) bool {
 	}
 }
 
-// revivingTransport keeps a client usable across the death of the kubectl
-// port-forward it was created against. A forward is one local process; when it
-// dies the pinned client keeps dialing a port nobody listens on, so a universe
-// creation that is half an hour into its task polling fails on `connection
-// refused` while YBA itself is healthy. The host is therefore resolved per
-// request rather than baked in, and a refused connection costs one re-forward
-// and a retry instead of the run.
+// revivingTransport keeps a client usable across a broken kubectl port-forward,
+// in either shape: the process exits and every dial is refused, or the pod goes
+// away while kubectl keeps listening and every request is accepted and then
+// EOFs. The second never heals on its own — the 0.260902.0 stress run lost
+// backing_maintenance and then backing_nemesis to one forward, 15 minutes apart.
+// The host is resolved per request, so a break costs a re-forward and a retry.
+//
+// What may be REPLAYED is narrower than what triggers a re-forward. A refused
+// dial proves YBA never saw the request, so any method can go again. An EOF does
+// not: the connection was established and the request may have been delivered,
+// and this transport also carries YBAMaintainer's restart, gflag and software
+// upgrades and the backup/restore/PITR creates, none of which YBA dedupes. Those
+// are therefore rebuilt-then-failed rather than replayed, and the break is
+// remembered so the NEXT request rebuilds the forward before it is sent — which
+// is what a test opening on a forward an earlier test broke actually needs.
 //
 // It deliberately does NOT retry on timeout: a timeout is the unroutable-address
 // case, which re-forwarding cannot fix and which must surface as itself.
 type revivingTransport struct {
-	base http.RoundTripper
-	host func(ctx context.Context, force bool) (string, error)
-	logf func(string, ...any)
+	base       http.RoundTripper
+	host       func(ctx context.Context, force bool) (string, error)
+	markBroken func()
+	logf       func(string, ...any)
 }
 
 func (t *revivingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	res, err := t.attempt(req, false)
-	if err == nil || !isConnRefused(err) {
+	if err == nil || !isDeadForward(err) {
 		return res, err
+	}
+	if t.markBroken != nil {
+		t.markBroken()
 	}
 	// Only a replayable body can be retried. http.NewRequest sets GetBody for
 	// every in-memory body, which is all this client sends.
 	if req.Body != nil && req.GetBody == nil {
-		return res, fmt.Errorf("%w (the yba port-forward is down and this request's body cannot be replayed)", err)
+		return res, core.AsEnvFailure(fmt.Errorf("%w (the yba port-forward is down and this request's body cannot be replayed)", err))
 	}
-	if t.logf != nil {
-		t.logf("ybastack: the yba port-forward refused the connection; re-establishing it and retrying %s %s", req.Method, req.URL.Path)
+	if !replayable(req.Method, err) {
+		return res, core.AsEnvFailure(fmt.Errorf("yba port-forward broke mid-request; %s %s may already have been applied and is not replayed: %w",
+			req.Method, req.URL.Path, err))
 	}
-	res2, err2 := t.attempt(req, true)
-	if err2 != nil && isConnRefused(err2) {
-		return res2, core.AsEnvFailure(fmt.Errorf("yba unreachable: the kubectl port-forward died and could not be re-established: %w", err2))
+	for attempt := 1; attempt <= reforwardAttempts; attempt++ {
+		if t.logf != nil {
+			t.logf("ybastack: the yba port-forward is broken (%v); re-establishing it and retrying %s %s (attempt %d/%d)",
+				err, req.Method, req.URL.Path, attempt, reforwardAttempts)
+		}
+		res, err = t.attempt(req, true)
+		if err == nil {
+			return res, nil
+		}
+		// A forward that cannot be rebuilt yet is the pod still being rescheduled;
+		// anything else that is not a broken forward is YBA's own answer.
+		if !isDeadForward(err) && !isReforwardFailure(err) {
+			return res, err
+		}
+		select {
+		case <-req.Context().Done():
+			return res, core.AsEnvFailure(fmt.Errorf("yba unreachable: the kubectl port-forward was still broken when the request context ended: %w", err))
+		case <-time.After(reforwardDelay):
+		}
 	}
-	return res2, err2
+	return res, core.AsEnvFailure(fmt.Errorf("yba unreachable: the kubectl port-forward stayed broken across %d re-establish attempts: %w", reforwardAttempts, err))
+}
+
+// replayable reports whether the request may be sent again. A refused dial never
+// reached YBA, so anything may; past that, only idempotent methods.
+func replayable(method string, err error) bool {
+	return isConnRefused(err) || method == http.MethodGet || method == http.MethodHead
 }
 
 func (t *revivingTransport) attempt(req *http.Request, force bool) (*http.Response, error) {
 	host, err := t.host(req.Context(), force)
 	if err != nil {
-		return nil, core.AsEnvFailure(fmt.Errorf("resolve yba address: %w", err))
+		return nil, core.AsEnvFailure(&reforwardFailure{err: fmt.Errorf("resolve yba address: %w", err)})
 	}
 	r := req.Clone(req.Context())
 	if r.URL == nil {
@@ -247,15 +301,46 @@ func (t *revivingTransport) attempt(req *http.Request, force bool) (*http.Respon
 	return base.RoundTrip(r)
 }
 
-// isConnRefused reports a refused TCP connection — a dead forward, not a YBA
-// that answered badly. String matching backs up errors.Is because the error
-// crosses url.Error and (in tests) fmt-wrapped boundaries.
+// reforwardFailure marks the forward itself as un-rebuildable right now — a
+// yugaware pod with no ready endpoint behind it, which the next attempt may find.
+type reforwardFailure struct{ err error }
+
+func (e *reforwardFailure) Error() string { return e.err.Error() }
+func (e *reforwardFailure) Unwrap() error { return e.err }
+
+func isReforwardFailure(err error) bool {
+	var rf *reforwardFailure
+	return errors.As(err, &rf)
+}
+
+// isDeadForward reports a failure a relaunched forward can fix: a refused dial,
+// or a connection accepted and dropped with no response. String matching backs
+// up errors.Is because the error crosses url.Error and fmt-wrapped boundaries.
+func isDeadForward(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isConnRefused(err) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, m := range []string{"connection reset by peer", "broken pipe", "unexpected eof", ": eof", "server closed idle connection"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return strings.HasSuffix(msg, "eof")
+}
+
+// isConnRefused reports a dial that never connected, which is the only failure
+// this transport can prove YBA did not see.
 func isConnRefused(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return true
-	}
-	return strings.Contains(err.Error(), "connection refused")
+	return errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(strings.ToLower(err.Error()), "connection refused")
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/yugabyte/amp/controller/internal/db"
-	"github.com/yugabyte/amp/controller/internal/log"
 )
 
 // This file adds the *idempotent, id-keyed* provisioning operations the
@@ -267,8 +266,7 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
 	rows, err := b.pool.Query(ctx,
 		`SELECT e.id::text, e.branch_id::text, eb.pg_version,
-		        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
-		        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs'
+		        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', '')
 		   FROM amp_registry.endpoints e
 		   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
 		  WHERE eb.branch_id = $1::uuid AND eb.dropped_at IS NULL`,
@@ -281,21 +279,10 @@ func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.
 	for rows.Next() {
 		var (
 			id, branchID string
-			cidrsRaw     []byte
 			d            EndpointDeploy
 		)
-		if err := rows.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Connectivity, &cidrsRaw); err != nil {
+		if err := rows.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory); err != nil {
 			return nil, fmt.Errorf("scan endpoint deploy: %w", err)
-		}
-		// Same tolerance as scanEndpoint: a malformed allowed_cidrs must not fail
-		// the redeploy, and the mode alone still keeps the load balancer. Logged,
-		// not swallowed — here it also means the redeployed Service loses its
-		// source ranges, which is a widening.
-		if len(cidrsRaw) > 0 {
-			if err := json.Unmarshal(cidrsRaw, &d.AllowedCIDRs); err != nil {
-				log.FromContext(ctx).Warn("endpoint config.allowed_cidrs is not a JSON string array; redeploying without source ranges",
-					"endpoint", id, "error", err, "raw", string(cidrsRaw))
-			}
 		}
 		if d.ID, err = uuid.Parse(id); err != nil {
 			return nil, fmt.Errorf("parse endpoint id: %w", err)

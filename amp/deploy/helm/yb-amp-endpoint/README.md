@@ -34,25 +34,6 @@ The chart renders:
 - **PersistentVolumeClaim** — only when `persistence.storageClass` is set: a
   `ReadWriteOnce` claim of that class (EBS/PD) backing `/data`. Part of the
   release, so `helm uninstall` frees it.
-- **LoadBalancer Service** `<fullname>-lb` (when `service.connectivity` is
-  `nlb_internal` or `nlb_external`) — a **second**, Postgres-only Service behind
-  an AWS Network Load Balancer, so clients outside the cluster get a stable
-  address that survives pod replacement (the load balancer controller re-targets
-  the new pod IP). `nlb_internal` is VPC-routable, `nlb_external` internet-facing;
-  restrict either with `service.allowedCidrs`.
-
-  Portable across clouds: the mode is the concept, and `service.cloud` selects
-  the annotations — AWS gets an NLB with pod-IP targets and cross-zone on, GKE
-  gets `networking.gke.io/load-balancer-type: Internal`, AKS gets
-  `service.beta.kubernetes.io/azure-load-balancer-internal`. `allowedCidrs` is a
-  core Service field and works the same everywhere. An **internal** LB with no
-  known cloud fails the render rather than defaulting to internet-facing, which
-  is what every provider would otherwise do.
-
-  It is a separate Service rather than a type change on the one below because
-  that one also carries `sup-http` (9899) — the supervisor's settings API, which
-  is unauthenticated and can restart Postgres. Publishing it on a load balancer
-  would put a restart button on the network.
 - **Service** — exposes the compute Postgres port (and, optionally, the
   internal HTTP APIs when `service.exposeInternalHttp=true`). The
   `postgres_exporter` metrics port is deliberately *not* published here — the
@@ -91,9 +72,6 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `16Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS. 16Gi is the 8 GiB per vCPU the control plane holds every endpoint to — a core without the memory to feed it gives Postgres a cache it cannot keep |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper HTTP |
-| `service.connectivity` | `cluster_ip` | client reachability: `cluster_ip`, `nlb_internal`, `nlb_external` |
-| `service.cloud` | _(detected)_ | whose LB annotations to render: `aws`, `gcp`, `azure`. The controller detects it from node provider IDs; required for `nlb_internal` |
-| `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted |
 | `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
 | `metrics.postgresExporter.image.tag` | `v0.17.1` | exporter image tag |
 | `metrics.postgresExporter.extraArgs` | `[]` | extra exporter flags, beyond the `--no-collector.database` / `--collector.stat_statements` the template sets |

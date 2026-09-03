@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -330,9 +333,9 @@ func TestRevivingTransportRetriesOnceOnRefused(t *testing.T) {
 	defer srv.Close()
 	liveHost := strings.TrimPrefix(srv.URL, "http://")
 
-	var hostCalls int
+	var hostCalls atomic.Int32
 	tr := &revivingTransport{host: func(_ context.Context, force bool) (string, error) {
-		hostCalls++
+		hostCalls.Add(1)
 		if force {
 			live.Store(true)
 		}
@@ -349,8 +352,8 @@ func TestRevivingTransportRetriesOnceOnRefused(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", res.StatusCode)
 	}
-	if hostCalls != 2 {
-		t.Errorf("host resolved %d times, want 2 (once refused, once re-forwarded)", hostCalls)
+	if n := hostCalls.Load(); n != 2 {
+		t.Errorf("host resolved %d times, want 2 (once refused, once re-forwarded)", n)
 	}
 }
 
@@ -630,3 +633,231 @@ func (p *livePFProc) Kill() error {
 	return nil
 }
 func (p *livePFProc) Wait() error { <-p.killed; return nil }
+
+// hangUpListener accepts and immediately closes, which is exactly what kubectl
+// looks like once its pod is gone: the dial succeeds and the request EOFs.
+func hangUpListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	return ln
+}
+
+// The 0.260902.0 stress failure: kubectl stays up and keeps accepting on the
+// local port, but its pod is gone, so every request EOFs. A pinned EOF used to
+// go unretried and never healed — backing_maintenance and then backing_nemesis
+// died 15 minutes apart on the same forward.
+func TestRevivingTransportRetriesReadsOnEOF(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"version":"2026.1.0.0"}`))
+	}))
+	defer srv.Close()
+	liveHost := strings.TrimPrefix(srv.URL, "http://")
+	dead := hangUpListener(t)
+
+	var live atomic.Bool
+	var hostCalls atomic.Int32
+	tr := &revivingTransport{host: func(_ context.Context, force bool) (string, error) {
+		hostCalls.Add(1)
+		if force {
+			live.Store(true)
+		}
+		if live.Load() {
+			return liveHost, nil
+		}
+		return dead.Addr().String(), nil
+	}}
+	res, err := (&http.Client{Transport: tr}).Get("http://placeholder/api/v1/app_version")
+	if err != nil {
+		t.Fatalf("GET through a forward that EOFs: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", res.StatusCode)
+	}
+	if n := hostCalls.Load(); n != 2 {
+		t.Errorf("host resolved %d times, want 2 (once EOF, once re-forwarded)", n)
+	}
+}
+
+// An EOF means the connection was established, so YBA may already have applied
+// the write. Restart, gflag-upgrade, backup and PITR creates all ride this
+// transport and none are deduped, so a write is never replayed on one — it is
+// reported, and the break is remembered for the next request.
+func TestRevivingTransportDoesNotReplayWritesOnEOF(t *testing.T) {
+	dead := hangUpListener(t)
+	var forced atomic.Int32
+	var broken atomic.Bool
+	tr := &revivingTransport{
+		host: func(_ context.Context, force bool) (string, error) {
+			if force {
+				forced.Add(1)
+			}
+			return dead.Addr().String(), nil
+		},
+		markBroken: func() { broken.Store(true) },
+	}
+	_, err := (&http.Client{Transport: tr}).Post("http://placeholder/api/v1/universes/abc/upgrade/restart",
+		"application/json", strings.NewReader(`{}`))
+	if err == nil {
+		t.Fatal("a write that broke mid-flight must be reported, not silently retried")
+	}
+	if !strings.Contains(err.Error(), "may already have been applied") {
+		t.Errorf("error %v does not say the write was not replayed", err)
+	}
+	if !core.IsEnvFailure(err) {
+		t.Errorf("error %v is not an env failure", err)
+	}
+	if n := forced.Load(); n != 0 {
+		t.Errorf("the write was re-sent %d time(s), want 0", n)
+	}
+	if !broken.Load() {
+		t.Error("the break must be recorded so the next request rebuilds the forward first")
+	}
+}
+
+// A refused dial never reached YBA, so a write may go again — this is the path
+// that was already safe before EOF joined the set.
+func TestRevivingTransportReplaysWritesOnRefused(t *testing.T) {
+	var seen atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		seen.Add(1)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	var live atomic.Bool
+	tr := &revivingTransport{host: func(_ context.Context, force bool) (string, error) {
+		if force {
+			live.Store(true)
+		}
+		if live.Load() {
+			return strings.TrimPrefix(srv.URL, "http://"), nil
+		}
+		return "127.0.0.1:1", nil // refuses
+	}}
+	res, err := (&http.Client{Transport: tr}).Post("http://placeholder/api/v1/universes/clusters",
+		"application/json", strings.NewReader(`{"name":"ampqa-1"}`))
+	if err != nil {
+		t.Fatalf("POST over a refused forward: %v", err)
+	}
+	defer res.Body.Close()
+	if n := seen.Load(); n != 1 {
+		t.Errorf("yba saw %d copies of the write, want 1", n)
+	}
+}
+
+// A yugaware pod that has not been rescheduled yet fails the re-forward itself,
+// which is a state the next attempt can find fixed — not a reason to give up on
+// the first try.
+func TestRevivingTransportRetriesWhileTheForwardCannotBeRebuilt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"version":"2026.1.0.0"}`))
+	}))
+	defer srv.Close()
+	dead := hangUpListener(t)
+
+	var calls atomic.Int32
+	tr := &revivingTransport{host: func(_ context.Context, force bool) (string, error) {
+		n := calls.Add(1)
+		switch {
+		case n == 1:
+			return dead.Addr().String(), nil // the broken forward
+		case n < 4:
+			return "", fmt.Errorf("port-forward svc/yugaware not ready: no ready endpoint") // still rescheduling
+		default:
+			return strings.TrimPrefix(srv.URL, "http://"), nil
+		}
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://placeholder/api/v1/app_version", nil)
+	res, err := (&http.Client{Transport: tr}).Do(req)
+	if err != nil {
+		t.Fatalf("request across a pod reschedule: %v", err)
+	}
+	defer res.Body.Close()
+	if n := calls.Load(); n != 4 {
+		t.Errorf("host resolved %d times, want 4 (one break, two un-rebuildable, one good)", n)
+	}
+}
+
+// A forward that cannot be brought back must surface as an env failure, not as
+// a bare transport error the suite reports as a product defect.
+func TestRevivingTransportGivesUpAsEnvFailure(t *testing.T) {
+	dead := hangUpListener(t)
+	tr := &revivingTransport{host: func(context.Context, bool) (string, error) {
+		return dead.Addr().String(), nil
+	}}
+	// Short on purpose: the client timeout that ends a request mid-loop is the
+	// common give-up path (30s in defaultNewClient), and it must be an env
+	// failure too, not a product verdict.
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://placeholder/api/v1/app_version", nil)
+	_, err := (&http.Client{Transport: tr}).Do(req)
+	if err == nil {
+		t.Fatal("a permanently broken forward must fail the request")
+	}
+	if !core.IsEnvFailure(err) {
+		t.Errorf("error %v is not an env failure", err)
+	}
+}
+
+// A YBA that answers — with any status — is not a broken forward, and retrying
+// it would double every write the suite makes.
+func TestRevivingTransportDoesNotRetryAnAnsweringYBA(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	tr := &revivingTransport{host: func(context.Context, bool) (string, error) {
+		return strings.TrimPrefix(srv.URL, "http://"), nil
+	}}
+	res, err := (&http.Client{Transport: tr}).Get("http://placeholder/api/v1/app_version")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want the 500 the server sent", res.StatusCode)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Errorf("server saw %d requests, want 1", n)
+	}
+}
+
+func TestIsDeadForward(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"refused", errors.New(`Post "http://127.0.0.1:38757/x": dial tcp: connection refused`), true},
+		{"eof", errors.New(`Get "http://127.0.0.1:38757/api/v1/tasks/abc": EOF`), true},
+		{"wrapped io.EOF", fmt.Errorf("read task: %w", io.EOF), true},
+		{"unexpected eof", errors.New("unexpected EOF"), true},
+		{"reset", errors.New("read tcp 127.0.0.1:38757: connection reset by peer"), true},
+		{"pooled conn died", errors.New("http: server closed idle connection"), true},
+		{"timeout", errors.New(`Get "http://10.21.137.3:9000/x": context deadline exceeded`), false},
+		{"http error", errors.New("yba returned 500: internal server error"), false},
+		{"nil", nil, false},
+	} {
+		if got := isDeadForward(tc.err); got != tc.want {
+			t.Errorf("%s: isDeadForward(%v) = %v, want %v", tc.name, tc.err, got, tc.want)
+		}
+	}
+}
