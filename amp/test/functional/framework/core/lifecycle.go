@@ -166,7 +166,7 @@ func RunOne(ctx context.Context, test Test, opts RunOptions) *Result {
 
 	provisionTimeout := opts.ProvisionTimeout
 	if provisionTimeout <= 0 {
-		provisionTimeout = ResolveProvisionTimeout(opts.Config)
+		provisionTimeout = ResolveProvisionTimeoutFor(opts.Config, test.Env)
 	}
 	pctx, pcancel := context.WithTimeout(ctx, provisionTimeout)
 	env, err := opts.Provider.Provision(pctx, test.Env, seed.Fork("env"))
@@ -252,7 +252,7 @@ func ReportResult(test Test, opts RunOptions, status Status, summary string) *Re
 // verifySharedInfra makes a FaultsSharedInfra test own the damage it leaves:
 // a green body with an unserving shared stack becomes a red final step.
 func verifySharedInfra(t *T, test Test, opts RunOptions) error {
-	if !test.Env.FaultsSharedInfra || !ProviderSharesInfra(opts.Provider) {
+	if !test.Env.FaultsShared() || !ProviderSharesInfra(opts.Provider) {
 		return nil
 	}
 	hc, ok := opts.Provider.(SharedInfraHealthChecker)

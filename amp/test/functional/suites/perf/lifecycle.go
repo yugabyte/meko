@@ -75,7 +75,7 @@ func init() {
 		Name:       testNameLifecycle,
 		Suite:      "perf",
 		Category:   core.Perf,
-		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:       []string{"perf"},
 		OwningTeam: core.TeamControlPlane,
 		Description: "Time the data lifecycle on a loaded tenant: create the tenant, fork a near-empty branch, load millions of rows plus an index, fork the loaded branch, " +

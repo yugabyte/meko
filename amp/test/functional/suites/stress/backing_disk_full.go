@@ -22,7 +22,7 @@ func init() {
 		Name:        "stress/backing_disk_full",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Fill every backing data disk to within a few MiB while tenants write through amp, and hold each INSERT to committing or erroring within the stall limit rather than hanging; then free the disks and assert writes resume and every acknowledged row is present.",

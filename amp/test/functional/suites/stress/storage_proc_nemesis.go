@@ -34,7 +34,7 @@ func init() {
 		Name:        "stress/storage_proc_nemesis",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Kill the pageserver and safekeeper processes by pid inside a tenant's endpoint pod, under a live postgres, while journaled writes run; then hold the endpoint supervisor to what it promises — the daemon respawned in place within its restart budget, no pod recreation — and hold storage to the exact acknowledged set, to a read over a fresh connection, and to writes committing again.",

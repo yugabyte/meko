@@ -35,7 +35,7 @@ func init() {
 		Name:        "stress/amp_nemesis",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Kill amp's own endpoint compute pods while tenants write through them, then assert recovery: every endpoint serves again, the pre-chaos data verifies exactly, and the control plane can still create a tenant.",

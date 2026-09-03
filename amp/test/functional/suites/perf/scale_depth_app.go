@@ -22,7 +22,7 @@ func init() {
 		Name:        "perf/scale_depth_sqltx",
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{scaleTier},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Grow one endpoint's dataset rung by rung with SqlDataLoadWithDDL, and after each rung measure SqlTransactions throughput on the same endpoint. Reports how a real workload's tps changes as the endpoint's data (sampled in GB on the backing) grows, and where it breaks.",

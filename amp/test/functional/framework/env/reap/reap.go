@@ -49,8 +49,39 @@ const (
 //     universe backing, either a KindDiscover namespace (k8s universe pods) or a
 //     Cloud tag-reap (a YBA-on-cloud universe's nodes).
 type Plan struct {
-	Cloud      *CloudReap `json:"cloud,omitempty"`
-	Namespaces []NSReap   `json:"namespaces,omitempty"`
+	Cloud *CloudReap `json:"cloud,omitempty"`
+	// Clouds are further tag sweeps: one per universe a run created beyond the
+	// first, each under its own tag.
+	Clouds     []CloudReap `json:"clouds,omitempty"`
+	Namespaces []NSReap    `json:"namespaces,omitempty"`
+}
+
+// AddCloud records a tag sweep once, in Cloud when it is free, else in Clouds.
+func (p *Plan) AddCloud(c *CloudReap) {
+	if c == nil {
+		return
+	}
+	if p.Cloud == nil {
+		p.Cloud = c
+		return
+	}
+	for _, have := range append([]CloudReap{*p.Cloud}, p.Clouds...) {
+		if have == *c {
+			return
+		}
+	}
+	p.Clouds = append(p.Clouds, *c)
+}
+
+func (p *Plan) allClouds() []*CloudReap {
+	var out []*CloudReap
+	if p.Cloud != nil {
+		out = append(out, p.Cloud)
+	}
+	for i := range p.Clouds {
+		out = append(out, &p.Clouds[i])
+	}
+	return out
 }
 
 // CloudReap terminates every instance of RunTag via the cloud, region-wide (the
@@ -74,7 +105,7 @@ type NSReap struct {
 
 // Empty reports whether the plan names nothing to reap.
 func (p *Plan) Empty() bool {
-	return p == nil || (p.Cloud == nil && len(p.Namespaces) == 0)
+	return p == nil || (p.Cloud == nil && len(p.Clouds) == 0 && len(p.Namespaces) == 0)
 }
 
 // JSON serializes the plan for the registry record. An empty plan yields "".
@@ -178,9 +209,9 @@ func (e *executor) run(ctx context.Context, p *Plan, force bool) error {
 		return nil
 	}
 	var errs []string
-	if p.Cloud != nil {
-		if err := e.cloudReap(ctx, p.Cloud, force); err != nil {
-			errs = append(errs, fmt.Sprintf("cloud reap (%s tag=%s): %v", p.Cloud.Cloud, p.Cloud.RunTag, err))
+	for _, c := range p.allClouds() {
+		if err := e.cloudReap(ctx, c, force); err != nil {
+			errs = append(errs, fmt.Sprintf("cloud reap (%s tag=%s): %v", c.Cloud, c.RunTag, err))
 		}
 	}
 	for _, n := range p.Namespaces {

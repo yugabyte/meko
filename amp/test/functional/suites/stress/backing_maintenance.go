@@ -40,7 +40,7 @@ func init() {
 		Name:        "stress/backing_maintenance",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Put the YugabyteDB under amp through planned maintenance — rolling restart, gflag change, data move, software upgrade — while amp tenants write through their endpoints, then assert commits kept flowing through every operation and no acknowledged row was lost.",

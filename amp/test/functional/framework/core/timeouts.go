@@ -18,6 +18,9 @@ const (
 	// ResolveProvisionTimeout — so a bigger store buys headroom without making a
 	// stuck single-node provision take twice as long to detect.
 	DefaultProvisionTimeout = 10 * time.Minute
+	// DefaultDedicatedProvisionTimeout covers a YBA install, an RF=3 universe
+	// and a control plane: about 16 minutes on amp-dev when nothing is queued.
+	DefaultDedicatedProvisionTimeout = 45 * time.Minute
 
 	// ProvisionPerExtraNode extends the provision budget per store node beyond
 	// the first when env.yb_deploy=yb_k8s: pods start in parallel, but a cold
@@ -95,6 +98,19 @@ func ResolveProvisionTimeout(cfg *Config) time.Duration {
 	nodes := max(cfg.GetInt("apps.ybk8s.tserver_replicas", 0),
 		cfg.GetInt("apps.ybk8s.master_replicas", 0), rf, 1)
 	return base + time.Duration(nodes-1)*ProvisionPerExtraNode
+}
+
+// ResolveProvisionTimeoutFor is ResolveProvisionTimeout for one test's shape: a
+// DedicatedStack test's provision brings up a backing and a control plane of
+// its own, so it gets timeouts.provision_dedicated instead. cfg may be nil.
+func ResolveProvisionTimeoutFor(cfg *Config, spec EnvSpec) time.Duration {
+	if !spec.Dedicated() {
+		return ResolveProvisionTimeout(cfg)
+	}
+	if cfg == nil {
+		return DefaultDedicatedProvisionTimeout
+	}
+	return cfg.GetDuration("timeouts.provision_dedicated", DefaultDedicatedProvisionTimeout)
 }
 
 // ResolveTeardownTimeout resolves timeouts.teardown from cfg, else

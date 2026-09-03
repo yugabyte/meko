@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/exclusivek8s"
 	"github.com/yugabyte/amp/test/functional/framework/env/fake"
@@ -104,48 +103,4 @@ func buildProvider(name string, cfg *core.Config, secrets *core.Secrets, masker 
 	default:
 		return nil, "", fmt.Errorf("unknown --env-provider %q (want fake|sharedk8s|exclusivek8s|universe|auto)", name)
 	}
-}
-
-// wrapShapeRouter routes dedicated_stack tests in a sharedk8s run to their own
-// exclusivek8s stack. Only sharedk8s needs it: every other provider already
-// stands each environment up in full.
-func wrapShapeRouter(name string, provider core.EnvProvider, cfg *core.Config) core.EnvProvider {
-	if name != "sharedk8s" || provider == nil {
-		return provider
-	}
-	return newShapeRouter(provider, func() (core.EnvProvider, string) {
-		xcfg := deriveDedicatedConfig(cfg)
-		if !xcfg.Configured() {
-			return nil, "no kube context to stand a dedicated stack on (set env.exclusivek8s.context or env.sharedk8s.context)"
-		}
-		return exclusivek8s.New(xcfg).WithYBDeployConfig(cfg), ""
-	})
-}
-
-// deriveDedicatedConfig fills the gaps in env.exclusivek8s.* from the run's own
-// sharedk8s/ampstack surface, so a dedicated stack runs the same product build
-// as the run-scoped control plane. Explicit exclusivek8s keys win.
-func deriveDedicatedConfig(cfg *core.Config) exclusivek8s.Config {
-	xcfg := exclusivek8s.FromConfig(cfg)
-	as := ampstack.FromConfig(cfg)
-	if xcfg.Context == "" {
-		xcfg.Context = sharedk8s.FromConfig(cfg).Context
-	}
-	if xcfg.Context == "" {
-		xcfg.Context = discoverKubeContext(cfg)
-	}
-	if xcfg.HelmChart == "" && xcfg.ManifestPath == "" {
-		xcfg.HelmChart = as.ControllerChart
-	}
-	if xcfg.ControllerImage == "" {
-		xcfg.ControllerImage = as.ControllerImage
-	}
-	if xcfg.PullSecretB64 == "" {
-		xcfg.PullSecretB64 = as.PullSecretDockerConfigB64
-	}
-	xcfg.QuayUser, xcfg.QuayToken = as.QuayUser, as.QuayToken
-	if xcfg.YBImage == exclusivek8s.DefaultYBImage && as.YBImage != "" {
-		xcfg.YBImage = as.YBImage
-	}
-	return xcfg
 }

@@ -1171,3 +1171,63 @@ func TestProvisionRefusesNonUniverseShapes(t *testing.T) {
 		t.Errorf("shape universe must stay served: %v", err)
 	}
 }
+
+// TestSharedYBAOneStackManyUniverses: under WithSharedYBA the YBA deploys once,
+// every Provision creates its own universe on it, each Teardown deletes only its
+// universe, and Close tears the YBA down.
+func TestSharedYBAOneStackManyUniverses(t *testing.T) {
+	ev := &ybaEvents{}
+	st := &fakeStack{ev: ev, info: ybastack.Info{URL: "http://yba", CustomerUUID: "c1", APIToken: "tok", Namespace: "ampqa-yba-shared"}}
+	pr := &fakeProvisioner{ev: ev, universe: liveUniverse(), universeID: "u-1"}
+	p := provisionYBAProvider(st, pr)
+	WithSharedYBA()(p)
+
+	a, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
+	if err != nil {
+		t.Fatalf("provision a: %v", err)
+	}
+	b, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(8, true))
+	if err != nil {
+		t.Fatalf("provision b: %v", err)
+	}
+	if n := countOf(ev.list(), "deploy"); n != 1 {
+		t.Errorf("yba deploys = %d, want 1 for two universes", n)
+	}
+	if n := countOf(ev.list(), "create_universe"); n != 2 {
+		t.Errorf("universe creates = %d, want 2", n)
+	}
+	if h := a.(*Env).ProvisionedHandles(); h.YBANamespace != "" || h.UniverseName == "" {
+		t.Errorf("a shared-YBA env must name its universe but not the YBA: %+v", h)
+	}
+	if h := p.SharedYBAHandles(); h.YBANamespace != "ampqa-yba-shared" {
+		t.Errorf("SharedYBAHandles = %+v, want the shared YBA namespace", h)
+	}
+	if err := p.Teardown(context.Background(), a); err != nil {
+		t.Fatalf("teardown a: %v", err)
+	}
+	if err := p.Teardown(context.Background(), b); err != nil {
+		t.Fatalf("teardown b: %v", err)
+	}
+	if pr.deletes != 2 || st.teardowns != 0 {
+		t.Errorf("after env teardowns: universe deletes = %d (want 2), yba teardowns = %d (want 0)", pr.deletes, st.teardowns)
+	}
+	if err := p.Close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if st.teardowns != 1 {
+		t.Errorf("yba teardowns after Close = %d, want 1", st.teardowns)
+	}
+	if h := p.SharedYBAHandles(); h.YBANamespace != "" {
+		t.Errorf("SharedYBAHandles after Close = %+v, want empty", h)
+	}
+}
+
+func countOf(got []string, want string) int {
+	n := 0
+	for _, g := range got {
+		if g == want {
+			n++
+		}
+	}
+	return n
+}

@@ -20,7 +20,7 @@ func init() {
 		Name:        "stress/control_plane_nemesis",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Force-delete the amp controller pod while branch and endpoint tasks are in flight, then hold the control plane to the task contract (meko#578, meko#971): every fired task finishes after the restart, no task stays non-terminal, no orphaned compute pod survives, tenants keep committing through the outage, and the control plane still creates a tenant.",

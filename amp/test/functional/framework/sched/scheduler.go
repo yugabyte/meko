@@ -93,7 +93,7 @@ func Run(ctx context.Context, tests []core.Test, opts Options) (core.RunSummary,
 	// shared infrastructure and a test that faults it.
 	if core.ProviderSharesInfra(opts.Provider) {
 		for i := range tests {
-			if tests[i].Env.FaultsSharedInfra {
+			if tests[i].Env.FaultsShared() {
 				s.infraGateArmed = true
 				break
 			}
@@ -169,10 +169,10 @@ type scheduler struct {
 // Must be taken BEFORE the lease and the slot: a waiter holding either while
 // blocked here deadlocks the writer, which needs both.
 func (s *scheduler) enterInfraGate(test core.Test) func() {
-	if !s.infraGateArmed {
+	if !s.infraGateArmed || test.Env.Dedicated() {
 		return func() {}
 	}
-	if test.Env.FaultsSharedInfra {
+	if test.Env.FaultsShared() {
 		s.infraGate.Lock()
 		return s.infraGate.Unlock
 	}
@@ -244,7 +244,7 @@ func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 // faulting test's shared stack does not serve within the recovery budget; a
 // passed result needs no probe, verifySharedInfra was its final step.
 func (s *scheduler) noteInfraOutcome(ctx context.Context, test core.Test, res *core.Result) {
-	if !s.infraGateArmed || !test.Env.FaultsSharedInfra || ctx.Err() != nil {
+	if !s.infraGateArmed || !test.Env.FaultsShared() || ctx.Err() != nil {
 		return
 	}
 	if res != nil && res.Status == core.StatusPassed {
@@ -262,6 +262,9 @@ func (s *scheduler) noteInfraOutcome(ctx context.Context, test core.Test, res *c
 }
 
 func (s *scheduler) failIfInfraPoisoned(test core.Test) *core.Result {
+	if test.Env.Dedicated() {
+		return nil
+	}
 	s.poisonMu.Lock()
 	by, err := s.poisonBy, s.poisonErr
 	s.poisonMu.Unlock()

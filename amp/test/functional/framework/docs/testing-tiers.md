@@ -18,6 +18,11 @@ untagged and run on demand — see the Perf bullet):
   `commit_durability`), `bulk_load_kill` (one large write killed mid-flight) and
   `backing_disk_full` (the backing's data disks filled, every INSERT held to an
   answer, then freed).
+  Every stress test that drives amp runs on a stack of its own
+  (`Shape: DedicatedStack`: its own YugabyteDB and amp control plane, torn
+  down with the test), so a fault one injects, or a wedge it leaves behind,
+  never reaches the next test. `load_sustain` (`SingleContainer`) and
+  `combined_load` (`Universe`) already stood on their own.
   Scheduled as its own tier so the report portal gets a Stress
   column; the `Category: core.Stress` tests in `suites/features` are **not** in it
   (they belong to `regression` and would double-report).

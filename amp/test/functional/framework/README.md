@@ -173,14 +173,23 @@ falls back to **self-building `sharedk8s`** when none are configured but a
 kube-context is discoverable. "Everything other than k8s is a parameter":
 `--env-provider universe|exclusivek8s|fake` targets the same tests elsewhere.
 
-**Per-test dedicated stacks.** A test whose `EnvSpec` declares
-`Shape: DedicatedStack` is binding: in a `sharedk8s` run it is routed to an
-`exclusivek8s` provider derived from the run's own config (same kube context,
-chart, images and pull credentials), so it gets its own control plane and
-backing while the rest of the run stays on the shared one. There is no knob to
-force such a test onto the shared control plane — `sharedk8s` refuses the shape
-outright, and when no dedicated stack can be built the test skips with the
-reason instead of silently running against the wrong topology.
+**Per-test dedicated stacks.** `EnvSpec.Shape` is the one switch between the
+two control-plane topologies. `SharedControlPlane` (the `features` tests)
+carves a cluster out of the run-scoped control plane. `DedicatedStack` (every
+`stress` and `perf` test that drives amp) makes `sharedk8s` stand up a whole
+stack for that test alone — the backing `env.yb_deploy` names and its own amp
+control plane, in its own `ampqa-cp-<id>` namespace, with the same apps and
+knobs as the shared one — and delete it all in teardown. Under the pipeline's
+default `yba` backing the run installs ONE YBA and creates a universe per stack
+on it (`ybdeploy.Provisioner`); a test's teardown deletes its universe, the
+run's close deletes the YBA. A fault test can only hurt itself, so the
+shared-infra gate and the run poison do not apply to it. The run-level knob
+`env.stack=shared|dedicated` moves every control-plane test to one shape for a
+run (`-o env.stack=shared` to make a stress run cheap; `-o env.stack=dedicated`
+to isolate a flaky features run); the provision budget for a dedicated stack is
+`timeouts.provision_dedicated` (45m). Dedicated stacks need deploy mode: an
+attached standing control plane cannot build one, and the test skips with the
+reason.
 
 **Lifecycle — `--env-mode build|attach|keep`.** Every `run` provisions an
 environment, runs the selected tests, and (by default) tears it down. The mode

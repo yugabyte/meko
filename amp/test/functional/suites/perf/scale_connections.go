@@ -20,7 +20,7 @@ func init() {
 		Name:        "perf/scale_connections",
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{scaleTier},
 		OwningTeam:  core.TeamCompute,
 		Description: "Open connections against ONE endpoint batch by batch, each held on a long pg_sleep, until the endpoint refuses or stops answering a fresh probe connection. Reports how many concurrent connections one compute carried, what each cost in memory, and the first refusal verbatim.",

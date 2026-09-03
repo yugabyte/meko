@@ -92,6 +92,8 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"timeouts.long_running": core.DefaultLongRunningTimeout,
 		"timeouts.teardown":     core.DefaultTeardownTimeout,
 		"timeouts.collect":      core.DefaultCollectTimeout,
+
+		"timeouts.provision_dedicated": core.DefaultDedicatedProvisionTimeout,
 	}
 	for key, want := range timeouts {
 		if got := cfg.GetDuration(key, -1); got != want {
@@ -129,6 +131,12 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	// (the run pipeline sets yba_provisioned for its default yba backing).
 	if got := cfg.GetString("env.yb_deploy", "__MISSING__"); got != "" {
 		t.Errorf("env.yb_deploy = %q, want present and empty", got)
+	}
+	if got := cfg.GetString(core.StackOverrideKey, "__MISSING__"); got != "" {
+		t.Errorf("%s = %q, want present and empty (tests keep their declared shape)", core.StackOverrideKey, got)
+	}
+	if got := core.ResolveProvisionTimeoutFor(cfg, core.EnvSpec{Shape: core.DedicatedStack}); got != core.DefaultDedicatedProvisionTimeout {
+		t.Errorf("ResolveProvisionTimeoutFor(dedicated) = %s, want %s", got, core.DefaultDedicatedProvisionTimeout)
 	}
 	if got := ybdeploy.Resolve(cfg, core.EnvSpec{}); got != ybdeploy.ModeBuiltin {
 		t.Errorf("ybdeploy.Resolve(defaults, no-pref) = %q, want %q", got, ybdeploy.ModeBuiltin)

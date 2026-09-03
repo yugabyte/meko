@@ -54,7 +54,7 @@ func init() {
 			Name:        "perf/" + name,
 			Suite:       "perf",
 			Category:    core.Perf,
-			Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+			Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 			Tags:        []string{scaleTier},
 			OwningTeam:  core.TeamControlPlane,
 			Description: "Add one more concurrent driver against the SAME endpoint every stage (" + strings.Join(mix, ", ") + "), drive them all for a full window, and keep climbing past diminishing returns: the ladder ends only when throughput falls to min_tps, the aggregate collapses under collapse_pct of its peak, a driver stops committing or falls over, or the storage layer stops advancing. Reports how much concurrent load one tenant carried, and which wall ended it.",

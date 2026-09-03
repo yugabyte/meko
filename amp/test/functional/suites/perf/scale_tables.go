@@ -20,7 +20,7 @@ func init() {
 		Name:     "perf/scale_tables",
 		Suite:    "perf",
 		Category: core.Perf,
-		Env:      core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:      core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:     []string{scaleTier},
 		// Catalog growth is a storage-layer question as much as a Postgres one:
 		// every relation is state the pageserver tracks.

@@ -57,6 +57,10 @@ timeouts:
   # 10m00s while a stuck single-node run should still fail fast. Setting a
   # value here overrides the scaling verbatim.
   # provision: 10m
+  # Provision deadline for a Shape: DedicatedStack test, whose provision stands
+  # up its own backing (YBA + universe under the yba backing) and control plane
+  # before the cluster: ~16m on amp-dev when nothing is queued.
+  provision_dedicated: 45m
   # EnvProvider.Teardown deadline (runs even after a body timeout, own budget).
   teardown: 5m
   # Environment.Collect deadline (best-effort, before teardown).
@@ -87,6 +91,11 @@ env:
   # itself for that branch. A framework-wide yba_provisioned default is wrong
   # here — it would force a doomed YBA attempt on runs that carry no YBA creds.
   yb_deploy: ""
+  # stack: move every control-plane test between the two stack shapes for one
+  # run — "dedicated" gives each test its own backing and control plane,
+  # "shared" packs them onto the run-scoped one. Empty keeps what each test
+  # declares (stress and perf tests declare dedicated, features shared).
+  stack: ""
 
   # env/sharedk8s: cluster-per-test on a control plane.
   # controller_url/context/namespace/user_id/pool_id: no default —
@@ -625,10 +634,10 @@ apps:
       region: "us-west1"
       zones:
         - code: "us-west1-b"
-      # Universe shape (cheap RF1: 1 tserver) while the YBA-backed path is still
-      # being validated. Set 3 for a production-like RF3 universe.
-      num_nodes: 1
-      replication_factor: 1
+      # Universe shape: RF3, the shape every schedule used to pass as an option.
+      # RF1 skips backing_maintenance and is not the product customers run.
+      num_nodes: 3
+      replication_factor: 3
       # enable_ybc: on here, unlike the VM default above — the chart brings
       # yb-controller, and stress/backing_backup_restore skips without YBC.
       enable_ybc: true

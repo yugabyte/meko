@@ -91,6 +91,12 @@ func (e *Env) DrainServerMetrics(emit func(core.Metric)) {
 // ybk8s deploy, a provisioned YBA universe), else the amp namespace, which is
 // where the built-in yugabyted lives.
 func (e *Env) backingNamespace() string {
+	if e.own != nil {
+		if ns := e.own.ampCfg.Backing.KubeNamespace; ns != "" {
+			return ns
+		}
+		return e.kube.Namespace()
+	}
 	if e.prov != nil {
 		if ns := e.prov.ampCfg.Backing.KubeNamespace; ns != "" {
 			return ns

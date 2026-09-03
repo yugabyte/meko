@@ -259,16 +259,76 @@ func provisionYBAProvisioned(ctx context.Context, cfg *core.Config, runTag strin
 }
 
 func provisionYBAProvisionedWithPlan(ctx context.Context, cfg *core.Config, runTag string, logf func(string, ...any)) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
+	prov, err := newYBAUniverseProvider(cfg, logf)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return provisionUniverseOn(ctx, prov, runTag)
+}
+
+func newYBAUniverseProvider(cfg *core.Config, logf func(string, ...any), opts ...universe.Option) (*universe.Provider, error) {
 	secrets, err := core.NewSecrets(cfg)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("secrets: %w", err)
+		return nil, fmt.Errorf("secrets: %w", err)
 	}
 	ucfg := universe.FromConfig(cfg)
 	ucfg.Mode = universe.ModeProvisionYBA
-	prov := universe.New(ucfg,
+	return universe.New(ucfg, append([]universe.Option{
 		universe.WithLogf(logf),
-		universe.WithProvisionYBA(cfg, secrets.Value))
+		universe.WithProvisionYBA(cfg, secrets.Value),
+	}, opts...)...), nil
+}
 
+// Provisioner provisions every backing of one run from one env.yb_deploy mode.
+// Under yba_provisioned it installs ONE YBA and creates a universe per call on
+// it; the other modes provision exactly as ProvisionWithPlan does. Close tears
+// the YBA down, after the universes are gone.
+type Provisioner struct {
+	cfg  *core.Config
+	mode string
+	logf func(string, ...any)
+	univ *universe.Provider // yba_provisioned only
+}
+
+func NewProvisioner(cfg *core.Config, mode string, logf func(string, ...any)) (*Provisioner, error) {
+	b := &Provisioner{cfg: cfg, mode: mode, logf: logf}
+	if mode == ModeYBAProvisioned {
+		prov, err := newYBAUniverseProvider(cfg, logf, universe.WithSharedYBA())
+		if err != nil {
+			return nil, err
+		}
+		b.univ = prov
+	}
+	return b, nil
+}
+
+// Provision stands up one backing tagged runTag (universe name, node tags).
+func (b *Provisioner) Provision(ctx context.Context, runTag string) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
+	if b.univ == nil {
+		return ProvisionWithPlan(ctx, b.cfg, b.mode, runTag, b.logf)
+	}
+	return provisionUniverseOn(ctx, b.univ, runTag)
+}
+
+// Plan names the shared YBA, once it is deployed; nil otherwise.
+func (b *Provisioner) Plan() *reap.Plan {
+	if b.univ == nil {
+		return nil
+	}
+	return ybaPlanFromHandles(b.univ.SharedYBAHandles())
+}
+
+func (b *Provisioner) Close(ctx context.Context) error {
+	if b.univ == nil {
+		return nil
+	}
+	return b.univ.Close(ctx)
+}
+
+// provisionUniverseOn creates one universe through prov and adapts it into a
+// backing store, keeping the env: it is the only handle to the YBA that
+// manages the universe, and a maintenance test needs to drive it.
+func provisionUniverseOn(ctx context.Context, prov *universe.Provider, runTag string) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
 	seed := core.NewRunSeed(0, true).Fork("yb_deploy/" + runTag)
 	env, err := prov.Provision(ctx, core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe}, seed)
 	if err != nil {
@@ -290,8 +350,6 @@ func provisionYBAProvisionedWithPlan(ctx context.Context, cfg *core.Config, runT
 	if k, ok := env.(interface{ InClusterAddrs() []string }); ok {
 		inCluster = k.InClusterAddrs()
 	}
-	// The env is carried along, not dropped: it is the only handle to the YBA
-	// that manages this universe, and a maintenance test needs to drive it.
 	backing := UniverseBacking{
 		BackingStore: ybaProvisionedBacking(acc.PGEndpoint(), acc.NodeAddrs(), inCluster),
 		env:          env,
@@ -310,7 +368,10 @@ func ybaReapPlan(env core.Environment) *reap.Plan {
 	if !ok {
 		return nil
 	}
-	ph := h.ProvisionedHandles()
+	return ybaPlanFromHandles(h.ProvisionedHandles())
+}
+
+func ybaPlanFromHandles(ph universe.ProvisionedHandles) *reap.Plan {
 	p := &reap.Plan{}
 	if ph.YBANamespace != "" {
 		p.Namespaces = append(p.Namespaces, reap.NSReap{

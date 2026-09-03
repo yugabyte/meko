@@ -57,10 +57,11 @@ const (
 	// shared dev project's us-west1, matching apps.cloud.gcp).
 	DefaultK8sRegion = "us-west1"
 	DefaultK8sZone   = "us-west1-b"
-	// DefaultK8sNumNodes / DefaultK8sReplication are the cheap RF1 default (1
-	// tserver), overridable for RF3.
-	DefaultK8sNumNodes    = 1
-	DefaultK8sReplication = 1
+	// DefaultK8sNumNodes / DefaultK8sReplication: RF3, what every schedule ran
+	// with as an option. RF1 skips backing_maintenance (one tserver cannot stay
+	// writable while one is out) and measures a different product.
+	DefaultK8sNumNodes    = 3
+	DefaultK8sReplication = 3
 	// DefaultK8sEnableYbc is on: the chart installs yb-controller, so YBA's
 	// backup tasks (and stress/backing_backup_restore) have what they need.
 	// The VM path keeps apps.yba.universe.enable_ybc=false.

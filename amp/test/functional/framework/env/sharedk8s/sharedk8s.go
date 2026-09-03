@@ -195,6 +195,10 @@ type Provider struct {
 	// its backing per test); ybDeployTeardown reaps what Prepare provisioned, run
 	// in Close AFTER the control plane (LIFO).
 	ybDeployCfg *core.Config
+	// backing provisions every backing of the run, the shared one and each
+	// dedicated stack's, off one YBA; built on first use, closed in Close.
+	backingMu sync.Mutex
+	backing   *ybdeploy.Provisioner
 	// backingPlan reaps the backing this provider provisioned, from a process
 	// that shares no memory with it (an aborted CI build).
 	backingPlan      *reap.Plan
@@ -206,6 +210,13 @@ type Provider struct {
 	backingUniverse core.Environment
 
 	ctrl controllerConn // one long-lived controller forward shared by all tests
+
+	// stacks are the live per-test stacks of DedicatedStack tests (dedicated.go);
+	// onPlanChange fires when the set changes so the reap plan on disk follows.
+	stacksMu     sync.Mutex
+	stacks       map[*stack]struct{}
+	planMu       sync.Mutex // serializes a stack-set change with the plan write it triggers
+	onPlanChange func()
 
 	portCounter atomic.Int64
 	nameCounter atomic.Int64
@@ -478,33 +489,11 @@ func (p *Provider) prepareYBDeploy() error {
 	if p.ybDeployCfg == nil {
 		return nil
 	}
-	mode := ybdeploy.Resolve(p.ybDeployCfg, core.EnvSpec{})
-	if mode == ybdeploy.ModeBuiltin {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
 	defer cancel()
-	store, td, plan, err := ybdeploy.ProvisionWithPlan(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
-	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(p.ybDeployCfg) {
-		// The run ASKED for YBA (env.yb_deploy was set explicitly), so a
-		// downgrade would answer a different question than the one it was
-		// launched to answer: a single-node yugabyted is not an RF=3 universe,
-		// and a perf number measured against it is not comparable to one that
-		// was. Three multitenant runs were reported as "YBA RF=3" that way
-		// before this refused.
-		return core.AsEnvFailure(fmt.Errorf("sharedk8s: yba_provisioned backing was requested explicitly and failed; refusing to downgrade to built-in yugabyted: %w", err))
-	}
-	if err != nil && mode == ybdeploy.ModeYBAProvisioned {
-		// Merely the default (no explicit knob): it needs a deployable YBA
-		// (quay pull secret + a k8s/cloud provider). Where that isn't available,
-		// fall back to ampstack's built-in single-node yugabyted (the proven
-		// default backing) so the run still proceeds instead of failing the env.
-		p.log("sharedk8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", err)
-		mode = ybdeploy.ModeBuiltin
-		store, td, plan, err = ybdeploy.ProvisionWithPlan(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
-	}
+	store, td, plan, err := p.provisionBacking(ctx, p.ampCfg.Namespace)
 	if err != nil {
-		return fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
+		return err
 	}
 	p.ybDeployTeardown = td
 	p.backingPlan = plan
@@ -513,6 +502,58 @@ func (p *Provider) prepareYBDeploy() error {
 		p.backingUniverse = ybdeploy.UniverseEnvOf(store)
 	}
 	return nil
+}
+
+// provisionBacking stands up the backing env.yb_deploy names, tagged with the
+// namespace of the control plane it serves. A nil store means the built-in
+// yugabyted: nothing external to point the control plane at.
+func (p *Provider) provisionBacking(ctx context.Context, tag string) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
+	if p.ybDeployCfg == nil {
+		return nil, nil, nil, nil
+	}
+	mode := ybdeploy.Resolve(p.ybDeployCfg, core.EnvSpec{})
+	if mode == ybdeploy.ModeBuiltin {
+		return nil, nil, nil, nil
+	}
+	b, err := p.backingProvisioner(mode)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	store, td, plan, err := b.Provision(ctx, tag)
+	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(p.ybDeployCfg) {
+		// The run ASKED for YBA (env.yb_deploy was set explicitly), so a
+		// downgrade would answer a different question than the one it was
+		// launched to answer: a single-node yugabyted is not an RF=3 universe,
+		// and a perf number measured against it is not comparable to one that
+		// was. Three multitenant runs were reported as "YBA RF=3" that way
+		// before this refused.
+		return nil, nil, nil, core.AsEnvFailure(fmt.Errorf("sharedk8s: yba_provisioned backing was requested explicitly and failed; refusing to downgrade to built-in yugabyted: %w", err))
+	}
+	if err != nil && mode == ybdeploy.ModeYBAProvisioned {
+		// Merely the default (no explicit knob): it needs a deployable YBA
+		// (quay pull secret + a k8s/cloud provider). Where that isn't available,
+		// fall back to ampstack's built-in single-node yugabyted (the proven
+		// default backing) so the run still proceeds instead of failing the env.
+		p.log("sharedk8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", err)
+		return nil, nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
+	}
+	return store, td, plan, nil
+}
+
+func (p *Provider) backingProvisioner(mode string) (*ybdeploy.Provisioner, error) {
+	p.backingMu.Lock()
+	defer p.backingMu.Unlock()
+	if p.backing == nil {
+		b, err := ybdeploy.NewProvisioner(p.ybDeployCfg, mode, p.logf)
+		if err != nil {
+			return nil, fmt.Errorf("sharedk8s: %s backing: %w", mode, err)
+		}
+		p.backing = b
+	}
+	return p.backing, nil
 }
 
 // StandingEnv reports the run-scoped control plane as a standing environment to
@@ -577,6 +618,20 @@ func (p *Provider) Close() error {
 			}
 		}
 	}
+	// Last: the YBA every backing of this run was created on.
+	p.backingMu.Lock()
+	b := p.backing
+	p.backingMu.Unlock()
+	if b != nil {
+		ctx, cancel := context.WithTimeout(bg, p.cfg.DeployTimeout)
+		defer cancel()
+		if err := b.Close(ctx); err != nil {
+			p.log("sharedk8s: teardown yba failed: %v", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
 	return firstErr
 }
 
@@ -609,18 +664,22 @@ func (p *Provider) nextLocalPort() int {
 // Provision creates a cluster + endpoint on the shared control plane and returns
 // a live environment bound to the endpoint's Postgres.
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
-	// A dedicated_stack test must never be silently served the shared control
-	// plane; the run command routes the shape to exclusivek8s (shape_router).
 	if spec.Shape == core.DedicatedStack {
-		return nil, &core.UnsupportedShapeError{
-			Provider: "sharedk8s",
-			Shape:    spec.Shape,
-			Why:      "the test requires its own control plane and backing; only exclusivek8s (namespace-per-test dedicated stack) can serve it",
-		}
+		return p.provisionDedicated(ctx, seed)
 	}
 	cl, url, err := p.ctrl.get(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return p.carve(ctx, cl, url, seed, nil)
+}
+
+// carve creates the per-test cluster and endpoint on a control plane: the shared
+// one (own == nil) or the stack a DedicatedStack test just brought up.
+func (p *Provider) carve(ctx context.Context, cl *controller.Client, url string, seed *core.Seed, own *stack) (core.Environment, error) {
+	kube, app, ns := p.kube, p.sharedApp(), p.cfg.Namespace
+	if own != nil {
+		kube, app, ns = own.kube, own.app, own.ampCfg.Namespace
 	}
 	var epPF *k8s.PortForward // per-test pg forward, owned by the Env once returned
 	fail := func(e error) (core.Environment, error) {
@@ -629,7 +688,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		}
 		// A dead shared controller forward mid-provision otherwise surfaces only
 		// as opaque connection-refused API errors; name it explicitly.
-		if !p.ctrl.alive() {
+		if own == nil && !p.ctrl.alive() {
 			return nil, fmt.Errorf("%w (controller port-forward died during provisioning)", e)
 		}
 		return nil, e
@@ -657,7 +716,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		return fail(err)
 	}
 
-	ci, pf, err := p.resolvePG(ctx, ep)
+	ci, pf, err := p.resolvePG(ctx, kube, ep)
 	if err != nil {
 		return fail(err)
 	}
@@ -681,7 +740,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	// YB version: ask the backing itself. The compute endpoint answers amp's own
 	// version(), which carries no YugabyteDB marker, so it is only a fallback for
 	// an attached stack whose backing this provider cannot name.
-	yb := p.detectBackingYB(ctx)
+	yb := backingYB(ctx, app)
 	if yb == "" {
 		yb = p.detectYB(ctx, ci)
 	}
@@ -697,15 +756,18 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		endpointAddr:  ep.Address,
 		ownCluster:    true,
 		pfs:           nonNilPFs(epPF),
-		kube:          p.kube,
+		kube:          kube,
+		own:           own,
 		logf:          p.logf,
 		handles: core.EnvHandles{
-			Namespace: p.cfg.Namespace,
+			Namespace: ns,
 			Cluster:   proj.ID,
 			Endpoint:  ep.ID,
 		},
 	}
-	env.ownCtrl = p.ownControllerConn()
+	if own == nil {
+		env.ownCtrl = p.ownControllerConn()
+	}
 	env.capturePGPod(ctx)
 	return env, nil
 }
@@ -756,7 +818,7 @@ func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, er
 	if len(eps) == 0 {
 		return fail(fmt.Errorf("attach cluster %s: no endpoints on default branch", ref))
 	}
-	ci, pf, err := p.resolvePG(ctx, eps[0])
+	ci, pf, err := p.resolvePG(ctx, p.kube, eps[0])
 	if err != nil {
 		return fail(err)
 	}
@@ -790,6 +852,9 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 	e, ok := env.(*Env)
 	if !ok {
 		return fmt.Errorf("sharedk8s teardown: unexpected environment type %T", env)
+	}
+	if e.own != nil {
+		return p.teardownDedicated(e)
 	}
 	var firstErr error
 	if e.ownCluster {
@@ -1196,10 +1261,10 @@ func (p *Provider) pickEndpoint(ctx context.Context, cl *controller.Client, pool
 // resolvePG turns an endpoint address into a pg.ConnInfo, port-forwarding the
 // endpoint Service through kubectl when a context is configured (the address is
 // then cluster-internal).
-func (p *Provider) resolvePG(ctx context.Context, ep controller.Endpoint) (pg.ConnInfo, *k8s.PortForward, error) {
+func (p *Provider) resolvePG(ctx context.Context, kube *k8s.Kubectl, ep controller.Endpoint) (pg.ConnInfo, *k8s.PortForward, error) {
 	host, port := splitAddr(ep.Address, p.cfg.EndpointPort)
 	ci := pg.ConnInfo{User: computeUser, Database: computeDB}
-	if p.kube == nil {
+	if kube == nil {
 		ci.Host, ci.Port = host, port
 		return ci, nil, nil
 	}
@@ -1210,11 +1275,11 @@ func (p *Provider) resolvePG(ctx context.Context, ep controller.Endpoint) (pg.Co
 	// turns a transient start-up race into a bounded wait, and a genuinely
 	// never-Ready compute into a clear failure instead of an opaque "port-forward
 	// not ready". Same assertion the restart path already makes.
-	if err := ampstack.WaitEndpointWorkloadReady(ctx, p.kube, ep.ID, computeRestartReadyTimeout); err != nil {
+	if err := ampstack.WaitEndpointWorkloadReady(ctx, kube, ep.ID, computeRestartReadyTimeout); err != nil {
 		return pg.ConnInfo{}, nil, fmt.Errorf("endpoint %s compute never became ready: %w", ep.ID, err)
 	}
 	local := p.nextLocalPort()
-	pf, err := p.kube.PortForward(ctx, "svc/yb-ep-"+ep.ID, local, port)
+	pf, err := kube.PortForward(ctx, "svc/yb-ep-"+ep.ID, local, port)
 	if err != nil {
 		return pg.ConnInfo{}, nil, fmt.Errorf("port-forward endpoint %s: %w", ep.ID, err)
 	}
@@ -1237,6 +1302,7 @@ type Env struct {
 	ownCluster   bool
 	pfs          []*k8s.PortForward
 	kube         *k8s.Kubectl
+	own          *stack // the stack this DedicatedStack env brought up; nil on the shared control plane
 	logf         func(format string, args ...any)
 
 	// extraPFs are per-endpoint pg forwards opened by ConnectEndpoint (the
@@ -1303,6 +1369,10 @@ func (e *Env) takeExtraPFs() []*k8s.PortForward {
 // functional amp-feature flow ATTACH to this control plane instead of deploying its
 // own — one half of the ampControlPlane handle env/functional type-asserts for.
 func (e *Env) AmpController(ctx context.Context) (*controller.Client, error) {
+	if e.own != nil {
+		cl, _, err := e.own.app.ControllerClient(ctx)
+		return cl, err
+	}
 	if e.ownCtrl != nil {
 		cl, _, err := e.ownCtrl.get(ctx)
 		return cl, err
@@ -1338,8 +1408,34 @@ func (p *Provider) ReapPlan() *reap.Plan {
 			Kind: reap.KindAmp, KubeContext: p.ampCfg.Context, Namespace: ns,
 		})
 	}
+	for _, st := range p.liveStacks() {
+		st.addToPlan(out)
+	}
+	p.backingMu.Lock()
+	b := p.backing
+	p.backingMu.Unlock()
+	if b != nil {
+		if bp := b.Plan(); bp != nil {
+			out.Namespaces = append(out.Namespaces, bp.Namespaces...)
+		}
+	}
+	out.Namespaces = dedupeNS(out.Namespaces)
 	if out.Empty() {
 		return nil
+	}
+	return out
+}
+
+func dedupeNS(in []reap.NSReap) []reap.NSReap {
+	seen := map[string]bool{}
+	out := in[:0]
+	for _, n := range in {
+		k := n.Kind + "/" + n.KubeContext + "/" + n.Namespace
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, n)
 	}
 	return out
 }
@@ -1395,6 +1491,9 @@ func (e *Env) InClusterAddrs() []string {
 }
 
 func (e *Env) backingUniverseEnv() core.Environment {
+	if e.own != nil {
+		return e.own.backingUniverse
+	}
 	if e.prov == nil {
 		return nil
 	}
@@ -1429,7 +1528,7 @@ func (e *Env) EndpointCredentials() (user, database string) { return computeUser
 // starting); the wait is bounded by the caller's ctx, so a probe against a retired
 // endpoint (Service gone) fails fast rather than blocking.
 func (e *Env) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (*pg.Client, error) {
-	ci, pf, err := e.prov.resolvePG(ctx, ep)
+	ci, pf, err := e.prov.resolvePG(ctx, e.kube, ep)
 	if err != nil {
 		return nil, err
 	}
@@ -1516,7 +1615,7 @@ func (e *Env) RefreshYBStorage(ctx context.Context) (pg.ConnInfo, error) {
 // resolveStorage does the work behind YBStorage, caller holding storageMu.
 func (e *Env) resolveStorage(ctx context.Context) (pg.ConnInfo, error) {
 	e.storagePF = nil
-	access, err := e.prov.storageAccess()
+	access, err := e.storageAccess()
 	if err != nil {
 		return pg.ConnInfo{}, err
 	}
@@ -1589,7 +1688,7 @@ func (e *Env) RestartCompute(ctx context.Context) error {
 
 	// The rolled pod's Service port-forward is dead; open a fresh one and repoint
 	// e.pg at it before waiting on Postgres readiness.
-	ci, pf, err := e.prov.resolvePG(ctx, controller.Endpoint{ID: e.endpointID, Address: e.endpointAddr})
+	ci, pf, err := e.prov.resolvePG(ctx, e.kube, controller.Endpoint{ID: e.endpointID, Address: e.endpointAddr})
 	if err != nil {
 		return fmt.Errorf("re-resolve endpoint %s after restart: %w", e.endpointID, err)
 	}
@@ -1693,7 +1792,7 @@ func (e *Env) RefreshPGEndpoint(ctx context.Context) (pg.ConnInfo, error) {
 	if e.prov == nil {
 		return pg.ConnInfo{}, fmt.Errorf("sharedk8s: no provider to re-resolve the endpoint")
 	}
-	ci, pf, err := e.prov.resolvePG(ctx, controller.Endpoint{ID: e.endpointID, Address: e.endpointAddr})
+	ci, pf, err := e.prov.resolvePG(ctx, e.kube, controller.Endpoint{ID: e.endpointID, Address: e.endpointAddr})
 	if err != nil {
 		return pg.ConnInfo{}, fmt.Errorf("re-resolve endpoint %s after a dead port-forward: %w", e.endpointID, err)
 	}
@@ -1752,6 +1851,9 @@ func (e *Env) swapPGRetiring(ci pg.ConnInfo, pf *k8s.PortForward) {
 // forward's live address (which changes if the forward was re-established),
 // falling back to the URL captured at provision time.
 func (e *Env) ControllerURL() string {
+	if e.own != nil {
+		return e.controllerURL
+	}
 	if e.prov != nil {
 		if u := e.prov.ctrl.currentURL(); u != "" {
 			return u
@@ -1928,12 +2030,19 @@ func splitAddr(addr string, defPort int) (string, int) {
 // detectBackingYB reads the YugabyteDB version from the backing store this
 // provider deployed, in the pod when the backing lives in the cluster. "" when
 // the stack is attached (its backing is not ours to name) or the probe misses.
-func (p *Provider) detectBackingYB(ctx context.Context) string {
+// sharedApp is the run-scoped control plane, nil until deployed or in attach mode.
+func (p *Provider) sharedApp() *ampstack.App {
 	p.ctrl.mu.Lock()
-	app := p.app
-	deploy := p.deploy
-	p.ctrl.mu.Unlock()
-	if !deploy || app == nil {
+	defer p.ctrl.mu.Unlock()
+	if !p.deploy {
+		return nil
+	}
+	return p.app
+}
+
+// backingYB asks a deployed stack's backing for its own version marker.
+func backingYB(ctx context.Context, app *ampstack.App) string {
+	if app == nil {
 		return ""
 	}
 	raw := app.BackingVersion(ctx)

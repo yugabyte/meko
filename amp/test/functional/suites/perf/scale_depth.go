@@ -46,7 +46,7 @@ func init() {
 		Name:        "perf/scale_depth_tpcc",
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{scaleTier},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Grow ONE endpoint's TPC-C dataset and concurrency stage by stage (warehouses x terminals), driving each for a full window, and after every stage prove the storage layer still advances: a read above the freshly written LSN on a bounded deadline, plus a scan of the endpoint log for WAL-wedge markers. Reports the largest scale that stayed healthy.",

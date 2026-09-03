@@ -19,6 +19,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -1382,7 +1383,7 @@ func TestRefreshPGRetiresTheOldForwardInsteadOfKillingIt(t *testing.T) {
 	p.kube = kube
 	p.app = ampstack.New(ampstack.Config{Namespace: "amp"}).WithKube(kube)
 
-	first, pf, err := p.resolvePG(context.Background(), controller.Endpoint{ID: "ep-1", Address: "10.0.0.1:5433"})
+	first, pf, err := p.resolvePG(context.Background(), p.kube, controller.Endpoint{ID: "ep-1", Address: "10.0.0.1:5433"})
 	if err != nil {
 		t.Fatalf("resolvePG: %v", err)
 	}
@@ -1564,5 +1565,112 @@ func TestCollectReachesTheBackingNamespace(t *testing.T) {
 	}
 	if !sawBackingNS {
 		t.Error("no kubectl call was made in the backing's namespace")
+	}
+}
+
+// TestDedicatedStackProvisionAndTeardown: a DedicatedStack test gets a control
+// plane in a namespace of its own, never touches the run-scoped one, is named in
+// the reap plan while it stands, and Teardown deletes the whole namespace.
+func TestDedicatedStackProvisionAndTeardown(t *testing.T) {
+	f := newFakeCtl()
+	defer f.close()
+	rec := &k8sRecorder{}
+	p := testDeployProvider(f, rec)
+	planChanges := 0
+	p.OnReapPlanChange(func() { planChanges++ })
+
+	env, err := p.Provision(context.Background(), core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack}, core.NewRunSeed(9, true))
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if p.app != nil {
+		t.Fatal("a dedicated stack must not deploy the run-scoped control plane")
+	}
+	e := env.(*Env)
+	if e.own == nil || e.own.app == nil {
+		t.Fatal("env must own its stack")
+	}
+	ns := e.own.ampCfg.Namespace
+	if ns == "ampqa-cp-test" || !strings.HasPrefix(ns, DefaultNamespacePrefix+"-") {
+		t.Fatalf("dedicated namespace %q must be its own, not the run-scoped one", ns)
+	}
+	if !hasSubstr(rec.argvs(), ns) {
+		t.Errorf("expected the dedicated namespace %s to be created; calls=%v", ns, rec.argvs())
+	}
+	if e.Handles().Namespace != ns || e.AmpKube().Namespace() != ns {
+		t.Errorf("env handles/kube must point at %s: handles=%q kube=%q", ns, e.Handles().Namespace, e.AmpKube().Namespace())
+	}
+	if cl, err := e.AmpController(context.Background()); err != nil || cl == nil {
+		t.Errorf("AmpController over the own stack: %v", err)
+	}
+	plan := p.ReapPlan()
+	if plan == nil || !hasNS(plan, ns) {
+		t.Fatalf("reap plan must name the live dedicated stack %s: %+v", ns, plan)
+	}
+	if planChanges != 1 {
+		t.Errorf("plan change hook fired %d times after provision, want 1", planChanges)
+	}
+
+	if err := p.Teardown(context.Background(), env); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if !hasSubstr(rec.argvs(), "delete namespace "+ns) {
+		t.Errorf("Teardown must delete the dedicated namespace; calls=%v", rec.argvs())
+	}
+	if hasSubstr(rec.argvs(), "clusters/") && hasReq(f.recorded(), "DELETE /api/v1/storage-pools/p-2/clusters") {
+		t.Error("the cluster goes with its namespace; no per-cluster delete expected")
+	}
+	if plan := p.ReapPlan(); plan != nil && hasNS(plan, ns) {
+		t.Errorf("reap plan still names the torn-down stack %s", ns)
+	}
+	if planChanges != 2 {
+		t.Errorf("plan change hook fired %d times in total, want 2", planChanges)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if hasSubstr(rec.argvs(), "delete namespace ampqa-cp-test") {
+		t.Error("Close must not delete a run-scoped namespace it never created")
+	}
+}
+
+// TestDedicatedStackNeedsDeployMode: an attached control plane cannot stand a
+// stack up per test, so the shape skips with the reason.
+func TestDedicatedStackNeedsDeployMode(t *testing.T) {
+	p := New(Config{ControllerURL: "http://x"})
+	_, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.DedicatedStack}, core.NewRunSeed(1, true))
+	var shape *core.UnsupportedShapeError
+	if !errors.As(err, &shape) {
+		t.Fatalf("want UnsupportedShapeError, got %v", err)
+	}
+}
+
+func hasNS(plan *reap.Plan, ns string) bool {
+	for _, n := range plan.Namespaces {
+		if n.Namespace == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDedicatedStackFailedTeardownStaysInPlan: a stack whose teardown failed is
+// the one the reap plan must keep naming; RunOne drops the teardown error.
+func TestDedicatedStackFailedTeardownStaysInPlan(t *testing.T) {
+	f := newFakeCtl()
+	defer f.close()
+	rec := &k8sRecorder{}
+	p := testDeployProvider(f, rec)
+	env, err := p.Provision(context.Background(), core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack}, core.NewRunSeed(9, true))
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	e := env.(*Env)
+	e.own.backingTeardown = func(context.Context) error { return errors.New("universe delete timed out") }
+	if err := p.Teardown(context.Background(), env); err == nil {
+		t.Fatal("teardown must report the backing failure")
+	}
+	if plan := p.ReapPlan(); plan == nil || !hasNS(plan, e.own.ampCfg.Namespace) {
+		t.Fatalf("reap plan must still name the stack whose teardown failed: %+v", plan)
 	}
 }

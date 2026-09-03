@@ -172,6 +172,9 @@ available), distinct from a genuine all-pass.`,
 			if !c.Flags().Changed("suite") {
 				tests = excludeSuite(tests, "canary")
 			}
+			if err := core.ApplyStackOverride(tests, cfg); err != nil {
+				return &exitError{code: 2, err: err}
+			}
 			// Setup-only tests (Run==nil, e.g. the presets) have no body to execute
 			// in a normal run, so drop them — UNLESS --setup-only was requested,
 			// where standing an env up (no body) is the whole point.
@@ -211,7 +214,6 @@ available), distinct from a genuine all-pass.`,
 			if perr != nil {
 				return &exitError{code: 2, err: perr}
 			}
-			provider = wrapShapeRouter(name, provider, cfg)
 			opts.Provider = provider
 			opts.ProviderUnavailableReason = unavailable
 
@@ -270,12 +272,14 @@ available), distinct from a genuine all-pass.`,
 			// otherwise the first test's short provision deadline would have to
 			// absorb the whole control-plane bring-up. A failed bring-up tears down
 			// what it created and fails the run.
-			preparedProvider, prepErr := prepareProvider(c.Context(), provider, cfg, func() (core.EnvProvider, error) {
-				p, _, err := buildProvider(name, cfg, secrets, masker, detected)
-				return wrapShapeRouter(name, p, cfg), err
-			})
-			provider = preparedProvider
-			opts.Provider = provider
+			var prepErr error
+			if !allDedicated(tests) {
+				provider, prepErr = prepareProvider(c.Context(), provider, cfg, func() (core.EnvProvider, error) {
+					p, _, err := buildProvider(name, cfg, secrets, masker, detected)
+					return p, err
+				})
+				opts.Provider = provider
+			}
 			if prepErr != nil {
 				// No environment means no test body can run — but the run must
 				// still say so per test. Every selected test reports env_failed
@@ -308,7 +312,11 @@ available), distinct from a genuine all-pass.`,
 			if reapPlan == "" && outDir != "" {
 				reapPlan = filepath.Join(outDir, "reap-plan.json")
 			}
-			writeReapPlan(reapPlan, opts.Provider, func(f string, a ...any) { fmt.Fprintf(c.ErrOrStderr(), f+"\n", a...) })
+			planLog := func(f string, a ...any) { fmt.Fprintf(c.ErrOrStderr(), f+"\n", a...) }
+			writeReapPlan(reapPlan, opts.Provider, planLog)
+			if sp, ok := opts.Provider.(interface{ OnReapPlanChange(func()) }); ok {
+				sp.OnReapPlanChange(func() { writeReapPlan(reapPlan, opts.Provider, planLog) })
+			}
 
 			summary, results := sched.Run(c.Context(), tests, opts)
 			// Teardown ownership: build/attach close the provider (build tears the
@@ -377,6 +385,17 @@ available), distinct from a genuine all-pass.`,
 
 // prepareProvider stands a self-building provider's control plane up before the
 // scheduler starts, REBUILDING it per retry — never reuse a half-built one.
+// allDedicated: every selected test brings its own stack, so the run-scoped one
+// would stand for nothing but its own bring-up and teardown.
+func allDedicated(tests []core.Test) bool {
+	for _, t := range tests {
+		if !t.Env.Dedicated() {
+			return false
+		}
+	}
+	return len(tests) > 0
+}
+
 func prepareProvider(ctx context.Context, provider core.EnvProvider, cfg *core.Config, rebuild func() (core.EnvProvider, error)) (core.EnvProvider, error) {
 	retries := core.ResolveEnvRetries(cfg)
 	for attempt := 1; ; attempt++ {

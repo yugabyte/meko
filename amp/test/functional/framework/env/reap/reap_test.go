@@ -264,3 +264,23 @@ func TestDiscoverMatchesTheNamespaceYBAActuallyCreates(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanAddCloudKeepsEverySweepOnce(t *testing.T) {
+	p := &Plan{}
+	a := &CloudReap{Cloud: "aws", RunTag: "t1", Region: "us-west-2"}
+	b := &CloudReap{Cloud: "aws", RunTag: "t2", Region: "us-west-2"}
+	p.AddCloud(nil)
+	p.AddCloud(a)
+	p.AddCloud(b)
+	p.AddCloud(a)
+	p.AddCloud(b)
+	if p.Cloud == nil || *p.Cloud != *a || len(p.Clouds) != 1 || p.Clouds[0] != *b {
+		t.Fatalf("plan clouds = %+v / %+v, want a in Cloud and b once in Clouds", p.Cloud, p.Clouds)
+	}
+	if got := p.allClouds(); len(got) != 2 {
+		t.Fatalf("allClouds = %d, want 2", len(got))
+	}
+	if (&Plan{Clouds: []CloudReap{*b}}).Empty() {
+		t.Fatal("a plan with only Clouds is not empty")
+	}
+}

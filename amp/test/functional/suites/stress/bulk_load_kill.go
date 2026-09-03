@@ -90,7 +90,7 @@ func init() {
 		Name:        "stress/bulk_load_kill",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Delete a tenant's endpoint compute pod, gracefully and by killing the container outright, while ONE large write is streaming into it — a COPY, a server-side INSERT ... SELECT, an application-shaped transaction of thousands of small parameterised INSERTs, a few-statement transaction, or an UPDATE rewriting rows already there — and hold that write to all-or-nothing, both after the fact and as a concurrent reader sees it while it runs. Then kill the compute the instant a large COPY is acknowledged and demand every row of it back, and hold the whole table to its count, checksum and the same rows through the primary key, the index on v and a full scan.",

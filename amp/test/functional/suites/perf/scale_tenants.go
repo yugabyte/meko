@@ -19,7 +19,7 @@ func init() {
 		Name:        "perf/scale_tenants",
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{scaleTier},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Add tenants (cluster + branch + endpoint) to ONE control plane a batch at a time, writing to every tenant after each batch, until a tenant cannot be created or an existing one stops serving. Reports how many tenants a small deployment carried, what create latency did on the way, and which layer said no.",

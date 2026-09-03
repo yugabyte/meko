@@ -17,7 +17,7 @@ func init() {
 		Name:        "stress/wal_tail_nemesis",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Commit a fresh WAL tail, then SIGKILL the safekeeper repeatedly while a backing YugabyteDB pod is down, so every safekeeper startup runs its end-of-WAL scan against failing backing reads (the meko#777/meko#941 WAL-loss class); after recovery every acknowledged commit must verify exactly and writes must flow again.",

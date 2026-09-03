@@ -32,7 +32,7 @@ func init() {
 			Name:        "perf/" + name,
 			Suite:       "perf",
 			Category:    core.Perf,
-			Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+			Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 			Tags:        []string{scaleTier},
 			OwningTeam:  core.TeamControlPlane,
 			Description: "Add one more LOADED tenant (own cluster, own endpoint, own " + workload + " driver) every stage and drive them all for a full window. Reports how tenant throughput and fairness change as the deployment fills up, and where it breaks.",

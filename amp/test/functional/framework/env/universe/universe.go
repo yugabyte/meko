@@ -241,6 +241,12 @@ type Provider struct {
 	// whereas pod IPs are tailnet-routable (mirrors apps/ybk8s). A seam so tests
 	// inject a fake (no real kubectl).
 	resolveK8sYSQLAddrs func(ctx context.Context, kubeContext, kubeconfig, universeName string, ysqlPort int) ([]string, error)
+
+	// sharedYBA (WithSharedYBA): one YBA for the Provider's lifetime, a universe
+	// per Provision on it. cp is that YBA once deployed; Close tears it down.
+	sharedYBA bool
+	ybaMu     sync.Mutex
+	cp        *ybaControlPlane
 }
 
 // Option customizes a Provider.
@@ -264,6 +270,13 @@ func WithProvisionYBA(get *core.Config, resolve func(name string) (string, error
 			p.providerType = get.GetString("apps.yba.provider_type", "aws")
 		}
 	}
+}
+
+// WithSharedYBA makes provision_yba install one YBA per Provider and create a
+// universe per Provision on it, instead of a YBA per universe. Each Env's
+// teardown deletes only its universe; Close tears the YBA down.
+func WithSharedYBA() Option {
+	return func(p *Provider) { p.sharedYBA = true }
 }
 
 // New builds a Provider from cfg.
@@ -532,168 +545,150 @@ func (p *Provider) provisionYugabyted(ctx context.Context) (core.Environment, er
 // universe then tears the YBA down (LIFO).
 func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Environment, error) {
 	runTag := provisionRunTag(seed)
-	isK8s := p.providerType == "kubernetes"
-	gcp := p.providerType == "gcp"
-
-	// Build the specs first: a config/secret error must fail before anything is
-	// created (nothing to clean up yet). The kubernetes path builds a k8s provider
-	// + universe spec (no cloud creds); the gcp path a GCE provider; the default
-	// AWS path an EC2 provider.
-	var (
-		provSpec    yba.ProviderSpec
-		k8sProvSpec yba.K8sProviderSpec
-		gcpProvSpec yba.GCPProviderSpec
-		uniSpec     yba.UniverseSpec
-		err         error
-	)
-	switch {
-	case isK8s:
-		k8sProvSpec, err = p.buildK8sProviderSpec()
-		if err != nil {
-			return nil, fmt.Errorf("provision_yba: build k8s provider spec: %w", err)
-		}
-		uniSpec, err = p.buildK8sUniverseSpec()
-		if err != nil {
-			return nil, fmt.Errorf("provision_yba: build k8s universe spec: %w", err)
-		}
-		uniSpec.ProviderCode = "kubernetes"
-	case gcp:
-		gcpProvSpec, err = p.buildGCPProviderSpec()
-		if err != nil {
-			return nil, fmt.Errorf("provision_yba: build gcp provider spec: %w", err)
-		}
-		uniSpec, err = p.buildGCPUniverseSpec()
-		if err != nil {
-			return nil, fmt.Errorf("provision_yba: build gcp universe spec: %w", err)
-		}
-		uniSpec.ProviderCode = "gcp"
-	default:
-		provSpec, err = p.buildProviderSpec()
-		if err != nil {
-			return nil, fmt.Errorf("provision_yba: build provider spec: %w", err)
-		}
-		uniSpec, err = p.buildUniverseSpec()
-		if err != nil {
-			return nil, fmt.Errorf("provision_yba: build universe spec: %w", err)
-		}
-		uniSpec.ProviderCode = "aws"
+	specs, err := p.buildYBASpecs()
+	if err != nil {
+		return nil, err
 	}
-	uniSpec.RunTag = runTag
+	specs.uni.RunTag = runTag
+	if p.sharedYBA {
+		cp, err := p.sharedControlPlane(ctx, specs)
+		if err != nil {
+			return nil, err
+		}
+		return p.createUniverse(ctx, cp, specs.uni, runTag, nil)
+	}
+	cp, err := p.deployYBA(ctx, runTag, specs)
+	if err != nil {
+		return nil, err
+	}
+	return p.createUniverse(ctx, cp, specs.uni, runTag, cp.stack)
+}
 
+// ybaSpecs are the provider and universe specs one cloud needs, built from
+// config before anything is created so a config/secret error fails with nothing
+// to clean up.
+type ybaSpecs struct {
+	isK8s, gcp bool
+	prov       yba.ProviderSpec
+	k8sProv    yba.K8sProviderSpec
+	gcpProv    yba.GCPProviderSpec
+	uni        yba.UniverseSpec
+}
+
+func (p *Provider) buildYBASpecs() (ybaSpecs, error) {
+	sp := ybaSpecs{isK8s: p.providerType == "kubernetes", gcp: p.providerType == "gcp"}
+	var err error
+	switch {
+	case sp.isK8s:
+		if sp.k8sProv, err = p.buildK8sProviderSpec(); err != nil {
+			return sp, fmt.Errorf("provision_yba: build k8s provider spec: %w", err)
+		}
+		if sp.uni, err = p.buildK8sUniverseSpec(); err != nil {
+			return sp, fmt.Errorf("provision_yba: build k8s universe spec: %w", err)
+		}
+		sp.uni.ProviderCode = "kubernetes"
+	case sp.gcp:
+		if sp.gcpProv, err = p.buildGCPProviderSpec(); err != nil {
+			return sp, fmt.Errorf("provision_yba: build gcp provider spec: %w", err)
+		}
+		if sp.uni, err = p.buildGCPUniverseSpec(); err != nil {
+			return sp, fmt.Errorf("provision_yba: build gcp universe spec: %w", err)
+		}
+		sp.uni.ProviderCode = "gcp"
+	default:
+		if sp.prov, err = p.buildProviderSpec(); err != nil {
+			return sp, fmt.Errorf("provision_yba: build provider spec: %w", err)
+		}
+		if sp.uni, err = p.buildUniverseSpec(); err != nil {
+			return sp, fmt.Errorf("provision_yba: build universe spec: %w", err)
+		}
+		sp.uni.ProviderCode = "aws"
+	}
+	return sp, nil
+}
+
+// ybaControlPlane is a deployed YBA with the cloud provider registered on it,
+// ready to create universes. One per Provision normally; one per Provider under
+// WithSharedYBA.
+type ybaControlPlane struct {
+	stack         ybaStack
+	info          ybastack.Info
+	cl            ybaProvisioner
+	specs         ybaSpecs
+	providerUUID  string
+	accessKeyCode string
+	regionUUIDs   []string
+	// The YBA control plane ALWAYS runs in k8s (ybastack), whatever cloud the
+	// universes land on, so its kubecontext identifies both the k8s universe
+	// namespace backstop and the YBA namespace a separate-process teardown reaps.
+	kubeContext, kubeconfig string
+}
+
+// deployYBA installs a YBA and registers the cloud provider on it. On any
+// failure the stack is torn down again; nothing else exists yet.
+func (p *Provider) deployYBA(ctx context.Context, runTag string, specs ybaSpecs) (*ybaControlPlane, error) {
 	stack, err := p.newStack(runTag)
 	if err != nil {
 		return nil, err
 	}
-
-	// Incremental cleanup: each created resource pushes its teardown here the
-	// instant it exists. failure runs them LIFO on a fresh background deadline so
-	// even a cancelled ctx cleans up. Never reached on full success (the Env owns
-	// the resources instead).
-	var created []func(context.Context) error
-	failure := func(e error) (core.Environment, error) {
+	cp := &ybaControlPlane{stack: stack, specs: specs}
+	if p.provisionCfg != nil {
+		cp.kubeContext = p.provisionCfg.GetString("apps.ybastack.kubecontext", "")
+		cp.kubeconfig = p.provisionCfg.GetString("apps.ybastack.kubeconfig", "")
+	}
+	// Deploy creates the namespace/pull-secret/CRBs as its first steps and leaves
+	// them on any later failure, so the teardown is armed before it.
+	failure := func(e error) (*ybaControlPlane, error) {
 		cctx, cancel := context.WithTimeout(context.Background(), provisionCleanupBudget)
 		defer cancel()
-		for i := len(created) - 1; i >= 0; i-- {
-			if cerr := created[i](cctx); cerr != nil {
-				p.log("provision_yba cleanup (best-effort): %v", cerr)
-			}
+		if cerr := stack.Teardown(cctx); cerr != nil {
+			p.log("provision_yba cleanup (best-effort): %v", cerr)
 		}
 		return nil, e
 	}
-
-	// A single gated teardown, armed BEFORE Deploy. Deploy creates the namespace/
-	// pull-secret/CRBs as its first steps and leaves them on any later failure, so
-	// its cleanup must be armed even when Deploy errors. Once a universe exists it
-	// is force-deleted FIRST and the YBA is torn down only once the nodes are gone
-	// (teardownProvisionedYBA). provClient/universeID/namespace are filled in as
-	// provisioning progresses; the closure reads them at cleanup time.
-	// reap is the airtight backstop, independent of the universe UUID or the YBA
-	// being reachable, bound now (all inputs known before Deploy) so teardown can
-	// always sweep our resources even if universe-resolve or the YBA force-delete
-	// failed. AWS: terminate EVERY EC2 instance tagged ampqa-run=<runTag> via AWS.
-	// gcp: delete EVERY GCE instance labeled ampqa-run=<runTag> via gcloud (using
-	// the provider's own SA key). kubernetes: delete any leftover YBA-created
-	// universe namespace in the target cluster (the same GKE cluster the YBA runs
-	// in — apps.ybastack.kubecontext).
-	universeName := uniSpec.UniverseName()
-	// The YBA control plane ALWAYS runs in k8s (ybastack), regardless of the
-	// universe backing cloud, so its kubecontext identifies both the k8s
-	// namespace backstop (kubernetes universes) and the ybastack YBA namespace a
-	// separate-process teardown must reap.
-	kubeContext, kubeconfig := "", ""
-	if p.provisionCfg != nil {
-		kubeContext = p.provisionCfg.GetString("apps.ybastack.kubecontext", "")
-		kubeconfig = p.provisionCfg.GetString("apps.ybastack.kubeconfig", "")
-	}
-	var reap func(context.Context) error
-	switch {
-	case isK8s:
-		reap = func(c context.Context) error {
-			return p.reapNamespaces(c, kubeContext, kubeconfig, universeName)
-		}
-	case gcp:
-		reap = func(c context.Context) error {
-			return p.reapGCENodes(c, gcpProvSpec.Project, gcpProvSpec.Zone, gcpProvSpec.CredentialsFile, runTag)
-		}
-	default:
-		reap = func(c context.Context) error {
-			return p.reapNodes(c, uniSpec.Region, provSpec.AccessKey, provSpec.SecretKey, runTag)
-		}
-	}
-
-	var (
-		provClient   ybaProvisioner
-		universeID   string
-		ybaNamespace string
-	)
-	created = append(created, func(c context.Context) error {
-		return teardownProvisionedYBA(c, provClient, stack, universeID, universeName, runTag, reap, ybaNamespace, p.log)
-	})
-
 	info, err := stack.Deploy(ctx)
 	if err != nil {
 		return failure(fmt.Errorf("provision_yba: deploy yba: %w", err))
 	}
-	ybaNamespace = info.Namespace
+	cp.info = info
 	p.log("provision_yba: yba up at %s (namespace %s, yb image registry %s)", info.URL, info.Namespace, info.YBImageRegistry)
 
 	cl := p.newProvisioner(info)
-	provClient = cl
-	// VM clouds (AWS + GCP): import the DB release for the universe version+arch —
+	cp.cl = cl
+	uni := specs.uni
+	// VM clouds (AWS + GCP): import the DB release for the universe version+arch;
 	// a freshly-deployed YBA has no artifact for it, so universe-create would 500
 	// ("no artifact found for architecture <arch>"). k8s universes pull their DB
-	// image from the provider's kubernetesImageRegistry instead — no tarball —
-	// but YBA still demands the release's HELM CHART package, which it bundles
-	// only for its OWN version; a universe on any other version (the upgrade
-	// tests' from-version) needs the chart imported. Idempotent either way.
-	if !isK8s {
-		arch := provSpec.Arch
-		if gcp {
-			arch = gcpProvSpec.Arch
+	// image from the provider's kubernetesImageRegistry instead, but YBA still
+	// demands the release's HELM CHART package, which it bundles only for its OWN
+	// version. Idempotent either way.
+	if !specs.isK8s {
+		arch := specs.prov.Arch
+		if specs.gcp {
+			arch = specs.gcpProv.Arch
 		}
-		if err := cl.EnsureRelease(ctx, uniSpec.YBSoftwareVersion, arch, uniSpec.ReleaseURL); err != nil {
+		if err := cl.EnsureRelease(ctx, uni.YBSoftwareVersion, arch, uni.ReleaseURL); err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure release: %w", err))
 		}
-	} else if ybaV, verr := cl.AppVersion(ctx); verr == nil && ybaV != uniSpec.YBSoftwareVersion {
-		if err := cl.EnsureReleaseK8s(ctx, uniSpec.YBSoftwareVersion); err != nil {
+	} else if ybaV, verr := cl.AppVersion(ctx); verr == nil && ybaV != uni.YBSoftwareVersion {
+		if err := cl.EnsureReleaseK8s(ctx, uni.YBSoftwareVersion); err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure the %s helm chart (the YBA is %s and bundles only its own): %w",
-				uniSpec.YBSoftwareVersion, ybaV, err))
+				uni.YBSoftwareVersion, ybaV, err))
 		}
 	}
-	var providerUUID string
 	switch {
-	case isK8s:
-		providerUUID, err = cl.EnsureK8sProvider(ctx, k8sProvSpec)
+	case specs.isK8s:
+		cp.providerUUID, err = cl.EnsureK8sProvider(ctx, specs.k8sProv)
 		if err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure k8s provider: %w", err))
 		}
-	case gcp:
-		providerUUID, err = cl.EnsureGCPProvider(ctx, gcpProvSpec)
+	case specs.gcp:
+		cp.providerUUID, err = cl.EnsureGCPProvider(ctx, specs.gcpProv)
 		if err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure gcp provider: %w", err))
 		}
 	default:
-		providerUUID, err = cl.EnsureAWSProvider(ctx, provSpec)
+		cp.providerUUID, err = cl.EnsureAWSProvider(ctx, specs.prov)
 		if err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure aws provider: %w", err))
 		}
@@ -707,21 +702,20 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// nothing installed there, and a create task that fails after launching the
 	// nodes strands them. A kubernetes universe gets yb-controller from the
 	// chart, so apps.yba.k8s.enable_ybc is on and the backup suites can run.
-	if err := cl.SetYbcEnabledForProvider(ctx, providerUUID, uniSpec.EnableYbc); err != nil {
+	if err := cl.SetYbcEnabledForProvider(ctx, cp.providerUUID, uni.EnableYbc); err != nil {
 		return failure(fmt.Errorf("provision_yba: set ybc.provider.enabled: %w", err))
 	}
 	// AWS only: register the universe's instance type on the provider (YBA does
 	// not auto-populate an API-created AWS provider's instance-type catalog, so
 	// universe-create would NPE on a null InstanceType). A GCP provider DOES
 	// auto-populate its machine-type catalog from the GCE API on create
-	// (GCPInitializer), so no registration is needed. A kubernetes universe has no
-	// instance type at all — pods, not VMs.
-	if !isK8s && !gcp {
-		if err := cl.AddInstanceType(ctx, providerUUID, yba.InstanceTypeSpec{
-			Code:      uniSpec.InstanceType,
-			NumCores:  uniSpec.NumCores,
-			MemSizeGB: uniSpec.MemSizeGB,
-			Arch:      provSpec.Arch,
+	// (GCPInitializer). A kubernetes universe has no instance type: pods, not VMs.
+	if !specs.isK8s && !specs.gcp {
+		if err := cl.AddInstanceType(ctx, cp.providerUUID, yba.InstanceTypeSpec{
+			Code:      uni.InstanceType,
+			NumCores:  uni.NumCores,
+			MemSizeGB: uni.MemSizeGB,
+			Arch:      specs.prov.Arch,
 		}); err != nil {
 			return failure(fmt.Errorf("provision_yba: register instance type: %w", err))
 		}
@@ -729,30 +723,79 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// VM clouds: resolve the provider's SSH access key so the universe references
 	// it (AWS launches EC2 with KeyName=None otherwise; GCP wires the reused
 	// keypair). A GCP provider created with no keypair (the default) has no access
-	// key — YBA then uses project/OS-login SSH keys — so the resolve is skipped
-	// unless a keypair was configured. A kubernetes universe has no SSH key.
-	if !isK8s {
-		needAccessKey := !gcp || gcpProvSpec.KeyPairName != ""
-		if needAccessKey {
-			accessKeyCode, err := cl.ProviderAccessKeyCode(ctx, providerUUID)
-			if err != nil {
-				return failure(fmt.Errorf("provision_yba: resolve access key: %w", err))
-			}
-			uniSpec.AccessKeyCode = accessKeyCode
+	// key, YBA then uses project/OS-login SSH keys. A kubernetes universe has none.
+	if !specs.isK8s && (!specs.gcp || specs.gcpProv.KeyPairName != "") {
+		cp.accessKeyCode, err = cl.ProviderAccessKeyCode(ctx, cp.providerUUID)
+		if err != nil {
+			return failure(fmt.Errorf("provision_yba: resolve access key: %w", err))
 		}
 	}
-	regionUUIDs, err := cl.RegionUUIDsForCodes(ctx, providerUUID, uniSpec.Region)
+	cp.regionUUIDs, err = cl.RegionUUIDsForCodes(ctx, cp.providerUUID, uni.Region)
 	if err != nil {
 		return failure(fmt.Errorf("provision_yba: resolve region uuids: %w", err))
 	}
-	uniSpec.ProviderUUID = providerUUID
-	uniSpec.RegionUUIDs = regionUUIDs
+	return cp, nil
+}
 
-	// Create the universe, then set universeID BEFORE waiting: the create task
-	// launches the cloud nodes DURING the wait, so a wait/task failure must still
-	// reap them. Once universeID is set, the gated teardown above force-deletes
-	// the universe (terminating its nodes) before the YBA is torn down — a failed
-	// create that already launched nodes is no longer orphaned.
+// sharedControlPlane deploys the Provider's one YBA on first use; later callers
+// wait for it and create their universes on it.
+func (p *Provider) sharedControlPlane(ctx context.Context, specs ybaSpecs) (*ybaControlPlane, error) {
+	p.ybaMu.Lock()
+	defer p.ybaMu.Unlock()
+	if p.cp != nil {
+		return p.cp, nil
+	}
+	cp, err := p.deployYBA(ctx, provisionRunTag(nil), specs)
+	if err != nil {
+		return nil, err
+	}
+	p.cp = cp
+	return cp, nil
+}
+
+// createUniverse creates one universe on cp and resolves how to reach it.
+// ownStack is the YBA this universe's Env tears down with itself, nil when the
+// YBA is shared and outlives it (Close tears that one down).
+func (p *Provider) createUniverse(ctx context.Context, cp *ybaControlPlane, uniSpec yba.UniverseSpec, runTag string, ownStack ybaStack) (core.Environment, error) {
+	cl, specs := cp.cl, cp.specs
+	uniSpec.ProviderUUID = cp.providerUUID
+	uniSpec.RegionUUIDs = cp.regionUUIDs
+	uniSpec.AccessKeyCode = cp.accessKeyCode
+	universeName := uniSpec.UniverseName()
+	// reap is the airtight backstop, independent of the universe UUID or the YBA
+	// being reachable: AWS terminates EVERY EC2 instance tagged ampqa-run=<runTag>,
+	// gcp deletes EVERY GCE instance labeled the same, kubernetes deletes the
+	// leftover YBA-created universe namespace.
+	var reap func(context.Context) error
+	switch {
+	case specs.isK8s:
+		reap = func(c context.Context) error {
+			return p.reapNamespaces(c, cp.kubeContext, cp.kubeconfig, universeName)
+		}
+	case specs.gcp:
+		reap = func(c context.Context) error {
+			return p.reapGCENodes(c, specs.gcpProv.Project, specs.gcpProv.Zone, specs.gcpProv.CredentialsFile, runTag)
+		}
+	default:
+		reap = func(c context.Context) error {
+			return p.reapNodes(c, uniSpec.Region, specs.prov.AccessKey, specs.prov.SecretKey, runTag)
+		}
+	}
+	var universeID string
+	// failure force-deletes whatever universe exists (terminating its nodes),
+	// sweeps by tag, and tears an owned YBA down, on a fresh background deadline
+	// so even a cancelled ctx cleans up.
+	failure := func(e error) (core.Environment, error) {
+		cctx, cancel := context.WithTimeout(context.Background(), provisionCleanupBudget)
+		defer cancel()
+		if cerr := teardownProvisionedYBA(cctx, cl, ownStack, universeID, universeName, runTag, reap, cp.info.Namespace, p.log); cerr != nil {
+			p.log("provision_yba cleanup (best-effort): %v", cerr)
+		}
+		return nil, e
+	}
+
+	// Set universeID BEFORE waiting: the create task launches the cloud nodes
+	// DURING the wait, so a wait/task failure must still reap them.
 	ref, err := cl.CreateUniverseFromSpec(ctx, uniSpec)
 	if err != nil {
 		return failure(fmt.Errorf("provision_yba: create universe: %w", err))
@@ -760,9 +803,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	universeID = ref.ResourceUUID
 	if universeID == "" {
 		// Some YBA builds don't return the universe UUID in the create task ref;
-		// resolve it by our ampqa-<runTag> name (the record exists the instant
-		// create is accepted). Capturing it here — before the wait — keeps the
-		// teardown able to force-delete the universe if the task later fails.
+		// resolve it by name (the record exists the instant create is accepted).
 		if u, gerr := cl.GetUniverse(ctx, universeName); gerr == nil {
 			universeID = u.UniverseUUID
 		}
@@ -775,10 +816,9 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	if ref2 == "" {
 		ref2 = universeName
 	}
-	// The create task completing is necessary but not sufficient — confirm the
-	// universe itself is HEALTHY (updateSucceeded && !updateInProgress) before
-	// provisioning is declared done, so the backing store is genuinely up (nodes
-	// provisioned, software installed, master/tserver live) and not half-built.
+	// The create task completing is necessary but not sufficient: confirm the
+	// universe itself is HEALTHY (updateSucceeded && !updateInProgress) so the
+	// backing store is genuinely up and not half-built.
 	if err := cl.WaitUniverseReady(ctx, ref2, provisionUniverseReadyTimeout); err != nil {
 		return failure(fmt.Errorf("provision_yba: universe not healthy: %w", err))
 	}
@@ -798,7 +838,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		kubeNS, kubePod string
 		pfs             []*k8s.PortForward
 	)
-	if isK8s {
+	if specs.isK8s {
 		// YBA reports a k8s universe node's private_ip as an in-cluster address
 		// (pod DNS / ClusterIP) the operator can't reach over the tailnet; only
 		// the framework's OPERATOR-side layer-1 path is affected (amp's own deploy
@@ -806,10 +846,9 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		// backing endpoint at the tserver POD IPs, which ARE tailnet-routable, but
 		// KEEP the in-cluster private_ip addrs: an amp control plane co-located in
 		// this cluster dials the universe over those, not the pod IPs (the split
-		// ybbacking.Colocated draws — controller via in-cluster DNS, coordinator
-		// create via tailnet pod IPs).
+		// ybbacking.Colocated draws).
 		inClusterAddrs = addrs
-		podAddrs, perr := p.resolveK8sYSQLAddrs(ctx, kubeContext, kubeconfig, universeName, ci.Port)
+		podAddrs, perr := p.resolveK8sYSQLAddrs(ctx, cp.kubeContext, cp.kubeconfig, universeName, ci.Port)
 		if perr != nil {
 			return failure(fmt.Errorf("provision_yba: resolve k8s universe tserver pod IPs: %w", perr))
 		}
@@ -817,11 +856,11 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		ci.Host, ci.Port, addrs = host, port, podAddrs
 		// A pod IP is routable only from inside the cluster, and on a cluster
 		// whose pod CIDR is shadowed by an unrelated advertised route it is not
-		// routable at all — the dial times out rather than refusing. Forward to
+		// routable at all: the dial times out rather than refusing. Forward to
 		// the tserver instead whenever its in-cluster name says where it is.
 		kubeNS, kubePod = ybbacking.KubeLocationFromDNS(inClusterAddrs[0])
 		if kubeNS != "" {
-			fwdCI, fwd, ferr := forwardToTServer(ctx, kubeContext, kubeconfig, kubeNS, kubePod, ci)
+			fwdCI, fwd, ferr := forwardToTServer(ctx, cp.kubeContext, cp.kubeconfig, kubeNS, kubePod, ci)
 			if ferr != nil {
 				return failure(fmt.Errorf("provision_yba: reach the universe's tserver: %w", ferr))
 			}
@@ -832,35 +871,69 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	if version == "" {
 		version = p.cfg.Product
 	}
-	return &Env{
+	env := &Env{
 		mode:            ModeProvisionYBA,
 		pg:              ci,
 		nodeAddrs:       addrs,
 		inClusterAddrs:  inClusterAddrs,
-		kubeContext:     kubeContext,
-		kubeconfig:      kubeconfig,
+		kubeContext:     cp.kubeContext,
+		kubeconfig:      cp.kubeconfig,
 		kubeNamespace:   kubeNS,
 		kubePod:         kubePod,
 		pfs:             pfs,
 		versions:        core.DetectedVersions{YB: version, Product: p.cfg.Product},
-		provStack:       stack,
+		provStack:       ownStack,
 		provClient:      cl,
-		provNamespace:   info.Namespace,
+		provNamespace:   cp.info.Namespace,
 		provUniverse:    universeName,
 		provRunTag:      runTag,
 		provReap:        reap,
 		universeID:      universeID,
 		owned:           true,
-		ybImageRegistry: info.YBImageRegistry,
+		ybImageRegistry: cp.info.YBImageRegistry,
 		handles:         core.EnvHandles{Endpoint: universeID},
 
 		provProviderType: p.providerType,
 		provRegion:       uniSpec.Region,
-		provKubeContext:  kubeContext,
-		provKubeconfig:   kubeconfig,
-		provHelmRelease:  info.HelmRelease,
-		provCRBs:         info.ClusterRoleBindings,
-	}, nil
+		provKubeContext:  cp.kubeContext,
+		provKubeconfig:   cp.kubeconfig,
+	}
+	// A shared YBA is not this env's to reap; SharedYBAHandles names it once.
+	if ownStack != nil {
+		env.provHelmRelease = cp.info.HelmRelease
+		env.provCRBs = cp.info.ClusterRoleBindings
+	}
+	return env, nil
+}
+
+// SharedYBAHandles names the Provider's shared YBA for a separate-process
+// teardown; the zero value when none is deployed.
+func (p *Provider) SharedYBAHandles() ProvisionedHandles {
+	p.ybaMu.Lock()
+	defer p.ybaMu.Unlock()
+	if p.cp == nil {
+		return ProvisionedHandles{}
+	}
+	return ProvisionedHandles{
+		ProviderType: p.providerType,
+		KubeContext:  p.cp.kubeContext,
+		Kubeconfig:   p.cp.kubeconfig,
+		YBANamespace: p.cp.info.Namespace,
+		HelmRelease:  p.cp.info.HelmRelease,
+		CRBs:         p.cp.info.ClusterRoleBindings,
+	}
+}
+
+// Close tears the shared YBA down. Callers tear the universes down first.
+func (p *Provider) Close(ctx context.Context) error {
+	p.ybaMu.Lock()
+	cp := p.cp
+	p.cp = nil
+	p.ybaMu.Unlock()
+	if cp == nil {
+		return nil
+	}
+	return cp.stack.Teardown(ctx)
 }
 
 // provisionRunTag derives the per-run tag that roots the ybastack namespace and
@@ -1101,6 +1174,9 @@ func teardownProvisionedYBA(ctx context.Context, provClient ybaProvisioner, stac
 			return fmt.Errorf("tag sweep (ampqa-run=%s) FAILED — keeping the YBA up (namespace %s) so this run's nodes are not orphaned; reap manually: %w", runTag, namespace, err)
 		}
 	}
+	if stack == nil {
+		return nil
+	}
 	return stack.Teardown(ctx)
 }
 
@@ -1238,17 +1314,18 @@ func (e *Env) ProvisionedHandles() ProvisionedHandles {
 	if e.mode != ModeProvisionYBA {
 		return ProvisionedHandles{}
 	}
-	return ProvisionedHandles{
+	h := ProvisionedHandles{
 		ProviderType: e.provProviderType,
 		RunTag:       e.provRunTag,
 		Region:       e.provRegion,
 		KubeContext:  e.provKubeContext,
 		Kubeconfig:   e.provKubeconfig,
-		YBANamespace: e.provNamespace,
-		HelmRelease:  e.provHelmRelease,
 		UniverseName: e.provUniverse,
-		CRBs:         e.provCRBs,
 	}
+	if e.provStack != nil {
+		h.YBANamespace, h.HelmRelease, h.CRBs = e.provNamespace, e.provHelmRelease, e.provCRBs
+	}
+	return h
 }
 
 // Mode reports the env.universe.mode this Env was provisioned/attached under

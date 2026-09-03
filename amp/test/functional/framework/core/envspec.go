@@ -89,3 +89,42 @@ type EnvSpec struct {
 	// The run-level env.yb_deploy knob OVERRIDES it: the knob always wins.
 	PreferredYBDeploy string
 }
+
+// Dedicated reports a test that owns its whole stack, so nothing it does can
+// reach another test and the shared-infra gate does not apply to it.
+func (s EnvSpec) Dedicated() bool { return s.Shape == DedicatedStack }
+
+// FaultsShared is FaultsSharedInfra as it matters to the scheduler: a test that
+// faults infrastructure only it uses faults nothing shared.
+func (s EnvSpec) FaultsShared() bool { return s.FaultsSharedInfra && !s.Dedicated() }
+
+// StackOverrideKey is the run-level knob that moves every control-plane test
+// between the two stack shapes: "dedicated" gives each test its own backing and
+// control plane, "shared" packs them onto the run-scoped one. Tests of other
+// shapes (SingleContainer, Universe) are untouched.
+const StackOverrideKey = "env.stack"
+
+// ApplyStackOverride rewrites the tests' shapes per env.stack. cfg may be nil.
+func ApplyStackOverride(tests []Test, cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	var want Shape
+	switch v := cfg.GetString(StackOverrideKey, ""); v {
+	case "":
+		return nil
+	case "shared":
+		want = SharedControlPlane
+	case "dedicated":
+		want = DedicatedStack
+	default:
+		return fmt.Errorf("%s=%q: want shared or dedicated", StackOverrideKey, v)
+	}
+	for i := range tests {
+		switch tests[i].Env.Shape {
+		case SharedControlPlane, DedicatedStack:
+			tests[i].Env.Shape = want
+		}
+	}
+	return nil
+}

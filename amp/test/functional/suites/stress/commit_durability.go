@@ -27,7 +27,7 @@ func init() {
 		Name:        "stress/commit_durability",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Journal every write's outcome while pod_delete faults hit amp's endpoint computes and the backing YugabyteDB, aiming a PostgreSQL cancel request at a seeded share of in-flight inserts plus a forced floor per writer, then recycle one tenant's endpoint and hold storage to the exact set: every acknowledged id present with its value, every present id one that was issued, and writes flowing again. A cancelled insert the server acks anyway is journaled as acked, which makes the meko#473 window reachable, not certain.",
@@ -131,6 +131,19 @@ func runCommitDurability(t *core.T) error {
 			return err
 		}
 		s.Set("endpoints_recovered", len(fleet.Tenants))
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The chaos also hit the backing the controller keeps its registry in, and
+	// the controller drops out of its Service until it reconnects.
+	if err := t.Step("control_plane_ready", func(s *core.StepHandle) error {
+		waited, err := awaitControlPlaneReady(t, fleet, params.SettleTimeout)
+		if err != nil {
+			return err
+		}
+		s.Set("ready_after", waited.Round(time.Second).String())
 		return nil
 	}); err != nil {
 		return err
