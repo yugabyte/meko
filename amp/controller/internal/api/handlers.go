@@ -1178,12 +1178,18 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 // (architecture/ac-endpoint-upgrade.md §6).
 //
 // It validates only what is true of the REQUEST — a version is named, the knobs
-// are in range. Whether a given endpoint can move is the planner's question,
+// are in range. Whether a given ENDPOINT can move is the planner's question,
 // answered once at Execute time when the answer is still true; asking it here
-// would be N reads of a fleet that moves in between. So there is no 404 and no
-// 409 on this route: an unknown id and an endpoint already at the target are
-// `skipped` lines in the task result, and a second concurrent roll waits on the
-// fleet lock rather than being refused.
+// would be N reads of a fleet that moves in between. So there is no 404: an
+// unknown id and an endpoint already at the target are `skipped` lines in the
+// task result, never a refusal of the roll.
+//
+// The 409 is the exception, and it is about the ROLL rather than any endpoint: a
+// second concurrent roll is refused, because two rolls naming different versions
+// flip the fleet twice and the second caller would learn nothing until after it
+// happened. Refusing here is the fast path — the plan-time query it rests on is
+// racy on its own, and the no-wait `fleet:endpoints` lock the parent step takes
+// is what actually decides (ac-endpoint-upgrade.md §5.6).
 func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpointsRequestObject) (UpgradeEndpointsResponseObject, error) {
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
@@ -1217,7 +1223,16 @@ func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpo
 		EndpointIDs: endpointIDs,
 		MaxParallel: maxParallel,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, task.ErrFleetRollInProgress):
+		// err names the roll in flight; it is logged rather than returned, since
+		// the body already says where to go and look for it.
+		c.logger.LogAttrs(ctx, slog.LevelInfo, "endpoint upgrade refused: a roll is already in flight",
+			slog.String("version", version), slog.String("error", err.Error()))
+		return UpgradeEndpoints409JSONResponse{ConflictJSONResponse(apiError("conflict",
+			"a fleet endpoint upgrade is already in progress; wait for it to finish "+
+				"(GET /tasks?kind=upgrade_endpoints) and re-run"))}, nil
+	case err != nil:
 		return nil, fmt.Errorf("upgrade endpoints task: %w", err)
 	}
 

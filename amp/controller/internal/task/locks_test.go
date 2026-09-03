@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
 // These cover the endpoint lock: the one a TASK holds, so two blocking tasks
@@ -80,7 +82,7 @@ func TestEndpointLockAdmitsOneTaskAtATime(t *testing.T) {
 	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := locks.AcquireResource(waitCtx, lock, second, KindDeleteEndpoint.String()); !errors.Is(err, ErrLockHeld) {
-		t.Fatalf("second task's bounded wait ended with err=%v, want ErrLockHeld", err)
+		t.Fatalf("second task's bounded wait ended with err=%v, want an error wrapping ErrLockHeld", err)
 	}
 
 	// It is admitted once the holder is done.
@@ -298,7 +300,7 @@ func TestEndpointLockRefusesASecondLeaseToItsOwnHolder(t *testing.T) {
 		_, err := locks.AcquireResource(ctx, lock, task, KindResizeEndpoint.String())
 		cancel()
 		if !errors.Is(err, ErrLockHeld) {
-			t.Errorf("second acquire %s got err=%v, want ErrLockHeld", when, err)
+			t.Errorf("second acquire %s got err=%v, want an error wrapping ErrLockHeld", when, err)
 		}
 	}
 	// And once given back it is takeable again, so the guard is not a deadlock.
@@ -389,13 +391,19 @@ func TestFleetRollDeclaresTheFleetLock(t *testing.T) {
 	if got.Type == ResourceEndpoint {
 		t.Error("the fleet roll took an endpoint lock; it holds one lock covering work its children do")
 	}
+	// And it is the one lock that REFUSES rather than queues (§5.6). Declaring it
+	// without NoWait would silently restore the old contract: two rolls at
+	// different versions, both accepted, the fleet flipped twice.
+	if !got.NoWait {
+		t.Error("the fleet lock queues; a second roll must be refused, not made to wait for its turn")
+	}
 }
 
-// TestFleetLockQueuesTheSecondRoll pins the contract change §5.6 made: a second
-// roll WAITS rather than being refused with a 409. That is better for the common
-// case — re-firing a half-failed roll, which then finds the fleet mostly
-// converged — and is why no unique index and no conflict classifier are needed.
-func TestFleetLockQueuesTheSecondRoll(t *testing.T) {
+// TestFleetLockRefusesTheSecondRoll is layer 2 of "one roll at a time" (§5.6),
+// and the authority: the plan-time query in front of it is two statements away
+// from the insert, so this is what actually stops two rolls naming different
+// versions from flipping the fleet twice.
+func TestFleetLockRefusesTheSecondRoll(t *testing.T) {
 	store := NewMemStore()
 	locks := store.Locks(ownerID())
 	first, second := uuid.New(), uuid.New()
@@ -404,17 +412,242 @@ func TestFleetLockQueuesTheSecondRoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first roll was refused the fleet lock: %v", err)
 	}
-	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := locks.AcquireResource(waitCtx, FleetEndpointsLock(), second, KindUpgradeEndpoints.String()); err == nil {
+
+	// No deadline on the context, deliberately: the refusal has to come from the
+	// LOCK, not from the caller's patience running out. A lock that queued would
+	// sit here for MemLocks' own bound and then report the timeout instead.
+	start := time.Now()
+	_, err = locks.AcquireResource(t.Context(), FleetEndpointsLock(), second, KindUpgradeEndpoints.String())
+	waited := time.Since(start)
+	if err == nil {
 		t.Fatal("two rolls held the fleet lock at once")
 	}
+	if !errors.Is(err, ErrLockHeld) {
+		t.Errorf("the second roll failed with %v, want an error wrapping ErrLockHeld", err)
+	}
+	if waited > memLockWait/2 {
+		t.Errorf("the second roll waited %s for the fleet lock; it must be refused at once, not queued", waited)
+	}
 
-	// Queued, not refused: once the first gives it back the second gets it.
+	// Refused, not poisoned: the next roll after this one finishes still gets it.
 	if err := held.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, err := locks.AcquireResource(t.Context(), FleetEndpointsLock(), second, KindUpgradeEndpoints.String()); err != nil {
-		t.Fatalf("the second roll never got the fleet lock after the first released it: %v", err)
+		t.Fatalf("a roll starting after the first finished was refused: %v", err)
+	}
+}
+
+// TestFleetLockRefusesRatherThanQueueing: the two ways a lock can be denied mean
+// different things — a refusal is work that was never attempted, a bounded wait
+// that ran out is a queue that did not clear in time — and both wrap ErrLockHeld,
+// so ErrLockRefused is what separates them. Naming the WORK behind the lock is the
+// service's job (ErrFleetRollInProgress), not this layer's.
+func TestFleetLockRefusesRatherThanQueueing(t *testing.T) {
+	store := NewMemStore()
+	locks := store.Locks(ownerID())
+
+	if _, err := locks.AcquireResource(t.Context(), FleetEndpointsLock(), uuid.New(), KindUpgradeEndpoints.String()); err != nil {
+		t.Fatalf("first roll was refused the fleet lock: %v", err)
+	}
+	_, err := locks.AcquireResource(t.Context(), FleetEndpointsLock(), uuid.New(), KindUpgradeEndpoints.String())
+	if err == nil {
+		t.Fatal("the second roll was granted the fleet lock")
+	}
+	if !errors.Is(err, ErrLockRefused) {
+		t.Errorf("refusal = %v, want an error wrapping ErrLockRefused", err)
+	}
+
+	// Ordinary endpoint contention waits instead, so it is never a refusal.
+	lock := EndpointLock(uuid.NewString())
+	if _, err := locks.AcquireResource(t.Context(), lock, uuid.New(), KindResizeEndpoint.String()); err != nil {
+		t.Fatalf("endpoint lock: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := locks.AcquireResource(waitCtx, lock, uuid.New(), KindDeleteEndpoint.String()); errors.Is(err, ErrLockRefused) {
+		t.Errorf("a contended endpoint reported %v, which names the wrong contention", err)
+	}
+}
+
+// TestEndpointLockStillWaitsForItsTurn is the other half of the asymmetry, and
+// the reason NoWait is per-lock rather than per-acquire: only the FLEET refuses.
+// A child whose endpoint a resize is holding must join the queue — refusing it
+// would turn ordinary contention into a failed roll (§5.4).
+func TestEndpointLockStillWaitsForItsTurn(t *testing.T) {
+	if EndpointLock(uuid.NewString()).NoWait {
+		t.Fatal("the endpoint lock refuses instead of queueing; a contended endpoint must wait")
+	}
+
+	store := NewMemStore()
+	locks := store.Locks(ownerID())
+	lock := EndpointLock(uuid.NewString())
+
+	held, err := locks.AcquireResource(t.Context(), lock, uuid.New(), KindResizeEndpoint.String())
+	if err != nil {
+		t.Fatalf("first task was refused the endpoint lock: %v", err)
+	}
+	// The holder finishes shortly. The waiter has to still be there to take the
+	// lock: one that had been refused on its first attempt is long gone.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = held.Release(context.WithoutCancel(t.Context()))
+	}()
+	if _, err := locks.AcquireResource(t.Context(), lock, uuid.New(), KindDeleteEndpoint.String()); err != nil {
+		t.Fatalf("a task on a busy endpoint was refused rather than queued: %v", err)
+	}
+}
+
+// TestFleetLockWaitsOutItsOwnLapsedRow is the case a bare refusal gets wrong. The
+// task lease is what makes a crashed roll claimable (Candidates probes
+// `task:<id>` and nothing else), and `fleet:endpoints` is a separate row on its
+// own renewal — so the reclaiming worker can find the fleet still held by the very
+// execution it is replacing, for up to one renewal interval past the task lease.
+//
+// Refusing there fails the roll durably, saying "another fleet upgrade is already
+// running" about its own dead predecessor, and strands the subtasks that execution
+// created: a re-fired roll derives child ids from a NEW parent id, so nothing ever
+// picks them up.
+func TestFleetLockWaitsOutItsOwnLapsedRow(t *testing.T) {
+	store := NewMemStore()
+	dead, alive := store.Locks("proc-a"), store.Locks("proc-b")
+	roll := uuid.New()
+
+	if _, err := dead.AcquireResource(t.Context(), FleetEndpointsLock(), roll, KindUpgradeEndpoints.String()); err != nil {
+		t.Fatalf("the first execution was refused the fleet lock: %v", err)
+	}
+
+	// proc-a is gone but its row has not lapsed yet. The assertion is that the
+	// reclaim WAITED: a refusal would come back with ErrLockRefused well inside
+	// this deadline, so the deadline expiring is the evidence.
+	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	_, err := alive.AcquireResource(waitCtx, FleetEndpointsLock(), roll, KindUpgradeEndpoints.String())
+	cancel()
+	if errors.Is(err, ErrLockRefused) {
+		t.Fatalf("the reclaiming execution was refused its own predecessor's lock: %v", err)
+	}
+	if !errors.Is(err, ErrLockHeld) {
+		t.Fatalf("bounded wait ended with err=%v, want an error wrapping ErrLockHeld", err)
+	}
+
+	// And once that row lapses the reclaim proceeds, which is the whole point of
+	// waiting rather than refusing.
+	store.locks.expire(FleetEndpointsLock().Key())
+	if _, err := alive.AcquireResource(t.Context(), FleetEndpointsLock(), roll, KindUpgradeEndpoints.String()); err != nil {
+		t.Errorf("after the predecessor's row lapsed the reclaim was still refused: %v", err)
+	}
+}
+
+// The other half: the carve-out above must not turn "refused" into "wait for
+// whoever has it". A different roll, in a different process — the shape a
+// self-reclaim is easiest to confuse with — is still refused at once.
+func TestFleetLockRefusesADifferentRollFromAnotherProcess(t *testing.T) {
+	store := NewMemStore()
+	first, second := store.Locks("proc-a"), store.Locks("proc-b")
+
+	if _, err := first.AcquireResource(t.Context(), FleetEndpointsLock(), uuid.New(), KindUpgradeEndpoints.String()); err != nil {
+		t.Fatalf("first roll was refused the fleet lock: %v", err)
+	}
+	// No deadline: the refusal must come from the lock, not from patience.
+	start := time.Now()
+	_, err := second.AcquireResource(t.Context(), FleetEndpointsLock(), uuid.New(), KindUpgradeEndpoints.String())
+	waited := time.Since(start)
+	if !errors.Is(err, ErrLockHeld) {
+		t.Fatalf("the second roll failed with %v, want an error wrapping ErrLockHeld", err)
+	}
+	if waited > memLockWait/2 {
+		t.Errorf("the second roll waited %s; a different roll must be refused at once, not queued", waited)
+	}
+}
+
+// noWaitDenial is where the three answers are decided, so it is asserted directly:
+// the wording is chosen from the CLASSIFIED error, not from the fact that an
+// acquire failed.
+func TestNoWaitDenialSeparatesContentionFromFailure(t *testing.T) {
+	r := FleetEndpointsLock()
+	roll := uuid.New()
+	self := resourceOwner(roll, KindUpgradeEndpoints.String(), "proc-b")
+	predecessor := resourceOwner(roll, KindUpgradeEndpoints.String(), "proc-a")
+	rival := resourceOwner(uuid.New(), KindUpgradeEndpoints.String(), "proc-c")
+
+	denial := func(holder string) error {
+		return &pglease.Denial{Key: r.Key(), Holder: holder}
+	}
+
+	// An infrastructure failure is not contention, and must not be reported as a
+	// lock somebody holds.
+	for name, boom := range map[string]error{
+		"backend error":     errors.New("dial tcp 10.0.0.1:5433: connect: connection refused"),
+		"cancelled context": context.Canceled,
+	} {
+		err := noWaitDenial(r, boom, self)
+		switch {
+		case err == nil:
+			t.Errorf("%s: noWaitDenial returned nil; only a self-reclaim may wait", name)
+		case errors.Is(err, ErrLockHeld):
+			t.Errorf("%s: reported as contention: %v", name, err)
+		case !errors.Is(err, boom):
+			t.Errorf("%s: the cause was dropped: %v", name, err)
+		}
+	}
+
+	// Contention from a different roll: refused, and named.
+	if err := noWaitDenial(r, denial(rival), self); !errors.Is(err, ErrLockHeld) {
+		t.Errorf("a rival roll's denial = %v, want an error wrapping ErrLockHeld", err)
+	}
+
+	// Contention from this roll's own predecessor: nil, meaning wait it out.
+	if err := noWaitDenial(r, denial(predecessor), self); err != nil {
+		t.Errorf("our own predecessor's denial = %v, want nil (wait it out)", err)
+	}
+
+	// A denial that could not name a holder is refused, not waited on: "unknown"
+	// must never be read as "mine".
+	if err := noWaitDenial(r, denial(""), self); !errors.Is(err, ErrLockHeld) {
+		t.Errorf("a denial with no visible holder = %v, want an error wrapping ErrLockHeld", err)
+	}
+}
+
+func TestHolderIDOf(t *testing.T) {
+	id := uuid.New()
+	for name, tc := range map[string]struct {
+		owner string
+		want  uuid.UUID
+		ok    bool
+	}{
+		"a task's owner":    {owner: resourceOwner(id, KindResizeEndpoint.String(), "proc-a"), want: id, ok: true},
+		"a subtask's owner": {owner: resourceOwner(id, StepUpgradeEndpoint, "proc-a"), want: id, ok: true},
+		// The compute write fence keys the same table, so its owners turn up in a
+		// Holder read. They carry no task field and must not parse as one.
+		"a foreign owner": {owner: "compute-ctl@host/7/abc"},
+		"empty":           {owner: ""},
+		"not a uuid":      {owner: "task=not-a-uuid kind=x proc=y"},
+	} {
+		got, ok := holderIDOf(tc.owner)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("%s: holderIDOf(%q) = %v, %v; want %v, %v", name, tc.owner, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestHeldByOwnPredecessor(t *testing.T) {
+	roll, other := uuid.New(), uuid.New()
+	self := resourceOwner(roll, KindUpgradeEndpoints.String(), "proc-b")
+
+	for name, tc := range map[string]struct {
+		holder string
+		want   bool
+	}{
+		"same unit of work, dead process": {holder: resourceOwner(roll, KindUpgradeEndpoints.String(), "proc-a"), want: true},
+		"a different unit of work":        {holder: resourceOwner(other, KindUpgradeEndpoints.String(), "proc-a")},
+		// Byte-identical means pglease would have granted it as a renewal, so a
+		// refusal here is one to honour rather than to wait out.
+		"this very acquire": {holder: self},
+		"no visible holder": {holder: ""},
+		"a foreign owner":   {holder: "compute-ctl@host/7/abc"},
+	} {
+		if got := heldByOwnPredecessor(tc.holder, self); got != tc.want {
+			t.Errorf("%s: heldByOwnPredecessor(%q, self) = %v, want %v", name, tc.holder, got, tc.want)
+		}
 	}
 }

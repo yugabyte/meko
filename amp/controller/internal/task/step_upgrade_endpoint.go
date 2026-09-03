@@ -3,10 +3,12 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	applog "github.com/yugabyte/amp/controller/internal/log"
@@ -81,6 +83,20 @@ func (s *upgradeEndpointStep) Execute(ctx context.Context) StepResult {
 	// target version on it. The version comes from the args rather than the row
 	// just written, which is a separate statement this read need not observe.
 	desired, err := s.state.EndpointDeploy(ctx, s.EndpointID)
+	if errors.Is(err, core.ErrNotFound) {
+		// Gone between the planner's enumeration and now — deleted, or its branch
+		// tombstoned by a cluster delete. Nothing to upgrade, and NOT a failure: the
+		// planner reports a missing endpoint as `skipped`, and a roll is never refused
+		// because one of its endpoints cannot move (ac-endpoint-upgrade.md §6). Failing
+		// here would instead trip fail-fast and halt every endpoint still queued behind
+		// it, which a concurrent delete during a long roll would do routinely.
+		logger.Info("endpoint is gone; nothing to upgrade", "requested_version", s.Version)
+		return Ok(mustResult(map[string]string{
+			"endpoint_id": s.EndpointID.String(),
+			"outcome":     "skipped",
+			"reason":      "the endpoint no longer exists",
+		}))
+	}
 	if err != nil {
 		return Fail(fmt.Errorf("read endpoint desired state: %w", err))
 	}
@@ -94,8 +110,6 @@ func (s *upgradeEndpointStep) Execute(ctx context.Context) StepResult {
 		return Fail(fmt.Errorf("redeploy endpoint: %w", err))
 	}
 
-	// An upgrade replaces the pod, so a ClusterIP address (the pod IP) is now
-	// stale and clients would consume a dead one.
 	if err := s.state.SetEndpointAddress(ctx, s.EndpointID, deployed.Address, deployed.TailnetAddress); err != nil {
 		return Fail(fmt.Errorf("record endpoint address: %w", err))
 	}

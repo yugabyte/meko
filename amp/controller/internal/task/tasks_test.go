@@ -2,6 +2,7 @@ package task
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -271,6 +272,58 @@ func TestServiceDeleteCluster(t *testing.T) {
 	decodeArgs(t, steps[0], &del)
 	if del.ClusterID != clusterID {
 		t.Errorf("delete_cluster args cluster = %s, want %s", del.ClusterID, clusterID)
+	}
+}
+
+// TestServiceUpgradeEndpointsRefusesASecondRoll is layer 1 of "one roll at a
+// time" (§5.6): a roll planned while another is non-terminal is refused, not
+// queued behind it, so the caller finds out at request time rather than after the
+// fleet has been rolled twice at two different versions.
+//
+// The check is a query over `tasks`, and the PENDING case below is why it cannot
+// be a probe of the `fleet:endpoints` lease: a roll nobody has claimed yet holds
+// no lease at all, so a probe would see a free fleet and accept the second roll.
+func TestServiceUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store, store.Subtasks())
+	roll := func(version string) (*Task, error) {
+		return svc.UpgradeEndpoints(t.Context(), UpgradeEndpointsInput{Version: version, MaxParallel: 4})
+	}
+
+	first, err := roll("v2")
+	if err != nil {
+		t.Fatalf("first roll: %v", err)
+	}
+	if _, err := roll("v3"); !errors.Is(err, ErrFleetRollInProgress) {
+		t.Fatalf("a second roll against a PENDING one failed with %v, want ErrFleetRollInProgress", err)
+	}
+
+	if _, err := store.Claim(t.Context(), first.ID, "owner-1"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if _, err := roll("v3"); !errors.Is(err, ErrFleetRollInProgress) {
+		t.Fatalf("a second roll against a RUNNING one failed with %v, want ErrFleetRollInProgress", err)
+	}
+	// A refused roll must leave nothing behind: a durable task nothing refuses
+	// later would be a roll that fires the moment the first one lands.
+	if _, total, err := store.List(t.Context(), TaskFilter{}, 10, 0); err != nil {
+		t.Fatalf("List: %v", err)
+	} else if total != 1 {
+		t.Errorf("%d tasks recorded, want 1: a refused roll planned work anyway", total)
+	}
+
+	// Only rolls exclude rolls. An endpoint-scoped task in flight says nothing
+	// about the fleet, and blocking on one would make every busy controller
+	// un-rollable.
+	if _, err := svc.ResizeEndpoint(t.Context(), ResizeEndpointInput{
+		ClusterID: uuid.New(), EndpointID: uuid.New(), CPU: "2", Memory: "4Gi"}); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	if err := store.CompleteTask(t.Context(), first.ID, "owner-1"); err != nil {
+		t.Fatalf("CompleteTask: %v", err)
+	}
+	if _, err := roll("v3"); err != nil {
+		t.Fatalf("a roll planned after the first reached terminal was refused: %v", err)
 	}
 }
 

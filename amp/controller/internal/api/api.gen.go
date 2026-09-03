@@ -4716,6 +4716,7 @@ type UpgradeEndpointsResponse struct {
 	HTTPResponse *http.Response
 	JSON202      *Accepted
 	JSON400      *BadRequest
+	JSON409      *Conflict
 	JSON500      *InternalError
 	JSON503      *ServiceUnavailable
 }
@@ -6438,6 +6439,13 @@ func ParseUpgradeEndpointsResponse(rsp *http.Response) (*UpgradeEndpointsRespons
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -9484,6 +9492,20 @@ func (response UpgradeEndpoints400JSONResponse) VisitUpgradeEndpointsResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpgradeEndpoints409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpgradeEndpoints409JSONResponse) VisitUpgradeEndpointsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }

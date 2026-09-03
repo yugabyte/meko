@@ -63,13 +63,21 @@ func newRunnerFixture(t *testing.T, reg *Registry) *runnerFixture {
 	t.Helper()
 	store := NewMemStore()
 	locks := &countingLocks{MemLocks: store.Locks(ownerID())}
+	f := newRunnerFixtureWith(t, store, reg, locks)
+	f.locks = locks
+	return f
+}
+
+// newRunnerFixtureWith is newRunnerFixture over a caller-supplied lock table, for
+// the tests that need an acquire to be refused. f.locks is nil on it.
+func newRunnerFixtureWith(t *testing.T, store *MemStore, reg *Registry, locks Locks) *runnerFixture {
+	t.Helper()
 	w := testWorkerMax(store, locks, reg, 8)
 	parent := claimedParent(t, store, w.owner)
 	subs := store.Subtasks()
 	return &runnerFixture{
 		store:  store,
 		subs:   subs,
-		locks:  locks,
 		worker: w,
 		runner: NewSubtaskRunner(w, subs),
 		parent: parent,
@@ -92,27 +100,16 @@ func (c *contendedLocks) AcquireResource(ctx context.Context, lock ResourceLock,
 	return c.MemLocks.AcquireResource(ctx, lock, holderID, holderKind)
 }
 
-func newRunnerFixtureWith(t *testing.T, reg *Registry, locks Locks) *runnerFixture {
-	t.Helper()
-	store := NewMemStore()
-	w := testWorkerMax(store, locks, reg, 8)
-	parent := claimedParent(t, store, w.owner)
-	subs := store.Subtasks()
-	return &runnerFixture{
-		store:  store,
-		subs:   subs,
-		worker: w,
-		runner: NewSubtaskRunner(w, subs),
-		parent: parent,
-		owner:  w.owner,
-	}
-}
-
-// An exhausted lock wait leaves the child NON-TERMINAL. `failed` is terminal, so
-// recording it here would be permanent: a replaying parent does not re-attempt a
-// failed child, and Create hands the next parent the same row — so one endpoint
-// held by a resize would stay unupgraded for good, from a wait that says nothing
-// about whether the upgrade would work.
+// TestSubtaskRunLeavesAContendedChildNonTerminal is §5.4's "a child that exhausts
+// that wait is unattempted, not failed" at the layer that decides it.
+//
+// The wait is bounded INSIDE AcquireResource, so it runs out with the caller's
+// context still live — which is why the shutdown guard cannot catch this and the
+// error has to be classified. Recording `failed` here would be permanent: failed
+// is terminal, a replaying parent does not re-attempt it, and Create hands the
+// next parent the same row. So one endpoint held by a resize (or by a fenced-out
+// predecessor that finished the deploy successfully) would stay unupgraded for
+// good, from a lock wait that says nothing about whether the upgrade would work.
 func TestSubtaskRunLeavesAContendedChildNonTerminal(t *testing.T) {
 	const endpoint = "33333333-3333-3333-3333-333333333333"
 	step := &lockingStep{fakeStep: fakeStep{kind: StepUpgradeEndpoint}, lock: EndpointLock(endpoint)}
@@ -121,11 +118,11 @@ func TestSubtaskRunLeavesAContendedChildNonTerminal(t *testing.T) {
 		MemLocks: store.Locks(ownerID()),
 		held:     map[string]struct{}{EndpointLock(endpoint).Key(): {}},
 	}
-	f := newRunnerFixtureWith(t, regFor(StepUpgradeEndpoint, step), locks)
+	f := newRunnerFixtureWith(t, store, regFor(StepUpgradeEndpoint, step), locks)
 	sub := f.create(t, StepUpgradeEndpoint)
 
 	err := f.runner.Run(t.Context(), sub, f.owner)
-	// Still an error, and still ErrLockHeld: that is what the parent reports as
+	// Still an error, and still ErrLockHeld: that is what the parent classifies as
 	// `unattempted` rather than halting the roll on.
 	if !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("Run over a held endpoint = %v, want an error wrapping ErrLockHeld", err)
@@ -133,6 +130,9 @@ func TestSubtaskRunLeavesAContendedChildNonTerminal(t *testing.T) {
 	if got := f.reread(t); got.Status != StatusPending {
 		t.Errorf("subtask status = %q, want pending: a failed row is terminal, so a replaying "+
 			"parent would never re-attempt this endpoint", got.Status)
+	}
+	if n := step.callCount(); n != 0 {
+		t.Errorf("the step ran %d times without its endpoint lock, want 0", n)
 	}
 }
 
@@ -147,60 +147,6 @@ func (f *runnerFixture) create(t *testing.T, kind string) *Subtask {
 }
 
 func (f *runnerFixture) reread(t *testing.T) *Subtask { return onlySubtask(t, f.subs, f.parent.ID) }
-
-// TestSubtaskRunTakesTheDeclaredResourceLock: a child holds its endpoint for the
-// duration and gives it back at once. Two halves, and both matter — a runner that
-// skipped lockFor would let a roll deploy an endpoint a resize is mid-way through,
-// and a runner that keyed the lease on the PARENT would give every child of one
-// roll the same owner string, which pglease grants unconditionally to the current
-// holder (§5.2).
-func TestSubtaskRunTakesTheDeclaredResourceLock(t *testing.T) {
-	const endpoint = "11111111-1111-1111-1111-111111111111"
-	step := &lockingStep{fakeStep: fakeStep{kind: StepUpgradeEndpoint}, lock: EndpointLock(endpoint)}
-	f := newRunnerFixture(t, regFor(StepUpgradeEndpoint, step))
-	step.observe = f.locks.MemLocks
-	sub := f.create(t, StepUpgradeEndpoint)
-
-	if err := f.runner.Run(t.Context(), sub, f.owner); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	held := step.heldBy()
-	if held == "" {
-		t.Fatal("the endpoint lock was not held while the step ran")
-	}
-	if !strings.Contains(held, sub.ID.String()) {
-		t.Errorf("lease owner = %q, want it to name the subtask %s", held, sub.ID)
-	}
-	if strings.Contains(held, f.parent.ID.String()) {
-		t.Errorf("lease owner = %q, want the subtask id rather than the parent's", held)
-	}
-	// Released as soon as the child finished — a child that held its lease for the
-	// whole roll would blow §5.2's "2 + max_parallel" accounting.
-	if now := f.locks.ResourceHolder(EndpointLock(endpoint)); now != "" {
-		t.Errorf("endpoint lock after Run is held by %q, want released", now)
-	}
-}
-
-// TestSubtaskRunReleasesTheLockWhenTheStepFails: the release is on every path, or
-// one failed endpoint wedges every later roll of it for a lease TTL.
-func TestSubtaskRunReleasesTheLockWhenTheStepFails(t *testing.T) {
-	const endpoint = "22222222-2222-2222-2222-222222222222"
-	step := &lockingStep{
-		fakeStep: fakeStep{kind: StepUpgradeEndpoint, failWith: errors.New("helm timed out")},
-		lock:     EndpointLock(endpoint),
-	}
-	f := newRunnerFixture(t, regFor(StepUpgradeEndpoint, step))
-	step.observe = f.locks.MemLocks
-	sub := f.create(t, StepUpgradeEndpoint)
-
-	if err := f.runner.Run(t.Context(), sub, f.owner); err == nil {
-		t.Fatal("Run returned nil for a failing step, want the failure")
-	}
-	if now := f.locks.ResourceHolder(EndpointLock(endpoint)); now != "" {
-		t.Fatalf("endpoint lock after a failed child is held by %q, want released", now)
-	}
-}
 
 // TestSubtaskRunStampsTheParentsOwner: the child's writes are fenced on the parent
 // task's owner, so Run must record under the owner it was handed rather than

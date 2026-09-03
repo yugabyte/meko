@@ -79,9 +79,12 @@ that an existing endpoint runs the controller's *currently configured* tag is ex
 the assumption that breaks after the first controller upgrade.
 
 **The deployer reports what it deployed**, and the step persists that.
-`deploy.Endpoint` (the `CreateEndpoint` return) gains `Version string`, so
-`create_endpoint` and `upgrade_endpoint` both record a fact rather than re-deriving
-one from config the deployer may have defaulted.
+`deploy.Endpoint` (the `CreateEndpoint` return) gains `Version string`, so every step
+that deploys an endpoint — `create_endpoint`, `upgrade_endpoint` and
+`add_branch_extensions`' redeploy — records a fact rather than re-deriving one from
+config the deployer may have defaulted. Each guards on a non-empty report: the local
+driver places nothing and names no version, and an empty answer must not overwrite
+what the row holds.
 
 Not modelled: the image *repository* (it stays deployer config — changing it is a
 controller reconfiguration, not an endpoint upgrade) and the resolved *digest*. The
@@ -249,8 +252,8 @@ re-drives the roll.
 Migration `0012` adds a table, and changes nothing about `tasks`:
 
 ```sql
-CREATE TABLE subtasks (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS subtasks (
+    id         uuid PRIMARY KEY,   -- derived, never defaulted: see §5.5
     parent_id  uuid NOT NULL REFERENCES tasks (id),
     kind       text NOT NULL,   -- a STEP kind: the Registry key, not a task kind
     status     step_status NOT NULL DEFAULT 'pending',
@@ -261,7 +264,7 @@ CREATE TABLE subtasks (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX subtasks_by_parent ON subtasks (parent_id);
+CREATE INDEX IF NOT EXISTS subtasks_by_parent ON subtasks (parent_id);
 ```
 
 **A subtask is one registered step with durable status, not a task with a step
@@ -292,7 +295,8 @@ endpoint_ids?, max_parallel}`) at Execute time:
    which a roll could not move anyway. Whole-fleet rule only: an endpoint named in
    `endpoint_ids` is still attempted.
 2. **Filters** out endpoints already recorded at the target version — an
-   optimization over *desired* state, not a progress signal. See the warning below.
+   optimization over *desired* state, not a progress signal, so it speaks only for
+   an endpoint this roll has no subtask for yet. See the warning below.
 3. **Creates** one `upgrade_endpoint` subtask per remaining endpoint.
 4. **Runs** them in-process, up to `max_parallel` at once (§5.4).
 5. **Reports** one line per endpoint on the step result: `upgraded`, `skipped` (with
@@ -359,15 +363,18 @@ never does.
 
 That leaves the lease-count argument, which is the other half of why the layers exist:
 
-| | 867 (children were free-standing tasks) | this design |
+| | [867](https://github.com/yugabyte/meko/pull/867) (children were free-standing tasks) | this design |
 |---|---|---|
 | leases held by one roll of N endpoints | up to 2N (task + endpoint per child) | **2 + max_parallel** |
 | execution slots consumed of `MaxConcurrent` (50) | up to N | **1** |
 
-`pkg/pglease/fleet_perf_test.go` is the measurement behind that first row: renewals
-and real work share one pool sized `max(4, NumCPU)`, so at high lease counts the pool
-is the bottleneck, delayed renewals follow, and a delayed renewal is what exits the
-process. A fleet roll is precisely the workload that would have found that cliff.
+`pkg/pglease/fleet_perf_test.go` measures the renewal margin one process holding N
+leases has, over a pool sized `max(4, NumCPU)`. The rest of that first row's argument
+is reasoning on top of it rather than measurement: renewals and real task work share
+that pool, so at high lease counts the pool is the bottleneck, delayed renewals follow,
+and a delayed renewal is what exits the process. The test's own header says nothing in
+it generates competing task work, so it cannot show that feedback loop — a fleet roll
+is simply the workload that would have found the cliff.
 
 The second row is a behaviour change worth naming: **a fleet roll now costs one
 execution slot, so it cannot crowd out ordinary work** — but equally, `max_parallel`
@@ -423,8 +430,8 @@ ordinary task.
 `max_parallel` (default **4**, validated `1 ≤ max_parallel ≤ 50`) is a **bounded
 pool, not waves**: a child starts as soon as a slot frees, rather than every child
 waiting on the slowest of its wave. Waves buy nothing here — the barrier is what made
-867 need `on_failure` to describe halting *at a wave boundary*, and a pool halts more
-precisely.
+[867](https://github.com/yugabyte/meko/pull/867) need `on_failure` to describe
+halting *at a wave boundary*, and a pool halts more precisely.
 
 **Fail-fast:** the first child failure stops new children from starting; in-flight
 ones finish (killing them mid-`helm --wait` would leave the release in a state the
@@ -432,11 +439,22 @@ next roll has to clean up). The parent then fails, and its result names what
 succeeded, what failed, and what was never attempted.
 
 Fail-fast is the default **because §7 drops the registry existence probe**. A typo'd
-version is the common mistake, and without the probe it surfaces as
-`ImagePullBackOff` → helm `--wait` timeout, minutes per endpoint. Stopping after the
-first one is what keeps that from costing `N × timeout` and taking a slice of the
-fleet down on the way. The two decisions only make sense together — if the probe is
-added back later, `on_failure=continue` becomes reasonable to add with it.
+version is the common mistake, and what it costs depends on the deployer — measured
+rather than assumed:
+
+- **Docker fails fast.** `docker run` cannot pull the tag and returns in ~2s, so the
+  roll fails almost immediately with the registry's own error. Fail-fast buys little
+  here.
+- **Kubernetes does not.** The pod is accepted and then sits in `ImagePullBackOff`
+  until helm `--wait` times out — minutes, per endpoint, surfacing as the bare
+  `context deadline exceeded` of [meko#635](https://github.com/yugabyte/meko/issues/635).
+  This is the case fail-fast exists for, and it is **unverified**: no local
+  environment can currently run a Kubernetes endpoint (see below).
+
+So the pairing holds where it matters, but the argument is narrower than "a typo
+costs minutes" — on the driver most local development uses, it does not. If the probe
+is added back ([meko#982](https://github.com/yugabyte/meko/issues/982)),
+`on_failure=continue` becomes reasonable to add with it.
 
 **A contended endpoint waits, it does not fail.** A child whose endpoint is held by a
 resize blocks in `AcquireResource` up to `--task-lock-wait` (10m) and then proceeds.
@@ -478,38 +496,116 @@ Then:
 4. A child left `running` re-runs on the step idempotency contract. Its endpoint lease
    from the dead process lapses within one TTL, and the reclaimed child waits that out.
 
+**The parent waits its own `fleet:endpoints` row out, in step 2.** What makes the roll
+claimable in step 1 is the *task* lease, and the fleet lease is a separate row on its
+own renewal — so a reclaiming execution can find the fleet still held by the execution
+it is replacing, for up to one renewal interval past the task lease. It must wait, not
+be refused (§5.6): a refusal fails the roll durably against its own dead predecessor
+and strands the children step 3 would otherwise have converged, because a re-fired roll
+derives child ids from a *new* parent id and nothing ever picks the old ones up.
+
 **A child can never be orphaned**, because the parent only reaches terminal once every
 child has, and a non-terminal parent is always reclaimable. With children in their own
 table this is the invariant to test directly — an orphaned subtask is work nothing will
 ever run, and unlike the claim-loop hazard in §5.2 the schema cannot prevent it.
 
-### 5.6 One roll at a time
+### 5.6 One roll at a time — refused, not queued
 
-Two concurrent fleet rolls have no sensible interleaving. 867 enforced that with a
-second partial unique index on `tasks`, which dragged in the
+Two concurrent fleet rolls have no sensible interleaving, and the bad case is not
+symmetric with ordinary lock contention: two rolls naming **different** versions
+roll the whole fleet twice, the second walking every endpoint back off the version
+the first just landed. Queueing hides that — the second caller is told `202` and
+finds out only after it has happened. So a second roll is **refused**.
+
+Not with an index. [867](https://github.com/yugabyte/meko/pull/867) enforced it
+with a second partial unique index on `tasks`, which dragged in the
 [#400](https://github.com/yugabyte/meko/issues/400) trap — YSQL leaves
-`PgError.ConstraintName` empty, so the violation has to be classified structurally,
-and the pinned index-inventory test exists to make that safe.
+`PgError.ConstraintName` empty, so the violation has to be classified
+structurally, and the pinned index-inventory test exists to make that safe. That
+trap stays closed: nothing here adds an index to `tasks`.
 
-**`pglease` makes that unnecessary.** The parent step declares an ordinary resource
-lock:
+The refusal is **two layers**, because neither is right alone.
+
+**Plan time — a `409`, the fast path.** `Service.UpgradeEndpoints` asks
+`Store.ActiveByKind` for a non-terminal `upgrade_endpoints` task and returns
+`ErrFleetRollInProgress`, which the handler maps to `409` the way
+`ErrResizeInProgress` is mapped today.
+
+A **query over `tasks`, not a probe of the `fleet:endpoints` lease**: a roll that
+is still `pending` has not been claimed and therefore holds no lease at all, so a
+probe would report a free fleet and wave a second roll through. Planning is not
+claiming, and a roll waits for a worker's execution slot in between.
+
+It is a fast path and not the authority: the read and the insert are two
+statements, so two requests can both find a clean table.
+
+**Execute time — the authority.** The parent step's lock refuses rather than
+waits, so the database decides and the plan-time race is closed:
 
 ```go
-func (s *planEndpointUpgradesStep) Lock() ResourceLock {
-    return ResourceLock{Type: "fleet", ID: "endpoints"}
+func FleetEndpointsLock() ResourceLock {
+    return ResourceLock{Type: ResourceFleet, ID: fleetEndpoints, NoWait: true}
 }
 ```
 
+`AcquireResource` branches on `NoWait`: one single-attempt `Client.Acquire`
+instead of `AcquireWait`, in `PgLocks` and `MemLocks` both, so `token_acquire`'s
+answer is the whole decision. **`Worker.lockFor` needs no change** — it passes the
+declared lock straight through, and the one-lock check compares `Key()`, which
+does not depend on `NoWait`.
+
+**What is refused is another HOLDER, not a held row.** A plan-time race and a
+self-reclaim want opposite answers out of the same denial, and the only thing that
+tells them apart is who holds it. `resourceOwner` writes the unit of work into the
+owner string (`task=<id> kind=<k> proc=<p>`) and pglease's `*Denial` carries the
+holder's, so `noWaitDenial` compares the `task=` field: a different id is a second
+roll and is refused at once; **this** id is the roll's own row, left by a dead
+predecessor process, and is waited out on the ordinary bounded path (§5.5 is why
+that row exists at all). A holder the statement could not see is refused —
+"unknown" must not be read as "mine", or a genuinely second roll queues.
+
+Whether the failure is contention **at all** is decided there too, and before the
+wording. `classifyAcquire` narrows only `pglease.ErrNotAcquired` and
+`ErrAlreadyHeld`; a dead pool, an expired context or a `token_acquire` RAISE comes
+back raw. Those take the neutral wrapper the queueing path uses, because wrapping
+them would put *another fleet upgrade is already running* in `tasks.error` for an
+unreachable database and make `errors.Is(err, ErrFleetRollInProgress)` true for an
+infrastructure failure.
+
+**What refusing costs, stated plainly.** A non-terminal roll blocks every later one,
+and there is no `force` and no way to cancel a task. Two shapes:
+
+- A roll whose child is inside a long `helm --wait` clears on its own. Fine.
+- A roll left **`pending`** on a controller with no worker running is never claimed,
+  so it never reaches terminal and blocks rolls **indefinitely**. Under queueing the
+  operator was merely delayed; under refusal they are stopped, and the only remedy is
+  to reach into the database. That is the trade this decision buys, and it wants an
+  escape hatch: [meko#1007](https://github.com/yugabyte/meko/issues/1007).
+
+Re-firing an **identical** roll is refused too — the check is per kind, not per
+version — which is the one case queueing handled better. Making it version-aware
+would mean comparing `params` at plan time and would still be racy, so it is not
+worth the second rule.
+
+A no-wait lock denied by another holder fails the task with
+`ErrFleetRollInProgress` — *another fleet upgrade is already running* — and
+deliberately not with the generic lock-held wording, so an operator reading the
+failure does not conclude their endpoint was contended. It is the same sentinel the
+`409` carries, so both layers say one thing.
+
+**The endpoint lock is untouched: a contended endpoint still WAITS** (§5.4). That
+asymmetry is the point, and it is why `NoWait` is a property of the lock rather
+than of the acquire: a contended endpoint is a queue you join, a second fleet roll
+is work that must not happen.
+
 `fleet:endpoints` is a third namespace in `resource_token`, disjoint from
 `endpoint:<id>` and `task:<id>` like they are from `branch:<id>`. No migration, no
-new index, no classifier — and the existing `lockFor` takes it, so the parent still
-holds exactly one lock and the children still hold one each.
+new index, no classifier.
 
-**This changes the contract from refuse to queue:** a second roll waits out the first
-rather than getting a `409`. That is better for the idempotent case — the second roll
-re-enumerates, finds the fleet already converged, and does almost nothing — and worse
-for the case where the two rolls name *different* target versions, which now flips
-the fleet twice instead of refusing. **Open decision (§10).**
+What the operator does about a `409`: wait for the roll in flight
+(`GET /tasks?kind=upgrade_endpoints`) and re-run. Re-firing a half-failed roll —
+the common case, and the one queueing was better for — is a re-run once the first
+is terminal, which is when the second one has something to converge anyway.
 
 ## 6. API
 
@@ -529,18 +625,22 @@ nested under pool/cluster/branch. Kebab-case noun, matching `/storage-pools` and
 | `max_parallel` | `4` | endpoints rolled at once (§5.4) |
 
 `202` + the `Task` + `Location`, like every other mutation. `400` for a missing
-version or an out-of-range `max_parallel`; `501` with no deployer.
+version or an out-of-range `max_parallel`; `409` while a roll is already in flight
+(§5.6); `501` with no deployer.
 
-**The handler checks only what is true of the request** — the version is present, the
-knobs are in range. Whether a given endpoint can move is the planner's, answered once
-at Execute time when it is still true. Answering it in the handler too would be N
-reads of a fleet that moves in between. So an id that no longer exists, and one
-already at the target, are `skipped` lines in the task result — a roll is never
-refused because one of its endpoints cannot move.
+**Beyond the `409`, the handler checks only what is true of the request** — the
+version is present, the knobs are in range. Whether a given endpoint can move is
+the planner's, answered once at Execute time when it is still true. Answering it in
+the handler too would be N reads of a fleet that moves in between. So an id that no
+longer exists, and one already at the target, are `skipped` lines in the task
+result — a roll is never refused because one of its endpoints cannot move. The
+`409` is not an exception to that: it is about the roll, not about any endpoint,
+and it is one read whatever the fleet's size.
 
 Read side: `Endpoint` carries `version`, **absent when unknown** rather than an empty
 string, so "we do not know" and "it runs a version named by the empty string" stay
-distinguishable. This is the hook QA asked for on #455 — a test can assert the upgrade
+distinguishable. This is the hook QA asked for on
+[#455](https://github.com/yugabyte/meko/issues/455) — a test can assert the upgrade
 *converged* rather than inferring it from pod images. It landed with §2–3 rather than
 here, because it is what lets an end-to-end test see the recorded column at all.
 
@@ -551,9 +651,10 @@ so a fleet roll adds exactly one row to it however many endpoints it touches.
 The MCP server is a mechanical wrapper of the REST surface; adding the tool is a
 follow-up, not a design question.
 
-## 7. What 867 had that this drops
+## 7. What [867](https://github.com/yugabyte/meko/pull/867) had that this drops
 
-867 was a much larger diff. Deliberately not in this pass:
+[867](https://github.com/yugabyte/meko/pull/867) was a much larger diff.
+Deliberately not in this pass:
 
 | dropped | why | cost of dropping |
 |---|---|---|
@@ -562,13 +663,14 @@ follow-up, not a design question.
 | `force` | only meaningful against a `Policy` verdict | — |
 | `skip_version_check` | only meaningful against the probe | — |
 | `on_failure` | the pool + fail-fast replaces what it selected between (§5.4) | a partial roll must be re-run rather than pushed through |
-| the fleet-upgrade unique index | replaced by `fleet:endpoints` (§5.6) | contract changes from refuse to queue |
+| the fleet-upgrade unique index | replaced by a plan-time query plus the no-wait `fleet:endpoints` lease (§5.6) | none — a second roll is still refused, without a second unique index on `tasks` and the #400 classifier it would need |
 
 What carries over essentially unchanged: §2 (the opaque version column, NULL-means-
 unknown, no backfill), §3 (the deploy spec override and the single mapping point),
 and §4's persist-before-deploy ordering.
 
-**867 was never reviewed** — the review bot declined it at 3011 changed lines against
+**[867](https://github.com/yugabyte/meko/pull/867) was never reviewed** — the
+review bot declined it at 3011 changed lines against
 a 3000-line limit, and it was closed when the locking foundation changed under it, not
 for defects (its migrations applied and the itest-dev smoke test passed 32/32). So
 none of the above carries a reviewer's endorsement; it carries only that it was
@@ -622,12 +724,30 @@ never record a version, with the suite green. Until a runner seam exists, a real
 deploy is the only thing that covers it, so an end-to-end check that the `version`
 column is populated after a create belongs in whatever exercises a live cluster.
 
-Live-database (`store_pg_test.go` / `locks_pg_test.go`, `AMP_TEST_DATABASE_URL`):
-`TestMigrateRoundTrip` with 0012; the subtask store's idempotent create against real
-SQL; and `fleet:endpoints` serializing two parents, at a short lease as the other
-`TestPg…` lock tests do.
+**What a live run can cover today, and what it cannot.** Exercised on the docker
+driver against a real YugabyteDB: migration `0011` applying, the subtasks being
+created with derived ids and reported per endpoint, the parent's outcome list, the
+already-at-target skip, an explicitly named endpoint *not* being skipped, and the
+requested version reaching the deployer's command line. **Not** covered: that the
+container comes back on the new image, and that the recorded version tracks a deploy
+rather than the pre-deploy persist. Both need an endpoint that starts, and no local
+endpoint image can run against the current controller —
+[meko#1005](https://github.com/yugabyte/meko/issues/1005). Until that is fixed, those
+two belong to whatever runs against a real cluster, and nothing here should be read as
+proving them.
 
-Integration: extend the upgrade scenario QA added under #455 to assert the endpoint's
+Live-database (`internal/task/store_pg_test.go` / `internal/task/locks_pg_test.go`,
+`AMP_TEST_DATABASE_URL`):
+`TestMigrateRoundTrip` with 0012; the subtask store's idempotent create against real
+SQL; `Store.ActiveByKind`'s `status IN ('pending','running')` predicate — layer 1,
+including that a **pending** roll is found, which is the case a lease probe would
+miss and the reason this is a query; and `fleet:endpoints` **refusing** a second
+parent against real `token_acquire` — the layer-2 assertion, which MemLocks can
+model but only this can decide — at a short lease as the other `TestPg…` lock
+tests do.
+
+Integration: extend the upgrade scenario QA added under
+[#455](https://github.com/yugabyte/meko/issues/455) to assert the endpoint's
 reported `version` after a roll, rather than recording the pod roll as a property.
 
 ## 9. Deliberately not in this slice
@@ -639,7 +759,7 @@ reported `version` after a roll, rather than recording the pod roll as a propert
   separate problem from choosing what version to run.
 - **Per-cluster pinning, maintenance windows, canary, auto-upgrade on release.** All
   are different planners over the same `upgrade_endpoint` child, which is the reason
-  the child is a task rather than a loop body.
+  the child is a subtask rather than a loop body.
 
 ## 10. Decisions
 
@@ -681,20 +801,13 @@ Settled while building §5–6, because the design did not say:
   must stamp its children with the NEW one, which is what fences out a predecessor —
   so it cannot be planned into args at all.
 
-Still open:
-
-1. **`fleet:endpoints` queues rather than refuses (§5.6).** Queue is better for the
-   idempotent re-run — the common case is re-firing a roll that half-failed — and
-   worse for two rolls naming *different* versions, which now rolls the fleet twice
-   instead of returning a `409`. Cheap mitigation if wanted: after acquiring, the
-   parent re-reads its own `params` and no-ops if a newer roll superseded it.
-   Recommendation: ship the queue, revisit if it bites. **Shipped as the queue.**
-
-2. **A failed-create endpoint is in the fleet.** "Every live endpoint" is
-   `eb.dropped_at IS NULL`, which includes an endpoint whose `create_endpoint` task
-   failed before its pod came up (`address IS NULL` — `core/orphans.go` already tracks
-   exactly these for the GC sweeper). A whole-fleet roll will try to upgrade one, wait
-   out helm's `--wait`, fail, and fail-fast then halts the roll — so one orphan stalls
-   every roll until GC reaps it. Not excluded here: the enumeration is deliberately one
-   read of one projection, the sweeper is what reclaims those rows, and excluding them
-   is a policy the design did not state. Revisit if a stalled roll traces back to one.
+- **A second fleet roll is REFUSED, not queued (§5.6).** Queueing was better for
+  the idempotent re-run and wrong for the case that actually costs something: two
+  rolls at different versions both run, the fleet is flipped twice, and the second
+  caller learns nothing until after the fact. Refusal is two layers — a plan-time
+  query behind a `409`, and the no-wait `fleet:endpoints` lease that decides a race
+  — rather than the unique index
+  [867](https://github.com/yugabyte/meko/pull/867) used, so the
+  [#400](https://github.com/yugabyte/meko/issues/400) classifier trap stays closed.
+  Only the FLEET lock refuses, and only a DIFFERENT roll: a contended endpoint
+  waits, and so does a roll reclaiming its own crashed execution.

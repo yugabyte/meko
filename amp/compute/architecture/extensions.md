@@ -191,8 +191,9 @@ the feature is additive.
 - **Endpoint spec** — `resolveBranchExtensions`
   ([`endpointspec.go`](../../controller/internal/task/endpointspec.go)) resolves
   the endpoint's extension set (its branch's opted-in set, below). A step that
-  redeploys a whole branch keeps the resolved set across its loop, so it reads once. Every step that
-  (re)deploys an endpoint (`create_endpoint`, `add_branch_extensions`) passes the
+  redeploys a whole branch keeps the resolved set across its loop, so it reads
+  once. Every step that (re)deploys an endpoint (`create_endpoint`,
+  `add_branch_extensions`, `upgrade_endpoint`) passes the
   resolved set to `deploy.EndpointSpecFrom`
   ([`deploy.go`](../../controller/internal/deploy/deploy.go)) rather than
   hand-rolling a spec, and the Kubernetes deployer
@@ -413,6 +414,7 @@ audit / recreate.
   (`resolveBranchExtensions` — where the mount set is resolved),
   [`controller/internal/task/step_create_endpoint.go`](../../controller/internal/task/step_create_endpoint.go),
   [`controller/internal/task/step_add_branch_extensions.go`](../../controller/internal/task/step_add_branch_extensions.go),
+  [`controller/internal/task/step_upgrade_endpoint.go`](../../controller/internal/task/step_upgrade_endpoint.go),
   [`controller/internal/deploy/kubernetes.go`](../../controller/internal/deploy/kubernetes.go),
   [`controller/internal/core/provision.go`](../../controller/internal/core/provision.go)
   (`BranchExtensions` / `AddBranchExtensions`; `EnsureBranch` copies the parent's set),

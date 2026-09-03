@@ -116,6 +116,82 @@ func TestPgTaskLocks(t *testing.T) {
 	}
 }
 
+// TestPgActiveByKind is the plan-time half of "one fleet roll at a time"
+// (ac-endpoint-upgrade.md §5.6) against real SQL: the query behind the API's
+// `409`. MemStore's mirror is hand-written, so running it there only checks the
+// mirror against itself.
+//
+// The `pending` case is the point. A roll nobody has claimed holds no lease at
+// all, so it is invisible to a probe of `fleet:endpoints` — which is why this is a
+// query over `tasks` and why the predicate is `status IN ('pending','running')`
+// rather than `= 'running'`.
+func TestPgActiveByKind(t *testing.T) {
+	pool, ctx := migratedPool(t)
+	// Registered before resetTasks so it runs after it (cleanups are LIFO).
+	t.Cleanup(pool.Close)
+	resetTasks(t, pool)
+	s := NewPgStore(pool)
+
+	roll, err := s.Create(ctx, TaskSpec{
+		Kind:  KindUpgradeEndpoints,
+		Steps: []StepSpec{{Kind: StepPlanEndpointUpgrades, Args: json.RawMessage(`{"version":"v2"}`)}},
+	})
+	if err != nil {
+		t.Fatalf("plan the first roll: %v", err)
+	}
+
+	active := func(kind string) *Task {
+		t.Helper()
+		got, err := s.ActiveByKind(ctx, kind)
+		if err != nil {
+			t.Fatalf("ActiveByKind(%s): %v", kind, err)
+		}
+		return got
+	}
+
+	got := active(KindUpgradeEndpoints.String())
+	if got == nil || got.ID != roll.ID {
+		t.Fatalf("a pending roll was not found: got %v, want task %s", got, roll.ID)
+	}
+	if got.Status != StatusPending {
+		t.Errorf("the roll came back as %q, want pending — the predicate has to cover the unclaimed case", got.Status)
+	}
+	// Per kind, or the 409 would refuse a fleet roll because some unrelated task is
+	// in flight.
+	if got := active(KindResizeEndpoint.String()); got != nil {
+		t.Errorf("ActiveByKind(resize_endpoint) returned %s, a task of kind %q", got.ID, got.Kind)
+	}
+
+	// Claimed, and still the answer: a roll being executed is exactly what a second
+	// caller must be refused against.
+	const owner = "TestPgActiveByKind"
+	if claimed, err := s.Claim(ctx, roll.ID, owner); err != nil || claimed == nil {
+		t.Fatalf("claim the roll %s: claimed=%v err=%v", roll.ID, claimed, err)
+	}
+	got = active(KindUpgradeEndpoints.String())
+	if got == nil || got.ID != roll.ID {
+		t.Fatalf("a running roll was not found: got %v, want task %s", got, roll.ID)
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("the claimed roll came back as %q, want running", got.Status)
+	}
+
+	// And terminal drops out, so the refusal clears itself instead of blocking every
+	// later roll.
+	if err := s.CompleteTask(ctx, roll.ID, owner); err != nil {
+		t.Fatalf("complete the roll: %v", err)
+	}
+	if got := active(KindUpgradeEndpoints.String()); got != nil {
+		t.Errorf("a succeeded roll is still reported active (%s, %q)", got.ID, got.Status)
+	}
+}
+
+// TestPgUniqueConstraintsOnTask pins the assumption isResizeLockViolation rests
+// on: the only unique constraints on `tasks` are its primary key — whose conflict
+// Create already absorbs with ON CONFLICT (id) DO NOTHING — and the resize lock.
+// That is what makes "a unique violation from Create's task INSERT, for a
+// resize_endpoint task" an exact identification of the lock without reading the
+// constraint's name out of the error (which YSQL does not expose in any field).
 // TestPgUniqueConstraintsOnTask holds the Go kind table and the live schema in
 // agreement about which kinds are first-writer-wins, in BOTH directions. It is
 // what keeps taskLockViolation's structural classification exact: a unique

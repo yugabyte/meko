@@ -65,6 +65,61 @@ func TestUpgradeEndpointsRejectsABadRequest(t *testing.T) {
 	}
 }
 
+// TestUpgradeEndpointsRefusesASecondRoll: while an upgrade_endpoints task is
+// non-terminal the route answers 409 instead of planning another. Two rolls
+// naming different versions would otherwise both run — flipping the fleet twice,
+// with the second caller learning nothing until after it had happened.
+//
+// The refusal is a query over `tasks`, which is why the PENDING roll below is
+// enough to trigger it: nothing has claimed it, so it holds no `fleet:endpoints`
+// lease that a lock probe could have found.
+func TestUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
+	client, _, store := newTestServer(t)
+	ctx := context.Background()
+
+	first, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "v2"})
+	if err != nil {
+		t.Fatalf("UpgradeEndpoints: %v", err)
+	}
+	if first.StatusCode() != http.StatusAccepted {
+		t.Fatalf("first roll: status = %d, want 202; body = %s", first.StatusCode(), first.Body)
+	}
+
+	second, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "v3"})
+	if err != nil {
+		t.Fatalf("UpgradeEndpoints: %v", err)
+	}
+	if second.StatusCode() != http.StatusConflict {
+		t.Fatalf("second roll: status = %d, want 409; body = %s", second.StatusCode(), second.Body)
+	}
+	if code := errorCode(t, second.Body); code != "conflict" {
+		t.Errorf("error code = %q, want conflict", code)
+	}
+	// And nothing was planned behind the 409: a durable second roll would fire the
+	// moment the first one lands, which is the outcome the refusal exists to stop.
+	if _, total, err := store.List(ctx, task.TaskFilter{}, 100, 0); err != nil {
+		t.Fatalf("list tasks: %v", err)
+	} else if total != 1 {
+		t.Errorf("%d tasks recorded, want 1: the refused roll was planned anyway", total)
+	}
+
+	// The refusal lasts exactly as long as the roll does. Driven through the store
+	// rather than the worker: what is asserted is the plan-time gate, not a roll.
+	if _, err := store.Claim(ctx, first.JSON202.Id, "owner-1"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := store.CompleteTask(ctx, first.JSON202.Id, "owner-1"); err != nil {
+		t.Fatalf("CompleteTask: %v", err)
+	}
+	third, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "v3"})
+	if err != nil {
+		t.Fatalf("UpgradeEndpoints: %v", err)
+	}
+	if third.StatusCode() != http.StatusAccepted {
+		t.Fatalf("a roll after the first finished: status = %d, want 202; body = %s", third.StatusCode(), third.Body)
+	}
+}
+
 // TestUpgradeEndpointsDeployDisabled: with no provisioner the roll refuses with
 // 501 rather than planning a task no worker can run — like create/resize/retire.
 func TestUpgradeEndpointsDeployDisabled(t *testing.T) {

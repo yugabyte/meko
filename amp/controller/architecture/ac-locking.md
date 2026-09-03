@@ -19,7 +19,7 @@ with `409` by `tasks_one_active_resize_per_endpoint`, and turning that into a
 |---|---|---|---|
 | **task execution** | `task:<task-id>` | the controller *process* | a second controller instance executing the same task |
 | **endpoint** | `endpoint:<endpoint-id>` | the *unit of work* — a task, or one of a parent's subtasks | anything else blocking on that endpoint, whichever process owns it |
-| **endpoint fleet** | `fleet:endpoints` | the fleet roll's parent task | a second fleet roll, which waits rather than being refused |
+| **endpoint fleet** | `fleet:endpoints` | the fleet roll's parent task | a second fleet roll, which is **refused** rather than made to wait (the one exception to "contention waits") |
 
 No new table and no new migration: the compute write fence keys the same table as
 `branch:<id>`, so the four namespaces coexist. Sharing 0006 is also what keeps
@@ -197,6 +197,23 @@ cleanly rather than hanging, so a lock nothing ever releases costs one task
 instead of every task queued behind it. A wait longer than a second is logged with
 the lock and the elapsed time.
 
+**`fleet:endpoints` is the exception, and it is the only one.** It sets
+`ResourceLock.NoWait`, so `AcquireResource` takes pglease's single-attempt
+`Acquire` instead of `AcquireWait` and a second fleet roll is refused rather than
+queued (Lock 3 for why that resource is different). `NoWait` lives on the lock
+rather than on the acquire, so what waits and what refuses is decided per
+resource, once, in `locks.go` — the endpoint lock cannot pick it up by accident.
+
+**What `NoWait` refuses is another HOLDER, not a held row**, and `noWaitDenial` is
+where that is decided. The owner string names the unit of work, so a denial whose
+`task=` field is the id we are acquiring *for* is this holder's own row, left by a
+predecessor process — waited out on the ordinary bounded path, because refusing it
+would fail a reclaimed task against its own corpse (Lock 3). Any other id, or a
+holder the statement could not see, is refused. The classification comes first:
+only `pglease.ErrNotAcquired` / `ErrAlreadyHeld` are contention, and anything else
+— a dead pool, an expired context, a `token_acquire` RAISE — gets the neutral
+wrapper the queueing path uses rather than a sentence about fleet upgrades.
+
 ## Lock 3 — the endpoint fleet
 
 `plan_endpoint_upgrades` declares `fleet:endpoints`: a third namespace in
@@ -204,13 +221,26 @@ the lock and the elapsed time.
 the compute fence's `branch:<id>`. No migration, no index, no classifier — the
 existing `lockFor` takes it like any other resource lock.
 
-It is what makes it **one fleet roll at a time**. Two concurrent rolls have no
-sensible interleaving, and a second one **waits** on the lease rather than being
-refused: better for the common case (re-firing a roll that half-failed, which then
-finds the fleet mostly converged), worse for two rolls naming different versions,
-which flips the fleet twice instead of returning a `409`
-([`ac-endpoint-upgrade.md`](ac-endpoint-upgrade.md) §5.6, and §10 for the open
-decision).
+It is what makes it **one fleet roll at a time**, and it is `NoWait`: a second
+roll is **refused**, not queued. Queueing would let two rolls naming different
+versions both run — the second walking the fleet back off the version the first
+landed — with the caller told `202` and finding out afterwards.
+
+This lease is the **authority** on that; the `409` the API returns comes from a
+plan-time query over `tasks` for a non-terminal `upgrade_endpoints` task, which is
+racy on its own (and is a query rather than a probe of this lease precisely
+because a `pending` roll holds no lease yet). A roll that wins the race at plan
+time and loses it here fails naming the roll that beat it, rather than with the
+generic lock-held wording — an operator must not read it as their endpoint being
+busy. [`ac-endpoint-upgrade.md`](ac-endpoint-upgrade.md) §5.6.
+
+**A roll reclaiming its own crashed execution is not a second roll**, and this is
+the one thing `NoWait` has to wait for. The task lease is what makes the roll
+claimable; `fleet:endpoints` is a separate row on its own renewal, so it can still
+be live when the successor re-enters the step. Refusing there fails the roll
+durably against its own dead predecessor and strands the subtasks that execution
+created. The holder's `task=` field is what tells the two apart — see the `NoWait`
+paragraph under Lock 2.
 
 It does **not** close the meko#976 gap: it serializes rolls against each other,
 not a roll against a cascade delete or `add_branch_extensions`.

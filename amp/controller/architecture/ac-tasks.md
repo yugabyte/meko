@@ -159,7 +159,9 @@ them. A task may hold at most one. The cascade deletes declare nothing — they
 touch many endpoints, and that needs intent locks.
 
 `plan_endpoint_upgrades` declares `fleet:endpoints` instead — one fleet roll at a
-time, with a second roll waiting on the lease rather than being refused. Its
+time, and the only lock that **refuses** rather than waits: a second roll is
+denied it and fails, since two rolls at different versions would flip the fleet
+twice ([`ac-locking.md`](ac-locking.md) Lock 3). Its
 children each take an `endpoint:<id>`, so the process holds two at once, nested,
 one per unit of work. The one-lock rule still holds per unit; what keeps the pair
 safe is an **order** — `fleet` before `endpoint`, never the reverse

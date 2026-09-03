@@ -161,11 +161,21 @@ func newRollFixture(t *testing.T, ctl *rollControl, locks Locks, seed ...uuid.UU
 	}
 }
 
-// setVersion records what an endpoint's row claims it runs — desired state, which
-// is what the whole-fleet filter reads.
+// setVersion records what an endpoint is running — what the whole-fleet filter reads.
 func (f *rollFixture) setVersion(id uuid.UUID, version string) {
 	if err := f.state.SetEndpointVersion(context.Background(), id, version); err != nil {
 		panic(err)
+	}
+}
+
+func (f *rollFixture) expectVersion(t *testing.T, id uuid.UUID, want string) {
+	t.Helper()
+	d, err := f.state.EndpointDeploy(context.Background(), id)
+	if err != nil {
+		t.Fatalf("read endpoint %s: %v", id, err)
+	}
+	if d.Version != want {
+		t.Errorf("endpoint %s runs %q, want %q", id, d.Version, want)
 	}
 }
 
@@ -295,6 +305,98 @@ func TestFleetRollSkipsFleetEndpointsAlreadyAtTheTarget(t *testing.T) {
 	}
 }
 
+// TestFleetRollReRunsAnUnfinishedChildOnReplay is §5.5 for the WHOLE-FLEET form.
+// A reclaimed parent re-runs the endpoints its first pass did not finish — the
+// failed one, and the one fail-fast never started — and the already-at-target
+// filter does not get in the way, because `version` is what the endpoint is
+// RUNNING: a child that failed its deploy never wrote it.
+func TestFleetRollReRunsAnUnfinishedChildOnReplay(t *testing.T) {
+	ctl := newRollControl()
+	ctl.failOn[ep1] = errors.New("helm --wait timed out")
+	f := newRollFixture(t, ctl, nil, ep1, ep2)
+	args := PlanEndpointUpgradesArgs{Version: "v2", MaxParallel: 1}
+
+	// First pass: ep1's child fails, and fail-fast leaves ep2's child pending.
+	if res := f.execute(t, args); !res.Failed() {
+		t.Fatal("a roll with a failed child reported success")
+	}
+	// Neither row moved off unknown: ep1's child failed its deploy and ep2's never
+	// ran, and the running version is only written after a deploy reports back.
+	f.expectVersion(t, ep1, "")
+	f.expectVersion(t, ep2, "")
+
+	// The parent is reclaimed and its step re-runs from the top.
+	delete(ctl.failOn, ep1)
+	got := decodeRoll(t, f.execute(t, args))
+
+	if got.Upgraded != 2 || got.Skipped != 0 {
+		t.Fatalf("replay = %d upgraded / %d skipped, want 2/0: neither endpoint reached the "+
+			"target on the first pass", got.Upgraded, got.Skipped)
+	}
+	if n := f.ctl.runCount(ep1); n != 2 {
+		t.Errorf("the failed endpoint was deployed %d times across the two passes, want 2", n)
+	}
+	if n := f.ctl.runCount(ep2); n != 1 {
+		t.Errorf("the never-started endpoint was deployed %d times, want 1", n)
+	}
+	for _, row := range mustByParent(t, f.subs, f.parent.ID) {
+		if row.Status != StatusSucceeded {
+			t.Errorf("subtask %s = %q after the replay, want succeeded", row.ID, row.Status)
+		}
+	}
+}
+
+// TestFleetRollAttemptsANamedEndpointOutsideTheFleetEnumeration: the whole-fleet
+// enumeration excludes an endpoint with no recorded address — a failed-create
+// orphan, or a local-driver compute — and that exclusion is a WHOLE-FLEET rule
+// (§5.1). Naming one must still roll it, or the never-skip-an-explicitly-named-
+// endpoint rule holds only for the endpoints the enumeration happened to return.
+func TestFleetRollAttemptsANamedEndpointOutsideTheFleetEnumeration(t *testing.T) {
+	f := newRollFixture(t, newRollControl(), nil, ep1, ep2)
+	f.deps.State = addresslessFleet{fakeStateStore: f.state, hidden: ep2}
+
+	// The whole-fleet form does not see it at all.
+	whole := decodeRoll(t, f.execute(t, PlanEndpointUpgradesArgs{Version: "v2", MaxParallel: 4}))
+	if len(whole.Endpoints) != 1 || whole.Endpoints[0].EndpointID != ep1.String() {
+		t.Fatalf("whole-fleet roll = %+v, want only the endpoint with an address", whole.Endpoints)
+	}
+
+	// Named, it is rolled from the by-id read rather than reported gone.
+	named := decodeRoll(t, f.execute(t, PlanEndpointUpgradesArgs{
+		Version:     "v2",
+		EndpointIDs: []uuid.UUID{ep2},
+		MaxParallel: 4,
+	}))
+	if line := lineFor(t, named.Endpoints, ep2); line.Outcome != rollUpgraded {
+		t.Errorf("named address-less endpoint = %q (%s), want upgraded", line.Outcome, line.Reason)
+	}
+	if n := f.ctl.runCount(ep2); n != 1 {
+		t.Errorf("the named endpoint was deployed %d times, want 1", n)
+	}
+}
+
+// addresslessFleet models the fleet enumeration's address predicate: hidden is
+// absent from AllEndpointDeploys but still readable by id, which is what an
+// endpoint that was never deployed looks like.
+type addresslessFleet struct {
+	*fakeStateStore
+	hidden uuid.UUID
+}
+
+func (s addresslessFleet) AllEndpointDeploys(ctx context.Context) ([]core.EndpointDeploy, error) {
+	all, err := s.fakeStateStore.AllEndpointDeploys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.EndpointDeploy, 0, len(all))
+	for _, d := range all {
+		if d.ID != s.hidden {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 // TestFleetRollDoesNotHaltOnAContendedEndpoint is §5.4's exception to fail-fast.
 //
 // ErrLockHeld says somebody else holds the endpoint, not that the upgrade would
@@ -327,6 +429,14 @@ func TestFleetRollDoesNotHaltOnAContendedEndpoint(t *testing.T) {
 	if n := f.ctl.runCount(ep1); n != 0 {
 		t.Errorf("the contended endpoint was deployed %d times, want 0", n)
 	}
+	// And its child is left non-terminal. `failed` is terminal, so recording it
+	// would put the endpoint out of reach of every later roll too — not just this
+	// one — over a lock wait that says nothing about whether the upgrade works.
+	for _, row := range mustByParent(t, f.subs, f.parent.ID) {
+		if row.Status == StatusFailed {
+			t.Errorf("subtask %s was durably failed by an endpoint lock it could not take", row.ID)
+		}
+	}
 }
 
 // TestFleetRollStopsStartingChildrenAfterAFailure is fail-fast itself. Without
@@ -351,11 +461,15 @@ func TestFleetRollStopsStartingChildrenAfterAFailure(t *testing.T) {
 			t.Errorf("endpoint %s was deployed %d times after an earlier child failed, want 0", id, n)
 		}
 	}
-	// The children behind the failure exist as pending rows: the roll's account has
-	// to distinguish "did not work" from "was never tried".
+	// No child is left non-terminal. Fail-fast makes the PARENT terminal, and a
+	// terminal parent is never reclaimed — so a row left `pending` under one is work
+	// nothing will ever run, and a re-fired roll derives different child ids, so
+	// nothing picks it up either. `GET /tasks/{id}/subtasks` would show it pending
+	// forever. The unattempted ones are closed with the reason instead.
 	for _, row := range mustByParent(t, f.subs, f.parent.ID) {
-		if row.Status == StatusRunning {
-			t.Errorf("subtask %s is still running after the roll returned", row.ID)
+		if row.Status == StatusRunning || row.Status == StatusPending {
+			t.Errorf("subtask %s is still %s under a parent that failed fast; nothing will ever run it",
+				row.ID, row.Status)
 		}
 	}
 }

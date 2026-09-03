@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,10 +37,22 @@ const (
 // treats it as "not my work".
 var ErrLockHeld = errors.New("task: lock held by another owner")
 
+// ErrLockRefused means a NoWait lock was held by another unit of work, so the
+// acquire gave up rather than queueing. Wraps ErrLockHeld: it is a held lock, and
+// what it adds is that no wait was spent on it.
+var ErrLockRefused = errors.New("resource lock is held and does not queue")
+
 // ResourceLock names the thing a step needs exclusively.
 type ResourceLock struct {
 	Type string
 	ID   string
+
+	// NoWait refuses instead of queueing when ANOTHER unit of work holds the lock:
+	// a contended endpoint is a queue you join, a second fleet roll is work that
+	// must not happen at all.
+	// NOTE: A row this holder's own predecessor left behind in a
+	// dead process is still waited out (noWaitDenial).
+	NoWait bool
 }
 
 // Key is the lease key this lock takes.
@@ -65,11 +78,14 @@ func EndpointLock(endpointID string) ResourceLock {
 }
 
 // FleetEndpointsLock is the lock on rolling the endpoint fleet: one roll at a
-// time (ac-endpoint-upgrade.md §5.6). A second roll WAITS on it rather than being
-// refused, so re-firing a half-failed roll — the common case — queues behind the
-// first and then finds most of the fleet already converged.
+// time (ac-endpoint-upgrade.md §5.6), and the AUTHORITY on that — the plan-time
+// query in front of it is racy on its own.
+//
+// NoWait, unlike every other resource lock: two rolls naming different versions
+// would flip the fleet twice, with the second caller learning nothing until after
+// it happened.
 func FleetEndpointsLock() ResourceLock {
-	return ResourceLock{Type: ResourceFleet, ID: fleetEndpoints}
+	return ResourceLock{Type: ResourceFleet, ID: fleetEndpoints, NoWait: true}
 }
 
 // Locking is implemented by steps needing a resource exclusively. The worker takes
@@ -112,6 +128,9 @@ type Locks interface {
 	// gives up — on ctx, or on the implementation's own bound (PgLocks:
 	// --task-lock-wait; MemLocks: its own). The bound is not part of the contract;
 	// pass a ctx deadline to pick one.
+	//
+	// An r.NoWait lock gives up at once when ANOTHER unit of work holds it, rather
+	// than waiting the holder out.
 	//
 	// holderID/kind name that unit: a task and its kind, or a SUBTASK and its step
 	// kind (ac-endpoint-upgrade.md §5.3). See resourceOwner.
@@ -187,9 +206,21 @@ func (l *PgLocks) AcquireResource(ctx context.Context, r ResourceLock, holderID 
 	// unconditionally to the current holder, so two of them sharing this process's
 	// owner id would both be granted and the database would stop deciding. Cheap —
 	// a client starts no goroutine and owns no pool; the renewal belongs to the Held.
-	c, err := pglease.New(l.store, resourceOwner(holderID, kind, l.owner), l.cfg)
+	owner := resourceOwner(holderID, kind, l.owner)
+	c, err := pglease.New(l.store, owner, l.cfg)
 	if err != nil {
 		return nil, fmt.Errorf("resource lock %s: %w", r, err)
+	}
+	if r.NoWait {
+		h, err := c.Acquire(ctx, r.Key())
+		if err == nil {
+			return h, nil
+		}
+		if denial := noWaitDenial(r, err, owner); denial != nil {
+			return nil, denial
+		}
+		// The row is this holder's OWN, left by a predecessor process: fall through
+		// to the bounded wait below. See noWaitDenial.
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, l.wait)
 	defer cancel()
@@ -211,11 +242,76 @@ func (l *PgLocks) Holder(ctx context.Context, r ResourceLock) (string, error) {
 }
 
 // classifyAcquire folds pglease's two "somebody has it" answers into ErrLockHeld.
+// Anything else — a dead pool, an expired context, a token_acquire RAISE — comes
+// back untouched, and is NOT contention.
 func classifyAcquire(err error) error {
 	if errors.Is(err, pglease.ErrNotAcquired) || errors.Is(err, pglease.ErrAlreadyHeld) {
 		return fmt.Errorf("%w: %w", ErrLockHeld, err)
 	}
 	return err
+}
+
+// noWaitDenial decides what a denied NO-WAIT acquire means: the error to report,
+// or nil for "wait it out after all".
+//
+// That nil case is the one a no-wait lock must still queue on. After a hard crash
+// the fleet row outlives the task lease that gates the claim, so the worker
+// reclaiming a roll can find the key still held by the execution it is replacing;
+// refusing there would fail the roll durably over its own dead predecessor and
+// strand the children that execution had already created.
+func noWaitDenial(r ResourceLock, err error, self string) error {
+	classified := classifyAcquire(err)
+	if !errors.Is(classified, ErrLockHeld) {
+		return fmt.Errorf("resource lock %s: %w", r, classified)
+	}
+	if heldByOwnPredecessor(denialHolder(err), self) {
+		return nil
+	}
+	return fmt.Errorf("resource lock %s: %w: %w", r, ErrLockRefused, classified)
+}
+
+// denialHolder is the holder a refused pglease acquire named, or "" when the error
+// is not a denial or token_acquire re-read after the row had already gone.
+func denialHolder(err error) string {
+	var d *pglease.Denial
+	if errors.As(err, &d) {
+		return d.Holder
+	}
+	return ""
+}
+
+// heldByOwnPredecessor reports whether holder is a lapsed row belonging to the
+// same unit of work as self from a previous proccess
+//
+// Equal holder and self strings would mean the same process. Instead, we need to compare
+// the task field uuid of each holder, which should be equal.
+func heldByOwnPredecessor(holder, self string) bool {
+	if holder == "" || holder == self {
+		return false
+	}
+	mine, ok := holderIDOf(self)
+	if !ok {
+		return false
+	}
+	theirs, ok := holderIDOf(holder)
+	return ok && theirs == mine
+}
+
+// holderIDOf extracts the unit of work an owner string names: the `task=` field
+// resourceOwner writes, which carries a task id or a SUBTASK id.
+func holderIDOf(owner string) (uuid.UUID, bool) {
+	for _, field := range strings.Fields(owner) {
+		rest, ok := strings.CutPrefix(field, holderField)
+		if !ok {
+			continue
+		}
+		id, err := uuid.Parse(rest)
+		if err != nil {
+			return uuid.Nil, false
+		}
+		return id, true
+	}
+	return uuid.Nil, false
 }
 
 func taskLockKey(taskID uuid.UUID) string { return taskKeyPrefix + taskID.String() }
@@ -233,8 +329,13 @@ func taskLockKey(taskID uuid.UUID) string { return taskKeyPrefix + taskID.String
 // than taking it over — see Locking. Kept anyway: the diagnostic is worth more than
 // a takeover wait already bounded by the task lease.
 func resourceOwner(holderID uuid.UUID, kind, procOwner string) string {
-	return fmt.Sprintf("task=%s kind=%s proc=%s", holderID, kind, procOwner)
+	return fmt.Sprintf("%s%s kind=%s proc=%s", holderField, holderID, kind, procOwner)
 }
+
+// holderField is the field resourceOwner writes the holding unit of work into.
+// Spelled `task=` before subtasks existed and kept that way: a subtask's id goes
+// in the same field, and holderIDOf is the one place that has to know.
+const holderField = "task="
 
 // The steps that mutate one endpoint's compute declare their lock together here,
 // so what serializes against what is answerable from one place. plan_endpoint_upgrades

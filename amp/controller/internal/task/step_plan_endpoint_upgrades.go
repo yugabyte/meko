@@ -196,9 +196,11 @@ func (s *planEndpointUpgradesStep) plan(ctx context.Context, taskID uuid.UUID) (
 
 	subs := make([]*Subtask, 0, len(targets))
 	for _, d := range targets {
-		// The already-at-target filter applies to whole-fleet enumeration ONLY:
-		// naming an endpoint is the operator's remedy after a partial roll, and
-		// skipping a named one would drop exactly the endpoint that needs re-running.
+		// Whole-fleet enumeration only: naming an endpoint is the operator's remedy
+		// after a partial roll, and skipping a named one would drop exactly the
+		// endpoint that needs re-running. Safe on a replay because `version` is what
+		// the endpoint is RUNNING — a child that failed its deploy never wrote it, so
+		// the endpoint still reads as not-at-target.
 		if !explicit && d.Version == s.Version {
 			done = append(done, &endpointRoll{
 				EndpointID: d.ID.String(), Outcome: rollSkipped,
@@ -250,12 +252,23 @@ func (s *planEndpointUpgradesStep) roll(ctx context.Context, owner string, subs 
 	var mu sync.Mutex
 	halted := false
 
-	// rest reports the children from i on, which never started.
-	rest := func(i int, reason string) {
+	// rest reports the children from i on, which never started. abandon says whether
+	// their subtask ROWS must also be closed: only on an exit that makes the parent
+	// terminal, since a terminal parent is never reclaimed and a pending row under
+	// one is work nothing will ever run. An interrupted parent stays reclaimable, so
+	// its children are left for the replay.
+	rest := func(i int, reason string, abandon bool) {
 		for _, sub := range subs[i:] {
 			out <- &endpointRoll{
 				EndpointID: endpointOf(sub), Outcome: rollUnattempted,
 				Reason: reason, SubtaskID: sub.ID.String(),
+			}
+			if !abandon {
+				continue
+			}
+			if err := s.subtasks.Abandon(ctx, sub, owner, reason); err != nil {
+				applog.FromContext(ctx).Warn("closing an unattempted subtask",
+					applog.KeySubtaskID, sub.ID.String(), "error", err)
 			}
 		}
 	}
@@ -264,12 +277,20 @@ func (s *planEndpointUpgradesStep) roll(ctx context.Context, owner string, subs 
 		// Take a slot BEFORE reading `halted`, so the check happens as late as it
 		// can: a slot frees only when a child finishes, and a failing child records
 		// its outcome before releasing.
+		took := false
 		select {
 		case sem <- struct{}{}:
+			took = true
 		case <-ctx.Done():
 		}
 		if ctx.Err() != nil {
-			rest(i, "not started: the roll was interrupted")
+			// Both cases can be ready at once, so give the slot back before leaving —
+			// as the halted branch below does. Only when one was actually taken: the
+			// ctx branch leaves the channel empty, and a receive on it would block.
+			if took {
+				<-sem
+			}
+			rest(i, "not started: the roll was interrupted", false)
 			break
 		}
 		mu.Lock()
@@ -277,7 +298,7 @@ func (s *planEndpointUpgradesStep) roll(ctx context.Context, owner string, subs 
 		mu.Unlock()
 		if stop {
 			<-sem
-			rest(i, "not started: the roll stopped after an earlier failure")
+			rest(i, "not started: the roll stopped after an earlier failure", true)
 			break
 		}
 

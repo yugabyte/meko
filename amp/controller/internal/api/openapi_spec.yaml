@@ -860,8 +860,11 @@ paths:
 
         **Fail-fast**: the first child failure stops new children from starting;
         the ones already running finish, and the task fails. **One roll at a
-        time**: a second roll WAITS on the fleet lock rather than being refused,
-        so re-firing a half-failed roll queues behind the first.
+        time**: while an `upgrade_endpoints` task is non-terminal a second roll
+        is refused with `409` rather than queued, since two rolls naming
+        different versions would flip the fleet twice. Re-run once the first
+        reaches a terminal status; a roll that raced the check is refused when
+        it executes and fails naming the roll that beat it.
 
         A whole-fleet roll skips endpoints already recorded at `version`; an
         endpoint named in `endpoint_ids` is **never** skipped, which is how an
@@ -869,8 +872,9 @@ paths:
         what was asked for, not what is running). Only the request is validated —
         an id that no longer exists comes back as a `skipped` line, not a `404`,
         since a roll is never refused because one of its endpoints cannot move.
-        `400` for a missing `version` or an out-of-range `max_parallel`. Requires
-        the endpoint deployer (`--deploy`); returns `501` otherwise.
+        `400` for a missing `version` or an out-of-range `max_parallel`; `409`
+        when a roll is already in flight. Requires the endpoint deployer
+        (`--deploy`); returns `501` otherwise.
       requestBody:
         required: true
         content:
@@ -882,6 +886,8 @@ paths:
           $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':

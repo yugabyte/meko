@@ -237,6 +237,36 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 			t.Errorf("AllEndpointDeploys = %+v, want the same state the branch enumeration reports (%+v)", *mine, d)
 		}
 
+		// An endpoint with no recorded address is NOT in the fleet, over real SQL and
+		// not just in the in-memory model. create_endpoint writes the row before
+		// deploying, so an address-less row is a failed create whose pod never came up
+		// — the orphans GC reclaims by this same condition. Rolling one waits out
+		// helm's --wait and fails, and fail-fast then halts the whole roll, so a
+		// single leaked orphan would make the upgrade API unusable until GC caught up.
+		if _, err := pool.Exec(ctx,
+			`UPDATE amp_registry.endpoints SET address = NULL WHERE id = $1::uuid`, endpointID); err != nil {
+			t.Fatalf("clear the endpoint address: %v", err)
+		}
+		orphaned, err := b.AllEndpointDeploys(ctx)
+		if err != nil {
+			t.Fatalf("AllEndpointDeploys after clearing the address: %v", err)
+		}
+		for i := range orphaned {
+			if orphaned[i].ID == endpointID {
+				t.Errorf("AllEndpointDeploys includes endpoint %s, which has no recorded address", endpointID)
+			}
+		}
+		// Still readable by id, so naming it explicitly in endpoint_ids still attempts
+		// it — the never-skip-an-explicitly-named-endpoint rule.
+		if _, err := b.EndpointDeploy(ctx, endpointID); err != nil {
+			t.Errorf("EndpointDeploy on an address-less endpoint = %v, want it still readable by id", err)
+		}
+		if _, err := pool.Exec(ctx,
+			`UPDATE amp_registry.endpoints SET address = $2 WHERE id = $1::uuid`,
+			endpointID, "yb-ep.endpoints.svc:55433"); err != nil {
+			t.Fatalf("restore the endpoint address: %v", err)
+		}
+
 		// Tombstoning the branch takes its endpoints out of the fleet: the endpoint
 		// row is still there (endpoints are hard-deleted, so presence is liveness),
 		// and `eb.dropped_at IS NULL` is the whole predicate.

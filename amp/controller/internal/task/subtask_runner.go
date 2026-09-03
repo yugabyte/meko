@@ -24,10 +24,26 @@ type Subtasks interface {
 	// parent can reconcile against its status.
 	Create(ctx context.Context, parentID uuid.UUID, kind string, args json.RawMessage) (*Subtask, error)
 
+	// ByParent returns the children a parent already has, oldest first. A replaying
+	// planner reconciles against them BEFORE deciding what to create, which is what
+	// keeps a filter over desired state from dropping an endpoint whose child is
+	// unfinished (ac-endpoint-upgrade.md §5.5).
+	ByParent(ctx context.Context, parentID uuid.UUID) ([]*Subtask, error)
+
 	// Run executes one subtask under owner — the parent's owner, so the child's
 	// writes carry the fence every task write has. It runs what it is given:
 	// deciding a child is already done is the parent's job.
 	Run(ctx context.Context, s *Subtask, owner string) error
+
+	// Abandon marks a child that will never be attempted terminal, with the reason.
+	//
+	// A fan-out creates every child up front, so a parent that stops early leaves
+	// rows nobody will run. It must not leave them PENDING: the parent is about to
+	// go terminal, and a terminal parent is never reclaimed, so those rows would sit
+	// pending forever and a re-fired roll derives different child ids — nothing ever
+	// picks them up. Only for an exit that makes the parent terminal; an interrupted
+	// parent stays reclaimable and its children are meant to survive for the replay.
+	Abandon(ctx context.Context, s *Subtask, owner, reason string) error
 }
 
 // SubtaskRunner is the real Subtasks: a subtask store plus the worker's step
@@ -35,12 +51,9 @@ type Subtasks interface {
 // runStepWithRetry, so a child gets the same one-lock rule, abort retry and panic
 // boundary a task's step gets.
 //
-// Run is called from up to max_parallel goroutines of one parent step at once.
-// That is sound because a Worker's fields are immutable after NewWorker and what
-// they reach is read-only by then: the Registry's builder map is fixed at
-// construction and its Deps are written only by WithSubtasks, during wiring and
-// before the `go Run` that reaches any Build. PgLocks builds a pglease client per
-// acquire.
+// Run is called from up to max_parallel goroutines of one parent step at once,
+// which is sound because a Worker's fields and everything they reach are
+// read-only by the time anything runs.
 type SubtaskRunner struct {
 	store SubtaskStore
 	w     *Worker
@@ -89,6 +102,14 @@ func (r *SubtaskRunner) Create(ctx context.Context, parentID uuid.UUID, kind str
 	return r.store.Create(ctx, parentID, kind, args)
 }
 
+func (r *SubtaskRunner) ByParent(ctx context.Context, parentID uuid.UUID) ([]*Subtask, error) {
+	return r.store.ByParent(ctx, parentID)
+}
+
+func (r *SubtaskRunner) Abandon(ctx context.Context, s *Subtask, owner, reason string) error {
+	return r.store.Fail(ctx, s.ID, owner, errors.New(reason))
+}
+
 func (r *SubtaskRunner) Run(ctx context.Context, s *Subtask, owner string) error {
 	if err := r.reserve(s.ID); err != nil {
 		return err
@@ -129,12 +150,14 @@ func (r *SubtaskRunner) Run(ctx context.Context, s *Subtask, owner string) error
 		return fmt.Errorf("subtask %s (%s): %w", s.ID, s.Kind, err)
 	}
 	if lease != nil {
-		// Released as soon as THIS child finishes, unlike a task's lock, which is
-		// held until the task leaves execution because a later step may want it
-		// again. Under a context of its own, so a shutdown frees the key now rather
-		// than a TTL from now.
+		// Released as soon as THIS child finishes, unlike a task's lock, which is held
+		// until the task leaves execution because a later step may want it again.
+		// Through releaseLease like every other release: detached from ctx so a
+		// shutdown frees the key now rather than a TTL from now, but bounded, so a
+		// wedged pool cannot park a finishing child inside Release and stall the roll
+		// behind one of its max_parallel slots.
 		defer func() {
-			if err := lease.Release(context.WithoutCancel(ctx)); err != nil {
+			if err := releaseLease(ctx, lease); err != nil {
 				logger.Warn("releasing resource lock", "lock", key, "error", err)
 			}
 		}()

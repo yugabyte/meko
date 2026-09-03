@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -148,6 +149,37 @@ func (s staleVersionReadStore) SetEndpointVersion(_ context.Context, endpointID 
 	return nil
 }
 
+// TestUpgradeEndpointStepKeepsRecordedExtensionsWithNoCatalog: the re-record is
+// an ABSOLUTE rewrite of the endpoint's mount set, and with no catalog configured
+// the resolver renders no mounts for anything — cmd/controller sets Extensions in
+// the Kubernetes branch only, so this is every upgrade on the Docker and local
+// drivers. Rewriting there would erase a set the row recorded while a catalog was
+// configured, leaving the config blob claiming an endpoint mounts nothing.
+func TestUpgradeEndpointStepKeepsRecordedExtensionsWithNoCatalog(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID, "pgvector")
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{
+		ID: epID, BranchID: branchID, PgVersion: 18, Version: "ep-v1",
+	})
+	state.endpointExts[epID] = []string{"pgvector"}
+
+	// endpointDeps carries no catalog, which is the whole fixture.
+	step := NewUpgradeEndpointStep(UpgradeEndpointArgs{EndpointID: epID, Version: "ep-v2"},
+		endpointDeps(state, nil, dep))
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+
+	// The upgrade still happened — the version is not the catalog's business.
+	if got := state.endpointVersions[epID]; got != "ep-v2" {
+		t.Errorf("recorded version = %q, want ep-v2", got)
+	}
+	if got := state.endpointExts[epID]; len(got) != 1 || got[0] != "pgvector" {
+		t.Errorf("recorded extensions = %v, want the endpoint's own [pgvector] left alone", got)
+	}
+}
+
 func TestUpgradeEndpointStepRequiresDeployer(t *testing.T) {
 	step := NewUpgradeEndpointStep(
 		UpgradeEndpointArgs{EndpointID: uuid.New(), Version: "ep-v2"},
@@ -160,15 +192,29 @@ func TestUpgradeEndpointStepRequiresDeployer(t *testing.T) {
 
 // An endpoint that is gone has no desired state to render, so the step fails
 // rather than deploying a default-everything pod under its id.
+// TestUpgradeEndpointStepMissingEndpoint: an endpoint that is gone by the time its
+// child runs is SKIPPED, not failed.
+//
+// The window is ordinary rather than exotic: a whole-fleet roll enumerates once and
+// then runs for minutes, so a delete_endpoint — or a cluster delete, which tombstones
+// the branches its endpoints hang off — lands mid-roll routinely. Failing here would
+// trip fail-fast and halt every endpoint still queued behind it, which contradicts
+// both the planner (it reports a missing endpoint as `skipped`) and §6's "a roll is
+// never refused because one of its endpoints cannot move".
 func TestUpgradeEndpointStepMissingEndpoint(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	step := NewUpgradeEndpointStep(UpgradeEndpointArgs{EndpointID: uuid.New(), Version: "ep-v2"}, upgradeDeps(state, dep))
 	res := step.Execute(t.Context())
-	if !res.Failed() {
-		t.Fatal("Execute succeeded for an endpoint that does not exist, want a failure")
+	if res.Failed() {
+		t.Fatalf("Execute failed for an endpoint that no longer exists: %v — want a skip, "+
+			"or fail-fast halts the whole roll on a concurrent delete", res.Err)
 	}
-	if !errors.Is(res.Err, core.ErrNotFound) {
-		t.Errorf("error = %v, want core.ErrNotFound", res.Err)
+	var out map[string]string
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if out["outcome"] != "skipped" {
+		t.Errorf("result outcome = %q, want skipped", out["outcome"])
 	}
 	if len(dep.created) != 0 {
 		t.Errorf("deployed %+v for a missing endpoint, want nothing", dep.created)

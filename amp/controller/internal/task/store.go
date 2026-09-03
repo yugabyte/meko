@@ -161,6 +161,18 @@ type Store interface {
 	// DESC (newest first), plus the total number of matching tasks (ignoring the
 	// page window). A zero-value TaskFilter is unfiltered.
 	List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error)
+
+	// ActiveByKind returns the oldest non-terminal task of kind — pending or
+	// running — or nil when there is none.
+	//
+	// It is the plan-time half of "one fleet roll at a time"
+	// (ac-endpoint-upgrade.md §5.6): a fast refusal in front of the fleet lock,
+	// never the authority, since the read and the insert are two statements and a
+	// roll can be planned between them. A QUERY over `tasks` rather than a probe
+	// of the `fleet:endpoints` lease, deliberately — a roll that is still
+	// `pending` has not been claimed, so it holds no lease at all and a probe
+	// would miss it entirely.
+	ActiveByKind(ctx context.Context, kind string) (*Task, error)
 }
 
 // TaskFilter narrows a List query. Zero-value fields are unfiltered: an empty
@@ -485,6 +497,22 @@ func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 		return nil, 0, fmt.Errorf("iterate tasks: %w", err)
 	}
 	return tasks, total, nil
+}
+
+func (s *PgStore) ActiveByKind(ctx context.Context, kind string) (*Task, error) {
+	t, err := scanTask(s.pool.QueryRow(ctx,
+		`SELECT `+taskColumns+`
+		 FROM tasks
+		 WHERE kind = $1 AND status IN ('pending', 'running')
+		 ORDER BY created_at
+		 LIMIT 1`, kind))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("active %s task: %w", kind, err)
+	}
+	return t, nil
 }
 
 // row is satisfied by both pgx.Row and a single pgx.Rows.

@@ -344,9 +344,9 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
 ## Resize an endpoint's compute (in place)
 
 Change a running endpoint's CPU/memory without recreating it. The controller does
-two writes — persist the size to the endpoint `config`, then PATCH the pod's
-`resize` subresource — so the current pod adopts the new size live and a
-controller-driven redeploy keeps it. The Deployment template is **not** patched
+two writes — PATCH the pod's `resize` subresource, then persist the size to the
+endpoint `config` once the deployer accepted it — so the current pod adopts the new
+size live and a controller-driven redeploy keeps it. The Deployment template is **not** patched
 (that would trigger a rollout and recreate the pod). Caveat: an involuntary
 recreate (node loss / eviction) before the next redeploy brings the pod back at
 the old size until a redeploy re-renders from `config`. Needs k8s ≥ 1.33.
@@ -401,6 +401,47 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   amp_registry.endpoints where id = '<ep>'`). Migration `0009` rewrites those to
   `4Gi` when the controller upgrades, so this clears on upgrade; before then, pass
   an explicit `memory` (e.g. `"4Gi"`) with the resize.
+
+## `409` on `POST /endpoint-upgrades` — a fleet roll is already in flight
+
+At most one `upgrade_endpoints` task may be non-terminal at a time, and a second
+roll is **refused rather than queued** — two rolls naming different versions would
+flip the fleet twice
+([`ac-endpoint-upgrade.md`](../controller/architecture/ac-endpoint-upgrade.md) §5.6).
+The check is per kind, so re-firing an *identical* roll is refused too. Find the one
+holding it:
+
+```bash
+curl -s "$BASE/tasks?kind=upgrade_endpoints&limit=20" \
+  | jq -r '.tasks[] | "\(.id)\t\(.status)\t\(.created_at)\t\(.error // "")"'
+# per-endpoint detail for the roll holding it (children never show in GET /tasks):
+curl -s "$BASE/tasks/$TASK/subtasks" \
+  | jq -r '.subtasks[] | "\(.args.endpoint_id)\t\(.status)\t\(.error // "")"'
+```
+
+- **`running`** — it is being executed. Wait and re-run: a child inside `helm --wait`
+  can take minutes per endpoint, and the second roll skips whatever the first landed.
+- **`pending`** — nobody has claimed it. If it stays that way there is no worker to
+  claim it (no controller up, or one running with the task worker off), and it
+  **never reaches terminal**, so it blocks every later roll indefinitely. The resize
+  `409`'s advice — wait for the in-flight task — is wrong for this one.
+
+There is no cancel verb and no `force`; an escape hatch is
+[meko#1007](https://github.com/yugabyte/meko/issues/1007). Until it exists the only
+remedy for the stuck case is to retire the row by hand — and only after confirming
+nothing is executing it, or you are stamping a status over a live roll:
+
+```sql
+-- no row = no worker holds the task's lease (500 = the skew grace, in ms)
+SELECT * FROM amp_registry.token_holder('task:<task-id>', 500);
+-- still pending is part of the predicate, not just the check above
+UPDATE controller.tasks
+   SET status = 'failed', error = 'retired by hand: never claimed', updated_at = now()
+ WHERE id = '<task-id>' AND status = 'pending';
+```
+
+A roll retired this way never ran its step, so it created no subtasks and no
+endpoint moved; re-issue the upgrade once a worker is running.
 
 ## Every API call answers `503 service_unavailable`
 
@@ -457,9 +498,25 @@ SELECT resource_id, client_id, to_timestamp(token/1e6) AS expires_at
 ```
 
 `task:<uuid>` rows are task ownership and name the process that claimed it;
-`endpoint:<uuid>` rows name the unit of work holding that endpoint — a task, or one
-of a fleet roll's subtasks, so an id that is not in `tasks` is in `subtasks`. Do not delete rows to
-hurry a reclaim along — that is the fence, and removing it is how two controllers
+`endpoint:<uuid>` and `fleet:endpoints` rows name the unit of *work* holding them,
+in a `task=<uuid>` field of `client_id`.
+
+That id is usually a task — but a fleet upgrade runs its children as **subtasks**,
+which are rows in `controller.subtasks` and never appear in `GET /tasks`, so
+looking it up there can dead-end. Try both:
+
+```sql
+SELECT 'task' AS found_in, id::text, kind, status::text, NULL AS parent
+  FROM controller.tasks WHERE id = '<uuid>'
+UNION ALL
+SELECT 'subtask', id::text, kind, status::text, parent_id::text
+  FROM controller.subtasks WHERE id = '<uuid>';
+```
+
+A subtask row's `parent` is the `upgrade_endpoints` task to poll with
+`GET /tasks/{id}`; the children's own state is `GET /tasks/{id}/subtasks`.
+
+Do not delete rows to hurry a reclaim along — that is the fence, and removing it is how two controllers
 end up on one endpoint. A row is takeable once `expires_at` plus the 500ms
 clock-skew grace has passed, not at `expires_at` itself.
 

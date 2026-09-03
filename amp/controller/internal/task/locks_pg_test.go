@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,6 +120,10 @@ func resetTasks(t *testing.T, pool *db.Pool) {
 	t.Helper()
 	ctx := context.WithoutCancel(t.Context())
 	for _, q := range []string{
+		// Both child tables first: `subtasks` and `task_steps` carry an unqualified
+		// FK to `tasks`, so deleting the parents first raises 23503 over any child
+		// row another test left behind.
+		`DELETE FROM subtasks`,
 		`DELETE FROM task_steps`,
 		`DELETE FROM tasks`,
 		`DELETE FROM amp_registry.resource_token`,
@@ -490,37 +495,66 @@ func TestPgLocksContract(t *testing.T) {
 	})
 }
 
-// TestPgFleetLockAdmitsOneRollAtATime is §5.6 over real SQL: `fleet:endpoints` is
+// TestPgFleetLockRefusesASecondRoll is §5.6 over real SQL: `fleet:endpoints` is
 // a third namespace in resource_token, and nothing else in `go test ./...` puts
-// that key through token_acquire. Two rolls take it in TURN — the second queues
-// on the lease rather than being refused, which is the contract change that let
-// the fleet-roll unique index and its structural classifier be dropped.
-func TestPgFleetLockAdmitsOneRollAtATime(t *testing.T) {
+// that key through token_acquire. It is also where the refusal is actually
+// decided — the plan-time 409 is a query two statements away from the insert, so
+// this is what settles two rolls that both read a clean `tasks` table.
+//
+// The second roll here is exactly that case: planned directly, behind the API's
+// back, while the first holds the lease.
+func TestPgFleetLockRefusesASecondRoll(t *testing.T) {
 	pool, _ := migratedPool(t)
 	t.Cleanup(pool.Close)
 	resetTasks(t, pool)
 	store := NewPgStore(pool)
 
-	step := &pgStep{kind: "fleet-roll", fleet: true}
+	// The first roll blocks in Execute, so it is unambiguously holding the lease
+	// when the second one asks for it.
+	step := &pgStep{kind: "fleet-roll", fleet: true, block: make(chan struct{})}
 	reg := pgReg(step)
 	first := seedTask(t, store, KindUpgradeEndpoints, step.kind, "")
-	second := seedTask(t, store, KindUpgradeEndpoints, step.kind, "")
 
 	startController(t, pool, reg)
-	waitForStatus(t, store, first.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
-	waitForStatus(t, store, second.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
-
-	if got := step.peakConcurrency(); got != 1 {
-		t.Errorf("peak concurrent fleet rolls = %d, want 1: two rolls over one fleet have no sensible interleaving", got)
-	}
-	if got := step.runCount(); got != 2 {
-		t.Errorf("rolls ran %d time(s) for 2 tasks, want 2 — the second waits, it is not refused", got)
-	}
-
 	locks, err := NewPgLocks(pool, testLeaseLogger(), pgTestTTL, pgTestRenewEvery, time.Second)
 	if err != nil {
 		t.Fatalf("NewPgLocks: %v", err)
 	}
+	waitFor(t, 10*time.Second, func() bool {
+		holder, err := locks.Holder(context.WithoutCancel(t.Context()), FleetEndpointsLock())
+		if err != nil {
+			t.Fatalf("Holder: %v", err)
+		}
+		return holder != ""
+	})
+
+	// Refused, and fast: --task-lock-wait is what a QUEUEING lock would spend here
+	// before giving up, so failing well inside it is the assertion that the lock
+	// never queued.
+	second := seedTask(t, store, KindUpgradeEndpoints, step.kind, "")
+	bound := pgTestConfig().LockWait / 2
+	waitForStatus(t, store, second.ID, StatusFailed, bound)
+	failed, err := store.Get(context.WithoutCancel(t.Context()), second.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	cause := ""
+	if failed.Error != nil {
+		cause = *failed.Error
+	}
+	// The lock layer reports that the key is held and was not queued for; naming the
+	// WORK behind it is the service's job (ErrFleetRollInProgress, the API's 409).
+	if !strings.Contains(cause, ErrLockRefused.Error()) || !strings.Contains(cause, FleetEndpointsLock().Key()) {
+		t.Errorf("the refused roll failed with %q, want it to name fleet:endpoints as refused", cause)
+	}
+	if got := step.peakConcurrency(); got != 1 {
+		t.Errorf("peak concurrent fleet rolls = %d, want 1", got)
+	}
+
+	// The first roll is untouched by the refusal, and gives the lease back.
+	close(step.block)
+	waitForStatus(t, store, first.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
+
 	var lastHolder string
 	waitFor(t, 5*time.Second, func() bool {
 		holder, err := locks.Holder(context.WithoutCancel(t.Context()), FleetEndpointsLock())
@@ -531,6 +565,10 @@ func TestPgFleetLockAdmitsOneRollAtATime(t *testing.T) {
 		return holder == ""
 	})
 	if lastHolder != "" {
-		t.Errorf("fleet:endpoints is still held by %q after both rolls finished", lastHolder)
+		t.Errorf("fleet:endpoints is still held by %q after the roll finished", lastHolder)
 	}
+
+	// And the key is refused only while it is taken: the next roll runs.
+	third := seedTask(t, store, KindUpgradeEndpoints, step.kind, "")
+	waitForStatus(t, store, third.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
 }

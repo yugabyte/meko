@@ -110,6 +110,20 @@ func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 	return cloneTask(t), nil
 }
 
+// ActiveByKind mirrors PgStore's: the oldest pending-or-running task of kind, or
+// nil. s.order is insertion order, which is created_at order here.
+func (s *MemStore) ActiveByKind(_ context.Context, kind string) (*Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range s.order {
+		t := s.tasks[id]
+		if t.Kind == kind && (t.Status == StatusPending || t.Status == StatusRunning) {
+			return cloneTask(t), nil
+		}
+	}
+	return nil, nil
+}
+
 // Candidates mirrors PgStore's: pending tasks, plus running ones whose execution
 // lease nobody holds, oldest first. The lock table it consults is this store's
 // own, the way the real one lives in the same database as the tasks.

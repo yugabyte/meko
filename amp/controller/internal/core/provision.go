@@ -335,10 +335,13 @@ func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.
 // with no pod. Rolling one waits out helm's --wait and fails, and fail-fast then
 // halts the whole roll. This is the WHOLE-FLEET rule only — a named endpoint is
 // still attempted (EndpointDeploysByIDs).
+//
+// COALESCE rather than IS NOT NULL, because SetEndpointAddress writes what the
+// deployer returned verbatim: one that places nothing stores ” rather than NULL.
 func (b *PgBackend) AllEndpointDeploys(ctx context.Context) ([]EndpointDeploy, error) {
 	return b.endpointDeploysWhere(ctx, "the fleet", `
 		  WHERE eb.dropped_at IS NULL
-		    AND e.address IS NOT NULL
+		    AND COALESCE(e.address, '') <> ''
 		  ORDER BY e.created_at, e.id`)
 }
 

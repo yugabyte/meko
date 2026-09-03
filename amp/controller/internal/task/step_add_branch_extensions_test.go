@@ -133,34 +133,46 @@ func TestAddBranchExtensionsStepReadsTheBranchSetOnce(t *testing.T) {
 	}
 }
 
-// An extension redeploy is a free chance to learn an endpoint's version: the
-// deployer answers with the tag it ran, and for a row whose version is still
-// unknown (created before the column existed, or by a deployer that reported
-// none) this is where it becomes known. Dropping it would leave the fleet with
-// permanently-unknown endpoints that a roll has already touched.
-func TestAddBranchExtensionsStepRecordsTheRedeployedVersion(t *testing.T) {
+// TestAddBranchExtensionsStepRecordsTheDeployedVersion: the redeploy is a real
+// deploy, so the deployer answers with the tag it ran — and a NULL version means
+// unknown (§2). Recording it is what makes one pass move an endpoint from unknown
+// to known instead of leaving it unknown through every extension change. Guarded:
+// an empty report is no information (the local driver places nothing) and must
+// not overwrite the row.
+func TestAddBranchExtensionsStepRecordsTheDeployedVersion(t *testing.T) {
 	state := newFakeStateStore()
-	dep := &fakeDeployer{defaultVersion: "ep-v9"}
+	dep := &fakeDeployer{reportVersion: "ep-2026.08.1"}
 	deps := endpointDeps(state, nil, dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID)
-	unknown, known := uuid.New(), uuid.New()
+	unknown := uuid.New()
 	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: unknown, BranchID: branchID, PgVersion: 18})
-	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: known, BranchID: branchID, PgVersion: 18, Version: "ep-v7"})
 
 	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pgvector"}}, deps)
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
 	}
-	// The unknown one learns the deployer's default; the pinned one keeps its own,
-	// because the spec pins it and the deployer echoes what it was asked to run.
-	if got := state.endpointVersions[unknown]; got != "ep-v9" {
-		t.Errorf("version recorded for the unknown endpoint = %q, want ep-v9 (what the deployer reported)", got)
+	if got := state.endpointVersions[unknown]; got != "ep-2026.08.1" {
+		t.Errorf("recorded version = %q, want the tag the deployer reported", got)
 	}
-	if got := state.endpointVersions[known]; got != "ep-v7" {
-		t.Errorf("version recorded for the pinned endpoint = %q, want ep-v7 (unchanged)", got)
+
+	// A deployer that reports nothing leaves the column as it was: the fake echoes
+	// the spec's version back, and this endpoint asks for none.
+	silent := newFakeStateStore()
+	quiet := endpointDeps(silent, nil, &fakeDeployer{})
+	quiet.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	silent.seedBranchExtensions(clusterID, branchID)
+	ep := uuid.New()
+	silent.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: ep, BranchID: branchID, PgVersion: 18})
+
+	step = NewAddBranchExtensionsStep(AddBranchExtensionsArgs{ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pgvector"}}, quiet)
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute (silent deployer): %v", res.Err)
+	}
+	if got, ok := silent.endpointVersions[ep]; ok {
+		t.Errorf("recorded version = %q, want the column untouched by an empty report", got)
 	}
 }
 

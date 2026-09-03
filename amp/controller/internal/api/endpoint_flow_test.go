@@ -288,7 +288,10 @@ func TestClusterExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCluster: %v", err)
 	}
-	if gotCluster.JSON200 == nil || gotCluster.JSON200.Extensions == nil ||
+	if gotCluster.JSON200 == nil {
+		t.Fatalf("GetCluster: body = %s", gotCluster.Body)
+	}
+	if gotCluster.JSON200.Extensions == nil ||
 		len(*gotCluster.JSON200.Extensions) != 1 || (*gotCluster.JSON200.Extensions)[0] != "pgvector" {
 		t.Errorf("GetCluster extensions = %v, want [pgvector]", gotCluster.JSON200.Extensions)
 	}
@@ -318,9 +321,14 @@ func TestClusterExtensions(t *testing.T) {
 	// different paths: create renders from the task args, the redeploy renders
 	// from BranchEndpointDeploys.
 	created, redeployed := dep.created[0], dep.created[len(dep.created)-1]
-	if redeployed.PgVersion != created.PgVersion || redeployed.CPU != cpu || redeployed.Memory != mem {
+	// The create renders the request, so it is where the literals belong — and it
+	// is what pins the cross-check below to a size that is not a deployer default.
+	if created.CPU != cpu || created.Memory != mem {
+		t.Fatalf("create spec = %s/%s, want the requested %s/%s", created.CPU, created.Memory, cpu, mem)
+	}
+	if redeployed.PgVersion != created.PgVersion || redeployed.CPU != created.CPU || redeployed.Memory != created.Memory {
 		t.Errorf("redeploy spec = pg%d %s/%s, want pg%d %s/%s (the endpoint's own desired state)",
-			redeployed.PgVersion, redeployed.CPU, redeployed.Memory, created.PgVersion, cpu, mem)
+			redeployed.PgVersion, redeployed.CPU, redeployed.Memory, created.PgVersion, created.CPU, created.Memory)
 	}
 	// The create asked for no version and the deployer answered with its own; that
 	// answer is on the row, so the redeploy must pin it rather than ask for the
@@ -337,7 +345,7 @@ func TestClusterExtensions(t *testing.T) {
 		t.Fatalf("GetEndpoint: %v", err)
 	}
 	if gotEp.JSON200 == nil {
-		t.Fatalf("GetEndpoint returned no endpoint: %s", gotEp.Status())
+		t.Fatalf("GetEndpoint: body = %s", gotEp.Body)
 	}
 	if gotEp.JSON200.Version == nil || *gotEp.JSON200.Version != deployerVersion {
 		t.Errorf("GetEndpoint version = %v, want %q", gotEp.JSON200.Version, deployerVersion)
@@ -362,8 +370,10 @@ func TestClusterExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBranch(after add): %v", err)
 	}
-	if gotBranch.JSON200 == nil || gotBranch.JSON200.Extensions == nil ||
-		len(*gotBranch.JSON200.Extensions) != 2 {
+	if gotBranch.JSON200 == nil {
+		t.Fatalf("GetBranch(after add): body = %s", gotBranch.Body)
+	}
+	if gotBranch.JSON200.Extensions == nil || len(*gotBranch.JSON200.Extensions) != 2 {
 		t.Errorf("GetBranch extensions after add = %v, want [pg_cron pgvector]", gotBranch.JSON200.Extensions)
 	}
 

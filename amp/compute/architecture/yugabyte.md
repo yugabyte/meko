@@ -791,13 +791,16 @@ Semantics are documented in
 
 ## `controller` schema
 
-The write-ahead task framework's `tasks` / `task_steps` tables (plus
-their status enums) that drive the create/delete workflows — the
-controller's own operational machinery, not a user resource, which is why
-it sits outside the resource model. Unlike `amp_registry` this schema name
-is fixed, not configurable (`db.TaskSchema`), the same way `amp_storage`
-is. Provisioned first (`0001_task_log`) so a fresh database can record
-work from the moment the controller starts; managed only by migrations, so do
+The write-ahead task framework's `tasks` / `task_steps` / `subtasks` tables
+(plus their status enums) that drive the create/delete/upgrade workflows —
+the controller's own operational machinery, not a user resource, which is
+why it sits outside the resource model. `subtasks` (`0012`) holds the
+children a fan-out task owns and runs in-process; they are deliberately
+not rows in `tasks`, so the claim loop cannot pick one up behind its
+parent's back. Unlike `amp_registry` this schema name is fixed, not
+configurable (`db.TaskSchema`), the same way `amp_storage` is. Provisioned
+first (`0001_task_log`) so a fresh database can record work from the
+moment the controller starts; managed only by migrations, so do
 **not** edit by hand. Inspect with:
 
 ```sql

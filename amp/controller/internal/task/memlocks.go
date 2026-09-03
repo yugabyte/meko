@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
 const (
@@ -49,8 +51,10 @@ func newMemLockTable() *memLockTable {
 }
 
 // acquire grants, renews or refuses the lease on key in one step, mirroring
-// token_acquire.
-func (t *memLockTable) acquire(key, owner string) (*MemLease, error) {
+// token_acquire. A refusal reports the holder alongside the error, as pglease's
+// *Denial does, because a NO-WAIT caller has to tell its own predecessor's row
+// from a rival's (locks.go, noWaitDenial).
+func (t *memLockTable) acquire(key, owner string) (*MemLease, string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	row := t.rows[key]
@@ -61,7 +65,7 @@ func (t *memLockTable) acquire(key, owner string) (*MemLease, error) {
 	// producing two Held over one row — the double execution the task lock exists to
 	// prevent, and a divergence that would hide the same bug in PgLocks.
 	case row != nil && row.owner == owner && row.granted.live():
-		return nil, fmt.Errorf("%w: %q already held by %s", ErrLockHeld, key, owner)
+		return nil, owner, fmt.Errorf("%w: %w", ErrLockHeld, &pglease.Denial{Key: key, Holder: owner})
 	case row == nil, row.lapsed:
 		// Free: takeover. A lapsed row's previous holder learns it lost the lease
 		// the same way pglease's does — its lease context is cancelled.
@@ -69,15 +73,15 @@ func (t *memLockTable) acquire(key, owner string) (*MemLease, error) {
 			row.granted.end(ErrLockHeld)
 		}
 	case row.owner == owner:
-		return nil, fmt.Errorf("%w: %q already held by %s", ErrLockHeld, key, owner)
+		return nil, owner, fmt.Errorf("%w: %w", ErrLockHeld, &pglease.Denial{Key: key, Holder: owner})
 	default:
-		return nil, fmt.Errorf("%w: %q held by %s", ErrLockHeld, key, row.owner)
+		return nil, row.owner, fmt.Errorf("%w: %w", ErrLockHeld, &pglease.Denial{Key: key, Holder: row.owner})
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	lease := &MemLease{key: key, owner: owner, table: t, ctx: ctx, cancel: cancel}
 	t.rows[key] = &memLockRow{owner: owner, granted: lease}
-	return lease, nil
+	return lease, "", nil
 }
 
 // release drops the row if owner still holds it; otherwise a no-op, as
@@ -178,11 +182,28 @@ func (s *MemStore) ExpireTaskLease(taskID uuid.UUID) { s.locks.expire(taskLockKe
 func (m *MemLocks) Owner() string { return m.owner }
 
 func (m *MemLocks) AcquireTask(_ context.Context, taskID uuid.UUID) (Lease, error) {
-	return m.table.acquire(taskLockKey(taskID), m.owner)
+	lease, _, err := m.table.acquire(taskLockKey(taskID), m.owner)
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
 }
 
 func (m *MemLocks) AcquireResource(ctx context.Context, r ResourceLock, holderID uuid.UUID, kind string) (Lease, error) {
 	owner := resourceOwner(holderID, kind, m.owner)
+	if r.NoWait {
+		// One attempt, no poll loop: the refusal is the answer, as it is against
+		// token_acquire (locks.go). Ahead of the wait bound below, which a no-wait
+		// lock reaches only for the one case noWaitDenial sends there — a row this
+		// holder itself left behind in a dead process.
+		lease, _, err := m.table.acquire(r.Key(), owner)
+		if err == nil {
+			return lease, nil
+		}
+		if denial := noWaitDenial(r, err, owner); denial != nil {
+			return nil, denial
+		}
+	}
 	wait := m.Wait
 	if wait <= 0 {
 		wait = memLockWait
@@ -192,7 +213,7 @@ func (m *MemLocks) AcquireResource(ctx context.Context, r ResourceLock, holderID
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	for {
-		lease, err := m.table.acquire(r.Key(), owner)
+		lease, _, err := m.table.acquire(r.Key(), owner)
 		if err == nil {
 			return lease, nil
 		}

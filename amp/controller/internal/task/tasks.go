@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -361,6 +362,10 @@ func (s *Service) ResizeEndpoint(ctx context.Context, in ResizeEndpointInput) (*
 	return s.create(ctx, KindResizeEndpoint, in, in.ClusterID, in.EndpointID.String(), steps)
 }
 
+// ErrFleetRollInProgress means a fleet roll is already under way and this one is
+// refused rather than queued (ac-endpoint-upgrade.md §5.6).
+var ErrFleetRollInProgress = errors.New("another fleet upgrade is already running")
+
 // UpgradeEndpointsInput is the request for an upgrade_endpoints task: move the
 // endpoint fleet — or the caller's subset — onto Version. EndpointIDs empty means
 // every live endpoint.
@@ -370,14 +375,22 @@ type UpgradeEndpointsInput struct {
 	MaxParallel int         `json:"max_parallel"`
 }
 
-// UpgradeEndpoints records an upgrade_endpoints task: a single, self-contained
-// plan_endpoint_upgrades step that enumerates the targets at Execute time and
-// runs one upgrade_endpoint child per endpoint (architecture/ac-endpoint-upgrade.md §5).
+// UpgradeEndpoints records an upgrade_endpoints task: one plan_endpoint_upgrades
+// step that enumerates the targets at Execute time and runs an upgrade_endpoint
+// child per endpoint (architecture/ac-endpoint-upgrade.md §5). Fleet-scoped, so it
+// carries no cluster id or target ref.
 //
-// No cluster id and no target ref: a roll is fleet-scoped, so it belongs to no
-// cluster and acts on no single resource. It therefore does not show up under
-// GET /tasks?cluster_id=…, which is correct — it is not that cluster's task.
+// The in-flight check is a fast path for the API's 409 — two requests can both
+// read a clean table — and the parent step's no-wait fleet lock is what actually
+// decides.
 func (s *Service) UpgradeEndpoints(ctx context.Context, in UpgradeEndpointsInput) (*Task, error) {
+	active, err := s.store.ActiveByKind(ctx, KindUpgradeEndpoints.String())
+	if err != nil {
+		return nil, fmt.Errorf("look for an in-flight fleet roll: %w", err)
+	}
+	if active != nil {
+		return nil, fmt.Errorf("%w: task %s", ErrFleetRollInProgress, active.ID)
+	}
 	steps := []StepSpec{
 		stepSpec(StepPlanEndpointUpgrades, PlanEndpointUpgradesArgs{
 			Version:     in.Version,
