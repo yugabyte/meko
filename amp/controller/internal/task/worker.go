@@ -469,9 +469,14 @@ func (w *Worker) stampYCPGeneration(ctx context.Context, logger *slog.Logger, t 
 }
 
 // lockFor takes the resource lock a step declares, waiting out a holder. It returns
-// a nil lease when the step needs none or the task already holds the right one, and
-// refuses a SECOND, different lock — holding two is what deadlock needs.
-func (w *Worker) lockFor(ctx context.Context, logger *slog.Logger, t *Task, step Step, held Lease, heldKey string) (Lease, string, error) {
+// a nil lease when the step needs none or the holder already holds the right one,
+// and refuses a SECOND, different lock within one unit of work.
+//
+// One lock per unit of work is no longer the whole deadlock argument: a parent
+// holding `fleet:endpoints` runs children that each take `endpoint:<id>`, so the
+// process holds two at once. What keeps that safe is the ORDER — `fleet` before
+// `endpoint`, never the reverse (ac-locking.md).
+func (w *Worker) lockFor(ctx context.Context, logger *slog.Logger, holder Holder, step Step, held Lease, heldKey string) (Lease, string, error) {
 	locking, ok := step.(Locking)
 	if !ok {
 		return nil, "", nil
@@ -484,12 +489,12 @@ func (w *Worker) lockFor(ctx context.Context, logger *slog.Logger, t *Task, step
 		if heldKey == lock.Key() {
 			return nil, "", nil
 		}
-		return nil, "", fmt.Errorf("step %s wants lock %s while the task holds %s: a task may hold at most one",
+		return nil, "", fmt.Errorf("step %s wants lock %s while %s is held: one unit of work may hold at most one",
 			step.Kind(), lock, heldKey)
 	}
 
 	start := time.Now()
-	lease, err := w.locks.AcquireResource(ctx, lock, t.ID, t.Kind)
+	lease, err := w.locks.AcquireResource(ctx, lock, holder.HolderID(), holder.HolderKind())
 	if err != nil {
 		return nil, "", err
 	}

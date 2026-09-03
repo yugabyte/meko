@@ -23,6 +23,11 @@ type MemStore struct {
 	tasks     map[uuid.UUID]*Task
 	stepsByID map[uuid.UUID]*StepRecord
 	now       func() time.Time
+	// The `subtasks` table, in the same store because the real one is in the same
+	// database: a child's writes are fenced on its parent's owner, which lives in
+	// `tasks`. Subtasks() is the SubtaskStore over it (memsubtasks.go).
+	subtasks     map[uuid.UUID]*Subtask
+	subtaskOrder []uuid.UUID
 	// locks is the lock table, held here because the real one lives in the same
 	// database as the tasks: Candidates has to be able to ask whether a running
 	// task's lease is still held. Locks(owner) is one instance's view of it.
@@ -34,6 +39,7 @@ func NewMemStore() *MemStore {
 	return &MemStore{
 		tasks:     map[uuid.UUID]*Task{},
 		stepsByID: map[uuid.UUID]*StepRecord{},
+		subtasks:  map[uuid.UUID]*Subtask{},
 		now:       time.Now,
 		locks:     newMemLockTable(),
 	}

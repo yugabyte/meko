@@ -91,11 +91,15 @@ type Locks interface {
 	// than waiting: a held task lock means the work is already being done.
 	AcquireTask(ctx context.Context, taskID uuid.UUID) (Lease, error)
 
-	// AcquireResource waits for the lease on r, held in the task's name rather than
-	// this process's, and reports ErrLockHeld when it gives up — on ctx, or on the
-	// implementation's own bound (PgLocks: --task-lock-wait; MemLocks: its own). The
-	// bound is not part of the contract; pass a ctx deadline to pick one.
-	AcquireResource(ctx context.Context, r ResourceLock, taskID uuid.UUID, kind string) (Lease, error)
+	// AcquireResource waits for the lease on r, held in the name of the unit of work
+	// asking for it rather than this process's, and reports ErrLockHeld when it
+	// gives up — on ctx, or on the implementation's own bound (PgLocks:
+	// --task-lock-wait; MemLocks: its own). The bound is not part of the contract;
+	// pass a ctx deadline to pick one.
+	//
+	// holderID/kind name that unit: a task and its kind, or a SUBTASK and its step
+	// kind (ac-endpoint-upgrade.md §5.3). See resourceOwner.
+	AcquireResource(ctx context.Context, r ResourceLock, holderID uuid.UUID, kind string) (Lease, error)
 }
 
 var _ Lease = (*pglease.Held)(nil)
@@ -162,12 +166,12 @@ func (l *PgLocks) AcquireTask(ctx context.Context, taskID uuid.UUID) (Lease, err
 	return h, nil
 }
 
-func (l *PgLocks) AcquireResource(ctx context.Context, r ResourceLock, taskID uuid.UUID, kind string) (Lease, error) {
-	// A client per acquire, because the owner names the TASK: pglease grants
-	// unconditionally to the current holder, so two tasks sharing this process's
+func (l *PgLocks) AcquireResource(ctx context.Context, r ResourceLock, holderID uuid.UUID, kind string) (Lease, error) {
+	// A client per acquire, because the owner names the unit of work: pglease grants
+	// unconditionally to the current holder, so two of them sharing this process's
 	// owner id would both be granted and the database would stop deciding. Cheap —
 	// a client starts no goroutine and owns no pool; the renewal belongs to the Held.
-	c, err := pglease.New(l.store, resourceOwner(taskID, kind, l.owner), l.cfg)
+	c, err := pglease.New(l.store, resourceOwner(holderID, kind, l.owner), l.cfg)
 	if err != nil {
 		return nil, fmt.Errorf("resource lock %s: %w", r, err)
 	}
@@ -201,15 +205,19 @@ func classifyAcquire(err error) error {
 func taskLockKey(taskID uuid.UUID) string { return taskKeyPrefix + taskID.String() }
 
 // resourceOwner is the owner string a resource lease is held under. It names the
-// task because that is the answer "what is holding endpoint X?" wants, and
-// resource_token has no metadata column to put it in otherwise; the process is
-// carried too, so the row also says which instance to go and look at.
+// unit of work holding it, because that is the answer "what is holding endpoint
+// X?" wants and resource_token has no metadata column to put it in otherwise; the
+// process is carried too, so the row also says which instance to go and look at.
+//
+// `task=` is where to look it up for a step of a task. A subtask's id goes in the
+// same field (ac-endpoint-upgrade.md §5.3) and is a row in `subtasks`, not
+// `tasks` — the parent's step result is what names it.
 //
 // Naming the process is what stops a cross-process reclaim renewing the row rather
 // than taking it over — see Locking. Kept anyway: the diagnostic is worth more than
 // a takeover wait already bounded by the task lease.
-func resourceOwner(taskID uuid.UUID, kind, procOwner string) string {
-	return fmt.Sprintf("task=%s kind=%s proc=%s", taskID, kind, procOwner)
+func resourceOwner(holderID uuid.UUID, kind, procOwner string) string {
+	return fmt.Sprintf("task=%s kind=%s proc=%s", holderID, kind, procOwner)
 }
 
 // The steps that mutate one endpoint's compute declare their lock together here,

@@ -62,6 +62,19 @@ sketch in §8.1 of the high-level doc):
   keeps "the steps of this task" a cheap lookup. The `args` are written when the
   task is created; `result` and `status` are updated as it runs. These rows **are**
   the write-ahead log.
+- **`subtasks`** (migration `0012`) — a third kind of row, and the exception to
+  everything above. A task that fans out over a set it cannot know until Execute time
+  creates one subtask per item and **runs them itself**, in its own process. A subtask
+  is *one registered step* — `kind` is a `task_step.kind`, there is no step list — with
+  its own status, args, result and error, fenced on the parent's `owner`.
+
+  **A subtask is not claimable**, and that is the point of a separate table rather than
+  a `parent_id` on `tasks`: `Candidates` reads `tasks`, so there is no predicate to
+  forget. The parent holds the only task lease; each child holds only the resource lock
+  its step declares. A child's id is derived from `(parent_id, kind, args)`, so a
+  replaying parent converges on the row it already made. The one user today is the
+  fleet endpoint upgrade — [`ac-endpoint-upgrade.md`](ac-endpoint-upgrade.md) §5 is the
+  design, and §5.2 is why the shape is what it is.
 
 **Creation is write-ahead.** A `Service.CreateX` method (`tasks.go`) generates
 *all* the ids the operation will need — cluster, branch, endpoint — up front and

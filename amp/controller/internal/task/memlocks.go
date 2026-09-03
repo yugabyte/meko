@@ -181,8 +181,8 @@ func (m *MemLocks) AcquireTask(_ context.Context, taskID uuid.UUID) (Lease, erro
 	return m.table.acquire(taskLockKey(taskID), m.owner)
 }
 
-func (m *MemLocks) AcquireResource(ctx context.Context, r ResourceLock, taskID uuid.UUID, kind string) (Lease, error) {
-	owner := resourceOwner(taskID, kind, m.owner)
+func (m *MemLocks) AcquireResource(ctx context.Context, r ResourceLock, holderID uuid.UUID, kind string) (Lease, error) {
+	owner := resourceOwner(holderID, kind, m.owner)
 	wait := m.Wait
 	if wait <= 0 {
 		wait = memLockWait

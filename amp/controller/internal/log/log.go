@@ -19,6 +19,7 @@ const (
 	KeyBranchID      = "branch_id"
 	KeyEndpointID    = "endpoint_id"
 	KeyTaskID        = "task_id"
+	KeySubtaskID     = "subtask_id" // a child of KeyTaskID, not a task of its own
 	KeyStep          = "step"
 	KeyRequestID     = "request_id"
 )

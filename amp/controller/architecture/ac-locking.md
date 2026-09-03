@@ -18,7 +18,7 @@ with `409` by `tasks_one_active_resize_per_endpoint`, and turning that into a
 | Lock | Key | Held by | Excludes |
 |---|---|---|---|
 | **task execution** | `task:<task-id>` | the controller *process* | a second controller instance executing the same task |
-| **endpoint** | `endpoint:<endpoint-id>` | the *task* | another blocking task touching that endpoint, whichever process owns it |
+| **endpoint** | `endpoint:<endpoint-id>` | the *unit of work* — a task, or one of a parent's subtasks | anything else blocking on that endpoint, whichever process owns it |
 
 No new table and no new migration: the compute write fence keys the same table as
 `branch:<id>`, so the three namespaces coexist. Sharing 0006 is also what keeps
@@ -150,8 +150,14 @@ type Locking interface{ Lock() ResourceLock }
 declare `endpoint:<endpoint-id>`. The declarations sit together in `locks.go` rather than
 one per step file, so what serializes against what is answerable from one place.
 
-**One lock per task.** Deadlock needs a task holding two, and refusing the second
-is what keeps that unreachable without a lock manager to detect one.
+**One lock per unit of work.** Deadlock needs one holding two, and refusing the
+second is what keeps that unreachable without a lock manager to detect one.
+
+The unit is not always a task. A fleet roll's parent holds `fleet:endpoints` and
+runs children that each take `endpoint:<id>`, so the process does hold two — nested,
+one per unit of work, which `lockFor` cannot see because a child arrives holding
+nothing. What keeps that safe is an ORDER: `fleet` before `endpoint`, never the
+reverse.
 
 That leaves the fan-out steps unprotected, because they need every endpoint under a
 branch or cluster and one lock cannot express that: `delete_branch` and
@@ -165,12 +171,13 @@ With `upgrade_endpoint` that gap can also make a row lie: a fan-out redeploying 
 a pre-upgrade snapshot puts the endpoint back on the old version while
 `endpoints.version` reads the new one, and both tasks succeed, so no replay runs.
 
-**The owner names the task, not the process.** `pglease` grants unconditionally to
-the current holder, so two tasks in one process sharing a process-scoped owner id
-would both be granted, and mutual exclusion would rest on the library's in-process
-`reserve()` guard rather than on the database. Naming the task makes one rule
-cover same-process and cross-process contention identically, and makes the
-`Holder` probe answer "which task holds endpoint X, and what kind is it" — the
+**The owner names the unit of work, not the process.** `pglease` grants
+unconditionally to the current holder, so two units in one process sharing a
+process-scoped owner id would both be granted, and mutual exclusion would rest on
+the library's in-process `reserve()` guard rather than on the database. Naming the
+unit — a task, or one of a parent's subtasks — makes one rule cover same-process
+and cross-process contention identically, and makes the
+`Holder` probe answer "what holds endpoint X, and what kind is it" — the
 debuggability a `reason` column would otherwise be for, which matters because
 `resource_token` has no metadata column and the owner string is the only place to
 put it.

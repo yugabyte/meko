@@ -245,7 +245,7 @@ re-drives the roll.
 
 ### 5.1 Shape: a subtask is not a task
 
-Migration `0011` adds a table, and changes nothing about `tasks`:
+Migration `0012` adds a table, and changes nothing about `tasks`:
 
 ```sql
 CREATE TABLE subtasks (
@@ -335,6 +335,17 @@ corrupted lease row is the worse one.
 A `WHERE` clause in a Go string literal is not the right custodian of that. A separate
 table makes it unrepresentable.
 
+**The table closes the claim path; it does not close the in-process one.** A child is
+unclaimable, but nothing stops a parent calling `Run` twice on one child concurrently —
+and the way in is ordinary rather than exotic: `Create` returns the same row for a
+duplicate (that is what the derived id is for), so a planner that appends every
+`Create` result to its work list gets two entries for one row the moment its
+enumeration yields an endpoint twice. A repeated id in a caller-supplied
+`endpoint_ids` is enough. So `SubtaskRunner` keeps a per-id reservation for the
+duration of a `Run` and refuses the second — the `reserve()` guard `pglease` has, at
+the layer where it can actually fire, since a fresh `Client` per acquire means its own
+never does.
+
 That leaves the lease-count argument, which is the other half of why the layers exist:
 
 | | 867 (children were free-standing tasks) | this design |
@@ -378,9 +389,16 @@ Three things to get right:
   a previous process still limping along.
 - **`Worker.lockFor` is reused as-is, keyed on the SUBTASK id.** The lease owner is
   `resourceOwner(subtaskID, kind, procOwner)`, so "what holds endpoint X?" answers
-  with an id that appears in the parent's step result. The one-lock rule is per unit
-  of work and each child takes exactly one; the parent takes `fleet:endpoints` and no
-  endpoint lock, so nothing holds two.
+  with an id that appears in the parent's step result.
+- **The one-lock rule becomes a lock ORDER, and that is a real weakening.** Each unit
+  of work still takes at most one, but the parent holds `fleet:endpoints` *while* its
+  children hold `endpoint:<id>` — nested, which is exactly the shape "a task may hold
+  at most one" existed to make unreachable, and which `lockFor` cannot see because a
+  child arrives holding nothing. What replaces it: **`fleet` is acquired before
+  `endpoint`, and nothing may acquire them in the other order.** Nothing today can
+  violate that (no step takes an endpoint lock and then wants a fleet one), but the
+  invariant is now a convention rather than a mechanism, so it has to be written down
+  — here and on `lockFor` — rather than assumed.
 - **The *process* holds `1 + max_parallel + 1` leases from one execution slot** (task,
   children, fleet). That is the accounting in §5.2, not a change to the one-lock rule.
 
@@ -411,6 +429,17 @@ added back later, `on_failure=continue` becomes reasonable to add with it.
 
 **A contended endpoint waits, it does not fail.** A child whose endpoint is held by a
 resize blocks in `AcquireResource` up to `--task-lock-wait` (10m) and then proceeds.
+
+**A child that exhausts that wait is `unattempted`, not `failed`,** and fail-fast must
+not halt on it. `ErrLockHeld` says only that somebody else holds the endpoint — it is
+not evidence the upgrade would fail. Treating it as a failure has a specific bad
+outcome: a predecessor process fenced out of a reclaimed parent keeps renewing its
+`endpoint:<id>` lease on its own goroutine, finishes the deploy *successfully*, and has
+its `Complete` silently no-op on the owner fence; the successor then times out on the
+lock and durably records `failed` for an endpoint that is at the target version and
+whose row says so. Fail-fast would amplify that into a halted fleet roll. The window is
+about one TTL (a process that truly loses a lease exits), but it is narrow rather than
+closed.
 The parent detects nothing and routes around nothing — that is what moving the lock
 off the task-insert path bought. But note the compounding: a child that waits holds
 its pool slot while it waits, so a fleet with several contended endpoints serializes
@@ -541,7 +570,7 @@ That size is itself a design input. **This should land as a stack, not one PR:**
    them. Pure refactor, no behaviour change, and it makes every PR after it smaller.
 2. **The version column and deploy-spec override** (§2–3).
 3. **`upgrade_endpoint`** (§4) — the per-endpoint step, usable on its own.
-4. **The `subtasks` table and runner** (§5) — migration `0011`; the numbers are
+4. **The `subtasks` table and runner** (§5) — migration `0012`; the numbers are
    assigned in stack order, since two migrations claiming one version wedges the
    controller's startup.
 5. **The API** (§6).
@@ -583,7 +612,7 @@ deploy is the only thing that covers it, so an end-to-end check that the `versio
 column is populated after a create belongs in whatever exercises a live cluster.
 
 Live-database (`store_pg_test.go` / `locks_pg_test.go`, `AMP_TEST_DATABASE_URL`):
-`TestMigrateRoundTrip` with 0011; the subtask store's idempotent create against real
+`TestMigrateRoundTrip` with 0012; the subtask store's idempotent create against real
 SQL; and `fleet:endpoints` serializing two parents, at a short lease as the other
 `TestPg…` lock tests do.
 

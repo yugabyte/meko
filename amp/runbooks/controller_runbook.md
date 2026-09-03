@@ -457,7 +457,8 @@ SELECT resource_id, client_id, to_timestamp(token/1e6) AS expires_at
 ```
 
 `task:<uuid>` rows are task ownership and name the process that claimed it;
-`endpoint:<uuid>` rows name the *task* holding that endpoint. Do not delete rows to
+`endpoint:<uuid>` rows name the unit of work holding that endpoint — a task, or one
+of a fleet roll's subtasks, so an id that is not in `tasks` is in `subtasks`. Do not delete rows to
 hurry a reclaim along — that is the fence, and removing it is how two controllers
 end up on one endpoint. A row is takeable once `expires_at` plus the 500ms
 clock-skew grace has passed, not at `expires_at` itself.

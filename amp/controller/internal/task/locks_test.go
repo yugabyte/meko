@@ -26,11 +26,31 @@ type lockingStep struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+
+	// observe, when set, is asked who holds the lock at execute time — for the
+	// subtask runner tests, which assert the runner took the declared lock and
+	// took it in the child's name.
+	observe *MemLocks
+	mu      sync.Mutex
+	holder  string
 }
 
 func (s *lockingStep) Lock() ResourceLock { return s.lock }
 
+// heldBy reports who the lock table named as the holder when the step last ran,
+// or "" if it was free (or the step never ran).
+func (s *lockingStep) heldBy() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.holder
+}
+
 func (s *lockingStep) Execute(ctx context.Context) StepResult {
+	if s.observe != nil {
+		s.mu.Lock()
+		s.holder = s.observe.ResourceHolder(s.lock)
+		s.mu.Unlock()
+	}
 	if s.entered != nil {
 		s.once.Do(func() { close(s.entered) })
 	}

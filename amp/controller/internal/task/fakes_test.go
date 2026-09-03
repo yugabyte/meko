@@ -585,11 +585,17 @@ type fakeStep struct {
 	// test can drive the worker's in-place retry to eventual success.
 	failWith  error
 	failTimes int
+	// before runs at the top of Execute, outside the lock, so a test can hold the
+	// step inside its own execution and observe what a concurrent caller sees.
+	before func()
 }
 
 func (s *fakeStep) Kind() string { return s.kind }
 
 func (s *fakeStep) Execute(ctx context.Context) StepResult {
+	if s.before != nil {
+		s.before()
+	}
 	s.mu.Lock()
 	s.calls++
 	calls := s.calls
