@@ -221,12 +221,14 @@ func resourceOwner(taskID uuid.UUID, kind, procOwner string) string {
 // helm-upgrade a release a locked task is mid-way through. None can take one
 // endpoint lock when they need all of them; that wants intent locks.
 // https://github.com/yugabyte/meko/issues/976
-func (s *createEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
-func (s *resizeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
-func (s *deleteEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
+func (s *createEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
+func (s *resizeEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
+func (s *upgradeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
+func (s *deleteEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 
 var (
 	_ Locking = (*createEndpointStep)(nil)
 	_ Locking = (*resizeEndpointStep)(nil)
+	_ Locking = (*upgradeEndpointStep)(nil)
 	_ Locking = (*deleteEndpointStep)(nil)
 )

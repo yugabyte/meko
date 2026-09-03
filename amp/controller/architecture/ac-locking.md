@@ -146,8 +146,8 @@ because a later step of the same task may still be operating on the resource.
 type Locking interface{ Lock() ResourceLock }
 ```
 
-`create_endpoint`, `resize_endpoint` and `delete_endpoint` declare
-`endpoint:<endpoint-id>`. The declarations sit together in `locks.go` rather than
+`create_endpoint`, `resize_endpoint`, `upgrade_endpoint` and `delete_endpoint`
+declare `endpoint:<endpoint-id>`. The declarations sit together in `locks.go` rather than
 one per step file, so what serializes against what is answerable from one place.
 
 **One lock per task.** Deadlock needs a task holding two, and refusing the second
@@ -160,6 +160,10 @@ through the same deployer create and resize use** — so it can run `helm upgrad
 against a release a locked single-endpoint task is mid-way through. Covering these
 needs intent locks on the branch and cluster above the endpoints:
 [meko#976](https://github.com/yugabyte/meko/issues/976).
+
+With `upgrade_endpoint` that gap can also make a row lie: a fan-out redeploying from
+a pre-upgrade snapshot puts the endpoint back on the old version while
+`endpoints.version` reads the new one, and both tasks succeed, so no replay runs.
 
 **The owner names the task, not the process.** `pglease` grants unconditionally to
 the current holder, so two tasks in one process sharing a process-scoped owner id

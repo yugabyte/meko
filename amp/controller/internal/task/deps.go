@@ -98,6 +98,12 @@ type StateStore interface {
 	// on replay). An absent branch yields an empty slice, not an error.
 	BranchEndpointDeploys(ctx context.Context, clusterID, branchID uuid.UUID) ([]core.EndpointDeploy, error)
 
+	// EndpointDeploy returns one endpoint's renderable desired state by id, for a
+	// step that redeploys a single endpoint and holds nothing but its id.
+	// core.ErrNotFound when the endpoint is gone or its branch is tombstoned — a
+	// redeploy has nothing to converge to.
+	EndpointDeploy(ctx context.Context, endpointID uuid.UUID) (core.EndpointDeploy, error)
+
 	// UpdateEndpointExtensions records the resolved extension names into the
 	// endpoint's stored config blob (audit / recreate spec), an absolute jsonb
 	// merge like UpdateEndpointResources. Idempotent; an absent endpoint is a

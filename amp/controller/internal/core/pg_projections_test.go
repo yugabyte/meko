@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -195,6 +196,19 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 		if d.BranchID != branchID {
 			t.Errorf("deploy state branch = %s, want %s", d.BranchID, branchID)
+		}
+
+		// The by-id form shares that projection and scanner, and is what
+		// upgrade_endpoint renders one endpoint from.
+		one, err := b.EndpointDeploy(ctx, endpointID)
+		if err != nil {
+			t.Fatalf("EndpointDeploy: %v", err)
+		}
+		if one != d {
+			t.Errorf("EndpointDeploy = %+v, want the same state the branch enumeration reports (%+v)", one, d)
+		}
+		if _, err := b.EndpointDeploy(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
+			t.Errorf("EndpointDeploy on an unknown id = %v, want ErrNotFound", err)
 		}
 	})
 }

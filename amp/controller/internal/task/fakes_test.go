@@ -153,6 +153,20 @@ func (f *fakeStateStore) BranchEndpointDeploys(_ context.Context, _, branchID uu
 	return out, nil
 }
 
+// EndpointDeploy returns one seeded endpoint's desired state by id. Mirrors the
+// backends: an endpoint that was never seeded, or was deleted, is
+// core.ErrNotFound rather than a zero record — a step that redeploys by id must
+// fail instead of deploying a default-everything endpoint.
+func (f *fakeStateStore) EndpointDeploy(_ context.Context, endpointID uuid.UUID) (core.EndpointDeploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.endpointBranch[endpointID]
+	if !ok {
+		return core.EndpointDeploy{}, core.ErrNotFound
+	}
+	return d, nil
+}
+
 // UpdateEndpointExtensions records the resolved names last written to an endpoint.
 func (f *fakeStateStore) UpdateEndpointExtensions(_ context.Context, endpointID uuid.UUID, names []string) error {
 	f.mu.Lock()
@@ -494,16 +508,20 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID, branc
 // records every call so tests can assert what ran. createErr/deleteErr inject
 // failures.
 type fakeDeployer struct {
-	mu        sync.Mutex
-	created   []deploy.EndpointSpec
-	deleted   []string
-	resized   []deploy.ResizeSpec
-	createErr error
-	deleteErr error
-	resizeErr error
-	// defaultVersion is what the deployer reports when the spec pins none, the way
-	// a real one falls back to its configured image tag. Empty: reports nothing.
+	mu      sync.Mutex
+	created []deploy.EndpointSpec
+	deleted []string
+	resized []deploy.ResizeSpec
+	// reportVersion, when set, is what CreateEndpoint claims it ran regardless of
+	// what was asked for. A real deployer resolves a version rather than echoing it,
+	// and "record what the deployer reported" is only observable when the two differ.
+	reportVersion string
+	// defaultVersion is what it reports when the spec pins none, the way a real one
+	// falls back to its configured image tag. Empty: reports nothing.
 	defaultVersion string
+	createErr      error
+	deleteErr      error
+	resizeErr      error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
@@ -514,13 +532,16 @@ func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpe
 		return deploy.Endpoint{}, f.createErr
 	}
 	// Echo the requested version back, as a real deployer reports the version it
-	// ran; with none pinned it reports its own default, which is how an endpoint
-	// with no recorded version learns one.
-	ran := spec.Version
-	if ran == "" {
-		ran = f.defaultVersion
+	// ran. With a version pinned it echoes that; with none it falls back to its own
+	// default, which is how an endpoint with no recorded version learns one.
+	version := spec.Version
+	if version == "" {
+		version = f.defaultVersion
 	}
-	return deploy.Endpoint{ID: spec.Name, Address: spec.Name + ".endpoints.svc:55433", Version: ran}, nil
+	if f.reportVersion != "" {
+		version = f.reportVersion
+	}
+	return deploy.Endpoint{ID: spec.Name, Address: spec.Name + ".endpoints.svc:55433", Version: version}, nil
 }
 
 func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {

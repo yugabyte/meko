@@ -23,9 +23,15 @@ import (
 //	create_branch         step_create_branch.go
 //	record_branch_recipe  step_record_branch_recipe.go
 //	create_endpoint       step_create_endpoint.go
+//	resize_endpoint       step_resize_endpoint.go
+//	upgrade_endpoint      step_upgrade_endpoint.go
 //	delete_endpoint       step_delete_endpoint.go
 //	delete_branch         step_delete_branch.go
 //	delete_cluster        step_delete_cluster.go
+//	add_branch_extensions step_add_branch_extensions.go
+//
+// (The Voyager migration steps are the exception to the file naming — their kinds
+// and files are in voyager_step_*.go.)
 
 // mustResult marshals a step result. The values are small, fixed-shape maps, so
 // marshaling cannot fail; a result is informational (read back via the task API)

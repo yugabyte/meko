@@ -318,7 +318,7 @@ func TestReleaseAfterLossDoesNotUnfenceTheSuccessor(t *testing.T) {
 	}
 }
 
-// The three endpoint-mutating steps all lock the endpoint they touch, and the
+// The four endpoint-mutating steps all lock the endpoint they touch, and the
 // cascade deletes deliberately lock nothing. This is a rule about which kinds
 // serialize, so it is asserted rather than left to a reader to notice.
 func TestEndpointStepsDeclareTheirLock(t *testing.T) {
@@ -328,6 +328,7 @@ func TestEndpointStepsDeclareTheirLock(t *testing.T) {
 	for _, s := range []Locking{
 		&createEndpointStep{CreateEndpointArgs: CreateEndpointArgs{EndpointID: id}},
 		&resizeEndpointStep{ResizeEndpointArgs: ResizeEndpointArgs{EndpointID: id}},
+		&upgradeEndpointStep{UpgradeEndpointArgs: UpgradeEndpointArgs{EndpointID: id}},
 		&deleteEndpointStep{DeleteEndpointArgs: DeleteEndpointArgs{EndpointID: id}},
 	} {
 		if got := s.Lock(); got != want {

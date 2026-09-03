@@ -260,20 +260,46 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 	return nil
 }
 
+// endpointDeploySelect projects an endpoint's renderable desired state: its id,
+// the branch it serves, the pinned pg version, the compute size and the version.
+// The pg version comes from the joined branch row, not from the endpoint — an
+// endpoint row has no such column, deliberately, so the two can never disagree;
+// cpu/memory come out of the endpoint's config blob and version off its own
+// column. The branch enumeration
+// and the by-id read share it (and scanEndpointDeploy) so the two cannot render
+// from different state; each adds its own WHERE.
+const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.pg_version,
+	        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
+	        COALESCE(e.version, '')
+	   FROM amp_registry.endpoints e
+	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
+
+func scanEndpointDeploy(r scanRow) (EndpointDeploy, error) {
+	var (
+		id, branchID string
+		d            EndpointDeploy
+	)
+	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version); err != nil {
+		return EndpointDeploy{}, err
+	}
+	var err error
+	if d.ID, err = uuid.Parse(id); err != nil {
+		return EndpointDeploy{}, fmt.Errorf("parse endpoint id: %w", err)
+	}
+	if d.BranchID, err = uuid.Parse(branchID); err != nil {
+		return EndpointDeploy{}, fmt.Errorf("parse branch id: %w", err)
+	}
+	return d, nil
+}
+
 // BranchEndpointDeploys returns the renderable desired state of every live
-// endpoint on the branch: its id, the branch it serves, and the pinned pg version
-// + compute size + version (pg_version from the branch, cpu/memory and version
-// from the endpoint). Callers that redeploy a whole branch enumerate these at Execute time,
-// so a concurrently-added endpoint is still covered on replay. An absent branch
-// yields an empty slice. The leading cluster id is vestigial, as in
-// BranchExtensions.
+// endpoint on the branch. Callers that redeploy a whole branch enumerate these
+// at Execute time, so a concurrently-added endpoint is still covered on replay.
+// An absent branch yields an empty slice. The leading cluster id is vestigial, as
+// in BranchExtensions.
 func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
 	rows, err := b.pool.Query(ctx,
-		`SELECT e.id::text, e.branch_id::text, eb.pg_version,
-		        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
-		        COALESCE(e.version, '')
-		   FROM amp_registry.endpoints e
-		   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
+		endpointDeploySelect+`
 		  WHERE eb.branch_id = $1::uuid AND eb.dropped_at IS NULL`,
 		branchID.String())
 	if err != nil {
@@ -282,18 +308,9 @@ func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.
 	defer rows.Close()
 	var out []EndpointDeploy
 	for rows.Next() {
-		var (
-			id, branchID string
-			d            EndpointDeploy
-		)
-		if err := rows.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version); err != nil {
+		d, err := scanEndpointDeploy(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan endpoint deploy: %w", err)
-		}
-		if d.ID, err = uuid.Parse(id); err != nil {
-			return nil, fmt.Errorf("parse endpoint id: %w", err)
-		}
-		if d.BranchID, err = uuid.Parse(branchID); err != nil {
-			return nil, fmt.Errorf("parse branch id: %w", err)
 		}
 		out = append(out, d)
 	}
@@ -301,6 +318,26 @@ func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.
 		return nil, fmt.Errorf("list endpoint deploys for branch: %w", err)
 	}
 	return out, nil
+}
+
+// EndpointDeploy returns one endpoint's renderable desired state by id — the
+// single-endpoint form of BranchEndpointDeploys, for a step that redeploys one
+// endpoint and holds nothing but its id. ErrNotFound when the endpoint is gone or
+// its branch is tombstoned: a redeploy has nothing to converge to, unlike the
+// write methods where an absent row is a no-op.
+func (b *PgBackend) EndpointDeploy(ctx context.Context, endpointID uuid.UUID) (EndpointDeploy, error) {
+	row := b.pool.QueryRow(ctx,
+		endpointDeploySelect+`
+		  WHERE e.id = $1::uuid AND eb.dropped_at IS NULL`,
+		endpointID.String())
+	d, err := scanEndpointDeploy(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EndpointDeploy{}, ErrNotFound
+	}
+	if err != nil {
+		return EndpointDeploy{}, fmt.Errorf("scan endpoint deploy: %w", err)
+	}
+	return d, nil
 }
 
 // UpdateEndpointExtensions merges the resolved extension names into the

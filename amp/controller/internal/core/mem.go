@@ -620,6 +620,31 @@ func (m *MemBackend) BranchEndpointDeploys(_ context.Context, _, branchID uuid.U
 	return out, nil
 }
 
+// EndpointDeploy returns one endpoint's renderable desired state by id, mirroring
+// PgBackend: pg_version comes from the endpoint's branch. ErrNotFound when the
+// endpoint or its branch is gone — MemBackend deletes branch rows outright rather
+// than tombstoning them, so a missing branch covers PgBackend's dropped_at case.
+func (m *MemBackend) EndpointDeploy(_ context.Context, endpointID uuid.UUID) (EndpointDeploy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.endpoints[endpointID]
+	if !ok {
+		return EndpointDeploy{}, ErrNotFound
+	}
+	b, ok := m.branches[e.BranchID]
+	if !ok {
+		return EndpointDeploy{}, ErrNotFound
+	}
+	return EndpointDeploy{
+		ID:        endpointID,
+		BranchID:  e.BranchID,
+		PgVersion: b.PgVersion,
+		CPU:       e.CPU,
+		Memory:    e.Memory,
+		Version:   e.Version,
+	}, nil
+}
+
 // UpdateEndpointExtensions is a no-op in the in-memory backend: it models the
 // endpoint's audit config blob, which MemBackend does not store. The resolved set
 // is recomputed from the cluster at deploy, so nothing depends on it here.

@@ -1,7 +1,7 @@
 # ac — Endpoint upgrade (parent task, per-endpoint subtasks)
 
 **Status:** Draft — for review
-**Last updated:** 2026-08-26
+**Last updated:** 2026-09-01
 
 Move every deployed endpoint — or a caller-named subset — onto a target version in
 one call. The first, dev-facing slice of
@@ -19,8 +19,8 @@ locking foundation changed under it (its branch and
 [design doc](https://github.com/yugabyte/meko/issues/809#issuecomment-5375942830) are
 kept). §7 records what carries over and what `pglease` lets us delete.
 
-**Landed so far:** §4.1 (the spec assembler), §2 and §3 (the version column and the
-per-endpoint override). §4, §5 and §6 are not built yet.
+**Landed so far:** §4.1 (the spec assembler), §2 and §3 (the version columns and the
+per-endpoint override), §4 (`upgrade_endpoint`). §5 and §6 are not built yet.
 
 ## 1. What was missing
 
@@ -55,8 +55,16 @@ fired at the whole fleet at once.
 Migration `0011`:
 
 ```sql
-ALTER TABLE amp_registry.endpoints ADD COLUMN IF NOT EXISTS version text;
+ALTER TABLE amp_registry.endpoints
+    ADD COLUMN IF NOT EXISTS version text,
+    ADD COLUMN IF NOT EXISTS target_version text;
 ```
+
+`version` is what the endpoint is recorded as **running**, written after a deploy
+reports back; every controller-driven redeploy renders from it. `target_version` is
+what it **should** run, written before the deploy. The two differing is an upgrade
+that has not converged — which is what makes "did this endpoint actually upgrade?"
+answerable from the row.
 
 **A version is an opaque string the deployer knows how to run.** Today it is the
 endpoint image tag verbatim, and version → `image.tag` is decided in exactly one
@@ -136,20 +144,24 @@ upgrade path has to run the controller with a genuine version tag, not the defau
 
 One step, args `{endpoint_id, version}`:
 
-1. **Persist** the target version to the endpoint row — absolute `UPDATE`.
+1. **Record the target** — `target_version`, before anything moves.
 2. **Redeploy** through `deploy.Deployer.CreateEndpoint`, re-rendering the endpoint's
-   stored spec with `Version` set.
-3. **Record** the deployer-reported version and address.
+   spec with the target version on it.
+3. **Record what is running** — `version`, from what the deployer reported, plus the
+   address.
 
-**Persist-first is deliberate, and the opposite of `resize_endpoint`**, because the
-failure modes are opposite. A resize must not record a size the pod rejected. An
-upgrade's row is the *desired* state every later redeploy reads (§3) — so a deploy
-that lands while the write is lost to a crash leaves an endpoint the controller will
-revert at its next redeploy. Recording an intent that has not converged yet is the
-safe direction; replay finishes it.
+The two columns are what make an unconverged upgrade legible: a crash anywhere in
+(1)–(3) leaves `target_version` ahead of `version`, which is exactly "asked for, not
+yet running". Replay finishes it, and nothing has to infer state from a row that
+claims a version the pod may not be running.
 
 Idempotent throughout: absolute `UPDATE`s, and a release already at the target
 version converges to a no-op.
+
+An upgrade moves the version and nothing else. It re-resolves the branch's extension
+set so the redeploy keeps its mounts, but does not rewrite the recorded set — an
+upgrade that changed an endpoint's extensions would be a bug, so it has no business
+writing that column.
 
 ### 4.1 One assembler for the deploy spec
 
@@ -160,13 +172,13 @@ caller that renders one:
 |---|---|---|---|
 | `create_endpoint` | `EnsureEndpointRecord`, from its args | a `core.EndpointDeploy` built from its args | `CreateEndpoint` |
 | `add_branch_extensions` | `AddBranchExtensions`, the branch set | `BranchEndpointDeploys` | `CreateEndpoint` |
-| `upgrade_endpoint` | the version, §4 | the fleet enumeration, §5.1 | `CreateEndpoint` |
+| `upgrade_endpoint` | `target_version`, §4 | a by-id read of its own row | `CreateEndpoint` |
 
 All three are the same shape — persist desired state, render from it, deploy — and
 they arrived there independently: create writes the row first so it claims the
-branch's single-writer slot before compute is spent, and the upgrade writes first for
-the reason in §4. (`resize_endpoint` is deployer-first and looks like a
-counterexample, but it patches a `ResizeSpec` in place and never renders.)
+branch's single-writer slot before compute is spent, and the upgrade writes its target
+first so an interrupted one stays visible. (`resize_endpoint` is deployer-first and
+looks like a counterexample, but it patches a `ResizeSpec` in place and never renders.)
 
 Adding a third hand-rolled `deploy.EndpointSpec{…}` literal is what to avoid. The
 struct has ten fields, drawn from three places — six from durable state, three from
@@ -268,11 +280,24 @@ endpoint_ids?, max_parallel}`) at Execute time:
 1. **Enumerates** targets — the caller's `endpoint_ids`, or every live endpoint — as
    `[]core.EndpointDeploy`, the renderable desired state §4.1 defines. One query, so
    a roll of N endpoints costs one read rather than N.
-2. **Filters** out endpoints already recorded at the target version.
+2. **Filters** out endpoints already recorded at the target version — an
+   optimization over *desired* state, not a progress signal. See the warning below.
 3. **Creates** one `upgrade_endpoint` subtask per remaining endpoint.
 4. **Runs** them in-process, up to `max_parallel` at once (§5.4).
 5. **Reports** one line per endpoint on the step result: `upgraded`, `skipped` (with
    why), or `failed` (with the subtask id to go and read).
+
+**The filter reads `version`, the running one (§2).** A child that records its target
+and then fails its deploy leaves `target_version` ahead of `version`, so the endpoint
+still reads as not-at-target and a re-issued roll picks it up. Two rules still hold:
+
+- **Progress within a roll comes from subtask status, not the column.** A reclaimed
+  parent re-filtering on state alone cannot tell "already there" from "this roll put
+  it there", and would report a roll clean whose children failed.
+- **An explicitly named endpoint is never skipped.** The already-at-target filter
+  applies only to whole-fleet enumeration, so naming an endpoint re-runs it — the
+  operator's remedy after a partial roll, and the case where re-issuing the same call
+  would otherwise skip the one endpoint that needs it.
 
 Self-contained for the same reason `delete_cluster` is (`ac-tasks.md` §3): the set is
 not known until Execute time, and the worker has no dynamic sub-step expansion.
@@ -393,7 +418,7 @@ behind them.
 
 ### 5.5 Replay and reclaim
 
-The parent's step is idempotent and **converges on the persisted version, not on
+The parent's step is idempotent and **converges on recorded state, not on
 bookkeeping**. There is no progress cursor.
 
 A process dying mid-roll leaves the parent `running` with children in mixed states.
@@ -401,10 +426,9 @@ Then:
 
 1. The parent's lease lapses; `Candidates` offers it (nothing about the claim query
    changed); a surviving instance acquires and re-claims it.
-2. The step re-runs from the top: re-enumerate, re-filter. Children that succeeded
-   have written their endpoint's version, so those endpoints drop out of the
-   enumeration entirely — the step does not need to read its own children to know
-   what it did.
+2. The step re-runs from the top: re-enumerate, re-filter — and then reconciles
+   against **its own children's status**, which is what actually says what it did.
+   It cannot use the version column for that, per the warning below.
 3. Children still `pending` or `running` are re-created idempotently, via
    `INSERT ... ON CONFLICT (id) DO NOTHING` returning the existing row — the same
    shape `Store.Create` already uses for a task planned with a preassigned id. This

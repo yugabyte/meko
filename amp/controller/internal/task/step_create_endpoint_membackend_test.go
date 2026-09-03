@@ -63,11 +63,15 @@ func TestCreateEndpointStepReplayConvergesAgainstMemBackend(t *testing.T) {
 // same derived address, so a replayed step records the same outcome.
 type memReplayDeployer struct {
 	created []string
+	// specs is what each call was asked to deploy, for the tests that assert a
+	// redeploy carried the endpoint's state through.
+	specs   []deploy.EndpointSpec
 	deleted []string
 }
 
 func (d *memReplayDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
 	d.created = append(d.created, spec.Name)
+	d.specs = append(d.specs, spec)
 	return deploy.Endpoint{ID: spec.Name, Address: spec.Name + ".endpoints.svc:55433"}, nil
 }
 

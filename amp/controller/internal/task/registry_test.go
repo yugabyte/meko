@@ -60,14 +60,23 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 	}
 	r := ProductionRegistry(deps)
 
-	for _, kind := range []string{
+	kinds := []string{
 		KindNoop,
 		StepCreateCluster,
 		StepCreateBranch,
 		StepRecordBranchRecipe,
 		StepCreateEndpoint,
+		StepResizeEndpoint,
+		StepUpgradeEndpoint,
 		StepDeleteEndpoint,
-	} {
+		StepDeleteBranch,
+		StepDeleteCluster,
+		StepAddBranchExtensions,
+		StepVoyagerEnsureRun,
+		StepVoyagerLaunchJob,
+		StepVoyagerAttachTarget,
+	}
+	for _, kind := range kinds {
 		// Empty args decode into a zero-valued step, so every kind builds.
 		step, err := r.Build(kind, json.RawMessage(`{}`))
 		if err != nil {
@@ -77,6 +86,13 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 		if step.Kind() != kind {
 			t.Errorf("kind %q builds a step whose Kind() = %q", kind, step.Kind())
 		}
+	}
+	// The list above is hand-maintained, so pin it against the registry's real size
+	// or this test does not do what its name says: seven kinds were silently missing
+	// from it, each one a registration untested until it fails at runtime.
+	if len(r.builders) != len(kinds) {
+		t.Errorf("ProductionRegistry registers %d kinds but this test lists %d; add the new kind to the list above",
+			len(r.builders), len(kinds))
 	}
 
 	// The create_endpoint step is built wired with the deploy collaborators from
@@ -104,7 +120,15 @@ func TestRegistryBuildRejectsBadArgs(t *testing.T) {
 		StepCreateBranch,
 		StepRecordBranchRecipe,
 		StepCreateEndpoint,
+		StepResizeEndpoint,
+		StepUpgradeEndpoint,
 		StepDeleteEndpoint,
+		StepDeleteBranch,
+		StepDeleteCluster,
+		StepAddBranchExtensions,
+		StepVoyagerEnsureRun,
+		StepVoyagerLaunchJob,
+		StepVoyagerAttachTarget,
 	} {
 		if _, err := r.Build(kind, bad); err == nil {
 			t.Errorf("%s: Build on bad args returned nil error, want a decode error", kind)
