@@ -1363,3 +1363,53 @@ func TestResizeGrandfathersAnEndpointWithNoStoredResources(t *testing.T) {
 		t.Errorf("growing cpu on a starved endpoint = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
 	}
 }
+
+// A create whose body arrives with no Content-Length — chunked transfer, what a
+// streaming client or a re-chunking proxy sends — makes echo's binder return
+// io.EOF, and the generated strict handler then leaves request.Body nil
+// (api.gen.go CreateEndpoint). Reading request.Body.Connectivity without a nil
+// guard panicked, which middleware.Recover turned into a 500 instead of the
+// default-everything create. A zero-Content-Length body does NOT reproduce it:
+// echo short-circuits that case and binds a zero-value struct.
+func TestCreateEndpointChunkedEmptyBody(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	backend := core.NewMemBackend()
+	client, _, base := newTestServerRaw(t, backend, prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "ep-chunked-pool")
+
+	clusterID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{
+		ClusterID: clusterID,
+		BranchID:  branchID,
+		Name:      "main",
+		PgVersion: 18,
+		IsDefault: true,
+	})
+
+	pr, pw := io.Pipe()
+	if err := pw.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	url := fmt.Sprintf("%s/storage-pools/%s/clusters/%s/branches/%s/endpoints", base, pool.Id, clusterID, branchID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, pr)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1 // chunked: the trigger for the io.EOF bind path
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST endpoints: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 202 (a nil body is the default-everything create), body = %s", resp.StatusCode, body)
+	}
+}

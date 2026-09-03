@@ -289,6 +289,11 @@ type CreateEndpointInput struct {
 	// deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Connectivity is the endpoint's client reachability (cluster_ip /
+	// nlb_internal / nlb_external), and AllowedCIDRs the source ranges allowed to
+	// reach an nlb_* endpoint's load balancer. Both are validated by the API.
+	Connectivity string   `json:"connectivity,omitempty"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 }
 
 // CreateEndpoint records a create_endpoint task: a single create_endpoint step on
@@ -313,6 +318,8 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			PgSettings:         in.PgSettings,
 			PageserverSettings: in.PageserverSettings,
 			SafekeeperSettings: in.SafekeeperSettings,
+			Connectivity:       in.Connectivity,
+			AllowedCIDRs:       in.AllowedCIDRs,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ClusterID, endpointID.String(), steps)

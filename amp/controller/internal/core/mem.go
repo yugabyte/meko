@@ -595,8 +595,8 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID 
 }
 
 // BranchEndpointDeploys returns the redeploy record for every endpoint on the
-// (clusterID, branchID) branch (pg_version from the branch, cpu/memory from the
-// endpoint). An absent branch yields an empty slice. Mirrors PgBackend.
+// (clusterID, branchID) branch (pg_version from the branch, cpu/memory and
+// connectivity from the endpoint). An absent branch yields an empty slice. Mirrors PgBackend.
 func (m *MemBackend) BranchEndpointDeploys(_ context.Context, clusterID, branchID uuid.UUID) ([]EndpointDeploy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -606,11 +606,13 @@ func (m *MemBackend) BranchEndpointDeploys(_ context.Context, clusterID, branchI
 			continue
 		}
 		out = append(out, EndpointDeploy{
-			ID:        id,
-			BranchID:  e.BranchID,
-			PgVersion: m.branches[e.BranchID].PgVersion,
-			CPU:       e.CPU,
-			Memory:    e.Memory,
+			ID:           id,
+			BranchID:     e.BranchID,
+			PgVersion:    m.branches[e.BranchID].PgVersion,
+			CPU:          e.CPU,
+			Memory:       e.Memory,
+			Connectivity: e.Connectivity,
+			AllowedCIDRs: e.AllowedCIDRs,
 		})
 	}
 	return out, nil

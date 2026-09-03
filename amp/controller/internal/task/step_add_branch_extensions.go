@@ -108,6 +108,8 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 			ControllerURL: s.scURL,
 			CPU:           d.CPU,
 			Memory:        d.Memory,
+			Connectivity:  d.Connectivity,
+			AllowedCIDRs:  d.AllowedCIDRs,
 			Extensions:    extSpecs,
 		}
 		deployed, err := s.deployer.CreateEndpoint(ctx, spec)

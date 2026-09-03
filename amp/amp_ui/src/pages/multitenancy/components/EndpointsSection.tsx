@@ -15,8 +15,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useCreateEndpoint } from "@/hooks/useEndpoints";
-import type { Endpoint, EndpointRole } from "@/lib/api/types";
-import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
+import type {
+  Endpoint,
+  EndpointConnectivityMode,
+  EndpointRole,
+} from "@/lib/api/types";
+import {
+  DEFAULT_ENDPOINT_CONNECTIVITY,
+  DEFAULT_ENDPOINT_CPU,
+  DEFAULT_ENDPOINT_MEMORY,
+} from "@/lib/api/types";
 import { isValidMemory } from "@/lib/compute";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeInstance } from "./ComputeInstance";
@@ -42,6 +50,13 @@ export function EndpointsSection({
   // ratio). Sent as request == limit → Guaranteed QoS.
   const [cpu, setCpu] = useState(DEFAULT_ENDPOINT_CPU);
   const [memory, setMemory] = useState(DEFAULT_ENDPOINT_MEMORY);
+  // How clients reach this compute. The nlb_* modes each provision their own
+  // cloud load balancer, so they are opt-in rather than the default.
+  const [connectivity, setConnectivity] = useState<EndpointConnectivityMode>(
+    DEFAULT_ENDPOINT_CONNECTIVITY,
+  );
+  const [allowedCidrs, setAllowedCidrs] = useState("");
+  const usesLoadBalancer = connectivity !== "cluster_ip";
   const createEndpoint = useCreateEndpoint();
   // The controller rejects a memory quantity with no unit; block the click
   // instead of sending one and reporting the 400 back as a toast.
@@ -65,6 +80,13 @@ export function EndpointsSection({
         role,
         cpu: cpu.trim() || DEFAULT_ENDPOINT_CPU,
         memory: memory.trim(),
+        connectivity,
+        allowedCidrs: usesLoadBalancer
+          ? allowedCidrs
+              .split(",")
+              .map((c) => c.trim())
+              .filter(Boolean)
+          : undefined,
       },
       {
         onSuccess: (ep) =>
@@ -138,6 +160,41 @@ export function EndpointsSection({
             className="h-8 w-24 font-mono text-xs"
           />
         </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Connectivity
+          </Label>
+          <Select
+            value={connectivity}
+            onValueChange={(v) => setConnectivity(v as EndpointConnectivityMode)}
+          >
+            <SelectTrigger className="h-8 w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cluster_ip">in-cluster</SelectItem>
+              <SelectItem value="nlb_internal">NLB (internal)</SelectItem>
+              <SelectItem value="nlb_external">NLB (external)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {usesLoadBalancer && (
+          <div className="flex flex-col gap-1">
+            <Label
+              htmlFor="ep-cidrs"
+              className="text-[10px] uppercase tracking-wide text-muted-foreground"
+            >
+              Allowed CIDRs
+            </Label>
+            <Input
+              id="ep-cidrs"
+              value={allowedCidrs}
+              onChange={(e) => setAllowedCidrs(e.target.value)}
+              placeholder="10.0.0.0/16, 1.2.3.4/32"
+              className="h-8 w-56 font-mono text-xs"
+            />
+          </div>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -147,6 +204,12 @@ export function EndpointsSection({
           {createEndpoint.isPending ? "Provisioning…" : "Provision compute"}
         </Button>
       </div>
+      {connectivity === "nlb_external" && !allowedCidrs.trim() && (
+        <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">
+          An external load balancer with no allowed CIDRs puts Postgres on the
+          public internet, with password authentication as the only barrier.
+        </p>
+      )}
       {!memoryValid && (
         <p id="ep-memory-hint" className="mt-1.5 text-[11px] text-destructive">
           {msg.memoryNeedsUnit}

@@ -402,6 +402,47 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   `4Gi` when the controller upgrades, so this clears on upgrade; before then, pass
   an explicit `memory` (e.g. `"4Gi"`) with the resize.
 
+## Endpoint stuck on a pod IP after an `nlb_*` create
+
+**Symptom.** An endpoint created with `connectivity.mode` `nlb_internal` or
+`nlb_external` reports a pod IP (or a NodePort/Service address) as its `address`
+instead of a load balancer hostname, and that address dies the next time the pod
+is replaced. The create logged
+`endpoint load balancer not ready in time; falling back to the Service-type address`.
+
+**Cause.** Cloud load balancer provisioning routinely takes longer than
+`lbAddressPollTimeout` (2 min). `CreateEndpoint` falls back rather than failing an
+endpoint that is up and serving — but **nothing re-polls afterwards**. The
+recorded address stays the fallback until the endpoint's next controller-driven
+redeploy re-runs the resolution.
+
+**Check** the load balancer actually came up (it almost always does, minutes after
+the create):
+
+```sh
+kubectl -n "$NS" get svc "$(printf 'yb-ep-%s-lb' "$EP")" \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{"\n"}'
+```
+
+Empty means the LB is still provisioning or failed — describe the Service and read
+its events before anything else; a missing subnet tag or an exhausted NLB quota
+(50 per region) stops it here.
+
+**Recover.** Any controller-driven redeploy of that endpoint re-resolves and
+re-records the address — adding a branch extension is the usual trigger, since
+`add_branch_extensions` carries the endpoint's connectivity into the redeploy and
+calls `SetEndpointAddress` with the result. Failing that, correct the stored value
+directly and let clients re-read it:
+
+```sql
+UPDATE amp_registry.endpoints SET address = '<lb-hostname>:5433' WHERE id = '<ep>';
+```
+
+**Prevention.** The endpoint is reachable in-cluster the whole time; only the
+recorded client address is stale. Callers that resolve the endpoint through the
+API on each connect pick up the corrected value with no further action.
+
+
 ## Every API call answers `503 service_unavailable`
 
 The controller cannot reach the YugabyteDB holding `yb_storage` — the tserver

@@ -34,6 +34,13 @@ type CreateEndpointArgs struct {
 	// the deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Connectivity is the endpoint's client reachability (deploy.Connectivity*):
+	// cluster_ip, nlb_internal or nlb_external. Carried in the args so a
+	// reclaim/replay recreates the same exposure. Empty means cluster_ip.
+	Connectivity string `json:"connectivity,omitempty"`
+	// AllowedCIDRs restricts which sources may reach an nlb_* endpoint's load
+	// balancer (loadBalancerSourceRanges). Empty = unrestricted.
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 	// Extended is per-endpoint compute configuration the control plane passes
 	// through WITHOUT interpreting: extra Postgres settings, and for a locally
 	// deployed compute the ports it binds. Stored under config.extended, nested
@@ -137,6 +144,8 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		ControllerURL: s.scURL,
 		CPU:           s.CPU,
 		Memory:        s.Memory,
+		Connectivity:  s.Connectivity,
+		AllowedCIDRs:  s.AllowedCIDRs,
 		Extensions:    extSpecs,
 		// No pg_settings here: the endpoint's supervisor reads the branch's and
 		// the endpoint's straight from amp_registry and merges them itself, so a
@@ -233,6 +242,14 @@ func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error
 		"pg_version": args.PgVersion,
 		"cpu":        args.CPU,
 		"memory":     args.Memory,
+	}
+	// Stored so GetEndpoint can report the exposure the endpoint was created
+	// with, and so a controller-driven redeploy recreates the same one.
+	if args.Connectivity != "" {
+		cfg["connectivity"] = args.Connectivity
+	}
+	if len(args.AllowedCIDRs) > 0 {
+		cfg["allowed_cidrs"] = args.AllowedCIDRs
 	}
 	if len(extensions) > 0 {
 		cfg["extensions"] = extensions

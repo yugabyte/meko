@@ -95,6 +95,27 @@ func (e EndpointRole) Valid() bool {
 	}
 }
 
+// Defines values for EndpointConnectivityMode.
+const (
+	ClusterIp   EndpointConnectivityMode = "cluster_ip"
+	NlbExternal EndpointConnectivityMode = "nlb_external"
+	NlbInternal EndpointConnectivityMode = "nlb_internal"
+)
+
+// Valid indicates whether the value is a known member of the EndpointConnectivityMode enum.
+func (e EndpointConnectivityMode) Valid() bool {
+	switch e {
+	case ClusterIp:
+		return true
+	case NlbExternal:
+		return true
+	case NlbInternal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MigrationRunOperation.
 const (
 	Assess  MigrationRunOperation = "assess"
@@ -491,6 +512,29 @@ type CreateClusterRequestEngine string
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
 type CreateEndpointRequest struct {
+	// Connectivity How clients reach this endpoint's Postgres port.
+	//
+	// `cluster_ip` (the default) publishes it in-cluster only — plus the
+	// tailnet, when the endpoint Service is tailnet-exposed. The two `nlb_*`
+	// modes additionally place a **Postgres-only** Service behind the cloud's
+	// L4 load balancer: `nlb_internal` is reachable from the surrounding
+	// network (VPC/VNet) only, `nlb_external` is internet-facing. The
+	// pageserver, safekeeper and supervisor ports are never published on that
+	// load balancer — the supervisor's settings API is unauthenticated and can
+	// restart Postgres.
+	//
+	// Works on EKS, GKE and AKS: the controller detects the cloud from the
+	// cluster's nodes and renders that provider's annotations. On a cluster
+	// whose cloud it cannot determine (kind, bare metal), `nlb_internal` is
+	// refused rather than falling back — every provider defaults a
+	// LoadBalancer Service to internet-facing, so a fallback would publish
+	// what was asked to stay private.
+	//
+	// The load-balancer address is also what `Endpoint.address` reports for
+	// these modes, and unlike a pod IP it stays correct when the pod is
+	// replaced.
+	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
+
 	// DiskType Backing disk for the endpoint's data volume. `network` (the default)
 	// provisions a network-attached block volume from the controller's
 	// configured storage class (e.g. EBS on AWS, Persistent Disk on GCP).
@@ -665,7 +709,30 @@ type Endpoint struct {
 
 	// ClusterId The cluster (control-plane grouping) this endpoint is bound to.
 	ClusterId openapi_types.UUID `json:"cluster_id"`
-	CreatedAt time.Time          `json:"created_at"`
+
+	// Connectivity How clients reach this endpoint's Postgres port.
+	//
+	// `cluster_ip` (the default) publishes it in-cluster only — plus the
+	// tailnet, when the endpoint Service is tailnet-exposed. The two `nlb_*`
+	// modes additionally place a **Postgres-only** Service behind the cloud's
+	// L4 load balancer: `nlb_internal` is reachable from the surrounding
+	// network (VPC/VNet) only, `nlb_external` is internet-facing. The
+	// pageserver, safekeeper and supervisor ports are never published on that
+	// load balancer — the supervisor's settings API is unauthenticated and can
+	// restart Postgres.
+	//
+	// Works on EKS, GKE and AKS: the controller detects the cloud from the
+	// cluster's nodes and renders that provider's annotations. On a cluster
+	// whose cloud it cannot determine (kind, bare metal), `nlb_internal` is
+	// refused rather than falling back — every provider defaults a
+	// LoadBalancer Service to internet-facing, so a fallback would publish
+	// what was asked to stay private.
+	//
+	// The load-balancer address is also what `Endpoint.address` reports for
+	// these modes, and unlike a pod IP it stays correct when the pod is
+	// replaced.
+	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
+	CreatedAt    time.Time             `json:"created_at"`
 
 	// ExtendedConfig The `extended_config` this endpoint was created with, verbatim, or
 	// `null` if it has none. Opaque — the control plane stores and forwards
@@ -760,6 +827,55 @@ type Endpoint struct {
 
 // EndpointRole defines model for Endpoint.Role.
 type EndpointRole string
+
+// EndpointConnectivity How clients reach this endpoint's Postgres port.
+//
+// `cluster_ip` (the default) publishes it in-cluster only — plus the
+// tailnet, when the endpoint Service is tailnet-exposed. The two `nlb_*`
+// modes additionally place a **Postgres-only** Service behind the cloud's
+// L4 load balancer: `nlb_internal` is reachable from the surrounding
+// network (VPC/VNet) only, `nlb_external` is internet-facing. The
+// pageserver, safekeeper and supervisor ports are never published on that
+// load balancer — the supervisor's settings API is unauthenticated and can
+// restart Postgres.
+//
+// Works on EKS, GKE and AKS: the controller detects the cloud from the
+// cluster's nodes and renders that provider's annotations. On a cluster
+// whose cloud it cannot determine (kind, bare metal), `nlb_internal` is
+// refused rather than falling back — every provider defaults a
+// LoadBalancer Service to internet-facing, so a fallback would publish
+// what was asked to stay private.
+//
+// The load-balancer address is also what `Endpoint.address` reports for
+// these modes, and unlike a pod IP it stays correct when the pod is
+// replaced.
+type EndpointConnectivity struct {
+	// AllowedCidrs Sources allowed to reach the load balancer, as CIDRs
+	// (`loadBalancerSourceRanges`), e.g. `["10.0.0.0/16"]`. Each entry must
+	// be a valid CIDR **with** a prefix length; a bare IP is rejected with
+	// 400. Only meaningful for the `nlb_*` modes.
+	//
+	// Empty means unrestricted. On `nlb_external` that puts Postgres on the
+	// public internet with password authentication as the only barrier, so
+	// set it for anything but a deliberately open test endpoint.
+	AllowedCidrs *[]string `json:"allowed_cidrs,omitempty"`
+
+	// Mode Client reachability for the Postgres port. Requires the Kubernetes
+	// deployer on EKS, GKE or AKS; the `nlb_*` modes are rejected with 400
+	// on other drivers.
+	// Each `nlb_*` endpoint provisions its own load balancer, which is a
+	// billed cloud resource and counts against the account's per-region
+	// load balancer quota.
+	Mode *EndpointConnectivityMode `json:"mode,omitempty"`
+}
+
+// EndpointConnectivityMode Client reachability for the Postgres port. Requires the Kubernetes
+// deployer on EKS, GKE or AKS; the `nlb_*` modes are rejected with 400
+// on other drivers.
+// Each `nlb_*` endpoint provisions its own load balancer, which is a
+// billed cloud resource and counts against the account's per-region
+// load balancer quota.
+type EndpointConnectivityMode string
 
 // EndpointList defines model for EndpointList.
 type EndpointList struct {

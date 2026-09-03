@@ -397,6 +397,69 @@ Kubernetes driver:
 | `--deploy-memory-gib-per-vcpu` | GiB of memory per endpoint vCPU (`0` = the built-in 8). Fills in the memory when a request names only CPU, and is the floor every request is held to — a pair below it is a `400`. The escape hatch for a pool whose nodes cannot back 8 GiB/core |
 | `--deploy-disk-size-override` | flat `/data` size for **every** endpoint whatever its CPU, bypassing the ratio and the floor; empty (default) = CPU-proportional. Test clusters only |
 
+`--deploy-service-type` and `--deploy-service-annotations` above are the
+deployment-wide default. **Client reachability is also a per-endpoint choice**,
+set with `connectivity` on `POST .../endpoints` and reported back on the
+endpoint:
+
+| `connectivity.mode` | What the endpoint gets |
+|---|---|
+| `cluster_ip` (default) | the ClusterIP Service only — in-cluster, plus the tailnet when tailnet-exposed |
+| `nlb_internal` | additionally a Postgres-only Service behind a VPC-routable AWS NLB |
+| `nlb_external` | the same, internet-facing |
+
+`connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`;
+empty is unrestricted, which on `nlb_external` leaves password authentication as
+the only barrier. Each `nlb_*` endpoint provisions its own load balancer — a
+billed resource that counts against the account's per-region quota.
+
+**Portable across clouds.** The mode is the concept; the annotations that
+implement it are per-provider, so the deployer detects the cloud from a node's
+`spec.providerID` (`aws://` / `gce://` / `azure://`) and passes it to the chart
+as `service.cloud` — no configuration, and it cannot drift from the cluster it
+describes. `KubernetesConfig.Cloud` overrides it.
+
+| Cloud | Internal | External |
+|---|---|---|
+| AWS | NLB, `scheme: internal`, pod-IP targets, cross-zone on | the same, `internet-facing` |
+| GKE | `networking.gke.io/load-balancer-type: Internal` (add `…-allow-global-access` for clients in another region) | no annotation — the default |
+| AKS | `service.beta.kubernetes.io/azure-load-balancer-internal: "true"` | no annotation — the default |
+
+`allowed_cidrs` needs no per-cloud handling: `loadBalancerSourceRanges` is a core
+Service field. An **internal** LB whose cloud is unknown **fails the render**
+rather than falling back — every provider defaults a LoadBalancer Service to
+internet-facing, so a silent fallback would publish exactly what the caller asked
+to keep private. An external one renders fine without knowing the cloud, since it
+needs no annotation anywhere.
+
+Three properties are deliberate:
+
+- **A second Service, not a type change.** The main endpoint Service also carries
+  `sup-http` (9899), the supervisor's settings API — unauthenticated, and able to
+  reload config and restart Postgres. The load-balanced Service publishes the
+  Postgres port alone.
+- **Pod-IP target group (AWS)** (`nlb-target-type: ip`), so there is no kube-proxy hop
+  and the load balancer controller re-registers the pod when it is replaced. That
+  is what makes this address durable where the stored pod IP is not.
+- **Cross-zone enabled (AWS).** An endpoint is one pod in one AZ while the NLB
+  takes an interface per subnet; with cross-zone off (the AWS load balancer
+  controller's default) interfaces in the other AZs have no target and clients
+  resolving to them fail outright. GCP and Azure L4 load balancers are regional
+  and need no equivalent.
+
+Cloud load balancers often take longer to provision than
+`lbAddressPollTimeout`, so `CreateEndpoint` falls back to the Service-type
+address rather than failing the create; the endpoint is up and serving either
+way. Nothing re-polls afterwards — the recorded address stays the fallback until
+the endpoint's next controller-driven redeploy re-runs the resolution. Recovery:
+"Endpoint stuck on a pod IP after an `nlb_*` create" in
+[`amp/runbooks/controller_runbook.md`](../../runbooks/controller_runbook.md).
+
+A redeploy re-renders the release from `core.EndpointDeploy` alone, so that record
+carries `Connectivity`/`AllowedCIDRs`: without them `service.connectivity` renders
+empty, helm prunes the `-lb` Service, and the load balancer is deleted out from
+under every client holding its address.
+
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
 `--deploy-external-host`.
 

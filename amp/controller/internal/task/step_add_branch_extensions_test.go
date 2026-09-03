@@ -69,3 +69,49 @@ func TestAddBranchExtensionsStepRequiresDeployerAndCatalog(t *testing.T) {
 		t.Fatal("Execute succeeded with no catalog, want a failure")
 	}
 }
+
+// The redeploy renders the release from core.EndpointDeploy alone, so it must
+// carry the endpoint's exposure. Without it service.connectivity renders empty,
+// service-lb.yaml's gate is false, helm prunes the -lb Service and the load
+// balancer is deleted — silently reverting an nlb_* endpoint to cluster_ip and
+// invalidating the address every client holds.
+func TestAddBranchExtensionsStepPreservesConnectivity(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	deps := endpointDeps(state, nil, dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+
+	clusterID, branchID := uuid.New(), uuid.New()
+	nlb, plain := uuid.New(), uuid.New()
+	cidrs := []string{"10.0.0.0/16"}
+	state.seedEndpointWithConnectivity(nlb, clusterID, branchID, "nlb_internal", cidrs)
+	state.seedEndpoint(plain, clusterID, branchID)
+
+	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
+		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"},
+	}, deps)
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+
+	var sawNLB bool
+	for _, spec := range dep.created {
+		switch spec.EndpointID {
+		case nlb.String():
+			sawNLB = true
+			if spec.Connectivity != "nlb_internal" {
+				t.Errorf("redeploy Connectivity = %q, want nlb_internal (an empty value deletes the load balancer)", spec.Connectivity)
+			}
+			if len(spec.AllowedCIDRs) != 1 || spec.AllowedCIDRs[0] != cidrs[0] {
+				t.Errorf("redeploy AllowedCIDRs = %v, want %v", spec.AllowedCIDRs, cidrs)
+			}
+		case plain.String():
+			// A cluster_ip endpoint must stay unexposed, not inherit its neighbour's.
+			if spec.Connectivity != "" {
+				t.Errorf("cluster_ip endpoint redeployed with Connectivity = %q, want empty", spec.Connectivity)
+			}
+		}
+	}
+	if !sawNLB {
+		t.Fatalf("the nlb_internal endpoint was never redeployed; specs = %+v", dep.created)
+	}
+}
