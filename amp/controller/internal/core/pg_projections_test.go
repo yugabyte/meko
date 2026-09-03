@@ -70,6 +70,15 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		[]byte(`{"wal_cache_size_mib":512}`)); err != nil {
 		t.Fatalf("ensure endpoint: %v", err)
 	}
+	// version is its own column, written after the insert the way the
+	// create_endpoint step writes it (the deployer reports it only once the deploy
+	// has landed).
+	if err := b.SetEndpointVersion(ctx, endpointID, "ep-v7.7.7"); err != nil {
+		t.Fatalf("set endpoint version: %v", err)
+	}
+	if err := b.SetEndpointTargetVersion(ctx, endpointID, "ep-v8.8.8"); err != nil {
+		t.Fatalf("SetEndpointTargetVersion: %v", err)
+	}
 
 	// pg_settings and write_token_settings are adjacent jsonb columns in the
 	// branch projection, so — as with the endpoint's two daemon columns above —
@@ -135,6 +144,12 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		if got.CPU != "2" || got.Memory != "4Gi" {
 			t.Errorf("resources = (%q,%q), want (2,4Gi)", got.CPU, got.Memory)
 		}
+		// Distinct from every other text column in the projection: version sits
+		// next to name/address/cpu/memory, so a transposed scan has to be
+		// distinguishable from a merely populated row.
+		if got.Version != "ep-v7.7.7" || got.TargetVersion != "ep-v8.8.8" {
+			t.Errorf("version/target = %q/%q, want ep-v7.7.7/ep-v8.8.8", got.Version, got.TargetVersion)
+		}
 		if got.PgSettings["work_mem"] != "64MB" {
 			t.Errorf("pg_settings = %v, want work_mem 64MB", got.PgSettings)
 		}
@@ -162,6 +177,24 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 		if total != 1 || len(list) != 1 || list[0].ID != endpointID {
 			t.Errorf("ListEndpoints = %d/%+v", total, list)
+		}
+
+		// BranchEndpointDeploys has its own projection and its own positional
+		// scanner — the desired state every redeploy renders from. Its fixtures are
+		// mutually distinguishable for the same reason as above.
+		deploys, err := b.BranchEndpointDeploys(ctx, clusterID, branchID)
+		if err != nil {
+			t.Fatalf("BranchEndpointDeploys: %v", err)
+		}
+		if len(deploys) != 1 || deploys[0].ID != endpointID {
+			t.Fatalf("BranchEndpointDeploys = %+v", deploys)
+		}
+		d := deploys[0]
+		if d.PgVersion != 18 || d.CPU != "2" || d.Memory != "4Gi" || d.Version != "ep-v7.7.7" {
+			t.Errorf("deploy state = pg%d %s/%s %q, want pg18 2/4Gi ep-v7.7.7", d.PgVersion, d.CPU, d.Memory, d.Version)
+		}
+		if d.BranchID != branchID {
+			t.Errorf("deploy state branch = %s, want %s", d.BranchID, branchID)
 		}
 	})
 }

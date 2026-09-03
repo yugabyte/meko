@@ -563,7 +563,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a cluster.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.ycp_generation, e.created_at
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.ycp_generation, e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -692,6 +692,36 @@ func (b *PgBackend) SetBranchYCPGeneration(ctx context.Context, branchID uuid.UU
 		branchID.String(), gen)
 	if err != nil {
 		return fmt.Errorf("set branch ycp generation: %w", err)
+	}
+	return nil
+}
+
+// SetEndpointVersion records the version the endpoint runs — an absolute UPDATE
+// of the row's own column, the same shape as SetEndpointAddress and the DB-side
+// half of an upgrade. Idempotent; an absent row is a no-op.
+//
+// The column is the desired state every controller-driven redeploy renders from
+// (BranchEndpointDeploys reads it), so writing it is what stops the next redeploy
+// reverting the endpoint to the deployer's configured default.
+func (b *PgBackend) SetEndpointVersion(ctx context.Context, endpointID uuid.UUID, version string) error {
+	_, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints SET version = $2 WHERE id = $1::uuid`,
+		endpointID.String(), version)
+	if err != nil {
+		return fmt.Errorf("set endpoint version: %w", err)
+	}
+	return nil
+}
+
+// SetEndpointTargetVersion records the version the endpoint SHOULD run — the
+// upgrade's intent, written before the deploy. It differing from `version` is an
+// upgrade that has not converged. Idempotent; an absent row is a no-op.
+func (b *PgBackend) SetEndpointTargetVersion(ctx context.Context, endpointID uuid.UUID, version string) error {
+	_, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints SET target_version = $2 WHERE id = $1::uuid`,
+		endpointID.String(), version)
+	if err != nil {
+		return fmt.Errorf("set endpoint target version: %w", err)
 	}
 	return nil
 }
@@ -951,7 +981,7 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		ycpGen      sql.NullInt64 // NULL until a YCP update has been applied
 		ep          Endpoint
 	)
-	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory,
+	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &ep.Version, &ep.TargetVersion,
 		&settingsRaw, &psRaw, &skRaw, &ep.Extended, &ycpGen, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}

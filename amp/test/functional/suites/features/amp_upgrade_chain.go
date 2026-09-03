@@ -19,10 +19,11 @@
 //
 // SCOPE, and what this test does NOT prove:
 //   - The CONTROL PLANE is what upgrades. There is no endpoint-upgrade route
-//     (meko#455): `controller/internal/api` has no upgrade operation and
-//     `amp_registry.endpoints` has no image column. Endpoints created before a
-//     hop keep running their old image, which is why their data surviving is the
-//     interesting assertion and their pod image is recorded, not asserted.
+//     (meko#455): `controller/internal/api` has no upgrade operation, and while
+//     `amp_registry.endpoints.version` records the image tag an endpoint runs,
+//     nothing moves it. Endpoints created before a hop keep running their old
+//     image, which is why their data surviving is the interesting assertion and
+//     their pod image is recorded, not asserted.
 //   - The Helm CHART is this checkout's, at every hop. Only the images move. So
 //     this covers image rollout and registry-database migration across releases,
 //     not chart evolution across them. A chart change that a released controller

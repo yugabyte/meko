@@ -262,15 +262,16 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 
 // BranchEndpointDeploys returns the renderable desired state of every live
 // endpoint on the branch: its id, the branch it serves, and the pinned pg version
-// + compute size (pg_version from the branch, cpu/memory from the endpoint
-// config). Callers that redeploy a whole branch enumerate these at Execute time,
+// + compute size + version (pg_version from the branch, cpu/memory and version
+// from the endpoint). Callers that redeploy a whole branch enumerate these at Execute time,
 // so a concurrently-added endpoint is still covered on replay. An absent branch
 // yields an empty slice. The leading cluster id is vestigial, as in
 // BranchExtensions.
 func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
 	rows, err := b.pool.Query(ctx,
 		`SELECT e.id::text, e.branch_id::text, eb.pg_version,
-		        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', '')
+		        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
+		        COALESCE(e.version, '')
 		   FROM amp_registry.endpoints e
 		   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
 		  WHERE eb.branch_id = $1::uuid AND eb.dropped_at IS NULL`,
@@ -285,7 +286,7 @@ func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.
 			id, branchID string
 			d            EndpointDeploy
 		)
-		if err := rows.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory); err != nil {
+		if err := rows.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version); err != nil {
 			return nil, fmt.Errorf("scan endpoint deploy: %w", err)
 		}
 		if d.ID, err = uuid.Parse(id); err != nil {

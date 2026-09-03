@@ -133,6 +133,37 @@ func TestAddBranchExtensionsStepReadsTheBranchSetOnce(t *testing.T) {
 	}
 }
 
+// An extension redeploy is a free chance to learn an endpoint's version: the
+// deployer answers with the tag it ran, and for a row whose version is still
+// unknown (created before the column existed, or by a deployer that reported
+// none) this is where it becomes known. Dropping it would leave the fleet with
+// permanently-unknown endpoints that a roll has already touched.
+func TestAddBranchExtensionsStepRecordsTheRedeployedVersion(t *testing.T) {
+	state := newFakeStateStore()
+	dep := &fakeDeployer{defaultVersion: "ep-v9"}
+	deps := endpointDeps(state, nil, dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID)
+	unknown, known := uuid.New(), uuid.New()
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: unknown, BranchID: branchID, PgVersion: 18})
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: known, BranchID: branchID, PgVersion: 18, Version: "ep-v7"})
+
+	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pgvector"}}, deps)
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	// The unknown one learns the deployer's default; the pinned one keeps its own,
+	// because the spec pins it and the deployer echoes what it was asked to run.
+	if got := state.endpointVersions[unknown]; got != "ep-v9" {
+		t.Errorf("version recorded for the unknown endpoint = %q, want ep-v9 (what the deployer reported)", got)
+	}
+	if got := state.endpointVersions[known]; got != "ep-v7" {
+		t.Errorf("version recorded for the pinned endpoint = %q, want ep-v7 (unchanged)", got)
+	}
+}
+
 // A branch set that cannot be read aborts the roll before the first endpoint is
 // touched, rather than leaving the branch half redeployed.
 func TestAddBranchExtensionsStepReadFailureDeploysNothing(t *testing.T) {

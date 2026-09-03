@@ -77,6 +77,12 @@ type EndpointSpec struct {
 	// resize them (see defaultEndpointMemory in kubernetes.go).
 	CPU    string
 	Memory string
+	// Version overrides the deployer's configured endpoint version for this
+	// endpoint. It is an opaque string the deployer knows how to run — today the
+	// endpoint image tag, which each deployer maps onto its own image reference in
+	// one place. Empty = the deployer default (KubernetesConfig.EndpointImageTag,
+	// the tag of DockerConfig.EndpointImage).
+	Version string
 	// Extensions are the externalized PostgreSQL extensions to mount into the
 	// endpoint as read-only ImageVolumes (compute/architecture/extensions.md).
 	// The Kubernetes deployer renders one volume per entry and derives
@@ -116,6 +122,7 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 		ControllerURL: controllerURL,
 		CPU:           e.CPU,
 		Memory:        e.Memory,
+		Version:       e.Version,
 		Extensions:    mounts,
 		// No pg_settings here: the endpoint's supervisor reads the branch's and
 		// the endpoint's straight from amp_registry and merges them itself, so a
@@ -174,6 +181,13 @@ type Endpoint struct {
 	// when the endpoint Service is exposed on the tailnet (see KubernetesConfig.
 	// TailnetSuffix). Empty when not tailnet-exposed.
 	TailnetAddress string
+	// Version is the version the deployer actually ran: the spec's Version when it
+	// asked for one, otherwise the deployer's own configured default. The caller
+	// persists this rather than re-deriving it, so the row records a fact instead
+	// of a request the deployer may have defaulted. Empty means the deployer has
+	// nothing to report (it placed nothing, or its image reference names no
+	// version), and the caller leaves the recorded version as it found it.
+	Version string
 }
 
 // Deployer places and removes compute endpoints on a runtime. CreateEndpoint

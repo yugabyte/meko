@@ -21,7 +21,7 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 
 	spec := EndpointSpecFrom(core.EndpointDeploy{
 		ID: epID, BranchID: branchID, PgVersion: 18,
-		CPU: "8", Memory: "16Gi",
+		CPU: "8", Memory: "16Gi", Version: "ep-v7.7.7",
 	}, yb, "http://sc:50051", mounts)
 
 	if spec.Name != EndpointName(epID) {
@@ -35,6 +35,9 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	}
 	if spec.PgVersion != 18 {
 		t.Errorf("PgVersion = %d, want 18", spec.PgVersion)
+	}
+	if spec.Version != "ep-v7.7.7" {
+		t.Errorf("Version = %q, want ep-v7.7.7 (the endpoint's own, not the deployer default)", spec.Version)
 	}
 	if spec.YB != yb {
 		t.Errorf("YB = %+v, want %+v", spec.YB, yb)

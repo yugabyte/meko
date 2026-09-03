@@ -93,6 +93,33 @@ func TestKubernetesValues(t *testing.T) {
 	}
 }
 
+// The endpoint's version is the chart's image.tag, and an endpoint that asks for
+// nothing gets exactly the configured tag — the behaviour before versions were
+// per-endpoint. The fallback is resolved here rather than delegated to the chart
+// (image.tag has no omitempty, and the chart reads an empty tag as its own
+// appVersion), so both directions are asserted on the rendered values.
+func TestKubernetesValuesVersionIsTheImageTag(t *testing.T) {
+	cfg := testKubernetesConfig()
+	k := NewKubernetesDeployer(cfg, nil)
+
+	unset := k.values(testEndpointSpec(), "rel")
+	if unset.Image.Tag != cfg.EndpointImageTag {
+		t.Errorf("Image.Tag with no version = %q, want the configured %q", unset.Image.Tag, cfg.EndpointImageTag)
+	}
+
+	spec := testEndpointSpec()
+	spec.Version = "v9.9.9"
+	pinned := k.values(spec, "rel")
+	if pinned.Image.Tag != "v9.9.9" {
+		t.Errorf("Image.Tag with a version = %q, want v9.9.9", pinned.Image.Tag)
+	}
+	// The version moves the tag only: the repository stays deployer configuration,
+	// so an upgrade cannot silently point an endpoint at a different image.
+	if pinned.Image.Repository != cfg.EndpointImageRepo {
+		t.Errorf("Image.Repository = %q, want the configured %q", pinned.Image.Repository, cfg.EndpointImageRepo)
+	}
+}
+
 // An unset branch id must reach the chart as "", not as the nil uuid: the chart
 // reads an empty branchId as "bootstrap a fresh branch" and the supervisor's
 // env_opt discards empty values, and "00000000-…" passes both checks.

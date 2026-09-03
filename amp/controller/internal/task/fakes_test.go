@@ -44,10 +44,12 @@ type fakeStateStore struct {
 	endpointResources          map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
 	// The applied YCP generation the worker stamped, per resource. Monotonic, like
 	// the real GREATEST write, so a test can assert a late older task cannot regress it.
-	endpointYCPGeneration map[uuid.UUID]int64
-	branchYCPGeneration   map[uuid.UUID]int64
-	deletedEndpoints      map[uuid.UUID]struct{}
-	existingWriterBranch  map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
+	endpointYCPGeneration  map[uuid.UUID]int64
+	branchYCPGeneration    map[uuid.UUID]int64
+	deletedEndpoints       map[uuid.UUID]struct{}
+	existingWriterBranch   map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
+	endpointVersions       map[uuid.UUID]string    // endpoint id -> running version last recorded
+	endpointTargetVersions map[uuid.UUID]string    // endpoint id -> target version last recorded
 
 	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
 	// EndpointIDsForBranch / EndpointIDsForCluster can enumerate children and the
@@ -312,6 +314,31 @@ func (f *fakeStateStore) SetEndpointAddress(_ context.Context, endpointID uuid.U
 	return nil
 }
 
+func (f *fakeStateStore) SetEndpointTargetVersion(_ context.Context, endpointID uuid.UUID, version string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endpointTargetVersions == nil {
+		f.endpointTargetVersions = map[uuid.UUID]string{}
+	}
+	f.endpointTargetVersions[endpointID] = version
+	return nil
+}
+
+func (f *fakeStateStore) SetEndpointVersion(_ context.Context, endpointID uuid.UUID, version string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endpointVersions == nil {
+		f.endpointVersions = map[uuid.UUID]string{}
+	}
+	f.endpointVersions[endpointID] = version
+	// The column is desired state, so a later redeploy renders what was recorded.
+	if d, ok := f.endpointBranch[endpointID]; ok {
+		d.Version = version
+		f.endpointBranch[endpointID] = d
+	}
+	return nil
+}
+
 func (f *fakeStateStore) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -474,6 +501,9 @@ type fakeDeployer struct {
 	createErr error
 	deleteErr error
 	resizeErr error
+	// defaultVersion is what the deployer reports when the spec pins none, the way
+	// a real one falls back to its configured image tag. Empty: reports nothing.
+	defaultVersion string
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
@@ -483,7 +513,14 @@ func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpe
 	if f.createErr != nil {
 		return deploy.Endpoint{}, f.createErr
 	}
-	return deploy.Endpoint{ID: spec.Name, Address: spec.Name + ".endpoints.svc:55433"}, nil
+	// Echo the requested version back, as a real deployer reports the version it
+	// ran; with none pinned it reports its own default, which is how an endpoint
+	// with no recorded version learns one.
+	ran := spec.Version
+	if ran == "" {
+		ran = f.defaultVersion
+	}
+	return deploy.Endpoint{ID: spec.Name, Address: spec.Name + ".endpoints.svc:55433", Version: ran}, nil
 }
 
 func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {

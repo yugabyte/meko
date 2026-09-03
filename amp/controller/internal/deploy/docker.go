@@ -55,6 +55,13 @@ const (
 )
 
 func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error) {
+	// Resolve the image before tearing the old container down: a version this
+	// deployer cannot honour must leave the running endpoint alone rather than
+	// remove it and then fail.
+	image, version, err := endpointImage(d.cfg.EndpointImage, spec.Version)
+	if err != nil {
+		return Endpoint{}, err
+	}
 	d.rmForce(context.Background(), spec.Name)
 
 	args := []string{"run", "-d", "--name", spec.Name}
@@ -98,7 +105,7 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
 	}
-	args = append(args, d.cfg.EndpointImage)
+	args = append(args, image)
 
 	if _, err := d.docker(ctx, args...); err != nil {
 		// `docker run -d` can fail after the container was created; don't leave it.
@@ -119,8 +126,88 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		d.rmForce(context.Background(), spec.Name)
 		return Endpoint{}, err
 	}
-	d.logger.Info("endpoint ready", "endpoint", spec.Name, "address", addr)
-	return Endpoint{ID: spec.Name, Address: addr}, nil
+	d.logger.Info("endpoint ready", "endpoint", spec.Name, "address", addr, "image", image)
+	return Endpoint{ID: spec.Name, Address: addr, Version: version}, nil
+}
+
+// endpointImage resolves the image this deployer runs for an endpoint, and the
+// version that image names. It is the one place a version becomes an image
+// reference on the Docker deployer.
+//
+// Unlike Kubernetes, the configured image is a single full reference rather than
+// a repository/tag pair, so honouring a version means rewriting its tag. An empty
+// version keeps the configured reference byte for byte.
+//
+// A digest-pinned reference is refused rather than rewritten: the digest is what
+// selects the image, so retagging it would either produce an invalid reference or
+// keep running the pinned image under a new recorded version.
+//
+// Every rejection must happen HERE, before the caller removes the running
+// container: a version that only fails later, at `docker run`, costs the endpoint
+// its container with nothing left to redeploy it. That is why the version's own
+// syntax is checked and not just the reference's shape.
+func endpointImage(ref, version string) (image, resolved string, err error) {
+	name, tag, digest := splitImageRef(ref)
+	if version == "" {
+		if digest != "" {
+			// Nothing to report: the digest is not a version and is not modelled.
+			return ref, "", nil
+		}
+		return ref, tag, nil
+	}
+	if digest != "" {
+		return "", "", fmt.Errorf("cannot deploy endpoint version %q: --deploy-endpoint-image %q is pinned to a digest, which has no tag to substitute", version, ref)
+	}
+	if !validImageTag(version) {
+		return "", "", fmt.Errorf("cannot deploy endpoint version %q: not a valid image tag (%s)", version, imageTagGrammar)
+	}
+	return name + ":" + version, version, nil
+}
+
+// imageTagGrammar is Docker's tag grammar, quoted in the error so the caller is
+// told what would have been acceptable.
+const imageTagGrammar = "[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"
+
+// validImageTag reports whether version is usable as an image tag. Spelled out
+// rather than regexp-compiled per call; the rule is small and fixed.
+func validImageTag(version string) bool {
+	if version == "" || len(version) > 128 {
+		return false
+	}
+	for i := 0; i < len(version); i++ {
+		c := version[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
+		case c == '.' || c == '-':
+			// Legal only after the first character.
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// splitImageRef splits a Docker image reference into its name, its tag and its
+// digest, any of the latter two being empty when absent.
+//
+// The tag is the part after the last colon only when that colon is in the
+// reference's final path component: in "localhost:5000/img" the colon introduces a
+// registry port, and a naive last-colon split would turn it into the unrelated
+// image "localhost".
+func splitImageRef(ref string) (name, tag, digest string) {
+	name = ref
+	if i := strings.IndexByte(name, '@'); i >= 0 {
+		digest = name[i+1:]
+		name = name[:i]
+	}
+	if i := strings.LastIndexByte(name, ':'); i >= 0 && !strings.Contains(name[i+1:], "/") {
+		tag = name[i+1:]
+		name = name[:i]
+	}
+	return name, tag, digest
 }
 
 func (d *DockerDeployer) DeleteEndpoint(_ context.Context, id string) error {

@@ -386,7 +386,7 @@ Kubernetes driver:
 |---|---|
 | `--deploy-namespace` | namespace endpoints are deployed into |
 | `--helm-bin` / `--deploy-chart` / `--kubeconfig` | helm binary, chart path, KUBECONFIG (empty = in-cluster) |
-| `--endpoint-image-repo` / `--endpoint-image-tag` | endpoint image (tag must be set) |
+| `--endpoint-image-repo` / `--endpoint-image-tag` | endpoint image (tag must be set). The tag is the **default**: an endpoint carrying its own `version` overrides it (`ac-endpoint-upgrade.md` §3) |
 | `--deploy-pull-secret` | `imagePullSecrets` name in the namespace |
 | `--deploy-compute-port` | compute Postgres port the Service publishes |
 | `--deploy-service-type` | endpoint Service type: `ClusterIP` (default), `NodePort`, or `LoadBalancer` |

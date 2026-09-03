@@ -193,9 +193,18 @@ type Endpoint struct {
 	// quantities), read from the stored config. Empty when the config predates
 	// resource tracking. Surfaced on the API so callers see the current size and
 	// can resize relative to it.
-	CPU       string
-	Memory    string
-	CreatedAt time.Time
+	CPU    string
+	Memory string
+	// Version is the version this endpoint is recorded as running — an opaque
+	// string the deployer knows how to run (today the endpoint image tag). Empty
+	// when unknown: the endpoint predates version tracking, or nothing has
+	// reported one. Unknown is upgradeable; it is never guessed from the
+	// controller's currently configured default.
+	Version string
+	// TargetVersion is the version the endpoint SHOULD run, written before an
+	// upgrade deploys. Differing from Version is an upgrade that has not converged.
+	TargetVersion string
+	CreatedAt     time.Time
 	// YCPGeneration is the highest YCP desired-state generation fully applied to
 	// this endpoint, echoed back so the reconcile agent can tell an applied update
 	// from one whose async task never finished (meko#985). Written by the worker
@@ -216,6 +225,11 @@ type EndpointDeploy struct {
 	PgVersion int
 	CPU       string
 	Memory    string
+	// Version is the endpoint's own version (the `version` column), rendered onto
+	// the deploy spec so a redeploy keeps it. Empty means unknown, which renders
+	// as "whatever the deployer is configured with" — the behaviour of every
+	// endpoint created before the column existed.
+	Version string
 }
 
 // DefaultBranchName is the name given to a cluster's default (root) branch. The

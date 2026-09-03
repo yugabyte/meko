@@ -19,20 +19,22 @@ locking foundation changed under it (its branch and
 [design doc](https://github.com/yugabyte/meko/issues/809#issuecomment-5375942830) are
 kept). §7 records what carries over and what `pglease` lets us delete.
 
-## 1. What is missing today
+**Landed so far:** §4.1 (the spec assembler), §2 and §3 (the version column and the
+per-endpoint override). §4, §5 and §6 are not built yet.
 
-An endpoint's version is **static deployer configuration**, not a property of the
-endpoint:
+## 1. What was missing
 
-- `--endpoint-image-tag` / `AMP_ENDPOINT_IMAGE_TAG` becomes
-  `KubernetesConfig.EndpointImageTag`, stamped into every release's `image.tag`
-  (`deploy/kubernetes.go:909`);
-- `deploy.EndpointSpec` has no version field, so nothing per-endpoint can ask for a
+Before §2–3, an endpoint's version was **static deployer configuration**, not a
+property of the endpoint:
+
+- `--endpoint-image-tag` / `AMP_ENDPOINT_IMAGE_TAG` became
+  `KubernetesConfig.EndpointImageTag`, stamped into every release's `image.tag`;
+- `deploy.EndpointSpec` had no version field, so nothing per-endpoint could ask for a
   different one;
-- `amp_registry.endpoints` has no version column, so the controller cannot say what
-  an endpoint is running.
+- `amp_registry.endpoints` had no version column, so the controller could not say what
+  an endpoint was running.
 
-Delete-and-recreate is the only path onto a new build. Three pieces close that: a
+Delete-and-recreate was the only path onto a new build. Three pieces close that: a
 per-endpoint version on the deploy spec (§3), a recorded running version on the
 endpoint row (§2), and a task that moves one to the other (§4–5).
 
@@ -50,7 +52,7 @@ fired at the whole fleet at once.
 
 ## 2. Recording what an endpoint runs
 
-Migration `0010`:
+Migration `0011`:
 
 ```sql
 ALTER TABLE amp_registry.endpoints ADD COLUMN IF NOT EXISTS version text;
@@ -89,15 +91,46 @@ redeploy verb; both belong with whatever needs them.
 Version string
 ```
 
-The Kubernetes deployer renders `spec.Version` as `image.tag` when set, falling back
-to `cfg.EndpointImageTag`. That fallback is exactly today's behaviour, so nothing
-changes for an endpoint that never asks.
+Each deployer maps it onto its own image reference in one place, and reports back
+the version it actually ran:
 
-**`create_endpoint` must carry it too.** Its args gain `Version`, stored in the
-endpoint config — otherwise any later controller-driven redeploy of an upgraded
-endpoint silently reverts it to the deployer default. Same argument as `cpu`/`memory`
-in `resize_endpoint`: desired state has to be durable on the row, or the next
-redeploy undoes it.
+- **Kubernetes** renders `spec.Version` as `image.tag` when set, falling back to
+  `cfg.EndpointImageTag`. That fallback is exactly today's behaviour, so nothing
+  changes for an endpoint that never asks. The fallback is resolved in Go, not left
+  to the chart: `image.tag` has no `omitempty` and the chart reads an empty tag as
+  its own `appVersion`.
+- **Docker** configures one full image reference rather than a repository/tag pair,
+  so it substitutes the tag out of it — parsed, because a registry host with a port
+  (`localhost:5000/img`) has a colon that is not a tag. A **digest-pinned** reference
+  is refused rather than retagged: the digest is what selects the image, so honouring
+  the version would deploy the pinned image under a new recorded version. Every
+  refusal — the digest case and a version that is not a legal tag — has to happen
+  **before** the deployer removes the running container, or a bad version costs the
+  endpoint its container with nothing left to bring it back. That is why this driver
+  validates the version's own syntax rather than letting `docker run` reject it.
+- **local** places nothing, so it echoes the version back — the only one it can name.
+  Echoing keeps the record convergent (a roll would otherwise re-select the endpoint
+  forever); the usual case is empty in, empty out, which stays unknown.
+
+**`create_endpoint` must carry it too.** Its args gain `Version`, and the step writes
+what the deployer reported to the `version` column — otherwise any later
+controller-driven redeploy of an upgraded endpoint silently reverts it to the
+deployer default. Same argument as `cpu`/`memory` in `resize_endpoint`: desired state
+has to be durable on the row, or the next redeploy undoes it. On the column, not in
+the `config` blob, so there is one answer to what the endpoint runs.
+
+A consequence worth naming: an endpoint created after this records the tag it ran,
+so bumping the controller's `--endpoint-image-tag` no longer moves it on its next
+redeploy. Moving it is what §4–6 are for. Endpoints created *before* this have a NULL
+version and keep following the configured default until something records one.
+
+**Watch the defaults when testing this.** `--endpoint-image-tag` defaults to `latest`
+and `--deploy-endpoint-image` to `yb-amp/neon-endpoint:dev`, and both are required to
+be non-empty — so on a default-configured controller *every* endpoint records the
+literal `latest` (or `dev`). Combined with §5.1's skip-if-already-at-target, a fleet
+of endpoints all recorded at `latest` cannot be rolled to `latest` again, which is the
+mutable-tag limitation above meeting the shipped default. Any real exercise of the
+upgrade path has to run the controller with a genuine version tag, not the default.
 
 ## 4. `upgrade_endpoint` — one endpoint
 
@@ -136,10 +169,10 @@ the reason in §4. (`resize_endpoint` is deployer-first and looks like a
 counterexample, but it patches a `ResizeSpec` in place and never renders.)
 
 Adding a third hand-rolled `deploy.EndpointSpec{…}` literal is what to avoid. The
-struct has nine fields going on ten, drawn from three places — six from durable
-state, three from deps (`YB`, `ControllerURL`, the catalog), one derived from the id —
-and **omitting one is silent**: the deploy succeeds and the endpoint comes back
-missing a mount or reverted to a default size.
+struct has ten fields, drawn from three places — six from durable state, three from
+deps (`YB`, `ControllerURL`, the catalog), one derived from the id — and **omitting
+one is silent**: the deploy succeeds and the endpoint comes back missing a mount,
+reverted to a default size, or running the deployer's default version.
 
 So spec assembly lives in one function, beside the type it builds, in
 `internal/deploy`:
@@ -200,7 +233,7 @@ re-drives the roll.
 
 ### 5.1 Shape: a subtask is not a task
 
-Migration `0010` adds a table, and changes nothing about `tasks`:
+Migration `0011` adds a table, and changes nothing about `tasks`:
 
 ```sql
 CREATE TABLE subtasks (
@@ -441,9 +474,11 @@ reads of a fleet that moves in between. So an id that no longer exists, and one
 already at the target, are `skipped` lines in the task result — a roll is never
 refused because one of its endpoints cannot move.
 
-Read side: `Endpoint` gains `version` (empty when unknown). This is the hook QA asked
-for on #455 — a test can assert the upgrade *converged* rather than inferring it from
-pod images.
+Read side: `Endpoint` carries `version`, **absent when unknown** rather than an empty
+string, so "we do not know" and "it runs a version named by the empty string" stay
+distinguishable. This is the hook QA asked for on #455 — a test can assert the upgrade
+*converged* rather than inferring it from pod images. It landed with §2–3 rather than
+here, because it is what lets an end-to-end test see the recorded column at all.
 
 Drilling into a roll is `GET /tasks/{taskId}/subtasks` — one row per endpoint with its
 status, result and error. `GET /tasks` needs no change at all: subtasks are not tasks,
@@ -482,7 +517,9 @@ That size is itself a design input. **This should land as a stack, not one PR:**
    them. Pure refactor, no behaviour change, and it makes every PR after it smaller.
 2. **The version column and deploy-spec override** (§2–3).
 3. **`upgrade_endpoint`** (§4) — the per-endpoint step, usable on its own.
-4. **The `subtasks` table and runner** (§5).
+4. **The `subtasks` table and runner** (§5) — migration `0011`; the numbers are
+   assigned in stack order, since two migrations claiming one version wedges the
+   controller's startup.
 5. **The API** (§6).
 
 Each is reviewable alone, and 1–3 are useful without the rest. Converting both
@@ -511,8 +548,18 @@ Unit, against `MemStore`, `MemLocks` and the existing fakes:
   invariant that has to be tested rather than designed away.
 - **the handler** — the `400`s and `max_parallel` bounds.
 
+**The two real deployers' `CreateEndpoint` bodies are not unit-testable**, and that
+is where the version is consumed and reported back. Both shell out (`exec.Command` to
+`docker` / `helm`) with no runner seam, so `values()` and `endpointImage()` are pinned
+as pure functions while the hop from those into the returned `deploy.Endpoint` is not.
+It matters because `create_endpoint` treats an empty reported version as "no
+information" and skips the write — a deployer that stopped reporting would silently
+never record a version, with the suite green. Until a runner seam exists, a real
+deploy is the only thing that covers it, so an end-to-end check that the `version`
+column is populated after a create belongs in whatever exercises a live cluster.
+
 Live-database (`store_pg_test.go` / `locks_pg_test.go`, `AMP_TEST_DATABASE_URL`):
-`TestMigrateRoundTrip` with 0010; the subtask store's idempotent create against real
+`TestMigrateRoundTrip` with 0011; the subtask store's idempotent create against real
 SQL; and `fleet:endpoints` serializing two parents, at a short lease as the other
 `TestPg…` lock tests do.
 

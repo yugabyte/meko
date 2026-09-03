@@ -1658,6 +1658,13 @@ components:
         safekeeper_settings:
           $ref: '#/components/schemas/DaemonSettings'
           description: This endpoint's safekeeper overrides, as stored.
+        version:
+          type: string
+          description: |
+            The version this endpoint is recorded as running — an opaque string
+            the deployer knows how to run (today the endpoint image tag). Absent
+            when unknown: the endpoint predates version tracking, or nothing has
+            reported one. Never guessed from the controller's configured default.
         ycp_generation:
           $ref: '#/components/schemas/YCPGenerationObserved'
         created_at:

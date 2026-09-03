@@ -26,8 +26,13 @@ var _ Deployer = LocalDeployer{}
 // record names is started locally by whoever owns it. The id echoes the
 // requested deploy name so the record's deploy handle keeps the same shape as
 // the launching drivers'.
+//
+// The version echoes back for the same reason: there is no image to override, and
+// what the launcher actually built is not visible from here, so the requested
+// version is the only one this driver can name. Echoing keeps the record
+// convergent — a version recorded is a version a later roll will not re-select.
 func (LocalDeployer) CreateEndpoint(_ context.Context, spec EndpointSpec) (Endpoint, error) {
-	return Endpoint{ID: spec.Name}, nil
+	return Endpoint{ID: spec.Name, Version: spec.Version}, nil
 }
 
 // DeleteEndpoint retires nothing; the record's owner stops its own process. The

@@ -614,6 +614,7 @@ func (m *MemBackend) BranchEndpointDeploys(_ context.Context, _, branchID uuid.U
 			PgVersion: m.branches[e.BranchID].PgVersion,
 			CPU:       e.CPU,
 			Memory:    e.Memory,
+			Version:   e.Version,
 		})
 	}
 	return out, nil
@@ -764,6 +765,30 @@ func maxYCPGeneration(current *int64, gen int64) *int64 {
 		gen = *current
 	}
 	return &gen
+}
+
+// SetEndpointVersion records the endpoint's version, mirroring PgBackend's
+// absolute UPDATE of the row's own column. Absent endpoint is a no-op.
+func (m *MemBackend) SetEndpointVersion(_ context.Context, endpointID uuid.UUID, version string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		ep.Version = version
+		m.endpoints[endpointID] = ep
+	}
+	return nil
+}
+
+// SetEndpointTargetVersion records the version the endpoint should run, mirroring
+// PgBackend's.
+func (m *MemBackend) SetEndpointTargetVersion(_ context.Context, endpointID uuid.UUID, version string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		ep.TargetVersion = version
+		m.endpoints[endpointID] = ep
+	}
+	return nil
 }
 
 // UpdateBranchSettings stores the branch-wide settings the caller named,

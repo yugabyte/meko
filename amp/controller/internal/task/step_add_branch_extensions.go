@@ -114,6 +114,16 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 		if err := s.state.UpdateEndpointExtensions(ctx, d.ID, extensionNames(spec.Extensions)); err != nil {
 			return Fail(fmt.Errorf("record endpoint extensions %s: %w", d.ID, err))
 		}
+		// The deployer just answered with the tag it ran, so take it: for an endpoint
+		// whose version is still unknown (created before the column, or by a deployer
+		// that reports none) this redeploy is where it becomes known. Same guard as
+		// create_endpoint — an empty report is no information and must not overwrite
+		// a known version with "unknown".
+		if deployed.Version != "" {
+			if err := s.state.SetEndpointVersion(ctx, d.ID, deployed.Version); err != nil {
+				return Fail(fmt.Errorf("record endpoint version %s: %w", d.ID, err))
+			}
+		}
 	}
 
 	logger.Info("branch extensions added", "added", s.Extensions, "endpoints_redeployed", len(deploys))

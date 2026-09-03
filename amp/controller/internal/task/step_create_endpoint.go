@@ -35,6 +35,11 @@ type CreateEndpointArgs struct {
 	// the deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Version pins the endpoint to a deployer version (today the endpoint image
+	// tag). Carried in the args for the same reason as CPU/Memory — a replay must
+	// deploy the same thing — and empty means the deployer's configured default,
+	// which is what every create asks for until something pins one.
+	Version string `json:"version,omitempty"`
 	// Extended is per-endpoint compute configuration the control plane passes
 	// through WITHOUT interpreting: extra Postgres settings, and for a locally
 	// deployed compute the ports it binds. Stored under config.extended, nested
@@ -108,6 +113,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		PgVersion: s.PgVersion,
 		CPU:       s.CPU,
 		Memory:    s.Memory,
+		Version:   s.Version,
 	}, s.yb, s.scURL, exts)
 
 	// Record the endpoint row first: it claims the single-writer slot (a second
@@ -141,8 +147,18 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	if err := s.state.SetEndpointAddress(ctx, s.EndpointID, deployed.Address, deployed.TailnetAddress); err != nil {
 		return Fail(fmt.Errorf("record endpoint address: %w", err))
 	}
+	// Record what the deployer actually ran, not what the args asked for: an empty
+	// Version means "the deployer's default", and the deployer is the only thing
+	// that knows what that resolved to. An empty report is no information at all
+	// (LocalDeployer places nothing) and must not overwrite a version already on
+	// the row with "unknown".
+	if deployed.Version != "" {
+		if err := s.state.SetEndpointVersion(ctx, s.EndpointID, deployed.Version); err != nil {
+			return Fail(fmt.Errorf("record endpoint version: %w", err))
+		}
+	}
 
-	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress)
+	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress, "version", deployed.Version)
 	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
 }
 

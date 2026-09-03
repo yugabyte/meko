@@ -748,6 +748,12 @@ type Endpoint struct {
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
 	TailnetAddress string `json:"tailnet_address"`
 
+	// Version The version this endpoint is recorded as running — an opaque string
+	// the deployer knows how to run (today the endpoint image tag). Absent
+	// when unknown: the endpoint predates version tracking, or nothing has
+	// reported one. Never guessed from the controller's configured default.
+	Version *string `json:"version,omitempty"`
+
 	// YcpGeneration The highest YCP desired-state generation fully applied to this resource,
 	// written by the task worker only after every step of the task carrying it
 	// succeeded — so it means the work landed, not that a `202` was returned.

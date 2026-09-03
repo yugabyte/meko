@@ -109,6 +109,17 @@ type StateStore interface {
 	// endpoint is not exposed on the tailnet. A missing endpoint is not an error.
 	SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address, tailnetAddress string) error
 
+	// SetEndpointVersion records the version an endpoint is RUNNING, written after
+	// a deploy reports back (absolute UPDATE, idempotent; a missing endpoint is not
+	// an error). BranchEndpointDeploys reads it back, so it is what every later
+	// controller-driven redeploy renders.
+	SetEndpointVersion(ctx context.Context, endpointID uuid.UUID, version string) error
+
+	// SetEndpointTargetVersion records the version an endpoint SHOULD run, written
+	// before an upgrade deploys. Differing from the running version is an upgrade
+	// that has not converged.
+	SetEndpointTargetVersion(ctx context.Context, endpointID uuid.UUID, version string) error
+
 	// DeleteEndpoint removes an endpoint record (idempotent; absent row is a no-op).
 	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error
 

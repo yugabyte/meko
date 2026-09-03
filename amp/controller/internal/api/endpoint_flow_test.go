@@ -236,7 +236,10 @@ func TestEndpointDiskType(t *testing.T) {
 // Cluster and Branch APIs, and extended per branch with addBranchExtensions
 // (which redeploys the branch's endpoints to pick up the new mounts).
 func TestClusterExtensions(t *testing.T) {
-	dep := &fakeDeployer{}
+	// A deployer with a version to report, so the create records one and the
+	// redeploy below has something to lose.
+	const deployerVersion = "ep-2026.08.1"
+	dep := &fakeDeployer{version: deployerVersion}
 	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
@@ -304,10 +307,11 @@ func TestClusterExtensions(t *testing.T) {
 	}
 	drainTasks(t, store, backend, prov)
 	// The redeploy re-renders the endpoint from its stored desired state, so it
-	// must carry the endpoint's own version and size through, not just the changed
-	// mounts. This is the only assertion covering that through a real backend: a
-	// BranchEndpointDeploys that stopped reporting either would otherwise silently
-	// resize the endpoint and move its Postgres major version on the next
+	// must carry the endpoint's own Postgres version, size and endpoint version
+	// through, not just the changed mounts. This is the only assertion covering
+	// that through a real backend: a BranchEndpointDeploys that stopped reporting
+	// any of them would otherwise silently resize the endpoint, move its Postgres
+	// major version, or revert it to the deployer's configured version on the next
 	// extension change.
 	// Compared against the CREATE's spec rather than literals, so the assertion
 	// does not encode the deployer's defaults — and so it cross-checks two
@@ -317,6 +321,26 @@ func TestClusterExtensions(t *testing.T) {
 	if redeployed.PgVersion != created.PgVersion || redeployed.CPU != cpu || redeployed.Memory != mem {
 		t.Errorf("redeploy spec = pg%d %s/%s, want pg%d %s/%s (the endpoint's own desired state)",
 			redeployed.PgVersion, redeployed.CPU, redeployed.Memory, created.PgVersion, cpu, mem)
+	}
+	// The create asked for no version and the deployer answered with its own; that
+	// answer is on the row, so the redeploy must pin it rather than ask for the
+	// default again.
+	if created.Version != "" {
+		t.Errorf("create spec version = %q, want empty (the create pinned nothing)", created.Version)
+	}
+	if redeployed.Version != deployerVersion {
+		t.Errorf("redeploy spec version = %q, want %q (the version the create recorded)", redeployed.Version, deployerVersion)
+	}
+	// And it is what the API reports the endpoint as running.
+	gotEp, err := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, uuid.MustParse(created.EndpointID))
+	if err != nil {
+		t.Fatalf("GetEndpoint: %v", err)
+	}
+	if gotEp.JSON200 == nil {
+		t.Fatalf("GetEndpoint returned no endpoint: %s", gotEp.Status())
+	}
+	if gotEp.JSON200.Version == nil || *gotEp.JSON200.Version != deployerVersion {
+		t.Errorf("GetEndpoint version = %v, want %q", gotEp.JSON200.Version, deployerVersion)
 	}
 	last := redeployed.Extensions
 	if len(last) != 2 {

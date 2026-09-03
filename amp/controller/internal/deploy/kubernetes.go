@@ -214,7 +214,9 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	}
 	tailnet := k.tailnetAddress(release)
 	k.logger.Info("endpoint ready", "endpoint", release, "address", addr, "tailnet_address", tailnet)
-	return Endpoint{ID: release, Address: addr, TailnetAddress: tailnet}, nil
+	// The version reported is the tag that was rendered, read back off the values
+	// that were installed — so it cannot drift from what the release runs.
+	return Endpoint{ID: release, Address: addr, TailnetAddress: tailnet, Version: vals.Image.Tag}, nil
 }
 
 // verifyReadyBudget / verifyReadyInterval / verifyReadyAttempt bound the
@@ -981,11 +983,19 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	if memory == "" {
 		memory = defaultEndpointMemory
 	}
+	// The one place a version becomes an image tag on this deployer. The fallback
+	// is resolved here rather than left to the chart: image.tag has no omitempty
+	// and the chart reads an empty tag as its own appVersion, so delegating it
+	// would deploy the chart default instead of the configured tag.
+	tag := spec.Version
+	if tag == "" {
+		tag = k.cfg.EndpointImageTag
+	}
 	v := chartValues{
 		FullnameOverride: release,
 		Image: imageValues{
 			Repository: k.cfg.EndpointImageRepo,
-			Tag:        k.cfg.EndpointImageTag,
+			Tag:        tag,
 		},
 		Yugabyte: yugabyteValues{
 			HostPorts: spec.YB.HostPorts,

@@ -498,8 +498,13 @@ type fakeDeployer struct {
 	// mu guards the recorded-call slices: drainTasks runs the worker with
 	// MaxConcurrent > 1, so steps (hence these deployer methods) can be invoked
 	// from several goroutines at once. Without it, the parallel-resize test races.
-	mu        sync.Mutex
-	addr      string
+	mu   sync.Mutex
+	addr string
+	// version stands in for the deployer's configured endpoint version (the
+	// Kubernetes deployer's --endpoint-image-tag): what CreateEndpoint reports
+	// having run when the spec asks for nothing. Empty = a deployer with no
+	// version to report.
+	version   string
 	skURL     string // safekeeper base URL EndpointSafekeeperURL returns (fork-point resolution)
 	supURL    string // supervisor settings API base URL; empty = unreachable
 	created   []deploy.EndpointSpec
@@ -523,7 +528,13 @@ func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpe
 	if addr == "" {
 		addr = spec.Name + ".ns.svc.cluster.local:55433"
 	}
-	return deploy.Endpoint{ID: spec.Name, Address: addr}, nil
+	// Report the version actually run: the spec's when it asked for one, else the
+	// deployer's own default — the resolution every real deployer performs.
+	version := spec.Version
+	if version == "" {
+		version = f.version
+	}
+	return deploy.Endpoint{ID: spec.Name, Address: addr, Version: version}, nil
 }
 
 func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {

@@ -69,7 +69,7 @@ func TestCreateEndpointStepDeploysTheArgsDesiredState(t *testing.T) {
 
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write",
-		PgVersion: 15, CPU: "8", Memory: "16Gi",
+		PgVersion: 15, CPU: "8", Memory: "16Gi", Version: "ep-v9",
 	}, deps)
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -85,8 +85,51 @@ func TestCreateEndpointStepDeploysTheArgsDesiredState(t *testing.T) {
 	if spec.CPU != "8" || spec.Memory != "16Gi" {
 		t.Errorf("deployed CPU/Memory = %q/%q, want 8/16Gi (the args' size)", spec.CPU, spec.Memory)
 	}
+	if spec.Version != "ep-v9" {
+		t.Errorf("deployed Version = %q, want ep-v9 (the args' pinned version)", spec.Version)
+	}
 	if len(spec.Extensions) != 1 || spec.Extensions[0].Name != "pgvector" {
 		t.Errorf("deployed Extensions = %+v, want the branch's pgvector", spec.Extensions)
+	}
+}
+
+// The version recorded on the row is the one the DEPLOYER reported, not the one
+// the args asked for: an endpoint that pins nothing still runs something, and the
+// deployer is the only thing that knows what its default resolved to. The row is
+// also what every later redeploy renders from, so losing this write reverts an
+// upgraded endpoint at its next redeploy.
+func TestCreateEndpointStepRecordsTheDeployedVersion(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	epID := uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ClusterID: uuid.New(), BranchID: uuid.New(),
+		Role: "read_write", PgVersion: 18, Version: "ep-v9",
+	}, endpointDeps(state, newFakeRecipeStore(), dep))
+
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if got := state.endpointVersions[epID]; got != "ep-v9" {
+		t.Errorf("recorded version = %q, want ep-v9", got)
+	}
+}
+
+// A deployer with nothing to report (LocalDeployer places no image) must leave
+// the column alone rather than write "" over it: empty is not a version, and
+// unknown is a state the row already has a meaning for.
+func TestCreateEndpointStepRecordsNoVersionWhenTheDeployerReportsNone(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	epID := uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ClusterID: uuid.New(), BranchID: uuid.New(),
+		Role: "read_write", PgVersion: 18,
+	}, endpointDeps(state, newFakeRecipeStore(), dep))
+
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if got, recorded := state.endpointVersions[epID]; recorded {
+		t.Errorf("recorded version = %q, want no write at all", got)
 	}
 }
 

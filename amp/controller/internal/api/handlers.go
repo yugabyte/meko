@@ -1371,6 +1371,12 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 		Resources:      &EndpointResources{Cpu: &cpu, Memory: &memory},
 		CreatedAt:      e.CreatedAt,
 	}
+	// No such substitution for the version: empty means genuinely unknown, and the
+	// controller's currently configured default is exactly the wrong guess — it
+	// stops being the endpoint's version the first time the controller is upgraded.
+	if e.Version != "" {
+		out.Version = &e.Version
+	}
 	if len(e.PgSettings) > 0 {
 		out.PgSettings = &e.PgSettings
 	}
