@@ -55,7 +55,7 @@ func equalKinds(a, b []string) bool {
 
 func TestServiceCreateClusterNoWriter(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	poolID := uuid.New()
 	tk, err := svc.CreateCluster(t.Context(), CreateClusterInput{PoolID: poolID, Name: "shop", PgVersion: 18})
 	if err != nil {
@@ -105,7 +105,7 @@ func TestServiceCreateClusterNoWriter(t *testing.T) {
 
 func TestServiceCreateClusterWithWriter(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	tk, err := svc.CreateCluster(t.Context(), CreateClusterInput{PoolID: uuid.New(), Name: "shop", PgVersion: 18, WithWriter: true, CPU: "4", Memory: "8Gi"})
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
@@ -138,7 +138,7 @@ func TestServiceCreateClusterWithWriter(t *testing.T) {
 
 func TestServiceBranch(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	poolID, clusterID, parentID := uuid.New(), uuid.New(), uuid.New()
 	tk, err := svc.Branch(t.Context(), BranchInput{
 		PoolID: poolID, ClusterID: clusterID, ParentBranchID: parentID,
@@ -187,7 +187,7 @@ func TestServiceBranch(t *testing.T) {
 
 func TestServiceCreateEndpointDefaultsRole(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	clusterID, branchID := uuid.New(), uuid.New()
 
 	// Role unset defaults to read_write.
@@ -216,7 +216,7 @@ func TestServiceCreateEndpointDefaultsRole(t *testing.T) {
 
 func TestServiceDeleteEndpoint(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	epID := uuid.New()
 	tk, err := svc.DeleteEndpoint(t.Context(), DeleteEndpointInput{ClusterID: uuid.New(), EndpointID: epID})
 	if err != nil {
@@ -235,7 +235,7 @@ func TestServiceDeleteEndpoint(t *testing.T) {
 
 func TestServiceDeleteBranch(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	clusterID, branchID := uuid.New(), uuid.New()
 	tk, err := svc.DeleteBranch(t.Context(), DeleteBranchInput{PoolID: uuid.New(), ClusterID: clusterID, BranchID: branchID})
 	if err != nil {
@@ -257,7 +257,7 @@ func TestServiceDeleteBranch(t *testing.T) {
 
 func TestServiceDeleteCluster(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	clusterID := uuid.New()
 	tk, err := svc.DeleteCluster(t.Context(), DeleteClusterInput{PoolID: uuid.New(), ClusterID: clusterID})
 	if err != nil {
@@ -284,7 +284,7 @@ func TestMemStoreList(t *testing.T) {
 		tick++
 		return base.Add(time.Duration(tick) * time.Second)
 	}
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 	clusterA, clusterB := uuid.New(), uuid.New()
 
 	// Three tasks, created oldest-first: A1, A2 (cluster A), B1 (cluster B).

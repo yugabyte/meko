@@ -77,7 +77,7 @@ func newClusterControllersProv(t *testing.T, prov api.Provisioning) (*api.Contro
 	}
 	store := task.NewMemStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return api.NewControllers(backend, task.NewService(store), prov, logger), backend, store
+	return api.NewControllers(backend, task.NewService(store, store.Subtasks()), prov, logger), backend, store
 }
 
 // fakeSafekeeper is an httptest stand-in for an endpoint's co-located safekeeper.

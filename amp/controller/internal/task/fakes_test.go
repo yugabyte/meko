@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -150,6 +151,33 @@ func (f *fakeStateStore) BranchEndpointDeploys(_ context.Context, _, branchID uu
 			out = append(out, d)
 		}
 	}
+	return out, nil
+}
+
+// AllEndpointDeploys returns every seeded endpoint's desired state, ordered by
+// id so a roll's report and the order its children start are stable — the
+// backends order theirs for the same reason.
+func (f *fakeStateStore) AllEndpointDeploys(_ context.Context) ([]core.EndpointDeploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]core.EndpointDeploy, 0, len(f.endpointBranch))
+	for _, d := range f.endpointBranch {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	return out, nil
+}
+
+func (f *fakeStateStore) EndpointDeploysByIDs(_ context.Context, ids []uuid.UUID) ([]core.EndpointDeploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []core.EndpointDeploy
+	for _, id := range ids {
+		if d, ok := f.endpointBranch[id]; ok {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 

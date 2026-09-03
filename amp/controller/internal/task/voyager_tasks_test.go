@@ -59,7 +59,7 @@ func TestMemStoreUsesPreassignedTaskID(t *testing.T) {
 func TestServiceStartMigrationRunPlan(t *testing.T) {
 	mem := NewMemStore()
 	store := &capturingTaskStore{Store: mem}
-	svc := NewService(store)
+	svc := NewService(store, NewMemStore().Subtasks())
 	in := VoyagerStartMigrationRunInput{
 		MigrationID:  uuid.New(),
 		Operation:    migration.OperationMigrate,
@@ -112,7 +112,7 @@ func TestServiceStartMigrationRunPlan(t *testing.T) {
 
 func TestServiceStartMigrationRunUsesStableRunID(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, NewMemStore().Subtasks())
 	in := VoyagerStartMigrationRunInput{
 		MigrationID: uuid.New(),
 		Operation:   migration.OperationAssess,

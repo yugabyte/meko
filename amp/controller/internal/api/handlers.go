@@ -809,10 +809,11 @@ var (
 	memoryQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)$`)
 )
 
-// Shared so create and resize reject the same value with the same wording.
+// Shared so the routes that validate one thing reject it with the same wording.
 const (
 	errMsgCPUQuantity    = `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`
 	errMsgMemoryQuantity = `resources.memory must be a Kubernetes memory quantity with an explicit unit, Mi or larger (e.g. "4Gi", "512Mi"); a unitless "4" means four bytes`
+	errMsgUpgradeVersion = "a non-empty version is required"
 )
 
 // parseResourceOverrides validates an optional resources object and returns the
@@ -1172,6 +1173,66 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	}}, nil
 }
 
+// UpgradeEndpoints plans a fleet roll: one parent task that owns an
+// upgrade_endpoint child per endpoint and runs them itself
+// (architecture/ac-endpoint-upgrade.md §6).
+//
+// It validates only what is true of the REQUEST — a version is named, the knobs
+// are in range. Whether a given endpoint can move is the planner's question,
+// answered once at Execute time when the answer is still true; asking it here
+// would be N reads of a fleet that moves in between. So there is no 404 and no
+// 409 on this route: an unknown id and an endpoint already at the target are
+// `skipped` lines in the task result, and a second concurrent roll waits on the
+// fleet lock rather than being refused.
+func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpointsRequestObject) (UpgradeEndpointsResponseObject, error) {
+	if c.prov.Deployer == nil {
+		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
+	}
+	if request.Body == nil {
+		return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsgUpgradeVersion))}, nil
+	}
+	version := strings.TrimSpace(request.Body.Version)
+	if version == "" {
+		return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsgUpgradeVersion))}, nil
+	}
+	// The spec's minimum/maximum are documentation: there is no wire-level
+	// validator middleware, so an out-of-range value has to be rejected here or it
+	// reaches the step and fails the task instead of the request. Absent means the
+	// default; 0 is an out-of-range value like any other, never "unbounded".
+	maxParallel := task.DefaultUpgradeParallel
+	if request.Body.MaxParallel != nil {
+		maxParallel = *request.Body.MaxParallel
+		if maxParallel < 1 || maxParallel > task.MaxUpgradeParallel {
+			return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+				fmt.Sprintf("max_parallel must be between 1 and %d", task.MaxUpgradeParallel)))}, nil
+		}
+	}
+	var endpointIDs []uuid.UUID
+	if request.Body.EndpointIds != nil {
+		endpointIDs = *request.Body.EndpointIds
+	}
+
+	t, err := c.tasks.UpgradeEndpoints(ctx, task.UpgradeEndpointsInput{
+		Version:     version,
+		EndpointIDs: endpointIDs,
+		MaxParallel: maxParallel,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upgrade endpoints task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "endpoint upgrade task accepted",
+		slog.String(applog.KeyTaskID, t.ID.String()),
+		slog.String("version", version),
+		slog.Int("endpoints", len(endpointIDs)),
+		slog.Int("max_parallel", maxParallel))
+
+	return UpgradeEndpoints202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
 // --- Tasks -----------------------------------------------------------------
 
 func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error) {
@@ -1193,6 +1254,30 @@ func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject)
 		}
 	}
 	return GetTask200JSONResponse(out), nil
+}
+
+// ListTaskSubtasks returns the children a fan-out task owns — one per endpoint
+// for a fleet roll. It is where a roll's per-endpoint account lives: the parent's
+// own result summarizes, and a FAILED parent records no result at all.
+func (c *Controllers) ListTaskSubtasks(ctx context.Context, request ListTaskSubtasksRequestObject) (ListTaskSubtasksResponseObject, error) {
+	// The parent read is the 404: a task with no children and a task that does not
+	// exist would otherwise both come back as an empty list.
+	t, err := c.tasks.Get(ctx, request.TaskId)
+	if err != nil {
+		return nil, fmt.Errorf("get task: %w", err)
+	}
+	if t == nil {
+		return ListTaskSubtasks404JSONResponse{NotFoundJSONResponse(apiError("not_found", "task not found"))}, nil
+	}
+	subs, err := c.tasks.Subtasks(ctx, t.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list subtasks: %w", err)
+	}
+	out := make([]Subtask, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, subtaskToAPI(s))
+	}
+	return ListTaskSubtasks200JSONResponse(SubtaskList{Subtasks: out, Count: len(out)}), nil
 }
 
 func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error) {
@@ -1423,6 +1508,34 @@ func pageParams(limit *Limit, offset *Offset) (int, int) {
 	}
 	o = max(0, o)
 	return l, o
+}
+
+// subtaskToAPI maps one child onto the wire. `owner` is deliberately not carried:
+// it is the parent's process fence, meaningless to a client and a hint about the
+// deployment's internals.
+func subtaskToAPI(s *task.Subtask) Subtask {
+	out := Subtask{
+		Id:        s.ID,
+		TaskId:    s.ParentID,
+		Kind:      s.Kind,
+		Status:    TaskStatus(s.Status),
+		Error:     s.Error,
+		CreatedAt: s.CreatedAt,
+		UpdatedAt: s.UpdatedAt,
+	}
+	if len(s.Args) > 0 {
+		var v any
+		if err := json.Unmarshal(s.Args, &v); err == nil {
+			out.Args = &v
+		}
+	}
+	if len(s.Result) > 0 {
+		var v any
+		if err := json.Unmarshal(s.Result, &v); err == nil {
+			out.Result = &v
+		}
+	}
+	return out
 }
 
 func taskToAPI(t *task.Task) Task {

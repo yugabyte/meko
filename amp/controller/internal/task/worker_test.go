@@ -30,7 +30,11 @@ func testWorker(store *MemStore, reg *Registry) *Worker {
 }
 
 func testWorkerMax(store Store, locks Locks, reg *Registry, maxConcurrent int) *Worker {
-	return NewWorker(store, reg, locks, testTaskConfig(maxConcurrent), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	subs := SubtaskStore(NewMemStore().Subtasks())
+	if mem, ok := store.(*MemStore); ok {
+		subs = mem.Subtasks()
+	}
+	return NewWorker(store, subs, reg, locks, testTaskConfig(maxConcurrent), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func testTaskConfig(maxConcurrent int) config.TaskConfig {
@@ -706,7 +710,7 @@ func TestWorkerLogsShutdownInterruptionNotFailure(t *testing.T) {
 
 	rec := &capturingHandler{}
 	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, RenewInterval: 10 * time.Second, MaxConcurrent: 1, ShutdownGrace: 2 * time.Second}
-	w := NewWorker(store, reg, store.Locks(ownerID()), cfg, slog.New(rec))
+	w := NewWorker(store, store.Subtasks(), reg, store.Locks(ownerID()), cfg, slog.New(rec))
 
 	task, steps := pendingTask("cancelaware")
 	store.Seed(task, steps)
@@ -740,7 +744,7 @@ func TestWorkerBoundedShutdown(t *testing.T) {
 	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
 	cfg := testTaskConfig(1)
 	cfg.ShutdownGrace = 50 * time.Millisecond
-	w := NewWorker(store, reg, store.Locks(ownerID()), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w := NewWorker(store, store.Subtasks(), reg, store.Locks(ownerID()), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	task, steps := pendingTask("gate")
 	store.Seed(task, steps)

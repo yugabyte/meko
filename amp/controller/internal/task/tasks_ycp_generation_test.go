@@ -14,6 +14,13 @@ import (
 
 func gen64(v int64) *int64 { return &v }
 
+// newTestService is a Service over a throwaway store, for the cases that only
+// need one to plan a task.
+func newTestService() *Service {
+	store := NewMemStore()
+	return NewService(store, store.Subtasks())
+}
+
 func TestCreateDerivesYCPStampFromTheKind(t *testing.T) {
 	cluster, endpoint, branch := uuid.New(), uuid.New(), uuid.New()
 
@@ -50,7 +57,7 @@ func TestCreateDerivesYCPStampFromTheKind(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := NewMemStore()
-			tk, err := tc.plan(NewService(store))
+			tk, err := tc.plan(NewService(store, store.Subtasks()))
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -68,7 +75,7 @@ func TestCreateDerivesYCPStampFromTheKind(t *testing.T) {
 // generation, and its task must leave whatever the row already records alone.
 func TestCreateOmitsYCPStampWithoutAGeneration(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, store.Subtasks())
 
 	tk, err := svc.ResizeEndpoint(nil, ResizeEndpointInput{
 		ClusterID: uuid.New(), EndpointID: uuid.New(), CPU: "4", Memory: "8Gi",
@@ -87,7 +94,7 @@ func TestCreateOmitsYCPStampWithoutAGeneration(t *testing.T) {
 // stamping. The check runs even though this caller sends no generation, because it
 // is the input type that has to be capable of carrying one.
 func TestCreateRejectsAKindWhoseInputCannotCarryAGeneration(t *testing.T) {
-	svc := NewService(NewMemStore())
+	svc := newTestService()
 	badKind := Kind{"upgrade_endpoint", YCPResourceEndpoint, "", nil}
 
 	_, err := svc.create(nil, badKind, struct{ Foo string }{"bar"}, uuid.New(), uuid.New().String(), nil)
@@ -102,7 +109,7 @@ func TestCreateRejectsAKindWhoseInputCannotCarryAGeneration(t *testing.T) {
 // Likewise a kind naming a resource the worker cannot stamp: caught at plan time
 // rather than as a task the worker keeps reclaiming.
 func TestCreateRejectsUnknownYCPResource(t *testing.T) {
-	svc := NewService(NewMemStore())
+	svc := newTestService()
 	badKind := Kind{"upgrade_datapack", "datapack", "", nil}
 
 	_, err := svc.create(nil, badKind, ResizeEndpointInput{YCPGeneration: gen64(1)}, uuid.New(), uuid.New().String(), nil)
@@ -118,7 +125,7 @@ func TestCreateRejectsUnknownYCPResource(t *testing.T) {
 // resource but plans no target_ref could not be stamped, so it is refused rather
 // than losing the generation quietly.
 func TestCreateRejectsAYCPStampWithNoTargetRef(t *testing.T) {
-	svc := NewService(NewMemStore())
+	svc := newTestService()
 
 	_, err := svc.create(nil, KindResizeEndpoint, ResizeEndpointInput{YCPGeneration: gen64(1)}, uuid.New(), "", nil)
 	if err == nil {
@@ -136,7 +143,7 @@ func TestAddBranchExtensionsTargetsTheBranch(t *testing.T) {
 	store := NewMemStore()
 	cluster, branch := uuid.New(), uuid.New()
 
-	tk, err := NewService(store).AddBranchExtensions(nil, AddBranchExtensionsInput{
+	tk, err := NewService(store, store.Subtasks()).AddBranchExtensions(nil, AddBranchExtensionsInput{
 		ClusterID: cluster, BranchID: branch, Extensions: []string{"pgvector"},
 	})
 	if err != nil {

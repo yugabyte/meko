@@ -73,7 +73,7 @@ func startController(t *testing.T, pool *db.Pool, reg *Registry) *controller {
 	if err != nil {
 		t.Fatalf("NewPgLocks: %v", err)
 	}
-	w := NewWorker(NewPgStore(pool), reg, locks, pgTestConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w := NewWorker(NewPgStore(pool), NewPgSubtasks(pool), reg, locks, pgTestConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	c := &controller{locks: locks, w: w, stop: cancel, done: make(chan struct{})}
 	go func() { w.Run(ctx); close(c.done) }()
@@ -135,6 +135,9 @@ func resetTasks(t *testing.T, pool *db.Pool) {
 type pgStep struct {
 	kind     string
 	endpoint string
+	// fleet makes the step declare `fleet:endpoints` instead of an endpoint lock —
+	// what a fleet roll's parent takes.
+	fleet bool
 
 	mu      sync.Mutex
 	bound   uuid.UUID
@@ -148,6 +151,9 @@ type pgStep struct {
 func (s *pgStep) Kind() string { return s.kind }
 
 func (s *pgStep) Lock() ResourceLock {
+	if s.fleet {
+		return FleetEndpointsLock()
+	}
 	if s.endpoint == "" {
 		return ResourceLock{}
 	}
@@ -482,4 +488,49 @@ func TestPgLocksContract(t *testing.T) {
 		}
 		return l
 	})
+}
+
+// TestPgFleetLockAdmitsOneRollAtATime is §5.6 over real SQL: `fleet:endpoints` is
+// a third namespace in resource_token, and nothing else in `go test ./...` puts
+// that key through token_acquire. Two rolls take it in TURN — the second queues
+// on the lease rather than being refused, which is the contract change that let
+// the fleet-roll unique index and its structural classifier be dropped.
+func TestPgFleetLockAdmitsOneRollAtATime(t *testing.T) {
+	pool, _ := migratedPool(t)
+	t.Cleanup(pool.Close)
+	resetTasks(t, pool)
+	store := NewPgStore(pool)
+
+	step := &pgStep{kind: "fleet-roll", fleet: true}
+	reg := pgReg(step)
+	first := seedTask(t, store, KindUpgradeEndpoints, step.kind, "")
+	second := seedTask(t, store, KindUpgradeEndpoints, step.kind, "")
+
+	startController(t, pool, reg)
+	waitForStatus(t, store, first.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
+	waitForStatus(t, store, second.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
+
+	if got := step.peakConcurrency(); got != 1 {
+		t.Errorf("peak concurrent fleet rolls = %d, want 1: two rolls over one fleet have no sensible interleaving", got)
+	}
+	if got := step.runCount(); got != 2 {
+		t.Errorf("rolls ran %d time(s) for 2 tasks, want 2 — the second waits, it is not refused", got)
+	}
+
+	locks, err := NewPgLocks(pool, testLeaseLogger(), pgTestTTL, pgTestRenewEvery, time.Second)
+	if err != nil {
+		t.Fatalf("NewPgLocks: %v", err)
+	}
+	var lastHolder string
+	waitFor(t, 5*time.Second, func() bool {
+		holder, err := locks.Holder(context.WithoutCancel(t.Context()), FleetEndpointsLock())
+		if err != nil {
+			t.Fatalf("Holder: %v", err)
+		}
+		lastHolder = holder
+		return holder == ""
+	})
+	if lastHolder != "" {
+		t.Errorf("fleet:endpoints is still held by %q after both rolls finished", lastHolder)
+	}
 }

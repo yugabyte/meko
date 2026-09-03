@@ -1,7 +1,7 @@
 # amp-controller — Task Framework & Step Catalog
 
 **Status:** Draft
-**Last updated:** 2026-06-29
+**Last updated:** 2026-08-27
 
 This is the design doc the high-level design defers to for the **step catalog**:
 [`amp-controller.md`](amp-controller.md) §8 fixes the *shape* of the task
@@ -158,6 +158,13 @@ two tasks cannot mutate one endpoint's compute at once whichever process owns
 them. A task may hold at most one. The cascade deletes declare nothing — they
 touch many endpoints, and that needs intent locks.
 
+`plan_endpoint_upgrades` declares `fleet:endpoints` instead — one fleet roll at a
+time, with a second roll waiting on the lease rather than being refused. Its
+children each take an `endpoint:<id>`, so the process holds two at once, nested,
+one per unit of work. The one-lock rule still holds per unit; what keeps the pair
+safe is an **order** — `fleet` before `endpoint`, never the reverse
+([`ac-endpoint-upgrade.md`](ac-endpoint-upgrade.md) §5.3).
+
 ## 3. The step catalog
 
 Steps are the re-usable, idempotent units tasks are built from. Each implements
@@ -181,16 +188,19 @@ double-apply or error.
 | `create_endpoint` | endpoint, cluster, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-cluster, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved by the API handler — 2 cores by default, with memory following CPU at the control plane's memory-per-vCPU ratio, and a pair below that ratio refused — and carried in the args, so a reclaim/replay redeploys the same size. Every planner that appends this step resolves them the same way (cluster create, fork-with-writer, Voyager target), because a step that reaches the deployer with an empty size lands on its fallback instead. |
 | `resize_endpoint` | endpoint id, cpu, memory | Change the endpoint's compute reservation: persist the new size to the endpoint `config`, then resize the **running pod in place** (`internal/task/step_resize_endpoint.go`). Records the in-place outcome on the step result. | Persist-first, then resize: `UpdateEndpointResources` is an absolute jsonb merge and the deployer resize is idempotent, so a replay converges. The DB write lands before the live resize, so even if the in-place step is deferred/infeasible a controller-driven redeploy still lands the new size. The deployer does **not** patch the Deployment template (that would trigger a rollout and recreate the pod — the opposite of in-place); an involuntary recreate before the next redeploy comes back at the old size (durable in DB, converges). **First-writer-wins lock**: the partial unique index `tasks_one_active_resize_per_endpoint` (migration 0001) admits at most one non-terminal `resize_endpoint` per endpoint (`target_ref`); a concurrent one is `ErrResizeInProgress` → `409`. The lock self-releases when the task reaches terminal (a crashed task is reclaimed by its lease, so it can't wedge). |
 | `upgrade_endpoint` | endpoint id, version | Move one endpoint onto a target version: record `target_version`, redeploy the endpoint's re-rendered spec with that version on it, then record the running `version` and the new address (`internal/task/step_upgrade_endpoint.go`). | The two columns make an interrupted upgrade legible: a crash anywhere leaves `target_version` ahead of `version`, so the endpoint still reads as not-at-target and replay picks it up (`ac-endpoint-upgrade.md` §4). Moves the version and nothing else — it re-resolves the branch's extensions so the redeploy keeps its mounts, but does not rewrite the recorded set. Declares the endpoint lock. Rebuilt from `{endpoint_id, version}` alone, so it reads its own row rather than being handed one: a record carried in args would silently revert a resize that landed between plan and replay. |
+| `plan_endpoint_upgrades` | version, endpoint ids (opt), max_parallel | The fleet roll's parent (`internal/task/step_plan_endpoint_upgrades.go`): enumerate the target endpoints at Execute time, create one `upgrade_endpoint` **subtask** each, and run them in-process through a bounded pool. Reports one line per endpoint (`upgraded`/`skipped`/`failed`/`unattempted`) on the step result. | Self-contained like the cascade deletes, and its progress comes from its children's status rather than from any cursor — a re-filter on state alone cannot tell "already there" from "this roll put it there", and would report a roll clean whose children failed. `Create` converges on an id derived from `(parent, kind, args)`, so a replaying parent gets back the rows it already made and re-runs only the non-succeeded ones. Caller-supplied ids are deduplicated before creating (two work-list entries for one row is a double `helm` — `ac-endpoint-upgrade.md` §5.2), and the already-at-target filter applies to whole-fleet enumeration only, never to an endpoint the caller named. Declares `fleet:endpoints`. |
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
 | `delete_branch` | cluster, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
 | `delete_cluster` | cluster id | Cascade-delete a cluster: enumerate **all** the cluster's endpoints, retire each (instance + record), then delete the cluster — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForCluster`). Cascade order is **endpoints → branches → cluster**; `DeleteCluster` nulls the branches' in-cluster parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
 | `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy every endpoint on the branch** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. **First-writer-wins lock**: `tasks_one_active_ext_add_per_branch` (migration 0014) admits at most one non-terminal `add_branch_extensions` per branch (`target_ref`); a concurrent one is `ErrBranchExtensionsInProgress` → `409`. Needed because the reconcile agent re-issues an update until the row confirms it, and this task redeploys every endpoint on the branch — two at once would run concurrent upgrades of the same release. |
 
-`delete_branch` and `delete_cluster` are **single self-contained steps**, not a
-planned per-endpoint fan-out, because the worker has no dynamic sub-step
-expansion: the set of endpoints to retire isn't known until Execute time, so the
-one step enumerates and retires them itself. Both require a deployer (they retire
-running instances, mirroring `delete_endpoint`).
+`delete_branch`, `delete_cluster` and `plan_endpoint_upgrades` are **single
+self-contained steps**, not a planned per-endpoint fan-out, because the worker has
+no dynamic sub-step expansion: the set of endpoints isn't known until Execute
+time, so the one step enumerates it itself. All three require a deployer. The
+difference is what they do with the set — the cascades act on it inline, while the
+roll records a `subtasks` row per endpoint and runs those, so each endpoint has a
+durable status of its own and takes its own endpoint lock.
 
 A few invariants worth calling out:
 

@@ -149,7 +149,7 @@ func TestStoreUnavailableLogsBelowError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	tasks := task.NewMemStore()
 	srv := api.NewServer(&config.Config{ListenAddr: ":0"},
-		storeFailBackend{core.NewMemBackend(), dialErr}, task.NewService(tasks), api.Provisioning{}, nil, logger)
+		storeFailBackend{core.NewMemBackend(), dialErr}, task.NewService(tasks, tasks.Subtasks()), api.Provisioning{}, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")

@@ -58,7 +58,7 @@ func drainTasks(t *testing.T, store *task.MemStore, backend core.Backend, prov a
 		LockWait:      10 * time.Second,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	w := task.NewWorker(store, task.ProductionRegistry(deps), store.Locks("api-test"), cfg, logger)
+	w := task.NewWorker(store, store.Subtasks(), task.ProductionRegistry(deps), store.Locks("api-test"), cfg, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -162,7 +162,7 @@ func newTestServerRaw(t *testing.T, backend *core.MemBackend, prov api.Provision
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{ListenAddr: ":0"}
 	cfg.Deploy.Enabled = prov.Deployer != nil
-	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, nil, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(tasks, tasks.Subtasks()), prov, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
@@ -180,7 +180,7 @@ func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provision
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{ListenAddr: ":0"}
 	cfg.Deploy.Enabled = prov.Deployer != nil
-	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, nil, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(tasks, tasks.Subtasks()), prov, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
@@ -813,7 +813,8 @@ func TestGetTask(t *testing.T) {
 // newFakeTaskService wraps a fresh in-memory task store in a task.Service, for
 // tests that build a server but don't need a handle on the underlying store.
 func newFakeTaskService() *task.Service {
-	return task.NewService(task.NewMemStore())
+	store := task.NewMemStore()
+	return task.NewService(store, store.Subtasks())
 }
 
 // --- per-mutation "returns a task" tests ----------------------------------

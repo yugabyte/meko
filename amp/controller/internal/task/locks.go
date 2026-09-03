@@ -13,15 +13,23 @@ import (
 	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
-// Two leases from pkg/pglease over amp_registry.resource_token (migration 0006):
-// `task:<id>` held by the process, `endpoint:<id>` held by the task. Both namespaces
-// are disjoint from the compute write fence's `branch:<id>` in the same table.
+// Three leases from pkg/pglease over amp_registry.resource_token (migration 0006):
+// `task:<id>` held by the process, `endpoint:<id>` held by the task, and
+// `fleet:endpoints` held by a fleet roll. All three namespaces are disjoint from
+// the compute write fence's `branch:<id>` in the same table.
 // Design: architecture/ac-locking.md.
 const (
 	taskKeyPrefix = "task:"
 
 	// ResourceEndpoint's id is the endpoint id, spelled as tasks.target_ref does.
 	ResourceEndpoint = "endpoint"
+
+	// ResourceFleet is the whole endpoint fleet. Its id is a constant rather than a
+	// uuid — there is one fleet — so it has one key, `fleet:endpoints`.
+	ResourceFleet = "fleet"
+
+	// fleetEndpoints is that id.
+	fleetEndpoints = "endpoints"
 )
 
 // ErrLockHeld means somebody else holds the lock. Not a failure: the claim loop
@@ -54,6 +62,14 @@ func EndpointLock(endpointID string) ResourceLock {
 		return ResourceLock{}
 	}
 	return ResourceLock{Type: ResourceEndpoint, ID: endpointID}
+}
+
+// FleetEndpointsLock is the lock on rolling the endpoint fleet: one roll at a
+// time (ac-endpoint-upgrade.md §5.6). A second roll WAITS on it rather than being
+// refused, so re-firing a half-failed roll — the common case — queues behind the
+// first and then finds most of the fleet already converged.
+func FleetEndpointsLock() ResourceLock {
+	return ResourceLock{Type: ResourceFleet, ID: fleetEndpoints}
 }
 
 // Locking is implemented by steps needing a resource exclusively. The worker takes
@@ -221,22 +237,29 @@ func resourceOwner(holderID uuid.UUID, kind, procOwner string) string {
 }
 
 // The steps that mutate one endpoint's compute declare their lock together here,
-// so what serializes against what is answerable from one place.
+// so what serializes against what is answerable from one place. plan_endpoint_upgrades
+// is the exception in kind, not in shape: it locks the FLEET, and its children take
+// the endpoint locks one at a time as they run.
 //
 // STILL UNPROTECTED, and not an oversight: delete_branch, delete_cluster and
 // add_branch_extensions each touch EVERY endpoint under a branch or cluster —
 // add_branch_extensions through the same deployer create and resize use, so it can
 // helm-upgrade a release a locked task is mid-way through. None can take one
 // endpoint lock when they need all of them; that wants intent locks.
+// `fleet:endpoints` does not cover them either — it serializes rolls against each
+// other, not a roll against a cascade.
 // https://github.com/yugabyte/meko/issues/976
 func (s *createEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 func (s *resizeEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 func (s *upgradeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
 func (s *deleteEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 
+func (s *planEndpointUpgradesStep) Lock() ResourceLock { return FleetEndpointsLock() }
+
 var (
 	_ Locking = (*createEndpointStep)(nil)
 	_ Locking = (*resizeEndpointStep)(nil)
 	_ Locking = (*upgradeEndpointStep)(nil)
 	_ Locking = (*deleteEndpointStep)(nil)
+	_ Locking = (*planEndpointUpgradesStep)(nil)
 )

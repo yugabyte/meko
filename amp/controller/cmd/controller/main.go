@@ -356,18 +356,21 @@ func runServe(args []string) error {
 	if err != nil {
 		return fmt.Errorf("task locks: %w", err)
 	}
-	worker := task.NewWorker(store, task.ProductionRegistry(deps), locks, cfg.Task, logger, task.WithMetrics(metricsReg))
+	subtasks := task.NewPgSubtasks(pool)
+	worker := task.NewWorker(store, subtasks, task.ProductionRegistry(deps), locks, cfg.Task, logger,
+		task.WithMetrics(metricsReg))
 
-	// The API creates tasks and reads their status through the task service (which
-	// wraps the same store the worker drains).
-	srv := api.NewServer(cfg, backend, task.NewService(store), prov, metricsReg, logger)
+	// One service over the same store the worker drains, for everything that
+	// initiates or reads tasks: the API, and the GC sweeper below.
+	tasks := task.NewService(store, subtasks)
+	srv := api.NewServer(cfg, backend, tasks, prov, metricsReg, logger)
 	// The write-once YCP binding endpoint the reconcile-agent pins itself to.
 	srv.RegisterYCPBinding(ycp.NewBindingStore(pool.Pool))
 
 	// Reclaims clusters and endpoints whose create failed, by enqueueing the same
 	// delete task an operator's delete would. Runs beside the worker rather than
 	// inside it: it produces tasks, it does not execute them.
-	sweeper := gc.New(backend, task.NewService(store), gc.Config{
+	sweeper := gc.New(backend, tasks, gc.Config{
 		Enabled:    cfg.GC.Enabled,
 		Interval:   cfg.GC.Interval,
 		Grace:      cfg.GC.Grace,

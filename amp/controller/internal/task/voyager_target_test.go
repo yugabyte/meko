@@ -130,7 +130,7 @@ func TestAttachTargetToMigrationStepFailsWithoutDependencies(t *testing.T) {
 func TestServiceCreateMigrationTargetPlan(t *testing.T) {
 	mem := NewMemStore()
 	store := &capturingTaskStore{Store: mem}
-	svc := NewService(store)
+	svc := NewService(store, NewMemStore().Subtasks())
 	in := VoyagerCreateMigrationTargetInput{
 		MigrationID:        uuid.New(),
 		PoolID:             uuid.New(),
@@ -206,7 +206,7 @@ func TestServiceCreateMigrationTargetPlan(t *testing.T) {
 
 func TestServiceCreateMigrationTargetSizingIsOptional(t *testing.T) {
 	mem := NewMemStore()
-	svc := NewService(mem)
+	svc := NewService(mem, mem.Subtasks())
 	tk, err := svc.VoyagerCreateMigrationTarget(t.Context(), VoyagerCreateMigrationTargetInput{
 		MigrationID:        uuid.New(),
 		PoolID:             uuid.New(),
@@ -233,7 +233,7 @@ func TestServiceCreateMigrationTargetSizingIsOptional(t *testing.T) {
 
 func TestServiceCreateMigrationTargetUsesClaimedTaskID(t *testing.T) {
 	store := NewMemStore()
-	svc := NewService(store)
+	svc := NewService(store, NewMemStore().Subtasks())
 	taskID := uuid.New()
 	got, err := svc.VoyagerCreateMigrationTarget(t.Context(), VoyagerCreateMigrationTargetInput{
 		TaskID:             taskID,

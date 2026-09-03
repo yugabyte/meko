@@ -80,6 +80,12 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 	if err := b.SetEndpointTargetVersion(ctx, endpointID, "ep-v8.8.8"); err != nil {
 		t.Fatalf("SetEndpointTargetVersion: %v", err)
 	}
+	// And an address: AllEndpointDeploys excludes a row without one, because
+	// create_endpoint writes the row before deploying, so an address-less row is a
+	// failed create with no pod that a fleet roll must not try to upgrade.
+	if err := b.SetEndpointAddress(ctx, endpointID, "yb-ep.endpoints.svc:55433", ""); err != nil {
+		t.Fatalf("set endpoint address: %v", err)
+	}
 
 	// pg_settings and write_token_settings are adjacent jsonb columns in the
 	// branch projection, so — as with the endpoint's two daemon columns above —
@@ -209,6 +215,44 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 		if _, err := b.EndpointDeploy(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
 			t.Errorf("EndpointDeploy on an unknown id = %v, want ErrNotFound", err)
+		}
+
+		// The fleet form is the third caller of that projection — the roll's
+		// Execute-time enumeration. Only its WHERE differs, so it must render the
+		// same state; a copied-and-edited SELECT is exactly what would drift.
+		fleet, err := b.AllEndpointDeploys(ctx)
+		if err != nil {
+			t.Fatalf("AllEndpointDeploys: %v", err)
+		}
+		var mine *EndpointDeploy
+		for i := range fleet {
+			if fleet[i].ID == endpointID {
+				mine = &fleet[i]
+			}
+		}
+		if mine == nil {
+			t.Fatalf("AllEndpointDeploys did not include the live endpoint %s", endpointID)
+		}
+		if *mine != d {
+			t.Errorf("AllEndpointDeploys = %+v, want the same state the branch enumeration reports (%+v)", *mine, d)
+		}
+
+		// Tombstoning the branch takes its endpoints out of the fleet: the endpoint
+		// row is still there (endpoints are hard-deleted, so presence is liveness),
+		// and `eb.dropped_at IS NULL` is the whole predicate.
+		if _, err := pool.Exec(ctx,
+			`UPDATE amp_registry.branches SET dropped_at = now() WHERE branch_id = $1::uuid`,
+			branchID.String()); err != nil {
+			t.Fatalf("tombstone branch: %v", err)
+		}
+		after, err := b.AllEndpointDeploys(ctx)
+		if err != nil {
+			t.Fatalf("AllEndpointDeploys after the tombstone: %v", err)
+		}
+		for _, f := range after {
+			if f.ID == endpointID {
+				t.Errorf("endpoint %s is still in the fleet after its branch was tombstoned", endpointID)
+			}
 		}
 	})
 }

@@ -1,7 +1,7 @@
 # ac — Task and endpoint locking
 
 **Status:** Draft
-**Last updated:** 2026-08-26
+**Last updated:** 2026-08-27
 
 How the controller decides who runs a task and who may touch an endpoint, once
 more than one controller process exists. Both answers are leases from
@@ -19,9 +19,10 @@ with `409` by `tasks_one_active_resize_per_endpoint`, and turning that into a
 |---|---|---|---|
 | **task execution** | `task:<task-id>` | the controller *process* | a second controller instance executing the same task |
 | **endpoint** | `endpoint:<endpoint-id>` | the *unit of work* — a task, or one of a parent's subtasks | anything else blocking on that endpoint, whichever process owns it |
+| **endpoint fleet** | `fleet:endpoints` | the fleet roll's parent task | a second fleet roll, which waits rather than being refused |
 
 No new table and no new migration: the compute write fence keys the same table as
-`branch:<id>`, so the three namespaces coexist. Sharing 0006 is also what keeps
+`branch:<id>`, so the four namespaces coexist. Sharing 0006 is also what keeps
 one definition of the rule — `token_acquire` decides every grant, for these locks
 and for the Rust write-fence client both.
 
@@ -147,8 +148,9 @@ type Locking interface{ Lock() ResourceLock }
 ```
 
 `create_endpoint`, `resize_endpoint`, `upgrade_endpoint` and `delete_endpoint`
-declare `endpoint:<endpoint-id>`. The declarations sit together in `locks.go` rather than
-one per step file, so what serializes against what is answerable from one place.
+declare `endpoint:<endpoint-id>`. The declarations sit together in `locks.go`
+rather than one per step file, so what serializes against what is answerable from
+one place.
 
 **One lock per unit of work.** Deadlock needs one holding two, and refusing the
 second is what keeps that unreachable without a lock manager to detect one.
@@ -195,9 +197,27 @@ cleanly rather than hanging, so a lock nothing ever releases costs one task
 instead of every task queued behind it. A wait longer than a second is logged with
 the lock and the elapsed time.
 
+## Lock 3 — the endpoint fleet
+
+`plan_endpoint_upgrades` declares `fleet:endpoints`: a third namespace in
+`resource_token`, disjoint from `endpoint:<id>` and `task:<id>` as they are from
+the compute fence's `branch:<id>`. No migration, no index, no classifier — the
+existing `lockFor` takes it like any other resource lock.
+
+It is what makes it **one fleet roll at a time**. Two concurrent rolls have no
+sensible interleaving, and a second one **waits** on the lease rather than being
+refused: better for the common case (re-firing a roll that half-failed, which then
+finds the fleet mostly converged), worse for two rolls naming different versions,
+which flips the fleet twice instead of returning a `409`
+([`ac-endpoint-upgrade.md`](ac-endpoint-upgrade.md) §5.6, and §10 for the open
+decision).
+
+It does **not** close the meko#976 gap: it serializes rolls against each other,
+not a roll against a cascade delete or `add_branch_extensions`.
+
 ## Losing a lease kills the process
 
-Both locks keep `pglease`'s default `AbortProcess`: cause and goroutine dump
+All three locks keep `pglease`'s default `AbortProcess`: cause and goroutine dump
 straight to stderr, `os.Exit(66)`, no deferred cleanup.
 
 The alternative was to cancel only the affected task and keep the other

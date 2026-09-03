@@ -65,7 +65,11 @@ var (
 	// UPDATE, so they are the two that stamp a generation. Creates and deletes
 	// self-heal through presence — the next diff sees the resource absent or still
 	// there — and so need no echo.
-	KindResizeEndpoint      = Kind{"resize_endpoint", "endpoint", "tasks_one_active_resize_per_endpoint", ErrResizeInProgress}
+	KindResizeEndpoint = Kind{"resize_endpoint", "endpoint", "tasks_one_active_resize_per_endpoint", ErrResizeInProgress}
+	// A fleet roll has no target_ref, so a partial unique index cannot constrain it
+	// — NULLs are distinct. Store.ActiveByKind is the plan-time gate instead, and
+	// the no-wait fleet lock is what actually decides.
+	KindUpgradeEndpoints    = Kind{"upgrade_endpoints", "", "", nil}
 	KindDeleteEndpoint      = Kind{"delete_endpoint", "", "", nil}
 	KindDeleteBranch        = Kind{"delete_branch", "", "", nil}
 	KindDeleteCluster       = Kind{"delete_cluster", "", "", nil}
@@ -80,6 +84,7 @@ var allKinds = []Kind{
 	KindBranch,
 	KindCreateEndpoint,
 	KindResizeEndpoint,
+	KindUpgradeEndpoints,
 	KindDeleteEndpoint,
 	KindDeleteBranch,
 	KindDeleteCluster,
@@ -93,11 +98,19 @@ var allKinds = []Kind{
 // the raw Store; the worker, which claims and runs tasks, uses the Store directly.
 type Service struct {
 	store Store
+	subs  SubtaskStore
 }
 
-// NewService returns a task Service backed by store.
-func NewService(store Store) *Service {
-	return &Service{store: store}
+// NewService returns a task Service backed by store, reading a fan-out parent's
+// children from subs.
+func NewService(store Store, subs SubtaskStore) *Service {
+	return &Service{store: store, subs: subs}
+}
+
+// Subtasks returns a parent task's children, oldest first (empty for a task that
+// fanned out to none).
+func (s *Service) Subtasks(ctx context.Context, parentID uuid.UUID) ([]*Subtask, error) {
+	return s.subs.ByParent(ctx, parentID)
 }
 
 // Get returns a task by id (its status, for GET /tasks/{id}), or nil if absent.
@@ -346,6 +359,33 @@ func (s *Service) ResizeEndpoint(ctx context.Context, in ResizeEndpointInput) (*
 		}),
 	}
 	return s.create(ctx, KindResizeEndpoint, in, in.ClusterID, in.EndpointID.String(), steps)
+}
+
+// UpgradeEndpointsInput is the request for an upgrade_endpoints task: move the
+// endpoint fleet — or the caller's subset — onto Version. EndpointIDs empty means
+// every live endpoint.
+type UpgradeEndpointsInput struct {
+	Version     string      `json:"version"`
+	EndpointIDs []uuid.UUID `json:"endpoint_ids,omitempty"`
+	MaxParallel int         `json:"max_parallel"`
+}
+
+// UpgradeEndpoints records an upgrade_endpoints task: a single, self-contained
+// plan_endpoint_upgrades step that enumerates the targets at Execute time and
+// runs one upgrade_endpoint child per endpoint (architecture/ac-endpoint-upgrade.md §5).
+//
+// No cluster id and no target ref: a roll is fleet-scoped, so it belongs to no
+// cluster and acts on no single resource. It therefore does not show up under
+// GET /tasks?cluster_id=…, which is correct — it is not that cluster's task.
+func (s *Service) UpgradeEndpoints(ctx context.Context, in UpgradeEndpointsInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepPlanEndpointUpgrades, PlanEndpointUpgradesArgs{
+			Version:     in.Version,
+			EndpointIDs: in.EndpointIDs,
+			MaxParallel: in.MaxParallel,
+		}),
+	}
+	return s.create(ctx, KindUpgradeEndpoints, in, uuid.Nil, "", steps)
 }
 
 // DeleteEndpointInput is the request for a delete_endpoint (scale-down) task.

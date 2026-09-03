@@ -19,8 +19,9 @@ locking foundation changed under it (its branch and
 [design doc](https://github.com/yugabyte/meko/issues/809#issuecomment-5375942830) are
 kept). §7 records what carries over and what `pglease` lets us delete.
 
-**Landed so far:** §4.1 (the spec assembler), §2 and §3 (the version columns and the
-per-endpoint override), §4 (`upgrade_endpoint`). §5 and §6 are not built yet.
+**Landed:** all of it — §4.1 (the spec assembler), §2–3 (the version columns and
+the per-endpoint override), §4 (`upgrade_endpoint`), §5 (the `subtasks` table, the
+runner, and the `plan_endpoint_upgrades` parent) and §6 (the API).
 
 ## 1. What was missing
 
@@ -280,6 +281,16 @@ endpoint_ids?, max_parallel}`) at Execute time:
 1. **Enumerates** targets — the caller's `endpoint_ids`, or every live endpoint — as
    `[]core.EndpointDeploy`, the renderable desired state §4.1 defines. One query, so
    a roll of N endpoints costs one read rather than N.
+
+   **"Every live endpoint" excludes one that was never deployed** — no recorded
+   address, the same condition the GC sweeper reclaims a failed-create orphan by.
+   `create_endpoint` writes the row *before* deploying, so a failed create leaves a
+   row with no pod; rolling it waits out helm's `--wait`, fails, and fail-fast then
+   halts the roll. One leaked orphan would otherwise make the whole API unusable
+   until GC caught up, with a multi-minute timeout as the only symptom. It also
+   excludes a `local`-driver compute, which has no controller-assigned address and
+   which a roll could not move anyway. Whole-fleet rule only: an endpoint named in
+   `endpoint_ids` is still attempted.
 2. **Filters** out endpoints already recorded at the target version — an
    optimization over *desired* state, not a progress signal. See the warning below.
 3. **Creates** one `upgrade_endpoint` subtask per remaining endpoint.
@@ -651,6 +662,25 @@ Settled in review, recorded so the reasoning is not re-litigated:
   fleet roll; a package would knot the imports for three callers that all live in
   `internal/task`. Promote it if a fourth caller appears outside that package.
 
+Settled while building §5–6, because the design did not say:
+
+- **A failed roll's per-endpoint account is `GET /tasks/{taskId}/subtasks`, not the
+  step result.** The worker records a failed step's *cause*, not its output, so the
+  `endpoints` report only survives on the success path. The parent's error carries the
+  tally and the first failure; the children's own rows carry the rest. The
+  alternatives were persisting the output of a failed step (a change to the task
+  framework, for one caller) or returning `Ok` on a partial roll, which would report a
+  failed roll as succeeded.
+- **`unattempted` fails the roll; it just does not halt it.** `ErrLockHeld` is not
+  evidence the upgrade would fail (§5.4), so it never stops new children starting —
+  but a roll that left an endpoint unattempted did not converge the fleet, and
+  `succeeded` has to keep meaning "every targeted endpoint is at the target". The
+  operator re-runs it; the second roll skips what the first did.
+- **A fan-out step reads its task id and owner off the context**, stamped by the
+  worker, rather than out of its args. The owner is per-execution — a reclaimed parent
+  must stamp its children with the NEW one, which is what fences out a predecessor —
+  so it cannot be planned into args at all.
+
 Still open:
 
 1. **`fleet:endpoints` queues rather than refuses (§5.6).** Queue is better for the
@@ -658,4 +688,13 @@ Still open:
    worse for two rolls naming *different* versions, which now rolls the fleet twice
    instead of returning a `409`. Cheap mitigation if wanted: after acquiring, the
    parent re-reads its own `params` and no-ops if a newer roll superseded it.
-   Recommendation: ship the queue, revisit if it bites.
+   Recommendation: ship the queue, revisit if it bites. **Shipped as the queue.**
+
+2. **A failed-create endpoint is in the fleet.** "Every live endpoint" is
+   `eb.dropped_at IS NULL`, which includes an endpoint whose `create_endpoint` task
+   failed before its pod came up (`address IS NULL` — `core/orphans.go` already tracks
+   exactly these for the GC sweeper). A whole-fleet roll will try to upgrade one, wait
+   out helm's `--wait`, fail, and fail-fast then halts the roll — so one orphan stalls
+   every roll until GC reaps it. Not excluded here: the enumeration is deliberately one
+   read of one projection, the sweeper is what reclaims those rows, and excluding them
+   is a policy the design did not state. Revisit if a stalled roll traces back to one.

@@ -44,9 +44,7 @@ func TestPgSubtasks(t *testing.T) {
 		}
 	})
 
-	// Any kind will do — this test is about the subtask rows, not the parent. The
-	// fleet-roll kind arrives with plan_endpoint_upgrades.
-	parent, err := tasks.Create(ctx, TaskSpec{Kind: KindCreateEndpoint, TargetRef: &ref})
+	parent, err := tasks.Create(ctx, TaskSpec{Kind: KindUpgradeEndpoints, TargetRef: &ref})
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)
 	}

@@ -98,6 +98,19 @@ type StateStore interface {
 	// on replay). An absent branch yields an empty slice, not an error.
 	BranchEndpointDeploys(ctx context.Context, clusterID, branchID uuid.UUID) ([]core.EndpointDeploy, error)
 
+	// AllEndpointDeploys returns the renderable desired state of every live
+	// endpoint in the deployment — the fleet roll's Execute-time enumeration
+	// (plan_endpoint_upgrades), which has no branch or cluster to scope by. One
+	// read for a roll of N endpoints rather than N, and unbounded: the caller
+	// wants the whole fleet and holds it in memory.
+	AllEndpointDeploys(ctx context.Context) ([]core.EndpointDeploy, error)
+
+	// EndpointDeploysByIDs returns the renderable desired state of the named
+	// endpoints, in one read. Unlike the fleet enumeration it keeps an
+	// address-less endpoint, so naming a broken one still attempts it; ids with no
+	// live row are absent from the result.
+	EndpointDeploysByIDs(ctx context.Context, ids []uuid.UUID) ([]core.EndpointDeploy, error)
+
 	// EndpointDeploy returns one endpoint's renderable desired state by id, for a
 	// step that redeploys a single endpoint and holds nothing but its id.
 	// core.ErrNotFound when the endpoint is gone or its branch is tombstoned — a
@@ -245,4 +258,13 @@ type Deps struct {
 	// disables externalized extensions (the endpoint ships only image-baked ones),
 	// e.g. under the Docker driver or when the feature is off.
 	Extensions *extensions.Catalog
+
+	// Subtasks runs the children a fan-out parent owns (subtask_runner.go). Unlike
+	// every other field it is not filled in by the caller building this struct: a
+	// runner needs the Worker, the Worker needs the Registry, and the Registry
+	// carries this Deps — so it is written into the registry's copy after the
+	// worker exists, by WithSubtasks (worker.go). Nil for a worker built without
+	// that option, and for anything that builds a step outside a worker; a parent
+	// step fails at Execute rather than at build, as the other optional ports do.
+	Subtasks Subtasks
 }

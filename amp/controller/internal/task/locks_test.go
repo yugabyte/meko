@@ -338,9 +338,10 @@ func TestReleaseAfterLossDoesNotUnfenceTheSuccessor(t *testing.T) {
 	}
 }
 
-// The four endpoint-mutating steps all lock the endpoint they touch, and the
-// cascade deletes deliberately lock nothing. This is a rule about which kinds
-// serialize, so it is asserted rather than left to a reader to notice.
+// The four endpoint-mutating steps all lock the endpoint they touch, the fleet
+// roll locks the fleet instead, and the cascade deletes deliberately lock
+// nothing. This is a rule about which kinds serialize, so it is asserted rather
+// than left to a reader to notice.
 func TestEndpointStepsDeclareTheirLock(t *testing.T) {
 	id := uuid.New()
 	want := EndpointLock(id.String())
@@ -363,5 +364,57 @@ func TestEndpointStepsDeclareTheirLock(t *testing.T) {
 		if _, ok := s.(Locking); ok {
 			t.Errorf("%T declares a resource lock; the cascade deletes touch many endpoints and need intent locks, not one lock", s)
 		}
+	}
+}
+
+// TestFleetRollDeclaresTheFleetLock is what makes it one roll at a time (§5.6).
+// Two concurrent rolls have no sensible interleaving; without the declaration
+// they would both fan out over the same fleet with only the per-endpoint locks
+// between them.
+func TestFleetRollDeclaresTheFleetLock(t *testing.T) {
+	var step Step = &planEndpointUpgradesStep{}
+	locking, ok := step.(Locking)
+	if !ok {
+		t.Fatal("plan_endpoint_upgrades declares no resource lock; nothing then serializes two fleet rolls")
+	}
+	got := locking.Lock()
+	if want := FleetEndpointsLock(); got != want {
+		t.Fatalf("plan_endpoint_upgrades locks %v, want %v", got, want)
+	}
+	// A third namespace in resource_token, disjoint from endpoint:<id> and
+	// task:<id> as they are from the compute fence's branch:<id>.
+	if got.Key() != "fleet:endpoints" {
+		t.Errorf("fleet lock key = %q, want fleet:endpoints", got.Key())
+	}
+	if got.Type == ResourceEndpoint {
+		t.Error("the fleet roll took an endpoint lock; it holds one lock covering work its children do")
+	}
+}
+
+// TestFleetLockQueuesTheSecondRoll pins the contract change §5.6 made: a second
+// roll WAITS rather than being refused with a 409. That is better for the common
+// case — re-firing a half-failed roll, which then finds the fleet mostly
+// converged — and is why no unique index and no conflict classifier are needed.
+func TestFleetLockQueuesTheSecondRoll(t *testing.T) {
+	store := NewMemStore()
+	locks := store.Locks(ownerID())
+	first, second := uuid.New(), uuid.New()
+
+	held, err := locks.AcquireResource(t.Context(), FleetEndpointsLock(), first, KindUpgradeEndpoints.String())
+	if err != nil {
+		t.Fatalf("first roll was refused the fleet lock: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := locks.AcquireResource(waitCtx, FleetEndpointsLock(), second, KindUpgradeEndpoints.String()); err == nil {
+		t.Fatal("two rolls held the fleet lock at once")
+	}
+
+	// Queued, not refused: once the first gives it back the second gets it.
+	if err := held.Release(t.Context()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if _, err := locks.AcquireResource(t.Context(), FleetEndpointsLock(), second, KindUpgradeEndpoints.String()); err != nil {
+		t.Fatalf("the second roll never got the fleet lock after the first released it: %v", err)
 	}
 }

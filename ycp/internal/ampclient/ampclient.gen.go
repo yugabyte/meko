@@ -1223,6 +1223,38 @@ type StoragePoolList struct {
 	Total TotalCount `json:"total"`
 }
 
+// Subtask One child of a fan-out task: a single registered step with durable
+// status, not a task with a step list. `kind` is a **step** kind (e.g.
+// `upgrade_endpoint`), never a task kind, and a subtask never appears in
+// `GET /tasks`.
+type Subtask struct {
+	// Args The child's inputs, as opaque JSON — for an `upgrade_endpoint` child,
+	// its `endpoint_id` and `version`.
+	Args      interface{}        `json:"args,omitempty"`
+	CreatedAt time.Time          `json:"created_at"`
+	Error     *string            `json:"error,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+	Kind      string             `json:"kind"`
+
+	// Result The child's step result, as opaque JSON. Absent until it succeeds.
+	Result interface{} `json:"result,omitempty"`
+
+	// Status The lifecycle state of a task, or of one of its subtasks — they share it,
+	// because a subtask is one step with durable status.
+	Status TaskStatus `json:"status"`
+
+	// TaskId The parent task this child belongs to.
+	TaskId    openapi_types.UUID `json:"task_id"`
+	UpdatedAt time.Time          `json:"updated_at"`
+}
+
+// SubtaskList defines model for SubtaskList.
+type SubtaskList struct {
+	// Count The number of subtasks returned (all of the parent's; this list is not paginated).
+	Count    int       `json:"count"`
+	Subtasks []Subtask `json:"subtasks"`
+}
+
 // Task defines model for Task.
 type Task struct {
 	ClusterId *openapi_types.UUID `json:"cluster_id,omitempty"`
@@ -1237,12 +1269,19 @@ type Task struct {
 	// Result The task's final step result, as opaque JSON — the user-facing
 	// outcome once the task has run. For a `resize_endpoint` task it carries
 	// `in_place_resize` (`completed` | `pending` | `infeasible` |
-	// `unsupported`) and `in_place_message`. Absent until a step records a
-	// result.
-	Result    interface{} `json:"result,omitempty"`
-	Status    TaskStatus  `json:"status"`
-	TargetRef *string     `json:"target_ref,omitempty"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	// `unsupported`) and `in_place_message`. For a succeeded
+	// `upgrade_endpoints` roll it carries `version`, the `upgraded` /
+	// `skipped` / `failed` / `unattempted` counts, and an `endpoints` array
+	// of `{endpoint_id, outcome, reason, subtask_id}` lines. Absent until a
+	// step records a result — including on a FAILED task, whose account is
+	// its `error` plus `GET /tasks/{taskId}/subtasks`.
+	Result interface{} `json:"result,omitempty"`
+
+	// Status The lifecycle state of a task, or of one of its subtasks — they share it,
+	// because a subtask is one step with durable status.
+	Status    TaskStatus `json:"status"`
+	TargetRef *string    `json:"target_ref,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 
 	// YcpGeneration The YCP desired-state generation this task applies to its target, when
 	// it was planned from YCP desired state; `null` for a task an operator or
@@ -1253,9 +1292,6 @@ type Task struct {
 	YcpGeneration *int64 `json:"ycp_generation,omitempty"`
 }
 
-// TaskStatus defines model for Task.Status.
-type TaskStatus string
-
 // TaskList defines model for TaskList.
 type TaskList struct {
 	// Count The number of items returned in this response (this page).
@@ -1265,6 +1301,10 @@ type TaskList struct {
 	// Total The number of items matching the request across all pages (ignores limit/offset).
 	Total TotalCount `json:"total"`
 }
+
+// TaskStatus The lifecycle state of a task, or of one of its subtasks — they share it,
+// because a subtask is one step with durable status.
+type TaskStatus string
 
 // TotalCount The number of items matching the request across all pages (ignores limit/offset).
 type TotalCount = int
@@ -1358,6 +1398,29 @@ type UpdateEndpointSettingsRequest struct {
 type UpdateStoragePoolRequest struct {
 	// Name The pool's new name; unique among live pools.
 	Name string `json:"name"`
+}
+
+// UpgradeEndpointsRequest Request to move endpoints onto a target version. The version is opaque to
+// the controller — the deployer decides what it selects; today it is the
+// endpoint image tag verbatim.
+type UpgradeEndpointsRequest struct {
+	// EndpointIds The endpoints to roll. Absent or empty means the whole fleet.
+	// Repeated ids are collapsed. An endpoint named here is rolled even if
+	// it is already recorded at the target, which is what makes this the
+	// remedy after a partial roll.
+	EndpointIds *[]openapi_types.UUID `json:"endpoint_ids,omitempty"`
+
+	// MaxParallel How many endpoints to roll at once. An upgrade replaces the pod, so
+	// this is how much of the fleet is down at a time. It is also the only
+	// bound on a roll's concurrency — the children run in-process off the
+	// parent's single execution slot, so `--task-max-concurrent` does not
+	// apply to them. Defaults to 4; 0 is rejected rather than read as
+	// unbounded.
+	MaxParallel *int `json:"max_parallel,omitempty"`
+
+	// Version The target version. Required and non-empty: an empty version would
+	// clear the endpoint's pinned desired state rather than leave it alone.
+	Version string `json:"version"`
 }
 
 // User defines model for User.
@@ -1548,6 +1611,9 @@ type ListUsersParams struct {
 	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
+
+// UpgradeEndpointsJSONRequestBody defines body for UpgradeEndpoints for application/json ContentType.
+type UpgradeEndpointsJSONRequestBody = UpgradeEndpointsRequest
 
 // CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
 type CreateMigrationJSONRequestBody = CreateMigrationRequest
@@ -1792,6 +1858,11 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// UpgradeEndpointsWithBody request with any body
+	UpgradeEndpointsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpgradeEndpoints(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListMigrations request
 	ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1911,6 +1982,9 @@ type ClientInterface interface {
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListTaskSubtasks request
+	ListTaskSubtasks(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListUsers request
 	ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1924,6 +1998,30 @@ type ClientInterface interface {
 
 	// GetVersion request
 	GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) UpgradeEndpointsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpgradeEndpointsRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpgradeEndpoints(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpgradeEndpointsRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2454,6 +2552,18 @@ func (c *Client) GetTask(ctx context.Context, taskId TaskId, reqEditors ...Reque
 	return c.Client.Do(req)
 }
 
+func (c *Client) ListTaskSubtasks(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListTaskSubtasksRequest(c.Server, taskId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListUsersRequest(c.Server, params)
 	if err != nil {
@@ -2512,6 +2622,46 @@ func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewUpgradeEndpointsRequest calls the generic UpgradeEndpoints builder with application/json body
+func NewUpgradeEndpointsRequest(server string, body UpgradeEndpointsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpgradeEndpointsRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewUpgradeEndpointsRequestWithBody generates requests for UpgradeEndpoints with any type of body
+func NewUpgradeEndpointsRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/endpoint-upgrades")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewListMigrationsRequest generates requests for ListMigrations
@@ -4173,6 +4323,40 @@ func NewGetTaskRequest(server string, taskId TaskId) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListTaskSubtasksRequest generates requests for ListTaskSubtasks
+func NewListTaskSubtasksRequest(server string, taskId TaskId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "taskId", taskId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/tasks/%s/subtasks", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListUsersRequest generates requests for ListUsers
 func NewListUsersRequest(server string, params *ListUsersParams) (*http.Request, error) {
 	var err error
@@ -4383,6 +4567,11 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// UpgradeEndpointsWithBodyWithResponse request with any body
+	UpgradeEndpointsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error)
+
+	UpgradeEndpointsWithResponse(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error)
+
 	// ListMigrationsWithResponse request
 	ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error)
 
@@ -4502,6 +4691,9 @@ type ClientWithResponsesInterface interface {
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
 
+	// ListTaskSubtasksWithResponse request
+	ListTaskSubtasksWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*ListTaskSubtasksResponse, error)
+
 	// ListUsersWithResponse request
 	ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error)
 
@@ -4515,6 +4707,39 @@ type ClientWithResponsesInterface interface {
 
 	// GetVersionWithResponse request
 	GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
+}
+
+type UpgradeEndpointsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r UpgradeEndpointsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpgradeEndpointsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpgradeEndpointsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type ListMigrationsResponse struct {
@@ -5567,6 +5792,40 @@ func (r GetTaskResponse) ContentType() string {
 	return ""
 }
 
+type ListTaskSubtasksResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SubtaskList
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r ListTaskSubtasksResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListTaskSubtasksResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListTaskSubtasksResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListUsersResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5695,6 +5954,23 @@ func (r GetVersionResponse) ContentType() string {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
+}
+
+// UpgradeEndpointsWithBodyWithResponse request with arbitrary body returning *UpgradeEndpointsResponse
+func (c *ClientWithResponses) UpgradeEndpointsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error) {
+	rsp, err := c.UpgradeEndpointsWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpgradeEndpointsResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpgradeEndpointsWithResponse(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error) {
+	rsp, err := c.UpgradeEndpoints(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpgradeEndpointsResponse(rsp)
 }
 
 // ListMigrationsWithResponse request returning *ListMigrationsResponse
@@ -6080,6 +6356,15 @@ func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, taskId Ta
 	return ParseGetTaskResponse(rsp)
 }
 
+// ListTaskSubtasksWithResponse request returning *ListTaskSubtasksResponse
+func (c *ClientWithResponses) ListTaskSubtasksWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*ListTaskSubtasksResponse, error) {
+	rsp, err := c.ListTaskSubtasks(ctx, taskId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListTaskSubtasksResponse(rsp)
+}
+
 // ListUsersWithResponse request returning *ListUsersResponse
 func (c *ClientWithResponses) ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error) {
 	rsp, err := c.ListUsers(ctx, params, reqEditors...)
@@ -6122,6 +6407,53 @@ func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParseGetVersionResponse(rsp)
+}
+
+// ParseUpgradeEndpointsResponse parses an HTTP response from a UpgradeEndpointsWithResponse call
+func ParseUpgradeEndpointsResponse(rsp *http.Response) (*UpgradeEndpointsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpgradeEndpointsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListMigrationsResponse parses an HTTP response from a ListMigrationsWithResponse call
@@ -7732,6 +8064,60 @@ func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest Task
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListTaskSubtasksResponse parses an HTTP response from a ListTaskSubtasksWithResponse call
+func ParseListTaskSubtasksResponse(rsp *http.Response) (*ListTaskSubtasksResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListTaskSubtasksResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SubtaskList
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

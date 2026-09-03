@@ -292,18 +292,13 @@ func scanEndpointDeploy(r scanRow) (EndpointDeploy, error) {
 	return d, nil
 }
 
-// BranchEndpointDeploys returns the renderable desired state of every live
-// endpoint on the branch. Callers that redeploy a whole branch enumerate these
-// at Execute time, so a concurrently-added endpoint is still covered on replay.
-// An absent branch yields an empty slice. The leading cluster id is vestigial, as
-// in BranchExtensions.
-func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
-	rows, err := b.pool.Query(ctx,
-		endpointDeploySelect+`
-		  WHERE eb.branch_id = $1::uuid AND eb.dropped_at IS NULL`,
-		branchID.String())
+// endpointDeploysWhere runs the shared projection with the caller's WHERE (and
+// ORDER BY) appended and collects the rows, so the enumerations differ only in
+// what they select — not in what they render.
+func (b *PgBackend) endpointDeploysWhere(ctx context.Context, what, where string, args ...any) ([]EndpointDeploy, error) {
+	rows, err := b.pool.Query(ctx, endpointDeploySelect+where, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list endpoint deploys for branch: %w", err)
+		return nil, fmt.Errorf("list endpoint deploys for %s: %w", what, err)
 	}
 	defer rows.Close()
 	var out []EndpointDeploy
@@ -315,9 +310,54 @@ func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.
 		out = append(out, d)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list endpoint deploys for branch: %w", err)
+		return nil, fmt.Errorf("list endpoint deploys for %s: %w", what, err)
 	}
 	return out, nil
+}
+
+// BranchEndpointDeploys returns the renderable desired state of every live
+// endpoint on the branch. Callers that redeploy a whole branch enumerate these
+// at Execute time, so a concurrently-added endpoint is still covered on replay.
+// An absent branch yields an empty slice. The leading cluster id is vestigial, as
+// in BranchExtensions.
+func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
+	return b.endpointDeploysWhere(ctx, "branch", `
+		  WHERE eb.branch_id = $1::uuid AND eb.dropped_at IS NULL`, branchID.String())
+}
+
+// AllEndpointDeploys returns the renderable desired state of every live endpoint
+// in the deployment — the fleet roll's Execute-time enumeration, in one read
+// (architecture/ac-endpoint-upgrade.md §5.1). Ordered, so a roll starts and
+// reports children in the same sequence on every replay.
+//
+// An endpoint with no recorded address is NOT in the fleet: create_endpoint
+// records the row before deploying, so an address-less row is a failed create
+// with no pod. Rolling one waits out helm's --wait and fails, and fail-fast then
+// halts the whole roll. This is the WHOLE-FLEET rule only — a named endpoint is
+// still attempted (EndpointDeploysByIDs).
+func (b *PgBackend) AllEndpointDeploys(ctx context.Context) ([]EndpointDeploy, error) {
+	return b.endpointDeploysWhere(ctx, "the fleet", `
+		  WHERE eb.dropped_at IS NULL
+		    AND e.address IS NOT NULL
+		  ORDER BY e.created_at, e.id`)
+}
+
+// EndpointDeploysByIDs returns the renderable desired state of the named
+// endpoints, in one read. Unlike the fleet enumeration it does NOT exclude an
+// address-less endpoint: naming one is how an operator attempts a broken endpoint
+// deliberately. Ids with no live row are simply absent from the result.
+func (b *PgBackend) EndpointDeploysByIDs(ctx context.Context, ids []uuid.UUID) ([]EndpointDeploy, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	strs := make([]string, len(ids))
+	for i, id := range ids {
+		strs[i] = id.String()
+	}
+	return b.endpointDeploysWhere(ctx, "the named endpoints", `
+		  WHERE eb.dropped_at IS NULL
+		    AND e.id = ANY($1::uuid[])
+		  ORDER BY e.created_at, e.id`, strs)
 }
 
 // EndpointDeploy returns one endpoint's renderable desired state by id — the

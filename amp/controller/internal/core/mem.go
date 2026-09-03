@@ -620,6 +620,71 @@ func (m *MemBackend) BranchEndpointDeploys(_ context.Context, _, branchID uuid.U
 	return out, nil
 }
 
+// AllEndpointDeploys returns the renderable desired state of every live endpoint
+// in the deployment (the fleet roll's enumeration), mirroring PgBackend. An
+// endpoint whose branch is gone is not in the fleet — MemBackend deletes branch
+// rows outright rather than tombstoning them, so a missing branch covers
+// PgBackend's dropped_at case.
+//
+// Ordered by id, where PgBackend orders by (created_at, id): the map iteration
+// has no order of its own, and a caller that reports one line per endpoint needs
+// a stable one.
+func (m *MemBackend) AllEndpointDeploys(_ context.Context) ([]EndpointDeploy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []EndpointDeploy
+	for id, e := range m.endpoints {
+		b, ok := m.branches[e.BranchID]
+		if !ok {
+			continue
+		}
+		// No address => never successfully deployed (a failed-create orphan, or a
+		// local compute the controller does not place). PgBackend applies
+		// `e.address IS NOT NULL`; the reason is there.
+		if e.Address == "" {
+			continue
+		}
+		out = append(out, EndpointDeploy{
+			ID:        id,
+			BranchID:  e.BranchID,
+			PgVersion: b.PgVersion,
+			CPU:       e.CPU,
+			Memory:    e.Memory,
+			Version:   e.Version,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	return out, nil
+}
+
+// EndpointDeploysByIDs mirrors PgBackend's: the named endpoints, address-less
+// ones included, with absent ids simply missing from the result.
+func (m *MemBackend) EndpointDeploysByIDs(_ context.Context, ids []uuid.UUID) ([]EndpointDeploy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []EndpointDeploy
+	for _, id := range ids {
+		e, ok := m.endpoints[id]
+		if !ok {
+			continue
+		}
+		b, ok := m.branches[e.BranchID]
+		if !ok {
+			continue
+		}
+		out = append(out, EndpointDeploy{
+			ID:        id,
+			BranchID:  e.BranchID,
+			PgVersion: b.PgVersion,
+			CPU:       e.CPU,
+			Memory:    e.Memory,
+			Version:   e.Version,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	return out, nil
+}
+
 // EndpointDeploy returns one endpoint's renderable desired state by id, mirroring
 // PgBackend: pg_version comes from the endpoint's branch. ErrNotFound when the
 // endpoint or its branch is gone — MemBackend deletes branch rows outright rather

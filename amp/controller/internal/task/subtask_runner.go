@@ -37,8 +37,10 @@ type Subtasks interface {
 //
 // Run is called from up to max_parallel goroutines of one parent step at once.
 // That is sound because a Worker's fields are immutable after NewWorker and what
-// they reach is safe: the Registry's builder map is read-only after construction,
-// and PgLocks builds a pglease client per acquire.
+// they reach is read-only by then: the Registry's builder map is fixed at
+// construction and its Deps are written only by WithSubtasks, during wiring and
+// before the `go Run` that reaches any Build. PgLocks builds a pglease client per
+// acquire.
 type SubtaskRunner struct {
 	store SubtaskStore
 	w     *Worker

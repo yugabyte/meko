@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/yugabyte/amp/controller/internal/config"
 	"github.com/yugabyte/amp/controller/internal/db"
 	applog "github.com/yugabyte/amp/controller/internal/log"
@@ -113,12 +115,18 @@ type Option func(*Worker)
 func WithMetrics(r MetricsRecorder) Option { return func(w *Worker) { w.metrics = r } }
 
 // NewWorker builds a worker. registry rebuilds each persisted step fully wired
-// with its deps (it carries them); locks hands out the task and resource leases.
-// Optional collaborators (e.g. metrics) are supplied via Options.
+// with its deps (it carries them); locks hands out the task and resource leases;
+// subtasks backs the runner a fan-out parent drives its children with. Optional
+// collaborators (e.g. metrics) are supplied via Options.
 //
 // The owner comes from locks rather than being generated here, so the fence on
 // every task and step mutation names the same thing the lease does.
-func NewWorker(store Store, registry *Registry, locks Locks, cfg config.TaskConfig, logger *slog.Logger, opts ...Option) *Worker {
+//
+// The runner is built here, after w exists, because the cycle is unavoidable: a
+// runner needs the Worker, the Worker needs the Registry, and the Registry
+// carries the Deps a step is built from. Writing Deps.Subtasks beforehand cannot
+// work — the Registry holds a Deps by VALUE and hands a copy to every builder.
+func NewWorker(store Store, subtasks SubtaskStore, registry *Registry, locks Locks, cfg config.TaskConfig, logger *slog.Logger, opts ...Option) *Worker {
 	w := &Worker{
 		store:    store,
 		registry: registry,
@@ -129,6 +137,7 @@ func NewWorker(store Store, registry *Registry, locks Locks, cfg config.TaskConf
 
 		retryBudget: stepRetryBudget,
 	}
+	registry.deps.Subtasks = NewSubtaskRunner(w, subtasks)
 	for _, opt := range opts {
 		opt(w)
 	}
@@ -355,6 +364,33 @@ func (w *Worker) runTask(ctx context.Context, t *Task, lease Lease) {
 	}
 }
 
+// running is the identity of the task a step is executing under, stamped on the
+// step's context by execute.
+//
+// A step normally needs neither field — its args name what it acts on and the
+// worker records its outcome. A FAN-OUT parent needs both: it creates children
+// under its own task id and runs them under the owner every task write is fenced
+// on (ac-endpoint-upgrade.md §5.3), and neither can be an arg (the owner is
+// per-execution, and a reclaimed parent must use the NEW one).
+type running struct {
+	taskID uuid.UUID
+	owner  string
+}
+
+type runningCtxKey struct{}
+
+func intoRunning(ctx context.Context, r running) context.Context {
+	return context.WithValue(ctx, runningCtxKey{}, r)
+}
+
+// runningFrom returns the executing task's identity. The second result is false
+// when the step was not run by a worker, which a step that needs it must fail on
+// rather than guess at.
+func runningFrom(ctx context.Context) (running, bool) {
+	r, ok := ctx.Value(runningCtxKey{}).(running)
+	return r, ok
+}
+
 // execute walks a task's steps, skipping already-succeeded ones so a reclaimed
 // task resumes at the first unfinished step rather than from the top.
 func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) error {
@@ -402,8 +438,9 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		}
 		// Stamp the step-scoped logger onto the context so steps log through
 		// applog.FromContext with the task/step keys already attached
-		// (controller/AGENTS.md: log through internal/log, not slog directly).
-		stepCtx := applog.IntoContext(ctx, stepLog)
+		// (controller/AGENTS.md: log through internal/log, not slog directly), plus
+		// the executing task's identity for a fan-out parent (see running).
+		stepCtx := intoRunning(applog.IntoContext(ctx, stepLog), running{taskID: t.ID, owner: w.owner})
 		res := w.runStepWithRetry(stepCtx, stepLog, step)
 		if res.Failed() {
 			// A cancelled worker context means we are shutting down (or the parent
