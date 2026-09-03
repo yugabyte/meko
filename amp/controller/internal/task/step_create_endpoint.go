@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	applog "github.com/yugabyte/amp/controller/internal/log"
@@ -93,20 +94,26 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	}
 	logger := applog.FromContext(ctx).With(applog.KeyEndpointID, s.EndpointID.String())
 
-	// Resolve the endpoint's externalized extensions: the cluster-wide opted-in
-	// set (stored on the default branch, shared by every branch's endpoints)
-	// unioned with the catalog defaults, mapped to pinned images. Nil catalog =>
-	// none (Docker driver / feature off). Done before the record so the resolved
-	// set is persisted in the recreate config.
-	extSpecs, extNames, err := s.resolveExtensions(ctx)
+	// Ahead of the record write: the resolved set is persisted in the recreate
+	// config below.
+	exts, err := resolveBranchExtensions(ctx, s.extensions, s.state, s.BranchID)
 	if err != nil {
 		return Fail(err)
 	}
+	// Rendered from the args: this step's desired state is the row it is about to
+	// write, so it assembles the record rather than reading one back.
+	spec := deploy.EndpointSpecFrom(core.EndpointDeploy{
+		ID:        s.EndpointID,
+		BranchID:  s.BranchID,
+		PgVersion: s.PgVersion,
+		CPU:       s.CPU,
+		Memory:    s.Memory,
+	}, s.yb, s.scURL, exts)
 
 	// Record the endpoint row first: it claims the single-writer slot (a second
 	// writer is rejected here) and gives the deploy a stable id, before any
 	// compute is spent. config is the spec stored for (re)creation.
-	config, err := endpointConfig(s.CreateEndpointArgs, extNames)
+	config, err := endpointConfig(s.CreateEndpointArgs, extensionNames(spec.Extensions))
 	if err != nil {
 		return Fail(err)
 	}
@@ -127,23 +134,6 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
 
-	// A branch's id is the storage branch id verbatim (no enclosing tenant).
-	spec := deploy.EndpointSpec{
-		Name:          EndpointDeployName(s.EndpointID),
-		EndpointID:    s.EndpointID.String(),
-		BranchID:      s.BranchID,
-		PgVersion:     s.PgVersion,
-		YB:            s.yb,
-		ControllerURL: s.scURL,
-		CPU:           s.CPU,
-		Memory:        s.Memory,
-		Extensions:    extSpecs,
-		// No pg_settings here: the endpoint's supervisor reads the branch's and
-		// the endpoint's straight from amp_registry and merges them itself, so a
-		// change is a registry write rather than a redeploy. EndpointID above is
-		// what it needs to find them.
-	}
-
 	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
 	if err != nil {
 		return Fail(fmt.Errorf("deploy endpoint: %w", err))
@@ -154,50 +144,6 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 
 	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress)
 	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
-}
-
-// resolveExtensions computes the endpoint's externalized extension mounts: its
-// branch's own opted-in set (seeded on the default branch, inherited by a fork,
-// extended per branch by addBranchExtensions) unioned with the catalog
-// defaults, resolved to pinned image references. It returns the deploy specs (for
-// the EndpointSpec) and the resolved names (for the recreate config). With no
-// catalog it returns (nil, nil) — the endpoint ships only image-baked extensions.
-// Unknown names are dropped by the catalog, so a stale entry can't wedge the deploy.
-func (s *createEndpointStep) resolveExtensions(ctx context.Context) ([]deploy.Extension, []string, error) {
-	if s.extensions == nil {
-		return nil, nil, nil
-	}
-	opted, err := s.state.BranchExtensions(ctx, s.ClusterID, s.BranchID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read branch extensions: %w", err)
-	}
-	names := unionStrings(s.extensions.DefaultNames(), opted)
-	resolved := s.extensions.Resolve(names)
-	if len(resolved) == 0 {
-		return nil, nil, nil
-	}
-	specs := make([]deploy.Extension, len(resolved))
-	got := make([]string, len(resolved))
-	for i, r := range resolved {
-		specs[i] = deploy.Extension{Name: r.Name, Image: r.Image, Preload: r.Preload}
-		got[i] = r.Name
-	}
-	return specs, got, nil
-}
-
-// unionStrings returns a ∪ b preserving order (a first, then b's new entries),
-// de-duplicated.
-func unionStrings(a, b []string) []string {
-	seen := make(map[string]struct{}, len(a)+len(b))
-	var out []string
-	for _, s := range append(append([]string(nil), a...), b...) {
-		if _, dup := seen[s]; dup {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
 }
 
 // endpointConfig is the spec stored on the endpoint row for (re)creation. The

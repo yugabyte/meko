@@ -258,7 +258,13 @@ func TestClusterExtensions(t *testing.T) {
 	// mounts pgvector (resolved to its pinned image).
 	want := []string{"pgvector"}
 	withWriter := true
-	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "shop", Extensions: &want, WithWriter: &withWriter})
+	// A non-default size on purpose: the redeploy assertion below can only catch a
+	// dropped field if losing it is distinguishable from the deployer's defaults.
+	cpu, mem := "4", "32Gi" // non-default, and at the 8 GiB per vCPU this control plane requires
+	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
+		Name: "shop", Extensions: &want, WithWriter: &withWriter,
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
+	})
 	if err != nil {
 		t.Fatalf("CreateCluster(pgvector): %v", err)
 	}
@@ -297,7 +303,22 @@ func TestClusterExtensions(t *testing.T) {
 		t.Fatalf("pg_cron status = %d, want 202; body = %s", cok.StatusCode(), cok.Body)
 	}
 	drainTasks(t, store, backend, prov)
-	last := dep.created[len(dep.created)-1].Extensions
+	// The redeploy re-renders the endpoint from its stored desired state, so it
+	// must carry the endpoint's own version and size through, not just the changed
+	// mounts. This is the only assertion covering that through a real backend: a
+	// BranchEndpointDeploys that stopped reporting either would otherwise silently
+	// resize the endpoint and move its Postgres major version on the next
+	// extension change.
+	// Compared against the CREATE's spec rather than literals, so the assertion
+	// does not encode the deployer's defaults — and so it cross-checks two
+	// different paths: create renders from the task args, the redeploy renders
+	// from BranchEndpointDeploys.
+	created, redeployed := dep.created[0], dep.created[len(dep.created)-1]
+	if redeployed.PgVersion != created.PgVersion || redeployed.CPU != cpu || redeployed.Memory != mem {
+		t.Errorf("redeploy spec = pg%d %s/%s, want pg%d %s/%s (the endpoint's own desired state)",
+			redeployed.PgVersion, redeployed.CPU, redeployed.Memory, created.PgVersion, cpu, mem)
+	}
+	last := redeployed.Extensions
 	if len(last) != 2 {
 		t.Fatalf("redeploy spec extensions = %+v, want both pg_cron and pgvector", last)
 	}

@@ -208,6 +208,9 @@ func (b *PgBackend) BranchPgSettings(ctx context.Context, _, branchID uuid.UUID)
 // inherited by a fork, extended per branch by AddBranchExtensions. An
 // absent branch yields an empty slice, not an error, so the endpoint step
 // degrades to the defaults rather than failing. See compute/architecture/extensions.md.
+//
+// The leading cluster id is vestigial: branch_id is a primary key, so the branch
+// is fully addressed by it, and both backends ignore the argument.
 func (b *PgBackend) BranchExtensions(ctx context.Context, _, branchID uuid.UUID) ([]string, error) {
 	var raw []byte
 	err := b.pool.QueryRow(ctx,
@@ -230,12 +233,12 @@ func (b *PgBackend) BranchExtensions(ctx context.Context, _, branchID uuid.UUID)
 	return names, nil
 }
 
-// AddBranchExtensions adds names to the (clusterID, branchID) branch's durable
-// extension set — the add_branch_extensions opt-in. Adding is per branch. It is
-// an *absolute* union: the row's extensions is recomputed as the sorted distinct
-// set of its existing entries ∪ names, so replaying the step can't double-apply
-// (satisfying the YB idempotency contract; no SET col = col + …). An absent
-// branch matches zero rows (a no-op).
+// AddBranchExtensions adds names to the branch's durable extension set — the
+// add_branch_extensions opt-in. Adding is per branch. It is an *absolute* union:
+// the row's extensions is recomputed as the sorted distinct set of its existing
+// entries ∪ names, so replaying the step can't double-apply (satisfying the YB
+// idempotency contract; no SET col = col + …). An absent branch matches zero rows
+// (a no-op). The leading cluster id is vestigial, as in BranchExtensions.
 func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -257,12 +260,13 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 	return nil
 }
 
-// BranchEndpointDeploys returns the redeploy record for every live endpoint on
-// the (clusterID, branchID) branch: its id, the branch it serves, and the pinned
-// pg version + compute size (pg_version from the branch, cpu/memory from the
-// endpoint config). The add_branch_extensions step enumerates these at Execute
-// time to re-render each endpoint with the new extension mounts. An absent branch
-// yields an empty slice.
+// BranchEndpointDeploys returns the renderable desired state of every live
+// endpoint on the branch: its id, the branch it serves, and the pinned pg version
+// + compute size (pg_version from the branch, cpu/memory from the endpoint
+// config). Callers that redeploy a whole branch enumerate these at Execute time,
+// so a concurrently-added endpoint is still covered on replay. An absent branch
+// yields an empty slice. The leading cluster id is vestigial, as in
+// BranchExtensions.
 func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
 	rows, err := b.pool.Query(ctx,
 		`SELECT e.id::text, e.branch_id::text, eb.pg_version,

@@ -9,6 +9,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/internal/core"
 )
 
 // safekeeperHTTPPort is the port every endpoint's co-located safekeeper serves
@@ -91,6 +93,35 @@ type Extension struct {
 	Name    string
 	Image   string
 	Preload bool
+}
+
+// EndpointName is the deployer's stable instance handle for an endpoint (the
+// container/pod/Helm-release name), keyed by the endpoint id. "yb-ep-" + a
+// lowercase-hyphen uuid is a valid DNS-1123 name (42 chars, under Helm's 53-char
+// limit).
+func EndpointName(endpointID uuid.UUID) string {
+	return "yb-ep-" + endpointID.String()
+}
+
+// EndpointSpecFrom renders an endpoint's deploy spec: every field comes from the
+// endpoint's own desired state, or from one of the three inputs a row cannot
+// carry — the YB connection, the controller URL, and the resolved mounts.
+func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mounts []Extension) EndpointSpec {
+	return EndpointSpec{
+		Name:          EndpointName(e.ID),
+		EndpointID:    e.ID.String(),
+		BranchID:      e.BranchID,
+		PgVersion:     e.PgVersion,
+		YB:            yb,
+		ControllerURL: controllerURL,
+		CPU:           e.CPU,
+		Memory:        e.Memory,
+		Extensions:    mounts,
+		// No pg_settings here: the endpoint's supervisor reads the branch's and
+		// the endpoint's straight from amp_registry and merges them itself, so a
+		// change is a registry write rather than a redeploy. EndpointID above is
+		// what it needs to find them.
+	}
 }
 
 // ResizeSpec is a request to change an existing endpoint's compute reservation.

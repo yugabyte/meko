@@ -68,6 +68,8 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 	if s.deployer == nil {
 		return Fail(fmt.Errorf("add_branch_extensions step requires a deployer, but none is configured"))
 	}
+	// Unlike create_endpoint, a missing catalog is fatal here rather than "no
+	// mounts": proceeding would strip the mounts off every endpoint on the branch.
 	if s.extensions == nil {
 		return Fail(fmt.Errorf("add_branch_extensions step requires an extension catalog, but none is configured"))
 	}
@@ -79,37 +81,21 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 		return Fail(fmt.Errorf("add branch extensions: %w", err))
 	}
 
-	// Re-render every endpoint on the branch against its (now-updated) set
-	// (∪ catalog defaults, mapped to pinned images) so the changed ImageVolume
-	// mounts take effect.
-	opted, err := s.state.BranchExtensions(ctx, s.ClusterID, s.BranchID)
-	if err != nil {
-		return Fail(fmt.Errorf("read branch extensions: %w", err))
-	}
-	resolved := s.extensions.Resolve(unionStrings(s.extensions.DefaultNames(), opted))
-	extSpecs := make([]deploy.Extension, len(resolved))
-	extNames := make([]string, len(resolved))
-	for i, r := range resolved {
-		extSpecs[i] = deploy.Extension{Name: r.Name, Image: r.Image, Preload: r.Preload}
-		extNames[i] = r.Name
-	}
-
 	deploys, err := s.state.BranchEndpointDeploys(ctx, s.ClusterID, s.BranchID)
 	if err != nil {
 		return Fail(fmt.Errorf("enumerate branch endpoints: %w", err))
 	}
+	// One read for the whole roll, before the first deploy: every endpoint on the
+	// branch renders from that one snapshot. Resolving per endpoint would let a
+	// concurrent AddBranchExtensions hand the later ones a larger set than the
+	// earlier ones, and a read that failed partway would abort with some endpoints
+	// already redeployed.
+	exts, err := resolveBranchExtensions(ctx, s.extensions, s.state, s.BranchID)
+	if err != nil {
+		return Fail(err)
+	}
 	for _, d := range deploys {
-		spec := deploy.EndpointSpec{
-			Name:          EndpointDeployName(d.ID),
-			EndpointID:    d.ID.String(),
-			BranchID:      d.BranchID,
-			PgVersion:     d.PgVersion,
-			YB:            s.yb,
-			ControllerURL: s.scURL,
-			CPU:           d.CPU,
-			Memory:        d.Memory,
-			Extensions:    extSpecs,
-		}
+		spec := deploy.EndpointSpecFrom(d, s.yb, s.scURL, exts)
 		deployed, err := s.deployer.CreateEndpoint(ctx, spec)
 		if err != nil {
 			return Fail(fmt.Errorf("redeploy endpoint %s: %w", d.ID, err))
@@ -122,7 +108,10 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 			return Fail(fmt.Errorf("record endpoint address %s: %w", d.ID, err))
 		}
 		// Record what the endpoint now mounts (audit / recreate spec). Idempotent.
-		if err := s.state.UpdateEndpointExtensions(ctx, d.ID, extNames); err != nil {
+		// An endpoint that mounts nothing records nil rather than an empty slice;
+		// both sinks treat the two alike (marshalExtensions writes "[]" for either,
+		// extensionValuesFor collapses len==0 to nil).
+		if err := s.state.UpdateEndpointExtensions(ctx, d.ID, extensionNames(spec.Extensions)); err != nil {
 			return Fail(fmt.Errorf("record endpoint extensions %s: %w", d.ID, err))
 		}
 	}

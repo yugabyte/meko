@@ -12,7 +12,7 @@ import (
 // endpointDeps bundles the create_endpoint collaborators a test wants the step
 // constructed with. A nil recipes is left as a nil Deps.Recipes (the no-storage-
 // controller case), not a typed-nil interface.
-func endpointDeps(state *fakeStateStore, recipes *fakeRecipeStore, dep *fakeDeployer) Deps {
+func endpointDeps(state StateStore, recipes *fakeRecipeStore, dep *fakeDeployer) Deps {
 	d := Deps{State: state, Deployer: dep, ControllerURL: "http://sc:50051"}
 	if recipes != nil {
 		d.Recipes = recipes
@@ -50,6 +50,43 @@ func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 	}
 	if decodeResult(t, res.Output)["address"] != wantAddr {
 		t.Errorf("result address = %v, want %q", decodeResult(t, res.Output)["address"], wantAddr)
+	}
+}
+
+// The args are the only place this endpoint's desired state exists, and the spec
+// handed to the deployer is where a value the step failed to carry across goes
+// missing — silently, since every one of them has a default downstream. So they
+// are asserted on the deployed spec, not on the struct the step passes the
+// assembler: a dropped PgVersion deploys the deployer's default major version, a
+// dropped size deploys the chart's 2 cores/4Gi, and a dropped branch id resolves
+// the opted-in extensions of no branch at all, mounting nothing.
+func TestCreateEndpointStepDeploysTheArgsDesiredState(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	deps := endpointDeps(state, newFakeRecipeStore(), dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID, "pgvector")
+
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write",
+		PgVersion: 15, CPU: "8", Memory: "16Gi",
+	}, deps)
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+
+	if len(dep.created) != 1 {
+		t.Fatalf("deployer CreateEndpoint calls = %d, want 1", len(dep.created))
+	}
+	spec := dep.created[0]
+	if spec.PgVersion != 15 {
+		t.Errorf("deployed PgVersion = %d, want 15 (the args' pinned version)", spec.PgVersion)
+	}
+	if spec.CPU != "8" || spec.Memory != "16Gi" {
+		t.Errorf("deployed CPU/Memory = %q/%q, want 8/16Gi (the args' size)", spec.CPU, spec.Memory)
+	}
+	if len(spec.Extensions) != 1 || spec.Extensions[0].Name != "pgvector" {
+		t.Errorf("deployed Extensions = %+v, want the branch's pgvector", spec.Extensions)
 	}
 }
 
@@ -161,7 +198,7 @@ func TestCreateEndpointStepMountsClusterExtension(t *testing.T) {
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
-	state.seedBranchExtensions(branchID, "pgvector")
+	state.seedBranchExtensions(clusterID, branchID, "pgvector")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
 	}, deps)
@@ -183,7 +220,7 @@ func TestCreateEndpointStepMountsClusterPreloadExtension(t *testing.T) {
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
-	state.seedBranchExtensions(branchID, "pg_cron")
+	state.seedBranchExtensions(clusterID, branchID, "pg_cron")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
 	}, deps)
@@ -206,7 +243,7 @@ func TestCreateEndpointStepMountsMultipleClusterExtensions(t *testing.T) {
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
-	state.seedBranchExtensions(branchID, "pgvector", "age")
+	state.seedBranchExtensions(clusterID, branchID, "pgvector", "age")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
 	}, deps)
@@ -234,7 +271,7 @@ func TestCreateEndpointStepMountsClusterExtensions(t *testing.T) {
 	// can't wedge the deploy while known ones are honored.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	clusterID, branchID := uuid.New(), uuid.New()
-	state.seedBranchExtensions(branchID, "pgvector", "totally-unknown-ext")
+	state.seedBranchExtensions(clusterID, branchID, "pgvector", "totally-unknown-ext")
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("r")
 	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)

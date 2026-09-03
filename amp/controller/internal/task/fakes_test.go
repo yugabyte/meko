@@ -52,11 +52,12 @@ type fakeStateStore struct {
 	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
 	// EndpointIDsForBranch / EndpointIDsForCluster can enumerate children and the
 	// delete-by-id methods can prune them. Populated by seedEndpoint / seedBranch.
-	endpointBranch  map[uuid.UUID]branchRef // endpoint id -> its (cluster, branch)
-	branchCluster   map[uuid.UUID]uuid.UUID // branch id -> its cluster
-	branchParent    map[uuid.UUID]uuid.UUID // branch id -> its parent branch id (forks only)
-	branchExts      map[uuid.UUID][]string  // branch id -> opted-in extension names (per branch)
-	endpointExts    map[uuid.UUID][]string  // endpoint id -> last-recorded resolved extension names
+	endpointBranch  map[uuid.UUID]core.EndpointDeploy // endpoint id -> its renderable desired state
+	endpointCluster map[uuid.UUID]uuid.UUID           // endpoint id -> the cluster its branch sits under
+	branchCluster   map[uuid.UUID]uuid.UUID           // branch id -> its cluster
+	branchParent    map[uuid.UUID]uuid.UUID           // branch id -> its parent branch id (forks only)
+	branchExts      map[uuid.UUID][]string            // branch id -> opted-in extension names (per branch)
+	endpointExts    map[uuid.UUID][]string            // endpoint id -> last-recorded resolved extension names
 	deletedBranches map[uuid.UUID]struct{}
 	deletedClusters map[uuid.UUID]struct{}
 
@@ -72,12 +73,6 @@ type fakeStateStore struct {
 	errDeleteCluster  error
 }
 
-// branchRef is an endpoint's (cluster, branch) placement in the fake.
-type branchRef struct {
-	clusterID uuid.UUID
-	branchID  uuid.UUID
-}
-
 func newFakeStateStore() *fakeStateStore {
 	return &fakeStateStore{
 		createdBranches:      map[uuid.UUID]struct{}{},
@@ -85,7 +80,8 @@ func newFakeStateStore() *fakeStateStore {
 		endpointAddresses:    map[uuid.UUID]string{},
 		deletedEndpoints:     map[uuid.UUID]struct{}{},
 		existingWriterBranch: map[uuid.UUID]uuid.UUID{},
-		endpointBranch:       map[uuid.UUID]branchRef{},
+		endpointBranch:       map[uuid.UUID]core.EndpointDeploy{},
+		endpointCluster:      map[uuid.UUID]uuid.UUID{},
 		branchCluster:        map[uuid.UUID]uuid.UUID{},
 		branchParent:         map[uuid.UUID]uuid.UUID{},
 		branchExts:           map[uuid.UUID][]string{},
@@ -96,14 +92,18 @@ func newFakeStateStore() *fakeStateStore {
 	}
 }
 
-// seedBranchExtensions sets a branch's opted-in extension set. Test helper.
-func (f *fakeStateStore) seedBranchExtensions(branchID uuid.UUID, names ...string) {
+// seedBranchExtensions places a branch under clusterID and sets its opted-in
+// extension set. Test helper.
+func (f *fakeStateStore) seedBranchExtensions(clusterID, branchID uuid.UUID, names ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.branchCluster[branchID] = clusterID
 	f.branchExts[branchID] = append([]string(nil), names...)
 }
 
 // BranchExtensions returns the branch's opted-in extension set (empty if none).
+// Mirrors the backends, cluster id included: branch_id is a primary key, so the
+// branch is fully addressed by it and the first argument is ignored.
 func (f *fakeStateStore) BranchExtensions(_ context.Context, _, branchID uuid.UUID) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -113,9 +113,9 @@ func (f *fakeStateStore) BranchExtensions(_ context.Context, _, branchID uuid.UU
 	return nil, nil
 }
 
-// AddBranchExtensions unions names into the (clusterID, branchID) branch's
-// opted-in set (existing-first order, deduplicated). Mirrors the backends; empty
-// names is a no-op.
+// AddBranchExtensions unions names into the branch's opted-in set (existing-first
+// order, deduplicated). Mirrors the backends: empty names is a no-op, and the
+// cluster id is ignored.
 func (f *fakeStateStore) AddBranchExtensions(_ context.Context, _, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -135,16 +135,17 @@ func (f *fakeStateStore) AddBranchExtensions(_ context.Context, _, branchID uuid
 	return nil
 }
 
-// BranchEndpointDeploys returns a redeploy record for every seeded endpoint on
-// the (clusterID, branchID) branch. pg version/size are not modeled by the fake
-// (zero/empty).
-func (f *fakeStateStore) BranchEndpointDeploys(_ context.Context, clusterID, branchID uuid.UUID) ([]core.EndpointDeploy, error) {
+// BranchEndpointDeploys returns the renderable desired state of every seeded
+// endpoint on the branch — whatever the seed carried, per endpoint, so a step
+// that re-renders the branch is fed the same shape production hands it. Mirrors
+// the backends: the cluster id is ignored.
+func (f *fakeStateStore) BranchEndpointDeploys(_ context.Context, _, branchID uuid.UUID) ([]core.EndpointDeploy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []core.EndpointDeploy
-	for id, ref := range f.endpointBranch {
-		if ref.clusterID == clusterID && ref.branchID == branchID {
-			out = append(out, core.EndpointDeploy{ID: id, BranchID: ref.branchID})
+	for _, d := range f.endpointBranch {
+		if d.BranchID == branchID {
+			out = append(out, d)
 		}
 	}
 	return out, nil
@@ -159,12 +160,22 @@ func (f *fakeStateStore) UpdateEndpointExtensions(_ context.Context, endpointID 
 }
 
 // seedEndpoint registers a live endpoint on (clusterID, branchID) so the cascade
-// enumeration methods can find it. Test helper.
+// enumeration methods can find it, with no pinned version or size. Test helper.
 func (f *fakeStateStore) seedEndpoint(endpointID, clusterID, branchID uuid.UUID) {
+	f.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: endpointID, BranchID: branchID})
+}
+
+// seedEndpointDeploy registers a live endpoint with the whole desired state a
+// real row carries — its pinned pg version and its compute size, which differ per
+// endpoint on a branch. clusterID is the cluster the endpoint's branch sits under:
+// bookkeeping for the cluster-scoped cascade enumerations, not part of the record.
+// Test helper for the steps that redeploy from it.
+func (f *fakeStateStore) seedEndpointDeploy(clusterID uuid.UUID, d core.EndpointDeploy) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.endpointBranch[endpointID] = branchRef{clusterID: clusterID, branchID: branchID}
-	f.createdEndpoints[endpointID] = "read_only"
+	f.endpointBranch[d.ID] = d
+	f.endpointCluster[d.ID] = clusterID
+	f.createdEndpoints[d.ID] = "read_only"
 }
 
 // seedBranch registers a live branch under clusterID. Test helper.
@@ -352,8 +363,8 @@ func (f *fakeStateStore) EndpointIDsForBranch(_ context.Context, clusterID, bran
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []uuid.UUID
-	for id, ref := range f.endpointBranch {
-		if ref.clusterID == clusterID && ref.branchID == branchID {
+	for id, d := range f.endpointBranch {
+		if f.endpointCluster[id] == clusterID && d.BranchID == branchID {
 			ids = append(ids, id)
 		}
 	}
@@ -364,8 +375,8 @@ func (f *fakeStateStore) EndpointIDsForCluster(_ context.Context, clusterID uuid
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []uuid.UUID
-	for id, ref := range f.endpointBranch {
-		if ref.clusterID == clusterID {
+	for id := range f.endpointBranch {
+		if f.endpointCluster[id] == clusterID {
 			ids = append(ids, id)
 		}
 	}
@@ -399,9 +410,10 @@ func (f *fakeStateStore) DeleteCluster(_ context.Context, clusterID uuid.UUID) e
 	if f.errDeleteCluster != nil {
 		return f.errDeleteCluster
 	}
-	for id, ref := range f.endpointBranch {
-		if ref.clusterID == clusterID {
+	for id := range f.endpointBranch {
+		if f.endpointCluster[id] == clusterID {
 			delete(f.endpointBranch, id)
+			delete(f.endpointCluster, id)
 			delete(f.createdEndpoints, id)
 		}
 	}

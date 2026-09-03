@@ -436,10 +436,9 @@ func (s *Service) AddBranchExtensions(ctx context.Context, in AddBranchExtension
 // EndpointDeployName is the deployer's stable instance handle for an endpoint
 // (the container/pod/Helm-release name), keyed by the endpoint id. It matches
 // the controller API layer's identical helper so the task and synchronous paths
-// name the same instance. "yb-ep-" + a lowercase-hyphen uuid is a valid DNS-1123
-// name (42 chars, under Helm's 53-char limit).
+// name the same instance.
 func EndpointDeployName(endpointID uuid.UUID) string {
-	return "yb-ep-" + endpointID.String()
+	return deploy.EndpointName(endpointID)
 }
 
 // roleReadWrite mirrors core.RoleReadWrite without importing core (the task

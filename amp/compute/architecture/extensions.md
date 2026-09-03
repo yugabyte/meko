@@ -188,13 +188,18 @@ the feature is additive.
   `pg_cron` is `Preload: true`, so `Resolve` carries that flag through and the
   chart adds it to `shared_preload_libraries`. `Has(name)` is the API validation
   gate. Keep versions in lockstep with `extensions.yaml`.
-- **Endpoint spec** — the create_endpoint step
-  ([`step_create_endpoint.go`](../../controller/internal/task/step_create_endpoint.go))
-  resolves the endpoint's extension set (its branch's opted-in set, below), sets
-  `deploy.EndpointSpec.Extensions`, and the Kubernetes deployer
-  ([`kubernetes.go`](../../controller/internal/deploy/kubernetes.go)) renders it
-  into `endpoint.extensions`. The Docker deployer has no ImageVolume equivalent
-  and ignores it (a dev endpoint ships only image-baked extensions).
+- **Endpoint spec** — `resolveBranchExtensions`
+  ([`endpointspec.go`](../../controller/internal/task/endpointspec.go)) resolves
+  the endpoint's extension set (its branch's opted-in set, below). A step that
+  redeploys a whole branch keeps the resolved set across its loop, so it reads once. Every step that
+  (re)deploys an endpoint (`create_endpoint`, `add_branch_extensions`) passes the
+  resolved set to `deploy.EndpointSpecFrom`
+  ([`deploy.go`](../../controller/internal/deploy/deploy.go)) rather than
+  hand-rolling a spec, and the Kubernetes deployer
+  ([`kubernetes.go`](../../controller/internal/deploy/kubernetes.go)) renders
+  `EndpointSpec.Extensions` into `endpoint.extensions`. The Docker deployer has no
+  ImageVolume equivalent and ignores it (a dev endpoint ships only image-baked
+  extensions).
 
 ## Default vs. on-demand, and restarts
 
@@ -404,6 +409,8 @@ audit / recreate.
   (`values.yaml` `endpoint.extensions`, `templates/deployment.yaml`,
   `templates/configmap.yaml`).
 - Controller: [`controller/internal/extensions/catalog.go`](../../controller/internal/extensions/catalog.go),
+  [`controller/internal/task/endpointspec.go`](../../controller/internal/task/endpointspec.go)
+  (`resolveBranchExtensions` — where the mount set is resolved),
   [`controller/internal/task/step_create_endpoint.go`](../../controller/internal/task/step_create_endpoint.go),
   [`controller/internal/task/step_add_branch_extensions.go`](../../controller/internal/task/step_add_branch_extensions.go),
   [`controller/internal/deploy/kubernetes.go`](../../controller/internal/deploy/kubernetes.go),

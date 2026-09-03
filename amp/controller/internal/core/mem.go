@@ -565,28 +565,30 @@ func (m *MemBackend) BranchPgSettings(_ context.Context, clusterID, branchID uui
 }
 
 // BranchExtensions returns the branch's own opted-in extension set (nil when
-// empty or absent). Mirrors PgBackend.
-func (m *MemBackend) BranchExtensions(_ context.Context, clusterID, branchID uuid.UUID) ([]string, error) {
+// empty or absent). Mirrors PgBackend, including the vestigial cluster id:
+// branch_id is a primary key, so the branch is fully addressed by it and both
+// backends ignore the first argument.
+func (m *MemBackend) BranchExtensions(_ context.Context, _, branchID uuid.UUID) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ClusterID != clusterID || len(b.Extensions) == 0 {
+	if !ok || len(b.Extensions) == 0 {
 		return nil, nil
 	}
 	return append([]string(nil), b.Extensions...), nil
 }
 
-// AddBranchExtensions adds names to the (clusterID, branchID) branch's durable
-// extension set (absolute union, sorted+deduped). Idempotent; an absent branch or
-// empty names is a no-op. Mirrors PgBackend.
-func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID uuid.UUID, names []string) error {
+// AddBranchExtensions adds names to the branch's durable extension set (absolute
+// union, sorted+deduped). Idempotent; an absent branch or empty names is a no-op.
+// Mirrors PgBackend, cluster id included: it is ignored here too.
+func (m *MemBackend) AddBranchExtensions(_ context.Context, _, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ClusterID != clusterID {
+	if !ok {
 		return nil
 	}
 	b.Extensions = dedupSorted(append(append([]string(nil), b.Extensions...), names...))
@@ -594,15 +596,16 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID 
 	return nil
 }
 
-// BranchEndpointDeploys returns the redeploy record for every endpoint on the
-// (clusterID, branchID) branch (pg_version from the branch, cpu/memory from the
-// endpoint). An absent branch yields an empty slice. Mirrors PgBackend.
-func (m *MemBackend) BranchEndpointDeploys(_ context.Context, clusterID, branchID uuid.UUID) ([]EndpointDeploy, error) {
+// BranchEndpointDeploys returns the renderable desired state of every endpoint on
+// the branch (pg_version from the branch, cpu/memory from the endpoint). An absent
+// branch yields an empty slice. Mirrors PgBackend, cluster id included: it is
+// ignored here too.
+func (m *MemBackend) BranchEndpointDeploys(_ context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []EndpointDeploy
 	for id, e := range m.endpoints {
-		if e.ClusterID != clusterID || e.BranchID != branchID {
+		if e.BranchID != branchID {
 			continue
 		}
 		out = append(out, EndpointDeploy{

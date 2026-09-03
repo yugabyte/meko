@@ -123,11 +123,11 @@ version converges to a no-op.
 The upgrade does not re-render an endpoint in a new way — it becomes the **third**
 caller that renders one:
 
-| | persists desired state | renders | deploys |
+| | persists desired state | renders from | deploys |
 |---|---|---|---|
-| `create_endpoint` | `EnsureEndpointRecord`, from its args | `step_create_endpoint.go:131` | `CreateEndpoint` |
-| `add_branch_extensions` | `AddBranchExtensions`, the branch set | `step_add_branch_extensions.go:102` | `CreateEndpoint` |
-| `upgrade_endpoint` | the version, §4 | *(new)* | `CreateEndpoint` |
+| `create_endpoint` | `EnsureEndpointRecord`, from its args | a `core.EndpointDeploy` built from its args | `CreateEndpoint` |
+| `add_branch_extensions` | `AddBranchExtensions`, the branch set | `BranchEndpointDeploys` | `CreateEndpoint` |
+| `upgrade_endpoint` | the version, §4 | the fleet enumeration, §5.1 | `CreateEndpoint` |
 
 All three are the same shape — persist desired state, render from it, deploy — and
 they arrived there independently: create writes the row first so it claims the
@@ -141,33 +141,48 @@ state, three from deps (`YB`, `ControllerURL`, the catalog), one derived from th
 and **omitting one is silent**: the deploy succeeds and the endpoint comes back
 missing a mount or reverted to a default size.
 
-So spec assembly moves into one function in `internal/task/endpointspec.go`, with the
-extracted `resolveExtensions` beside it (which also collapses the near-copy currently
-inlined in `addBranchExtensionsStep.Execute`):
+So spec assembly lives in one function, beside the type it builds, in
+`internal/deploy`:
 
 ```go
-// endpointSpecFor assembles an endpoint's full deploy spec from its renderable
-// desired state plus the deps a row cannot carry: the YB conn, the controller URL,
-// and the extension catalog the stored names resolve through.
-func endpointSpecFor(ctx context.Context, deps Deps, e core.EndpointDeploy) (deploy.EndpointSpec, error)
+func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string,
+    mounts []Extension) EndpointSpec
 ```
+
+It is pure — no context, no error, every input a value — so there is one place to read
+to know what a rendered spec contains. `core.EndpointDeploy` stops being "the row
+`add_branch_extensions` reads" and becomes the general renderable desired state — which
+is why `create_endpoint` **constructs** one from `CreateEndpointArgs` instead of reading
+a row back. It carries the endpoint's id and its branch's — `branch_id` is a primary
+key, so the branch (and its extension set) is fully addressed by it, no cluster id — and
+it gains `Version` in §2.
 
 **It takes the state, it does not read it.** Reading by endpoint id would be safer —
 a caller could not under-populate the input — but it is N+1 queries for a fleet roll
 and would make create re-read a row it just wrote. Enumeration stays with the callers,
-who each already have what they need: `add_branch_extensions` from
-`BranchEndpointDeploys`, the upgrade planner from its fleet query (§5.1), and
-`create_endpoint` by **constructing** one from `CreateEndpointArgs` rather than
-reading — which is what turns `core.EndpointDeploy` from "the row
-`add_branch_extensions` reads" (its doc comment today) into the general renderable
-desired state. It grows `ClusterID` (extensions resolve per branch, and the branch is
-addressed by both ids) and `Version`.
+who each already have what they need.
 
-**What this does not fix**, stated so nobody assumes otherwise: it closes the assembly
-half of the problem and only narrows the query half. Go zero-values a field a query
-forgot to select, so a later field added to `core.EndpointDeploy` still will not break
-the three call sites that should now fill it. Closing that properly means one shared
-query behind all three enumerations — more than this slice needs, but the direction.
+**Extensions are the exception, and that is why `mounts` is a parameter.** They cannot
+come off the record: the opt-in set is on the branch and the name → image mapping is in
+the catalog, so somebody has to read. That read is the task layer's — domain state,
+resolved through `StateStore` and the catalog — so `resolveBranchExtensions` stays in
+`internal/task/endpointspec.go` and each caller passes the set it resolved. A caller that
+redeploys many endpoints holds the set it resolved and reuses it, which is what keeps a
+branch-wide redeploy on a single snapshot: `add_branch_extensions` keeps a per-branch map
+across its loop and so does one read for its whole roll, and `create_endpoint` renders one
+endpoint and needs no cache at all.
+
+**Extraction alone does not close the hole — the caller-boundary test does.** Moving
+the literal only moves where a field can go missing: from the `EndpointSpec{…}` to the
+`core.EndpointDeploy{…}` feeding it. A test that hands the assembler a fully-populated
+record passes no matter what the *step* put in there. Verified by mutation: dropping
+`PgVersion` from `create_endpoint`'s record leaves build, vet and the whole suite green
+while an endpoint pinned to pg 15 deploys pg 18, because
+`internal/deploy/kubernetes.go` defaults a zero. So each caller needs an assertion
+on the spec the deployer actually **received**, and each backend that fills the
+record needs one too — `TestClusterExtensions` covers the `MemBackend` redeploy
+path for that reason. Treat those as part of the abstraction, not as optional
+coverage.
 
 **One consequence of rendering rather than replaying: an upgrade moves extension
 images too.** The catalog is pinned to the controller build, so re-resolving picks up
@@ -462,9 +477,9 @@ written down and nothing has since contradicted it.
 
 That size is itself a design input. **This should land as a stack, not one PR:**
 
-1. **The spec assembler** (§4.1) — extract `endpointSpecFor` and `resolveExtensions`,
-   convert `create_endpoint` and `add_branch_extensions` onto them. Pure refactor, no
-   behaviour change, and it makes every PR after it smaller.
+1. **The spec assembler** (§4.1) — extract `deploy.EndpointSpecFrom` and the branch
+   extension resolver, convert `create_endpoint` and `add_branch_extensions` onto
+   them. Pure refactor, no behaviour change, and it makes every PR after it smaller.
 2. **The version column and deploy-spec override** (§2–3).
 3. **`upgrade_endpoint`** (§4) — the per-endpoint step, usable on its own.
 4. **The `subtasks` table and runner** (§5).
@@ -478,10 +493,12 @@ hand-rolling a spec literal is worse than either end state.
 
 Unit, against `MemStore`, `MemLocks` and the existing fakes:
 
-- **`endpointSpecFor`** (§4.1) — every field rendered from one `core.EndpointDeploy`,
-  and extensions resolved through the catalog. This is where the "a missing field is
-  silent" risk is actually pinned, so it is tested once here rather than three times
-  in the callers.
+- **`deploy.EndpointSpecFrom`** (§4.1) — every field rendered from one
+  `core.EndpointDeploy`; `resolveBranchExtensions`'s own tests cover the catalog
+  mapping, and `add_branch_extensions`' cover its one-read-per-roll.
+  **Plus an assertion per caller** on the spec the deployer actually received: the
+  assembler's own test passes on a fully-populated record regardless of what the step
+  put there, so it does not pin the caller boundary and cannot be the only test.
 - **`upgrade_endpoint`** — happy path, idempotent replay, the spec carrying the
   version override, persist-before-deploy ordering.
 - **the parent step** — whole-fleet and subset enumeration, endpoints already at the
