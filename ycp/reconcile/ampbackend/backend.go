@@ -443,10 +443,12 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 
 // Update carries the two spec changes this agent applies to a resource that
 // already exists: resizing an endpoint, and enabling externalized extensions on
-// a branch. Pools and clusters have no controller update path at all, so a spec
-// change to one is a permanent (non-retryable) error the engine surfaces as
-// drift rather than retrying forever; the branch fields Update does not apply
-// are reported the same way (see updateBranch).
+// a branch. Clusters have no controller update path at all, and a pool's only
+// one is rename — which is not an update here, since a pool's resource key IS
+// its name, so renaming one reaches the engine as a different resource. Either
+// way a spec change to one is a permanent (non-retryable) error the engine
+// surfaces as drift rather than retrying forever; the branch fields Update does
+// not apply are reported the same way (see updateBranch).
 func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
 	apply, ok := updateFuncs[r.Kind]
 	if !ok {
@@ -779,8 +781,14 @@ func sortedMissing(names, present map[string]bool) []string {
 
 // Delete removes the resource. Deleting the top of a withdrawn subtree cascades
 // in the controller, so the engine only asks to delete the highest node.
-// Storage pools have no delete endpoint, so a withdrawn pool is a permanent
-// (non-retryable) error the engine surfaces as drift rather than retrying.
+//
+// Storage pools are the exception, and still a permanent (non-retryable) error
+// the engine surfaces as drift. The controller does have DELETE /storage-pools
+// now, but it deliberately does NOT cascade — it refuses with 409 while the pool
+// holds a live cluster (amp#1083). That is incompatible with the highest-node
+// contract above: a fully withdrawn pool subtree would ask only for the pool
+// delete, get a 409, and leave the clusters behind. Wiring it up needs the
+// engine to stop treating a pool as a cascading root, which is not modelled here.
 func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 	b.mu.RLock()
 	idx := b.idx
@@ -788,7 +796,8 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 
 	switch key.Kind {
 	case KindPool:
-		return reconcile.Permanent(fmt.Errorf("delete storage pool %q: not supported by the controller API", key.Name))
+		return reconcile.Permanent(fmt.Errorf(
+			"delete storage pool %q: the controller's pool delete does not cascade, so the engine cannot drive it as a subtree root", key.Name))
 	case KindCluster:
 		poolID, clusterID, ok := b.resolveCluster(idx, key.Name)
 		if !ok {

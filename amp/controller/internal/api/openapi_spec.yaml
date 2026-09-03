@@ -229,6 +229,67 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [storage-pools]
+      operationId: updateStoragePool
+      summary: Rename a storage pool
+      description: >-
+        Renames the pool. Allowed at any time and on any pool — a name is a label,
+        not an identity, and nothing addresses a pool by it. `409` if another live
+        pool already holds the name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStoragePoolRequest'
+      responses:
+        '200':
+          description: The renamed storage pool.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePool'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [storage-pools]
+      operationId: deleteStoragePool
+      summary: Delete an empty storage pool
+      description: |
+        Deletes the pool and frees its name for reuse. Synchronous — a pool with
+        nothing in it owns no compute to retire, so there is no task to poll.
+
+        `409` while the pool still holds a live cluster; delete those first. A
+        cluster that has already been deleted does **not** block this, even though
+        its row survives: clusters are tombstoned rather than removed, and waiting
+        on a tombstone would make the pool permanently undeletable.
+
+        The pool is itself tombstoned rather than removed, for the same reason its
+        clusters are — their rows keep a `storage_pool_id` referencing it. It stops
+        appearing in `listStoragePools`, `getStoragePool` returns `404`, and its
+        name is immediately available to a new pool.
+      responses:
+        '204':
+          description: The storage pool was deleted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /storage-pools/{poolId}/clusters:
     parameters:
@@ -1314,7 +1375,9 @@ components:
           description: >-
             Optional explicit id — e.g. a Meko datapack UUID, so the pool and
             the datapack share one id (no separate mapping). Omit to
-            auto-generate. Idempotent: re-creating an existing id returns it.
+            auto-generate. Idempotent: re-creating a live pool's id returns it.
+            An id belonging to a deleted pool is a `409` — a tombstone keeps the
+            primary key, so ids are never reusable the way names are.
         name:
           type: string
           minLength: 1
@@ -1324,6 +1387,16 @@ components:
           type: string
           format: uuid
           description: The user that will own the pool.
+
+    UpdateStoragePoolRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 63
+          description: The pool's new name; unique among live pools.
 
     CreateClusterRequest:
       type: object

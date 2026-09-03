@@ -265,8 +265,10 @@ type Backend interface {
 	CreateStoragePool(ctx context.Context, owner uuid.UUID, name string) (StoragePool, error)
 	// CreateStoragePoolWithID creates a pool with an explicit id (e.g. a Meko
 	// datapack UUID), or returns the existing pool if that id is already present
-	// (idempotent). Returns ErrNotFound if owner does not exist, or ErrConflict
-	// if the name is taken by a different pool.
+	// and live (idempotent). Returns ErrNotFound if owner does not exist, or
+	// ErrConflict if the name is taken by a different live pool -- or if the id
+	// belongs to a deleted one, since a tombstone keeps the primary key and only
+	// names are reusable.
 	CreateStoragePoolWithID(ctx context.Context, id, owner uuid.UUID, name string) (StoragePool, error)
 	// ListStoragePools returns a page of every pool in the placement group
 	// ordered by (created_at, id), and the total number of pools (ignoring
@@ -277,6 +279,15 @@ type Backend interface {
 	// so this is not owner-scoped: a pool will eventually be acted on by more
 	// than the one user who created it.
 	GetStoragePool(ctx context.Context, poolID uuid.UUID) (StoragePool, error)
+	// RenameStoragePool renames the pool and returns it. Returns ErrNotFound if
+	// the pool does not exist, or ErrConflict if another live pool holds the name.
+	RenameStoragePool(ctx context.Context, poolID uuid.UUID, name string) (StoragePool, error)
+	// DeleteStoragePool tombstones an empty pool, freeing its name. Returns
+	// ErrNotFound if the pool does not exist, or ErrConflict if it still has a
+	// live cluster. Tombstoned clusters do not block the delete: they are
+	// unrecoverable history that keeps a FK to the pool, so the pool row outlives
+	// them rather than being removed.
+	DeleteStoragePool(ctx context.Context, poolID uuid.UUID) error
 
 	// CreateCluster creates a cluster (a "database") named name in the pool,
 	// together with its default branch at Postgres major version pgVersion, and

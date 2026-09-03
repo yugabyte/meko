@@ -83,6 +83,8 @@ external service).
 | `create_storage_pool` | `POST /storage-pools` (body `{name, owner_user_id}`) | write |
 | `list_storage_pools` | `GET /storage-pools` | read-only |
 | `get_storage_pool` | `GET /storage-pools/{poolId}` | read-only |
+| `rename_storage_pool` | `PATCH /storage-pools/{poolId}` (body `{name}`) | write |
+| `delete_storage_pool` | `DELETE /storage-pools/{poolId}` | destructive |
 | `create_cluster` | `POST /storage-pools/{poolId}/clusters` | write (async) |
 | `list_clusters` | `GET /storage-pools/{poolId}/clusters` | read-only |
 | `get_cluster` | `GET …/clusters/{clusterId}` | read-only |

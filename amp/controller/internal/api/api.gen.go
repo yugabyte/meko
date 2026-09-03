@@ -609,7 +609,7 @@ type CreateMigrationRequest struct {
 
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
-	// Id Optional explicit id — e.g. a Meko datapack UUID, so the pool and the datapack share one id (no separate mapping). Omit to auto-generate. Idempotent: re-creating an existing id returns it.
+	// Id Optional explicit id — e.g. a Meko datapack UUID, so the pool and the datapack share one id (no separate mapping). Omit to auto-generate. Idempotent: re-creating a live pool's id returns it. An id belonging to a deleted pool is a `409` — a tombstone keeps the primary key, so ids are never reusable the way names are.
 	Id *openapi_types.UUID `json:"id,omitempty"`
 
 	// Name Pool name; unique across the placement group.
@@ -1350,6 +1350,12 @@ type UpdateEndpointSettingsRequest struct {
 	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
 }
 
+// UpdateStoragePoolRequest defines model for UpdateStoragePoolRequest.
+type UpdateStoragePoolRequest struct {
+	// Name The pool's new name; unique among live pools.
+	Name string `json:"name"`
+}
+
 // User defines model for User.
 type User struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -1553,6 +1559,9 @@ type ProvisionMigrationTargetJSONRequestBody = ProvisionMigrationTargetRequest
 
 // CreateStoragePoolJSONRequestBody defines body for CreateStoragePool for application/json ContentType.
 type CreateStoragePoolJSONRequestBody = CreateStoragePoolRequest
+
+// UpdateStoragePoolJSONRequestBody defines body for UpdateStoragePool for application/json ContentType.
+type UpdateStoragePoolJSONRequestBody = UpdateStoragePoolRequest
 
 // CreateClusterJSONRequestBody defines body for CreateCluster for application/json ContentType.
 type CreateClusterJSONRequestBody = CreateClusterRequest
@@ -1819,8 +1828,16 @@ type ClientInterface interface {
 
 	CreateStoragePool(ctx context.Context, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// DeleteStoragePool request
+	DeleteStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetStoragePool request
 	GetStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateStoragePoolWithBody request with any body
+	UpdateStoragePoolWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateStoragePool(ctx context.Context, poolId PoolId, body UpdateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListClusters request
 	ListClusters(ctx context.Context, poolId PoolId, params *ListClustersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2085,8 +2102,44 @@ func (c *Client) CreateStoragePool(ctx context.Context, body CreateStoragePoolJS
 	return c.Client.Do(req)
 }
 
+func (c *Client) DeleteStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteStoragePoolRequest(c.Server, poolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetStoragePoolRequest(c.Server, poolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateStoragePoolWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateStoragePoolRequestWithBody(c.Server, poolId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateStoragePool(ctx context.Context, poolId PoolId, body UpdateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateStoragePoolRequest(c.Server, poolId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2905,6 +2958,40 @@ func NewCreateStoragePoolRequestWithBody(server string, contentType string, body
 	return req, nil
 }
 
+// NewDeleteStoragePoolRequest generates requests for DeleteStoragePool
+func NewDeleteStoragePoolRequest(server string, poolId PoolId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetStoragePoolRequest generates requests for GetStoragePool
 func NewGetStoragePoolRequest(server string, poolId PoolId) (*http.Request, error) {
 	var err error
@@ -2935,6 +3022,53 @@ func NewGetStoragePoolRequest(server string, poolId PoolId) (*http.Request, erro
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewUpdateStoragePoolRequest calls the generic UpdateStoragePool builder with application/json body
+func NewUpdateStoragePoolRequest(server string, poolId PoolId, body UpdateStoragePoolJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateStoragePoolRequestWithBody(server, poolId, "application/json", bodyReader)
+}
+
+// NewUpdateStoragePoolRequestWithBody generates requests for UpdateStoragePool with any type of body
+func NewUpdateStoragePoolRequestWithBody(server string, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -4285,8 +4419,16 @@ type ClientWithResponsesInterface interface {
 
 	CreateStoragePoolWithResponse(ctx context.Context, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error)
 
+	// DeleteStoragePoolWithResponse request
+	DeleteStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*DeleteStoragePoolResponse, error)
+
 	// GetStoragePoolWithResponse request
 	GetStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error)
+
+	// UpdateStoragePoolWithBodyWithResponse request with any body
+	UpdateStoragePoolWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateStoragePoolResponse, error)
+
+	UpdateStoragePoolWithResponse(ctx context.Context, poolId PoolId, body UpdateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateStoragePoolResponse, error)
 
 	// ListClustersWithResponse request
 	ListClustersWithResponse(ctx context.Context, poolId PoolId, params *ListClustersParams, reqEditors ...RequestEditorFn) (*ListClustersResponse, error)
@@ -4703,6 +4845,40 @@ func (r CreateStoragePoolResponse) ContentType() string {
 	return ""
 }
 
+type DeleteStoragePoolResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteStoragePoolResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteStoragePoolResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteStoragePoolResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetStoragePoolResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -4731,6 +4907,41 @@ func (r GetStoragePoolResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetStoragePoolResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UpdateStoragePoolResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *StoragePool
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateStoragePoolResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateStoragePoolResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateStoragePoolResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -5612,6 +5823,15 @@ func (c *ClientWithResponses) CreateStoragePoolWithResponse(ctx context.Context,
 	return ParseCreateStoragePoolResponse(rsp)
 }
 
+// DeleteStoragePoolWithResponse request returning *DeleteStoragePoolResponse
+func (c *ClientWithResponses) DeleteStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*DeleteStoragePoolResponse, error) {
+	rsp, err := c.DeleteStoragePool(ctx, poolId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteStoragePoolResponse(rsp)
+}
+
 // GetStoragePoolWithResponse request returning *GetStoragePoolResponse
 func (c *ClientWithResponses) GetStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error) {
 	rsp, err := c.GetStoragePool(ctx, poolId, reqEditors...)
@@ -5619,6 +5839,23 @@ func (c *ClientWithResponses) GetStoragePoolWithResponse(ctx context.Context, po
 		return nil, err
 	}
 	return ParseGetStoragePoolResponse(rsp)
+}
+
+// UpdateStoragePoolWithBodyWithResponse request with arbitrary body returning *UpdateStoragePoolResponse
+func (c *ClientWithResponses) UpdateStoragePoolWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateStoragePoolResponse, error) {
+	rsp, err := c.UpdateStoragePoolWithBody(ctx, poolId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateStoragePoolResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateStoragePoolWithResponse(ctx context.Context, poolId PoolId, body UpdateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateStoragePoolResponse, error) {
+	rsp, err := c.UpdateStoragePool(ctx, poolId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateStoragePoolResponse(rsp)
 }
 
 // ListClustersWithResponse request returning *ListClustersResponse
@@ -6367,6 +6604,60 @@ func ParseCreateStoragePoolResponse(rsp *http.Response) (*CreateStoragePoolRespo
 	return response, nil
 }
 
+// ParseDeleteStoragePoolResponse parses an HTTP response from a DeleteStoragePoolWithResponse call
+func ParseDeleteStoragePoolResponse(rsp *http.Response) (*DeleteStoragePoolResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteStoragePoolResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetStoragePoolResponse parses an HTTP response from a GetStoragePoolWithResponse call
 func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -6401,6 +6692,67 @@ func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, e
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateStoragePoolResponse parses an HTTP response from a UpdateStoragePoolWithResponse call
+func ParseUpdateStoragePoolResponse(rsp *http.Response) (*UpdateStoragePoolResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateStoragePoolResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest StoragePool
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -7620,9 +7972,15 @@ type ServerInterface interface {
 	// Create a storage pool
 	// (POST /storage-pools)
 	CreateStoragePool(ctx echo.Context) error
+	// Delete an empty storage pool
+	// (DELETE /storage-pools/{poolId})
+	DeleteStoragePool(ctx echo.Context, poolId PoolId) error
 	// Get a storage pool
 	// (GET /storage-pools/{poolId})
 	GetStoragePool(ctx echo.Context, poolId PoolId) error
+	// Rename a storage pool
+	// (PATCH /storage-pools/{poolId})
+	UpdateStoragePool(ctx echo.Context, poolId PoolId) error
 	// List the clusters in a pool
 	// (GET /storage-pools/{poolId}/clusters)
 	ListClusters(ctx echo.Context, poolId PoolId, params ListClustersParams) error
@@ -7853,6 +8211,22 @@ func (w *ServerInterfaceWrapper) CreateStoragePool(ctx echo.Context) error {
 	return err
 }
 
+// DeleteStoragePool converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteStoragePool(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeleteStoragePool(ctx, poolId)
+	return err
+}
+
 // GetStoragePool converts echo context to params.
 func (w *ServerInterfaceWrapper) GetStoragePool(ctx echo.Context) error {
 	var err error
@@ -7866,6 +8240,22 @@ func (w *ServerInterfaceWrapper) GetStoragePool(ctx echo.Context) error {
 
 	// Invoke the callback with all the unmarshaled arguments
 	err = w.Handler.GetStoragePool(ctx, poolId)
+	return err
+}
+
+// UpdateStoragePool converts echo context to params.
+func (w *ServerInterfaceWrapper) UpdateStoragePool(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.UpdateStoragePool(ctx, poolId)
 	return err
 }
 
@@ -8582,7 +8972,9 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.POST(options.BaseURL+"/migrations/:migrationId/provision-target", wrapper.ProvisionMigrationTarget, options.OperationMiddlewares["provisionMigrationTarget"]...)
 	router.GET(options.BaseURL+"/storage-pools", wrapper.ListStoragePools, options.OperationMiddlewares["listStoragePools"]...)
 	router.POST(options.BaseURL+"/storage-pools", wrapper.CreateStoragePool, options.OperationMiddlewares["createStoragePool"]...)
+	router.DELETE(options.BaseURL+"/storage-pools/:poolId", wrapper.DeleteStoragePool, options.OperationMiddlewares["deleteStoragePool"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId", wrapper.GetStoragePool, options.OperationMiddlewares["getStoragePool"]...)
+	router.PATCH(options.BaseURL+"/storage-pools/:poolId", wrapper.UpdateStoragePool, options.OperationMiddlewares["updateStoragePool"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters", wrapper.ListClusters, options.OperationMiddlewares["listClusters"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters", wrapper.CreateCluster, options.OperationMiddlewares["createCluster"]...)
 	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId", wrapper.DeleteCluster, options.OperationMiddlewares["deleteCluster"]...)
@@ -9309,6 +9701,93 @@ func (response CreateStoragePool503JSONResponse) VisitCreateStoragePoolResponse(
 	return err
 }
 
+type DeleteStoragePoolRequestObject struct {
+	PoolId PoolId `json:"poolId"`
+}
+
+type DeleteStoragePoolResponseObject interface {
+	VisitDeleteStoragePoolResponse(w http.ResponseWriter) error
+}
+
+type DeleteStoragePool204Response struct {
+}
+
+func (response DeleteStoragePool204Response) VisitDeleteStoragePoolResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteStoragePool400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteStoragePool400JSONResponse) VisitDeleteStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteStoragePool404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteStoragePool404JSONResponse) VisitDeleteStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteStoragePool409JSONResponse struct{ ConflictJSONResponse }
+
+func (response DeleteStoragePool409JSONResponse) VisitDeleteStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteStoragePool500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteStoragePool500JSONResponse) VisitDeleteStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteStoragePool503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response DeleteStoragePool503JSONResponse) VisitDeleteStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetStoragePoolRequestObject struct {
 	PoolId PoolId `json:"poolId"`
 }
@@ -9376,6 +9855,100 @@ func (response GetStoragePool500JSONResponse) VisitGetStoragePoolResponse(w http
 type GetStoragePool503JSONResponse struct{ ServiceUnavailableJSONResponse }
 
 func (response GetStoragePool503JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateStoragePoolRequestObject struct {
+	PoolId PoolId `json:"poolId"`
+	Body   *UpdateStoragePoolJSONRequestBody
+}
+
+type UpdateStoragePoolResponseObject interface {
+	VisitUpdateStoragePoolResponse(w http.ResponseWriter) error
+}
+
+type UpdateStoragePool200JSONResponse StoragePool
+
+func (response UpdateStoragePool200JSONResponse) VisitUpdateStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateStoragePool400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateStoragePool400JSONResponse) VisitUpdateStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateStoragePool404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateStoragePool404JSONResponse) VisitUpdateStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateStoragePool409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateStoragePool409JSONResponse) VisitUpdateStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateStoragePool500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateStoragePool500JSONResponse) VisitUpdateStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateStoragePool503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response UpdateStoragePool503JSONResponse) VisitUpdateStoragePoolResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -11160,9 +11733,15 @@ type StrictServerInterface interface {
 	// Create a storage pool
 	// (POST /storage-pools)
 	CreateStoragePool(ctx context.Context, request CreateStoragePoolRequestObject) (CreateStoragePoolResponseObject, error)
+	// Delete an empty storage pool
+	// (DELETE /storage-pools/{poolId})
+	DeleteStoragePool(ctx context.Context, request DeleteStoragePoolRequestObject) (DeleteStoragePoolResponseObject, error)
 	// Get a storage pool
 	// (GET /storage-pools/{poolId})
 	GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error)
+	// Rename a storage pool
+	// (PATCH /storage-pools/{poolId})
+	UpdateStoragePool(ctx context.Context, request UpdateStoragePoolRequestObject) (UpdateStoragePoolResponseObject, error)
 	// List the clusters in a pool
 	// (GET /storage-pools/{poolId}/clusters)
 	ListClusters(ctx context.Context, request ListClustersRequestObject) (ListClustersResponseObject, error)
@@ -11520,6 +12099,31 @@ func (sh *strictHandler) CreateStoragePool(ctx echo.Context) error {
 	return nil
 }
 
+// DeleteStoragePool operation middleware
+func (sh *strictHandler) DeleteStoragePool(ctx echo.Context, poolId PoolId) error {
+	var request DeleteStoragePoolRequestObject
+
+	request.PoolId = poolId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteStoragePool(ctx.Request().Context(), request.(DeleteStoragePoolRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteStoragePool")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeleteStoragePoolResponseObject); ok {
+		return validResponse.VisitDeleteStoragePoolResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
 // GetStoragePool operation middleware
 func (sh *strictHandler) GetStoragePool(ctx echo.Context, poolId PoolId) error {
 	var request GetStoragePoolRequestObject
@@ -11539,6 +12143,37 @@ func (sh *strictHandler) GetStoragePool(ctx echo.Context, poolId PoolId) error {
 		return err
 	} else if validResponse, ok := response.(GetStoragePoolResponseObject); ok {
 		return validResponse.VisitGetStoragePoolResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// UpdateStoragePool operation middleware
+func (sh *strictHandler) UpdateStoragePool(ctx echo.Context, poolId PoolId) error {
+	var request UpdateStoragePoolRequestObject
+
+	request.PoolId = poolId
+
+	var body UpdateStoragePoolJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateStoragePool(ctx.Request().Context(), request.(UpdateStoragePoolRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateStoragePool")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(UpdateStoragePoolResponseObject); ok {
+		return validResponse.VisitUpdateStoragePoolResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

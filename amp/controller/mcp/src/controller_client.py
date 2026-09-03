@@ -151,6 +151,14 @@ class ControllerClient:
     def get_storage_pool(self, pool_id: str) -> dict:
         return self._request("GET", f"/storage-pools/{pool_id}")
 
+    def rename_storage_pool(self, pool_id: str, name: str) -> dict:
+        return self._request(
+            "PATCH", f"/storage-pools/{pool_id}", json={"name": name}
+        )
+
+    def delete_storage_pool(self, pool_id: str) -> dict:
+        return self._request("DELETE", f"/storage-pools/{pool_id}")
+
     # ---- Clusters ----
 
     def create_cluster(

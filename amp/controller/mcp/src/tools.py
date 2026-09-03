@@ -46,6 +46,33 @@ def get_storage_pool(pool_id: str) -> dict[str, Any]:
     return controller_client.get_storage_pool(pool_id)
 
 
+def rename_storage_pool(pool_id: str, name: str) -> dict[str, Any]:
+    """Rename a storage pool. Returns the renamed pool.
+
+    Allowed at any time, whatever the pool holds — nothing addresses a pool by
+    name, so renaming one breaks no reference. `name` must not be in use by
+    another live pool (409). This is the cheap way out of a name collision on
+    `create_storage_pool`: rename the pool squatting the name rather than
+    deleting it.
+    """
+    return controller_client.rename_storage_pool(pool_id, name)
+
+
+def delete_storage_pool(pool_id: str) -> dict[str, Any]:
+    """Delete an empty storage pool, freeing its name for reuse.
+
+    Synchronous — unlike `delete_cluster` there is no task to poll. Returns an
+    empty dict.
+
+    The pool must hold no live cluster (409 otherwise); call `list_clusters` and
+    `delete_cluster` on each first. Clusters already deleted do not count, so a
+    pool that has been emptied is deletable even though its cluster history
+    remains. The pool then disappears from `list_storage_pools`, `get_storage_pool`
+    returns 404, and the name is immediately available again.
+    """
+    return controller_client.delete_storage_pool(pool_id)
+
+
 def create_cluster(
     pool_id: str,
     name: str,

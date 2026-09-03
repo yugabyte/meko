@@ -81,6 +81,164 @@ func TestStoragePoolFlow(t *testing.T) {
 	}
 }
 
+// TestStoragePoolRename covers the rename contract: any pool at any time, the
+// new name visible immediately, the old one released, and a live pool's name
+// still refused.
+func TestStoragePoolRename(t *testing.T) {
+	client, _, _ := newTestServer(t)
+	ctx := context.Background()
+
+	alice := mustCreateUser(t, client, false)
+	alpha := mustCreatePool(t, client, alice.Id, "alpha")
+	mustCreatePool(t, client, alice.Id, "beta")
+
+	renamed, err := client.UpdateStoragePoolWithResponse(ctx, alpha.Id, api.UpdateStoragePoolRequest{Name: "alpha-renamed"})
+	if err != nil {
+		t.Fatalf("UpdateStoragePool: %v", err)
+	}
+	if renamed.StatusCode() != http.StatusOK || renamed.JSON200 == nil {
+		t.Fatalf("UpdateStoragePool status = %d, body = %s", renamed.StatusCode(), renamed.Body)
+	}
+	if renamed.JSON200.Name != "alpha-renamed" {
+		t.Errorf("name = %q, want alpha-renamed", renamed.JSON200.Name)
+	}
+	// Rename is in place: same id, same owner, same creation time.
+	if renamed.JSON200.Id != alpha.Id || renamed.JSON200.OwnerUserId != alice.Id {
+		t.Errorf("got {id:%s owner:%s}, want {%s %s}",
+			renamed.JSON200.Id, renamed.JSON200.OwnerUserId, alpha.Id, alice.Id)
+	}
+	if got, want := listPoolNames(t, client), []string{"alpha-renamed", "beta"}; !equalStrings(got, want) {
+		t.Fatalf("list = %v, want %v", got, want)
+	}
+
+	// The vacated name is free again.
+	mustCreatePool(t, client, alice.Id, "alpha")
+
+	// A name a live pool holds is still refused.
+	clash, err := client.UpdateStoragePoolWithResponse(ctx, alpha.Id, api.UpdateStoragePoolRequest{Name: "beta"})
+	if err != nil {
+		t.Fatalf("UpdateStoragePool(clash): %v", err)
+	}
+	if clash.StatusCode() != http.StatusConflict {
+		t.Fatalf("clash status = %d, want 409, body = %s", clash.StatusCode(), clash.Body)
+	}
+
+	// Renaming a pool to the name it already has is a no-op, not a self-conflict.
+	same, err := client.UpdateStoragePoolWithResponse(ctx, alpha.Id, api.UpdateStoragePoolRequest{Name: "alpha-renamed"})
+	if err != nil {
+		t.Fatalf("UpdateStoragePool(same): %v", err)
+	}
+	if same.StatusCode() != http.StatusOK {
+		t.Fatalf("same-name status = %d, want 200, body = %s", same.StatusCode(), same.Body)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body api.UpdateStoragePoolRequest
+		id   uuid.UUID
+		want int
+	}{
+		{"blank name", api.UpdateStoragePoolRequest{Name: "   "}, alpha.Id, http.StatusBadRequest},
+		{"missing pool", api.UpdateStoragePoolRequest{Name: "whatever"}, uuid.New(), http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := client.UpdateStoragePoolWithResponse(ctx, tc.id, tc.body)
+			if err != nil {
+				t.Fatalf("UpdateStoragePool: %v", err)
+			}
+			if resp.StatusCode() != tc.want {
+				t.Fatalf("status = %d, want %d, body = %s", resp.StatusCode(), tc.want, resp.Body)
+			}
+		})
+	}
+}
+
+// TestStoragePoolDelete covers the delete contract: an empty pool goes away and
+// releases its name, a pool with a live cluster is refused, and a pool whose
+// clusters have all been deleted is empty enough to go — the case that leaves
+// tombstoned cluster rows still pointing at the pool (#1083).
+func TestStoragePoolDelete(t *testing.T) {
+	client, backend, store := newTestServer(t)
+	ctx := context.Background()
+
+	alice := mustCreateUser(t, client, false)
+	empty := mustCreatePool(t, client, alice.Id, "empty")
+	occupied := mustCreatePool(t, client, alice.Id, "occupied")
+	cluster := mustCreateCluster(t, client, store, backend, occupied.Id, "db")
+
+	// An empty pool deletes, disappears from the list, and 404s on get.
+	del, err := client.DeleteStoragePoolWithResponse(ctx, empty.Id)
+	if err != nil {
+		t.Fatalf("DeleteStoragePool: %v", err)
+	}
+	if del.StatusCode() != http.StatusNoContent {
+		t.Fatalf("DeleteStoragePool status = %d, want 204, body = %s", del.StatusCode(), del.Body)
+	}
+	if got, want := listPoolNames(t, client), []string{"occupied"}; !equalStrings(got, want) {
+		t.Fatalf("list = %v, want %v", got, want)
+	}
+	gone, err := client.GetStoragePoolWithResponse(ctx, empty.Id)
+	if err != nil {
+		t.Fatalf("GetStoragePool(deleted): %v", err)
+	}
+	if gone.StatusCode() != http.StatusNotFound {
+		t.Fatalf("GetStoragePool(deleted) status = %d, want 404, body = %s", gone.StatusCode(), gone.Body)
+	}
+
+	// The name it held is immediately reusable.
+	mustCreatePool(t, client, alice.Id, "empty")
+
+	// Its id is not: a tombstone keeps the primary key, so re-creating on a
+	// deleted pool's id is a conflict rather than the idempotent re-create a live
+	// id gets.
+	reuse, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{
+		Id: &empty.Id, Name: "reborn", OwnerUserId: alice.Id,
+	})
+	if err != nil {
+		t.Fatalf("CreateStoragePool(dropped id): %v", err)
+	}
+	if reuse.StatusCode() != http.StatusConflict {
+		t.Fatalf("re-create on a dropped id = %d, want 409, body = %s", reuse.StatusCode(), reuse.Body)
+	}
+
+	// Deleting it twice is a 404, not a second success.
+	again, err := client.DeleteStoragePoolWithResponse(ctx, empty.Id)
+	if err != nil {
+		t.Fatalf("DeleteStoragePool(twice): %v", err)
+	}
+	if again.StatusCode() != http.StatusNotFound {
+		t.Fatalf("second delete status = %d, want 404, body = %s", again.StatusCode(), again.Body)
+	}
+
+	// A pool holding a live cluster is refused.
+	busy, err := client.DeleteStoragePoolWithResponse(ctx, occupied.Id)
+	if err != nil {
+		t.Fatalf("DeleteStoragePool(occupied): %v", err)
+	}
+	if busy.StatusCode() != http.StatusConflict {
+		t.Fatalf("occupied status = %d, want 409, body = %s", busy.StatusCode(), busy.Body)
+	}
+
+	// Delete the cluster and the pool becomes deletable — the cluster row survives
+	// as a tombstone, and blocking on that would strand the pool forever.
+	dc, err := client.DeleteClusterWithResponse(ctx, occupied.Id, cluster.Id)
+	if err != nil {
+		t.Fatalf("DeleteCluster: %v", err)
+	}
+	if dc.StatusCode() != http.StatusAccepted {
+		t.Fatalf("DeleteCluster status = %d, want 202, body = %s", dc.StatusCode(), dc.Body)
+	}
+	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}})
+
+	drained, err := client.DeleteStoragePoolWithResponse(ctx, occupied.Id)
+	if err != nil {
+		t.Fatalf("DeleteStoragePool(drained): %v", err)
+	}
+	if drained.StatusCode() != http.StatusNoContent {
+		t.Fatalf("drained status = %d, want 204, body = %s", drained.StatusCode(), drained.Body)
+	}
+}
+
 func mustCreatePool(t *testing.T, client *api.ClientWithResponses, owner uuid.UUID, name string) api.StoragePool {
 	t.Helper()
 	resp, err := client.CreateStoragePoolWithResponse(context.Background(), api.CreateStoragePoolRequest{Name: name, OwnerUserId: owner})

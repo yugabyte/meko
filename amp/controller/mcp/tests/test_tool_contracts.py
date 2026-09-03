@@ -1,4 +1,4 @@
-"""Wire-contract lock for all 30 MCP tools.
+"""Wire-contract lock for all 32 MCP tools.
 
 What this solves: it pins the exact HTTP method, path, request body, and query
 params each tool sends to the controller, so silent API drift (a renamed route,
@@ -60,7 +60,7 @@ def wire():
 
 
 # (tool name, kwargs, expected method, expected path, canned response spec).
-# One row per tool — the full 30-tool surface.
+# One row per tool — the full 32-tool surface.
 CASES = [
     ("get_user", {"user_id": "u1"}, "GET", "/api/v1/users/u1", {"id": "u1"}),
     ("create_storage_pool", {"name": "n", "owner_user_id": "u9"}, "POST",
@@ -68,6 +68,10 @@ CASES = [
     ("list_storage_pools", {}, "GET", "/api/v1/storage-pools",
      {"storage_pools": [], "total": 0, "count": 0}),
     ("get_storage_pool", {"pool_id": "p1"}, "GET", P, {"id": "p1"}),
+    ("rename_storage_pool", {"pool_id": "p1", "name": "n2"}, "PATCH", P,
+     {"id": "p1", "name": "n2"}),
+    # Delete is synchronous and answers 204: no body, no Task to poll.
+    ("delete_storage_pool", {"pool_id": "p1"}, "DELETE", P, (204, None)),
     ("create_cluster", {"pool_id": "p1", "name": "db"}, "POST",
      f"{P}/clusters", (202, TASK)),
     ("list_clusters", {"pool_id": "p1"}, "GET", f"{P}/clusters",
@@ -135,7 +139,7 @@ CASES = [
 
 
 def test_cases_cover_all_tools():
-    assert len({name for name, *_ in CASES}) == 30
+    assert len({name for name, *_ in CASES}) == 32
 
 
 @pytest.mark.parametrize("name,kwargs,method,path,spec", CASES, ids=[c[0] for c in CASES])

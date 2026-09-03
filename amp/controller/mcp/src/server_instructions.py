@@ -15,7 +15,9 @@ databases backed by branchable storage.
 Resources are nested **storage pool → cluster → branch → endpoint**:
 
 - **Storage pool** — a top-level workspace owned by a user. Create one with \
-`create_storage_pool` (you must pass `owner_user_id`).
+`create_storage_pool` (you must pass `owner_user_id`); `rename_storage_pool` \
+renames one at any time, and `delete_storage_pool` removes one that holds no \
+live cluster.
 - **Cluster** — a database living in a pool. Creating a cluster also creates \
 its default branch named "main".
 - **Branch** — a Postgres timeline in a cluster. `create_branch` forks an \

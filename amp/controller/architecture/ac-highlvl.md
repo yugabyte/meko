@@ -250,9 +250,14 @@ CREATE TABLE users (                        -- "user" is reserved in PG
 -- recorded as its owner; others reach it only via a user_pool_grant (a "share").
 CREATE TABLE storage_pools (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name           text NOT NULL UNIQUE,
-    owner_user_id  uuid NOT NULL REFERENCES users(id)
+    name           text NOT NULL,
+    owner_user_id  uuid NOT NULL REFERENCES users(id),
+    dropped_at     timestamptz                -- tombstone; its clusters' FKs outlive it
 );
+
+-- Name unique among LIVE pools, so deleting one frees its name.
+CREATE UNIQUE INDEX storage_pools_name_live ON storage_pools (name)
+    WHERE dropped_at IS NULL;
 
 CREATE TABLE clusters (                         -- a "database": one cluster, one default branch
     id               uuid PRIMARY KEY,   -- control-plane-only id; maps to no storage object
@@ -305,7 +310,7 @@ CREATE TABLE branches (
     -- its pages/WAL in amp_storage outlive the drop. Every "is this live?" reader
     -- filters `dropped_at IS NULL`. Clusters tombstone for the follow-on reason:
     -- the FK above is RESTRICT, so a cluster whose branches survive as tombstones
-    -- could never be deleted.
+    -- could never be deleted. Pools tombstone one level up, for the same reason.
     dropped_at          timestamptz,
 
     -- Branch-drop GC (sc-integration.md § Branch-drop GC): `reap_after` is the

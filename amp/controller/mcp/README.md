@@ -12,13 +12,14 @@ See `controller/architecture/ac-mcp.md` for the design.
 
 ## Tools
 
-30 tools mapped to the controller's operations:
+32 tools mapped to the controller's operations:
 
 - **Users (read-only):** `get_user`. User create/list are intentionally not
   exposed; where the API needs an owner, the tool takes `owner_user_id` as a
   required argument.
 - **Storage pools:** `create_storage_pool` (requires `owner_user_id`),
-  `list_storage_pools`, `get_storage_pool`.
+  `list_storage_pools`, `get_storage_pool`, `rename_storage_pool`,
+  `delete_storage_pool` (only a pool holding no live cluster).
 - **Clusters:** `create_cluster` (optional `pg_version`, default 18 — only 18
   is accepted today), `list_clusters`, `get_cluster`, `delete_cluster`.
 - **Branches:** `create_branch`, `list_branches`, `get_branch`,
@@ -33,12 +34,13 @@ See `controller/architecture/ac-mcp.md` for the design.
   `list_migrations`, `get_migration`, `get_migration_assessment`,
   `start_migration_assessment`, `provision_migration_target`, `start_migration`.
 
-`create_storage_pool` and the two `update_*_settings` tools are
+The storage-pool tools (`create_storage_pool`, `rename_storage_pool`,
+`delete_storage_pool`) and the two `update_*_settings` tools are
 **synchronous** — they return their result directly. A settings change is
 stored, then pushed to the running endpoints, which restart the services whose
 config actually changed and report them; restarting the compute bounces
 Postgres, so a `pg_settings` change interrupts that endpoint's connections. The `create_cluster` / `create_branch` / `create_endpoint` /
-`resize_endpoint` tools and every `delete_*` tool are **asynchronous**: they
+`resize_endpoint` tools and the other `delete_*` tools are **asynchronous**: they
 return a `Task` object immediately. Poll `get_task(task_id=<id>)` until the task's `status` reaches
 `succeeded` or `failed`, then read the resource to see its final state.
 

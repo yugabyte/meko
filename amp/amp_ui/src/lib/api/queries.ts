@@ -18,6 +18,7 @@ import {
   createUser,
   deleteBranch,
   deleteCluster,
+  deleteStoragePool,
   getVersion,
   listBranches,
   listClusters,
@@ -26,6 +27,7 @@ import {
   listUsers,
   pollTask,
   updateBranchSettings,
+  updateStoragePool,
 } from "./resources";
 import type {
   Branch,
@@ -116,6 +118,29 @@ export function useCreateStoragePool() {
   return useMutation({
     mutationFn: (input: { name: string; ownerUserId: string }) =>
       createStoragePool({ name: input.name, owner_user_id: input.ownerUserId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.storagePools });
+    },
+  });
+}
+
+export function useRenameStoragePool() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { poolId: string; name: string }) =>
+      updateStoragePool(input.poolId, { name: input.name }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.storagePools });
+    },
+  });
+}
+
+// The pool must already be empty for this to succeed, so nothing below it can be
+// stale — only the pool list needs invalidating.
+export function useDeleteStoragePool() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { poolId: string }) => deleteStoragePool(input.poolId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.storagePools });
     },

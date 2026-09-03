@@ -9,6 +9,8 @@ EXPECTED_TOOLS = {
     "create_storage_pool",
     "list_storage_pools",
     "get_storage_pool",
+    "rename_storage_pool",
+    "delete_storage_pool",
     "create_cluster",
     "list_clusters",
     "get_cluster",
@@ -55,7 +57,7 @@ def test_all_tools_present_in_tools_module():
     tools_src = _read(TOOLS_SRC)
     for name in EXPECTED_TOOLS:
         assert f"def {name}(" in tools_src, f"missing tool def: {name}"
-    assert len(EXPECTED_TOOLS) == 30
+    assert len(EXPECTED_TOOLS) == 32
 
 
 def test_all_tools_registered_in_server():

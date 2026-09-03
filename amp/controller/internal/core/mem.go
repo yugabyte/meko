@@ -20,7 +20,8 @@ type MemBackend struct {
 	mu           sync.Mutex
 	users        map[uuid.UUID]User
 	pools        map[uuid.UUID]StoragePool
-	names        map[string]struct{} // pool names are unique across the placement group
+	droppedPools map[uuid.UUID]struct{} // ids of deleted pools; never reusable, as in the schema
+	names        map[string]struct{}    // pool names are unique across the placement group
 	clusters     map[uuid.UUID]Cluster
 	branches     map[uuid.UUID]Branch
 	clusterNames map[clusterNameKey]struct{} // cluster names are unique within their pool
@@ -59,6 +60,7 @@ func NewMemBackend() *MemBackend {
 	return &MemBackend{
 		users:        make(map[uuid.UUID]User),
 		pools:        make(map[uuid.UUID]StoragePool),
+		droppedPools: make(map[uuid.UUID]struct{}),
 		names:        make(map[string]struct{}),
 		clusters:     make(map[uuid.UUID]Cluster),
 		branches:     make(map[uuid.UUID]Branch),
@@ -122,6 +124,9 @@ func (m *MemBackend) CreateStoragePoolWithID(_ context.Context, id, owner uuid.U
 	if p, ok := m.pools[id]; ok {
 		return p, nil // idempotent — the id already maps to a pool
 	}
+	if _, dropped := m.droppedPools[id]; dropped {
+		return StoragePool{}, ErrConflict // a tombstone keeps the id; only names are reusable
+	}
 	if _, ok := m.users[owner]; !ok {
 		return StoragePool{}, ErrNotFound
 	}
@@ -168,6 +173,53 @@ func (m *MemBackend) GetStoragePool(_ context.Context, poolID uuid.UUID) (Storag
 		return StoragePool{}, ErrNotFound
 	}
 	return p, nil
+}
+
+func (m *MemBackend) RenameStoragePool(_ context.Context, poolID uuid.UUID, name string) (StoragePool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.pools[poolID]
+	if !ok {
+		return StoragePool{}, ErrNotFound
+	}
+	if name == p.Name {
+		return p, nil
+	}
+	if _, taken := m.names[name]; taken {
+		return StoragePool{}, ErrConflict
+	}
+	delete(m.names, p.Name)
+	m.names[name] = struct{}{}
+	p.Name = name
+	m.pools[poolID] = p
+	return p, nil
+}
+
+// PgBackend tombstones the pool; this drops the row and remembers the id, which
+// reproduces what callers can observe — the pool is gone from every read, its
+// name is free, and its id is not.
+//
+// What it cannot reproduce is the tombstoned-CLUSTER case this delete policy is
+// built around: MemBackend's DeleteCluster hard-deletes, so the fake never holds
+// a cluster that is dropped-but-present, and the live-only check below can never
+// differ from "any cluster". That case is covered against the real schema by
+// TestPgStoragePoolDeleteRename.
+func (m *MemBackend) DeleteStoragePool(_ context.Context, poolID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.pools[poolID]
+	if !ok {
+		return ErrNotFound
+	}
+	for _, c := range m.clusters {
+		if c.StoragePoolID == poolID {
+			return ErrConflict
+		}
+	}
+	delete(m.pools, poolID)
+	delete(m.names, p.Name)
+	m.droppedPools[poolID] = struct{}{}
+	return nil
 }
 
 func (m *MemBackend) CreateCluster(_ context.Context, poolID uuid.UUID, name string, pgVersion int) (Cluster, error) {

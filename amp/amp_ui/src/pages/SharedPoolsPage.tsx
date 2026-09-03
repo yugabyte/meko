@@ -3,9 +3,9 @@
 // backing in the API (quota / tenants / topology / health from the mock) are
 // intentionally omitted — only real data is shown.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Boxes, Database, Plus } from "lucide-react";
+import { Boxes, Database, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -27,7 +33,9 @@ import {
 import {
   useCreateStoragePool,
   useCurrentUser,
+  useDeleteStoragePool,
   useFleet,
+  useRenameStoragePool,
   useStoragePools,
 } from "@/lib/api/queries";
 import type { StoragePool } from "@/lib/api/types";
@@ -48,8 +56,10 @@ export default function SharedPoolsPage() {
     return pools.data;
   }, [pools.data, currentUser.data]);
 
-  // Cluster counts per pool — reuse the fleet fan-out.
-  const fleet = useFleet(myPools);
+  // Cluster counts per pool — reuse the fleet fan-out. includeFailed, because
+  // this count also gates Delete: a failed-creation cluster is still a live row
+  // and the controller counts it, so hiding those would offer a delete that 409s.
+  const fleet = useFleet(myPools, true);
   const dbCountByPool = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const row of fleet.rows) {
@@ -59,6 +69,8 @@ export default function SharedPoolsPage() {
   }, [fleet.rows]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [renaming, setRenaming] = useState<StoragePool | null>(null);
+  const [deleting, setDeleting] = useState<StoragePool | null>(null);
 
   const isLoading = currentUser.isLoading || pools.isLoading;
   const error = currentUser.error ?? pools.error;
@@ -92,11 +104,16 @@ export default function SharedPoolsPage() {
             <PoolCard
               key={pool.id}
               pool={pool}
-              dbCount={dbCountByPool[pool.id]}
+              // A pool with no clusters contributes no fleet rows, so it has no
+              // entry at all — resolve that to 0 once the fan-out has settled,
+              // or an empty pool would read as "count unknown" forever.
+              dbCount={fleet.isLoading ? undefined : (dbCountByPool[pool.id] ?? 0)}
               dbCountLoading={fleet.isLoading}
               onOpen={() =>
                 navigate(`/fleet?pool=${encodeURIComponent(pool.name)}`)
               }
+              onRename={() => setRenaming(pool)}
+              onDelete={() => setDeleting(pool)}
             />
           ))}
           <button
@@ -117,52 +134,234 @@ export default function SharedPoolsPage() {
         onOpenChange={setDialogOpen}
         ownerUserId={currentUser.data?.id}
       />
+      <RenamePoolDialog
+        pool={renaming}
+        onOpenChange={(open) => !open && setRenaming(null)}
+      />
+      <DeletePoolDialog
+        pool={deleting}
+        onOpenChange={(open) => !open && setDeleting(null)}
+      />
     </PageContainer>
   );
 }
 
-function PoolCard({
+export function PoolCard({
   pool,
   dbCount,
   dbCountLoading,
   onOpen,
+  onRename,
+  onDelete,
 }: {
   pool: StoragePool;
   dbCount: number | undefined;
   dbCountLoading: boolean;
   onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
 }) {
+  // The controller refuses to delete a pool that still holds a live cluster, so
+  // disable the action rather than let it 409. An unresolved count is treated as
+  // non-empty: better to withhold the action than offer one that fails.
+  const hasClusters = dbCount === undefined || dbCount > 0;
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex flex-col rounded-xl border bg-card p-5 text-left text-card-foreground shadow transition-colors hover:border-brand/40"
-    >
-      <div className="flex items-center gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand/15 text-brand">
-          <Boxes className="h-[18px] w-[18px]" />
-        </div>
-        <div className="min-w-0">
-          <p className="truncate font-semibold">{pool.name}</p>
-          <p className="font-mono text-xs text-muted-foreground">
-            {pool.id}
-          </p>
-        </div>
+    <div className="relative flex flex-col rounded-xl border bg-card text-card-foreground shadow transition-colors hover:border-brand/40">
+      <div className="absolute right-2 top-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Actions for ${pool.name}`}
+            >
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={onRename}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              disabled={hasClusters}
+              onSelect={onDelete}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      <div className="mt-5 flex items-center justify-between border-t border-border pt-4 text-sm">
-        <span className="flex items-center gap-2 text-muted-foreground">
-          <Database className="h-4 w-4" />
-          Clusters
-        </span>
-        <span className="font-semibold text-foreground">
-          {dbCountLoading && dbCount === undefined ? "…" : (dbCount ?? 0)}
-        </span>
-      </div>
-      <p className="mt-3 text-xs text-muted-foreground">
-        Created {formatDateTime(pool.created_at)}
-      </p>
-    </button>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex flex-1 flex-col p-5 text-left"
+      >
+        <div className="flex items-center gap-3 pr-8">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand/15 text-brand">
+            <Boxes className="h-[18px] w-[18px]" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate font-semibold">{pool.name}</p>
+            <p className="font-mono text-xs text-muted-foreground">
+              {pool.id}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center justify-between border-t border-border pt-4 text-sm">
+          <span className="flex items-center gap-2 text-muted-foreground">
+            <Database className="h-4 w-4" />
+            Clusters
+          </span>
+          <span className="font-semibold text-foreground">
+            {dbCountLoading && dbCount === undefined ? "…" : (dbCount ?? 0)}
+          </span>
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Created {formatDateTime(pool.created_at)}
+        </p>
+      </button>
+    </div>
+  );
+}
+
+export function RenamePoolDialog({
+  pool,
+  onOpenChange,
+}: {
+  pool: StoragePool | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [name, setName] = useState("");
+  const rename = useRenameStoragePool();
+
+  // Seed the field from whichever pool the menu opened on.
+  useEffect(() => {
+    if (pool) setName(pool.name);
+  }, [pool]);
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!pool || !trimmed || trimmed === pool.name) return;
+    rename.mutate(
+      { poolId: pool.id, name: trimmed },
+      {
+        onSuccess: (updated) => {
+          toast.success(`Shared pool renamed to "${updated.name}"`);
+          onOpenChange(false);
+        },
+        onError: (err) =>
+          toast.error(err instanceof Error ? err.message : "Failed to rename pool"),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={!!pool} onOpenChange={(o) => !rename.isPending && onOpenChange(o)}>
+      <DialogContent>
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Rename shared pool</DialogTitle>
+            <DialogDescription>
+              Nothing addresses a pool by name, so renaming one breaks no
+              reference. The name must be free.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="my-4 space-y-2">
+            <Label htmlFor="rename-pool-name">Pool name</Label>
+            <Input
+              id="rename-pool-name"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={rename.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={
+                !name.trim() || name.trim() === pool?.name || rename.isPending
+              }
+              variant="brand"
+            >
+              {rename.isPending ? "Renaming…" : "Rename pool"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// A one-click confirm, not the type-to-confirm DeleteClusterDialog uses: the
+// pool is empty by the time this is reachable, so nothing is destroyed.
+function DeletePoolDialog({
+  pool,
+  onOpenChange,
+}: {
+  pool: StoragePool | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const del = useDeleteStoragePool();
+
+  function remove() {
+    if (!pool) return;
+    del.mutate(
+      { poolId: pool.id },
+      {
+        onSuccess: () => {
+          toast.success(`Shared pool "${pool.name}" deleted`);
+          onOpenChange(false);
+        },
+        onError: (err) =>
+          toast.error(err instanceof Error ? err.message : "Failed to delete pool"),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={!!pool} onOpenChange={(o) => !del.isPending && onOpenChange(o)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete shared pool &ldquo;{pool?.name}&rdquo;?</DialogTitle>
+          <DialogDescription>
+            The pool holds no clusters, so nothing is lost. Its name becomes
+            available again straight away.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={del.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={remove}
+            disabled={del.isPending}
+          >
+            {del.isPending ? "Deleting…" : "Delete pool"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

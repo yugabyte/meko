@@ -822,7 +822,14 @@ the upstream multi-tenant machinery is dropped.
   live?" reader filters `dropped_at IS NULL`, and the name/default uniqueness
   indexes are partial on it so a drop frees the name. Clusters are tombstoned for
   the same reason — the branch → cluster FK is RESTRICT, so a cluster whose
-  branches survive as tombstones could never be deleted.
+  branches survive as tombstones could never be deleted — and storage pools in
+  turn, since their clusters' FKs outlive them. `deleteStoragePool` therefore
+  gates on *live* clusters only: a tombstone is never reclaimed, so waiting for
+  one would make the pool undeletable.
+  The pool's live-cluster guard is a read, so `EnsureCluster` carries the
+  matching write (`SET dropped_at = dropped_at WHERE dropped_at IS NULL` on the
+  pool row) — see the next bullet; without it a create planned while the pool was
+  live commits alongside the delete.
 - **A tombstone trips no foreign key, so the guards around it are explicit — and
   the racing side's guard is a write.** Stamping `dropped_at` never touches
   `branch_id`, so neither the child-fork nor the endpoint RESTRICT reference is

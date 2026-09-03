@@ -25,6 +25,7 @@ import type {
   TaskList,
   UpdateBranchSettingsInput,
   UpdateEndpointSettingsInput,
+  UpdateStoragePoolInput,
   User,
   UserList,
   Version,
@@ -121,6 +122,22 @@ export function createStoragePool(
     method: "POST",
     body: input,
   });
+}
+
+export function updateStoragePool(
+  poolId: string,
+  input: UpdateStoragePoolInput,
+): Promise<StoragePool> {
+  return apiRequest<StoragePool>(`/storage-pools/${poolId}`, {
+    method: "PATCH",
+    body: input,
+  });
+}
+
+// Synchronous, unlike deleteCluster: an empty pool owns no compute to retire, so
+// there is no task to poll. 409 while it still holds a live cluster.
+export function deleteStoragePool(poolId: string): Promise<void> {
+  return apiRequest<void>(`/storage-pools/${poolId}`, { method: "DELETE" });
 }
 
 /* ---- Clusters ---- */

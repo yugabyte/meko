@@ -66,17 +66,20 @@ PF_PORT="${PF_PORT:-18080}"
 # Path to psql INSIDE the endpoint pod (PG v18 install; not needed on the host).
 PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
 KEEP="${KEEP:-0}"
-# storage_pools.name is UNIQUE and a pool can be neither deleted nor renamed
-# through the API (#1083), so any name this script picks is claimed forever. The
-# old name came from $$ — a container PID, small and recurring — so a repeat made
-# createStoragePool a 409 no run could recover from (#1082).
+# The pool is ONE fixed row, created on the first run and reused by every later
+# one. The old name came from $$ — a container PID, small and recurring — so a
+# repeat made createStoragePool a 409 no run could recover from (#1082).
 #
-# A unique name per run would fix that collision and leak a permanent row every
-# run, which is worse: ycp lists pools unpaged and gets the oldest 100
-# (ampbackend/backend.go -> defaultPageLimit, ordered created_at), so past that a
-# YCP-managed pool drops off the page, Diff reads it as absent, and its cluster
-# create fails "parent pool not found". So the pool is ONE fixed row, created on
-# the first run and reused by every later one.
+# #1083 added pool delete and rename, so a name is no longer claimed forever and
+# a per-run name could now be cleaned up. The fixed row is still what this does:
+# a unique name per run only stops leaking if every run's delete succeeds, and a
+# run that fails before its cleanup leaks a pool that nothing else collects. ycp
+# lists pools unpaged and gets the oldest 100 (ampbackend/backend.go ->
+# defaultPageLimit, ordered created_at), so each leak walks the list toward the
+# point where a YCP-managed pool drops off the page, Diff reads it as absent, and
+# its cluster create fails "parent pool not found". One reused row cannot leak.
+#
+# Reusing by name (below) is also why this script must not rename the pool.
 POOL_NAME="pool-smoke"
 # The cluster IS deletable and clusters_name_per_pool is partial on
 # `dropped_at IS NULL`, so a per-run cluster name leaves nothing that blocks

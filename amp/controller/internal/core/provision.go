@@ -45,12 +45,36 @@ func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branch
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name, engine)
 		 VALUES ($1::uuid, $2::uuid, $3, $4)
 		 ON CONFLICT (id) DO NOTHING`,
-		clusterID.String(), poolID.String(), name, normalizeEngine(engine)); err != nil {
+		clusterID.String(), poolID.String(), name, normalizeEngine(engine))
+	if err != nil {
 		return mapClusterErr("insert cluster", err)
+	}
+	// Interlock against a concurrent pool delete, the pool-level twin of the
+	// branch interlock in EnsureEndpointRecord. DeleteStoragePool guards on a READ
+	// (no live cluster) and writes only the pool row; this writes only cluster and
+	// branch rows, and the FK is satisfied by a tombstoned pool. Nothing either
+	// side writes is read by the other, so both commit and leave a live cluster
+	// under a tombstoned pool — invisible to every `dropped_at IS NULL` reader, so
+	// nothing ever enumerates it. Writing the pool row here makes the two conflict.
+	//
+	// Only when the INSERT actually inserted: a replay of the same cluster id must
+	// stay an idempotent no-op, and a row already there is proof the pool was live
+	// when it landed, since the delete refuses while a live cluster remains.
+	if tag.RowsAffected() > 0 {
+		live, err := tx.Exec(ctx,
+			`UPDATE amp_registry.storage_pools SET dropped_at = dropped_at
+			  WHERE id = $1::uuid AND dropped_at IS NULL`,
+			poolID.String())
+		if err != nil {
+			return mapPoolDropRaceErr("validate pool liveness", err)
+		}
+		if live.RowsAffected() == 0 {
+			return ErrNotFound
+		}
 	}
 	// Seed the create-time externalized-extension set on the default branch row.
 	// It is per-branch state: a fork inherits it, and AddBranchExtensions unions
@@ -70,9 +94,20 @@ func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branch
 		return mapBranchErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit ensure cluster+default branch: %w", err)
+		return mapPoolDropRaceErr("commit ensure cluster+default branch", err)
 	}
 	return nil
+}
+
+// mapPoolDropRaceErr is mapBranchDropRaceErr one level up: it names the
+// serialization abort the pool interlock provokes by design, and stays under no
+// sentinel for the same reason — the request was never adjudicated, so the task
+// worker re-runs the step and resolves it to success or a clean ErrNotFound.
+func mapPoolDropRaceErr(what string, err error) error {
+	if db.IsAbortedTransaction(err) {
+		return fmt.Errorf("%s conflicted with a concurrent delete of the storage pool: %w", what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // marshalExtensions renders a name set as a sorted, de-duplicated JSON array for

@@ -127,6 +127,7 @@ export type TaskList = { tasks: Task[]; count: number; total: number };
 
 export type CreateUserInput = { is_admin: boolean };
 export type CreateStoragePoolInput = { name: string; owner_user_id: string };
+export type UpdateStoragePoolInput = { name: string };
 export type CreateClusterInput = { name: string; extensions?: string[] };
 /** Unioned into the branch's set; the controller redeploys every endpoint on
  *  the branch to mount them. At least one name. */

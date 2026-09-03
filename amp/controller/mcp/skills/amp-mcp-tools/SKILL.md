@@ -36,7 +36,8 @@ storage pool          (a workspace, owned by a user)
         └── endpoint    (the compute — one pod — you actually connect to)
 ```
 
-- **Storage pool** — top-level workspace. `create_storage_pool(name, owner_user_id)`.
+- **Storage pool** — top-level workspace. `create_storage_pool(name, owner_user_id)`;
+  `rename_storage_pool` any time, `delete_storage_pool` once no live cluster is left.
 - **Cluster** — a database in a pool. Creating one also creates its `main` branch.
 - **Branch** — a timeline. `create_branch` forks an existing branch (defaults to `main`).
 - **Endpoint** — compute bound to a branch. A branch admits **at most one `read_write`** endpoint (plus any number of `read_only`).
@@ -63,8 +64,9 @@ The mandatory pattern for every mutation:
 Do **not** treat the Task as the resource. A freshly created endpoint has **no
 `address` in the Task** — the address only exists after the task succeeds and
 you `get_endpoint`. `list_tasks(status=, kind=, cluster_id=)` finds tasks if you
-lose an id. The synchronous exceptions are reads (`get_*`, `list_*`) and
-`create_storage_pool` (returns the pool directly).
+lose an id. The synchronous exceptions are reads (`get_*`, `list_*`) and the
+storage-pool writes (`create_storage_pool` returns the pool directly; `rename_storage_pool`
+and `delete_storage_pool` likewise plan no task).
 
 ## Roles and the one-read-write rule
 
@@ -266,10 +268,10 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 - `service_unavailable` — transient: the controller could not reach its state store, or a dependency the call needs is not up yet. Wait the `Retry-After` seconds (2) and retry the same call.
 - `internal` — controller-side failure; surface it, don't silently retry.
 
-## Tool catalog (30)
+## Tool catalog (32)
 
 **Users (1):** `get_user`
-**Storage pools (3):** `create_storage_pool`, `list_storage_pools`, `get_storage_pool`
+**Storage pools (5):** `create_storage_pool`, `list_storage_pools`, `get_storage_pool`, `rename_storage_pool`, `delete_storage_pool`
 **Clusters / databases (4):** `create_cluster`*, `list_clusters`, `get_cluster`, `delete_cluster`*
 **Branches (6):** `create_branch`*, `list_branches`, `get_branch`, `add_branch_extensions`*, `delete_branch`*, `update_branch_settings`
 **Endpoints / compute (6):** `create_endpoint`*, `list_endpoints`, `get_endpoint`, `delete_endpoint`*, `resize_endpoint`*, `update_endpoint_settings`

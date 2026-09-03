@@ -69,6 +69,16 @@ func (b *PgBackend) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 	return u, err
 }
 
+// poolLive excludes tombstoned (dropped) pools. A pool is tombstoned rather
+// than deleted so its own tombstoned clusters keep a valid storage_pool_id (see
+// PgBackend.DeleteStoragePool), which means every read has to filter them out
+// explicitly. Unqualified, so it only composes into the pool-only statements
+// below -- clusterSelect and branchSelect alias the table `sp` and would need
+// their own qualified predicate. They do not carry one: a live cluster or branch
+// under a tombstoned pool is the state the EnsureCluster interlock exists to
+// prevent, not one the read paths are expected to filter out.
+const poolLive = `dropped_at IS NULL`
+
 func (b *PgBackend) CreateStoragePool(ctx context.Context, owner uuid.UUID, name string) (StoragePool, error) {
 	return b.CreateStoragePoolWithID(ctx, uuid.New(), owner, name)
 }
@@ -91,6 +101,12 @@ func (b *PgBackend) CreateStoragePoolWithID(ctx context.Context, id, owner uuid.
 		return StoragePool{}, fmt.Errorf("insert storage pool: %w", err)
 	}
 	pool, err := b.getStoragePoolByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The insert was a no-op and no live pool has the id, so a tombstoned pool
+		// holds it. Ids are never reused (the tombstone keeps the PK), so this is a
+		// conflict rather than the idempotent re-create the caller asked for.
+		return StoragePool{}, ErrConflict
+	}
 	if err != nil {
 		return StoragePool{}, db.AfterWrite(err)
 	}
@@ -126,13 +142,14 @@ func (b *PgBackend) ListUsers(ctx context.Context, limit, offset int) ([]User, i
 }
 
 func (b *PgBackend) ListStoragePools(ctx context.Context, limit, offset int) ([]StoragePool, int, error) {
-	total, err := b.count(ctx, `SELECT count(*) FROM amp_registry.storage_pools`)
+	total, err := b.count(ctx, `SELECT count(*) FROM amp_registry.storage_pools WHERE `+poolLive)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count storage pools: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
 		`SELECT id::text, name, owner_user_id::text, created_at
-		 FROM amp_registry.storage_pools ORDER BY created_at, id LIMIT $1 OFFSET $2`,
+		 FROM amp_registry.storage_pools WHERE `+poolLive+`
+		 ORDER BY created_at, id LIMIT $1 OFFSET $2`,
 		limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list storage pools: %w", err)
@@ -161,6 +178,67 @@ func (b *PgBackend) GetStoragePool(ctx context.Context, poolID uuid.UUID) (Stora
 		return StoragePool{}, ErrNotFound
 	}
 	return p, err
+}
+
+func (b *PgBackend) RenameStoragePool(ctx context.Context, poolID uuid.UUID, name string) (StoragePool, error) {
+	row := b.pool.QueryRow(ctx,
+		`UPDATE amp_registry.storage_pools SET name = $2 WHERE id = $1::uuid AND `+poolLive+`
+		 RETURNING id::text, name, owner_user_id::text, created_at`,
+		poolID.String(), name)
+	p, err := scanPool(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return StoragePool{}, ErrNotFound
+	case err != nil:
+		var pgErr *pgconn.PgError
+		// unique_violation on storage_pools_name_live: a live pool holds the name.
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return StoragePool{}, ErrConflict
+		}
+		return StoragePool{}, fmt.Errorf("rename storage pool: %w", err)
+	}
+	return p, nil
+}
+
+func (b *PgBackend) DeleteStoragePool(ctx context.Context, poolID uuid.UUID) error {
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	id := poolID.String()
+	// Only LIVE clusters block the delete. A tombstoned cluster is unrecoverable
+	// history whose data the branch reaper has already reclaimed, and its row is
+	// kept forever — waiting for it to go away would make the pool undeletable.
+	var hasClusters bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		    SELECT 1 FROM amp_registry.clusters
+		     WHERE storage_pool_id = $1::uuid AND dropped_at IS NULL)`,
+		id).Scan(&hasClusters); err != nil {
+		return fmt.Errorf("check pool clusters: %w", err)
+	}
+	if hasClusters {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM amp_registry.user_pool_grants WHERE storage_pool_id = $1::uuid`, id); err != nil {
+		return fmt.Errorf("delete pool grants: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE amp_registry.storage_pools SET dropped_at = now() WHERE id = $1::uuid AND `+poolLive,
+		id)
+	if err != nil {
+		return fmt.Errorf("tombstone storage pool: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete storage pool: %w", err)
+	}
+	return nil
 }
 
 func (b *PgBackend) CreateCluster(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Cluster, error) {
@@ -448,7 +526,7 @@ func mapBranchErr(what string, err error) error {
 func (b *PgBackend) getStoragePoolByID(ctx context.Context, id uuid.UUID) (StoragePool, error) {
 	row := b.pool.QueryRow(ctx,
 		`SELECT id::text, name, owner_user_id::text, created_at
-		 FROM amp_registry.storage_pools WHERE id = $1::uuid`,
+		 FROM amp_registry.storage_pools WHERE id = $1::uuid AND `+poolLive,
 		id.String())
 	return scanPool(row)
 }

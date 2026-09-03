@@ -157,7 +157,7 @@ async def test_real_controller_resource_ladder():
     config.controller_url = base
     mcp = server.build_server(config)
     async with Client(mcp) as client:
-        assert len(await client.list_tools()) == 30
+        assert len(await client.list_tools()) == 32
 
         pool = (
             await client.call_tool(
@@ -242,6 +242,20 @@ async def test_real_controller_resource_ladder():
             "succeeded",
             "failed",
         )
+
+        # Rename, then delete the pool the cascade just emptied. Delete works even
+        # though the cascade left the cluster row behind as a tombstone.
+        renamed = (
+            await client.call_tool(
+                "rename_storage_pool",
+                {"pool_id": pool_id, "name": f"itest-pool-renamed-{sfx}"},
+            )
+        ).data
+        assert renamed["name"] == f"itest-pool-renamed-{sfx}"
+
+        await client.call_tool("delete_storage_pool", {"pool_id": pool_id})
+        pools = (await client.call_tool("list_storage_pools", {})).data
+        assert not any(p["id"] == pool_id for p in pools["storage_pools"])
 
 
 def _await_status(task):

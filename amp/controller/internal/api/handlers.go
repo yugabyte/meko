@@ -214,6 +214,44 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 	return GetStoragePool200JSONResponse(poolToAPI(p)), nil
 }
 
+func (c *Controllers) UpdateStoragePool(ctx context.Context, request UpdateStoragePoolRequestObject) (UpdateStoragePoolResponseObject, error) {
+	if request.Body == nil {
+		return UpdateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+	}
+	name := strings.TrimSpace(request.Body.Name)
+	if name == "" {
+		return UpdateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+	}
+	p, err := c.backend.RenameStoragePool(ctx, request.PoolId, name)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return UpdateStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+	case errors.Is(err, core.ErrConflict):
+		return UpdateStoragePool409JSONResponse{ConflictJSONResponse(apiError("conflict", "a storage pool with that name already exists"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("rename storage pool: %w", err)
+	}
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "storage pool renamed",
+		slog.String(applog.KeyStoragePoolID, p.ID.String()),
+		slog.String("name", p.Name))
+	return UpdateStoragePool200JSONResponse(poolToAPI(p)), nil
+}
+
+func (c *Controllers) DeleteStoragePool(ctx context.Context, request DeleteStoragePoolRequestObject) (DeleteStoragePoolResponseObject, error) {
+	err := c.backend.DeleteStoragePool(ctx, request.PoolId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return DeleteStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+	case errors.Is(err, core.ErrConflict):
+		return DeleteStoragePool409JSONResponse{ConflictJSONResponse(apiError("conflict", "the storage pool still has clusters; delete them first"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("delete storage pool: %w", err)
+	}
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "storage pool deleted",
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()))
+	return DeleteStoragePool204Response{}, nil
+}
+
 // --- Clusters --------------------------------------------------------------
 // Create and delete are async: each runs a cheap synchronous pre-check, then
 // plans a task (create_cluster / delete_cluster) and returns 202 + the Task.
