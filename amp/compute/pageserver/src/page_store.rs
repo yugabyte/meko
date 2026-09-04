@@ -3367,6 +3367,15 @@ impl PageStore {
         Ok(Some((rows.iter().map(|r| r.get(0)).collect(), cursor)))
     }
 
+    /// TidScan hint: a never-ANALYZEd table is costed as 1000 rows, and the
+    /// planner drops the Tid Scan for a full scan above ~27 ids (#970).
+    fn gc_sweep_delete_sql(&self, table: &str) -> String {
+        format!(
+            "/*+ TidScan({table}) */ DELETE FROM \"{schema}\".{table} WHERE ybctid = ANY($1::bytea[])",
+            schema = self.schema
+        )
+    }
+
     /// Delete one sweep batch by `ybctid`. Idempotent — a row another tick
     /// already removed just doesn't match.
     ///
@@ -3374,12 +3383,8 @@ impl PageStore {
     /// re-runs as a no-op and reports 0 for rows that are gone, which would
     /// under-charge the budget and let one tick sweep the whole database.
     async fn gc_sweep_delete_batch(&self, table: &str, ybctids: &[Vec<u8>]) -> Result<usize> {
-        let sql = format!(
-            "DELETE FROM \"{schema}\".{table} WHERE ybctid = ANY($1::bytea[])",
-            schema = self.schema
-        );
         self.ysql_client
-            .execute(&sql, &[&ybctids])
+            .execute(&self.gc_sweep_delete_sql(table), &[&ybctids])
             .await
             .with_context(|| format!("gc_act_sweep delete from {table} n={}", ybctids.len()))?;
         Ok(ybctids.len())
@@ -7872,6 +7877,35 @@ mod tests {
             )))),
             lsn: Lsn(lsn),
             payload: Bytes::copy_from_slice(&nblocks.to_le_bytes()),
+        }
+    }
+
+    /// A full batch's DELETE is a Tid Scan on a table nothing has ANALYZEd —
+    /// the state every universe starts in (#970).
+    #[tokio::test]
+    async fn gc_sweep_delete_plans_a_tid_scan() {
+        let (store, _schema) = make_store("gc_sweep_plan").await;
+        let ids: Vec<Vec<u8>> = (0..GC_SWEEP_MAX_ROWS_PER_DELETE as u64)
+            .map(|i| i.to_be_bytes().to_vec())
+            .collect();
+        for table in ["pages", "meta"] {
+            let plan = store
+                .ysql_client
+                .query(
+                    &format!("EXPLAIN {}", store.gc_sweep_delete_sql(table)),
+                    &[&ids],
+                )
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get::<_, String>(0))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                plan.contains("Tid Scan"),
+                "{table}: DELETE of {} ybctids is not a Tid Scan:\n{plan}",
+                ids.len()
+            );
         }
     }
 

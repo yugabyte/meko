@@ -1293,7 +1293,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetString("stress.backing_disk_full.fill", ""); got != "all" {
 		t.Errorf("stress.backing_disk_full.fill = %q, want all", got)
 	}
-	if got := cfg.GetStringSlice("functional.backing_contract.settings", nil); strings.Join(got, ",") != "guc:yb_enable_cbo=on,gflag:ysql_enable_auto_analyze=true" {
+	if got := cfg.GetStringSlice("functional.backing_contract.settings", nil); strings.Join(got, ",") != "guc:yb_enable_cbo=on,gflag:ysql_enable_auto_analyze=true,guc:pg_hint_plan.enable_hint=on" {
 		t.Errorf("functional.backing_contract.settings = %v", got)
 	}
 	if got := cfg.GetDuration("functional.failed_create_reclaim.sweep_timeout", -1); got != 45*time.Minute {

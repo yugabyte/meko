@@ -235,6 +235,10 @@ type GCConfig struct {
 // mirrors its default, and a deployment that raises one should raise both.
 const defaultGCRetention = 24 * time.Hour
 
+// Exported because branchgc's plan test must EXPLAIN the batch size production
+// uses: below ~27 ids a Tid Scan wins on cost alone and the test proves nothing (#970).
+const DefaultBranchGCRowsPerDelete = 5000
+
 var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // dns1123Re matches a Kubernetes DNS-1123 label (lowercase alphanumeric and
@@ -272,7 +276,7 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.BranchGC.Enabled, "branch-gc", envBool("AMP_BRANCH_GC", true), "run the branch-drop reaper: reclaim a dropped branch's amp_storage rows once its retention window has passed")
 	fs.DurationVar(&c.BranchGC.Interval, "branch-gc-interval", envDuration("AMP_BRANCH_GC_INTERVAL", 30*time.Second), "branch-drop reaper base tick cadence; the loop adapts around it — interval/6 while a reap is capped by its row budget, doubling to 8x while nothing is due (see internal/branchgc)")
 	fs.DurationVar(&c.BranchGC.Retention, "branch-gc-retention", envDuration("AMP_BRANCH_GC_RETENTION", defaultGCRetention), "how long a dropped branch's data is kept before it is reclaimed; measured from the drop and stamped into reap_after by the reaper, so a change moves only deadlines not yet stamped")
-	fs.IntVar(&c.BranchGC.RowsPerDelete, "branch-gc-rows-per-delete", envInt("AMP_BRANCH_GC_ROWS_PER_DELETE", 5000), "at most this many rows are named by one DELETE, so no reap is one large distributed transaction")
+	fs.IntVar(&c.BranchGC.RowsPerDelete, "branch-gc-rows-per-delete", envInt("AMP_BRANCH_GC_ROWS_PER_DELETE", DefaultBranchGCRowsPerDelete), "at most this many rows are named by one DELETE, so no reap is one large distributed transaction")
 	fs.IntVar(&c.BranchGC.RowsPerTick, "branch-gc-rows-per-tick", envInt("AMP_BRANCH_GC_ROWS_PER_TICK", 20000), "pacing budget: at most this many rows are deleted by one reaper tick, across every branch and table it touches")
 
 	d := &c.Deploy

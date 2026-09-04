@@ -55,7 +55,9 @@ Reaping a large branch is a write flood aimed at the same six `pages` / `wals`
 tablets live branches ingest into, so every batch is bounded — a key-only SELECT
 that yields `ybctid`s, then one `DELETE ... WHERE ybctid = ANY(...)`, resuming from
 a cursor so it never re-walks the tombstones it just wrote — and every tick has a
-row budget, so a big branch drains over many ticks.
+row budget, so a big branch drains over many ticks. The DELETE carries a `TidScan`
+hint; the controller doc below has the why
+([#970](https://github.com/yugabyte/meko/issues/970)).
 Cadence, pacing knobs and the operator's triage query:
 [`controller/architecture/sc-integration.md`](../../controller/architecture/sc-integration.md#branch-drop-gc)
 and [`runbooks/controller_runbook.md`](../../runbooks/controller_runbook.md).

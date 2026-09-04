@@ -143,7 +143,17 @@ permanently among the oldest.
 
 A batch is a **key-only SELECT that yields `ybctid`s, then one
 `DELETE ... WHERE ybctid = ANY(...)`**. `ybctid` is the DocDB row key, so the
-delete is a direct point lookup per row and scans nothing itself.
+delete is a direct point lookup per row and scans nothing itself. The DELETE
+carries a `/*+ TidScan(<table>) */` hint: YB costs a table that was never
+`ANALYZE`d (`reltuples = -1`) as 1000 rows, so above ~27 ids the planner swapped
+the Tid Scan for a full scan — 20 minutes a batch on a 2-billion-row `pages`
+([#970](https://github.com/yugabyte/meko/issues/970)). The hint makes the plan
+independent of statistics, so an unanalyzed or stale table cannot flip it. It is a
+safety net, not a substitute for `ANALYZE` — auto-analyze is required on, which the
+QA contract below asserts separately.
+`pg_hint_plan` is on by default in YB; a universe that turns it off gets the
+planner's choice back, which the `features/backing_config_contract` QA test
+catches by asserting `pg_hint_plan.enable_hint`.
 
 The SELECT resumes from a **cursor**, which is what keeps a reap linear. Without
 one, every batch restarts at the beginning of the branch's key range and

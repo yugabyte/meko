@@ -205,12 +205,18 @@ func buildSteps() []step {
 			st := step{spec: spec, bucket: bucket}
 			st.initSelectSQL = spec.selectSQL(false)
 			st.resumeSelectSQL = spec.selectSQL(true)
-			st.deleteSQL = fmt.Sprintf(
-				"DELETE FROM amp_storage.%s WHERE ybctid = ANY($1::bytea[])", spec.table)
+			st.deleteSQL = spec.deleteSQL()
 			p = append(p, st)
 		}
 	}
 	return p
+}
+
+// TidScan hint: a never-ANALYZEd table is costed as 1000 rows, and the planner drops the
+// Tid Scan for a full scan above ~27 ids (#970).
+func (s tableSpec) deleteSQL() string {
+	return fmt.Sprintf("/*+ TidScan(%s) */ DELETE FROM amp_storage.%s WHERE ybctid = ANY($1::bytea[])",
+		s.table, s.table)
 }
 
 // orderBy is the full ORDER BY: the cursor columns, then whatever sorts below

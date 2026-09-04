@@ -351,9 +351,12 @@ functional:
   # backing_contract pins the YugabyteDB settings AMP's storage schema depends
   # on, as source:name=value; guc: reads pg_settings on the amp storage database,
   # gflag: reads a tserver's /varz (meko#970: auto analyze off left
-  # amp_storage.pages unanalyzed and GC deletes planned as 20-minute SeqScans).
+  # amp_storage.pages unanalyzed and GC deletes planned as 20-minute SeqScans,
+  # and the GC deletes now carry a TidScan hint that pg_hint_plan must honour).
+  # This list overrides defaultBackingContract in backing_config_contract.go;
+  # keep the two in step.
   backing_contract:
-    settings: ["guc:yb_enable_cbo=on", "gflag:ysql_enable_auto_analyze=true"]
+    settings: ["guc:yb_enable_cbo=on", "gflag:ysql_enable_auto_analyze=true", "guc:pg_hint_plan.enable_hint=on"]
   # failed_create_reclaim: sweep_timeout bounds how long the orphan sweeper may
   # take to remove a failed-create endpoint. The controller leaves an orphan alone
   # for gc-grace (30m) so a fresh failure can be inspected, then sweeps every

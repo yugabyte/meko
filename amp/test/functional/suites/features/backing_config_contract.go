@@ -18,7 +18,14 @@ import (
 // defaultBackingContract is the settings AMP relies on the foundation for:
 // "guc:" entries are read from pg_settings, "gflag:" entries from a tserver's
 // /varz (the auto analyze service is a tserver flag with no GUC mirror).
-var defaultBackingContract = []string{"guc:yb_enable_cbo=on", "gflag:ysql_enable_auto_analyze=true"}
+var defaultBackingContract = []string{
+	"guc:yb_enable_cbo=on",
+	"gflag:ysql_enable_auto_analyze=true",
+	// The GC deletes by ybctid carry a TidScan hint; with hints off they plan as
+	// SeqScans again. The plan itself is asserted where the statement is built
+	// (controller branchgc + pageserver page_store tests), not from a copy here.
+	"guc:pg_hint_plan.enable_hint=on",
+}
 
 // backingKubeEnv is the standing env's handle on the backing namespace.
 type backingKubeEnv interface {
@@ -35,7 +42,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Assert the backing YugabyteDB carries the settings AMP's storage schema depends on: the cost-based optimizer on (pg_settings on the amp storage database) and the auto analyze service on (a tserver's /varz).",
+		Description: "Assert the backing YugabyteDB carries the settings AMP's storage schema depends on: the cost-based optimizer and pg_hint_plan on (pg_settings on the amp storage database) and the auto analyze service on (a tserver's /varz).",
 		Params:      []string{"functional.backing_contract", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runBackingConfigContract,
 	})
@@ -102,33 +109,8 @@ func (a *ampFeatureRun) backingConfigContract(ctx context.Context) error {
 			wrong = append(wrong, fmt.Sprintf("%s=%s, want %s", name, got, val))
 		}
 	}
-	if err := assertGCDeletePlan(ctx, db, a.f.logf); err != nil {
-		wrong = append(wrong, err.Error())
-	}
 	if len(wrong) > 0 {
 		return fmt.Errorf("the backing YugabyteDB is not configured the way AMP depends on (meko#970: auto analyze off left amp_storage.pages unanalyzed and GC deletes planned as 20-minute SeqScans): %s", strings.Join(wrong, "; "))
-	}
-	return nil
-}
-
-// assertGCDeletePlan is the meko#970 symptom itself: the branch-drop reaper's
-// delete by ybctid must plan as a point delete, never a scan of the whole table.
-func assertGCDeletePlan(ctx context.Context, db sqlConn, logf func(string, ...any)) error {
-	n, err := db.QueryInt(ctx, "SELECT count(*) FROM pg_tables WHERE schemaname = 'amp_storage' AND tablename = 'pages'")
-	if err != nil {
-		return fmt.Errorf("look for amp_storage.pages: %w", err)
-	}
-	if n == 0 {
-		logf("backing_config_contract: no amp_storage.pages table on this storage database, so the GC delete plan is not judged")
-		return nil
-	}
-	plan, err := db.QueryString(ctx, "EXPLAIN (FORMAT JSON) DELETE FROM amp_storage.pages WHERE ybctid = ANY(ARRAY['\\x0102'::bytea, '\\x0304'::bytea])")
-	if err != nil {
-		return fmt.Errorf("explain the GC delete: %w", err)
-	}
-	logf("backing_config_contract: GC delete plan: %s", plan)
-	if strings.Contains(plan, "Seq Scan") {
-		return fmt.Errorf("DELETE FROM amp_storage.pages WHERE ybctid = ANY(...) plans as a Seq Scan (%s); the branch-drop reaper deletes 5000 rows per batch this way and each batch took 20 minutes on the dev foundation", plan)
 	}
 	return nil
 }

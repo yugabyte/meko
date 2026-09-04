@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/yugabyte/amp/controller/internal/config"
 	"github.com/yugabyte/amp/controller/internal/core"
@@ -754,5 +755,26 @@ func TestPgStampsReapDeadlines(t *testing.T) {
 	if got, _ := window(branchID); got != retention {
 		t.Errorf("a retention change moved an already-stamped deadline to + %s, want + %s",
 			got, retention)
+	}
+}
+
+// TestPgDeletePlansTidScan: a full batch's DELETE is a Tid Scan on every table, on
+// a database nothing has ANALYZEd — the state every universe starts in (#970).
+func TestPgDeletePlansTidScan(t *testing.T) {
+	pool := migratedPool(t)
+	ids := make([][]byte, config.DefaultBranchGCRowsPerDelete)
+	for i := range ids {
+		id := uuid.New()
+		ids[i] = id[:]
+	}
+	for _, spec := range specs {
+		rows, _ := pool.Query(t.Context(), "EXPLAIN "+spec.deleteSQL(), ids)
+		plan, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatalf("explain %s: %v", spec.table, err)
+		}
+		if p := strings.Join(plan, "\n"); !strings.Contains(p, "Tid Scan") {
+			t.Errorf("%s: DELETE of %d ybctids is not a Tid Scan:\n%s", spec.table, len(ids), p)
+		}
 	}
 }
