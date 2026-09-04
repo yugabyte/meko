@@ -1185,6 +1185,13 @@ pub const GC_BUCKETS: i32 = 3;
 /// `pageserver:gc` pool is sized to this.
 pub const GC_ACTION_PARALLELISM: usize = 1;
 
+/// Bars a merge join in the GC trim statements — the shape that wedged the
+/// drain by materialising the DELETE's own scan (#1133). Not a general spill
+/// guard; the per-statement bounds are what bound the damage, and
+/// [`PageStore::gc_trim_blocks_sql`] carries the reasoning. Shared so the
+/// three statements cannot drift.
+const GC_TRIM_MERGEJOIN_HINT: &str = "/*+ Set(enable_mergejoin off) */";
+
 /// Encode a `Key` to its fixed 18-byte wire form — the `pending_gc.key`
 /// (and `meta.key`) bytea.
 pub(crate) fn key_to_bytes(key: &Key) -> Vec<u8> {
@@ -3018,6 +3025,48 @@ impl PageStore {
         Ok(removed)
     }
 
+    /// The `pages` trim statement, split out so a test can EXPLAIN it.
+    ///
+    /// `$8`=bucket_id, on both the anchor CTE and the DELETE — each is its
+    /// own scan of `pages` and needs the leading key column bound.
+    ///
+    /// Trap: the hint is load-bearing and fails silently. Nothing else would
+    /// notice it being dropped — the statement stays correct and reverts to
+    /// the merge join that wedged the drain (#1133; the numbers and the why
+    /// are in `compute/architecture/pageserver-gc.md`). #884 would remove the
+    /// `GROUP BY` whose misestimate makes that plan look cheap, and so retire
+    /// the hint, but is gated on its anchor-trust correctness trade.
+    ///
+    /// The hint is not a general spill guard. A hash join spills its build
+    /// side to the same `temp_file_limit`; what keeps that safe is the anchor
+    /// being the smaller side, so it is the side hashed. Should the estimates
+    /// ever invert and `p` become the build side, a deep fork would spill
+    /// again — the `blknum`/`lsn` bounds are what bound the damage.
+    fn gc_trim_blocks_sql(&self) -> String {
+        format!(
+            "{hint} WITH anchor AS ( \
+                 SELECT blknum, MAX(lsn) AS lsn \
+                 FROM \"{schema}\".pages \
+                 WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+                   AND relnode=$4 AND forknum=$5 \
+                   AND blknum = ANY($6) \
+                   AND lsn <= $7 AND will_init \
+                 GROUP BY blknum \
+             ) \
+             DELETE FROM \"{schema}\".pages p \
+             USING anchor a \
+             WHERE p.bucket_id=$8 AND p.branch_id=$1 AND p.spcnode=$2 AND p.dbnode=$3 \
+               AND p.relnode=$4 AND p.forknum=$5 \
+               AND p.blknum = ANY($6) \
+               AND p.lsn <= $7 \
+               AND p.blknum = a.blknum \
+               AND (p.lsn < a.lsn \
+                 OR (p.lsn = a.lsn AND NOT p.will_init))",
+            schema = self.schema,
+            hint = GC_TRIM_MERGEJOIN_HINT
+        )
+    }
+
     /// Trim one fork's listed blocks: per block, keep the newest base
     /// (`will_init`) <= CUTOFF plus everything above; delete below,
     /// incl. same-LSN non-base twins. Greedy to the cutoff (not
@@ -3049,27 +3098,7 @@ impl PageStore {
         if blknums.is_empty() {
             return Ok(0);
         }
-        // `$8`=bucket_id, on both the anchor CTE and the DELETE — each is its
-        // own scan of `pages` and needs the leading key column bound.
-        let sql = format!(
-            "WITH anchor AS ( \
-                 SELECT blknum, MAX(lsn) AS lsn \
-                 FROM \"{schema}\".pages \
-                 WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
-                   AND relnode=$4 AND forknum=$5 \
-                   AND blknum = ANY($6) \
-                   AND lsn <= $7 AND will_init \
-                 GROUP BY blknum \
-             ) \
-             DELETE FROM \"{schema}\".pages p \
-             USING anchor a \
-             WHERE p.bucket_id=$8 AND p.branch_id=$1 AND p.spcnode=$2 AND p.dbnode=$3 \
-               AND p.relnode=$4 AND p.forknum=$5 \
-               AND p.blknum = a.blknum \
-               AND (p.lsn < a.lsn \
-                 OR (p.lsn = a.lsn AND NOT p.will_init))",
-            schema = self.schema
-        );
+        let sql = self.gc_trim_blocks_sql();
         // Candidate blocks are an arbitrary set, so they can straddle buckets:
         // group them and issue one bucket-pinned DELETE per group. Each block's
         // anchor is computed within its own bucket, which is where all of that
@@ -3435,6 +3464,32 @@ impl PageStore {
         Ok(deleted)
     }
 
+    /// The `slru_pages` trim statement — same plan pinning as
+    /// [`Self::gc_trim_blocks_sql`], and split out for the same test. Latent
+    /// rather than live here: a segment caps at 32 blocks, so the unbounded
+    /// scan stays small. Kept identical so the two don't drift.
+    fn gc_trim_slru_sql(&self) -> String {
+        format!(
+            "{hint} WITH anchor AS ( \
+                 SELECT blknum, MAX(lsn) AS lsn \
+                 FROM \"{schema}\".slru_pages \
+                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
+                   AND blknum = ANY($4) AND lsn <= $5 AND will_init \
+                 GROUP BY blknum \
+             ) \
+             DELETE FROM \"{schema}\".slru_pages p \
+             USING anchor a \
+             WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
+               AND p.blknum = ANY($4) \
+               AND p.lsn <= $5 \
+               AND p.blknum = a.blknum \
+               AND (p.lsn < a.lsn \
+                 OR (p.lsn = a.lsn AND NOT p.will_init))",
+            schema = self.schema,
+            hint = GC_TRIM_MERGEJOIN_HINT
+        )
+    }
+
     /// Trim action for one SLRU segment's listed blocks: per block, keep
     /// the newest base (`will_init`) `<= cutoff` plus everything above;
     /// delete below. Single-tablet (`branch_id` is the hash key and
@@ -3451,22 +3506,7 @@ impl PageStore {
         if blknums.is_empty() {
             return Ok(0);
         }
-        let sql = format!(
-            "WITH anchor AS ( \
-                 SELECT blknum, MAX(lsn) AS lsn \
-                 FROM \"{schema}\".slru_pages \
-                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
-                   AND blknum = ANY($4) AND lsn <= $5 AND will_init \
-                 GROUP BY blknum \
-             ) \
-             DELETE FROM \"{schema}\".slru_pages p \
-             USING anchor a \
-             WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
-               AND p.blknum = a.blknum \
-               AND (p.lsn < a.lsn \
-                 OR (p.lsn = a.lsn AND NOT p.will_init))",
-            schema = self.schema
-        );
+        let sql = self.gc_trim_slru_sql();
         self.ysql_client
             .execute(
                 &sql,
@@ -3515,6 +3555,28 @@ impl PageStore {
         Ok(deleted)
     }
 
+    /// The `meta` trim statement — same plan pinning as
+    /// [`Self::gc_trim_blocks_sql`], and split out for the same test. The
+    /// least bound of the three without it: `m`'s scan would carry only
+    /// `branch_id`, so a merge join materialises the branch's whole `meta`
+    /// table.
+    fn gc_trim_meta_sql(&self) -> String {
+        format!(
+            "{hint} WITH anchor AS ( \
+                 SELECT key, MAX(lsn) AS lsn \
+                 FROM \"{schema}\".meta \
+                 WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3 \
+                 GROUP BY key \
+             ) \
+             DELETE FROM \"{schema}\".meta m \
+             USING anchor a \
+             WHERE m.branch_id=$1 AND m.key = ANY($2::bytea[]) AND m.lsn <= $3 \
+               AND m.key = a.key AND m.lsn < a.lsn",
+            schema = self.schema,
+            hint = GC_TRIM_MERGEJOIN_HINT
+        )
+    }
+
     /// Trim action for `meta` keys: per key keep the newest version
     /// `<= cutoff`, delete everything below it. `meta` is full-overwrite
     /// (no `will_init`/chain), so the anchor is just each key's newest
@@ -3532,18 +3594,7 @@ impl PageStore {
         if keys.is_empty() {
             return Ok(0);
         }
-        let sql = format!(
-            "WITH anchor AS ( \
-                 SELECT key, MAX(lsn) AS lsn \
-                 FROM \"{schema}\".meta \
-                 WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3 \
-                 GROUP BY key \
-             ) \
-             DELETE FROM \"{schema}\".meta m \
-             USING anchor a \
-             WHERE m.branch_id=$1 AND m.key = a.key AND m.lsn < a.lsn",
-            schema = self.schema
-        );
+        let sql = self.gc_trim_meta_sql();
         self.ysql_client
             .execute(&sql, &[&branch_id, &keys, &(cutoff.0 as i64)])
             .await
@@ -7889,22 +7940,98 @@ mod tests {
             .map(|i| i.to_be_bytes().to_vec())
             .collect();
         for table in ["pages", "meta"] {
-            let plan = store
-                .ysql_client
-                .query(
-                    &format!("EXPLAIN {}", store.gc_sweep_delete_sql(table)),
-                    &[&ids],
-                )
-                .await
-                .unwrap()
-                .iter()
-                .map(|r| r.get::<_, String>(0))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let plan = explain(&store, &store.gc_sweep_delete_sql(table), &[&ids]).await;
             assert!(
                 plan.contains("Tid Scan"),
                 "{table}: DELETE of {} ybctids is not a Tid Scan:\n{plan}",
                 ids.len()
+            );
+        }
+    }
+
+    /// Capture a statement's plan as text. Shared by the plan-shape tests —
+    /// they assert on node names, so the whole plan is joined into one string.
+    async fn explain(
+        store: &PageStore,
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> String {
+        store
+            .ysql_client
+            .query(&format!("EXPLAIN {sql}"), params)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<_, String>(0))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The three trims must never plan a merge join — see
+    /// [`PageStore::gc_trim_blocks_sql`] for why (#1133).
+    ///
+    /// Asserts the join method, not the absence of a `Materialize`: the
+    /// tuplestore is a *consequence* of the merge join, and a `Materialize`
+    /// over the small anchor side is harmless (plans with exactly that have
+    /// been observed), so matching the node name would fail correct plans.
+    ///
+    /// The hint-string assertion is the load-bearing half: an EXPLAIN against
+    /// a table this small picks a safe plan on its own, so the plan check
+    /// catches `enable_hint=off` and a malformed hint, not a deleted one. The
+    /// literal is spelled out here on purpose — asserting the constant would
+    /// pass a typo in it.
+    #[tokio::test]
+    async fn gc_trims_never_plan_a_merge_join() {
+        let (store, _schema) = make_store("gc_trim_plan").await;
+        let branch = BranchId::generate();
+        let oid: i64 = 1;
+        let fork: i16 = 0;
+        let blknums: Vec<i64> = vec![0, 1];
+        let lsn: i64 = 1;
+        let bucket: i16 = 0;
+        let keys: Vec<Vec<u8>> = vec![vec![0u8; KEY_SIZE]];
+
+        type Params<'a> = Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>;
+        // Each DELETE's own key and lsn bounds, which the join predicate does
+        // not supply under a hash join — the half that keeps the scan tight
+        // whatever the plan, so the half worth asserting by text.
+        let cases: Vec<(&str, String, Params, [&str; 2])> = vec![
+            (
+                "pages",
+                store.gc_trim_blocks_sql(),
+                vec![&branch, &oid, &oid, &oid, &fork, &blknums, &lsn, &bucket],
+                ["p.blknum = ANY($6)", "p.lsn <= $7"],
+            ),
+            (
+                "slru_pages",
+                store.gc_trim_slru_sql(),
+                vec![&branch, &fork, &oid, &blknums, &lsn],
+                ["p.blknum = ANY($4)", "p.lsn <= $5"],
+            ),
+            (
+                "meta",
+                store.gc_trim_meta_sql(),
+                vec![&branch, &keys, &lsn],
+                ["m.key = ANY($2::bytea[])", "m.lsn <= $3"],
+            ),
+        ];
+
+        for (label, sql, params, bounds) in cases {
+            assert!(
+                sql.contains("Set(enable_mergejoin off)"),
+                "{label}: trim statement lost its merge-join bar:\n{sql}"
+            );
+            for bound in bounds {
+                assert!(
+                    sql.contains(bound),
+                    "{label}: DELETE lost its `{bound}` bound, so its scan is \
+                     no longer tight under a hash join:\n{sql}"
+                );
+            }
+            let plan = explain(&store, &sql, &params).await;
+            assert!(
+                !plan.contains("Merge Join"),
+                "{label}: trim plans a Merge Join:\n{plan}"
             );
         }
     }

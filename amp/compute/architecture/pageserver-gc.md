@@ -392,9 +392,23 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    per-block semantics are unchanged), while `gc_act_shrink_fork` covers a
    fork's whole truncated suffix — length unknown at that point — and so loops
    over all `PAGE_BUCKETS`. Each returns the summed row count.
+
    `slru_pages` and `meta` need no fan-out: `branch_id` is their whole hash
    key, so binding the branch (which every act does) already bounds the
    statement to one tablet.
+
+   All three trims bind the rest of their key on the DELETE as well as in the
+   anchor — the block or key set, and `lsn` to the cutoff — and bar a merge
+   join with a `pg_hint_plan` `Set`. The join predicate alone bounds the scan
+   only under a nested loop; a merge join instead materialises the DELETE's
+   own scan into a tuplestore and blows `temp_file_limit`, which wedged GC for
+   45 consecutive ticks on a Temporal deployment. The anchor's `GROUP BY`
+   cardinality is not estimable (PG ignores the `= ANY(array)` cap), so the
+   plan has to be pinned rather than costed.
+
+   The bounds, not the hint, are what make that safe in general: a hash join
+   spills its build side to the same `temp_file_limit`, and only the anchor
+   being the smaller side keeps it off the DELETE's scan.
 
    All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue**, not from the delete.
