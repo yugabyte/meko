@@ -5,6 +5,17 @@ name: Meko CI
 #                     golangci-lint (non-blocking for now), then `go test ./...`.
 #                     Tests are mocked; the few DB-backed tests self-skip when no
 #                     YugabyteDB is present, so no database is needed in CI.
+#   meko_migration_versions — checks migration files this PR adds/renumbers against
+#                     main's tip: version+direction collisions (with main and with
+#                     this PR's own other added files), version-sequence gaps, and
+#                     every version having both an up.sql and a down.sql. Fires only
+#                     when internal/db/migrations/** changes.
+#   meko_migrations_recheck — push-to-main only: when main's own migrations change,
+#                     re-runs meko_migration_versions (and so meko_ci_gate) on every
+#                     other open PR that also touches migrations, so a PR whose check
+#                     already passed doesn't merge on a now-stale result. Excluded
+#                     from meko_ci_gate since it never runs on the pull_request event
+#                     that gate is evaluated on.
 #   meko_inference  — inference_gateway (Python): install with the dev extra, run
 #                     pytest. All upstream (LLM / MCP) calls are mocked — no creds.
 #   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
@@ -39,6 +50,14 @@ concurrency:
 permissions:
   contents: read
 
+# The anchor makes meko_migration_versions's `name:` and
+# meko_migrations_recheck's job-lookup string the same literal value at YAML
+# parse time -- meko_migrations_recheck finds the other job by matching this
+# name against the GitHub API's job list, which has no other handle back to
+# a specific job in this file, so the two can't be allowed to drift apart.
+env:
+  MEKO_MIGRATION_CHECK_JOB_NAME: &migration_check_job_name "Meko API Server — migration version check"
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -47,6 +66,7 @@ jobs:
       pull-requests: read
     outputs:
       meko_api_server: ${{ steps.filter.outputs.meko_api_server }}
+      meko_migrations: ${{ steps.filter.outputs.meko_migrations }}
       meko_inference: ${{ steps.filter.outputs.meko_inference }}
       meko_ui: ${{ steps.filter.outputs.meko_ui }}
       meko_ycp: ${{ steps.filter.outputs.meko_ycp }}
@@ -62,6 +82,15 @@ jobs:
             meko_api_server:
               - 'meko/api_server/**'
               - '.github/workflows/meko-pr-build.yml'
+            # Scoped narrower than meko_api_server: this job diffs against
+            # main and only cares about the migrations tree (plus the tool
+            # that checks it), not every api_server PR.
+            # Unlike every other filter here, this one deliberately omits
+            # the workflow file itself: meko_migration_versions should only
+            # fire when the migrations folder is touched, not on every edit
+            # to this file (most of which are unrelated to it).
+            meko_migrations:
+              - 'meko/api_server/internal/db/migrations/**'
             meko_inference:
               - 'meko/inference_gateway/**'
               - '.github/workflows/meko-pr-build.yml'
@@ -166,6 +195,118 @@ jobs:
       # YugabyteDB is reachable, so this runs without a database.
       - name: Tests
         run: go test ./...
+
+  # A PR branch cut before some other, already-merged PR added its own
+  # same-numbered migration to main never has both files in its own history
+  # — nothing collides within that branch's tree — yet the two land on main
+  # together the moment this PR merges. internal/db/migrations/checkmigrations
+  # catches that by diffing this branch against main's tip fetched fresh in
+  # this job, not whatever commit the PR's merge-ref happened to snapshot
+  # when the run started.
+  meko_migration_versions:
+    name: *migration_check_job_name
+    needs: changes
+    if: needs.changes.outputs.meko_migrations == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: meko/api_server
+    steps:
+      # Full history: merge-base needs to find where this branch actually
+      # diverged from main, which a shallow (default depth-1) checkout of
+      # just the PR's merge-ref can't answer.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: meko/api_server/go.mod
+          cache-dependency-path: meko/api_server/go.sum
+
+      - name: Fetch main's current tip
+        run: git fetch origin main
+
+      - name: Check migration versions against main
+        # No path argument: checkmigrations' own default is already
+        # repo-root-relative ("meko/api_server/internal/db/migrations"), and
+        # this step's working-directory is meko/api_server -- passing a
+        # working-directory-relative path here would resolve to nothing
+        # under checkAgainstRef's `git -C <repo root>`, making every run a
+        # silent, always-passing no-op.
+        run: go run ./internal/db/migrations/checkmigrations origin/main
+
+  # meko_migration_versions above only re-checks a PR when the PR itself
+  # pushes. If PR A merges a migration after PR B (open since before that,
+  # also touching migrations) already passed its own check, B's result goes
+  # stale -- nothing re-runs it, and the ruleset does not require branches to
+  # be up to date before merging. Push-triggered only: whenever main's own
+  # migrations change, re-run meko_migration_versions on every other open PR
+  # that also touches migrations, so its result reflects the new main instead
+  # of whatever main looked like at B's last push. A job rerun cascades to
+  # whatever depends on it, so this also re-runs meko_ci_gate -- the PR's
+  # actual required check updates, not just an internal job nobody reads.
+  # Also leaves a PR comment: a check rerun alone doesn't notify anyone the
+  # way a comment does, so B's author would otherwise only learn about a
+  # failure by noticing the Checks tab or trying to merge.
+  meko_migrations_recheck:
+    name: Meko API Server — re-check open PRs' migration versions
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.meko_migrations == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Re-run the migration version check on every open PR touching migrations
+        run: |
+          set -euo pipefail
+
+          prs=$(gh pr list --repo "$REPO" --state open --json number,headRefName --jq '.[] | @base64')
+
+          for row in $prs; do
+            pr=$(echo "$row" | base64 -d | jq -r '.number')
+            branch=$(echo "$row" | base64 -d | jq -r '.headRefName')
+
+            # .sql specifically, not the whole folder: it also holds the
+            # checkmigrations tool and its tests, and a PR that only touched
+            # those has no added/renamed migration for a collision to hide
+            # in, so there's nothing here worth re-checking or commenting on.
+            files=$(gh api --method GET "repos/$REPO/pulls/$pr/files" --paginate --jq '.[].filename')
+            if ! grep -qE '^meko/api_server/internal/db/migrations/.*\.sql$' <<<"$files"; then
+              continue
+            fi
+            echo "PR #$pr ($branch) touches migrations -- re-checking against the new main"
+
+            run_id=$(gh api --method GET "repos/$REPO/actions/workflows/meko-pr-build.yml/runs" \
+              -f event=pull_request -f branch="$branch" -f status=completed \
+              --jq '.workflow_runs[0].id // empty')
+            if [ -z "$run_id" ]; then
+              echo "  no completed meko-pr-build.yml run found for $branch yet, skipping"
+              continue
+            fi
+
+            job_id=$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" --paginate \
+              --jq ".jobs[] | select(.name == \"$MEKO_MIGRATION_CHECK_JOB_NAME\") | .id")
+            if [ -z "$job_id" ]; then
+              echo "  run $run_id has no migration version check job (filter was false then), skipping"
+              continue
+            fi
+
+            gh api -X POST "repos/$REPO/actions/jobs/$job_id/rerun"
+
+            # A rerun alone only flips a check in the PR's Checks tab --
+            # nothing pings the author the way a PR comment does. Post one
+            # so a failure here isn't discovered only when they try to merge.
+            comment_body=$(printf "main's migrations changed since this PR's last CI run, so the migration version check is being re-run against the new main:\n%s\n\nIf it fails, another PR claimed a version number this PR also used -- rebase onto main and renumber to the next free version." \
+              "https://github.com/$REPO/actions/runs/$run_id/job/$job_id")
+            gh pr comment "$pr" --repo "$REPO" --body "$comment_body"
+          done
 
   meko_inference:
     name: Meko Inference Gateway — tests
@@ -308,6 +449,7 @@ jobs:
     needs:
       - changes
       - meko_api_server
+      - meko_migration_versions
       - meko_inference
       - meko_ui
       - meko_ycp
@@ -321,3 +463,7 @@ jobs:
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
+          # Push-only (see its own comment above): always skipped on the
+          # pull_request event this gate itself runs on, so it can never
+          # contribute a real result to this PR's own gate.
+          exclude: meko_migrations_recheck

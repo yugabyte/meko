@@ -81,6 +81,10 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
 - Migrations live in `internal/db/migrations/{system,data}` and run on startup.
   Enums can't drop values in place — swap to a fresh type (see
   `000008_standard_tier`: create `_v2`, rebind columns, drop old, rename).
+- A new migration's version must extend main's current highest by exactly +1
+  in its directory, and ship both an `up.sql` and a `down.sql` — CI's
+  `meko_migration_versions` job blocks a PR that doesn't. Check locally before
+  pushing: `go run ./internal/db/migrations/checkmigrations origin/main`.
 
 ## Conventions
 
