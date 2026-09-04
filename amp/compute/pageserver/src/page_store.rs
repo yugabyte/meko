@@ -491,6 +491,7 @@ async fn run_batched_block_scan(
     client: &yb_thin_client::TsClient,
     table: &yb_thin_client::TableHandle,
     block_reads: &[(i64, yb_thin_client::RangeRead)],
+    stop: ScanStop,
     what: &str,
     op_label: impl Fn(usize) -> String,
 ) -> Result<Vec<Vec<yb_thin_client::Row>>> {
@@ -547,7 +548,7 @@ async fn run_batched_block_scan(
                 let got = res.rows.len();
                 feed_scan_rows(&mut collectors[i], res.rows)
                     .with_context(|| format!("thin-lane {what} for {}", op_label(i)))?;
-                if collectors[i].complete() {
+                if collectors[i].complete() || (stop == ScanStop::FirstRound && got > 0) {
                     continue;
                 }
                 if let Some(ps) = res.paging_state {
@@ -570,6 +571,74 @@ async fn run_batched_block_scan(
         }
     }
     unreachable!("the final scan attempt returns or propagates")
+}
+
+/// When an op of [`run_batched_block_scan`] stops paging.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanStop {
+    /// At its block's `will_init` anchor and tie group, however many rounds
+    /// that takes: the chain a page reconstruction needs.
+    Anchor,
+    /// After its first round that returns rows (the read's `limit` sizes it):
+    /// the top of the chain. A round with no rows but a continuation is
+    /// "nothing yet", not "nothing" — the tserver ran out of scan budget
+    /// (tombstones, deadline) before the first match — so it is followed.
+    FirstRound,
+}
+
+/// How much of each block's version chain an SLRU range read returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlruScan {
+    /// Back to the newest `will_init` anchor: what a page reconstruction needs.
+    ToAnchor,
+    /// At most the newest `n` versions, one round per block — a cap, not a
+    /// count: the round is also bounded by the tserver's own size and
+    /// deadline budget, so fewer than `n` can come back for a block that has
+    /// more. For a reader that decodes what it needs from the top of the
+    /// chain (a clog block's trailer is the `timestamp` of its newest commit
+    /// row) and never reconstructs the page; the result is not
+    /// anchor-complete and must not be fed to reconstruction.
+    NewestUpTo(u64),
+}
+
+impl SlruScan {
+    fn page_rows(self) -> u64 {
+        match self {
+            SlruScan::ToAnchor => DIRECT_SLRU_CHAIN_PAGE_ROWS,
+            SlruScan::NewestUpTo(n) => n,
+        }
+    }
+    fn stop(self) -> ScanStop {
+        match self {
+            SlruScan::ToAnchor => ScanStop::Anchor,
+            SlruScan::NewestUpTo(_) => ScanStop::FirstRound,
+        }
+    }
+    fn op_label(self) -> &'static str {
+        match self {
+            SlruScan::ToAnchor => "scan_slru_range",
+            SlruScan::NewestUpTo(_) => "scan_slru_newest",
+        }
+    }
+}
+
+/// Put a merged SLRU chain into result form: LSN-descending, image before
+/// delta on ties, one row per LSN, nothing below the newest `will_init`, and
+/// at most `n` rows for [`SlruScan::NewestUpTo`].
+///
+/// Every SLRU merge (two branch segments, or the writer's buffer with the
+/// store) goes through here. The tie order makes the dedup keep the image,
+/// which is the page after the equal-LSN delta; the dedup also collapses the
+/// same flushed delta seen from both buffer and store.
+pub(crate) fn merge_slru_chain(chain: &mut Vec<SlruPageRow>, mode: SlruScan) {
+    chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+    chain.dedup_by(|a, b| a.lsn == b.lsn);
+    if let Some(idx) = chain.iter().position(|r| r.will_init) {
+        chain.truncate(idx + 1);
+    }
+    if let SlruScan::NewestUpTo(n) = mode {
+        chain.truncate(n as usize);
+    }
 }
 
 /// Whole-scan restarts for a batched thin-lane block scan
@@ -1987,9 +2056,14 @@ impl PageStore {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let chains = run_batched_block_scan(&p.client, pages, &block_reads, "page scan", |i| {
-            format!("rel={rel} fork={fork} blk={}", block_reads[i].0)
-        })
+        let chains = run_batched_block_scan(
+            &p.client,
+            pages,
+            &block_reads,
+            ScanStop::Anchor,
+            "page scan",
+            |i| format!("rel={rel} fork={fork} blk={}", block_reads[i].0),
+        )
         .await?;
 
         let mut by_key = HashMap::with_capacity(chains.len());
@@ -2285,6 +2359,7 @@ impl PageStore {
         blk_lo: i64,
         blk_hi: i64,
         target: i64,
+        mode: SlruScan,
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
         use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
@@ -2302,14 +2377,19 @@ impl PageStore {
                         .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk))?
                         .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
                         .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
-                        .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS),
+                        .limit(mode.page_rows()),
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let chains = run_batched_block_scan(&p.client, slru, &block_reads, "slru scan", |i| {
-            format!("kind={kind:?} segno={segno_i} blk={}", block_reads[i].0)
-        })
+        let chains = run_batched_block_scan(
+            &p.client,
+            slru,
+            &block_reads,
+            mode.stop(),
+            "slru scan",
+            |i| format!("kind={kind:?} segno={segno_i} blk={}", block_reads[i].0),
+        )
         .await?;
 
         let mut by_block = HashMap::with_capacity(chains.len());
@@ -2332,7 +2412,8 @@ impl PageStore {
     /// Range scan over SLRU blocks in `range`. `range` must stay inside
     /// one `(kind, segno)` segment — that's how SLRU vectored reads are
     /// shaped today. Returns one entry per blknum, each chain
-    /// LSN-descending and truncated at the latest will_init row.
+    /// LSN-descending and truncated at the latest will_init row, or cut to at
+    /// most its newest `n` rows for [`SlruScan::NewestUpTo`].
     pub async fn scan_slru_range(
         &self,
         branch_id: BranchId,
@@ -2340,10 +2421,11 @@ impl PageStore {
         segno: u32,
         blknum_range: Range<u32>,
         target_lsn: Lsn,
+        mode: SlruScan,
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
         // Single-block fast path: delegate to read_slru_chain to skip
-        // the multi-block JOIN.
-        if blknum_range.end == blknum_range.start.saturating_add(1) {
+        // the multi-block JOIN. ToAnchor only — it reads the whole chain.
+        if mode == SlruScan::ToAnchor && blknum_range.end == blknum_range.start.saturating_add(1) {
             let chain = self
                 .read_slru_chain(branch_id, kind, segno, blknum_range.start, target_lsn)
                 .await?;
@@ -2363,13 +2445,16 @@ impl PageStore {
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
         let by_block = self
-            .scan_slru_range_thin(&p, branch_id, kind, kind_i, segno_i, blk_lo, blk_hi, target)
+            .scan_slru_range_thin(
+                &p, branch_id, kind, kind_i, segno_i, blk_lo, blk_hi, target, mode,
+            )
             .await?;
         crate::metrics::YB_STORE_OP_SECONDS
-            .with_label_values(&["scan_slru_range", "yb_thin_client"])
+            .with_label_values(&[mode.op_label(), "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
         Ok(by_block)
     }
+
     async fn put_slru_pages_thin(
         &self,
         p: &ThinClientTables,
@@ -3714,16 +3799,14 @@ impl PageStore {
             chain.extend(rows);
         }
         if lineage.len() > 1 {
-            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-            chain.dedup_by(|a, b| a.lsn == b.lsn);
-            if let Some(idx) = chain.iter().position(|r| r.will_init) {
-                chain.truncate(idx + 1);
-            }
+            merge_slru_chain(&mut chain, SlruScan::ToAnchor);
         }
         Ok(chain)
     }
 
-    /// Lineage-aware [`Self::scan_slru_range`].
+    /// Lineage-aware [`Self::scan_slru_range`]. Ancestor rows all lie below
+    /// the branch point, so after the merge the tip's rows lead and a
+    /// [`SlruScan::NewestUpTo`] cut keeps the newest overall.
     pub async fn scan_slru_range_lineage(
         &self,
         lineage: &[LineageSegment],
@@ -3731,37 +3814,36 @@ impl PageStore {
         segno: u32,
         blknum_range: Range<u32>,
         target_lsn: Lsn,
+        mode: SlruScan,
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
         let Some((first, rest)) = lineage.split_first() else {
             bail!("scan_slru_range_lineage: empty lineage");
         };
-        let mut out = self
-            .scan_slru_range(
-                first.branch_id,
+        // A segment is read at most up to its cap: the LSN at which the next
+        // segment branched off it.
+        let scan = async |branch_id, capped_lsn| {
+            self.scan_slru_range(
+                branch_id,
                 kind,
                 segno,
                 blknum_range.clone(),
-                std::cmp::min(target_lsn, first.cap_lsn),
+                capped_lsn,
+                mode,
             )
-            .await?;
+            .await
+        };
+        let mut out = scan(first.branch_id, std::cmp::min(target_lsn, first.cap_lsn)).await?;
         if rest.is_empty() {
             return Ok(out);
         }
         for seg in rest {
-            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            let anc = self
-                .scan_slru_range(seg.branch_id, kind, segno, blknum_range.clone(), eff)
-                .await?;
+            let anc = scan(seg.branch_id, std::cmp::min(target_lsn, seg.cap_lsn)).await?;
             for (blk, rows) in anc {
                 out.entry(blk).or_default().extend(rows);
             }
         }
         for chain in out.values_mut() {
-            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-            chain.dedup_by(|a, b| a.lsn == b.lsn);
-            if let Some(idx) = chain.iter().position(|r| r.will_init) {
-                chain.truncate(idx + 1);
-            }
+            merge_slru_chain(chain, mode);
         }
         Ok(out)
     }
@@ -6199,13 +6281,160 @@ mod tests {
 
         // And the range-scan variant sees the ancestor-only block.
         let scanned = store
-            .scan_slru_range_lineage(&lineage, SlruKind::Clog, 1, 0..4, Lsn(100))
+            .scan_slru_range_lineage(
+                &lineage,
+                SlruKind::Clog,
+                1,
+                0..4,
+                Lsn(100),
+                SlruScan::ToAnchor,
+            )
             .await
             .unwrap();
         assert_eq!(
             scanned[&0].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
             vec![30, 10]
         );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `SlruScan::NewestUpTo(n)`: at most the newest `n` rows per block, the
+    /// anchor trim still applied; `ToAnchor` on the same data is unchanged.
+    #[tokio::test]
+    async fn scan_slru_newest_caps_each_block() {
+        let (store, schema) = make_store("slru_newest").await;
+        let branch = rand_branch();
+        let row = |blk: u32, lsn: u64, is_image: bool, will_init: bool, pl: &[u8]| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 1,
+            blknum: blk,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::copy_from_slice(pl),
+        };
+        // blk 0: an image at 10 under six deltas; blk 1: the image is the
+        // newest row; blk 2: nothing.
+        store
+            .put_slru_pages(
+                branch,
+                &[
+                    row(0, 10, true, true, b"b0-img"),
+                    row(0, 20, false, false, b"b0-d20"),
+                    row(0, 30, false, false, b"b0-d30"),
+                    row(0, 40, false, false, b"b0-d40"),
+                    row(0, 50, false, false, b"b0-d50"),
+                    row(0, 60, false, false, b"b0-d60"),
+                    row(0, 70, false, false, b"b0-d70"),
+                    row(1, 40, false, false, b"b1-d40"),
+                    row(1, 50, true, true, b"b1-img"),
+                ],
+            )
+            .await
+            .unwrap();
+        let lsns = |chain: &Vec<SlruPageRow>| chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>();
+
+        let newest = store
+            .scan_slru_range(
+                branch,
+                SlruKind::Clog,
+                1,
+                0..3,
+                Lsn(1000),
+                SlruScan::NewestUpTo(3),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&newest[&0]), vec![70, 60, 50]);
+        assert_eq!(lsns(&newest[&1]), vec![50], "anchor trim still applies");
+        assert!(!newest.contains_key(&2));
+
+        let capped = store
+            .scan_slru_range(
+                branch,
+                SlruKind::Clog,
+                1,
+                0..1,
+                Lsn(45),
+                SlruScan::NewestUpTo(2),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&capped[&0]), vec![40, 30], "target bound then cap");
+
+        let chains = store
+            .scan_slru_range(
+                branch,
+                SlruKind::Clog,
+                1,
+                0..3,
+                Lsn(1000),
+                SlruScan::ToAnchor,
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&chains[&0]), vec![70, 60, 50, 40, 30, 20, 10]);
+        assert_eq!(lsns(&chains[&1]), vec![50]);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Lineage under `NewestUpTo(n)`: the tip's rows lead the ancestor's and the
+    /// cap applies to the merged chain, not per segment.
+    #[tokio::test]
+    async fn scan_slru_newest_lineage_tip_leads() {
+        let (store, schema) = make_store("slru_newest_lin").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        let row = |lsn: u64, is_image: bool, will_init: bool, pl: &[u8]| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 1,
+            blknum: 0,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::copy_from_slice(pl),
+        };
+        store
+            .put_slru_pages(
+                anc,
+                &[
+                    row(10, true, true, b"anc-img"),
+                    row(20, false, false, b"anc-d20"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    row(30, false, false, b"child-d30"),
+                    row(40, false, false, b"child-d40"),
+                ],
+            )
+            .await
+            .unwrap();
+        let lineage = lineage2(child, anc, 25);
+        let lsns = |chain: &Vec<SlruPageRow>| chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>();
+
+        for (n, want) in [
+            (3u64, vec![40, 30, 20]),
+            (1, vec![40]),
+            (10, vec![40, 30, 20, 10]),
+        ] {
+            let got = store
+                .scan_slru_range_lineage(
+                    &lineage,
+                    SlruKind::Clog,
+                    1,
+                    0..1,
+                    Lsn(100),
+                    SlruScan::NewestUpTo(n),
+                )
+                .await
+                .unwrap();
+            assert_eq!(lsns(&got[&0]), want, "NewestUpTo({n})");
+        }
         drop_schema(&store, &schema).await;
     }
 
@@ -6484,7 +6713,14 @@ mod tests {
         let got: Vec<&[u8]> = chain.iter().map(|r| r.payload.as_ref()).collect();
         assert_eq!(got, [b"s0-d20".as_ref(), b"s0-img".as_ref()]);
         let by_block = store
-            .scan_slru_range(branch, SlruKind::Clog, 1, 0..4, Lsn(1000))
+            .scan_slru_range(
+                branch,
+                SlruKind::Clog,
+                1,
+                0..4,
+                Lsn(1000),
+                SlruScan::ToAnchor,
+            )
             .await
             .unwrap();
         assert_eq!(by_block.len(), 2);

@@ -1060,7 +1060,13 @@ impl Timeline {
                 })?;
                 let blk_hi = range.end.field6;
                 let scan = page_writer
-                    .scan_slru_range(kind, segno, blk_lo..blk_hi, target_lsn)
+                    .scan_slru_range(
+                        kind,
+                        segno,
+                        blk_lo..blk_hi,
+                        target_lsn,
+                        crate::page_store::SlruScan::ToAnchor,
+                    )
                     .await
                     .map_err(|e| {
                         GetVectoredError::Other(anyhow!("SLRU scan_range failed: {e:#}"))

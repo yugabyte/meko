@@ -2157,6 +2157,29 @@ impl PageWriter {
         Ok(out)
     }
 
+    /// The SLRU buffer's rows for `blocks` of one `(kind, segno)` at or
+    /// below `target_lsn`: what a read must blend with the store, since the
+    /// buffer holds rows not yet flushed.
+    fn buffered_slru_rows(
+        &self,
+        kind: SlruKind,
+        segno: u32,
+        blocks: std::ops::Range<u32>,
+        target_lsn: Lsn,
+    ) -> Vec<SlruPageRow> {
+        let aux = self.aux.lock();
+        aux.slru_buffer
+            .iter()
+            .filter(|r| {
+                r.kind == kind
+                    && r.segno == segno
+                    && blocks.contains(&r.blknum)
+                    && r.lsn <= target_lsn
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Per-block SLRU chain read, blending the in-RAM SLRU buffer with
     /// PageStore. Used by the timeline's vectored read for SLRU keys.
     pub async fn read_slru_chain(
@@ -2166,26 +2189,14 @@ impl PageWriter {
         blknum: u32,
         target_lsn: Lsn,
     ) -> Result<Vec<SlruPageRow>> {
-        let mut buffered: Vec<SlruPageRow> = {
-            let aux = self.aux.lock();
-            aux.slru_buffer
-                .iter()
-                .filter(|r| {
-                    r.kind == kind && r.segno == segno && r.blknum == blknum && r.lsn <= target_lsn
-                })
-                .cloned()
-                .collect()
-        };
+        let mut chain = self.buffered_slru_rows(kind, segno, blknum..blknum + 1, target_lsn);
         let persisted = self
             .compute_page_store
             .read_slru_chain_lineage(&self.lineage, kind, segno, blknum, target_lsn)
             .await?;
-        buffered.extend(persisted);
-        buffered.sort_by(|a, b| b.lsn.cmp(&a.lsn));
-        if let Some(idx) = buffered.iter().position(|r| r.will_init) {
-            buffered.truncate(idx + 1);
-        }
-        Ok(buffered)
+        chain.extend(persisted);
+        crate::page_store::merge_slru_chain(&mut chain, crate::page_store::SlruScan::ToAnchor);
+        Ok(chain)
     }
 
     /// Range scan over an SLRU segment, blending buffered + persisted.
@@ -2196,34 +2207,24 @@ impl PageWriter {
         segno: u32,
         blknum_range: std::ops::Range<u32>,
         target_lsn: Lsn,
+        mode: crate::page_store::SlruScan,
     ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
-        let persisted = self
+        let mut out = self
             .compute_page_store
-            .scan_slru_range_lineage(&self.lineage, kind, segno, blknum_range.clone(), target_lsn)
+            .scan_slru_range_lineage(
+                &self.lineage,
+                kind,
+                segno,
+                blknum_range.clone(),
+                target_lsn,
+                mode,
+            )
             .await?;
-        let buffered: Vec<SlruPageRow> = {
-            let aux = self.aux.lock();
-            aux.slru_buffer
-                .iter()
-                .filter(|r| {
-                    r.kind == kind
-                        && r.segno == segno
-                        && r.blknum >= blknum_range.start
-                        && r.blknum < blknum_range.end
-                        && r.lsn <= target_lsn
-                })
-                .cloned()
-                .collect()
-        };
-        let mut out: std::collections::HashMap<u32, Vec<SlruPageRow>> = persisted;
-        for row in buffered {
+        for row in self.buffered_slru_rows(kind, segno, blknum_range, target_lsn) {
             out.entry(row.blknum).or_default().push(row);
         }
         for chain in out.values_mut() {
-            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn));
-            if let Some(idx) = chain.iter().position(|r| r.will_init) {
-                chain.truncate(idx + 1);
-            }
+            crate::page_store::merge_slru_chain(chain, mode);
         }
         Ok(out)
     }

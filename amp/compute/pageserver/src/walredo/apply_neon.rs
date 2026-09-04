@@ -8,10 +8,42 @@ use postgres_ffi::v18::nonrelfile_utils::{
     transaction_id_set_status,
 };
 use postgres_ffi::{BLCKSZ, pg_constants};
+use postgres_ffi_types::TimestampTz;
 use postgres_ffi_types::forknum::VISIBILITYMAP_FORKNUM;
 use tracing::*;
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
+
+/// The pageserver's own annotation on a clog page: the `timestamp` of the
+/// newest `ClogSetCommitted` applied to it, as [`CLOG_TRAILER_LEN`]
+/// big-endian bytes after the `BLCKSZ` of real page. Written here on redo and
+/// read back without redo by `find_lsn_for_timestamp`; nothing else knows
+/// the layout.
+pub(crate) const CLOG_TRAILER_LEN: usize = 8;
+
+/// Stamp `timestamp` as the page's trailer, replacing any existing one.
+/// `false` (page untouched) if the page is neither a bare block nor a block
+/// with a trailer.
+pub(crate) fn set_clog_trailer(page: &mut BytesMut, timestamp: TimestampTz) -> bool {
+    if page.len() == BLCKSZ as usize + CLOG_TRAILER_LEN {
+        page.truncate(BLCKSZ as usize);
+    }
+    if page.len() != BLCKSZ as usize {
+        return false;
+    }
+    page.extend_from_slice(&timestamp.to_be_bytes());
+    true
+}
+
+/// The page's trailer, if it carries one.
+pub(crate) fn clog_trailer(page: &[u8]) -> Option<TimestampTz> {
+    if page.len() != BLCKSZ as usize + CLOG_TRAILER_LEN {
+        return None;
+    }
+    let mut bytes = [0u8; CLOG_TRAILER_LEN];
+    bytes.copy_from_slice(&page[BLCKSZ as usize..]);
+    Some(TimestampTz::from_be_bytes(bytes))
+}
 
 /// Can this request be served by neon redo functions
 /// or we need to pass it to wal-redo postgres process?
@@ -142,13 +174,7 @@ pub(crate) fn apply_in_neon(
                 transaction_id_set_status(xid, pg_constants::TRANSACTION_STATUS_COMMITTED, page);
             }
 
-            // Append the timestamp
-            if page.len() == BLCKSZ as usize + 8 {
-                page.truncate(BLCKSZ as usize);
-            }
-            if page.len() == BLCKSZ as usize {
-                page.extend_from_slice(&timestamp.to_be_bytes());
-            } else {
+            if !set_clog_trailer(page, *timestamp) {
                 warn!(
                     "CLOG blk {} in seg {} has invalid size {}",
                     blknum,
@@ -278,4 +304,31 @@ pub(crate) fn apply_in_neon(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod clog_trailer_tests {
+    use super::{CLOG_TRAILER_LEN, clog_trailer, set_clog_trailer};
+    use bytes::BytesMut;
+    use postgres_ffi::BLCKSZ;
+
+    #[test]
+    fn round_trip_and_replace() {
+        let mut page = BytesMut::zeroed(BLCKSZ as usize);
+        assert_eq!(clog_trailer(&page), None);
+        assert!(set_clog_trailer(&mut page, 1_700_000_000_000_000));
+        assert_eq!(page.len(), BLCKSZ as usize + CLOG_TRAILER_LEN);
+        assert_eq!(clog_trailer(&page), Some(1_700_000_000_000_000));
+        assert!(set_clog_trailer(&mut page, 42));
+        assert_eq!(page.len(), BLCKSZ as usize + CLOG_TRAILER_LEN);
+        assert_eq!(clog_trailer(&page), Some(42));
+    }
+
+    #[test]
+    fn rejects_other_sizes() {
+        let mut short = BytesMut::zeroed(BLCKSZ as usize - 1);
+        assert!(!set_clog_trailer(&mut short, 1));
+        assert_eq!(short.len(), BLCKSZ as usize - 1);
+        assert_eq!(clog_trailer(&short), None);
+    }
 }

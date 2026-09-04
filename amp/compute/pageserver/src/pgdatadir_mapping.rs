@@ -48,12 +48,83 @@ use crate::metrics::{
 };
 use crate::page_server::timeline::{GetVectoredError, VersionedKeySpaceQuery};
 use crate::span::debug_assert_current_span_has_branch_id;
+use crate::walredo::apply_neon::clog_trailer;
 
 /// Max delta records appended to the AUX_FILES_KEY (for aux v1). The write path will write a full image once this threshold is reached.
 pub const MAX_AUX_FILE_DELTAS: usize = 1024;
 
 /// Max number of aux-file-related delta layers. The compaction will create a new image layer once this threshold is reached.
 pub const MAX_AUX_FILE_V2_DELTAS: usize = 16;
+
+/// Rows per block fetched by [`Timeline::map_all_timestamps`]'s row-based
+/// trailer read. The newest commit row is almost always row 1; the rest of the
+/// budget absorbs a run of aborts on top of it before the block falls back to
+/// page reconstruction.
+const CLOG_TRAILER_ROWS: u64 = 16;
+
+/// What the newest-first rows of a clog block say about its trailer.
+#[derive(Debug, PartialEq, Eq)]
+enum ClogTrailer {
+    /// Settled by a commit row or an image: the trailer, or `None` when the
+    /// page has none (an image without one).
+    Known(Option<TimestampTz>),
+    /// Not settled by the fetched prefix (aborts only, no rows, or a record
+    /// this decoder does not know): reconstruct the page instead.
+    Unknown,
+}
+
+/// The trailer of a clog page is the `timestamp` of the newest
+/// `ClogSetCommitted` applied to it (`apply_neon`); aborts leave it alone and
+/// an image already carries it. So, walking `rows` newest-first: a commit row
+/// or an image settles the answer, an abort is skipped.
+fn clog_trailer_from_rows(rows: &[crate::page_store::SlruPageRow]) -> anyhow::Result<ClogTrailer> {
+    for row in rows {
+        if row.is_image {
+            return Ok(ClogTrailer::Known(clog_trailer(&row.payload)));
+        }
+        match NeonWalRecord::des(&row.payload)
+            .with_context(|| format!("decoding clog delta at {}", row.lsn))?
+        {
+            NeonWalRecord::ClogSetCommitted { timestamp, .. } => {
+                return Ok(ClogTrailer::Known(Some(timestamp)));
+            }
+            NeonWalRecord::ClogSetAborted { .. } => continue,
+            _ => return Ok(ClogTrailer::Unknown),
+        }
+    }
+    Ok(ClogTrailer::Unknown)
+}
+
+/// The five-way classification at the end of `find_lsn_for_timestamp`.
+///
+/// Pure because the segment visiting order in `map_all_timestamps` changes
+/// `found_smaller` — a too-late probe stops at the first trailer >= T and
+/// may see no smaller one on the way — without being allowed to change the
+/// result. It cannot: a too-early probe walks every page and sets
+/// `found_smaller` whenever any trailer exists, in any order; and if every
+/// probe was too-late, `low` never moved, so `commit_lsn < min_lsn` and both
+/// `(false, true)` and the guarded `(true, _)` arm return `Past(min_lsn)`.
+/// Keep those two arms agreeing.
+fn lsn_for_timestamp_result(
+    found_smaller: bool,
+    found_larger: bool,
+    commit_lsn: Lsn,
+    min_lsn: Lsn,
+) -> LsnForTimestamp {
+    match (found_smaller, found_larger) {
+        // No commit records processed yet, e.g. just after importing.
+        (false, false) => LsnForTimestamp::NoData(min_lsn),
+        // No commit timestamp smaller than the request.
+        (false, true) => LsnForTimestamp::Past(min_lsn),
+        // `found_smaller` was set but the search never advanced `low`, so the
+        // subtraction landed below `min_lsn`; never return that.
+        (true, _) if commit_lsn < min_lsn => LsnForTimestamp::Past(min_lsn),
+        // Only commits older than the request. Still valid for branch
+        // creation; `update_gc_info()` ignores the LSN of a `Future` anyway.
+        (true, false) => LsnForTimestamp::Future(commit_lsn),
+        (true, true) => LsnForTimestamp::Present(commit_lsn),
+    }
+}
 
 #[derive(Debug)]
 pub enum LsnForTimestamp {
@@ -874,31 +945,12 @@ impl Timeline {
         // include physical changes from later commits that will be marked
         // as aborted, and will need to be vacuumed away.
         let commit_lsn = Lsn((low - 1) * 8);
-        match (found_smaller, found_larger) {
-            (false, false) => {
-                // This can happen if no commit records have been processed yet, e.g.
-                // just after importing a cluster.
-                Ok(LsnForTimestamp::NoData(min_lsn))
-            }
-            (false, true) => {
-                // Didn't find any commit timestamps smaller than the request
-                Ok(LsnForTimestamp::Past(min_lsn))
-            }
-            (true, _) if commit_lsn < min_lsn => {
-                // the search above did set found_smaller to true but it never increased the lsn.
-                // Then, low is still the old min_lsn, and the subtraction above gave a value
-                // below the min_lsn. We should never do that.
-                Ok(LsnForTimestamp::Past(min_lsn))
-            }
-            (true, false) => {
-                // Only found commits with timestamps smaller than the request.
-                // It's still a valid case for branch creation, return it.
-                // And `update_gc_info()` ignores LSN for a `LsnForTimestamp::Future`
-                // case, anyway.
-                Ok(LsnForTimestamp::Future(commit_lsn))
-            }
-            (true, true) => Ok(LsnForTimestamp::Present(commit_lsn)),
-        }
+        Ok(lsn_for_timestamp_result(
+            found_smaller,
+            found_larger,
+            commit_lsn,
+            min_lsn,
+        ))
     }
 
     /// Subroutine of find_lsn_for_timestamp(). Returns true, if there are any
@@ -959,45 +1011,119 @@ impl Timeline {
         ctx: &RequestContext,
         mut f: impl FnMut(TimestampTz) -> ControlFlow<T>,
     ) -> Result<T, PageReconstructError> {
-        for segno in self
+        // Highest segno first, which is newest first except across an xid
+        // wraparound (segno wraps at 4096 with the xid space), where it
+        // inverts. A too-late probe stops at the first segment holding a
+        // commit after the search timestamp: when few segments do (a recent
+        // timestamp, e.g. branch-by-time) that is the newest one and HashSet
+        // order would visit ~half the clog to find it; when many do (a cutoff
+        // a day back) any order finds one within a couple of segments and the
+        // sort is neutral — measured: unchanged Perform counts for the cutoff
+        // shape. Order never changes the result: see `lsn_for_timestamp_result`.
+        let mut segments: Vec<u32> = self
             .list_slru_segments(SlruKind::Clog, Version::at(probe_lsn), ctx)
             .await?
-        {
+            .into_iter()
+            .collect();
+        segments.sort_unstable_by(|a, b| b.cmp(a));
+        let step = self.conf.max_get_vectored_keys.get() as u32;
+        for segno in segments {
             let nblocks = self
                 .get_slru_segment_size(SlruKind::Clog, segno, Version::at(probe_lsn), ctx)
                 .await?;
-
-            let keyspace = KeySpace::single(
-                slru_block_to_key(SlruKind::Clog, segno, 0)
-                    ..slru_block_to_key(SlruKind::Clog, segno, nblocks),
-            );
-
-            let batches = keyspace.partition(
-                self.conf.max_get_vectored_keys.get() as u64 * BLCKSZ as u64,
-                BLCKSZ as u64,
-            );
-
-            for batch in batches.parts.into_iter().rev() {
-                let query = VersionedKeySpaceQuery::uniform(batch, probe_lsn);
-                let blocks = self.get_vectored(query, ctx).await?;
-
-                for (_key, clog_page) in blocks.into_iter().rev() {
-                    let clog_page = clog_page?;
-
-                    if clog_page.len() == BLCKSZ as usize + 8 {
-                        let mut timestamp_bytes = [0u8; 8];
-                        timestamp_bytes.copy_from_slice(&clog_page[BLCKSZ as usize..]);
-                        let timestamp = TimestampTz::from_be_bytes(timestamp_bytes);
-
-                        match f(timestamp) {
-                            ControlFlow::Break(b) => return Ok(b),
-                            ControlFlow::Continue(()) => (),
-                        }
+            let mut blk_hi = nblocks;
+            while blk_hi > 0 {
+                let blk_lo = blk_hi.saturating_sub(step);
+                for trailer in self
+                    .clog_trailers(segno, blk_lo..blk_hi, probe_lsn, ctx)
+                    .await?
+                {
+                    // Newest block first, so a block that settles the probe
+                    // short-circuits past an older block's error, as before.
+                    let Some(timestamp) = trailer? else { continue };
+                    match f(timestamp) {
+                        ControlFlow::Break(b) => return Ok(b),
+                        ControlFlow::Continue(()) => (),
                     }
                 }
+                blk_hi = blk_lo;
             }
         }
         Ok(Default::default())
+    }
+
+    /// Trailer timestamps of the clog blocks in `blocks` (one segment) as of
+    /// `probe_lsn`, newest block first: `None` for a block without a trailer,
+    /// `Err` for one that could not be read. Errors are returned per block
+    /// rather than propagated so the caller's newest-first walk can stop on a
+    /// newer block before it reaches them.
+    ///
+    /// Read off the top of each block's chain ([`clog_trailer_from_rows`],
+    /// [`CLOG_TRAILER_ROWS`] rows per block) instead of reconstructing the
+    /// page. Blocks the prefix does not settle are reconstructed by one
+    /// `get_vectored` over the span from the lowest to the highest of them:
+    /// one store round trip, at the cost of rebuilding any settled block in
+    /// between — never more than the old all-blocks read. That is the old
+    /// path, so its errors and its skipping of row-less blocks are unchanged.
+    async fn clog_trailers(
+        &self,
+        segno: u32,
+        blocks: std::ops::Range<u32>,
+        probe_lsn: Lsn,
+        ctx: &RequestContext,
+    ) -> Result<Vec<Result<Option<TimestampTz>, PageReconstructError>>, PageReconstructError> {
+        let rows_by_block = match self.page_writer.as_ref() {
+            Some(pw) => pw
+                .scan_slru_range(
+                    SlruKind::Clog,
+                    segno,
+                    blocks.clone(),
+                    probe_lsn,
+                    crate::page_store::SlruScan::NewestUpTo(CLOG_TRAILER_ROWS),
+                )
+                .await
+                .map_err(PageReconstructError::Other)?,
+            None => HashMap::new(),
+        };
+        // Indexed by `blknum - blocks.start`; `None` = not settled by the rows.
+        let mut trailers: Vec<Option<Result<Option<TimestampTz>, PageReconstructError>>> =
+            Vec::with_capacity(blocks.len());
+        let mut unsettled: Option<std::ops::Range<u32>> = None;
+        for blknum in blocks.clone() {
+            let rows = rows_by_block.get(&blknum).map_or(&[][..], Vec::as_slice);
+            trailers.push(match clog_trailer_from_rows(rows) {
+                Ok(ClogTrailer::Known(ts)) => Some(Ok(ts)),
+                Ok(ClogTrailer::Unknown) => {
+                    unsettled = Some(match unsettled {
+                        None => blknum..blknum + 1,
+                        Some(r) => r.start..blknum + 1,
+                    });
+                    None
+                }
+                Err(e) => Some(Err(PageReconstructError::Other(e))),
+            });
+        }
+        if let Some(span) = unsettled {
+            let keyspace = KeySpace::single(
+                slru_block_to_key(SlruKind::Clog, segno, span.start)
+                    ..slru_block_to_key(SlruKind::Clog, segno, span.end),
+            );
+            let query = VersionedKeySpaceQuery::uniform(keyspace, probe_lsn);
+            for (key, page) in self.get_vectored(query, ctx).await? {
+                let (_, _, blknum) = key.to_slru_block().map_err(PageReconstructError::Other)?;
+                let slot = &mut trailers[(blknum - blocks.start) as usize];
+                if slot.is_none() {
+                    *slot = Some(page.map(|p| clog_trailer(&p)));
+                }
+            }
+        }
+        // A block `get_vectored` did not return has no version at or below
+        // `probe_lsn`; it was skipped before and is skipped now.
+        Ok(trailers
+            .into_iter()
+            .rev()
+            .map(|t| t.unwrap_or(Ok(None)))
+            .collect())
     }
 
     pub(crate) async fn get_slru_keyspace(
@@ -3041,5 +3167,131 @@ mod tests {
         ));
         // Bootstrap timeline (horizon 0): unchanged semantics.
         assert!(latest_rel_size_cache_hit(Lsn(100), Lsn(50), Lsn(0), reader));
+    }
+}
+
+#[cfg(test)]
+mod clog_trailer_tests {
+    use super::{ClogTrailer, LsnForTimestamp, clog_trailer_from_rows, lsn_for_timestamp_result};
+    use crate::page_store::SlruPageRow;
+    use bytes::Bytes;
+    use pageserver_api::reltag::SlruKind;
+    use postgres_ffi::BLCKSZ;
+    use utils::bin_ser::BeSer;
+    use utils::lsn::Lsn;
+    use wal_decoder::models::record::NeonWalRecord;
+
+    fn row(lsn: u64, is_image: bool, payload: Vec<u8>) -> SlruPageRow {
+        SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 0,
+            blknum: 0,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init: is_image,
+            payload: Bytes::from(payload),
+        }
+    }
+    fn commit(lsn: u64, ts: i64) -> SlruPageRow {
+        let rec = NeonWalRecord::ClogSetCommitted {
+            xids: vec![1],
+            timestamp: ts,
+        };
+        row(lsn, false, rec.ser().unwrap())
+    }
+    fn abort(lsn: u64) -> SlruPageRow {
+        row(
+            lsn,
+            false,
+            NeonWalRecord::ClogSetAborted { xids: vec![1] }
+                .ser()
+                .unwrap(),
+        )
+    }
+    fn image(lsn: u64, trailer: Option<i64>) -> SlruPageRow {
+        let mut page = vec![0u8; BLCKSZ as usize];
+        if let Some(ts) = trailer {
+            page.extend_from_slice(&ts.to_be_bytes());
+        }
+        row(lsn, true, page)
+    }
+
+    #[test]
+    fn newest_commit_row_is_the_trailer() {
+        let rows = [commit(300, 30), commit(200, 20), commit(100, 10)];
+        assert_eq!(
+            clog_trailer_from_rows(&rows).unwrap(),
+            ClogTrailer::Known(Some(30))
+        );
+    }
+
+    #[test]
+    fn aborts_on_top_are_skipped() {
+        let rows = [abort(500), abort(400), commit(300, 30), commit(200, 20)];
+        assert_eq!(
+            clog_trailer_from_rows(&rows).unwrap(),
+            ClogTrailer::Known(Some(30))
+        );
+    }
+
+    #[test]
+    fn image_settles_with_or_without_trailer() {
+        let rows = [abort(400), image(300, Some(25)), commit(200, 20)];
+        assert_eq!(
+            clog_trailer_from_rows(&rows).unwrap(),
+            ClogTrailer::Known(Some(25))
+        );
+        let rows = [image(300, None), commit(200, 20)];
+        assert_eq!(
+            clog_trailer_from_rows(&rows).unwrap(),
+            ClogTrailer::Known(None)
+        );
+    }
+
+    #[test]
+    fn aborts_only_or_nothing_is_unknown() {
+        let rows = [abort(500), abort(400)];
+        assert_eq!(clog_trailer_from_rows(&rows).unwrap(), ClogTrailer::Unknown);
+        assert_eq!(clog_trailer_from_rows(&[]).unwrap(), ClogTrailer::Unknown);
+    }
+
+    /// Segment order changes `found_smaller`: under the newest-first walk a
+    /// too-late probe breaks on the first trailer >= T and may set nothing,
+    /// while hash order could have seen a smaller trailer before breaking.
+    /// When every probe is too-late `low` never moves, so
+    /// `commit_lsn = min_lsn - 8`, and both flag outcomes must agree on
+    /// `Past(min_lsn)`.
+    #[test]
+    fn all_probes_too_late_is_past_under_both_orderings() {
+        let min_lsn = Lsn(0x1000);
+        let commit_lsn = Lsn(0x1000 - 8);
+        // newest-first: no smaller trailer observed before any break
+        assert!(matches!(
+            lsn_for_timestamp_result(false, true, commit_lsn, min_lsn),
+            LsnForTimestamp::Past(l) if l == min_lsn
+        ));
+        // hash order: a smaller trailer observed on the way to the break
+        assert!(matches!(
+            lsn_for_timestamp_result(true, true, commit_lsn, min_lsn),
+            LsnForTimestamp::Past(l) if l == min_lsn
+        ));
+    }
+
+    #[test]
+    fn some_probe_too_early_classifies_by_flags() {
+        let min_lsn = Lsn(0x1000);
+        let commit_lsn = Lsn(0x2000);
+        assert!(matches!(
+            lsn_for_timestamp_result(true, true, commit_lsn, min_lsn),
+            LsnForTimestamp::Present(l) if l == commit_lsn
+        ));
+        assert!(matches!(
+            lsn_for_timestamp_result(true, false, commit_lsn, min_lsn),
+            LsnForTimestamp::Future(l) if l == commit_lsn
+        ));
+        assert!(matches!(
+            lsn_for_timestamp_result(false, false, commit_lsn, min_lsn),
+            LsnForTimestamp::NoData(l) if l == min_lsn
+        ));
     }
 }

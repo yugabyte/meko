@@ -173,6 +173,13 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    (monotone), then publish it to the in-memory
    `Rcu<Lsn>`.
 
+   The retention-window term is `find_lsn_for_timestamp(now − pitr_interval)`:
+   a binary search over LSN whose probes read each clog block's newest commit
+   row (`ClogSetCommitted.timestamp` is the page trailer, so no page is
+   reconstructed), highest segno first (newest, except across an xid
+   wraparound) so a probe that is too late stops at the first trailer past the
+   target when only the newest segments hold commits after it.
+
    The `consistent_lsn` term is load-bearing for **correctness**, not just
    keep-up. GC deletes history below the cutoff, and the WAL ingest path reads
    below its own apply position with no GC guard — so the cutoff must not pass

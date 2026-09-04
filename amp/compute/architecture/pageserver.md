@@ -476,7 +476,11 @@ envelope pins every continuation to the first page's snapshot (`read_time_ht`), 
 must run until a reader signals stop or the range is exhausted — a scan
 cut short mid-chain drops the base image and reconstructs a partial page
 (the `yb_thin_client` `read_scan` loop stops iff its `on_page` callback
-returns `true`). Cross-forknum
+returns `true`). The one deliberate exception is `scan_slru_range` in
+`SlruScan::NewestUpTo(n)` mode (the `scan_slru_newest` op label): it stops after
+each block's first round with rows, so its chains are at most `n` rows and
+not anchor-complete — for readers that decode what they need from the top
+of the chain (the clog trailer probe), never for reconstruction. Cross-forknum
 `scan_range` and multi-key `scan_meta_range` always stay on YSQL — they
 span many keys and are not hot (with `key` a range column,
 `scan_meta_range` is a contiguous scan inside the branch's tablet).
