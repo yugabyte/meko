@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small-temporal-ui
+  namespace: amp-lru
+  labels:
+    app: temporal-ui
+    lru: small_temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-ui
+      lru: small_temporal
+  template:
+    metadata:
+      labels:
+        app: temporal-ui
+        lru: small_temporal
+    spec:
+      # Service link env vars (TEMPORAL_UI_PORT=tcp://...) collide with the UI's
+      # own TEMPORAL_UI_PORT integer setting and crash it.
+      enableServiceLinks: false
+      containers:
+        - name: ui
+          image: temporalio/ui:2.53.3
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: small-temporal-frontend:7233
+            - name: TEMPORAL_CORS_ORIGINS
+              value: http://small-temporal.tail5955.ts.net
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: small-temporal-ui
+  namespace: amp-lru
+  labels:
+    lru: small_temporal
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: small-temporal
+    tailscale.com/tags: tag:k8s-meko
+spec:
+  selector:
+    app: temporal-ui
+    lru: small_temporal
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

@@ -1,0 +1,102 @@
+# Omes (github.com/temporalio/omes) built from source at pod start and run in a
+# loop: one cycle ends, the next starts with a fresh run id. Rebuilding on every
+# restart costs a few minutes; a pushed image can replace this once the workload
+# shape is settled.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: small-temporal-omes-run
+  namespace: amp-lru
+  labels:
+    lru: small_temporal
+data:
+  OMES_REF: main
+  OMES_SCENARIO: throughput_stress
+  OMES_MAX_CONCURRENT: "4"
+  OMES_MAX_ITERATIONS_PER_SECOND: "2"
+  OMES_CYCLE_DURATION: 2h
+  OMES_NAMESPACE: default
+  OMES_SERVER: small-temporal-frontend:7233
+  run.sh: |
+    #!/bin/sh
+    set -eu
+    export GOPATH=/work/go GOCACHE=/work/gocache GOFLAGS=-mod=mod
+    if [ ! -d /work/src/.git ]; then
+      git clone --depth 1 --branch "$OMES_REF" https://github.com/temporalio/omes /work/src
+    fi
+    cd /work/src
+    go build -o /work/omes ./cmd/omes
+    while true; do
+      RUN_ID="lru-$(date -u +%Y%m%dT%H%M%SZ)"
+      echo "=== cycle $RUN_ID scenario=$OMES_SCENARIO duration=$OMES_CYCLE_DURATION concurrent=$OMES_MAX_CONCURRENT rps=$OMES_MAX_ITERATIONS_PER_SECOND"
+      /work/omes run-scenario-with-worker \
+        --scenario "$OMES_SCENARIO" \
+        --language go \
+        --server-address "$OMES_SERVER" \
+        --namespace "$OMES_NAMESPACE" \
+        --run-id "$RUN_ID" \
+        --duration "$OMES_CYCLE_DURATION" \
+        --max-concurrent "$OMES_MAX_CONCURRENT" \
+        --max-iterations-per-second "$OMES_MAX_ITERATIONS_PER_SECOND" \
+        --prom-listen-address 0.0.0.0:9090 \
+        --worker-process-metrics-address 0.0.0.0:9091 \
+        || echo "=== cycle $RUN_ID exited with $?"
+      sleep 30
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small-temporal-omes
+  namespace: amp-lru
+  labels:
+    app: omes
+    lru: small_temporal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: omes
+      lru: small_temporal
+  template:
+    metadata:
+      labels:
+        app: omes
+        lru: small_temporal
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: omes
+          image: golang:1.26
+          command: ["/bin/sh", "/etc/omes/run.sh"]
+          envFrom:
+            - configMapRef:
+                name: small-temporal-omes-run
+          ports:
+            - name: metrics
+              containerPort: 9090
+            - name: metrics-worker
+              containerPort: 9091
+          volumeMounts:
+            - name: run
+              mountPath: /etc/omes
+            - name: work
+              mountPath: /work
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: run
+          configMap:
+            name: small-temporal-omes-run
+        - name: work
+          emptyDir:
+            sizeLimit: 10Gi

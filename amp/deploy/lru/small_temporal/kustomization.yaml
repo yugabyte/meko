@@ -1,0 +1,24 @@
+# One LRU: the Temporal server, its Omes load, its health checker, its
+# dashboard. Depends on ../monitoring having been applied.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: amp-lru
+resources:
+  - endpoint.yaml
+  - temporal-dynamicconfig.yaml
+  - temporal.yaml
+  - temporal-ui.yaml
+  - omes.yaml
+  - checker.yaml
+configMapGenerator:
+  - name: small-temporal-checker
+    files: [checker/check.py]
+  # The shared Grafana's sidecar picks up any ConfigMap with this label.
+  - name: small-temporal-dashboard
+    files: [dashboard.json]
+    options:
+      labels:
+        grafana_dashboard: "1"
+        lru: small_temporal
+generatorOptions:
+  disableNameSuffixHash: true

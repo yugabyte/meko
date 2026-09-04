@@ -1,0 +1,60 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+scrape_configs:
+  # Every LRU in the namespace, discovered rather than listed: a pod opts in
+  # with the annotation prometheus.io/scrape=true and names its metrics ports
+  # "metrics" or "metrics-<something>". Labels come from the pod:
+  #   job       = pod label app          (temporal, omes, checker, ...)
+  #   lru       = pod label lru          (which LRU this series belongs to)
+  #   component = container port name    (metrics, metrics-worker, ...)
+  - job_name: lru
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [amp-lru]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        regex: "true"
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        regex: metrics(-.*)?
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: job
+      - source_labels: [__meta_kubernetes_pod_label_lru]
+        target_label: lru
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        target_label: component
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+  # Every amp endpoint pod in amp-dev: postgres-exporter 9187, pageserver 9898,
+  # safekeeper 7676. Dashboards filter on the endpoint label, so which endpoint
+  # belongs to which LRU lives in Grafana, not here.
+  - job_name: amp-endpoint
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [amp-dev]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        regex: yb-amp-endpoint
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "9187|9898|7676"
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+        regex: yb-ep-(.*)
+        target_label: endpoint
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "9187"
+        target_label: exporter
+        replacement: postgres
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "9898"
+        target_label: exporter
+        replacement: pageserver
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "7676"
+        target_label: exporter
+        replacement: safekeeper

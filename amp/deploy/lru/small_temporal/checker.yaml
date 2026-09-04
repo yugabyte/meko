@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small-temporal-checker
+  namespace: amp-lru
+  labels:
+    app: checker
+    lru: small_temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checker
+      lru: small_temporal
+  template:
+    metadata:
+      labels:
+        app: checker
+        lru: small_temporal
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: checker
+          image: python:3.12-alpine
+          command: [python3, -u, /app/check.py]
+          env:
+            - name: LRU_NAME
+              value: small_temporal
+            - name: TEMPORAL_METRICS
+              value: http://small-temporal-frontend:8000/metrics
+            # The endpoint id is resolved from the controller by pool, so a
+            # recreated endpoint needs no redeploy and no id is tracked in git.
+            - name: AMP_POOL
+              value: lru-temporal
+          ports:
+            - name: metrics
+              containerPort: 9100
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: app
+          configMap:
+            name: small-temporal-checker

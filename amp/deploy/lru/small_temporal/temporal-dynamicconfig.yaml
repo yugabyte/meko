@@ -1,0 +1,27 @@
+# Mirrors config/dynamicconfig/development-sql.yaml from temporalio/docker-compose,
+# which the auto-setup image no longer ships. Without the callback template and
+# the allowed-address rule every Nexus operation (used by the Omes
+# throughput_stress scenario) fails.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: small-temporal-dynamicconfig
+  namespace: amp-lru
+  labels:
+    lru: small_temporal
+data:
+  lru.yaml: |
+    limit.maxIDLength:
+      - value: 255
+        constraints: {}
+    system.forceSearchAttributesCacheRefreshOnRead:
+      - value: true
+        constraints: {}
+    component.nexusoperations.callback.endpoint.template:
+      - value: http://small-temporal-frontend:7243/namespaces/{{.NamespaceName}}/nexus/callback
+        constraints: {}
+    component.callbacks.allowedAddresses:
+      - value:
+          - Pattern: "small-temporal-frontend:7243"
+            AllowInsecure: true
+        constraints: {}

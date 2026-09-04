@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana
+  namespace: amp-lru
+---
+# The dashboard sidecar reads ConfigMaps, one per LRU, so Grafana never has to
+# know which LRUs exist.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-dashboards
+  namespace: amp-lru
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grafana-dashboards
+  namespace: amp-lru
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grafana-dashboards
+subjects:
+  - kind: ServiceAccount
+    name: grafana
+    namespace: amp-lru
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: amp-lru
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      serviceAccountName: grafana
+      enableServiceLinks: false
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.1.1
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: user
+            # Anonymous viewing is what people use; the admin login only exists
+            # for edits, and its password is not a manifest constant.
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: password
+            # Grafana serves its ~8 MB of boot JS uncompressed by default, which
+            # is the whole cost of a first visit over the tailnet.
+            - name: GF_SERVER_ENABLE_GZIP
+              value: "true"
+            - name: GF_SERVER_ROOT_URL
+              value: https://grafana-lru.tail5955.ts.net
+            # The report portal embeds dashboards in an iframe on an https page.
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: none
+            - name: GF_SECURITY_COOKIE_SECURE
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 3000
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: providers
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+        # Copies every ConfigMap labelled grafana_dashboard=1 into the
+        # dashboards volume and keeps it current. An LRU ships its dashboard as
+        # such a ConfigMap and it appears here without touching this file.
+        - name: dashboards
+          image: kiwigrid/k8s-sidecar:1.30.3
+          env:
+            - name: LABEL
+              value: grafana_dashboard
+            - name: LABEL_VALUE
+              value: "1"
+            - name: FOLDER
+              value: /var/lib/grafana/dashboards
+            - name: NAMESPACE
+              value: amp-lru
+            - name: RESOURCE
+              value: configmap
+          volumeMounts:
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: providers
+          configMap:
+            name: grafana-dashboard-providers
+        - name: dashboards
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: amp-lru
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+---
+# HTTPS on the tailnet with a MagicDNS certificate, so the portal (https) can
+# frame the dashboards. A plain tailscale.com/expose Service is http only.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: amp-lru
+  annotations:
+    tailscale.com/tags: tag:k8s-meko
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: grafana
+      port:
+        number: 80
+  tls:
+    - hosts: [grafana-lru]

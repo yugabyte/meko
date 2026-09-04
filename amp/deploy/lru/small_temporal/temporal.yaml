@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small-temporal-server
+  namespace: amp-lru
+  labels:
+    app: temporal
+    lru: small_temporal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: temporal
+      lru: small_temporal
+  template:
+    metadata:
+      labels:
+        app: temporal
+        lru: small_temporal
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: temporal
+          image: temporalio/auto-setup:1.29.7
+          env:
+            - name: DB
+              value: postgres12
+            - name: DB_PORT
+              value: "55433"
+            - name: POSTGRES_SEEDS
+              value: small-temporal-endpoint
+            - name: POSTGRES_USER
+              value: cloud_admin
+            - name: POSTGRES_PWD
+              value: cloud_admin
+            - name: DBNAME
+              value: temporal_lru
+            - name: VISIBILITY_DBNAME
+              value: temporal_lru_visibility
+            - name: DYNAMIC_CONFIG_FILE_PATH
+              value: config/dynamicconfig/lru.yaml
+            - name: TEMPORAL_ADDRESS
+              value: small-temporal-frontend:7233
+            - name: TEMPORAL_CLI_ADDRESS
+              value: small-temporal-frontend:7233
+            - name: PROMETHEUS_ENDPOINT
+              value: 0.0.0.0:8000
+            - name: NUM_HISTORY_SHARDS
+              value: "512"
+          ports:
+            - name: grpc
+              containerPort: 7233
+            - name: http
+              containerPort: 7243
+            - name: metrics
+              containerPort: 8000
+          volumeMounts:
+            - name: dynamicconfig
+              mountPath: /etc/temporal/config/dynamicconfig
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+          readinessProbe:
+            tcpSocket:
+              port: 7233
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      volumes:
+        - name: dynamicconfig
+          configMap:
+            name: small-temporal-dynamicconfig
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: small-temporal-frontend
+  namespace: amp-lru
+  labels:
+    lru: small_temporal
+spec:
+  selector:
+    app: temporal
+    lru: small_temporal
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: 7233
+    - name: http
+      port: 7243
+      targetPort: 7243
+    - name: metrics
+      port: 8000
+      targetPort: 8000

@@ -1,0 +1,26 @@
+# Prometheus discovers pods in amp-dev as well as amp-lru. That Role lives in
+# another namespace, which this kustomization's namespace transformer would
+# rewrite, so it is applied separately by up.sh.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-pod-read
+  namespace: amp-dev
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-pod-read
+  namespace: amp-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-pod-read
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: amp-lru
