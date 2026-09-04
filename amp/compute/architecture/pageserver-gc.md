@@ -397,18 +397,22 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    key, so binding the branch (which every act does) already bounds the
    statement to one tablet.
 
-   All three trims bind the rest of their key on the DELETE as well as in the
-   anchor — the block or key set, and `lsn` to the cutoff — and bar a merge
-   join with a `pg_hint_plan` `Set`. The join predicate alone bounds the scan
-   only under a nested loop; a merge join instead materialises the DELETE's
-   own scan into a tuplestore and blows `temp_file_limit`, which wedged GC for
-   45 consecutive ticks on a Temporal deployment. The anchor's `GROUP BY`
-   cardinality is not estimable (PG ignores the `= ANY(array)` cap), so the
-   plan has to be pinned rather than costed.
+   Each trim resolves its anchor per key — `ORDER BY lsn DESC LIMIT 1` over a
+   `CROSS JOIN LATERAL`, not `MAX(lsn) ... GROUP BY` — because the PK already
+   orders a key's versions newest-first, so the first base below the cutoff is
+   already the newest one. Only the `LIMIT` stops there: PG rewrites MIN/MAX
+   into an index `LIMIT` for a bare aggregate only, so the grouped form reads
+   every version of every key. On a deep fork that exceeded YB's history
+   retention, so the statement could not complete at all.
 
-   The bounds, not the hint, are what make that safe in general: a hash join
-   spills its build side to the same `temp_file_limit`, and only the anchor
-   being the smaller side keeps it off the DELETE's scan.
+   All three also bind the rest of their key on the DELETE, not just in the
+   anchor — the block or key set, and `lsn` to the cutoff. The join predicate
+   alone bounds that scan only under a nested loop, and those bounds are what
+   keep it tight under any join method: a merge join materialises the DELETE's
+   own scan into a tuplestore, and a hash join spills its build side, both
+   against `temp_file_limit`. A `pg_hint_plan` `Set` bars the merge join as
+   well, which is insurance rather than the fix — with the lateral anchor the
+   statement plans as a batched nested loop without it.
 
    All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue**, not from the delete.

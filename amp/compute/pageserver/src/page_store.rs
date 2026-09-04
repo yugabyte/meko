@@ -3030,28 +3030,37 @@ impl PageStore {
     /// `$8`=bucket_id, on both the anchor CTE and the DELETE — each is its
     /// own scan of `pages` and needs the leading key column bound.
     ///
-    /// Trap: the hint is load-bearing and fails silently. Nothing else would
-    /// notice it being dropped — the statement stays correct and reverts to
-    /// the merge join that wedged the drain (#1133; the numbers and the why
-    /// are in `compute/architecture/pageserver-gc.md`). #884 would remove the
-    /// `GROUP BY` whose misestimate makes that plan look cheap, and so retire
-    /// the hint, but is gated on its anchor-trust correctness trade.
+    /// Trap: the per-block `ORDER BY lsn DESC LIMIT 1` is load-bearing, even
+    /// though `MAX(lsn) ... GROUP BY blknum` returns the same value. The PK
+    /// orders `blknum ASC, lsn DESC`, so the first `will_init` row below the
+    /// cutoff already IS that maximum — but PG rewrites MIN/MAX into an index
+    /// `LIMIT` only for a bare aggregate, so the grouped form reads every
+    /// version of every block instead of stopping at it (#1133).
     ///
-    /// The hint is not a general spill guard. A hash join spills its build
-    /// side to the same `temp_file_limit`; what keeps that safe is the anchor
-    /// being the smaller side, so it is the side hashed. Should the estimates
-    /// ever invert and `p` become the build side, a deep fork would spill
-    /// again — the `blknum`/`lsn` bounds are what bound the damage.
+    /// The hint is now insurance, not the fix. It was added when the anchor
+    /// was a `GROUP BY` whose cardinality PG could not estimate, which made a
+    /// merge join look cheap; the merge join then materialised this DELETE's
+    /// own scan and blew `temp_file_limit` (#1133). The lateral gives an exact
+    /// row count, and the statement plans as a batched nested loop with the
+    /// hint removed — so the hint now only guards against the estimate
+    /// regressing. It is kept because it costs nothing, and because it is not
+    /// a general spill guard either: a hash join spills its build side to the
+    /// same limit, and what keeps that safe is the `blknum`/`lsn` bounds on
+    /// the DELETE, not the join method.
     fn gc_trim_blocks_sql(&self) -> String {
         format!(
             "{hint} WITH anchor AS ( \
-                 SELECT blknum, MAX(lsn) AS lsn \
-                 FROM \"{schema}\".pages \
-                 WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
-                   AND relnode=$4 AND forknum=$5 \
-                   AND blknum = ANY($6) \
-                   AND lsn <= $7 AND will_init \
-                 GROUP BY blknum \
+                 SELECT b.blknum, x.lsn \
+                 FROM unnest($6::bigint[]) AS b(blknum) \
+                 CROSS JOIN LATERAL ( \
+                     SELECT lsn \
+                     FROM \"{schema}\".pages \
+                     WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+                       AND relnode=$4 AND forknum=$5 \
+                       AND blknum = b.blknum \
+                       AND lsn <= $7 AND will_init \
+                     ORDER BY lsn DESC LIMIT 1 \
+                 ) x \
              ) \
              DELETE FROM \"{schema}\".pages p \
              USING anchor a \
@@ -3464,18 +3473,23 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// The `slru_pages` trim statement — same plan pinning as
-    /// [`Self::gc_trim_blocks_sql`], and split out for the same test. Latent
-    /// rather than live here: a segment caps at 32 blocks, so the unbounded
-    /// scan stays small. Kept identical so the two don't drift.
+    /// The `slru_pages` trim statement — same anchor shape and plan pinning as
+    /// [`Self::gc_trim_blocks_sql`], and split out for the same test. Kept
+    /// identical so the two don't drift: a segment caps the *block* count at
+    /// 32, but nothing caps a block's version depth, which is what the anchor
+    /// walks (`will_init` is sparser in clog than in `pages`).
     fn gc_trim_slru_sql(&self) -> String {
         format!(
             "{hint} WITH anchor AS ( \
-                 SELECT blknum, MAX(lsn) AS lsn \
-                 FROM \"{schema}\".slru_pages \
-                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
-                   AND blknum = ANY($4) AND lsn <= $5 AND will_init \
-                 GROUP BY blknum \
+                 SELECT b.blknum, x.lsn \
+                 FROM unnest($4::bigint[]) AS b(blknum) \
+                 CROSS JOIN LATERAL ( \
+                     SELECT lsn \
+                     FROM \"{schema}\".slru_pages \
+                     WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
+                       AND blknum = b.blknum AND lsn <= $5 AND will_init \
+                     ORDER BY lsn DESC LIMIT 1 \
+                 ) x \
              ) \
              DELETE FROM \"{schema}\".slru_pages p \
              USING anchor a \
@@ -3555,18 +3569,22 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// The `meta` trim statement — same plan pinning as
-    /// [`Self::gc_trim_blocks_sql`], and split out for the same test. The
-    /// least bound of the three without it: `m`'s scan would carry only
-    /// `branch_id`, so a merge join materialises the branch's whole `meta`
-    /// table.
+    /// The `meta` trim statement — same anchor shape and plan pinning as
+    /// [`Self::gc_trim_blocks_sql`] (no `will_init` here: every `meta` put is
+    /// a base), split out for the same test. The least bound of the three
+    /// without the pinning: `m`'s scan would carry only `branch_id`, so a
+    /// merge join materialises the branch's whole `meta` table.
     fn gc_trim_meta_sql(&self) -> String {
         format!(
             "{hint} WITH anchor AS ( \
-                 SELECT key, MAX(lsn) AS lsn \
-                 FROM \"{schema}\".meta \
-                 WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3 \
-                 GROUP BY key \
+                 SELECT k.key, x.lsn \
+                 FROM unnest($2::bytea[]) AS k(key) \
+                 CROSS JOIN LATERAL ( \
+                     SELECT lsn \
+                     FROM \"{schema}\".meta \
+                     WHERE branch_id=$1 AND key = k.key AND lsn <= $3 \
+                     ORDER BY lsn DESC LIMIT 1 \
+                 ) x \
              ) \
              DELETE FROM \"{schema}\".meta m \
              USING anchor a \
@@ -3580,10 +3598,9 @@ impl PageStore {
     /// Trim action for `meta` keys: per key keep the newest version
     /// `<= cutoff`, delete everything below it. `meta` is full-overwrite
     /// (no `will_init`/chain), so the anchor is just each key's newest
-    /// version `<= cutoff` (a grouped `MAX`, computed once per key then
-    /// joined — the `meta` analog of [`Self::gc_act_trim_blocks`]). A key
-    /// with no version `<= cutoff` is untouched (it's absent from the
-    /// anchor). Returns rows deleted.
+    /// version `<= cutoff` — resolved per key and joined, the `meta` analog
+    /// of [`Self::gc_act_trim_blocks`]. A key with no version `<= cutoff` is
+    /// untouched (it's absent from the anchor). Returns rows deleted.
     pub async fn gc_act_trim_meta(
         &self,
         branch_id: BranchId,
@@ -7096,6 +7113,28 @@ mod tests {
             Ok(out)
         }
 
+        /// Meta analog of [`Self::test_raw_block_versions`]: one key's stored
+        /// LSNs, ordered.
+        async fn test_raw_meta_versions(
+            &self,
+            branch_id: BranchId,
+            key: &[u8],
+        ) -> Result<Vec<u64>> {
+            let sql = format!(
+                "SELECT lsn FROM \"{}\".meta \
+                 WHERE branch_id=$1 AND key=$2 ORDER BY lsn",
+                self.schema
+            );
+            let key = key.to_vec();
+            Ok(self
+                .ysql_client
+                .query(&sql, &[&branch_id, &key])
+                .await?
+                .iter()
+                .map(|r| r.get::<_, i64>(0) as u64)
+                .collect())
+        }
+
         /// SLRU analog of [`Self::test_raw_block_versions`]: one block's
         /// stored versions for `(kind, segno, blknum)`, ordered by lsn.
         async fn test_raw_slru_versions(
@@ -7967,6 +8006,118 @@ mod tests {
             .join("\n")
     }
 
+    /// `gc_act_trim_slru`'s anchor: per block keep the newest `will_init`
+    /// `<= cutoff` plus everything above, delete below. The sibling of
+    /// `gc_trim_anchor_keep_delete_semantics`, which covers only `pages` —
+    /// the SLRU and meta anchors are their own SQL and need their own check.
+    #[tokio::test]
+    async fn gc_trim_slru_anchor_keep_delete_semantics() {
+        let (store, _schema) = make_store("gc_trim_slru").await;
+        let branch = rand_branch();
+        let (seg, blk_a, blk_b) = (7u32, 1u32, 2u32);
+        let row = |blk: u32, lsn: u64, is_image: bool, will_init: bool| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: seg,
+            blknum: blk,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::from_static(b"x"),
+        };
+        store
+            .put_slru_pages(
+                branch,
+                &[
+                    // block A: anchor is the will_init at 40; 10/15 go, 40/55 stay
+                    row(blk_a, 10, false, true),
+                    row(blk_a, 15, false, false),
+                    row(blk_a, 40, true, true),
+                    row(blk_a, 55, false, false),
+                    // block B: no base <= cutoff, so nothing is provably dead
+                    row(blk_b, 20, false, false),
+                    row(blk_b, 60, true, true),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let kind = SlruKind::Clog as i16;
+        store
+            .gc_act_trim_slru(
+                branch,
+                (kind, seg as i64),
+                &[blk_a as i64, blk_b as i64],
+                Lsn(50),
+            )
+            .await
+            .unwrap();
+
+        let a = store
+            .test_raw_slru_versions(branch, kind, seg as i64, blk_a as i64)
+            .await
+            .unwrap();
+        assert_eq!(
+            a,
+            vec![(40, true, true), (55, false, false)],
+            "block A must keep its anchor + everything above"
+        );
+        let b = store
+            .test_raw_slru_versions(branch, kind, seg as i64, blk_b as i64)
+            .await
+            .unwrap();
+        assert_eq!(b.len(), 2, "no-anchor block must be untouched");
+    }
+
+    /// `gc_act_trim_meta`'s anchor: per key keep the newest version `<= cutoff`
+    /// plus everything above. `meta` has no `will_init` — every put is a base —
+    /// so the anchor is simply that newest version.
+    #[tokio::test]
+    async fn gc_trim_meta_anchor_keep_delete_semantics() {
+        use pageserver_api::key::twophase_file_key;
+
+        let (store, _schema) = make_store("gc_trim_meta").await;
+        let branch = rand_branch();
+        let key_a = key_to_bytes(&twophase_file_key(11));
+        let key_b = key_to_bytes(&twophase_file_key(22));
+        let row = |k: &[u8], lsn: u64| MetaRow {
+            key: Bytes::copy_from_slice(k),
+            lsn: Lsn(lsn),
+            payload: Bytes::from_static(b"x"),
+        };
+        store
+            .put_meta(
+                branch,
+                &[
+                    // key A: anchor is 40; 10/15 go, 40/55 stay
+                    row(&key_a, 10),
+                    row(&key_a, 15),
+                    row(&key_a, 40),
+                    row(&key_a, 55),
+                    // key B: every version is above the cutoff
+                    row(&key_b, 60),
+                    row(&key_b, 70),
+                ],
+            )
+            .await
+            .unwrap();
+
+        store
+            .gc_act_trim_meta(branch, &[key_a.clone(), key_b.clone()], Lsn(50))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.test_raw_meta_versions(branch, &key_a).await.unwrap(),
+            vec![40, 55],
+            "key A must keep its anchor + everything above"
+        );
+        assert_eq!(
+            store.test_raw_meta_versions(branch, &key_b).await.unwrap(),
+            vec![60, 70],
+            "a key entirely above the cutoff must be untouched"
+        );
+    }
+
     /// The three trims must never plan a merge join — see
     /// [`PageStore::gc_trim_blocks_sql`] for why (#1133).
     ///
@@ -8020,6 +8171,17 @@ mod tests {
             assert!(
                 sql.contains("Set(enable_mergejoin off)"),
                 "{label}: trim statement lost its merge-join bar:\n{sql}"
+            );
+            // Both anchor forms are correct, so only the shape distinguishes
+            // them and nothing else would catch a regression to the grouped
+            // one, which cannot terminate early (#1133).
+            assert!(
+                sql.contains("ORDER BY lsn DESC LIMIT 1"),
+                "{label}: anchor no longer stops at the first base:\n{sql}"
+            );
+            assert!(
+                !sql.contains("GROUP BY"),
+                "{label}: anchor regressed to a grouped aggregate:\n{sql}"
             );
             for bound in bounds {
                 assert!(
