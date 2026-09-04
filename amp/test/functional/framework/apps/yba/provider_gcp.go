@@ -363,6 +363,8 @@ func BuildGCPUniverseSpec(c ConfigGetter) UniverseSpec {
 		StorageType:       c.GetString("apps.yba.gcp.storage_type", DefaultGCPStorageType),
 		InstanceTags:      instanceTagsFromConfig(c),
 		EnableYbc:         c.GetBool("apps.yba.universe.enable_ybc", false),
+		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
+		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
 	}
 }
 

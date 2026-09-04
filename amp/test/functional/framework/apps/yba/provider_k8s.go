@@ -219,6 +219,8 @@ func BuildK8sUniverseSpec(c ConfigGetter) UniverseSpec {
 		TServerCPUCores:   c.GetInt("apps.yba.k8s.tserver_cpu", DefaultK8sTServerCPUCores),
 		TServerMemGiB:     c.GetInt("apps.yba.k8s.tserver_mem_gib", DefaultK8sTServerMemGiB),
 		EnableYbc:         c.GetBool("apps.yba.k8s.enable_ybc", DefaultK8sEnableYbc),
+		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
+		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
 	}
 }
 

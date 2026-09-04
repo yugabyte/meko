@@ -607,6 +607,20 @@ apps:
       # a backup test will drive; the kubernetes universe has its own
       # apps.yba.k8s.enable_ybc, which is on.
       enable_ybc: false
+      # master_gflags/tserver_gflags go onto every universe built from a
+      # UniverseSpec, whatever the provider. tserver_gflags defaults to the
+      # settings AMP's storage schema depends on and
+      # features/backing_config_contract asserts (auto analyze on,
+      # yb_enable_cbo=on through ysql_pg_conf_csv); keys here override or extend
+      # that, and an empty value drops one of the defaults. They are set at
+      # create because they are cluster-wide: a session GUC would not reach the
+      # branch-drop reaper's own connections.
+      # NOT read by env.yb_deploy=yba_universe with functional.yba.create_spec,
+      # which posts a hand-written create body straight to YBA (ybdeploy.go) and
+      # so has to carry its own tserverGFlags, nor by an attached universe
+      # someone else created.
+      master_gflags: {}
+      tserver_gflags: {}
     # k8s.*: KUBERNETES provider+universe (provider_type "kubernetes"): a universe
     # ON the same k8s cluster the YBA runs in (apps.ybastack.kubecontext), no VMs.
     k8s:

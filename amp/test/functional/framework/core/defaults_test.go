@@ -540,6 +540,28 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if uspec.VolumeCount != yba.DefaultVolumeCount {
 		t.Errorf("yba universe VolumeCount = %d, want %d", uspec.VolumeCount, yba.DefaultVolumeCount)
 	}
+	// master_gflags/tserver_gflags are documented-empty but must be PRESENT, and
+	// every provider's builder must carry the backing contract's tserver flags
+	// through from the embedded defaults: features/backing_config_contract reads
+	// them back off the live universe and fails without them.
+	for _, key := range []string{"apps.yba.universe.master_gflags", "apps.yba.universe.tserver_gflags"} {
+		if got := cfg.GetMap(key, nil); got == nil {
+			t.Errorf("%s missing from the embedded defaults", key)
+		} else if len(got) != 0 {
+			t.Errorf("%s = %v, want present and empty", key, got)
+		}
+	}
+	for name, tserver := range map[string]map[string]string{
+		"aws": uspec.TServerGFlags,
+		"gcp": yba.BuildGCPUniverseSpec(cfg).TServerGFlags,
+		"k8s": yba.BuildK8sUniverseSpec(cfg).TServerGFlags,
+	} {
+		for flag, want := range yba.DefaultTServerGFlags {
+			if tserver[flag] != want {
+				t.Errorf("%s universe TServerGFlags[%s] = %q, want %q", name, flag, tserver[flag], want)
+			}
+		}
+	}
 	// The VM builders stay YBC-off: there WaitForYbcServer pings a yb-controller
 	// nothing installs, and the create task fails with the nodes already up.
 	if uspec.EnableYbc {

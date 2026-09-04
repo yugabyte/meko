@@ -352,3 +352,85 @@ func TestCreateUniverseFromSpecRequiresProvider(t *testing.T) {
 		t.Fatalf("expected error for missing provider uuid")
 	}
 }
+
+// TestGFlagsFromConfigMergesDefaults keeps the backing contract's flags on by
+// default, lets config override or extend them, and treats an empty value as
+// "drop this default".
+func TestGFlagsFromConfigMergesDefaults(t *testing.T) {
+	g := gflagsFromConfig(fakeConfig{m: map[string]any{
+		"apps.yba.universe.tserver_gflags": map[string]any{
+			"ysql_pg_conf_csv":         "yb_enable_cbo=on,log_statement=all",
+			"ysql_enable_auto_analyze": "",
+			"ysql_log_statement":       "ddl",
+		},
+	}}, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags)
+
+	if g["ysql_pg_conf_csv"] != "yb_enable_cbo=on,log_statement=all" {
+		t.Errorf("config override lost: ysql_pg_conf_csv = %q", g["ysql_pg_conf_csv"])
+	}
+	if g["ysql_log_statement"] != "ddl" {
+		t.Errorf("config extension lost: ysql_log_statement = %q", g["ysql_log_statement"])
+	}
+	if _, ok := g["ysql_enable_auto_analyze"]; ok {
+		t.Errorf("empty value did not drop the default: %v", g)
+	}
+
+	if def := gflagsFromConfig(fakeConfig{}, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags); def["ysql_enable_auto_analyze"] != "true" || def["ysql_pg_conf_csv"] != "yb_enable_cbo=on" {
+		t.Errorf("unconfigured run lost the backing contract flags: %v", def)
+	}
+}
+
+// TestBuildConfigureRequestGFlags asserts the spec's gflags reach the userIntent
+// on every provider. features/backing_config_contract fails on a backing without
+// them, and the nightly's backing is created by exactly this request.
+func TestBuildConfigureRequestGFlags(t *testing.T) {
+	for _, providerCode := range []string{"aws", "gcp", "kubernetes"} {
+		t.Run(providerCode, func(t *testing.T) {
+			s := sampleUniverseSpec()
+			s.ProviderCode = providerCode
+			s.TServerGFlags = map[string]string{"ysql_enable_auto_analyze": "true"}
+			s.MasterGFlags = map[string]string{"master_flag": "1"}
+			ui := BuildConfigureRequest(s)["clusters"].([]any)[0].(map[string]any)["userIntent"].(map[string]any)
+
+			ts, _ := ui["tserverGFlags"].(map[string]any)
+			if ts["ysql_enable_auto_analyze"] != "true" {
+				t.Errorf("tserverGFlags = %v", ui["tserverGFlags"])
+			}
+			ms, _ := ui["masterGFlags"].(map[string]any)
+			if ms["master_flag"] != "1" {
+				t.Errorf("masterGFlags = %v", ui["masterGFlags"])
+			}
+		})
+	}
+}
+
+// TestBuildConfigureRequestNoGFlagsOmitsKeys keeps a spec with no gflags sending
+// exactly the request it sent before gflags existed. An empty map is not the
+// same request as an absent key, and YBA reads the difference.
+func TestBuildConfigureRequestNoGFlagsOmitsKeys(t *testing.T) {
+	s := sampleUniverseSpec()
+	s.MasterGFlags, s.TServerGFlags = nil, nil
+	ui := BuildConfigureRequest(s)["clusters"].([]any)[0].(map[string]any)["userIntent"].(map[string]any)
+	for _, k := range []string{"masterGFlags", "tserverGFlags"} {
+		if _, ok := ui[k]; ok {
+			t.Errorf("%s present with no gflags configured: %v", k, ui[k])
+		}
+	}
+}
+
+// TestBuildUniverseSpecCarriesBackingContractGFlags pins the wiring the fix
+// rests on: every provider's spec builder, not just one, must pick the backing
+// contract's tserver flags up from config, because whichever one the nightly
+// uses is where features/backing_config_contract reads them back.
+func TestBuildUniverseSpecCarriesBackingContractGFlags(t *testing.T) {
+	c := fakeConfig{m: map[string]any{"versions.yugabytedb": "2025.2.1.0-b141"}}
+	for name, s := range map[string]UniverseSpec{
+		"aws": BuildUniverseSpec(c),
+		"gcp": BuildGCPUniverseSpec(c),
+		"k8s": BuildK8sUniverseSpec(c),
+	} {
+		if s.TServerGFlags["ysql_enable_auto_analyze"] != "true" || s.TServerGFlags["ysql_pg_conf_csv"] != "yb_enable_cbo=on" {
+			t.Errorf("%s: TServerGFlags = %v", name, s.TServerGFlags)
+		}
+	}
+}

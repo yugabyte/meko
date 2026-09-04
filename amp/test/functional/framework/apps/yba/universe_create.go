@@ -43,6 +43,11 @@ type UniverseSpec struct {
 	InstanceTags      map[string]string // userIntent.instanceTags on every node
 	EnableYbc         bool              // ybc.provider.enabled — off skips WaitForYbcServer
 
+	// Server gflags, emitted on every provider. AMP depends on some of these
+	// being set (see DefaultTServerGFlags), so they are not an opt-in knob.
+	MasterGFlags  map[string]string
+	TServerGFlags map[string]string
+
 	// Kubernetes-only (ProviderCode "kubernetes"): the PVC storage class and the
 	// master/tserver K8SNodeResourceSpec (cpu cores + memory GiB). The AWS path
 	// ignores these; the k8s path ignores InstanceType/AccessKeyCode/AMI/keypair
@@ -91,6 +96,60 @@ func instanceTagsFromConfig(c ConfigGetter) map[string]string {
 	return tags
 }
 
+// DefaultTServerGFlags are the tserver gflags AMP's storage schema depends on,
+// asserted by features/backing_config_contract. The dev foundation ran with auto
+// analyze off, which left amp_storage.pages unanalyzed and cost the branch-drop
+// reaper 20 minutes a batch (meko#970). That one DELETE now pins its own plan
+// with a TidScan hint, but the hint is a safety net over a single statement, not
+// a substitute for statistics every other plan is costed from.
+//
+// yb_enable_cbo is a configuration parameter with no gflag of its own, so it
+// goes through ysql_pg_conf_csv. Both are set at create rather than by a test,
+// because a session GUC would not reach the reaper's own connections.
+var DefaultTServerGFlags = map[string]string{
+	"ysql_enable_auto_analyze": "true",
+	"ysql_pg_conf_csv":         "yb_enable_cbo=on",
+}
+
+// DefaultMasterGFlags is empty: nothing AMP depends on is a master flag.
+var DefaultMasterGFlags = map[string]string{}
+
+// gflagsFromConfig merges the apps.yba.universe.<role>_gflags map over def
+// (config wins). A configured value of "" drops the flag, which is how a run
+// opts out of one of the defaults without replacing the whole map.
+func gflagsFromConfig(c ConfigGetter, key string, def map[string]string) map[string]string {
+	out := make(map[string]string, len(def))
+	for k, v := range def {
+		out[k] = v
+	}
+	for k, v := range c.GetMap(key, nil) {
+		s, ok := v.(string)
+		if !ok {
+			s = fmt.Sprint(v)
+		}
+		if s == "" {
+			delete(out, k)
+			continue
+		}
+		out[k] = s
+	}
+	return out
+}
+
+// applyGFlags writes the spec's gflags onto a userIntent as the per-role maps.
+// They are documented as deprecated in favour of specificGFlags, but on create
+// UniverseCRUDHandler derives specificGFlags from them when the request omits
+// it, so sending both would be redundant. An empty map is omitted rather than
+// sent empty, which YBA reads as a different request.
+func applyGFlags(userIntent map[string]any, s UniverseSpec) {
+	if len(s.MasterGFlags) > 0 {
+		userIntent["masterGFlags"] = toAnyMap(s.MasterGFlags)
+	}
+	if len(s.TServerGFlags) > 0 {
+		userIntent["tserverGFlags"] = toAnyMap(s.TServerGFlags)
+	}
+}
+
 // BuildUniverseSpec reads apps.yba.universe.* into a UniverseSpec. The software
 // version resolves through DBVersion: apps.yba.universe.yb_version, then the
 // versions.yb run override, then versions.yugabytedb.
@@ -115,6 +174,8 @@ func BuildUniverseSpec(c ConfigGetter) UniverseSpec {
 		Throughput:        c.GetInt("apps.yba.universe.throughput", DefaultThroughput),
 		InstanceTags:      instanceTagsFromConfig(c),
 		EnableYbc:         c.GetBool("apps.yba.universe.enable_ybc", false),
+		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
+		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
 	}
 }
 
@@ -226,6 +287,7 @@ func awsUserIntent(s UniverseSpec) map[string]any {
 		}
 		userIntent["instanceTags"] = tags
 	}
+	applyGFlags(userIntent, s)
 	return userIntent
 }
 
@@ -286,6 +348,7 @@ func gcpUserIntent(s UniverseSpec) map[string]any {
 		}
 		userIntent["instanceTags"] = toAnyMap(sanitizeGCPLabels(raw))
 	}
+	applyGFlags(userIntent, s)
 	return userIntent
 }
 
@@ -331,7 +394,7 @@ func k8sUserIntent(s UniverseSpec) map[string]any {
 	for _, u := range s.RegionUUIDs {
 		regionList = append(regionList, u)
 	}
-	return map[string]any{
+	userIntent := map[string]any{
 		"universeName":      s.UniverseName(),
 		"provider":          s.ProviderUUID,
 		"providerType":      "kubernetes",
@@ -352,6 +415,8 @@ func k8sUserIntent(s UniverseSpec) map[string]any {
 		"masterK8SNodeResourceSpec":  map[string]any{"cpuCoreCount": masterCPU, "memoryGib": masterMem},
 		"tserverK8SNodeResourceSpec": map[string]any{"cpuCoreCount": tserverCPU, "memoryGib": tserverMem},
 	}
+	applyGFlags(userIntent, s)
+	return userIntent
 }
 
 // CreateUniverseFromSpec creates the universe via the single-call
