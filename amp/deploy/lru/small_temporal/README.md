@@ -42,7 +42,12 @@ then this directory, and points `small-temporal-endpoint` at the endpoint. Ids
 land in `lru.env` (gitignored). Controller, namespace, pool, sizes and kube
 context are env vars with defaults.
 
-No endpoint id is stored anywhere: the checker asks the controller which endpoint
+`small-temporal-endpoint`, the ExternalName alias every pod resolves, is the one
+object `up.sh` applies outside kustomize. It has to be: it carries the endpoint id,
+so a tracked manifest could only ship a placeholder, and a bare `kubectl apply -k .`
+would then reset the alias and take the whole LRU down. Re-run `up.sh` to repoint it.
+
+No endpoint id is stored in a tracked file: the checker asks the controller which endpoint
 belongs to pool `lru-temporal` and re-resolves every five minutes, so recreating
 the endpoint needs no redeploy. The dashboard resolves it the same way, from
 `amp_endpoint_info{pool="lru-temporal"}`; if you run `up.sh` with a different
@@ -57,6 +62,7 @@ rebuilds Omes, which takes a few minutes.
 ```bash
 kubectl -n amp-lru scale deploy/small-temporal-omes --replicas=0   # stop the load, keep the data
 kubectl delete -k .                                                  # remove the workload, keep the pool
+kubectl -n amp-lru delete svc small-temporal-endpoint                # the alias, which delete -k does not own
 ```
 
 Nothing here deletes the pool, cluster or endpoint. Do that on purpose through the

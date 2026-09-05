@@ -77,6 +77,31 @@ Phase 0 log. Observed facts, dated, newest at the bottom. Inferences are marked.
   `quay-pull-secret`, a long-lived quay credential from 2026-07-08, not a ~12 h
   ECR token.
 
+## 2026-09-04 the endpoint alias was never patched
+
+The LRU was down for its whole first day: Temporal could not acquire a single
+shard and Omes died on every cycle, both on
+`lookup small-temporal-endpoint ... no such host`. All four pods stayed `Running`,
+so only the portal verdict showed it.
+
+`svc/small-temporal-endpoint` still carried the `placeholder.amp-dev.svc.cluster.local`
+that `endpoint.yaml` shipped through kustomize. `up.sh` guarded its patch on
+`get svc amp-endpoint`, a different service that the else branch was supposed to
+create. It is not in the namespace today, so the guard never passed and the alias
+the manifests actually resolve was never touched.
+
+The deeper problem was that the alias was a kustomize resource at all. A tracked
+manifest can only carry a placeholder, so every `kubectl apply -k .` — a path
+`README.md` documents for changing an Omes knob — reset the alias and would have
+reproduced this outage even with the guard fixed. `up.sh` now applies the alias
+imperatively with the resolved externalName and it is no longer a kustomize
+resource. Nothing detects the failure on its own: the rollout status passes because
+the pod is Running, and the checker resolves the endpoint from the controller API
+rather than through the alias, so `amp_endpoint_resolved` stays green.
+
+The amp side was healthy throughout: pool `lru-temporal`, endpoint
+`a310d544-39a4-45c5-bfaf-b5f6d8c0b592`, its deployment 1/1 the whole time.
+
 ## Open
 
 - 12 failed workflows per 4 minutes: confirm they are the Nexus deadline cases and not

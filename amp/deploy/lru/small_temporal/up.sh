@@ -90,12 +90,20 @@ echo "wrote $HERE/lru.env"
 
 k apply -k "$HERE/../monitoring"
 k apply -k "$HERE"
-# Stable in-namespace alias for the endpoint so the Temporal manifest carries no
-# endpoint id. Kept out of kustomize so a re-apply cannot reset it.
-if k -n "$LRU_NS" get svc amp-endpoint >/dev/null 2>&1; then
-  k -n "$LRU_NS" patch svc small-temporal-endpoint --type merge -p "{\"spec\":{\"externalName\":\"$EP_SVC\"}}"
-else
-  k -n "$LRU_NS" create service externalname amp-endpoint --external-name "$EP_SVC" --tcp 55433:55433
-fi
+# Stable in-namespace alias for the endpoint so the manifests carry no endpoint id.
+# Deliberately not a kustomize resource: a bare `kubectl apply -k .` would put a
+# placeholder back and nothing downstream would resolve.
+k apply -f - <<YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: small-temporal-endpoint
+  namespace: $LRU_NS
+  labels: { lru: $LRU }
+spec:
+  type: ExternalName
+  externalName: $EP_SVC
+  ports: [{ name: postgres, port: 55433, targetPort: 55433 }]
+YAML
 k -n "$LRU_NS" rollout status deploy/small-temporal-server --timeout=600s
 k -n "$LRU_NS" get pods -l lru="$LRU"
