@@ -3,6 +3,7 @@ package launch
 import (
 	"bufio"
 	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/amp/controller/local/cfg"
 	"github.com/yugabyte/amp/controller/local/config"
 	"github.com/yugabyte/amp/controller/local/proc"
 )
@@ -24,10 +26,12 @@ import (
 // the thing that notices a daemon died. The supervisor is resident, so the local
 // stack fails and recovers the way the deployed one does.
 //
-// The launcher keeps rendering the config. Local config comes from an environment
-// the supervisor cannot see — ports allocated by a free-port search, a Postgres
-// install outside any image, per-endpoint settings held in the control plane — so
-// it runs with PRERENDERED_CONFIG and touches none of it.
+// The launcher brings the two daemon tomls and lets the supervisor render the
+// compute spec (PRERENDERED_CONFIG=daemons). Their content comes from an
+// environment the supervisor cannot see — per-endpoint data directories and ports
+// allocated by a free-port search — while the compute's settings are its own to
+// render, from the invariants, this endpoint's amp_registry rows, and the
+// local-only values supervisorEnv passes below.
 
 // supervisorName is what proc calls the supervisor's pidfile and log inside the
 // endpoint directory.
@@ -162,13 +166,40 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 		return nil, fmt.Errorf("no safekeeper for endpoint %s", conf.EndpointID)
 	}
 
+	// The launcher brings the two daemon tomls, whose content comes from an
+	// environment the supervisor cannot see, and lets it render the compute spec.
+	// Rendering our own copy of that meant a second list of the same Postgres
+	// settings, which drifted (https://github.com/yugabyte/meko/issues/1050); what is genuinely local goes through
+	// COMPUTE_EXTRA_SETTINGS_JSON below instead.
+	extra, err := json.Marshal(cfg.LocalComputeSettings(localComputeParams(env, le)))
+	if err != nil {
+		return nil, fmt.Errorf("marshal local compute settings: %w", err)
+	}
+	// compute_ctl gates its external HTTP on this key set, and the launcher probes
+	// /status with a token signed by the matching private key. The supervisor's
+	// default is empty, which is the pod's and rejects everything — so without
+	// this the launcher times out waiting for an endpoint that is actually up.
+	jwks, err := json.Marshal(conf.ComputeCtlConfig.Jwks)
+	if err != nil {
+		return nil, fmt.Errorf("marshal compute_ctl jwks: %w", err)
+	}
+
 	out := map[string]string{
-		"PRERENDERED_CONFIG":  "true",
-		"RUN_DIR":             endpointDir(env, conf.EndpointID),
-		"BIN_DIR":             env.YbAmpDistribDir,
-		"PG_DISTRIB_DIR":      env.PgDistribDirRaw(),
-		"BRANCH_ID":           conf.BranchID.String(),
-		"ENDPOINT_PG_VERSION": strconv.Itoa(conf.PgVersion),
+		"PRERENDERED_CONFIG": "daemons",
+		// The registry row's id, which is what the endpoint's pg_settings are
+		// keyed by — not conf.EndpointID, which is the human handle ("main") and
+		// is what COMPUTE_ID carries. The supervisor requires a UUID here and
+		// only warns when it does not get one, so a name would leave the compute
+		// silently running on derived defaults with none of the operator's
+		// settings.
+		"ENDPOINT_ID":                 le.ID.String(),
+		"COMPUTE_EXTRA_SETTINGS_JSON": string(extra),
+		"COMPUTE_CTL_JWKS_JSON":       string(jwks),
+		"RUN_DIR":                     endpointDir(env, conf.EndpointID),
+		"BIN_DIR":                     env.YbAmpDistribDir,
+		"PG_DISTRIB_DIR":              env.PgDistribDirRaw(),
+		"BRANCH_ID":                   conf.BranchID.String(),
+		"ENDPOINT_PG_VERSION":         strconv.Itoa(conf.PgVersion),
 
 		"COMPUTE_ID":                     conf.EndpointID,
 		"COMPUTE_PORT":                   strconv.Itoa(int(conf.PgPort)),
@@ -178,7 +209,14 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 		"PAGESERVER_PG_PORT":   strconv.Itoa(int(psPg)),
 		"PAGESERVER_HTTP_PORT": strconv.Itoa(int(psHTTP)),
 		"SAFEKEEPER_PG_PORT":   strconv.Itoa(int(skConf.PgPort)),
-		"SAFEKEEPER_HTTP_PORT": strconv.Itoa(int(skConf.HTTPPort)),
+		// What walproposer connects to, which is the tenant-only port when one is
+		// configured. Passed separately so the spec names it once: emitting
+		// yb_amp.safekeepers a second time from the launcher would leave Postgres
+		// taking the last occurrence and compute_ctl's ParsedSpec taking the
+		// first (GenericOptionsSearch::find), which is how the two end up talking
+		// to different safekeepers.
+		"SAFEKEEPER_COMPUTE_PORT": strconv.Itoa(int(skConf.GetComputePort())),
+		"SAFEKEEPER_HTTP_PORT":    strconv.Itoa(int(skConf.HTTPPort)),
 
 		// A local run is a place where daemons are killed on purpose — the
 		// integration suite SIGKILLs the safekeeper several times per scenario —
@@ -202,12 +240,30 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 	if conf.PrivilegedRoleName != nil {
 		out["PRIVILEGED_ROLE_NAME"] = *conf.PrivilegedRoleName
 	}
-	// Only for the readiness wait before the daemons start: the connection they
-	// actually use is in the config files the launcher wrote.
+	// The whole connection, not just enough for the readiness wait: since the
+	// supervisor renders the compute spec it also reads this endpoint's
+	// pg_settings out of amp_registry itself, and `fetch_overrides` downgrades a
+	// failed read to a warning — so a connection missing its sslmode or its
+	// password produces a compute that boots looking healthy with none of the
+	// operator's settings, rather than an error.
 	if yb := env.Controller.Yb; yb != nil {
 		out["YB_HOST_PORTS"] = yb.HostPorts
 		out["YB_USER"] = yb.EffectiveUser()
 		out["YB_DBNAME"] = yb.EffectiveDbname()
+		if yb.Sslmode != nil {
+			out["YB_SSLMODE"] = *yb.Sslmode
+		}
+		if yb.Sslrootcert != nil {
+			out["YB_SSLROOTCERT"] = *yb.Sslrootcert
+		}
+		if yb.PasswordEnv != nil {
+			// The name, and the value it names: proc scrubs the environment, so
+			// the variable the supervisor is told to read has to travel with it.
+			out["YB_PASSWORD_ENV"] = *yb.PasswordEnv
+			if v, ok := os.LookupEnv(*yb.PasswordEnv); ok {
+				out[*yb.PasswordEnv] = v
+			}
+		}
 	}
 	for k, v := range pgLibEnv(env) {
 		out[k] = v

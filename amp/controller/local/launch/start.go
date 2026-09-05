@@ -65,13 +65,11 @@ func startAllImpl(ctx context.Context, env *config.LocalEnv, timeout time.Durati
 		return fmt.Errorf("load endpoints: %w", err)
 	}
 	for _, ep := range endpoints.all {
-		// Config first: an endpoint that was created but never started has no
-		// compute spec yet, and the supervisor refuses to start without one.
+		// Daemon config first: the supervisor is told it brings the tomls, and
+		// refuses to start when one is missing. The compute spec is its own to
+		// render, so there is nothing to write here.
 		if err := renderDaemonConfig(env, ep, "safekeeper"); err != nil {
 			return fmt.Errorf("render safekeeper config for %s: %w", ep.conf.EndpointID, err)
-		}
-		if err := renderComputeSpec(ctx, env, ep); err != nil {
-			return fmt.Errorf("render compute spec for %s: %w", ep.conf.EndpointID, err)
 		}
 		if err := startEndpointSupervisor(env, ep, timeout); err != nil {
 			return fmt.Errorf("start endpoint %s: %w", ep.conf.EndpointID, err)

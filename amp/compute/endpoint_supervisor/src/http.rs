@@ -277,10 +277,12 @@ async fn reload_handler(request: Request<Body>) -> Result<Response<Body>, ApiErr
         .data::<Arc<State>>()
         .expect("state is attached to the router");
 
-    // PRERENDERED_CONFIG means the config on disk is the caller's, not ours —
-    // `yb_amp_local` writes it from an environment this process cannot see, so
-    // re-rendering would replace a working config with one built from defaults.
-    if state.env.prerendered {
+    // The caller brought every file, so the config on disk is theirs, not ours,
+    // and re-rendering would replace a working config with one built from
+    // defaults. A caller that brought only the daemon tomls is not refused: the
+    // compute spec is this process's to render, so a reload re-renders that and
+    // leaves the tomls alone.
+    if state.env.prerender == crate::Prerender::Everything {
         return Err(ApiError::PreconditionFailed(
             "this endpoint runs on prerendered config; its settings are the caller's to re-render"
                 .into(),

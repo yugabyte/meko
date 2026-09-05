@@ -62,6 +62,9 @@ pub const UNRECOGNIZED: &str = "unrecognized parameter";
 pub const INVALID_VALUE: &str = "invalid value";
 pub const NOT_SETTABLE: &str = "cannot be set in a configuration file";
 pub const REFUSED: &str = "refused by Postgres";
+/// Stored, but this process did not write the file it belongs in: the caller
+/// brought the daemon config, so a daemon override is theirs to render.
+pub const CALLERS_DAEMON_CONFIG: &str = "the caller renders this daemon's config";
 /// Not refused, just inert: Postgres knows it and nothing can change it.
 pub const NOTHING_APPLIES: &str = "nothing applies this setting";
 

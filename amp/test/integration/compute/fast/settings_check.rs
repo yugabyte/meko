@@ -5,9 +5,8 @@
 //! makes a reload apply nothing and the next start fail outright, so an endpoint
 //! keeps serving until something restarts it and then does not come back.
 //!
-//! Testable here where the reload is not: the check renders nothing, so it works
-//! on a `PRERENDERED_CONFIG` endpoint like the ones this harness runs, and it
-//! answers from the same Postgres binary the compute uses.
+//! The check renders nothing, so it answers from the same Postgres binary the
+//! compute uses without touching any config file.
 
 use anyhow::{Context, bail};
 use serde_json::Value;

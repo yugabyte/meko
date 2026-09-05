@@ -4,12 +4,13 @@
 //! pageserver, and `compute_ctl` with Postgres. This binary renders their config
 //! and supervises them.
 //!
-//! `PRERENDERED_CONFIG=true` keeps the supervising and drops the rendering, for a
-//! caller that has already written all three config files. That is how
-//! `yb_amp_local` runs an endpoint: its config comes from a local environment this
-//! process cannot see — ports it allocated, a Postgres install outside any image,
-//! per-endpoint settings held in the control plane — but the process tree it wants
-//! is the same one the pod runs.
+//! `PRERENDERED_CONFIG` says how much of the config a caller brought; see
+//! [`Prerender`]. A pod brings none. `yb_amp_local` sets `daemons`: it writes the
+//! two daemon tomls, which describe per-endpoint data directories and ports it
+//! found by searching for free ones, and the supervisor renders the compute spec
+//! as it does everywhere else — so a local compute gets the same invariants and
+//! the same `amp_registry` settings a deployed one does. `true` keeps the old
+//! all-three behaviour for a caller that has not been taught otherwise.
 //!
 //! # Modules
 //!
@@ -154,9 +155,60 @@ pub struct Env {
     /// Extension paths and the like, computed by the chart from the ImageVolumes
     /// it mounted. Not derivable here and not in the database.
     chart_settings: BTreeMap<String, String>,
-    /// The caller has already written every config file, so this process
-    /// supervises and does not render. See [`run`].
-    prerendered: bool,
+    /// `compute_ctl`'s bearer-token key set. See
+    /// [`spec::ComputeSpecParams::compute_ctl_jwks`].
+    compute_ctl_jwks: serde_json::Value,
+    /// Which config files the caller wrote itself. See [`Prerender`].
+    prerender: Prerender,
+}
+
+/// How much of the config a caller brought with it.
+///
+/// A pod brings none: the supervisor renders all three files from the
+/// environment and the registry. `yb_amp_local` brings the two daemon tomls,
+/// because their content comes from an environment this process cannot see —
+/// per-endpoint data directories under the launcher's tree and ports it found by
+/// searching for free ones.
+///
+/// It does **not** bring the compute spec. The settings in it are either
+/// invariants of a yb-amp compute or derived from the registry, both of which
+/// this process is the one that knows; a launcher that rendered its own copy kept
+/// a second list of the same settings that drifted from this one (https://github.com/yugabyte/meko/issues/1050).
+/// What is genuinely local goes through `COMPUTE_EXTRA_SETTINGS_JSON`, the same
+/// layer the chart uses for the extension paths only it can compute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prerender {
+    /// Nothing: render all three. The pod.
+    Nothing,
+    /// The two daemon tomls, but not the compute spec. `yb_amp_local`.
+    Daemons,
+    /// All three. A caller that wants this process purely as a supervisor.
+    Everything,
+}
+
+impl Prerender {
+    /// `PRERENDERED_CONFIG`: unset or false for [`Self::Nothing`], `daemons` for
+    /// [`Self::Daemons`], anything else truthy for [`Self::Everything`].
+    ///
+    /// `true` keeps meaning all three, so a caller that has not been taught the
+    /// compute spec is still correct rather than silently having it rewritten.
+    fn from_env() -> Self {
+        match env_opt("PRERENDERED_CONFIG").as_deref().map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("daemons") => Self::Daemons,
+            _ if env_bool("PRERENDERED_CONFIG") => Self::Everything,
+            _ => Self::Nothing,
+        }
+    }
+
+    /// Whether a caller is driving this at all, which is also what decides
+    /// whether each child gets its own log file.
+    fn caller_driven(self) -> bool {
+        self != Self::Nothing
+    }
+
+    fn brings_compute_spec(self) -> bool {
+        self == Self::Everything
+    }
 }
 
 /// `--run-dir <path>`, the one command-line argument this binary takes.
@@ -208,11 +260,12 @@ impl Env {
 
         let branch_id = env_opt("BRANCH_ID").context("BRANCH_ID is required")?;
 
-        // One switch for "a caller is driving this, not a pod": it renders the
-        // config and it reads each daemon's log on its own.
-        let prerendered = env_bool("PRERENDERED_CONFIG");
+        // What the caller brought, which is also what says whether each daemon's
+        // log is read on its own.
+        let prerender = Prerender::from_env();
 
         let compute_ctl_http_port = env_port("COMPUTE_CTL_HTTP_PORT", 3080)?;
+        let safekeeper_pg_port = env_port("SAFEKEEPER_PG_PORT", 5454)?;
 
         let layout = boot::Layout {
             run_dir,
@@ -223,7 +276,10 @@ impl Env {
             pageserver_pg_port: env_port("PAGESERVER_PG_PORT", 64000)?,
             pageserver_http_port: env_port("PAGESERVER_HTTP_PORT", 9898)?,
             pageserver_grpc_port: env_port("PAGESERVER_GRPC_PORT", 51051)?,
-            safekeeper_pg_port: env_port("SAFEKEEPER_PG_PORT", 5454)?,
+            safekeeper_pg_port,
+            // A pod's compute and pageserver reach the same port; `yb_amp_local`
+            // can put a tenant-only one in front of the compute.
+            safekeeper_compute_port: env_port("SAFEKEEPER_COMPUTE_PORT", safekeeper_pg_port)?,
             safekeeper_http_port: env_port("SAFEKEEPER_HTTP_PORT", 7676)?,
             compute_ctl_http_port,
             // The pod allocates the pair contiguously; `yb_amp_local` takes each
@@ -239,7 +295,7 @@ impl Env {
             control_plane_api: env_or("CONTROL_PLANE_API", "http://localhost:6666"),
             compute_id: env_or("COMPUTE_ID", boot::COMPUTE_ID),
             privileged_role_name: env_opt("PRIVILEGED_ROLE_NAME"),
-            log_files: prerendered,
+            log_files: prerender.caller_driven(),
         };
 
         // A malformed id means the overrides cannot be read, which is a warning
@@ -276,7 +332,8 @@ impl Env {
                 DEFAULT_SHARED_PRELOAD_LIBRARIES,
             ),
             chart_settings: chart_settings()?,
-            prerendered,
+            compute_ctl_jwks: compute_ctl_jwks()?,
+            prerender,
         })
     }
 
@@ -369,6 +426,20 @@ impl Env {
     }
 }
 
+/// `COMPUTE_CTL_JWKS_JSON`, the `{"keys": [...]}` object `compute_ctl` validates
+/// bearer tokens against. Empty by default, which is the pod's and closes every
+/// external authenticated route — see [`spec::ComputeSpecParams::compute_ctl_jwks`].
+fn compute_ctl_jwks() -> Result<serde_json::Value> {
+    let raw = env_or("COMPUTE_CTL_JWKS_JSON", r#"{"keys": []}"#);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).context("COMPUTE_CTL_JWKS_JSON is not JSON")?;
+    anyhow::ensure!(
+        parsed.get("keys").is_some_and(|k| k.is_array()),
+        "COMPUTE_CTL_JWKS_JSON must be an object with a \"keys\" array"
+    );
+    Ok(parsed)
+}
+
 /// `COMPUTE_EXTRA_SETTINGS_JSON`, a flat `{name: value}` map the chart renders.
 fn chart_settings() -> Result<BTreeMap<String, String>> {
     let raw = env_or("COMPUTE_EXTRA_SETTINGS_JSON", "{}");
@@ -442,17 +513,16 @@ fn run() -> Result<std::process::ExitCode> {
         return Ok(std::process::ExitCode::SUCCESS);
     }
 
-    if env.prerendered {
-        // `yb_amp_local` renders every one of these itself, from a local
-        // environment this process cannot see: ports it allocated, a Postgres
-        // install outside the image, per-endpoint settings held in the control
-        // plane. Rendering over them would replace a working local config with
-        // one derived from container defaults.
-        require_prerendered(l)?;
-    } else {
+    // The caller's files must be there before anything reads them, whichever
+    // subset it promised.
+    require_prerendered(l, env.prerender)?;
+    if env.prerender != Prerender::Everything {
         // Tolerant on the boot path: `fetch_overrides` warns and returns
         // defaults, because an endpoint that cannot reach the registry must
         // still start. `reload_config` refuses instead — see there.
+        //
+        // With `Prerender::Daemons` this renders the compute spec only; see
+        // [`render_config`].
         let overrides = fetch_overrides(&env);
         render_config(&env, fence_cfg.required, &overrides)?;
     }
@@ -470,9 +540,10 @@ fn run() -> Result<std::process::ExitCode> {
     // — an endpoint serves fine without it, and refusing to run because a port is
     // taken would trade a working database for a convenience. Only when a port is
     // configured, which the chart and `yb_amp_local` both do. It is served on a
-    // prerendered endpoint too, where every call is the refusal in
-    // `reload_handler` — the caller learns that from an answer rather than from a
-    // connection refused.
+    // prerendered endpoint too. On `Everything` every call is the refusal in
+    // `reload_handler`, which the caller learns from an answer rather than from a
+    // connection refused; on `Daemons` the compute spec is this process's to
+    // re-render, so the call does what it says.
     if let Some(addr) = env.settings_api_addr() {
         let state = std::sync::Arc::new(http::State::new(env.clone(), fence_cfg.required));
         match http::spawn(addr, state) {
@@ -516,7 +587,7 @@ fn run() -> Result<std::process::ExitCode> {
                 return Ok(std::process::ExitCode::SUCCESS);
             }
         }
-        let (outcome, returned) = serve_one_lease(&env, fence)?;
+        let (outcome, returned) = serve_one_lease(&env, fence_cfg.required, fence)?;
         fence = returned;
         match outcome {
             Outcome::Shutdown => {
@@ -556,7 +627,8 @@ fn run() -> Result<std::process::ExitCode> {
 /// tolerates its own 409, and the pageserver reads its init mode off a row that
 /// exists by then.
 fn serve_one_lease(
-    env: &Env,
+    env: &std::sync::Arc<Env>,
+    fence_required: bool,
     fence: Option<fence::Fence>,
 ) -> Result<(Outcome, Option<fence::Fence>)> {
     let l = &env.layout;
@@ -569,7 +641,7 @@ fn serve_one_lease(
         .pop()
         .context("boot::services must include a compute")?;
     anyhow::ensure!(
-        compute.name == "compute_ctl",
+        compute.name == boot::COMPUTE_SERVICE,
         "expected compute_ctl last in boot::services, got {}",
         compute.name
     );
@@ -643,7 +715,7 @@ fn serve_one_lease(
         // client outside the pod can authenticate, and a `yb_amp_local` endpoint
         // is reached over loopback, by a spec that already says how its roles
         // are set up.
-        if !env.prerendered {
+        if !env.prerender.caller_driven() {
             remote_auth::spawn(
                 &l.pg_bin().join("psql"),
                 l.compute_port,
@@ -667,9 +739,21 @@ fn serve_one_lease(
         // out of threads, which is exactly the moment that trade is worst.
         match control::bind(&l.run_dir).and_then(|(listener, generation)| {
             let sup = sup.clone();
+            // The control socket re-renders the compute spec before starting the
+            // compute, so it needs the same environment the boot render used.
+            let env_for_control = env.clone();
+            let fence_for_control = fence_required;
             std::thread::Builder::new()
                 .name("control".into())
-                .spawn(move || control::serve(listener, sup, generation))
+                .spawn(move || {
+                    control::serve(
+                        listener,
+                        sup,
+                        generation,
+                        env_for_control,
+                        fence_for_control,
+                    )
+                })
                 .context("spawning the control thread")
         }) {
             Ok(_handle) => {}
@@ -833,32 +917,59 @@ pub fn render_config(
         Err(e) => tracing::warn!("write token: ignoring the branch's lease settings: {e:#}"),
     }
 
+    // Only the daemon tomls take it, so it is not computed when they are the
+    // caller's — and neither is the warning, which would be noise about a file
+    // this process is not writing.
     let scale = res
         .vcpu
         .map(|v| ("scale_factor", toml_edit::Value::from(v)));
-    if scale.is_none() {
+    if scale.is_none() && env.prerender == Prerender::Nothing {
         tracing::warn!("endpoint CPU unknown; leaving the daemons' scale_factor at their default");
     }
 
-    let mut ps_base = boot::pageserver_base(l, env.yb_conn(), fence_required);
-    ps_base.extend(scale.clone());
-    let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
-        .context("rendering pageserver.toml")?;
-    let pageserver = write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
+    // Skipped when the caller brought the daemon tomls: theirs describe per-endpoint
+    // data directories and ports this process cannot see, and rendering over them
+    // would replace a working local config with one built from pod defaults.
+    //
+    // Any daemon override stored for this endpoint is therefore not applied, and
+    // is named back to the caller rather than dropped — a reload that answered
+    // 200 with nothing restarted would otherwise read as "your edit took".
+    let mut refused_daemon: Vec<guc::NotApplied> = Vec::new();
+    if env.prerender != Prerender::Nothing {
+        for (daemon, keys) in [
+            ("pageserver", &overrides.pageserver),
+            ("safekeeper", &overrides.safekeeper),
+        ] {
+            refused_daemon.extend(keys.keys().map(|k| guc::NotApplied {
+                name: format!("{daemon}.{k}"),
+                reason: guc::CALLERS_DAEMON_CONFIG.to_string(),
+            }));
+        }
+    }
+    let (pageserver, safekeeper) = if env.prerender == Prerender::Nothing {
+        let mut ps_base = boot::pageserver_base(l, env.yb_conn(), fence_required);
+        ps_base.extend(scale.clone());
+        let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
+            .context("rendering pageserver.toml")?;
+        let pageserver = write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
 
-    // The safekeeper's yb_storage_conn is a string-encoded inline table rather
-    // than a table, which is the shape its config type expects.
-    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string(), fence_required);
-    sk_base.extend(scale);
-    let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
-        .context("rendering safekeeper.toml")?;
-    let safekeeper = write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
+        // The safekeeper's yb_storage_conn is a string-encoded inline table rather
+        // than a table, which is the shape its config type expects.
+        let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string(), fence_required);
+        sk_base.extend(scale);
+        let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
+            .context("rendering safekeeper.toml")?;
+        let safekeeper = write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
+        (pageserver, safekeeper)
+    } else {
+        (false, false)
+    };
 
     let compute_spec = spec::render_compute_spec(
         &spec::ComputeSpecParams {
             compute_port: l.compute_port,
             branch_id: &l.branch_id,
-            safekeeper_addr: &l.safekeeper_addr(),
+            safekeeper_addr: &l.safekeeper_compute_addr(),
             pageserver_connstring: &l.pageserver_connstring(),
             shared_preload_libraries: &env.shared_preload_libraries,
             cloud_admin_password_md5: &spec::md5_role_password(
@@ -869,6 +980,7 @@ pub fn render_config(
             yb_storage_conn: env.yb_conn_typed_json(),
             autoprewarm: env.autoprewarm,
             offload_lfc_interval_seconds: env.offload_lfc_interval_seconds,
+            compute_ctl_jwks: env.compute_ctl_jwks.clone(),
         },
         &settings,
         &env.chart_settings,
@@ -896,7 +1008,7 @@ pub fn render_config(
         safekeeper,
         compute,
         changed_settings,
-        refused_settings: screened.refused,
+        refused_settings: screened.refused.into_iter().chain(refused_daemon).collect(),
     })
 }
 
@@ -906,18 +1018,29 @@ pub fn render_config(
 /// message. Without it a missing file surfaces as a daemon that exits on a
 /// default config it silently invented, or a `compute_ctl` that panics on a spec
 /// it cannot open — neither of which names the file that is missing.
-fn require_prerendered(l: &boot::Layout) -> Result<()> {
-    for path in [
-        l.ps_datadir().join("pageserver.toml"),
-        l.sk_datadir().join("safekeeper.toml"),
-        l.compute_spec(),
-    ] {
+fn require_prerendered(l: &boot::Layout, mode: Prerender) -> Result<()> {
+    let mut paths = match mode {
+        Prerender::Nothing => return Ok(()),
+        Prerender::Daemons | Prerender::Everything => vec![
+            l.ps_datadir().join("pageserver.toml"),
+            l.sk_datadir().join("safekeeper.toml"),
+        ],
+    };
+    if mode.brings_compute_spec() {
+        paths.push(l.compute_spec());
+    }
+    for path in paths {
         anyhow::ensure!(
             path.exists(),
             "PRERENDERED_CONFIG is set but {path} does not exist"
         );
     }
-    tracing::info!("running on the caller's config; rendering nothing");
+    match mode {
+        Prerender::Everything => {
+            tracing::info!("running on the caller's config; rendering nothing")
+        }
+        _ => tracing::info!("running on the caller's daemon config; rendering the compute spec"),
+    }
     Ok(())
 }
 
@@ -1122,6 +1245,7 @@ mod tests {
                 pageserver_http_port: 9898,
                 pageserver_grpc_port: 51051,
                 safekeeper_pg_port: 5454,
+                safekeeper_compute_port: 5454,
                 safekeeper_http_port: 7676,
                 compute_ctl_http_port: 3080,
                 compute_ctl_internal_http_port: 3081,
@@ -1144,7 +1268,8 @@ mod tests {
             offload_lfc_interval_seconds: None,
             shared_preload_libraries: "yb_amp".into(),
             chart_settings: BTreeMap::new(),
-            prerendered: false,
+            prerender: Prerender::Nothing,
+            compute_ctl_jwks: serde_json::json!({"keys": []}),
         }
     }
 
@@ -1259,16 +1384,20 @@ mod tests {
         std::fs::create_dir_all(l.ps_datadir()).unwrap();
         std::fs::create_dir_all(l.sk_datadir()).unwrap();
 
-        let err = require_prerendered(&l).unwrap_err().to_string();
+        let err = require_prerendered(&l, Prerender::Everything)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("pageserver.toml"), "{err}");
 
         std::fs::write(l.ps_datadir().join("pageserver.toml"), "").unwrap();
         std::fs::write(l.sk_datadir().join("safekeeper.toml"), "").unwrap();
-        let err = require_prerendered(&l).unwrap_err().to_string();
+        let err = require_prerendered(&l, Prerender::Everything)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("compute_spec.json"), "{err}");
 
         std::fs::write(l.compute_spec(), "{}").unwrap();
-        require_prerendered(&l).expect("all three present");
+        require_prerendered(&l, Prerender::Everything).expect("all three present");
     }
 
     /// The optional connection fields are omitted rather than emitted as null,

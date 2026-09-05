@@ -174,9 +174,9 @@ pgbouncer/local_proxy config, remote-extension index, swap/disk-quota sizes, and
 `compute_ctl_config` carries the JWKS (and optional TLS cert paths) that the
 external HTTP server's auth verifies against. The config is acquired two ways:
 
-- **From a file** — `--config <path>`. This is how `yb_amp_local` drives it:
-  `controller/local/cfg` writes `compute_spec.json` into the endpoint dir and the
-  endpoint's `endpoint-supervisor` passes `--config`.
+- **From a file** — `--config <path>`. This is how `yb_amp_local` drives it: the
+  endpoint's `endpoint-supervisor` renders `compute_spec.json` into the endpoint
+  dir and passes `--config`, the same as in a pod.
 - **From the control plane** — `--control-plane-uri <base>` (with `--compute-id`),
   which GETs `{base}/compute/api/v2/computes/{id}/spec` with 3 attempts (`spec.rs`),
   sending `Bearer $YBAMP_CONTROL_PLANE_TOKEN` if that env var is set. The response
@@ -493,9 +493,8 @@ compute-ctl \
 
 `BUILD_TAG` (compile-time) stamps metrics and remote-extension paths.
 
-In the dev cluster, `yb_amp_local` writes the spec (`compute_spec.json`, via
-`controller/local/cfg`) and the endpoint's `endpoint-supervisor` runs the binary,
-the same way a pod does — see
+In the dev cluster the endpoint's `endpoint-supervisor` renders the spec
+(`compute_spec.json`) and runs the binary, the same way a pod does — see
 [single-container-endpoint.md](single-container-endpoint.md). The launcher
 decides when the compute is *up*, polling `GET /status` until `running`, since
 only that distinguishes a compute that is serving from one that failed its
@@ -542,5 +541,6 @@ on `compute_ctl` in a few concrete places:
   `ComputeMode` / `ComputeStatus` and the API request/response types, shared with
   the control plane.
 - `controller/local/launch/endpoint.go`, `controller/local/launch/supervisor.go`,
-  `controller/local/cfg` — the `yb_amp_local` endpoint lifecycle: it writes
-  `compute_spec.json` and runs the binary under `endpoint-supervisor`.
+  `controller/local/cfg` — the `yb_amp_local` endpoint lifecycle: it writes the
+  two daemon tomls and runs the binary under `endpoint-supervisor`, which renders
+  `compute_spec.json` itself.

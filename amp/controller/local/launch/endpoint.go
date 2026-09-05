@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -48,10 +47,10 @@ type endpointConf struct {
 	ExternalHTTPPort uint16          `json:"external_http_port"`
 	InternalHTTPPort uint16          `json:"internal_http_port"`
 	// Where the supervisor serves POST /v1/settings/reload. Deployed endpoints
-	// get this from the chart. Locally the answer is always a refusal — the
-	// launcher renders the config, so re-rendering is not the supervisor's to do
-	// — and the port is allocated anyway so that contract is reachable, by a
-	// test and by anyone debugging why a local settings change did not apply.
+	// get this from the chart; the launcher allocates it so a local endpoint has
+	// the same surface. The compute spec is the supervisor's to render on both,
+	// so a pg_settings edit applies here too — only a daemon override comes back
+	// in `not_applied`, since those two files are the launcher's.
 	SettingsHTTPPort             uint16               `json:"settings_http_port"`
 	PgVersion                    int                  `json:"pg_version"`
 	Grpc                         bool                 `json:"grpc"`
@@ -369,49 +368,6 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch
 	return nil
 }
 
-// effectivePgSettings resolves what this endpoint's compute actually runs with:
-// its branch's settings merged with its own, its own winning. Sorted by name so
-// the generated postgresql.conf is byte-stable across runs — Go map iteration is
-// not ordered, and an unstable config file would make every diff noise.
-func effectivePgSettings(ctx context.Context, env *config.LocalEnv, le launcherEndpoint) ([][2]string, error) {
-	b, err := newBranchAPI(env)
-	if err != nil {
-		return nil, err
-	}
-	branch, err := b.api.GetBranch(ctx, b.poolID, le.Cluster, le.Branch)
-	if err != nil {
-		return nil, err
-	}
-	var branchSettings map[string]string
-	if branch.PgSettings != nil {
-		branchSettings = *branch.PgSettings
-	}
-	var endpointSettings map[string]string
-	if le.pgSettings != nil {
-		endpointSettings = le.pgSettings
-	}
-	merged := make(map[string]string, len(branchSettings)+len(endpointSettings))
-	for k, v := range branchSettings {
-		merged[k] = v
-	}
-	for k, v := range endpointSettings {
-		merged[k] = v
-	}
-	names := make([]string, 0, len(merged))
-	for k := range merged {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	out := make([][2]string, 0, len(names))
-	for _, k := range names {
-		out = append(out, [2]string{k, merged[k]})
-	}
-	return out, nil
-}
-
-// pgSettingsMap turns the repeatable --pg-setting flag into the object the API
-// takes. A name given twice keeps the last value, matching how postgresql.conf
-// resolves a repeated setting.
 func pgSettingsMap(pairs [][2]string) map[string]string {
 	if len(pairs) == 0 {
 		return nil
@@ -453,149 +409,47 @@ func resolveEndpoint(ctx context.Context, env *config.LocalEnv, endpointID strin
 	return endpoints.lookup(endpointID)
 }
 
-// EndpointStart builds the compute config, brings the endpoint's supervisor up,
-// and waits for the compute to reach Running. Mirrors the `EndpointCmd::Start`
-// arm of Rust `handle_endpoint` + `Endpoint::start`.
+// EndpointStart brings the endpoint's supervisor up and waits for the compute to
+// reach Running.
+//
+// It renders no compute config. The supervisor does that, from the invariants it
+// owns, this endpoint's and its branch's `pg_settings` in `amp_registry`, and the
+// local-only settings `supervisorEnv` hands it — the same way the k8s and Docker
+// deploy drivers have always worked. A launcher that rendered its own copy kept a
+// second list of the same Postgres settings, and the two drifted (https://github.com/yugabyte/meko/issues/1050).
 func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string, timeout time.Duration) error {
 	le, err := resolveEndpoint(ctx, env, endpointID)
 	if err != nil {
 		return err
 	}
-	if err := renderComputeSpec(ctx, env, le); err != nil {
-		return err
-	}
 	return startCompute(ctx, env, le, timeout)
 }
 
-// renderComputeSpec writes the compute spec the supervisor starts compute_ctl
-// from.
-//
-// Every path that brings the supervisor up has to call this first: the
-// supervisor runs with PRERENDERED_CONFIG and refuses to start against a spec
-// that is not there, and `endpoint create` does not write one. Without it,
-// `start` or `pageserver start` on an endpoint that was created but never
-// started aborts the supervisor before any daemon runs.
-func renderComputeSpec(ctx context.Context, env *config.LocalEnv, le launcherEndpoint) error {
-	conf := le.conf
-	// The compute's settings are the branch's baseline with this endpoint's own
-	// merged over it — the same rule the deployed path applies (core.EffectivePgSettings).
-	pgSettings, err := effectivePgSettings(ctx, env, le)
-	if err != nil {
-		return err
+// localComputeParams is the one description of a local compute's environment,
+// which `supervisorEnv` turns into the settings the supervisor cannot work out
+// for itself.
+func localComputeParams(env *config.LocalEnv, le launcherEndpoint) cfg.PostgresqlConfParams {
+	// This endpoint's own safekeeper, not every one in the environment:
+	// walproposer refuses to start against more than one ("yb_amp.safekeepers
+	// must name exactly one safekeeper"), so a second endpoint on a fork wedges
+	// the moment the env has two. The port is GetComputePort rather than PgPort
+	// because a tenant-only port, when configured, is the one the compute uses.
+	var skPorts []uint16
+	for i := range env.Safekeepers {
+		if env.Safekeepers[i].EndpointID == le.conf.EndpointID {
+			skPorts = append(skPorts, env.Safekeepers[i].GetComputePort())
+			break
+		}
 	}
-
-	psConf := env.PageserverConfForBranch(conf.BranchID)
-	if psConf == nil {
-		return fmt.Errorf("no pageserver serves branch %s", conf.BranchID)
-	}
-
-	// Trust path: no storage auth token for the compute→pageserver link.
-	var storageAuthToken *string
-
-	connInfo, err := pageserverConnInfo(psConf, conf.Grpc, env.UseLocalTLS)
-	if err != nil {
-		return err
-	}
-	var pageserverConnstring *string
-	if len(connInfo.Pageservers) > 0 && connInfo.Pageservers[0].LibpqURL != nil {
-		s := *connInfo.Pageservers[0].LibpqURL
-		pageserverConnstring = &s
-	}
-
-	// The branch's safekeepers become the spec's safekeeper connstrings.
-	branchSks := safekeepersForTimeline(env, conf.BranchID)
-	var safekeeperConnstrings []string
-	for _, sk := range branchSks {
-		sk := sk
-		safekeeperConnstrings = append(safekeeperConnstrings, fmt.Sprintf("127.0.0.1:%d", sk.GetComputePort()))
-	}
-
-	// postgresql.conf: walproposer is wired to ALL env safekeepers'
-	// compute ports (Rust `setup_pg_conf` reads `self.env.safekeepers`).
-	var allSkPorts []uint16
-	for _, sk := range env.Safekeepers {
-		sk := sk
-		allSkPorts = append(allSkPorts, sk.GetComputePort())
-	}
-	pgConf := cfg.BuildPostgresqlConf(cfg.PostgresqlConfParams{
-		SharedBuffers:          conf.SharedBuffers,
+	return cfg.PostgresqlConfParams{
+		SharedBuffers:          le.conf.SharedBuffers,
 		ListenAddr:             "127.0.0.1",
-		Port:                   conf.PgPort,
 		UseLocalTLS:            env.UseLocalTLS,
-		LfcSize:                conf.LfcSize,
-		PgSettings:             pgSettings,
-		SafekeeperComputePorts: allSkPorts,
-	})
-
-	computeConfig, err := cfg.BuildComputeConfig(cfg.ComputeSpecParams{
-		PostgresqlConf:               pgConf,
-		CreateTestUser:               false,
-		StorageBranchID:              conf.BranchID,
-		EndpointID:                   conf.EndpointID,
-		Mode:                         cfg.ComputeModePrimary,
-		PageserverConnInfo:           connInfo,
-		PageserverConnstring:         pageserverConnstring,
-		SafekeeperConnstrings:        safekeeperConnstrings,
-		StorageAuthToken:             storageAuthToken,
-		SkipPgCatalogUpdates:         conf.SkipPgCatalogUpdates,
-		DropSubscriptionsBeforeStart: conf.DropSubscriptionsBeforeStart,
-		ReconfigureConcurrency:       conf.ReconfigureConcurrency,
-		// The LFC state store, so a prewarming compute can address its blob.
-		// Passed unconditionally: BuildComputeConfig only derives the store when
-		// prewarm is actually enabled.
-		YbConn:           env.Controller.Yb,
-		Features:         nil,
-		ComputeCtlConfig: conf.ComputeCtlConfig,
-	})
-	if err != nil {
-		return err
+		LfcSize:                le.conf.LfcSize,
+		SafekeeperComputePorts: skPorts,
 	}
-
-	// At the path the supervisor's layout expects.
-	return cfg.WriteComputeConfigJSON(computeSpecPath(env, conf.EndpointID), computeConfig)
 }
 
-// pageserverConnInfo builds the compute's pageserver connection block from a
-// PageServerConf, mirroring Rust `local_pageserver_conf_to_conn_info`.
-func pageserverConnInfo(conf *config.PageServerConf, grpc, useTLS bool) (cfg.PageserverConnectionInfo, error) {
-	host, err := hostOf(conf.ListenPgAddr)
-	if err != nil {
-		return cfg.PageserverConnectionInfo{}, err
-	}
-	port, err := portOf(conf.ListenPgAddr)
-	if err != nil {
-		return cfg.PageserverConnectionInfo{}, err
-	}
-	sslmode := "?sslmode=disable"
-	if useTLS {
-		sslmode = ""
-	}
-	libpq := fmt.Sprintf("postgres://no_user@%s:%d%s", host, port, sslmode)
-	item := cfg.PageserverConnectionItem{LibpqURL: &libpq}
-	if conf.ListenGRPCAddr != nil {
-		gh, err := hostOf(*conf.ListenGRPCAddr)
-		if err != nil {
-			return cfg.PageserverConnectionInfo{}, err
-		}
-		gp, err := portOf(*conf.ListenGRPCAddr)
-		if err != nil {
-			return cfg.PageserverConnectionInfo{}, err
-		}
-		grpcURL := fmt.Sprintf("grpc://no_user@%s:%d", gh, gp)
-		item.GrpcURL = &grpcURL
-	}
-	prefer := cfg.PageserverProtocolLibpq
-	if grpc {
-		prefer = cfg.PageserverProtocolGrpc
-	}
-	return cfg.PageserverConnectionInfo{
-		Pageservers:    []cfg.PageserverConnectionItem{item},
-		PreferProtocol: prefer,
-	}, nil
-}
-
-// computeJWT mints the compute_ctl status token (Rust `generate_jwt(None)`:
-// compute_id set, scope + aud null).
 func computeJWT(env *config.LocalEnv, endpointID string) (string, error) {
 	return env.GenerateAuthToken(jwt.MapClaims{
 		"compute_id": endpointID,
@@ -604,10 +458,14 @@ func computeJWT(env *config.LocalEnv, endpointID string) (string, error) {
 	})
 }
 
-// startCompute writes the compute spec, brings up the endpoint's supervisor —
-// which starts the safekeeper, the pageserver and then compute_ctl — and polls
+// startCompute brings up the endpoint's supervisor — which renders the compute
+// spec, then starts the safekeeper, the pageserver and compute_ctl — and polls
 // /status until Running. Mirrors the process-launch half of Rust
 // `Endpoint::start`.
+//
+// It writes no compute config. When the supervisor is already up, the `start
+// compute_ctl` request re-renders the spec before the compute starts, so an
+// amp_registry edit between a stop and a start applies.
 //
 // The supervisor spawns compute_ctl; the launcher decides when the compute is
 // *up*. Only compute_ctl's own status distinguishes a compute that is serving
@@ -689,12 +547,6 @@ func startCompute(ctx context.Context, env *config.LocalEnv, le launcherEndpoint
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-}
-
-// computeSpecPath is where the supervisor looks for the compute spec — see
-// `Layout::compute_spec` in compute/endpoint_supervisor/src/boot.rs.
-func computeSpecPath(env *config.LocalEnv, endpointID string) string {
-	return filepath.Join(endpointDir(env, endpointID), "compute_spec.json")
 }
 
 // EndpointStopMode selects how `endpoint stop` terminates the compute.

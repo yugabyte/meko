@@ -5,8 +5,10 @@
 //   - pageserver.toml / metadata.json
 //   - safekeeper.toml, whose shape is
 //     safekeeper_api::config::SafekeeperConfigToml
-//   - the compute's config.json + in-spec postgresql.conf, whose shapes are
-//     compute_api::spec::ComputeSpec / responses::ComputeConfig
+//
+// The compute's spec is not among them: the endpoint supervisor renders that on
+// every deploy path, and what only this launcher knows reaches it through
+// COMPUTE_EXTRA_SETTINGS_JSON (see LocalComputeSettings).
 //
 // These files are parsed by the Rust daemons, so field names, TOML/JSON
 // types and nesting must match the Rust structs exactly — a wrong key or a

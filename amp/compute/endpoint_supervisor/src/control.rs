@@ -119,7 +119,13 @@ pub fn bind(run_dir: &Utf8Path) -> Result<(UnixListener, u64)> {
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Serve control requests until the process stops. One connection, one command.
-pub fn serve(listener: UnixListener, sup: Shared, generation: u64) {
+pub fn serve(
+    listener: UnixListener,
+    sup: Shared,
+    generation: u64,
+    env: std::sync::Arc<crate::Env>,
+    fence_required: bool,
+) {
     loop {
         if crate::supervise::shutdown_requested()
             || GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation
@@ -134,7 +140,7 @@ pub fn serve(listener: UnixListener, sup: Shared, generation: u64) {
                     tracing::warn!("control stream: {e}");
                     continue;
                 }
-                if let Err(e) = handle(stream, &sup) {
+                if let Err(e) = handle(stream, &sup, &env, fence_required) {
                     tracing::warn!("control request failed: {e:#}");
                 }
             }
@@ -164,12 +170,12 @@ pub fn run_shared(sup: &Shared, poll: std::time::Duration) -> Result<crate::supe
     }
 }
 
-fn handle(stream: UnixStream, sup: &Shared) -> Result<()> {
+fn handle(stream: UnixStream, sup: &Shared, env: &crate::Env, fence_required: bool) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone().context("cloning the control stream")?);
     let mut line = String::new();
     reader.read_line(&mut line).context("reading the request")?;
 
-    let response = dispatch(line.trim(), sup);
+    let response = dispatch(line.trim(), sup, env, fence_required);
     let mut stream = stream;
     stream
         .write_all(response.as_bytes())
@@ -177,7 +183,7 @@ fn handle(stream: UnixStream, sup: &Shared) -> Result<()> {
     Ok(())
 }
 
-fn dispatch(line: &str, sup: &Shared) -> String {
+fn dispatch(line: &str, sup: &Shared, env: &crate::Env, fence_required: bool) -> String {
     let mut parts = line.split_whitespace();
     let verb = parts.next().unwrap_or_default();
     let target = parts.next();
@@ -209,11 +215,17 @@ fn dispatch(line: &str, sup: &Shared) -> String {
         }
         ("disable", Some(name)) => reply(sup.disable(&name)),
         ("stop", Some(name)) => reply(sup.stop_one(&name, drain)),
-        ("start", Some(name)) => reply(sup.start_one(&name, budget)),
-        ("restart", Some(name)) => reply(
-            sup.stop_one(&name, drain)
-                .and_then(|()| sup.start_one(&name, budget)),
-        ),
+        ("start", Some(name)) => {
+            rerender_for(env, fence_required, &name);
+            reply(sup.start_one(&name, budget))
+        }
+        ("restart", Some(name)) => {
+            rerender_for(env, fence_required, &name);
+            reply(
+                sup.stop_one(&name, drain)
+                    .and_then(|()| sup.start_one(&name, budget)),
+            )
+        }
         // Read-only. Retuning goes through the branch's `write_token_settings`,
         // which the renewal loop picks up; this answers what a running endpoint
         // actually has, which is the question a retune leaves behind. Two ways
@@ -237,6 +249,29 @@ fn dispatch(line: &str, sup: &Shared) -> String {
     }
 }
 
+/// Re-render the compute spec before the compute starts, so a compute brought up
+/// on its own runs the settings the registry holds now rather than the ones it
+/// held when the supervisor booted.
+///
+/// Only the compute: the daemons read their toml at start, and under
+/// [`crate::Prerender::Daemons`] those files are the caller's.
+///
+/// Tolerant, like the boot path and unlike `/v1/settings/reload`: a registry that
+/// cannot be reached must not stop an endpoint from starting, and the spec
+/// already on disk is a working one. The refusal belongs to the reload, which is
+/// a request to apply a change and has nothing to fall back to.
+fn rerender_for(env: &crate::Env, fence_required: bool, service: &str) {
+    if service != crate::boot::COMPUTE_SERVICE {
+        return;
+    }
+    let overrides = crate::fetch_overrides(env);
+    match crate::render_config(env, fence_required, &overrides) {
+        Ok(r) if r.compute => tracing::info!("compute spec re-rendered before start"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("starting on the spec already on disk: {e:#}"),
+    }
+}
+
 fn reply(res: Result<()>) -> String {
     match res {
         Ok(()) => "ok\n".into(),
@@ -254,6 +289,14 @@ fn reply(res: Result<()>) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The control socket re-renders before starting the compute, so `dispatch`
+    /// needs an environment. These tests exercise the verbs, not the render:
+    /// `/data` does not exist, so `rerender_for` warns and starts anyway, which
+    /// is the tolerance the boot path has too.
+    fn env() -> std::sync::Arc<crate::Env> {
+        std::sync::Arc::new(crate::tests::test_env())
+    }
+
     use super::*;
     use crate::supervise::{Policy, Service};
 
@@ -274,10 +317,12 @@ mod tests {
     #[test]
     fn unknown_commands_and_missing_names_are_errors_not_panics() {
         let sup = shared_with(Service::new("x", sh("sleep 60")));
-        assert!(dispatch("frobnicate x", &sup).starts_with("err: unknown command"));
-        assert!(dispatch("stop", &sup).starts_with("err: stop needs a service name"));
-        assert!(dispatch("", &sup).starts_with("err: empty request"));
-        assert!(dispatch("stop nosuch", &sup).starts_with("err:"));
+        assert!(dispatch("frobnicate x", &sup, &env(), false).starts_with("err: unknown command"));
+        assert!(
+            dispatch("stop", &sup, &env(), false).starts_with("err: stop needs a service name")
+        );
+        assert!(dispatch("", &sup, &env(), false).starts_with("err: empty request"));
+        assert!(dispatch("stop nosuch", &sup, &env(), false).starts_with("err:"));
     }
 
     /// The point of the whole module: a service stopped through the socket must
@@ -288,8 +333,8 @@ mod tests {
         svc.spawn().unwrap();
         let sup = shared_with(svc);
 
-        assert_eq!(dispatch("stop pageserver", &sup), "ok\n");
-        let status = dispatch("status", &sup);
+        assert_eq!(dispatch("stop pageserver", &sup, &env(), false), "ok\n");
+        let status = dispatch("status", &sup, &env(), false);
         assert!(
             status.contains("pageserver stopped"),
             "want a deliberate stop, got: {status}"
@@ -308,7 +353,10 @@ mod tests {
         };
         let sup = shared_with_policy(svc, policy);
 
-        assert_eq!(dispatch("stop pageserver immediate", &sup), "ok\n");
+        assert_eq!(
+            dispatch("stop pageserver immediate", &sup, &env(), false),
+            "ok\n"
+        );
 
         let mut guard = sup.lock().unwrap();
         assert_eq!(
@@ -317,7 +365,7 @@ mod tests {
             "the request's mode must reach the signal the stop sends"
         );
         drop(guard);
-        assert!(dispatch("status", &sup).contains("pageserver stopped"));
+        assert!(dispatch("status", &sup, &env(), false).contains("pageserver stopped"));
     }
 
     #[test]
@@ -325,9 +373,9 @@ mod tests {
         let mut svc = Service::new("safekeeper", sh("sleep 60"));
         svc.spawn().unwrap();
         let sup = shared_with(svc);
-        let status = dispatch("status", &sup);
+        let status = dispatch("status", &sup, &env(), false);
         assert!(status.contains("safekeeper running"), "{status}");
-        let _ = dispatch("stop safekeeper", &sup);
+        let _ = dispatch("stop safekeeper", &sup, &env(), false);
     }
 
     /// The caller's budget has to reach the supervisor, or the two give up at
@@ -349,7 +397,7 @@ mod tests {
         );
 
         let started = std::time::Instant::now();
-        let reply = dispatch("start pageserver 1", &sup);
+        let reply = dispatch("start pageserver 1", &sup, &env(), false);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(30),
             "waited {:?}: the caller's budget was ignored",
@@ -370,7 +418,7 @@ mod tests {
         svc.spawn().unwrap();
         let sup = shared_with(svc);
 
-        assert_eq!(dispatch("disable compute_ctl", &sup), "ok\n");
+        assert_eq!(dispatch("disable compute_ctl", &sup, &env(), false), "ok\n");
 
         // Still running: the caller has not killed it yet.
         let mut guard = sup.lock().unwrap();
@@ -427,7 +475,7 @@ mod tests {
         let dir = camino_tempfile::tempdir().unwrap();
         let (first, first_gen) = bind(dir.path()).unwrap();
         let sup = shared_with(Service::new("pageserver", sh("sleep 60")));
-        let old = std::thread::spawn(move || serve(first, sup, first_gen));
+        let old = std::thread::spawn(move || serve(first, sup, first_gen, env(), false));
 
         // Supersede it. The old thread must notice and return on its own — no
         // connection, no shutdown flag.
@@ -453,7 +501,7 @@ mod tests {
 
         let (listener, generation) = bind(&deep).expect("the fallback path must bind");
         let sup = shared_with(Service::new("pageserver", sh("sleep 60")));
-        std::thread::spawn(move || serve(listener, sup, generation));
+        std::thread::spawn(move || serve(listener, sup, generation, env(), false));
 
         let mut stream = UnixStream::connect(&path).expect("connect to the fallback socket");
         stream.write_all(b"status\n").unwrap();
@@ -473,16 +521,25 @@ mod tests {
         let sup = shared_with(Service::new("a", sh("sleep 30")));
         crate::fence::set_timings(Duration::from_secs(10), Duration::from_secs(5)).unwrap();
 
-        assert_eq!(dispatch("lease", &sup), "ttl_ms=10000 renew_ms=5000\n");
+        assert_eq!(
+            dispatch("lease", &sup, &env(), false),
+            "ttl_ms=10000 renew_ms=5000\n"
+        );
 
         // It reports a change that arrived from the branch.
         crate::fence::set_timings(Duration::from_secs(20), Duration::from_secs(8)).unwrap();
-        assert_eq!(dispatch("lease", &sup), "ttl_ms=20000 renew_ms=8000\n");
+        assert_eq!(
+            dispatch("lease", &sup, &env(), false),
+            "ttl_ms=20000 renew_ms=8000\n"
+        );
 
         // Setting it here is refused, and says where the knob is.
-        let refused = dispatch("lease 30000 9", &sup);
+        let refused = dispatch("lease 30000 9", &sup, &env(), false);
         assert!(refused.contains("write_token_settings"), "{refused}");
-        assert_eq!(dispatch("lease", &sup), "ttl_ms=20000 renew_ms=8000\n");
+        assert_eq!(
+            dispatch("lease", &sup, &env(), false),
+            "ttl_ms=20000 renew_ms=8000\n"
+        );
 
         crate::fence::reset_timings_for_test();
     }

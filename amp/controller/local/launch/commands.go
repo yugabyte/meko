@@ -33,11 +33,6 @@ func daemonStart(ctx context.Context, env *config.LocalEnv, endpointID, service 
 	if err := renderDaemonConfig(env, le, service); err != nil {
 		return err
 	}
-	// The supervisor runs every service or none, so it needs the compute's spec
-	// even when the caller only asked for a daemon.
-	if err := renderComputeSpec(ctx, env, le); err != nil {
-		return err
-	}
 	if err := startEndpointSupervisor(env, le, timeout); err != nil {
 		return err
 	}

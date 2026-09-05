@@ -71,8 +71,8 @@ Code anchors:
 - `controller/local/config` — the `.yb_amp/config` TOML types
   (`YbAmpControllerConf.Yb`, `SafekeeperConf.YbStorageConn`;
   every service takes the same `yb_storage_conn` connection block).
-- `controller/local/cfg` — the per-component config-file writers
-  (pageserver.toml / safekeeper.toml / compute config.json);
+- `controller/local/cfg` — the per-daemon config-file writers (pageserver.toml /
+  safekeeper.toml) plus the local-only compute settings the supervisor is handed;
   `controller/local/cmd/yb_amp_local` — the CLI assembly.
 - `compute/pageserver/src/page_store.rs` — `PageStore` row store for the
   row-per-page YB layout (`amp_storage.pages` +

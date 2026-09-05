@@ -55,7 +55,6 @@ func (LocalDeployer) ResizeEndpoint(_ context.Context, _ ResizeSpec) (ResizeResu
 // api.Provisioning.Node, which this driver leaves nil).
 func (LocalDeployer) EndpointSafekeeperURL(_ string) string { return "" }
 
-// EndpointSupervisorURL is likewise empty: the launcher owns these endpoints,
-// and one on prerendered config refuses a reload anyway — its settings are the
-// launcher's to re-render, from an environment the supervisor cannot see.
+// EndpointSupervisorURL is likewise empty: the launcher owns these endpoints and
+// reaches their supervisors over the port it allocated, not through this driver.
 func (LocalDeployer) EndpointSupervisorURL(_ string) string { return "" }

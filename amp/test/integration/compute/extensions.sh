@@ -352,8 +352,9 @@ PG_SETTINGS=(
     # EXPLAIN tests diverge on a value that can't be blessed. Harmless elsewhere.
     --pg-setting "compute_query_id=off"
 )
-# A preload extension must also be added to shared_preload_libraries; the local
-# base sets it to just "yb_amp" (postgresqlconf.go). That GUC is comma-separated
+# A preload extension must also be added to shared_preload_libraries; the base is
+# the supervisor's DEFAULT_SHARED_PRELOAD_LIBRARIES (endpoint_supervisor's
+# main.rs), which local and deployed endpoints share. That GUC is comma-separated
 # (a list of library names), unlike the path GUCs above. pgvector/age need no
 # preload; pg_cron/hexabridge do — union whatever the co-mounted set requires.
 if [[ ${#PRELOAD_LIBS[@]} -gt 0 ]]; then

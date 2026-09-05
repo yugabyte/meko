@@ -25,6 +25,11 @@ pub struct Layout {
     pub pageserver_http_port: u16,
     pub pageserver_grpc_port: u16,
     pub safekeeper_pg_port: u16,
+    /// The safekeeper port the **compute** connects to, which the pageserver's
+    /// does not have to equal: `yb_amp_local` can configure a tenant-only pg
+    /// port, and that is the one walproposer must use. Defaults to
+    /// [`Self::safekeeper_pg_port`], which is what a pod has.
+    pub safekeeper_compute_port: u16,
     pub safekeeper_http_port: u16,
     /// `compute_ctl`'s own HTTP surface.
     pub compute_ctl_http_port: u16,
@@ -56,6 +61,10 @@ pub struct Layout {
 /// Loopback is what the compute and the supervisor's own probes use, even when
 /// the daemons bind `0.0.0.0` — a wildcard listener accepts it too.
 pub const LISTEN_HOST: &str = "127.0.0.1";
+
+/// The compute's service name, as the control socket and the supervisor's own
+/// service list both spell it.
+pub const COMPUTE_SERVICE: &str = "compute_ctl";
 
 /// The default identity `compute_ctl` reports itself under. One compute per pod,
 /// so a fixed name is enough — but the flag is required, not optional.
@@ -99,8 +108,15 @@ impl Layout {
     pub fn pageserver_connstring(&self) -> String {
         format!("host={LISTEN_HOST} port={}", self.pageserver_pg_port)
     }
+    /// Where the pageserver streams WAL from — the safekeeper's pg port.
     pub fn safekeeper_addr(&self) -> String {
         format!("{LISTEN_HOST}:{}", self.safekeeper_pg_port)
+    }
+    /// What `yb_amp.safekeepers` names, which walproposer connects to. Separate
+    /// from [`Self::safekeeper_addr`] because a tenant-only port serves the
+    /// compute while the pageserver keeps using the pg port.
+    pub fn safekeeper_compute_addr(&self) -> String {
+        format!("{LISTEN_HOST}:{}", self.safekeeper_compute_port)
     }
 }
 
@@ -366,7 +382,7 @@ pub fn services(l: &Layout) -> Vec<Service> {
         .cwd(l.ps_datadir())
         .health(status_probe(l.pageserver_http_port, "/v1/status"))
         .logging_to(log(l.ps_datadir(), "pageserver")),
-        Service::new("compute_ctl", compute_ctl_argv(l))
+        Service::new(COMPUTE_SERVICE, compute_ctl_argv(l))
             .cwd(l.run_dir.clone())
             .health(tcp_probe(l.compute_port))
             .logging_to(log(l.run_dir.clone(), "compute")),
@@ -388,6 +404,7 @@ mod tests {
             pageserver_http_port: 9898,
             pageserver_grpc_port: 51051,
             safekeeper_pg_port: 5454,
+            safekeeper_compute_port: 5454,
             safekeeper_http_port: 7676,
             compute_ctl_http_port: 3080,
             compute_ctl_internal_http_port: 3081,

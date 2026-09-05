@@ -42,6 +42,16 @@ pub struct ComputeSpecParams<'a> {
     pub autoprewarm: bool,
     /// Save the LFC state this often. `None` means never.
     pub offload_lfc_interval_seconds: Option<u64>,
+    /// The key set `compute_ctl` validates bearer tokens against on its external
+    /// HTTP server, as the `{"keys": [...]}` object its config expects.
+    ///
+    /// An empty set is the pod's, and is deliberate: the supervisor has no token
+    /// to present, so an empty set closes every external authenticated route and
+    /// leaves the in-pod server as the control channel (see `compute_tools`'
+    /// `http::server`). A caller that does hold a key — `yb_amp_local` mints
+    /// status tokens from the local environment's keypair — passes it here, or
+    /// its own probes are the ones that get rejected.
+    pub compute_ctl_jwks: Value,
 }
 
 /// Renders the compute spec, layering settings in precedence order.
@@ -151,7 +161,7 @@ pub fn render_compute_spec(
             },
             "skip_pg_catalog_updates": true,
         },
-        "compute_ctl_config": {"jwks": {"keys": []}},
+        "compute_ctl_config": {"jwks": p.compute_ctl_jwks},
     })
 }
 
@@ -172,6 +182,7 @@ mod tests {
                                     "user": "yugabyte", "dbname": "yb_storage"}),
             autoprewarm: false,
             offload_lfc_interval_seconds: None,
+            compute_ctl_jwks: json!({"keys": []}),
         }
     }
 
@@ -286,6 +297,27 @@ mod tests {
         let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &registry);
         assert_eq!(last_value(&spec, "full_page_writes").as_deref(), Some("on"));
         assert_eq!(last_value(&spec, "wal_log_hints").as_deref(), Some("on"));
+    }
+
+    /// `compute_ctl` gates its external routes on this, and an empty set rejects
+    /// every request — a debug build panics on the assertion rather than
+    /// answering 401, which surfaces as a dropped connection. So a caller that
+    /// holds a key has to see it reach the spec; local endpoints timed out
+    /// probing their own `/status` when it did not.
+    #[test]
+    fn the_callers_jwks_reaches_compute_ctl() {
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(spec["compute_ctl_config"]["jwks"], json!({"keys": []}));
+
+        let key = json!({"keys": [{"kty": "OKP", "crv": "Ed25519", "x": "abc"}]});
+        let mut p = params();
+        p.compute_ctl_jwks = key.clone();
+        let spec = render_compute_spec(&p, &[], &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(spec["compute_ctl_config"]["jwks"], key);
+        // And it must survive the typed parse, not just the json! macro.
+        let parsed: compute_api::responses::ComputeConfig =
+            serde_json::from_value(spec).expect("must deserialize as ComputeConfig");
+        assert_eq!(parsed.compute_ctl_config.jwks.keys.len(), 1);
     }
 
     /// The guard for the shape itself: the rendered file must deserialize into the

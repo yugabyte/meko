@@ -204,7 +204,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` |
 | Control-plane resource model | YB `amp_registry` schema | users, pools, clusters, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
 | Task log | YB `controller` schema | `task`, `task_step` |
-| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, the supervisor's pidfile and control socket, `compute_spec.json`); the directory and its configs come from `endpoint create`, `pgdata` from `endpoint start`, and all of it goes on destroy |
+| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, the supervisor's pidfile and control socket, `compute_spec.json`); the directory and the daemon configs come from `endpoint create`, `compute_spec.json` from the supervisor at start, `pgdata` from `endpoint start`, and all of it goes on destroy |
 | Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
 
 Everything in the local-FS rows is reconstructible; everything that

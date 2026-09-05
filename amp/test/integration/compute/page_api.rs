@@ -47,10 +47,42 @@ pub async fn client(c: &Cluster) -> anyhow::Result<PageserverClient> {
 /// pageserver (this cluster runs one pageserver per endpoint, so a branch
 /// timeline is not served by the main endpoint's PS).
 ///
-/// The compute connstring is the **libpq** page_service address
-/// (`postgres://user@host:PG?...`, optionally comma-separated shards). The
-/// gRPC page_service of the same pageserver sits at `PG + 200` under the
-/// yb_amp port scheme (pageserver pg = base+300, grpc = base+500, and
+/// Splits `yb_amp.pageserver_connstring` into host and pg port, in either form
+/// libpq takes: keyword (`host=h port=p`), which is what the endpoint supervisor
+/// renders on every deploy path, or URL (`postgres://user@host:PG?...`,
+/// optionally comma-separated shards).
+///
+/// Both are handled because both have been the compute's value. The local
+/// launcher used to render its own spec and wrote the URL form; it now takes the
+/// supervisor's, which is the keyword form a deployed endpoint has always had.
+fn split_host_port(raw: &str) -> anyhow::Result<(&str, u16)> {
+    let (host, port) = if raw.contains("://") || !raw.contains('=') {
+        let after_scheme = raw.split("://").nth(1).unwrap_or(raw);
+        let host_part = after_scheme.rsplit('@').next().unwrap_or(after_scheme); // drop userinfo
+        let host_port = host_part.split(['?', '/']).next().unwrap_or(host_part); // drop query/path
+        host_port
+            .rsplit_once(':')
+            .with_context(|| format!("connstring {raw:?} has no :port"))?
+    } else {
+        let field = |key: &str| {
+            raw.split_whitespace()
+                .find_map(|kv| kv.strip_prefix(key))
+                .filter(|v| !v.is_empty())
+        };
+        (
+            field("host=").with_context(|| format!("connstring {raw:?} has no host="))?,
+            field("port=").with_context(|| format!("connstring {raw:?} has no port="))?,
+        )
+    };
+    let port: u16 = port
+        .parse()
+        .with_context(|| format!("parse pageserver pg port from {raw:?}"))?;
+    Ok((host, port))
+}
+
+/// The compute connstring is the page_service address of the pageserver serving
+/// this branch. The gRPC page_service of the same pageserver sits at `PG + 200`
+/// under the yb_amp port scheme (pageserver pg = base+300, grpc = base+500, and
 /// every per-instance bump shifts both equally), so we derive the gRPC URL
 /// from it.
 pub fn client_at_connstring(
@@ -61,28 +93,10 @@ pub fn client_at_connstring(
     let branch_id = BranchId::from_str(branch_hex).context("parse branch id")?;
 
     let raw = connstring.split(',').next().unwrap_or(connstring).trim();
-    let after_scheme = raw.split("://").nth(1).unwrap_or(raw);
-    let host_part = after_scheme.rsplit('@').next().unwrap_or(after_scheme); // drop userinfo
-    let host_port = host_part.split(['?', '/']).next().unwrap_or(host_part); // drop query/path
-    let (host, pg_port) = host_port
-        .rsplit_once(':')
-        .with_context(|| format!("connstring {raw:?} has no :port"))?;
-    let pg_port: u16 = pg_port
-        .parse()
-        .with_context(|| format!("parse pageserver pg port from {raw:?}"))?;
+    let (host, pg_port) = split_host_port(raw)?;
     let url = format!("grpc://{host}:{}", pg_port + 200);
 
     PageserverClient::new(branch_id, url, None, None).context("connect branch PS gRPC")
-}
-
-/// A heap/relation `RelTag` in the default tablespace, main fork.
-pub fn heap_rel(dbnode: u32, relnode: u32) -> RelTag {
-    RelTag {
-        forknum: 0,
-        spcnode: DEFAULT_TABLESPACE,
-        dbnode,
-        relnode,
-    }
 }
 
 /// Issue a `GetPage@LSN` for `blocks` and return the 8 KiB page images,
@@ -260,4 +274,38 @@ pub fn restart_with_pipeline_depth(
     c.yb_logged(&["pageserver", "stop", "-m", "immediate"])?;
     c.yb_logged(&["pageserver", "start"])?;
     Ok(())
+}
+
+/// A heap/relation `RelTag` in the default tablespace, main fork.
+pub fn heap_rel(dbnode: u32, relnode: u32) -> RelTag {
+    RelTag {
+        forknum: 0,
+        spcnode: DEFAULT_TABLESPACE,
+        dbnode,
+        relnode,
+    }
+}
+
+#[cfg(test)]
+mod connstring_tests {
+    use super::split_host_port;
+
+    /// The keyword form is what a deployed endpoint reports and, since the local
+    /// launcher stopped rendering its own spec, what a local one reports too.
+    #[test]
+    fn both_libpq_forms_parse() {
+        assert_eq!(
+            split_host_port("host=127.0.0.1 port=11306").unwrap(),
+            ("127.0.0.1", 11306)
+        );
+        assert_eq!(
+            split_host_port("postgres://cloud_admin@127.0.0.1:11306?x=1").unwrap(),
+            ("127.0.0.1", 11306)
+        );
+        assert_eq!(
+            split_host_port("127.0.0.1:11306").unwrap(),
+            ("127.0.0.1", 11306)
+        );
+        assert!(split_host_port("host=127.0.0.1").is_err());
+    }
 }

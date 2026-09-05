@@ -39,14 +39,31 @@ Kubernetes replaces it.
 
 `yb_amp_local` starts one `endpoint-supervisor` per endpoint, so the
 local stack has the process tree, the startup order and the restart
-behaviour of the deployed one. It sets `PRERENDERED_CONFIG=true`: the
-launcher writes all three config files itself — from ports it allocated,
-a Postgres install outside any image, and per-endpoint settings held in
-the control plane, none of which the supervisor can see — and the
-supervisor supervises without rendering. That mode also gives each child
-its own log file (`endpoints/<id>/pageserver/pageserver.log` and
-siblings) rather than the single interleaved stream `kubectl logs`
-wants.
+behaviour of the deployed one.
+
+`PRERENDERED_CONFIG` says which config files the caller brought:
+
+| value | the caller wrote | the supervisor renders |
+|---|---|---|
+| unset | nothing | all three. The pod. |
+| `daemons` | `pageserver.toml`, `safekeeper.toml` | the compute spec. `yb_amp_local`. |
+| `true` | all three | nothing. |
+
+`yb_amp_local` sets `daemons`. The two tomls describe per-endpoint data
+directories and ports it found by searching for free ones, which this
+process cannot see; the compute spec is the supervisor's, so a local
+compute gets the same invariants, the same resource-derived GUCs and the
+same `amp_registry` settings a deployed one does. The launcher rendering
+its own copy is how k8s endpoints came to run `full_page_writes = on`
+([#1050](https://github.com/yugabyte/meko/issues/1050)). What is
+genuinely local — loopback binding, the safekeeper's compute port, sizes
+a machine without a cgroup cannot derive — travels in
+`COMPUTE_EXTRA_SETTINGS_JSON`, the same layer the chart uses for the
+extension paths only it can compute.
+
+Any value other than `daemons` also gives each child its own log file
+(`endpoints/<id>/pageserver/pageserver.log` and siblings) rather than the
+single interleaved stream `kubectl logs` wants.
 
 The launcher exits after each command, so it cannot signal a daemon
 directly: the supervisor would restart it. `yb_amp_local pageserver
@@ -143,10 +160,16 @@ bounded: 64 KiB of body and 512 settings, both far above any real map, because
 an unauthenticated route that spawns processes should not be the cheapest way to
 load the pod.
 
-An endpoint on `PRERENDERED_CONFIG` refuses the call: its config belongs to the
-caller that wrote it (`yb_amp_local`), built from an environment this process
-cannot see, so re-rendering would replace a working config with one assembled
-from defaults.
+An endpoint that brought **every** config file (`PRERENDERED_CONFIG=true`)
+refuses the call: all of it belongs to the caller that wrote it, built from an
+environment this process cannot see, so re-rendering would replace a working
+config with one assembled from defaults.
+
+On `daemons` the call is served, because the compute spec is the supervisor's to
+re-render — a `pg_settings` edit applies to a local endpoint the same way it does
+to a deployed one. The two daemon tomls are still the caller's, so a
+`pageserver_settings` or `safekeeper_settings` edit is named back in
+`not_applied` rather than silently accepted.
 
 ## The write fence
 
