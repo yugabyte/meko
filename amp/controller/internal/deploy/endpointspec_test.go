@@ -22,6 +22,7 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	spec := EndpointSpecFrom(core.EndpointDeploy{
 		ID: epID, BranchID: branchID, PgVersion: 18,
 		CPU: "8", Memory: "16Gi", Version: "ep-v7.7.7",
+		Connectivity: ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.0/16"},
 	}, yb, "http://sc:50051", mounts)
 
 	if spec.Name != EndpointName(epID) {
@@ -50,6 +51,14 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec.Extensions, mounts) {
 		t.Errorf("Extensions = %+v, want %+v", spec.Extensions, mounts)
+	}
+	// Carried, not defaulted: a redeploy that renders cluster_ip here prunes the
+	// -lb Service and silently drops an nlb_* endpoint's load balancer.
+	if spec.Connectivity != ConnectivityNLBInternal {
+		t.Errorf("Connectivity = %q, want %q", spec.Connectivity, ConnectivityNLBInternal)
+	}
+	if !reflect.DeepEqual(spec.AllowedCIDRs, []string{"10.0.0.0/16"}) {
+		t.Errorf("AllowedCIDRs = %+v, want [10.0.0.0/16]", spec.AllowedCIDRs)
 	}
 
 	v := reflect.ValueOf(spec)

@@ -596,8 +596,24 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, _, branchID uuid.UUI
 	return nil
 }
 
+// endpointDeploy renders one endpoint's desired state. All four projections below
+// go through it, so MemBackend cannot disagree with itself the way four hand-built
+// literals could — the property PgBackend gets from sharing endpointDeploySelect.
+func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) EndpointDeploy {
+	return EndpointDeploy{
+		ID:           id,
+		BranchID:     e.BranchID,
+		PgVersion:    pgVersion,
+		CPU:          e.CPU,
+		Memory:       e.Memory,
+		Version:      e.Version,
+		Connectivity: e.Connectivity,
+		AllowedCIDRs: e.AllowedCIDRs,
+	}
+}
+
 // BranchEndpointDeploys returns the renderable desired state of every endpoint on
-// the branch (pg_version from the branch, cpu/memory from the endpoint). An absent
+// the branch (pg_version from the branch, the rest from the endpoint). An absent
 // branch yields an empty slice. Mirrors PgBackend, cluster id included: it is
 // ignored here too.
 func (m *MemBackend) BranchEndpointDeploys(_ context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
@@ -608,14 +624,7 @@ func (m *MemBackend) BranchEndpointDeploys(_ context.Context, _, branchID uuid.U
 		if e.BranchID != branchID {
 			continue
 		}
-		out = append(out, EndpointDeploy{
-			ID:        id,
-			BranchID:  e.BranchID,
-			PgVersion: m.branches[e.BranchID].PgVersion,
-			CPU:       e.CPU,
-			Memory:    e.Memory,
-			Version:   e.Version,
-		})
+		out = append(out, m.endpointDeploy(id, e, m.branches[e.BranchID].PgVersion))
 	}
 	return out, nil
 }
@@ -644,14 +653,7 @@ func (m *MemBackend) AllEndpointDeploys(_ context.Context) ([]EndpointDeploy, er
 		if e.Address == "" {
 			continue
 		}
-		out = append(out, EndpointDeploy{
-			ID:        id,
-			BranchID:  e.BranchID,
-			PgVersion: b.PgVersion,
-			CPU:       e.CPU,
-			Memory:    e.Memory,
-			Version:   e.Version,
-		})
+		out = append(out, m.endpointDeploy(id, e, b.PgVersion))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
@@ -672,14 +674,7 @@ func (m *MemBackend) EndpointDeploysByIDs(_ context.Context, ids []uuid.UUID) ([
 		if !ok {
 			continue
 		}
-		out = append(out, EndpointDeploy{
-			ID:        id,
-			BranchID:  e.BranchID,
-			PgVersion: b.PgVersion,
-			CPU:       e.CPU,
-			Memory:    e.Memory,
-			Version:   e.Version,
-		})
+		out = append(out, m.endpointDeploy(id, e, b.PgVersion))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
@@ -700,14 +695,7 @@ func (m *MemBackend) EndpointDeploy(_ context.Context, endpointID uuid.UUID) (En
 	if !ok {
 		return EndpointDeploy{}, ErrNotFound
 	}
-	return EndpointDeploy{
-		ID:        endpointID,
-		BranchID:  e.BranchID,
-		PgVersion: b.PgVersion,
-		CPU:       e.CPU,
-		Memory:    e.Memory,
-		Version:   e.Version,
-	}, nil
+	return m.endpointDeploy(endpointID, e, b.PgVersion), nil
 }
 
 // UpdateEndpointExtensions is a no-op in the in-memory backend: it models the
@@ -766,10 +754,12 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		}
 		m.writers[k] = struct{}{}
 	}
-	// Mirror PgBackend, which reads cpu/memory back out of the config jsonb.
+	// Mirror PgBackend, which reads these back out of the config jsonb.
 	var cfg struct {
-		CPU    string `json:"cpu"`
-		Memory string `json:"memory"`
+		CPU          string   `json:"cpu"`
+		Memory       string   `json:"memory"`
+		Connectivity string   `json:"connectivity"`
+		AllowedCIDRs []string `json:"allowed_cidrs"`
 	}
 	if len(config) > 0 {
 		_ = json.Unmarshal(config, &cfg)
@@ -792,6 +782,8 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		SafekeeperSettings: decodeAnyMap(safekeeperSettings),
 		CPU:                cfg.CPU,
 		Memory:             cfg.Memory,
+		Connectivity:       cfg.Connectivity,
+		AllowedCIDRs:       cfg.AllowedCIDRs,
 		CreatedAt:          m.now(),
 	}
 	return nil

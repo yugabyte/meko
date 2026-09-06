@@ -83,6 +83,18 @@ type EndpointSpec struct {
 	// one place. Empty = the deployer default (KubernetesConfig.EndpointImageTag,
 	// the tag of DockerConfig.EndpointImage).
 	Version string
+	// Connectivity is how clients reach this endpoint's Postgres port:
+	// ConnectivityClusterIP (the default, in-cluster and tailnet only),
+	// ConnectivityNLBInternal (VPC-routable) or ConnectivityNLBExternal
+	// (internet-facing). The NLB modes add a SECOND, Postgres-only Service in
+	// front of a load balancer; the pageserver/safekeeper/supervisor ports are
+	// never published on it. Only the Kubernetes deployer implements this.
+	Connectivity string
+	// AllowedCIDRs restricts which sources may reach that load balancer
+	// (loadBalancerSourceRanges). Empty leaves it unrestricted, which for
+	// ConnectivityNLBExternal means Postgres is reachable from the internet
+	// behind password auth alone.
+	AllowedCIDRs []string
 	// Extensions are the externalized PostgreSQL extensions to mount into the
 	// endpoint as read-only ImageVolumes (compute/architecture/extensions.md).
 	// The Kubernetes deployer renders one volume per entry and derives
@@ -91,6 +103,15 @@ type EndpointSpec struct {
 	// ImageVolumes and ignores this.
 	Extensions []Extension
 }
+
+// Client reachability modes for EndpointSpec.Connectivity. These strings are
+// also the chart's `service.connectivity` values and the API's enum, so one
+// vocabulary runs end to end and nothing has to translate between layers.
+const (
+	ConnectivityClusterIP   = "cluster_ip"
+	ConnectivityNLBInternal = "nlb_internal"
+	ConnectivityNLBExternal = "nlb_external"
+)
 
 // Extension is one externalized extension to mount into an endpoint: its name
 // (the /extensions/<Name> mount subdir), the OCI image built by
@@ -123,6 +144,8 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 		CPU:           e.CPU,
 		Memory:        e.Memory,
 		Version:       e.Version,
+		Connectivity:  e.Connectivity,
+		AllowedCIDRs:  e.AllowedCIDRs,
 		Extensions:    mounts,
 		// No pg_settings here: the endpoint's supervisor reads the branch's and
 		// the endpoint's straight from amp_registry and merges them itself, so a
@@ -188,6 +211,14 @@ type Endpoint struct {
 	// nothing to report (it placed nothing, or its image reference names no
 	// version), and the caller leaves the recorded version as it found it.
 	Version string
+}
+
+// ConnectivitySupporter is implemented by a Deployer that can honour a
+// per-endpoint nlb_* connectivity mode. A deployer that does not implement it
+// silently ignores EndpointSpec.Connectivity, so the API rejects the nlb_* modes
+// up front rather than persisting an exposure the endpoint will never have.
+type ConnectivitySupporter interface {
+	SupportsConnectivity() bool
 }
 
 // Deployer places and removes compute endpoints on a runtime. CreateEndpoint

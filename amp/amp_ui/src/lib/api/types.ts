@@ -59,6 +59,21 @@ export type Cluster = {
 /** A compute endpoint bound to a branch. A branch admits at most one
  *  read_write endpoint. `address` is host:port, empty until deployed. */
 export type EndpointRole = "read_write" | "read_only";
+/** How clients reach an endpoint's Postgres port. `cluster_ip` is in-cluster
+ *  (plus the tailnet) only; the `nlb_*` modes add a Postgres-only Service behind
+ *  the cloud's L4 load balancer — internal (reachable from the surrounding
+ *  VPC/VNet) or internet-facing. Works on EKS, GKE and AKS; the controller
+ *  renders the right provider's annotations. */
+export type EndpointConnectivityMode =
+  | "cluster_ip"
+  | "nlb_internal"
+  | "nlb_external";
+export type EndpointConnectivity = {
+  mode?: EndpointConnectivityMode;
+  /** Sources allowed to reach the load balancer, as CIDRs. Empty is
+   *  unrestricted — on `nlb_external` that means the public internet. */
+  allowed_cidrs?: string[];
+};
 export type Endpoint = {
   id: string;
   branch_id: string;
@@ -69,6 +84,9 @@ export type Endpoint = {
   /** Current compute reservation (cpu/memory). Fields may be empty for
    *  endpoints created before resource tracking. */
   resources?: EndpointResources;
+  /** Client reachability as stored. Absent for endpoints created before this
+   *  was configurable, which behave as `cluster_ip`. */
+  connectivity?: EndpointConnectivity;
   /** This endpoint's own stored settings. `pg_settings` merge over the
    *  branch's and win on a shared key; the daemon ones are its alone. */
   pg_settings?: PgSettings;
@@ -225,6 +243,9 @@ export type ResizeOutcome = "completed" | "pending" | "infeasible" | "unsupporte
  *  a pre-filled value under the floor makes the default action fail. */
 export const DEFAULT_ENDPOINT_CPU = "2";
 export const DEFAULT_ENDPOINT_MEMORY = "16Gi";
+/** Matches the controller/chart default: in-cluster only, no load balancer. */
+export const DEFAULT_ENDPOINT_CONNECTIVITY: EndpointConnectivityMode =
+  "cluster_ip";
 
 export type CreateBranchInput = {
   name: string;

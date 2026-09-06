@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/amp/controller/internal/helm"
@@ -92,6 +93,10 @@ type KubernetesConfig struct {
 	ServiceType       string // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
+	// Cloud overrides the cloud detected from node provider IDs ("aws", "gcp",
+	// "azure"), which selects the load-balancer annotations the endpoint chart
+	// renders for the nlb_* connectivity modes. Empty (the normal case) = detect.
+	Cloud string
 	// NodeSelector, when non-empty, pins endpoint pods to nodes carrying these
 	// labels — e.g. a node pool with local-NVMe-SSD ephemeral storage, so the
 	// endpoint's emptyDir /data lands on NVMe instead of the node boot disk.
@@ -142,6 +147,14 @@ type KubernetesDeployer struct {
 	helm   *helm.Client
 	cfg    KubernetesConfig
 	logger *slog.Logger
+	// cloudMu/cloud memoize which cloud this cluster runs on, read from a node's
+	// spec.providerID. A cluster does not migrate between clouds under us, so a
+	// successful answer is looked up once rather than on every endpoint create.
+	// Only success is cached: k8sAPIGet is best-effort and returns nothing on a
+	// transient apiserver error, and caching that would refuse every later
+	// nlb_internal create until the controller restarts.
+	cloudMu sync.Mutex
+	cloud   string
 }
 
 // NewKubernetesDeployer builds the deployer from its static config.
@@ -155,6 +168,11 @@ func NewKubernetesDeployer(cfg KubernetesConfig, logger *slog.Logger) *Kubernete
 
 var _ Deployer = (*KubernetesDeployer)(nil)
 
+// SupportsConnectivity reports that this deployer renders the per-endpoint
+// load-balancer Service, satisfying deploy.ConnectivitySupporter. The docker and
+// local deployers do not implement it.
+func (k *KubernetesDeployer) SupportsConnectivity() bool { return true }
+
 // CreateEndpoint installs/updates the endpoint's Helm release and waits for it
 // to be ready, then returns the stable in-cluster client address. The release
 // name (= spec.Name, a DNS-1123 label) is also the object/Service name via
@@ -163,6 +181,11 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	release := spec.Name
 	// The data volume's size is proportional to the endpoint's CPU.
 	vals := k.values(spec, release)
+	// Only needed for the load-balanced modes, and it costs a node list — so it is
+	// resolved here rather than in values(), which has no context to do it with.
+	if spec.Connectivity == ConnectivityNLBInternal || spec.Connectivity == ConnectivityNLBExternal {
+		vals.Service.Cloud = k.detectCloud(ctx)
+	}
 	if err := k.applyDiskSizing(&vals); err != nil {
 		return Endpoint{}, err
 	}
@@ -187,6 +210,37 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	// safekeeper by the stable Service DNS (CONTROLLER_REACHABLE_HOST set in the chart),
 	// so a pod reschedule re-registers the same address (no 409, #121).
 	addr := k.address(release)
+	// A per-endpoint load balancer is the DURABLE client address: the AWS load
+	// balancer controller re-registers the pod when it is replaced, so unlike the
+	// pod IP the other branches fall back to, this survives pod replacement. It
+	// also survives a controller-driven redeploy, but only because
+	// core.EndpointDeploy carries Connectivity/AllowedCIDRs — without them the
+	// redeploy renders service.connectivity empty, helm prunes the -lb Service and
+	// the load balancer is deleted. Checked before the Service-type switch because
+	// it is a per-endpoint choice, not the controller-wide default.
+	if spec.Connectivity == ConnectivityNLBInternal || spec.Connectivity == ConnectivityNLBExternal {
+		if lb := k.serviceLBAddress(ctx, release+"-lb"); lb != "" {
+			if err := k.verifyReady(ctx, release); err != nil {
+				return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
+			}
+			k.logger.Info("endpoint ready", "endpoint", release, "address", lb, "connectivity", spec.Connectivity)
+			// Version, as on every other return: the steps persist the endpoint's
+			// version only when the deployer reports one, and a NULL version makes
+			// the next redeploy silently move it to the deployer default.
+			return Endpoint{ID: release, Address: lb, TailnetAddress: k.tailnetAddress(release), Version: vals.Image.Tag}, nil
+		}
+		// Provisioning a cloud load balancer routinely outruns
+		// lbAddressPollTimeout. Fall through rather than fail the create: the
+		// endpoint is up and serving on the Service-type address.
+		//
+		// Nothing re-polls on its own. The recorded address stays the fallback
+		// (the pod IP, which a pod replacement invalidates) until the endpoint's
+		// next controller-driven redeploy re-runs this resolution. See
+		// "Endpoint stuck on a pod IP after an nlb_* create" in
+		// amp/runbooks/controller_runbook.md for the operator recovery.
+		k.logger.Warn("endpoint load balancer not ready in time; falling back to the Service-type address",
+			"endpoint", release, "connectivity", spec.Connectivity)
+	}
 	switch k.cfg.ServiceType {
 	case serviceTypeLoadBalancer:
 		if lb := k.serviceLBAddress(ctx, release); lb != "" {
@@ -535,6 +589,69 @@ func parseServiceNodePort(body []byte, computePort int) int {
 		}
 	}
 	return 0
+}
+
+// detectCloud reports which cloud this cluster runs on ("aws", "gcp", "azure"),
+// or "" when it cannot tell. Read from a node's spec.providerID, which the
+// cloud-controller-manager sets, so it cannot drift from the cluster it
+// describes. Reading it needs `nodes get, list` (rbac.clusterScoped); an explicit
+// KubernetesConfig.Cloud (--deploy-cloud) skips the lookup and wins, both for a
+// cluster whose provider IDs say something unexpected and for one where the
+// controller does not hold that permission.
+func (k *KubernetesDeployer) detectCloud(ctx context.Context) string {
+	if k.cfg.Cloud != "" {
+		return k.cfg.Cloud
+	}
+	k.cloudMu.Lock()
+	defer k.cloudMu.Unlock()
+	if k.cloud != "" {
+		return k.cloud
+	}
+	body, ok := k.k8sAPIGet(ctx, "/api/v1/nodes")
+	if !ok {
+		k.logger.Warn("could not list nodes to detect the cloud; an internal load balancer will be refused by the chart. " +
+			"The controller needs nodes get/list — set rbac.clusterScoped=true, or pass --deploy-cloud")
+		return ""
+	}
+	cloud := parseCloudProvider(body)
+	if cloud == "" {
+		k.logger.Warn("could not determine the cloud from node provider IDs; an internal load balancer will be refused by the chart. " +
+			"Pass --deploy-cloud to say which cloud this is")
+		return ""
+	}
+	k.logger.Info("detected cloud for load-balancer annotations", "cloud", cloud)
+	k.cloud = cloud
+	return cloud
+}
+
+// parseCloudProvider maps the provider-ID scheme on any node of a Kubernetes
+// NodeList to a cloud name. The schemes are set by each cloud-controller-manager:
+// "aws:///us-east-2a/i-0123", "gce://project/us-west1-b/gke-...",
+// "azure:///subscriptions/...". Returns "" for anything else (kind, bare metal,
+// a provider we have no annotations for).
+func parseCloudProvider(body []byte) string {
+	var out struct {
+		Items []struct {
+			Spec struct {
+				ProviderID string `json:"providerID"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return ""
+	}
+	for _, n := range out.Items {
+		switch {
+		case strings.HasPrefix(n.Spec.ProviderID, "aws://"):
+			return "aws"
+		// GKE nodes report "gce://"; the cloud is still GCP.
+		case strings.HasPrefix(n.Spec.ProviderID, "gce://"):
+			return "gcp"
+		case strings.HasPrefix(n.Spec.ProviderID, "azure://"):
+			return "azure"
+		}
+	}
+	return ""
 }
 
 // aNodeIP returns the address of any Ready cluster node, preferring an
@@ -904,6 +1021,17 @@ type serviceValues struct {
 	Type string `json:"type,omitempty"`
 	// Annotations on the Service (e.g. internal-LB annotations for LoadBalancer).
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// Connectivity selects the chart's per-endpoint client reachability:
+	// cluster_ip (default), nlb_internal or nlb_external. The NLB modes render a
+	// second, Postgres-only Service in front of a load balancer.
+	Connectivity string `json:"connectivity,omitempty"`
+	// AllowedCidrs becomes that Service's loadBalancerSourceRanges.
+	AllowedCidrs []string `json:"allowedCidrs,omitempty"`
+	// Cloud tells the chart whose load-balancer annotations to render ("aws",
+	// "gcp", "azure"). Every provider defaults a LoadBalancer Service to
+	// internet-facing, so the chart refuses to render an INTERNAL one without
+	// this rather than publish it by accident.
+	Cloud string `json:"cloud,omitempty"`
 }
 
 type controllerValues struct {
@@ -1010,8 +1138,13 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Resources:   resourceValues{CPU: cpu, Memory: memory},
 			Extensions:  extensionValuesFor(spec.Extensions),
 		},
-		Controller:   controllerValues{URL: spec.ControllerURL},
-		Service:      serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
+		Controller: controllerValues{URL: spec.ControllerURL},
+		Service: serviceValues{
+			Type:         k.cfg.ServiceType,
+			Annotations:  k.cfg.ServiceAnnotations,
+			Connectivity: spec.Connectivity,
+			AllowedCidrs: spec.AllowedCIDRs,
+		},
 		StartupProbe: startupProbeBudget(k.cfg.Timeout),
 		// Headroom over the startup budget: the rollout must not be declared
 		// failed while the kubelet is still legitimately waiting.

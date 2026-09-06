@@ -222,6 +222,20 @@ func (f *fakeStateStore) seedEndpointDeploy(clusterID uuid.UUID, d core.Endpoint
 	f.createdEndpoints[d.ID] = "read_only"
 }
 
+// seedEndpointWithConnectivity is seedEndpoint for an endpoint whose exposure a
+// redeploy has to preserve.
+func (f *fakeStateStore) seedEndpointWithConnectivity(endpointID, clusterID, branchID uuid.UUID, connectivity string, cidrs []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endpointBranch[endpointID] = core.EndpointDeploy{
+		ID:           endpointID,
+		BranchID:     branchID,
+		Connectivity: connectivity,
+		AllowedCIDRs: cidrs,
+	}
+	f.endpointCluster[endpointID] = clusterID
+}
+
 // seedBranch registers a live branch under clusterID. Test helper.
 func (f *fakeStateStore) seedBranch(clusterID, branchID uuid.UUID) {
 	f.mu.Lock()

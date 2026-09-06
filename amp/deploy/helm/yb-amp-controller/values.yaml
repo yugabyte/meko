@@ -23,10 +23,11 @@ fullnameOverride: ""
 rbac:
   # -- Also create the *controller's* cluster-scoped ClusterRole +
   # ClusterRoleBinding: namespaces get/list/create (Helm --create-namespace
-  # probing) and nodes get/list (NodePort endpoint node-IP resolution). Default
-  # off — with the default controller (internal-lb) and endpoint (ClusterIP)
-  # service types nothing reads nodes. Enable only for a NodePort deploy (which
-  # needs node-IP reads).
+  # probing) and nodes get/list (NodePort endpoint node-IP resolution, and the
+  # cloud detection behind the nlb_* endpoint connectivity modes). Default off —
+  # with the default controller (internal-lb) and endpoint (ClusterIP) service
+  # types nothing reads nodes. Enable it for a NodePort deploy, or for nlb_*
+  # endpoints unless the controller is given --deploy-cloud instead.
   #
   # This governs the controller only. The metrics collectors carry their own
   # RBAC, sized to what they scrape: a namespaced Role for pod discovery always,

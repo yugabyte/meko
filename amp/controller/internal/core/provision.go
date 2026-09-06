@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/yugabyte/amp/controller/internal/db"
+	"github.com/yugabyte/amp/controller/internal/log"
 )
 
 // This file adds the *idempotent, id-keyed* provisioning operations the
@@ -270,17 +271,29 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // from different state; each adds its own WHERE.
 const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.pg_version,
 	        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
-	        COALESCE(e.version, '')
+	        COALESCE(e.version, ''),
+	        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs'
 	   FROM amp_registry.endpoints e
 	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
-func scanEndpointDeploy(r scanRow) (EndpointDeploy, error) {
+func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) {
 	var (
 		id, branchID string
+		cidrsRaw     []byte
 		d            EndpointDeploy
 	)
-	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version); err != nil {
+	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Connectivity, &cidrsRaw); err != nil {
 		return EndpointDeploy{}, err
+	}
+	// Same tolerance as scanEndpoint: a malformed allowed_cidrs must not fail the
+	// redeploy, and the mode alone still keeps the load balancer. Logged, not
+	// swallowed — here it also means the redeployed Service loses its source
+	// ranges, which is a widening.
+	if len(cidrsRaw) > 0 {
+		if err := json.Unmarshal(cidrsRaw, &d.AllowedCIDRs); err != nil {
+			log.FromContext(ctx).Warn("endpoint config.allowed_cidrs is not a JSON string array; redeploying without source ranges",
+				"endpoint", id, "error", err, "raw", string(cidrsRaw))
+		}
 	}
 	var err error
 	if d.ID, err = uuid.Parse(id); err != nil {
@@ -303,7 +316,7 @@ func (b *PgBackend) endpointDeploysWhere(ctx context.Context, what, where string
 	defer rows.Close()
 	var out []EndpointDeploy
 	for rows.Next() {
-		d, err := scanEndpointDeploy(rows)
+		d, err := scanEndpointDeploy(ctx, rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan endpoint deploy: %w", err)
 		}
@@ -373,7 +386,7 @@ func (b *PgBackend) EndpointDeploy(ctx context.Context, endpointID uuid.UUID) (E
 		endpointDeploySelect+`
 		  WHERE e.id = $1::uuid AND eb.dropped_at IS NULL`,
 		endpointID.String())
-	d, err := scanEndpointDeploy(row)
+	d, err := scanEndpointDeploy(ctx, row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return EndpointDeploy{}, ErrNotFound
 	}

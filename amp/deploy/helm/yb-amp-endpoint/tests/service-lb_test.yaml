@@ -1,0 +1,219 @@
+suite: load-balancer service
+templates:
+  - templates/service-lb.yaml
+tests:
+  - it: renders nothing by default (cluster_ip)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when connectivity is explicitly cluster_ip
+    set:
+      service.connectivity: cluster_ip
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: nlb_internal renders one internal-scheme NLB Service
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: aws
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-scheme"]
+          value: internal
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+          value: nlb
+
+  - it: nlb_external flips only the scheme
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-scheme"]
+          value: internet-facing
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+          value: nlb
+
+  # The endpoint is one pod in one AZ while the NLB gets an interface per subnet.
+  # Without cross-zone, interfaces in the other AZs have no target and clients
+  # resolving to them fail — so this annotation is load-bearing, not cosmetic.
+  - it: enables cross-zone load balancing on AWS
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: aws
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled"]
+          value: "true"
+
+  # Registering the pod IP (not the ClusterIP) is what lets the load balancer
+  # controller re-target a replaced pod, which is the whole point of this Service.
+  - it: targets pod IPs directly on AWS
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: aws
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"]
+          value: ip
+
+  # service.yaml also publishes ps-http/sk-http/sup-http. The supervisor's
+  # settings API (sup-http) is unauthenticated and can restart Postgres, so it
+  # must never appear on a load balancer — this is the assertion that keeps a
+  # future edit from putting it there.
+  - it: publishes the Postgres port ONLY, never the internal HTTP APIs
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+      service.exposeInternalHttp: true
+      controller.url: http://amp-controller:8080
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+      - equal:
+          path: spec.ports[0].name
+          value: pg-compute
+      - equal:
+          path: spec.ports[0].port
+          value: 55433
+
+  - it: passes allowedCidrs through as loadBalancerSourceRanges
+    set:
+      service.connectivity: nlb_external
+      service.cloud: gcp
+      service.allowedCidrs:
+        - 10.0.0.0/16
+        - 96.33.50.4/32
+    asserts:
+      - equal:
+          path: spec.loadBalancerSourceRanges
+          value:
+            - 10.0.0.0/16
+            - 96.33.50.4/32
+
+  - it: omits loadBalancerSourceRanges when no CIDRs are given
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: azure
+    asserts:
+      - notExists:
+          path: spec.loadBalancerSourceRanges
+
+  # The LB Service is additive: it must select the same pod as the ClusterIP
+  # Service, and carry its own name so both can exist.
+  - it: is a separate -lb Service selecting the same pod
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: aws
+    release:
+      name: yb-ep-abc
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: -lb$
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: yb-amp-endpoint
+
+  # --- per-cloud annotations -------------------------------------------------
+  # The mode is the portable concept; each provider spells it differently, and
+  # getting this wrong on an internal LB means a public address.
+
+  - it: GKE internal uses the GKE annotation and none of the AWS ones
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: gcp
+    asserts:
+      - equal:
+          path: metadata.annotations["networking.gke.io/load-balancer-type"]
+          value: Internal
+      - notExists:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+      - notExists:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-scheme"]
+
+  - it: AKS internal uses the Azure annotation and none of the AWS ones
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: azure
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/azure-load-balancer-internal"]
+          value: "true"
+      - notExists:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+
+  # External is the default everywhere, so it needs no annotation off AWS — and
+  # must not inherit the internal one.
+  - it: GKE external adds no internal annotation
+    set:
+      service.connectivity: nlb_external
+      service.cloud: gcp
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: metadata.annotations["networking.gke.io/load-balancer-type"]
+
+  - it: AKS external adds no internal annotation
+    set:
+      service.connectivity: nlb_external
+      service.cloud: azure
+    asserts:
+      - notExists:
+          path: metadata.annotations["service.beta.kubernetes.io/azure-load-balancer-internal"]
+
+  # The whole point of the cloud value: without it an "internal" request would
+  # render a Service that every provider defaults to internet-facing. Fail the
+  # render rather than publish it.
+  - it: refuses to render an internal LB when the cloud is unknown
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs service.cloud to be one of aws, gcp, azure"
+
+  - it: refuses an unrecognised cloud for an internal LB
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: openstack
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs service.cloud to be one of aws, gcp, azure"
+
+  # An external LB is safe without it: no annotation is needed on any provider.
+  - it: still renders an external LB when the cloud is unknown
+    set:
+      service.connectivity: nlb_external
+      service.cloud: ""
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+  # loadBalancerSourceRanges is a core Service field, so the allow-list must
+  # survive on every cloud, not just the one it was written against.
+  - it: honours allowedCidrs on every cloud
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: azure
+      service.allowedCidrs: ["10.1.0.0/16"]
+    asserts:
+      - equal:
+          path: spec.loadBalancerSourceRanges
+          value: ["10.1.0.0/16"]

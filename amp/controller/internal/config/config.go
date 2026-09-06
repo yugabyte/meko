@@ -113,8 +113,12 @@ type DeployConfig struct {
 	ComputePort        int               // compute Postgres port the endpoint Service publishes
 	ServiceType        string            // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	ServiceAnnotations map[string]string // annotations on the endpoint Service (e.g. GKE internal-LB)
-	NodeSelector       map[string]string // node labels endpoint pods must match (e.g. a local-NVMe-SSD pool)
-	TailnetSuffix      string            // Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") for deriving endpoint tailnet addresses; empty = disabled
+	// Cloud names the cloud whose load-balancer annotations the endpoint chart
+	// renders for the nlb_* connectivity modes. Empty = read it off a node's
+	// spec.providerID, which needs `nodes get, list`.
+	Cloud         string
+	NodeSelector  map[string]string // node labels endpoint pods must match (e.g. a local-NVMe-SSD pool)
+	TailnetSuffix string            // Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") for deriving endpoint tailnet addresses; empty = disabled
 
 	// StorageClass provisions the endpoint's data volume (/data: pgdata, LFC,
 	// logs) as a PersistentVolumeClaim of that class — a network block volume
@@ -294,6 +298,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ServiceType, "deploy-service-type", env("AMP_DEPLOY_SERVICE_TYPE", "ClusterIP"), "k8s: endpoint Service type — ClusterIP (default), NodePort, or LoadBalancer")
 	var serviceAnnotationsRaw string
 	fs.StringVar(&serviceAnnotationsRaw, "deploy-service-annotations", env("AMP_DEPLOY_SERVICE_ANNOTATIONS", ""), "k8s: comma-separated key=value annotations for the endpoint Service, e.g. internal-LB annotations (values cannot contain commas)")
+	fs.StringVar(&d.Cloud, "deploy-cloud", env("AMP_DEPLOY_CLOUD", ""), "k8s: cloud whose load-balancer annotations the nlb_* connectivity modes render — aws, gcp or azure. Empty = detect from a node's spec.providerID, which needs nodes get/list (rbac.clusterScoped)")
 	var nodeSelectorRaw string
 	fs.StringVar(&nodeSelectorRaw, "deploy-node-selector", env("AMP_DEPLOY_NODE_SELECTOR", ""), "k8s: comma-separated key=value node labels endpoint pods must schedule onto, e.g. a local-NVMe-SSD ephemeral pool (values cannot contain commas)")
 	fs.StringVar(&d.TailnetSuffix, "deploy-tailnet-suffix", env("AMP_DEPLOY_TAILNET_SUFFIX", ""), "k8s: Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each endpoint's tailnet address when its Service is tailnet-exposed (tailscale.com/expose=true); empty = disabled")
@@ -510,6 +515,13 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	case "NodePort", "LoadBalancer":
 	default:
 		return fmt.Errorf(`invalid deploy service type %q (want "ClusterIP", "NodePort", or "LoadBalancer")`, d.ServiceType)
+	}
+	// A typo here is silent otherwise: the chart renders no annotations for an
+	// unknown cloud, so an nlb_internal endpoint would come up internet-facing.
+	switch d.Cloud {
+	case "", "aws", "gcp", "azure":
+	default:
+		return fmt.Errorf(`invalid deploy cloud %q (want "aws", "gcp", or "azure")`, d.Cloud)
 	}
 	// A storage class provisions a PVC, which needs a requested size; without a
 	// class the data volume is an ephemeral emptyDir and the size is unused.

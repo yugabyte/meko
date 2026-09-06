@@ -40,6 +40,13 @@ type CreateEndpointArgs struct {
 	// deploy the same thing — and empty means the deployer's configured default,
 	// which is what every create asks for until something pins one.
 	Version string `json:"version,omitempty"`
+	// Connectivity is the endpoint's client reachability (deploy.Connectivity*):
+	// cluster_ip, nlb_internal or nlb_external. Carried in the args so a
+	// reclaim/replay recreates the same exposure. Empty means cluster_ip.
+	Connectivity string `json:"connectivity,omitempty"`
+	// AllowedCIDRs restricts which sources may reach an nlb_* endpoint's load
+	// balancer (loadBalancerSourceRanges). Empty = unrestricted.
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 	// Extended is per-endpoint compute configuration the control plane passes
 	// through WITHOUT interpreting: extra Postgres settings, and for a locally
 	// deployed compute the ports it binds. Stored under config.extended, nested
@@ -108,12 +115,14 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	// Rendered from the args: this step's desired state is the row it is about to
 	// write, so it assembles the record rather than reading one back.
 	spec := deploy.EndpointSpecFrom(core.EndpointDeploy{
-		ID:        s.EndpointID,
-		BranchID:  s.BranchID,
-		PgVersion: s.PgVersion,
-		CPU:       s.CPU,
-		Memory:    s.Memory,
-		Version:   s.Version,
+		ID:           s.EndpointID,
+		BranchID:     s.BranchID,
+		PgVersion:    s.PgVersion,
+		CPU:          s.CPU,
+		Memory:       s.Memory,
+		Version:      s.Version,
+		Connectivity: s.Connectivity,
+		AllowedCIDRs: s.AllowedCIDRs,
 	}, s.yb, s.scURL, exts)
 
 	// Record the endpoint row first: it claims the single-writer slot (a second
@@ -195,6 +204,14 @@ func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error
 		"pg_version": args.PgVersion,
 		"cpu":        args.CPU,
 		"memory":     args.Memory,
+	}
+	// Stored so GetEndpoint can report the exposure the endpoint was created
+	// with, and so a controller-driven redeploy recreates the same one.
+	if args.Connectivity != "" {
+		cfg["connectivity"] = args.Connectivity
+	}
+	if len(args.AllowedCIDRs) > 0 {
+		cfg["allowed_cidrs"] = args.AllowedCIDRs
 	}
 	if len(extensions) > 0 {
 		cfg["extensions"] = extensions

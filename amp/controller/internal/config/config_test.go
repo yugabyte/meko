@@ -259,6 +259,43 @@ func TestDeployServiceType(t *testing.T) {
 	}
 }
 
+// A typo in --deploy-cloud is silent otherwise: the endpoint chart renders no
+// annotations for an unknown cloud, so an endpoint asked for nlb_internal would
+// come up internet-facing.
+func TestDeployCloud(t *testing.T) {
+	chart := t.TempDir()
+	args := func(cloud string) []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--endpoint-image-tag", "latest",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+			"--deploy-cloud", cloud,
+		}
+	}
+	for _, cloud := range []string{"aws", "gcp", "azure"} {
+		c, err := Load(args(cloud))
+		if err != nil {
+			t.Errorf("cloud %q: unexpected error: %v", cloud, err)
+			continue
+		}
+		if c.Deploy.Cloud != cloud {
+			t.Errorf("cloud %q: Cloud = %q", cloud, c.Deploy.Cloud)
+		}
+	}
+	// Empty is the normal case: detect from the cluster's nodes.
+	if c, err := Load(args("")); err != nil || c.Deploy.Cloud != "" {
+		t.Errorf("empty cloud: Cloud=%v err=%v, want empty/nil", c, err)
+	}
+	if _, err := Load(args("gke")); err == nil {
+		t.Error("expected error for an invalid --deploy-cloud")
+	}
+}
+
 func TestDeployStorageClass(t *testing.T) {
 	chart := t.TempDir()
 	base := func() []string {

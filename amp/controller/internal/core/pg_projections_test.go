@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -210,7 +211,7 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EndpointDeploy: %v", err)
 		}
-		if one != d {
+		if !reflect.DeepEqual(one, d) {
 			t.Errorf("EndpointDeploy = %+v, want the same state the branch enumeration reports (%+v)", one, d)
 		}
 		if _, err := b.EndpointDeploy(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
@@ -233,7 +234,7 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		if mine == nil {
 			t.Fatalf("AllEndpointDeploys did not include the live endpoint %s", endpointID)
 		}
-		if *mine != d {
+		if !reflect.DeepEqual(*mine, d) {
 			t.Errorf("AllEndpointDeploys = %+v, want the same state the branch enumeration reports (%+v)", *mine, d)
 		}
 

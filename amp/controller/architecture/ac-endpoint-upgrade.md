@@ -185,10 +185,11 @@ first so an interrupted one stays visible. (`resize_endpoint` is deployer-first 
 looks like a counterexample, but it patches a `ResizeSpec` in place and never renders.)
 
 Adding a third hand-rolled `deploy.EndpointSpec{…}` literal is what to avoid. The
-struct has ten fields, drawn from three places — six from durable state, three from
-deps (`YB`, `ControllerURL`, the catalog), one derived from the id — and **omitting
-one is silent**: the deploy succeeds and the endpoint comes back missing a mount,
-reverted to a default size, or running the deployer's default version.
+struct has twelve fields, drawn from three places — eight from durable state, three
+from deps (`YB`, `ControllerURL`, the catalog), one derived from the id — and
+**omitting one is silent**: the deploy succeeds and the endpoint comes back missing a
+mount, reverted to a default size, running the deployer's default version, or with
+its load balancer pruned.
 
 So spec assembly lives in one function, beside the type it builds, in
 `internal/deploy`:
@@ -204,7 +205,9 @@ to know what a rendered spec contains. `core.EndpointDeploy` stops being "the ro
 is why `create_endpoint` **constructs** one from `CreateEndpointArgs` instead of reading
 a row back. It carries the endpoint's id and its branch's — `branch_id` is a primary
 key, so the branch (and its extension set) is fully addressed by it, no cluster id — and
-it gains `Version` in §2.
+it gains `Version` in §2 and `Connectivity`/`AllowedCIDRs` from meko#967.
+`TestEndpointSpecFromRendersEveryField` sweeps the struct reflectively, so a field
+added later fails the build rather than going silently unrendered.
 
 **It takes the state, it does not read it.** Reading by endpoint id would be safer —
 a caller could not under-populate the input — but it is N+1 queries for a fleet roll

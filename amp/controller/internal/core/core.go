@@ -204,7 +204,14 @@ type Endpoint struct {
 	// TargetVersion is the version the endpoint SHOULD run, written before an
 	// upgrade deploys. Differing from Version is an upgrade that has not converged.
 	TargetVersion string
-	CreatedAt     time.Time
+	// Connectivity is the endpoint's client reachability as stored
+	// (cluster_ip / nlb_internal / nlb_external), and AllowedCIDRs the source
+	// ranges allowed to reach an nlb_* endpoint's load balancer. Empty for
+	// endpoints created before connectivity was configurable, which behave as
+	// cluster_ip.
+	Connectivity string
+	AllowedCIDRs []string
+	CreatedAt    time.Time
 	// YCPGeneration is the highest YCP desired-state generation fully applied to
 	// this endpoint, echoed back so the reconcile agent can tell an applied update
 	// from one whose async task never finished (meko#985). Written by the worker
@@ -230,6 +237,13 @@ type EndpointDeploy struct {
 	// as "whatever the deployer is configured with" — the behaviour of every
 	// endpoint created before the column existed.
 	Version string
+	// Connectivity and AllowedCIDRs carry the endpoint's exposure into a
+	// redeploy. They are load-bearing, not informational: a redeploy renders the
+	// release from this record alone, so leaving them empty makes service-lb.yaml's
+	// gate false and helm prunes the -lb Service, deleting the load balancer and
+	// reverting an nlb_* endpoint to cluster_ip behind every client's back.
+	Connectivity string
+	AllowedCIDRs []string
 }
 
 // DefaultBranchName is the name given to a cluster's default (root) branch. The

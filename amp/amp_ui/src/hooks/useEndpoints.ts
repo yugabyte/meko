@@ -15,6 +15,7 @@ import {
 import type {
   Branch,
   Endpoint,
+  EndpointConnectivityMode,
   EndpointRole,
   SettingsUpdateResult,
   UpdateEndpointSettingsInput,
@@ -54,9 +55,23 @@ export function useCreateEndpoint() {
       role: EndpointRole;
       cpu?: string;
       memory?: string;
+      connectivity?: EndpointConnectivityMode;
+      allowedCidrs?: string[];
     }): Promise<Endpoint> =>
       createEndpoint(input.poolId, input.clusterId, input.branchId, {
         role: input.role,
+        // Same rule as resources: only send the block when the caller chose
+        // something, so an omitted one takes the controller's cluster_ip default.
+        ...(input.connectivity && input.connectivity !== "cluster_ip"
+          ? {
+              connectivity: {
+                mode: input.connectivity,
+                ...(input.allowedCidrs?.length
+                  ? { allowed_cidrs: input.allowedCidrs }
+                  : {}),
+              },
+            }
+          : {}),
         // Only send a resources block when the caller specified something; an
         // omitted block lets the controller apply its 2-core / 4Gi default.
         ...(input.cpu || input.memory

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -68,7 +69,7 @@ func TestMemAllEndpointDeploys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EndpointDeploy: %v", err)
 	}
-	if one != byID[epA.ID] {
+	if !reflect.DeepEqual(one, byID[epA.ID]) {
 		t.Errorf("EndpointDeploy = %+v, want what the fleet enumeration reports (%+v)", one, byID[epA.ID])
 	}
 

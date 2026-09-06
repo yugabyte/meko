@@ -49,8 +49,9 @@ subjects:
     namespace: {{ .Release.Namespace }}
 {{- if .Values.rbac.clusterScoped }}
 ---
-# Cluster-scoped reads: Helm's --create-namespace probes namespaces, and the
-# NodePort endpoint address resolver reads node IPs.
+# Cluster-scoped reads: Helm's --create-namespace probes namespaces; node IPs are
+# read by the NodePort endpoint address resolver and by the cloud detection the
+# nlb_* endpoint connectivity modes need (--deploy-cloud skips that lookup).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
