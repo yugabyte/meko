@@ -1022,11 +1022,12 @@ pub struct BranchConfigToml {
     /// ingest and the materialiser share one per-block counter. Read once
     /// at activation (see `enable_gc`). Default 10.
     pub gc_candidate_every_n_bases: u32,
-    /// Per-block trim watermarks the GC drain keeps in memory, per timeline.
-    /// Nothing else reclaims them — unlike a sweep cursor a watermark has no
-    /// dequeue — so this is what bounds the map. An entry costs ~100 B, so the
-    /// default is ~10 MB a timeline once full; evicting one costs that block
-    /// one full-range trim, and 0 turns them off. Read once at `Timeline::new`
+    /// Per-key trim watermarks the GC drain keeps in memory, per timeline —
+    /// one map over rel blocks, SLRU blocks and `meta` keys alike. Nothing
+    /// else reclaims them — unlike a sweep cursor a watermark has no dequeue —
+    /// so this is what bounds the map. An entry costs ~100 B, so the default
+    /// is ~10 MB a timeline once full; evicting one costs that key one
+    /// full-range trim, and 0 turns them off. Read once at `Timeline::new`
     /// (see `enable_gc`).
     pub gc_trim_watermark_cache_capacity: usize,
 }

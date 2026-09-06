@@ -62,9 +62,9 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use futures::stream::{StreamExt, TryStreamExt};
 use itertools::Itertools as _;
-use pageserver_api::key::{KEY_SIZE, Key, rel_block_to_key};
+use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::PayloadCompression;
-use pageserver_api::reltag::{RelTag, SlruKind};
+use pageserver_api::reltag::SlruKind;
 
 use remote_storage::{YbConnConfig, YsqlClient};
 // We talk to YugabyteDB through the YB smart-driver fork of
@@ -1186,10 +1186,15 @@ pub const GC_BUCKETS: i32 = 3;
 /// `pageserver:gc` pool is sized to this.
 pub const GC_ACTION_PARALLELISM: usize = 1;
 
-/// Bars a merge join in the `slru_pages` and `meta` trims — the shape that
-/// wedged the drain by materialising the DELETE's own scan (#1133). Not a
-/// general spill guard; the per-statement bounds are what bound the damage.
-const GC_TRIM_NO_MERGEJOIN_HINT: &str = "/*+ Set(enable_mergejoin off) */";
+/// The trims' shared hint. A per-key `(watermark, anchor)` bound reaches the
+/// index only as a parameter of an inner scan rescanned per `bound` row, so
+/// each directive bars one plan that drops it to a Join Filter: hash join, a
+/// table-outer nested loop, a `Materialize` over one unparameterised scan, and
+/// merge join, which also spills the DELETE's scan to a tuplestore (#1133).
+const GC_TRIM_NESTED_LOOP_HINT: &str = concat!(
+    "/*+ Set(enable_mergejoin off) Set(enable_hashjoin off) ",
+    "Set(enable_material off) Leading((bound p)) */"
+);
 
 /// Encode a `Key` to its fixed 18-byte wire form — the `pending_gc.key`
 /// (and `meta.key`) bytea.
@@ -1563,24 +1568,6 @@ pub(crate) fn rel_fork_of(key: &Key) -> GcForkIdent {
         key.field3 as i64,
         key.field4 as i64,
         key.field5 as i16,
-    )
-}
-
-/// The inverse of [`rel_fork_of`]: the rel block key for `blknum` in that fork.
-/// The GC groups block keys by fork and gets blknums back from SQL, so this is
-/// how a result row becomes a key again.
-pub(crate) fn rel_block_key_of(
-    (spcnode, dbnode, relnode, forknum): GcForkIdent,
-    blknum: i64,
-) -> Key {
-    rel_block_to_key(
-        RelTag {
-            spcnode: spcnode as u32,
-            dbnode: dbnode as u32,
-            relnode: relnode as u32,
-            forknum: forknum as u8,
-        },
-        blknum as u32,
     )
 }
 
@@ -3106,23 +3093,24 @@ impl PageStore {
     /// below the same cutoff), so they cannot change which rows go — they only
     /// stop the scan running to the ends of the block if the plan slips.
     ///
-    /// Trap: all three hint directives are load-bearing, and the method half is
-    /// not enough on its own. The bounds are per-block, so they reach the index
-    /// scan only with `bound` on the outer side of a nested loop — measured on
-    /// a dev deployment, 40 blocks:
+    /// Trap: every directive in [`GC_TRIM_NESTED_LOOP_HINT`] is load-bearing,
+    /// and the method half is not enough on its own. The bounds are per-block,
+    /// so they reach the index scan only as parameters of an inner scan
+    /// rescanned per `bound` row — measured on a dev deployment, 40 blocks:
     ///
     /// | plan | rows scanned |
     /// |---|---|
-    /// | nested loop, `bound` outer | 310 |
+    /// | nested loop, `bound` outer, inner rescanned | 310 |
     /// | nested loop, `pages` outer (`Leading((p bound))`) | 33 283 |
     /// | hash join | 33 255 |
     ///
     /// With `pages` outer the bounds reference the inner relation and all fall
-    /// to a Join Filter, the same 107x regression barring the hash join was
-    /// meant to prevent; `Leading` is what rules it out. `gc_trims_never_plan_a_merge_join`
-    /// runs under `pg_hint_plan.yb_bad_hint_mode = error`, so a directive that
-    /// stops binding — a renamed alias, a typo — fails the test rather than
-    /// silently costing that 107x.
+    /// to a Join Filter; `Leading` rules that out. A `Materialize` under the
+    /// right join order costs the same, more quietly — the inner scan runs once,
+    /// unparameterised — and amp2 picked exactly that for this statement as it
+    /// landed (#1155). `gc_trims_never_plan_a_merge_join` runs under
+    /// `pg_hint_plan.yb_bad_hint_mode = error`, so a directive that stops
+    /// binding fails the test rather than silently costing the 107x.
     fn gc_trim_blocks_sql(&self) -> String {
         format!(
             "{hint} DELETE FROM \"{schema}\".pages p \
@@ -3138,7 +3126,7 @@ impl PageStore {
                AND (p.lsn < bound.anchor \
                  OR (p.lsn = bound.anchor AND NOT p.will_init))",
             schema = self.schema,
-            hint = "/*+ Set(enable_mergejoin off) Set(enable_hashjoin off) Leading((bound p)) */"
+            hint = GC_TRIM_NESTED_LOOP_HINT
         )
     }
 
@@ -3608,64 +3596,124 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// The `slru_pages` trim statement — same anchor shape as
-    /// [`Self::gc_trim_anchors_sql`], still resolved in a CTE the DELETE joins
-    /// against, and split out for the same test. A segment caps the *block*
-    /// count at 32, but nothing caps a block's version depth, which is what the
-    /// anchor walks (`will_init` is sparser in clog than in `pages`), so the
-    /// early-stopping anchor matters here too.
-    ///
-    /// No watermark, unlike the `pages` trim (#1155). That is scoping, not a
-    /// depth argument — see the paragraph above — and it holds only while this
-    /// statement has not been observed to exceed YB's history retention. Give
-    /// it one when it is.
-    fn gc_trim_slru_sql(&self) -> String {
+    /// Each SLRU block's anchor, on [`Self::gc_trim_anchors_sql`]'s contract.
+    /// No `bucket_id`: `branch_id` is this table's whole hash key. The
+    /// `LIMIT 1` early stop matters more here — `will_init` is sparser in clog
+    /// than in `pages` (#1133).
+    fn gc_trim_slru_anchors_sql(&self) -> String {
         format!(
-            "{hint} WITH anchor AS ( \
-                 SELECT b.blknum, x.lsn \
-                 FROM unnest($4::bigint[]) AS b(blknum) \
-                 CROSS JOIN LATERAL ( \
-                     SELECT lsn \
-                     FROM \"{schema}\".slru_pages \
-                     WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
-                       AND blknum = b.blknum AND lsn <= $5 AND will_init \
-                     ORDER BY lsn DESC LIMIT 1 \
-                 ) x \
-             ) \
-             DELETE FROM \"{schema}\".slru_pages p \
-             USING anchor a \
-             WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
-               AND p.blknum = ANY($4) \
-               AND p.lsn <= $5 \
-               AND p.blknum = a.blknum \
-               AND (p.lsn < a.lsn \
-                 OR (p.lsn = a.lsn AND NOT p.will_init))",
-            schema = self.schema,
-            hint = GC_TRIM_NO_MERGEJOIN_HINT
+            "SELECT b.blknum, b.watermark, x.lsn AS anchor \
+             FROM unnest($4::bigint[], $6::bigint[]) AS b(blknum, watermark) \
+             CROSS JOIN LATERAL ( \
+                 SELECT lsn \
+                 FROM \"{schema}\".slru_pages \
+                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
+                   AND blknum = b.blknum \
+                   AND lsn <= $5 AND will_init \
+                 ORDER BY lsn DESC LIMIT 1 \
+             ) x",
+            schema = self.schema
         )
     }
 
-    /// Trim action for one SLRU segment's listed blocks: per block, keep
-    /// the newest base (`will_init`) `<= cutoff` plus everything above;
-    /// delete below. Single-tablet (`branch_id` is the hash key and
-    /// `(kind, segno)` a bound range prefix within it). The `slru_pages`
-    /// analog of [`Self::gc_act_trim_blocks`].
+    /// The `slru_pages` trim statement — same shape and hint as
+    /// [`Self::gc_trim_blocks_sql`], which carries the reasoning; split out for
+    /// the same test. `$4`/`$6`/`$7` are the blknum / watermark / anchor
+    /// arrays.
+    fn gc_trim_slru_sql(&self) -> String {
+        format!(
+            "{hint} DELETE FROM \"{schema}\".slru_pages p \
+             USING unnest($4::bigint[], $6::bigint[], $7::bigint[]) \
+                 AS bound(blknum, watermark, anchor) \
+             WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
+               AND p.blknum = ANY($4) \
+               AND p.lsn >= $8 AND p.lsn <= $5 \
+               AND p.blknum = bound.blknum \
+               AND p.lsn >= bound.watermark \
+               AND p.lsn <= bound.anchor \
+               AND (p.lsn < bound.anchor \
+                 OR (p.lsn = bound.anchor AND NOT p.will_init))",
+            schema = self.schema,
+            hint = GC_TRIM_NESTED_LOOP_HINT
+        )
+    }
+
+    /// Trim one SLRU segment's listed blocks: per block keep the newest base
+    /// (`will_init`) `<= cutoff` and everything above, delete below.
+    /// Single-tablet, so no bucket fan-out. Watermarks in, anchors out in
+    /// `trimmed_to`, on [`Self::gc_act_trim_blocks`]'s contract.
     pub async fn gc_act_trim_slru(
         &self,
         branch_id: BranchId,
         (kind, segno): GcSlruSeg,
-        blknums: &[i64],
+        block_watermarks: &[(i64, Lsn)],
         cutoff: Lsn,
+        trimmed_to: &mut Vec<(i64, Lsn)>,
     ) -> Result<u64> {
         self.write_gate("GC trim of amp_storage.slru_pages");
-        if blknums.is_empty() {
+        if block_watermarks.is_empty() {
             return Ok(0);
         }
-        let sql = self.gc_trim_slru_sql();
-        self.ysql_client
+        let cutoff_i = cutoff.0 as i64;
+        let (all_blknums, all_watermarks): (Vec<i64>, Vec<i64>) = block_watermarks
+            .iter()
+            .map(|&(blk, watermark)| (blk, watermark.0 as i64))
+            .unzip();
+
+        // Read before the DELETE, never after: a base can appear below the
+        // cutoff mid-statement, and a watermark above the anchor the DELETE
+        // used would strand the rows between them.
+        let rows = self
+            .ysql_client
+            .query(
+                &self.gc_trim_slru_anchors_sql(),
+                &[
+                    &branch_id,
+                    &kind,
+                    &segno,
+                    &all_blknums,
+                    &cutoff_i,
+                    &all_watermarks,
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "gc_trim_slru_anchors branch={branch_id} kind={kind} segno={segno} blocks={}",
+                    block_watermarks.len()
+                )
+            })?;
+        // Blocks with no base <= cutoff are absent, which is what leaves them
+        // untouched.
+        let (blknums, watermarks, anchors): (Vec<i64>, Vec<i64>, Vec<i64>) = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get::<_, i64>("blknum"),
+                    r.get::<_, i64>("watermark"),
+                    r.get::<_, i64>("anchor"),
+                )
+            })
+            .multiunzip();
+        // The plan-independent floor; no anchored block means nothing to do.
+        let Some(&floor) = watermarks.iter().min() else {
+            return Ok(0);
+        };
+
+        let deleted = self
+            .ysql_client
             .execute(
-                &sql,
-                &[&branch_id, &kind, &segno, &blknums, &(cutoff.0 as i64)],
+                &self.gc_trim_slru_sql(),
+                &[
+                    &branch_id,
+                    &kind,
+                    &segno,
+                    &blknums,
+                    &cutoff_i,
+                    &watermarks,
+                    &anchors,
+                    &floor,
+                ],
             )
             .await
             .with_context(|| {
@@ -3673,7 +3721,14 @@ impl PageStore {
                     "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno} blocks={}",
                     blknums.len()
                 )
-            })
+            })?;
+        trimmed_to.extend(
+            blknums
+                .iter()
+                .zip(&anchors)
+                .map(|(blk, anchor)| (*blk, Lsn(*anchor as u64))),
+        );
+        Ok(deleted)
     }
 
     /// Drop action for a truncated SLRU segment: delete every `slru_pages`
@@ -3710,55 +3765,125 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// The `meta` trim statement — same anchor shape as
-    /// [`Self::gc_trim_anchors_sql`] (no `will_init` here: every `meta` put is
-    /// a base), still resolved in a CTE the DELETE joins against, and split out
-    /// for the same test. No watermark, on the same scoping grounds as
-    /// [`Self::gc_trim_slru_sql`]. The least bound of the three
-    /// without the pinning: `m`'s scan would carry only `branch_id`, so a
-    /// merge join materialises the branch's whole `meta` table.
-    fn gc_trim_meta_sql(&self) -> String {
+    /// Each `meta` key's anchor: its newest version `<= $3`. No `will_init`
+    /// test (every `meta` put is a base) and no `bucket_id`.
+    fn gc_trim_meta_anchors_sql(&self) -> String {
         format!(
-            "{hint} WITH anchor AS ( \
-                 SELECT k.key, x.lsn \
-                 FROM unnest($2::bytea[]) AS k(key) \
-                 CROSS JOIN LATERAL ( \
-                     SELECT lsn \
-                     FROM \"{schema}\".meta \
-                     WHERE branch_id=$1 AND key = k.key AND lsn <= $3 \
-                     ORDER BY lsn DESC LIMIT 1 \
-                 ) x \
-             ) \
-             DELETE FROM \"{schema}\".meta m \
-             USING anchor a \
-             WHERE m.branch_id=$1 AND m.key = ANY($2::bytea[]) AND m.lsn <= $3 \
-               AND m.key = a.key AND m.lsn < a.lsn",
-            schema = self.schema,
-            hint = GC_TRIM_NO_MERGEJOIN_HINT
+            "SELECT b.key, b.watermark, x.lsn AS anchor \
+             FROM unnest($2::bytea[], $4::bigint[]) AS b(key, watermark) \
+             CROSS JOIN LATERAL ( \
+                 SELECT lsn \
+                 FROM \"{schema}\".meta \
+                 WHERE branch_id=$1 AND key = b.key AND lsn <= $3 \
+                 ORDER BY lsn DESC LIMIT 1 \
+             ) x",
+            schema = self.schema
         )
     }
 
-    /// Trim action for `meta` keys: per key keep the newest version
-    /// `<= cutoff`, delete everything below it. `meta` is full-overwrite
-    /// (no `will_init`/chain), so the anchor is just each key's newest
-    /// version `<= cutoff` — resolved per key and joined, the `meta` analog
-    /// of [`Self::gc_act_trim_blocks`]. A key with no version `<= cutoff` is
-    /// untouched (it's absent from the anchor). Returns rows deleted.
+    /// The `meta` trim statement — same shape and hint as
+    /// [`Self::gc_trim_blocks_sql`]; `$2`/`$4`/`$5` are the key / watermark /
+    /// anchor arrays.
+    ///
+    /// Trap: the range is half-open. Every `meta` put is a base, so there is no
+    /// same-LSN twin at the anchor and the anchor row itself must survive.
+    fn gc_trim_meta_sql(&self) -> String {
+        format!(
+            "{hint} DELETE FROM \"{schema}\".meta p \
+             USING unnest($2::bytea[], $4::bigint[], $5::bigint[]) \
+                 AS bound(key, watermark, anchor) \
+             WHERE p.branch_id=$1 \
+               AND p.key = ANY($2::bytea[]) \
+               AND p.lsn >= $6 AND p.lsn <= $3 \
+               AND p.key = bound.key \
+               AND p.lsn >= bound.watermark \
+               AND p.lsn < bound.anchor",
+            schema = self.schema,
+            hint = GC_TRIM_NESTED_LOOP_HINT
+        )
+    }
+
+    /// Trim `meta` keys: per key keep the newest version `<= cutoff` and
+    /// delete below. A key with no version `<= cutoff` is absent from the
+    /// anchors result, so untouched. Watermarks in, anchors out in
+    /// `trimmed_to`, on [`Self::gc_act_trim_blocks`]'s contract.
+    ///
+    /// Trap: the watermark is the previous anchor and that row is still live,
+    /// which is why the range is half-open.
     pub async fn gc_act_trim_meta(
         &self,
         branch_id: BranchId,
-        keys: &[Vec<u8>],
+        key_watermarks: &[(Key, Lsn)],
         cutoff: Lsn,
+        trimmed_to: &mut Vec<(Key, Lsn)>,
     ) -> Result<u64> {
         self.write_gate("GC trim of amp_storage.meta");
-        if keys.is_empty() {
+        if key_watermarks.is_empty() {
             return Ok(0);
         }
-        let sql = self.gc_trim_meta_sql();
-        self.ysql_client
-            .execute(&sql, &[&branch_id, &keys, &(cutoff.0 as i64)])
+        let cutoff_i = cutoff.0 as i64;
+        let (all_key_bytes, all_watermarks): (Vec<Vec<u8>>, Vec<i64>) = key_watermarks
+            .iter()
+            .map(|(key, watermark)| (key_to_bytes(key), watermark.0 as i64))
+            .unzip();
+
+        let rows = self
+            .ysql_client
+            .query(
+                &self.gc_trim_meta_anchors_sql(),
+                &[&branch_id, &all_key_bytes, &cutoff_i, &all_watermarks],
+            )
             .await
-            .with_context(|| format!("gc_act_trim_meta branch={branch_id} keys={}", keys.len()))
+            .with_context(|| {
+                format!(
+                    "gc_trim_meta_anchors branch={branch_id} keys={}",
+                    key_watermarks.len()
+                )
+            })?;
+        // A key with no version <= cutoff is absent, which is what leaves it
+        // untouched.
+        let (key_bytes, watermarks, anchors): (Vec<Vec<u8>>, Vec<i64>, Vec<i64>) = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get::<_, Vec<u8>>("key"),
+                    r.get::<_, i64>("watermark"),
+                    r.get::<_, i64>("anchor"),
+                )
+            })
+            .multiunzip();
+        // The plan-independent floor, as in the block trims.
+        let Some(&floor) = watermarks.iter().min() else {
+            return Ok(0);
+        };
+
+        let deleted = self
+            .ysql_client
+            .execute(
+                &self.gc_trim_meta_sql(),
+                &[
+                    &branch_id,
+                    &key_bytes,
+                    &cutoff_i,
+                    &watermarks,
+                    &anchors,
+                    &floor,
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "gc_act_trim_meta branch={branch_id} keys={}",
+                    key_bytes.len()
+                )
+            })?;
+        trimmed_to.extend(
+            key_bytes
+                .iter()
+                .zip(&anchors)
+                .map(|(key, anchor)| (Key::from_slice(key), Lsn(*anchor as u64))),
+        );
+        Ok(deleted)
     }
 
     /// Drop action for dead `meta` keys (a retired object's directory /
@@ -8331,8 +8456,9 @@ mod tests {
             .gc_act_trim_slru(
                 branch,
                 (kind, seg as i64),
-                &[blk_a as i64, blk_b as i64],
+                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(0))],
                 Lsn(50),
+                &mut Vec::new(),
             )
             .await
             .unwrap();
@@ -8353,6 +8479,189 @@ mod tests {
         assert_eq!(b.len(), 2, "no-anchor block must be untouched");
     }
 
+    /// Two consecutive SLRU trims, the second bounded by the watermark the
+    /// first left, plus a second block carrying its own in the same statement
+    /// (#1155). Pins the two off-by-ones: the previous anchor row sits exactly
+    /// at the watermark and must go with the range above it, and a row below
+    /// one block's watermark must survive the batch's floor.
+    #[tokio::test]
+    async fn gc_trim_slru_watermark_is_per_block_across_ticks() {
+        let (store, _schema) = make_store("gc_trim_slru_wm").await;
+        let branch = rand_branch();
+        let (seg, blk_a, blk_b) = (9u32, 1u32, 2u32);
+        let kind = SlruKind::Clog as i16;
+        let row = |blk: u32, lsn: u64, will_init: bool| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: seg,
+            blknum: blk,
+            lsn: Lsn(lsn),
+            is_image: will_init,
+            will_init,
+            payload: Bytes::from_static(b"x"),
+        };
+        store
+            .put_slru_pages(
+                branch,
+                &[
+                    row(blk_a, 10, true),
+                    row(blk_a, 20, false),
+                    row(blk_a, 30, true),
+                    row(blk_a, 40, false),
+                    row(blk_a, 50, true),
+                    row(blk_a, 60, false),
+                    // B is only ever trimmed in tick 2, at watermark 50: lsn 45
+                    // is the discriminator — above the batch's floor (30) and
+                    // below B's own watermark, so the floor alone would take it.
+                    row(blk_b, 45, false),
+                    row(blk_b, 50, true),
+                    row(blk_b, 55, false),
+                    row(blk_b, 70, true),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let versions =
+            |blk: u32| store.test_raw_slru_versions(branch, kind, seg as i64, blk as i64);
+
+        // Tick 1, block A only, no watermark: the whole range below its anchor
+        // at 30.
+        let mut wm = Vec::new();
+        store
+            .gc_act_trim_slru(
+                branch,
+                (kind, seg as i64),
+                &[(blk_a as i64, Lsn(0))],
+                Lsn(35),
+                &mut wm,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            wm,
+            vec![(blk_a as i64, Lsn(30))],
+            "the anchor is the watermark"
+        );
+        assert_eq!(
+            versions(blk_a).await.unwrap(),
+            vec![
+                (30, true, true),
+                (40, false, false),
+                (50, true, true),
+                (60, false, false)
+            ]
+        );
+
+        // Tick 2, both blocks in one statement: A bounded below by 30, B by 50.
+        let mut wm2 = Vec::new();
+        store
+            .gc_act_trim_slru(
+                branch,
+                (kind, seg as i64),
+                &[(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(50))],
+                Lsn(75),
+                &mut wm2,
+            )
+            .await
+            .unwrap();
+        wm2.sort_unstable();
+        assert_eq!(wm2, vec![(blk_a as i64, Lsn(50)), (blk_b as i64, Lsn(70))]);
+        assert_eq!(
+            versions(blk_a).await.unwrap(),
+            vec![(50, true, true), (60, false, false)],
+            "the previous anchor row goes with the range above it"
+        );
+        assert_eq!(
+            versions(blk_b).await.unwrap(),
+            vec![(45, false, false), (70, true, true)],
+            "B keeps lsn 45: above the batch floor, below its own watermark"
+        );
+    }
+
+    /// The `meta` twin, and the opposite off-by-one: the range is half-open,
+    /// so the watermark row is the previous anchor and is still live. Tick 2
+    /// must delete it only once a newer version has become the anchor (#1155).
+    #[tokio::test]
+    async fn gc_trim_meta_watermark_is_per_key_across_ticks() {
+        use pageserver_api::key::twophase_file_key;
+
+        let (store, _schema) = make_store("gc_trim_meta_wm").await;
+        let branch = rand_branch();
+        let (key_a, key_b) = (twophase_file_key(31), twophase_file_key(32));
+        let row = |k: &Key, lsn: u64| MetaRow {
+            key: Bytes::from(key_to_bytes(k)),
+            lsn: Lsn(lsn),
+            payload: Bytes::from_static(b"x"),
+        };
+        store
+            .put_meta(
+                branch,
+                &[
+                    row(&key_a, 10),
+                    row(&key_a, 30),
+                    row(&key_a, 40),
+                    row(&key_a, 50),
+                    // B is only trimmed in tick 2, at watermark 50: lsn 45 is
+                    // above the batch's floor (30) and below B's own watermark.
+                    row(&key_b, 45),
+                    row(&key_b, 50),
+                    row(&key_b, 60),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let (bytes_a, bytes_b) = (key_to_bytes(&key_a), key_to_bytes(&key_b));
+
+        // Tick 1, key A only: anchor 30, so 10 goes and 30 stays.
+        let mut wm = Vec::new();
+        store
+            .gc_act_trim_meta(branch, &[(key_a, Lsn(0))], Lsn(35), &mut wm)
+            .await
+            .unwrap();
+        assert_eq!(wm, vec![(key_a, Lsn(30))], "the anchor is the watermark");
+        assert_eq!(
+            store
+                .test_raw_meta_versions(branch, &bytes_a)
+                .await
+                .unwrap(),
+            vec![30, 40, 50]
+        );
+
+        // Tick 2: A's watermark row (30) is now below a newer anchor (50), so
+        // it goes with 40; B is bounded by its own watermark.
+        let mut wm2 = Vec::new();
+        store
+            .gc_act_trim_meta(
+                branch,
+                &[(key_a, Lsn(30)), (key_b, Lsn(50))],
+                Lsn(65),
+                &mut wm2,
+            )
+            .await
+            .unwrap();
+        wm2.sort_unstable();
+        let mut expected = vec![(key_a, Lsn(50)), (key_b, Lsn(60))];
+        expected.sort_unstable();
+        assert_eq!(wm2, expected);
+        assert_eq!(
+            store
+                .test_raw_meta_versions(branch, &bytes_a)
+                .await
+                .unwrap(),
+            vec![50],
+            "the previous anchor row goes once a newer version supersedes it"
+        );
+        assert_eq!(
+            store
+                .test_raw_meta_versions(branch, &bytes_b)
+                .await
+                .unwrap(),
+            vec![45, 60],
+            "B keeps lsn 45: above the batch floor, below its own watermark"
+        );
+    }
+
     /// `gc_act_trim_meta`'s anchor: per key keep the newest version `<= cutoff`
     /// plus everything above. `meta` has no `will_init` — every put is a base —
     /// so the anchor is simply that newest version.
@@ -8362,8 +8671,8 @@ mod tests {
 
         let (store, _schema) = make_store("gc_trim_meta").await;
         let branch = rand_branch();
-        let key_a = key_to_bytes(&twophase_file_key(11));
-        let key_b = key_to_bytes(&twophase_file_key(22));
+        let (key_a, key_b) = (twophase_file_key(11), twophase_file_key(22));
+        let (bytes_a, bytes_b) = (key_to_bytes(&key_a), key_to_bytes(&key_b));
         let row = |k: &[u8], lsn: u64| MetaRow {
             key: Bytes::copy_from_slice(k),
             lsn: Lsn(lsn),
@@ -8374,42 +8683,50 @@ mod tests {
                 branch,
                 &[
                     // key A: anchor is 40; 10/15 go, 40/55 stay
-                    row(&key_a, 10),
-                    row(&key_a, 15),
-                    row(&key_a, 40),
-                    row(&key_a, 55),
+                    row(&bytes_a, 10),
+                    row(&bytes_a, 15),
+                    row(&bytes_a, 40),
+                    row(&bytes_a, 55),
                     // key B: every version is above the cutoff
-                    row(&key_b, 60),
-                    row(&key_b, 70),
+                    row(&bytes_b, 60),
+                    row(&bytes_b, 70),
                 ],
             )
             .await
             .unwrap();
 
         store
-            .gc_act_trim_meta(branch, &[key_a.clone(), key_b.clone()], Lsn(50))
+            .gc_act_trim_meta(
+                branch,
+                &[(key_a, Lsn(0)), (key_b, Lsn(0))],
+                Lsn(50),
+                &mut Vec::new(),
+            )
             .await
             .unwrap();
 
         assert_eq!(
-            store.test_raw_meta_versions(branch, &key_a).await.unwrap(),
+            store
+                .test_raw_meta_versions(branch, &bytes_a)
+                .await
+                .unwrap(),
             vec![40, 55],
             "key A must keep its anchor + everything above"
         );
         assert_eq!(
-            store.test_raw_meta_versions(branch, &key_b).await.unwrap(),
+            store
+                .test_raw_meta_versions(branch, &bytes_b)
+                .await
+                .unwrap(),
             vec![60, 70],
             "a key entirely above the cutoff must be untouched"
         );
     }
 
-    /// The three trims must never plan a merge join — see
-    /// [`PageStore::gc_trim_blocks_sql`] for why (#1133).
-    ///
-    /// Asserts the join method, not the absence of a `Materialize`: the
-    /// tuplestore is a *consequence* of the merge join, and a `Materialize`
-    /// over the small anchor side is harmless (plans with exactly that have
-    /// been observed), so matching the node name would fail correct plans.
+    /// The three trims must never plan a merge join, and never a `Materialize`
+    /// — see [`PageStore::gc_trim_blocks_sql`] for why (#1133, #1155). The
+    /// anchors moved into their own statements, so nothing remains in these
+    /// DELETEs that a tuplestore could legitimately sit over.
     ///
     /// The hint-string assertion is the load-bearing half: an EXPLAIN against
     /// a table this small picks a safe plan on its own, so the plan check
@@ -8428,12 +8745,13 @@ mod tests {
         let keys: Vec<Vec<u8>> = vec![vec![0u8; KEY_SIZE]];
         let watermarks: Vec<i64> = vec![0, 0];
         let anchors: Vec<i64> = vec![1, 1];
+        let key_watermarks: Vec<i64> = vec![0];
+        let key_anchors: Vec<i64> = vec![1];
 
         type Params<'a> = Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>;
         // Per statement, the text that has to survive: its own key and lsn
         // bounds, which the join predicate does not supply under a hash join,
-        // and the anchor's early stop or the hint directives beyond the
-        // merge-join bar every case shares.
+        // and the hint directives beyond the merge-join bar every case shares.
         let cases: Vec<(&str, String, Params, &[&str])> = vec![
             (
                 "pages",
@@ -8465,27 +8783,51 @@ mod tests {
                     "p.lsn >= bound.watermark",
                     "p.lsn <= bound.anchor",
                     "Set(enable_hashjoin off)",
+                    "Set(enable_material off)",
                     "Leading((bound p))",
                 ],
             ),
             (
                 "slru_pages",
                 store.gc_trim_slru_sql(),
-                vec![&branch, &fork, &oid, &blknums, &lsn],
+                vec![
+                    &branch,
+                    &fork,
+                    &oid,
+                    &blknums,
+                    &lsn,
+                    &watermarks,
+                    &anchors,
+                    &lsn,
+                ],
+                // Same three per-block bounds and the same plan pins as
+                // `pages`: `slru_pages` has no bucket column, but its bounds
+                // are per-block all the same, so they reach the index scan only
+                // with `bound` on the outer side of a nested loop (#1155).
                 &[
                     "p.blknum = ANY($4)",
-                    "p.lsn <= $5",
-                    "ORDER BY lsn DESC LIMIT 1",
+                    "p.lsn >= $8 AND p.lsn <= $5",
+                    "p.lsn >= bound.watermark",
+                    "p.lsn <= bound.anchor",
+                    "Set(enable_hashjoin off)",
+                    "Set(enable_material off)",
+                    "Leading((bound p))",
                 ],
             ),
             (
                 "meta",
                 store.gc_trim_meta_sql(),
-                vec![&branch, &keys, &lsn],
+                vec![&branch, &keys, &lsn, &key_watermarks, &key_anchors, &lsn],
+                // `< bound.anchor`, not `<=`: every `meta` put is a base, so
+                // there is no same-LSN twin at the anchor to sweep.
                 &[
-                    "m.key = ANY($2::bytea[])",
-                    "m.lsn <= $3",
-                    "ORDER BY lsn DESC LIMIT 1",
+                    "p.key = ANY($2::bytea[])",
+                    "p.lsn >= $6 AND p.lsn <= $3",
+                    "p.lsn >= bound.watermark",
+                    "p.lsn < bound.anchor",
+                    "Set(enable_hashjoin off)",
+                    "Set(enable_material off)",
+                    "Leading((bound p))",
                 ],
             ),
         ];
@@ -8512,15 +8854,21 @@ mod tests {
             "the GUC did not stick, so every hint assertion below is vacuous"
         );
 
-        // The `pages` anchor moved out of the DELETE into its own statement, so
-        // its early stop is asserted there. Nothing in the result distinguishes
-        // a scan that stopped at the first base from one that read the whole
-        // block, so the shape is the only thing that can be checked (#1133).
-        let anchors_sql = store.gc_trim_anchors_sql();
-        assert!(
-            anchors_sql.contains("ORDER BY lsn DESC LIMIT 1") && !anchors_sql.contains("GROUP BY"),
-            "pages: anchor no longer stops at the first base:\n{anchors_sql}"
-        );
+        // Every anchor moved out of its DELETE into its own statement, so the
+        // early stop is asserted there. Nothing in the result distinguishes a
+        // scan that stopped at the first base from one that read the whole
+        // key, so the shape is the only thing that can be checked (#1133).
+        for (label, anchors_sql) in [
+            ("pages", store.gc_trim_anchors_sql()),
+            ("slru_pages", store.gc_trim_slru_anchors_sql()),
+            ("meta", store.gc_trim_meta_anchors_sql()),
+        ] {
+            assert!(
+                anchors_sql.contains("ORDER BY lsn DESC LIMIT 1")
+                    && !anchors_sql.contains("GROUP BY"),
+                "{label}: anchor no longer stops at the first base:\n{anchors_sql}"
+            );
+        }
         for (label, sql, params, bounds) in cases {
             assert!(
                 sql.contains("Set(enable_mergejoin off)"),
@@ -8541,6 +8889,11 @@ mod tests {
             assert!(
                 !plan.contains("Merge Join"),
                 "{label}: trim plans a Merge Join:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Materialize"),
+                "{label}: trim materialises its scan, so the per-key range is a \
+                 Join Filter rather than an index bound:\n{plan}"
             );
         }
     }

@@ -705,19 +705,19 @@ impl Timeline {
         // from these. `classify_candidate` has already checked the shape.
         let mut rel_keys_by_fork: HashMap<crate::page_store::GcForkIdent, Vec<Key>> =
             HashMap::new();
-        let mut slru_by_seg: HashMap<crate::page_store::GcSlruSeg, Vec<i64>> = HashMap::new();
-        let mut meta_keys: Vec<Vec<u8>> = Vec::new();
+        let mut slru_keys_by_seg: HashMap<crate::page_store::GcSlruSeg, Vec<Key>> = HashMap::new();
+        let mut meta_keys: Vec<Key> = Vec::new();
         for (key, gc_kind) in trims {
             match *gc_kind {
                 GcKind::TrimPages => rel_keys_by_fork
                     .entry(crate::page_store::rel_fork_of(key))
                     .or_default()
                     .push(*key),
-                GcKind::TrimSlru => slru_by_seg
+                GcKind::TrimSlru => slru_keys_by_seg
                     .entry(crate::page_store::slru_seg_of(key))
                     .or_default()
-                    .push(key.field6 as i64),
-                GcKind::TrimMeta => meta_keys.push(crate::page_store::key_to_bytes(key)),
+                    .push(*key),
+                GcKind::TrimMeta => meta_keys.push(*key),
                 // partition_by_kind routes only trim kinds into this bucket.
                 other => debug_assert!(false, "act_trims: non-trim kind {other:?}"),
             }
@@ -728,35 +728,18 @@ impl Timeline {
                 store,
                 rel_keys_by_fork.into_iter(),
                 |store, (fork, keys)| async move {
-                    // Each block walks `[watermark, anchor]`, not its whole
-                    // history (#1148). The map is keyed by `Key`; the store
-                    // binds blknums, which are those keys' `field6`.
-                    let block_watermarks: Vec<(i64, Lsn)> = {
-                        let mut progress = self.gc_drain.progress.lock().unwrap();
-                        keys.iter()
-                            .map(|k| (k.field6 as i64, progress.trim_watermark(k)))
-                            .collect()
-                    };
+                    let watermarks = self.block_trim_watermarks(&keys);
                     let mut trimmed_to = Vec::new();
                     let deleted = store
                         .gc_act_trim_blocks(
                             branch_id,
                             fork,
-                            &block_watermarks,
+                            &watermarks,
                             applied_cutoff,
                             &mut trimmed_to,
                         )
                         .await;
-                    // Stored on the error path too: only committed anchors are
-                    // in there, and a failed statement's predecessors still
-                    // made progress.
-                    {
-                        let mut progress = self.gc_drain.progress.lock().unwrap();
-                        for (blknum, anchor) in &trimmed_to {
-                            let key = crate::page_store::rel_block_key_of(fork, *blknum);
-                            progress.store_trim_watermark(key, *anchor);
-                        }
-                    }
+                    self.store_block_trim_watermarks(&keys[0], &trimmed_to);
                     deleted
                 },
             )
@@ -765,22 +748,86 @@ impl Timeline {
         let slru_deleted = self
             .run_parallel_actions(
                 store,
-                slru_by_seg.into_iter(),
-                |store, (seg, blknums)| async move {
-                    store
-                        .gc_act_trim_slru(branch_id, seg, &blknums, applied_cutoff)
-                        .await
+                slru_keys_by_seg.into_iter(),
+                |store, (seg, keys)| async move {
+                    let watermarks = self.block_trim_watermarks(&keys);
+                    let mut trimmed_to = Vec::new();
+                    let deleted = store
+                        .gc_act_trim_slru(
+                            branch_id,
+                            seg,
+                            &watermarks,
+                            applied_cutoff,
+                            &mut trimmed_to,
+                        )
+                        .await;
+                    self.store_block_trim_watermarks(&keys[0], &trimmed_to);
+                    deleted
                 },
             )
             .await?;
 
-        // Meta trim: one batched keep-newest over all meta keys.
+        // Meta trim: one batched keep-newest over all meta keys. Its keys are
+        // not block keys, so it drives the map directly rather than through the
+        // two helpers above.
+        let key_watermarks: Vec<(Key, Lsn)> = {
+            let mut progress = self.gc_drain.progress.lock().unwrap();
+            let watermarks = progress.trim_watermarks_of(&meta_keys);
+            meta_keys.iter().copied().zip(watermarks).collect()
+        };
+        let mut meta_trimmed_to = Vec::new();
         let meta_deleted = store
-            .gc_act_trim_meta(branch_id, &meta_keys, applied_cutoff)
+            .gc_act_trim_meta(
+                branch_id,
+                &key_watermarks,
+                applied_cutoff,
+                &mut meta_trimmed_to,
+            )
             .await
             .map_err(GcError::Persistence)?;
+        self.gc_drain
+            .progress
+            .lock()
+            .unwrap()
+            .store_trim_watermarks(meta_trimmed_to);
 
         Ok(rel_deleted + slru_deleted + meta_deleted)
+    }
+
+    /// The watermarks for one object's blocks, paired with their blknums —
+    /// what the two block trims bind. The map is keyed by `Key`; the store
+    /// binds blknums, which are those keys' `field6`.
+    fn block_trim_watermarks(&self, keys: &[Key]) -> Vec<(i64, Lsn)> {
+        let mut progress = self.gc_drain.progress.lock().unwrap();
+        let watermarks = progress.trim_watermarks_of(keys);
+        keys.iter()
+            .map(|k| k.field6 as i64)
+            .zip(watermarks)
+            .collect()
+    }
+
+    /// Store the anchors a block trim committed to, rebuilding each `Key` from
+    /// `template` — any key of the same object, since `field6` is the only
+    /// field a block key varies within one fork or SLRU segment. Rebuilding
+    /// from the caller's own candidate avoids a second encoding of the rel and
+    /// SLRU key layouts, which would have to move together.
+    ///
+    /// Called on the error path too: only committed anchors reach `trimmed_to`,
+    /// and a failed statement's predecessors still made progress.
+    fn store_block_trim_watermarks(&self, template: &Key, trimmed_to: &[(i64, Lsn)]) {
+        self.gc_drain
+            .progress
+            .lock()
+            .unwrap()
+            .store_trim_watermarks(trimmed_to.iter().map(|&(blknum, anchor)| {
+                (
+                    Key {
+                        field6: blknum as u32,
+                        ..*template
+                    },
+                    anchor,
+                )
+            }));
     }
 
     /// The `meta` keys a `DropMeta` may name — one shape per emitter in

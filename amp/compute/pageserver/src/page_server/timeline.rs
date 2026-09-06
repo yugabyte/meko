@@ -343,8 +343,8 @@ pub(crate) struct GcDrainProgress {
     /// never skips a row.
     ///
     /// Keyed by `Key`, the same identity `pending_gc` uses, so a rel block, an
-    /// SLRU block and a `meta` key share one map: only the `pages` trim
-    /// consults it today, and the other two need no new mechanism to.
+    /// SLRU block and a `meta` key share one map — all three trims consult it
+    /// (#1155), and the identity is what keeps them from colliding.
     trim_watermarks: LruCache<Key, Lsn>,
 }
 
@@ -358,15 +358,19 @@ impl GcDrainProgress {
         }
     }
 
-    /// The watermark this key carries. `Lsn(0)` for one that has none — the
-    /// bottom [`Self::floor`] also starts at.
-    pub(crate) fn trim_watermark(&mut self, key: &Key) -> Lsn {
-        self.trim_watermarks.get(key).copied().unwrap_or_default()
+    /// The watermarks these keys carry, in order. `Lsn(0)` for one that has
+    /// none — the bottom [`Self::floor`] also starts at.
+    pub(crate) fn trim_watermarks_of(&mut self, keys: &[Key]) -> Vec<Lsn> {
+        keys.iter()
+            .map(|k| self.trim_watermarks.get(k).copied().unwrap_or_default())
+            .collect()
     }
 
-    /// Record the anchor a committed trim of `key` reached.
-    pub(crate) fn store_trim_watermark(&mut self, key: Key, anchor: Lsn) {
-        self.trim_watermarks.insert(key, anchor);
+    /// Record the anchors a committed trim reached.
+    pub(crate) fn store_trim_watermarks(&mut self, trimmed: impl IntoIterator<Item = (Key, Lsn)>) {
+        for (key, anchor) in trimmed {
+            self.trim_watermarks.insert(key, anchor);
+        }
     }
 
     /// The cursor this candidate resumes from. Leaves the entry in place: the

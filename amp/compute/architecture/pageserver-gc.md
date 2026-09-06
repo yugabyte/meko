@@ -406,49 +406,61 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    every version of every key. On a deep fork that exceeded YB's history
    retention, so the statement could not complete at all.
 
-   The rel trim resolves its anchors in a **separate statement** and passes the
-   result into the DELETE as parallel arrays — `(blknum, watermark, anchor)`,
-   one per block — rather than recomputing them in a CTE the DELETE joins
-   against. The range is `[watermark, anchor]` per block, both ends pushed into
-   the index scan.
+   That anchor resolves in a **separate statement** per trim, whose result the
+   DELETE takes as parallel arrays — `(key, watermark, anchor)`, one
+   per block or `meta` key — rather than recomputing them in a CTE the DELETE
+   joins against. The range is `[watermark, anchor]` per key, both ends pushed
+   into the index scan. `meta` is the one half-open case, `[watermark, anchor)`:
+   every `meta` put is a base, so there is no same-LSN non-base twin at the
+   anchor to sweep and the anchor row itself always stays.
 
-   The watermark (`GcDrainProgress::trim_watermarks`) is the anchor that block's
+   The watermark (`GcDrainProgress::trim_watermarks`) is the anchor that key's
    last successful trim reached, below which everything deletable is already
-   gone, so a block trimmed once walks a tick's worth of LSNs rather than its
-   whole history (#1148). Two rules keep it sound, both argued at
+   gone, so a key trimmed once walks a tick's worth of LSNs rather than its
+   whole history (#1148, #1155). Two rules keep it sound, both argued at
    `gc_act_trim_blocks`: it advances only after the DELETE commits, and it is
    the anchor read *before* it, never after. Being wrong low only costs a
    re-scan, which is why the map can be in-memory and a bounded LRU
-   (`gc_trim_watermark_cache_capacity`).
+   (`gc_trim_watermark_cache_capacity`). One map covers all three keyspaces —
+   it is keyed by `Key`, the identity `pending_gc` already uses.
 
    The `USING` side is a function scan over literal arrays and reads no table,
    which is what makes the shape stable: no lateral or CTE for the planner to
-   re-associate into the join. It does need the nested loop — the bounds are
-   per-block, and under a hash join both fall to a Join Filter and the scan
-   reads `[0, cutoff]` (107x the rows on amp2). Its hint therefore bars hash as
-   well as merge and pins the join order (`Leading((bound p))`); the
-   `slru_pages` and `meta` trims bar only merge.
+   re-associate into the join. What it needs in return is one exact plan — the
+   inner index scan rescanned per `bound` row, so the range is a scan
+   *parameter*. Anything else pushes it to a Join Filter and the scan reads the
+   key's whole history (107x the rows on amp2 for `pages`). So all three share
+   one hint (`GC_TRIM_NESTED_LOOP_HINT`), and each of its four directives
+   removes one such plan: hash join, a table-outer nested loop
+   (`Leading((bound p))` pins the order), a merge join — which also
+   materialises the DELETE's own scan into a tuplestore — and a `Materialize`
+   under the correct join order, which runs the inner scan once,
+   unparameterised, over the whole key set. That last one is the quiet one:
+   amp2's planner picked it for all three tables, `pages` included, which is
+   why `enable_material off` joined the hint in #1155.
 
-   A block with **no** watermark — every block after a restart — has `Lsn(0)`
-   for its watermark, so it is still unbounded below, still batched with the
-   rest of its bucket, and can still take that statement past YB's history
-   retention, where it rolls back everything it deleted and the block makes no
-   progress at any runtime.
-   Bounding it means telling a deep cold block from a shallow one before
-   trimming it, which is a change of its own. The SLRU and `meta` trims have no
-   watermark for the same reason in reverse: neither has been observed to fail
-   that way, so neither has been given one.
+   A key with **no** watermark — every key after a restart — has `Lsn(0)` for
+   its watermark, so it is still unbounded below, still batched with the rest of
+   its statement, and can still take that statement past YB's history retention,
+   where it rolls back everything it deleted and the key makes no progress at
+   any runtime. Bounding it means telling a deep cold key from a shallow one
+   before trimming it, which is a change of its own.
 
-   All three also bind their block or key set and `lsn` on the DELETE, not just
-   in the anchor — the rel trim as the batch's lowest watermark and the cutoff,
-   the other two as the cutoff alone. The join predicate alone bounds that scan
-   only under a nested loop, and those single-table bounds are what keep it
-   tight under any join method: a merge join materialises the DELETE's own scan
-   into a tuplestore, and a hash join spills its build side, both against
-   `temp_file_limit`. For the SLRU and `meta` trims the merge-join `Set` is
-   insurance rather than the fix — with the lateral anchor they plan as a
-   batched nested loop without it. The rel trim is the one whose *speed* rests
-   on its hint, per the paragraph above; its scan stays bounded either way.
+   Depth is why all three have one. Measured on amp2 after ~16 days without GC:
+   a single clog block held over 10 000 versions below the cutoff, and across
+   8 523 `meta` keys the average was 1 948 with a maximum of 3.77 M — a
+   `rel_size` sentinel takes a version per extension, so its depth tracks the
+   relation's block count. Neither table fans out over buckets, so within one
+   statement deep keys sum rather than splitting across statements.
+
+   All three also bind their block or key set, the batch's lowest watermark and
+   the cutoff on the DELETE, not just in the anchor. The join predicate alone
+   bounds that scan only under a nested loop, and those single-table bounds are
+   what keep it tight under any join method: a merge join materialises the
+   DELETE's own scan into a tuplestore, and a hash join spills its build side,
+   both against `temp_file_limit`. Both scalars are implied by the per-key
+   ranges, so they cannot change which rows go — they only stop the scan running
+   to the ends of the key if the plan slips.
 
    All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue**, not from the delete.
@@ -628,7 +640,7 @@ per-branch is also per-instance today.
 | --- | --- | --- |
 | `enable_gc` | `true` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
-| `gc_trim_watermark_cache_capacity` | `100 000` | Per-block trim watermarks held in memory, **per timeline**. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that block a full-range trim. Read once at activation. |
+| `gc_trim_watermark_cache_capacity` | `100 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that key a full-range trim. Read once at activation. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
 | `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
