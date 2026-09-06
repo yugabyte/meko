@@ -700,15 +700,19 @@ impl Timeline {
 
         // Group by target table off the candidate's kind (block keys by
         // their object); keys are already deduped in partition_by_kind.
-        let mut rel_by_fork: HashMap<crate::page_store::GcForkIdent, Vec<i64>> = HashMap::new();
+        // Keys, not blknums: the watermark map is keyed by `Key`, and a rel
+        // block key's `field6` is its blknum, so the store's blknums derive
+        // from these. `classify_candidate` has already checked the shape.
+        let mut rel_keys_by_fork: HashMap<crate::page_store::GcForkIdent, Vec<Key>> =
+            HashMap::new();
         let mut slru_by_seg: HashMap<crate::page_store::GcSlruSeg, Vec<i64>> = HashMap::new();
         let mut meta_keys: Vec<Vec<u8>> = Vec::new();
         for (key, gc_kind) in trims {
             match *gc_kind {
-                GcKind::TrimPages => rel_by_fork
+                GcKind::TrimPages => rel_keys_by_fork
                     .entry(crate::page_store::rel_fork_of(key))
                     .or_default()
-                    .push(key.field6 as i64),
+                    .push(*key),
                 GcKind::TrimSlru => slru_by_seg
                     .entry(crate::page_store::slru_seg_of(key))
                     .or_default()
@@ -722,11 +726,38 @@ impl Timeline {
         let rel_deleted = self
             .run_parallel_actions(
                 store,
-                rel_by_fork.into_iter(),
-                |store, (fork, blknums)| async move {
-                    store
-                        .gc_act_trim_blocks(branch_id, fork, &blknums, applied_cutoff)
-                        .await
+                rel_keys_by_fork.into_iter(),
+                |store, (fork, keys)| async move {
+                    // Each block walks `[watermark, anchor]`, not its whole
+                    // history (#1148). The map is keyed by `Key`; the store
+                    // binds blknums, which are those keys' `field6`.
+                    let block_watermarks: Vec<(i64, Lsn)> = {
+                        let mut progress = self.gc_drain.progress.lock().unwrap();
+                        keys.iter()
+                            .map(|k| (k.field6 as i64, progress.trim_watermark(k)))
+                            .collect()
+                    };
+                    let mut trimmed_to = Vec::new();
+                    let deleted = store
+                        .gc_act_trim_blocks(
+                            branch_id,
+                            fork,
+                            &block_watermarks,
+                            applied_cutoff,
+                            &mut trimmed_to,
+                        )
+                        .await;
+                    // Stored on the error path too: only committed anchors are
+                    // in there, and a failed statement's predecessors still
+                    // made progress.
+                    {
+                        let mut progress = self.gc_drain.progress.lock().unwrap();
+                        for (blknum, anchor) in &trimmed_to {
+                            let key = crate::page_store::rel_block_key_of(fork, *blknum);
+                            progress.store_trim_watermark(key, *anchor);
+                        }
+                    }
+                    deleted
                 },
             )
             .await?;

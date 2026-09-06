@@ -1022,6 +1022,13 @@ pub struct BranchConfigToml {
     /// ingest and the materialiser share one per-block counter. Read once
     /// at activation (see `enable_gc`). Default 10.
     pub gc_candidate_every_n_bases: u32,
+    /// Per-block trim watermarks the GC drain keeps in memory, per timeline.
+    /// Nothing else reclaims them — unlike a sweep cursor a watermark has no
+    /// dequeue — so this is what bounds the map. An entry costs ~100 B, so the
+    /// default is ~10 MB a timeline once full; evicting one costs that block
+    /// one full-range trim, and 0 turns them off. Read once at `Timeline::new`
+    /// (see `enable_gc`).
+    pub gc_trim_watermark_cache_capacity: usize,
 }
 
 /// Ceiling on the rows one prefix-sweep GC DELETE names, so a `DROP DATABASE`
@@ -1043,6 +1050,10 @@ pub mod tenant_conf_defaults {
         crate::pages_bucket::PAGE_BUCKETS as usize * super::GC_SWEEP_MAX_ROWS_PER_DELETE;
     pub const DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL: &str = "2 h";
     pub const DEFAULT_GC_CANDIDATE_EVERY_N_BASES: u32 = 10;
+    /// Sized for the deep, hot blocks a workload rewrites — a few hundred per
+    /// relation — which is where the benefit is. A wide shallow relation's
+    /// millions of blocks are one candidate each and lose nothing to eviction.
+    pub const DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY: usize = 100_000;
     pub const DEFAULT_PITR_INTERVAL: &str = "1 day";
     pub const DEFAULT_WALRECEIVER_CONNECT_TIMEOUT: &str = "10 seconds";
     pub const DEFAULT_WALRECEIVER_LAGGING_WAL_TIMEOUT: &str = "10 seconds";
@@ -1085,6 +1096,7 @@ impl Default for BranchConfigToml {
             .expect("cannot parse default gc queue floor reset interval"),
             enable_gc: true,
             gc_candidate_every_n_bases: DEFAULT_GC_CANDIDATE_EVERY_N_BASES,
+            gc_trim_watermark_cache_capacity: DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY,
         }
     }
 }

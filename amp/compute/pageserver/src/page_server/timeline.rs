@@ -314,7 +314,6 @@ impl GcInfo {
 }
 
 /// The GC drain's in-memory progress. Reset to defaults on restart.
-#[derive(Default)]
 pub(crate) struct GcDrainProgress {
     /// Select floor high-water mark: everything at `due_lsn <= floor`
     /// has been handled — dequeued, acted-but-requeued (a busy-object drop),
@@ -336,9 +335,40 @@ pub(crate) struct GcDrainProgress {
         crate::page_store::GcCandidateId,
         crate::page_store::GcSweepProgress,
     >,
+
+    /// Per-key trim watermarks: the anchor that key's last successful trim
+    /// deleted down to, so the next walks `[watermark, anchor]` instead of its
+    /// whole history (#1148). LRU capped at `gc_trim_watermark_cache_capacity`;
+    /// a missing entry — evicted or lost to a restart — only widens the range,
+    /// never skips a row.
+    ///
+    /// Keyed by `Key`, the same identity `pending_gc` uses, so a rel block, an
+    /// SLRU block and a `meta` key share one map: only the `pages` trim
+    /// consults it today, and the other two need no new mechanism to.
+    trim_watermarks: LruCache<Key, Lsn>,
 }
 
 impl GcDrainProgress {
+    fn new(trim_watermark_capacity: usize) -> Self {
+        Self {
+            floor: Lsn::default(),
+            last_floor_reset: None,
+            sweep_cursors: std::collections::HashMap::new(),
+            trim_watermarks: LruCache::new(trim_watermark_capacity),
+        }
+    }
+
+    /// The watermark this key carries. `Lsn(0)` for one that has none — the
+    /// bottom [`Self::floor`] also starts at.
+    pub(crate) fn trim_watermark(&mut self, key: &Key) -> Lsn {
+        self.trim_watermarks.get(key).copied().unwrap_or_default()
+    }
+
+    /// Record the anchor a committed trim of `key` reached.
+    pub(crate) fn store_trim_watermark(&mut self, key: Key, anchor: Lsn) {
+        self.trim_watermarks.insert(key, anchor);
+    }
+
     /// The cursor this candidate resumes from. Leaves the entry in place: the
     /// caller writes back whatever the sweep advanced it to, error or not.
     ///
@@ -2017,7 +2047,7 @@ impl Timeline {
         // Read once at writer construction, so a runtime patch takes
         // effect only on the next PS restart (the drain knobs, by
         // contrast, are re-read each tick).
-        let (enable_gc, gc_candidate_every_n_bases) = {
+        let (enable_gc, gc_candidate_every_n_bases, gc_trim_watermark_cache_capacity) = {
             let loaded_tenant_conf = tenant_conf.load();
             (
                 loaded_tenant_conf
@@ -2028,6 +2058,10 @@ impl Timeline {
                     .tenant_conf
                     .gc_candidate_every_n_bases
                     .unwrap_or(conf.default_tenant_conf.gc_candidate_every_n_bases),
+                loaded_tenant_conf
+                    .tenant_conf
+                    .gc_trim_watermark_cache_capacity
+                    .unwrap_or(conf.default_tenant_conf.gc_trim_watermark_cache_capacity),
             )
         };
 
@@ -2200,7 +2234,9 @@ impl Timeline {
                 applied_gc_cutoff_lsn,
                 gc_drain: GcDrain {
                     page_store: resources.gc_page_store,
-                    progress: std::sync::Mutex::new(GcDrainProgress::default()),
+                    progress: std::sync::Mutex::new(GcDrainProgress::new(
+                        gc_trim_watermark_cache_capacity,
+                    )),
                 },
                 initdb_lsn: metadata.initdb_lsn(),
 

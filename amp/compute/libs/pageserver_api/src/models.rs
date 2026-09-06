@@ -442,6 +442,8 @@ pub struct BranchConfigPatch {
     pub enable_gc: FieldPatch<bool>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_candidate_every_n_bases: FieldPatch<u32>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub gc_trim_watermark_cache_capacity: FieldPatch<usize>,
 }
 
 /// Like [`crate::config::BranchConfigToml`], but preserves the information
@@ -511,6 +513,9 @@ pub struct BranchConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gc_candidate_every_n_bases: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gc_trim_watermark_cache_capacity: Option<usize>,
 }
 
 impl BranchConfig {
@@ -537,6 +542,7 @@ impl BranchConfig {
             mut gc_queue_floor_reset_interval,
             mut enable_gc,
             mut gc_candidate_every_n_bases,
+            mut gc_trim_watermark_cache_capacity,
         } = self;
 
         patch.gc_horizon.apply(&mut gc_horizon);
@@ -588,6 +594,9 @@ impl BranchConfig {
         patch
             .gc_candidate_every_n_bases
             .apply(&mut gc_candidate_every_n_bases);
+        patch
+            .gc_trim_watermark_cache_capacity
+            .apply(&mut gc_trim_watermark_cache_capacity);
 
         Ok(Self {
             gc_horizon,
@@ -608,6 +617,7 @@ impl BranchConfig {
             gc_queue_floor_reset_interval,
             enable_gc,
             gc_candidate_every_n_bases,
+            gc_trim_watermark_cache_capacity,
         })
     }
 
@@ -657,6 +667,9 @@ impl BranchConfig {
             gc_candidate_every_n_bases: self
                 .gc_candidate_every_n_bases
                 .unwrap_or(global_conf.gc_candidate_every_n_bases),
+            gc_trim_watermark_cache_capacity: self
+                .gc_trim_watermark_cache_capacity
+                .unwrap_or(global_conf.gc_trim_watermark_cache_capacity),
         }
     }
 }
