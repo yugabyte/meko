@@ -409,10 +409,25 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    That anchor resolves in a **separate statement** per trim, whose result the
    DELETE takes as parallel arrays — `(key, watermark, anchor)`, one
    per block or `meta` key — rather than recomputing them in a CTE the DELETE
-   joins against. The range is `[watermark, anchor]` per key, both ends pushed
-   into the index scan. `meta` is the one half-open case, `[watermark, anchor)`:
-   every `meta` put is a base, so there is no same-LSN non-base twin at the
-   anchor to sweep and the anchor row itself always stays.
+   joins against. The range is `[watermark, anchor)` per key, both ends pushed
+   into the index scan as a pure index range.
+
+   Half-open means the two block trims leave the same-LSN delta at the anchor —
+   the delta the materialiser stamped its image over. Reads already tolerate
+   one: the PK orders `lsn DESC, is_image DESC` and chain reconstruction stops
+   at the first `will_init` row, so the image shadows it from the moment it is
+   stamped until a trim removes it. Excluding it needs an `OR ... NOT
+   will_init` disjunct that turns the index range into a Storage Filter,
+   15-25% of the DELETE's time on amp2 warm and cold (#1153), and the next
+   tick's `[anchor₁, anchor₂)` sweeps it anyway. A block that never receives
+   another candidate keeps it for good — for one that goes cold right after an
+   image is stamped, two retained rows rather than one, though the extra is a
+   WAL record and not another 8 kB page.
+
+   `meta` is half-open for a different reason, and there `<` is a correctness
+   requirement rather than a cost trade: every put is a base, so there is no
+   same-LSN delta to leave, and `<=` would delete the anchor row itself — the
+   key's live value.
 
    The watermark (`GcDrainProgress::trim_watermarks`) is the anchor that key's
    last successful trim reached, below which everything deletable is already

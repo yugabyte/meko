@@ -3070,7 +3070,7 @@ impl PageStore {
     /// The `pages` trim statement, split out so a test can EXPLAIN it.
     ///
     /// `$6`/`$7`/`$8` are parallel arrays — blknum, watermark, anchor — one
-    /// entry per block, so the DELETE's range is `[watermark, anchor]` per
+    /// entry per block, so the DELETE's range is `[watermark, anchor)` per
     /// block. The watermark is the anchor that block's last successful trim
     /// reached, below which everything deletable is already gone (#1148);
     /// `Lsn(0)` for a block that has none, which is the whole range.
@@ -3082,6 +3082,15 @@ impl PageStore {
     /// Trap: this deletes the previous anchor row itself, sitting at exactly
     /// the watermark. Intended — reads are admitted at `>= applied_cutoff`,
     /// above the new anchor.
+    ///
+    /// Trap: half-open, so the same-LSN delta at the anchor survives — the
+    /// delta the materialiser stamped its image over. The PK orders
+    /// `lsn DESC, is_image DESC` and chain reconstruction stops at the first
+    /// `will_init` row, so the image shadows it; that is already the steady
+    /// state between a stamp and the next trim. Sweeping it instead needs an
+    /// `OR (p.lsn = bound.anchor AND NOT p.will_init)`, which costs the pure
+    /// index range and 15-25% of the DELETE (#1153). The next tick's
+    /// `[anchor₁, anchor₂)` starts at this anchor, so it takes the delta.
     ///
     /// Trap: `p.blknum = ANY($6)`, `p.lsn >= $10` and `p.lsn <= $11` duplicate
     /// the join on purpose — the batch's blocks, the lowest watermark among
@@ -3122,17 +3131,16 @@ impl PageStore {
                AND p.lsn >= $10 AND p.lsn <= $11 \
                AND p.blknum = bound.blknum \
                AND p.lsn >= bound.watermark \
-               AND p.lsn <= bound.anchor \
-               AND (p.lsn < bound.anchor \
-                 OR (p.lsn = bound.anchor AND NOT p.will_init))",
+               AND p.lsn < bound.anchor",
             schema = self.schema,
             hint = GC_TRIM_NESTED_LOOP_HINT
         )
     }
 
     /// Trim one fork's listed blocks: per block, keep the newest base
-    /// (`will_init`) <= CUTOFF plus everything above; delete below,
-    /// incl. same-LSN non-base twins. Greedy to the cutoff (not
+    /// (`will_init`) <= CUTOFF plus everything above; delete strictly
+    /// below, which leaves the same-LSN delta beside it for the next tick
+    /// (see [`Self::gc_trim_blocks_sql`]). Greedy to the cutoff (not
     /// due_lsn); no base <= cutoff = block untouched. Returns rows
     /// deleted.
     ///
@@ -3630,18 +3638,19 @@ impl PageStore {
                AND p.lsn >= $8 AND p.lsn <= $5 \
                AND p.blknum = bound.blknum \
                AND p.lsn >= bound.watermark \
-               AND p.lsn <= bound.anchor \
-               AND (p.lsn < bound.anchor \
-                 OR (p.lsn = bound.anchor AND NOT p.will_init))",
+               AND p.lsn < bound.anchor",
             schema = self.schema,
             hint = GC_TRIM_NESTED_LOOP_HINT
         )
     }
 
     /// Trim one SLRU segment's listed blocks: per block keep the newest base
-    /// (`will_init`) `<= cutoff` and everything above, delete below.
+    /// (`will_init`) `<= cutoff` and everything above, delete strictly below.
     /// Single-tablet, so no bucket fan-out. Watermarks in, anchors out in
     /// `trimmed_to`, on [`Self::gc_act_trim_blocks`]'s contract.
+    ///
+    /// The materialiser stamps SLRU images too, so the same-LSN delta at the
+    /// anchor survives here as it does in `pages`.
     pub async fn gc_act_trim_slru(
         &self,
         branch_id: BranchId,
@@ -3785,8 +3794,10 @@ impl PageStore {
     /// [`Self::gc_trim_blocks_sql`]; `$2`/`$4`/`$5` are the key / watermark /
     /// anchor arrays.
     ///
-    /// Trap: the range is half-open. Every `meta` put is a base, so there is no
-    /// same-LSN twin at the anchor and the anchor row itself must survive.
+    /// Trap: `<` here is a correctness requirement, not the block trims' cost
+    /// trade. Every `meta` put is a base, so there is no same-LSN delta beside
+    /// the anchor and `<=` would delete the anchor row itself — the key's live
+    /// value.
     fn gc_trim_meta_sql(&self) -> String {
         format!(
             "{hint} DELETE FROM \"{schema}\".meta p \
@@ -8024,10 +8035,11 @@ mod tests {
     ///   lsn 40  image        (base)      → deleted (superseded base)
     ///   lsn 55  plain delta              → deleted
     ///   lsn 70  image        (base)      → KEPT — the anchor
-    ///   lsn 70  plain delta  (twin)      → deleted (same-LSN non-base:
-    ///                                      the materialiser stamps its
-    ///                                      image at the folded delta's
-    ///                                      LSN, shadowing it)
+    ///   lsn 70  plain delta  (same LSN)  → KEPT — the range stops below
+    ///                                      the anchor, so the delta the
+    ///                                      materialiser stamped over
+    ///                                      survives to the next tick,
+    ///                                      shadowed by the image (#1153)
     ///   lsn 90  plain delta              → kept (above anchor)
     ///   lsn 120 plain delta              → kept (above cutoff)
     ///
@@ -8149,8 +8161,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             a,
-            vec![(70, true, true), (90, false, false), (120, false, false)],
-            "block A must keep anchor + everything above"
+            vec![
+                (70, false, false),
+                (70, true, true),
+                (90, false, false),
+                (120, false, false)
+            ],
+            "block A must keep anchor + its same-LSN delta + everything above"
         );
         let b = store
             .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_b as i64)
@@ -8417,7 +8434,8 @@ mod tests {
     }
 
     /// `gc_act_trim_slru`'s anchor: per block keep the newest `will_init`
-    /// `<= cutoff` plus everything above, delete below. The sibling of
+    /// `<= cutoff` plus everything above, delete strictly below — so the
+    /// same-LSN delta at the anchor survives, as in `pages`. The sibling of
     /// `gc_trim_anchor_keep_delete_semantics`, which covers only `pages` —
     /// the SLRU and meta anchors are their own SQL and need their own check.
     #[tokio::test]
@@ -8438,9 +8456,12 @@ mod tests {
             .put_slru_pages(
                 branch,
                 &[
-                    // block A: anchor is the will_init at 40; 10/15 go, 40/55 stay
+                    // block A: anchor is the will_init at 40; 10/15 go,
+                    // 40 and the delta the image was stamped over stay, as
+                    // does 55
                     row(blk_a, 10, false, true),
                     row(blk_a, 15, false, false),
+                    row(blk_a, 40, false, false),
                     row(blk_a, 40, true, true),
                     row(blk_a, 55, false, false),
                     // block B: no base <= cutoff, so nothing is provably dead
@@ -8469,8 +8490,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             a,
-            vec![(40, true, true), (55, false, false)],
-            "block A must keep its anchor + everything above"
+            vec![(40, false, false), (40, true, true), (55, false, false)],
+            "block A must keep its anchor + its same-LSN delta + everything above"
         );
         let b = store
             .test_raw_slru_versions(branch, kind, seg as i64, blk_b as i64)
@@ -8781,7 +8802,7 @@ mod tests {
                     "p.blknum = ANY($6)",
                     "p.lsn >= $10 AND p.lsn <= $11",
                     "p.lsn >= bound.watermark",
-                    "p.lsn <= bound.anchor",
+                    "p.lsn < bound.anchor",
                     "Set(enable_hashjoin off)",
                     "Set(enable_material off)",
                     "Leading((bound p))",
@@ -8808,7 +8829,7 @@ mod tests {
                     "p.blknum = ANY($4)",
                     "p.lsn >= $8 AND p.lsn <= $5",
                     "p.lsn >= bound.watermark",
-                    "p.lsn <= bound.anchor",
+                    "p.lsn < bound.anchor",
                     "Set(enable_hashjoin off)",
                     "Set(enable_material off)",
                     "Leading((bound p))",
@@ -8818,8 +8839,6 @@ mod tests {
                 "meta",
                 store.gc_trim_meta_sql(),
                 vec![&branch, &keys, &lsn, &key_watermarks, &key_anchors, &lsn],
-                // `< bound.anchor`, not `<=`: every `meta` put is a base, so
-                // there is no same-LSN twin at the anchor to sweep.
                 &[
                     "p.key = ANY($2::bytea[])",
                     "p.lsn >= $6 AND p.lsn <= $3",
@@ -8894,6 +8913,14 @@ mod tests {
                 !plan.contains("Materialize"),
                 "{label}: trim materialises its scan, so the per-key range is a \
                  Join Filter rather than an index bound:\n{plan}"
+            );
+            // The range must reach the index whole. A qual the index cannot
+            // take — an `OR` over the anchor, say — becomes a Storage Filter
+            // and the scan reads rows it then discards (#1153).
+            assert!(
+                !plan.contains("Storage Filter"),
+                "{label}: a trim qual fell out of the index cond to a Storage \
+                 Filter, so the scan reads past its range:\n{plan}"
             );
         }
     }
@@ -9684,14 +9711,14 @@ mod tests {
     /// at distinct random LSNs; the oldest version of a block is
     /// always a base for physical validity; later versions are plain
     /// deltas / init deltas / images at random; one random plain delta
-    /// may gain a same-LSN image twin — the materialiser pattern).
+    /// may gain a same-LSN image — the materialiser pattern).
     /// A random cutoff is drawn, all blocks are trimmed, and the
     /// surviving `(lsn, is_image, will_init)` set of every block must
     /// equal a 5-line model:
     ///
     ///   anchor = max lsn with will_init && lsn ≤ cutoff
     ///   no anchor → everything survives
-    ///   else survive ⇔ lsn > anchor, or lsn == anchor && will_init
+    ///   else survive ⇔ lsn >= anchor
     #[tokio::test]
     async fn gc_trim_randomized_model_check() {
         use rand::rngs::StdRng;
@@ -9737,7 +9764,7 @@ mod tests {
                     };
                     versions.push((lsn, is_image, will_init));
                 }
-                // Materialiser twin: image stamped at a plain delta's LSN.
+                // Materialiser pattern: image stamped at a plain delta's LSN.
                 if let Some(&(lsn, _, _)) = versions
                     .iter()
                     .find(|(_, im, wi)| !im && !wi)
@@ -9784,7 +9811,7 @@ mod tests {
                     Some(a) => versions
                         .iter()
                         .copied()
-                        .filter(|(lsn, _, wi)| *lsn > a || (*lsn == a && *wi))
+                        .filter(|(lsn, _, _)| *lsn >= a)
                         .collect(),
                 };
                 expected.sort_by_key(|(lsn, im, _)| (*lsn, *im));
