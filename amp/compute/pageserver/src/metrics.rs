@@ -47,6 +47,23 @@ const CRITICAL_OP_BUCKETS: &[f64] = &[
     1.0, 10.0, 100.0, // 1 s, 10 s, 100 s
 ];
 
+/// Producer paths for [`GC_CANDIDATES_EMITTED`]. An enum, not a `&str`, so the
+/// label domain stays closed: a new producer has to name itself here, which is
+/// what keeps the seeding in `preinitialize_metrics` complete — an unseeded
+/// path would be absent until its first emission, the bug #1142 fixed.
+#[derive(Debug, Clone, Copy, VariantNames, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum GcEmitPath {
+    /// Trim bases seen by WAL ingest.
+    Ingest,
+    /// Trim bases stamped by the image materialiser.
+    Materialiser,
+    /// Unsampled `GcKind::Drop*` events.
+    Drop,
+    /// Unsampled `GcKind::ShrinkPages` events.
+    Shrink,
+}
+
 // Metrics collected on operations on the storage repository.
 #[derive(Debug, VariantNames, IntoStaticStr)]
 #[strum(serialize_all = "kebab_case")]
@@ -271,6 +288,10 @@ pub(crate) static GC_APPLIED_CUTOFF_LSN: Lazy<UIntGauge> = Lazy::new(|| {
 /// drop | shrink events. Trim counts SAMPLER FIRINGS: a block firing
 /// more than once within one emitter flush window folds into a single
 /// `pending_gc` row, so inserted rows can be fewer than this counter.
+///
+/// Every [`GcEmitPath`] is seeded at zero in [`preinitialize_metrics`]:
+/// "emitted flat" is the first GC diagnostic in the runbook, and an absent
+/// series can't be read as flat (#1142).
 pub(crate) static GC_CANDIDATES_EMITTED: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "pageserver_yb_gc_candidates_emitted_total",
@@ -293,6 +314,7 @@ pub(crate) static GC_CANDIDATES_READ: Lazy<IntCounter> = Lazy::new(|| {
 /// Rows the dequeue deleted: each visited block's whole `(floor, cutoff]`
 /// candidate set, so >= the acted rows (it collapses a block's duplicates
 /// and stragglers). rate(emitted) − rate(dequeued) = queue growth.
+/// Charged per committed statement; see [`GC_ROWS_DELETED`].
 pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_candidates_dequeued_total",
@@ -301,7 +323,14 @@ pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// `pages` rows deleted by the GC drain (trim / drop / shrink).
+/// Rows the GC drain deleted across `amp_storage.pages`, `slru_pages` and
+/// `meta` (trim / drop / shrink).
+///
+/// Charged as each delete commits (#1142), at two sites: `PageStore::delete_rows`
+/// for the statement's own rowcount, and `gc_sweep_delete_batch` for the
+/// `ybctid`s it deleted — a retried sweep statement reports 0 for rows already
+/// gone, so its own count is the truthful one. Forced in
+/// [`preinitialize_metrics`] so an idle drain reads zero, not absent.
 pub(crate) static GC_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_rows_deleted_total",
@@ -3616,6 +3645,8 @@ pub fn preinitialize_metrics(
         &PAGE_SERVICE_SMGR_FLUSH_INPROGRESS_MICROS_GLOBAL,
         &WAIT_LSN_IN_PROGRESS_GLOBAL_MICROS,
         &MISROUTED_PAGESTREAM_REQUESTS,
+        &GC_ROWS_DELETED,
+        &GC_CANDIDATES_DEQUEUED,
     ]
     .into_iter()
     .for_each(|c| {
@@ -3635,6 +3666,14 @@ pub fn preinitialize_metrics(
     .for_each(|c| {
         Lazy::force(c);
     });
+
+    // Forcing a vec registers its family but creates no children, and a
+    // childless vec exposes nothing — so name every producer path. Diagnosing
+    // GC starts at "is anything being emitted", which needs a zero to read.
+    // Driven off the enum's variants, so a new path cannot be left unseeded.
+    for path in GcEmitPath::VARIANTS {
+        GC_CANDIDATES_EMITTED.with_label_values(&[path]).inc_by(0);
+    }
 
     // gauges
     WALRECEIVER_ACTIVE_MANAGERS.get();

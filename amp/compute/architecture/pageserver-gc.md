@@ -695,6 +695,18 @@ one doc.)
 | `pageserver_yb_gc_rows_deleted_total` | IntCounter | — | Rows deleted by the drain across `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink). `rate()` = reclamation throughput. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence — which is adaptive, so a low rate is idle backoff, not necessarily a stall. |
 
+The two deletion counters move at **statement** granularity, not per tick: a
+GC delete is its own autocommit transaction, so a tick that errors keeps the
+counts of everything that committed before it failed, and a tick running for an
+hour reports its progress as it goes (#1142). They and
+`gc_candidates_emitted_total` are pre-registered at startup, so absent means "no
+pageserver" rather than "nothing happening" — zero on the deletion counters
+means nothing to reclaim, and zero on `emitted` means nothing is being queued
+(see Troubleshooting: usually `enable_gc` off).
+The tick's own `rows_deleted` — the `gc drain complete` line and the `do_gc`
+response — is still reported only when the tick finishes, so on an erroring tick
+the counter is deliberately the higher of the two.
+
 The drain also owns five `kind` values of
 `pageserver_yb_correctness_errors_total` (the rest are in
 [`pageserver-metrics.md`](pageserver-metrics.md)). All five mean "the drain
@@ -719,9 +731,10 @@ Three checks localize most GC escalations (metrics above):
    `rate(gc_drain_ticks_total) > 0`. `outcome=disabled` climbing ⇒
    gated off (`enable_gc`, or `gc_period`/`gc_horizon` at 0);
    `lease_grace` ⇒ skipped during fresh-attach grace; `error` ⇒ the drain is
-   erroring. A *low* tick rate is not by itself a stall: a branch with nothing
-   due backs off to one tick per 4 min, so read the rate together with
-   `outcome=empty` climbing.
+   erroring — and `rows_deleted` climbing with it means it is reclaiming and
+   failing partway, not idling. A *low* tick rate is not by itself a stall: a
+   branch with nothing due backs off to one tick per 4 min, so read the rate
+   together with `outcome=empty` climbing.
 2. **Is the queue keeping up?** `rate(candidates_emitted) −
    rate(candidates_dequeued) > 0` ⇒ the drain is falling behind; confirm
    with `gc_drain_lag_bytes > 0` and rising `outcome=capped`.

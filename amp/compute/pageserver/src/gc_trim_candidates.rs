@@ -216,7 +216,7 @@ impl GcTrimCandidateEmitter {
     pub(crate) fn record_bases<'a, R: TrimBase + 'a>(
         &self,
         rows: impl IntoIterator<Item = &'a R>,
-        path: &'static str,
+        path: crate::metrics::GcEmitPath,
     ) {
         self.record_base_keys(
             rows.into_iter()
@@ -237,13 +237,13 @@ impl GcTrimCandidateEmitter {
         &self,
         keys: impl Iterator<Item = (Key, Lsn)>,
         kind: GcKind,
-        path: &'static str,
+        path: crate::metrics::GcEmitPath,
     ) {
         let emitted: Vec<(Key, Lsn)> = keys
             .filter_map(|(key, lsn)| {
                 let due = self.increment_base_count(key, lsn)?;
                 crate::metrics::GC_CANDIDATES_EMITTED
-                    .with_label_values(&[path])
+                    .with_label_values(&[path.into()])
                     .inc();
                 Some((key, due))
             })

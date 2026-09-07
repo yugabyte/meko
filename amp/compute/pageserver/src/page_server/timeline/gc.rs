@@ -360,8 +360,8 @@ impl Timeline {
         } else {
             GcTickOutcome::BacklogRemains
         };
-        crate::metrics::GC_CANDIDATES_DEQUEUED.inc_by(dequeued);
-        crate::metrics::GC_ROWS_DELETED.inc_by(result.rows_deleted);
+        // Not the deletion counters: those are charged per statement in
+        // `PageStore`, not from these totals (#1142).
         crate::metrics::GC_DRAIN_TICKS
             .with_label_values(&[result.outcome.label()])
             .inc();

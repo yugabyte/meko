@@ -535,8 +535,10 @@ impl ImageMaterializer {
             // — a candidate implies a durable image, same contract as
             // the ingest window flush. A failed batch stays
             // GC-invisible.
-            self.page_writer
-                .record_gc_trim_bases(rel_images.iter().map(|img| img.as_ref()), "materialiser");
+            self.page_writer.record_gc_trim_bases(
+                rel_images.iter().map(|img| img.as_ref()),
+                crate::metrics::GcEmitPath::Materialiser,
+            );
         }
         if !slru_images.is_empty() {
             let slru_rows = slru_images
@@ -561,7 +563,7 @@ impl ImageMaterializer {
             // GC trim candidates for the SLRU images, after the INSERT
             // lands — same durable-first contract as the rel path above.
             self.page_writer
-                .record_gc_trim_bases(&slru_rows, "materialiser");
+                .record_gc_trim_bases(&slru_rows, crate::metrics::GcEmitPath::Materialiser);
         }
         let t_insert = t_insert_start.elapsed();
 

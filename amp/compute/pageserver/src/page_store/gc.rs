@@ -658,6 +658,34 @@ impl PageStore {
         })
     }
 
+    /// Run one GC delete of stored data, charging `GC_ROWS_DELETED` as the
+    /// statement commits. Per statement and not per tick because each is its
+    /// own autocommit transaction: a tick that fails on its tenth statement
+    /// still committed the nine before it, and a tick running for an hour has
+    /// committed everything it has finished — one increment at the end of the
+    /// drain reported neither (#1142).
+    async fn delete_rows(
+        &self,
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<u64> {
+        let deleted = self.ysql_client.execute(sql, params).await?;
+        crate::metrics::GC_ROWS_DELETED.inc_by(deleted);
+        Ok(deleted)
+    }
+
+    /// The dequeue's twin of [`Self::delete_rows`]: `pending_gc` rows, so
+    /// they charge `GC_CANDIDATES_DEQUEUED`.
+    async fn dequeue_candidates(
+        &self,
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<u64> {
+        let removed = self.ysql_client.execute(sql, params).await?;
+        crate::metrics::GC_CANDIDATES_DEQUEUED.inc_by(removed);
+        Ok(removed)
+    }
+
     /// Dequeue the visited trim candidates: a bucket-grouped range delete
     /// over `(floor, cutoff]`, matching each `(key, gc_kind)` pair. Same
     /// window as the select, so an object's duplicate/straggler candidates
@@ -707,8 +735,7 @@ impl PageStore {
         for (bucket, (keyb, kinds)) in by_bucket {
             let n = keyb.len();
             removed += self
-                .ysql_client
-                .execute(
+                .dequeue_candidates(
                     &sql,
                     &[&branch_id, &bucket, &floor_i, &cutoff_i, &keyb, &kinds],
                 )
@@ -754,8 +781,7 @@ impl PageStore {
             }
             let n = cs.len();
             removed += self
-                .ysql_client
-                .execute(&sql, &[&branch_id, &bucket, &keyb, &kinds, &due])
+                .dequeue_candidates(&sql, &[&branch_id, &bucket, &keyb, &kinds, &due])
                 .await
                 .with_context(|| {
                     format!(
@@ -980,8 +1006,7 @@ impl PageStore {
             let floor = *watermarks.iter().min().expect("non-empty");
             self.write_gate("GC trim of amp_storage.pages");
             deleted += self
-                .ysql_client
-                .execute(
+                .delete_rows(
                     &delete_sql,
                     &[
                         &branch_id,
@@ -1035,8 +1060,7 @@ impl PageStore {
              WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3",
             schema = self.schema
         );
-        self.ysql_client
-            .execute(&sql, &[&branch_id, &keys, &(due_lsn.0 as i64)])
+        self.delete_rows(&sql, &[&branch_id, &keys, &(due_lsn.0 as i64)])
             .await
     }
 
@@ -1293,11 +1317,17 @@ impl PageStore {
     /// Returns `ybctids.len()`, not the DELETE's count: a retried statement
     /// re-runs as a no-op and reports 0 for rows that are gone, which would
     /// under-charge the budget and let one tick sweep the whole database.
+    /// `GC_ROWS_DELETED` is charged that same figure, which is why this is the
+    /// one GC delete outside [`Self::delete_rows`] — not because the retry
+    /// under-count is special (every idempotent GC delete reports 0 on a
+    /// retry), but because this is the only one whose count feeds control
+    /// flow rather than just a report.
     async fn gc_sweep_delete_batch(&self, table: &str, ybctids: &[Vec<u8>]) -> Result<usize> {
         self.ysql_client
             .execute(&self.gc_sweep_delete_sql(table), &[&ybctids])
             .await
             .with_context(|| format!("gc_act_sweep delete from {table} n={}", ybctids.len()))?;
+        crate::metrics::GC_ROWS_DELETED.inc_by(ybctids.len() as u64);
         Ok(ybctids.len())
     }
 
@@ -1328,8 +1358,7 @@ impl PageStore {
         let mut deleted = 0u64;
         for bucket in 0..PAGE_BUCKETS as i16 {
             deleted += self
-                .ysql_client
-                .execute(
+                .delete_rows(
                     &sql,
                     &[
                         &branch_id, &spcnode, &dbnode, &relnode, &forknum, &relsize, &due, &bucket,
@@ -1454,8 +1483,7 @@ impl PageStore {
             let floor = *watermarks.iter().min().expect("non-empty");
             self.write_gate("GC trim of amp_storage.slru_pages");
             deleted += self
-                .ysql_client
-                .execute(
+                .delete_rows(
                     &slru_sql,
                     &[
                         &branch_id,
@@ -1491,7 +1519,7 @@ impl PageStore {
     /// row for `(kind, segno)` with `lsn <= due_lsn`, plus the segment's
     /// size-sentinel `meta` key (`seg_size_key` bytes) up to the same LSN.
     /// `<= due_lsn` keeps a wraparound-recreated segno (written above the
-    /// truncation) alive. Idempotent. Returns `slru_pages` rows deleted.
+    /// truncation) alive. Idempotent. Returns rows deleted across both.
     pub async fn gc_act_drop_slru(
         &self,
         branch_id: BranchId,
@@ -1507,18 +1535,18 @@ impl PageStore {
             schema = self.schema
         );
         let deleted = self
-            .ysql_client
-            .execute(&pages_sql, &[&branch_id, &kind, &segno, &due])
+            .delete_rows(&pages_sql, &[&branch_id, &kind, &segno, &due])
             .await
             .with_context(|| {
                 format!("gc_act_drop_slru pages branch={branch_id} kind={kind} segno={segno}")
             })?;
-        self.delete_meta_up_to_lsn(branch_id, std::slice::from_ref(&seg_size_key), due_lsn)
+        let meta_deleted = self
+            .delete_meta_up_to_lsn(branch_id, std::slice::from_ref(&seg_size_key), due_lsn)
             .await
             .with_context(|| {
                 format!("gc_act_drop_slru meta branch={branch_id} kind={kind} segno={segno}")
             })?;
-        Ok(deleted)
+        Ok(deleted + meta_deleted)
     }
 
     /// Each `meta` key's anchor: its newest version `<= $3`. No `will_init`
@@ -1618,8 +1646,7 @@ impl PageStore {
             let floor = *watermarks.iter().min().expect("non-empty");
             self.write_gate("GC trim of amp_storage.meta");
             deleted += self
-                .ysql_client
-                .execute(
+                .delete_rows(
                     &meta_sql,
                     &[
                         &branch_id,

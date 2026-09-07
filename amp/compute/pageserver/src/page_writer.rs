@@ -576,7 +576,7 @@ impl PageWriter {
     pub(crate) fn record_gc_trim_bases<'a, R: TrimBase + 'a>(
         &self,
         rows: impl IntoIterator<Item = &'a R>,
-        path: &'static str,
+        path: crate::metrics::GcEmitPath,
     ) {
         if let Some(emitter) = &self.gc_trim_candidate_emitter {
             emitter.record_bases(rows, path);
@@ -613,11 +613,11 @@ impl PageWriter {
         }
         for row in rows {
             let path = match row.gc_kind {
-                crate::page_store::GcKind::ShrinkPages => "shrink",
+                crate::page_store::GcKind::ShrinkPages => crate::metrics::GcEmitPath::Shrink,
                 crate::page_store::GcKind::DropSlru
                 | crate::page_store::GcKind::DropMeta
                 | crate::page_store::GcKind::DropDb
-                | crate::page_store::GcKind::DropRel => "drop",
+                | crate::page_store::GcKind::DropRel => crate::metrics::GcEmitPath::Drop,
                 // Exhaustive, no wildcard: a new kind must be classified here
                 // at compile time rather than mislabelled in release and
                 // panicking in debug.
@@ -629,11 +629,11 @@ impl PageWriter {
                         false,
                         "trim candidates go through the emitter, got {other:?}"
                     );
-                    "drop"
+                    crate::metrics::GcEmitPath::Drop
                 }
             };
             crate::metrics::GC_CANDIDATES_EMITTED
-                .with_label_values(&[path])
+                .with_label_values(&[path.into()])
                 .inc();
         }
         let mut aux = self.aux.lock();
@@ -1671,9 +1671,12 @@ impl PageWriter {
             // GC trim candidates for this window's bases, recorded only
             // now that the rows are durable: candidate implies its base
             // landed. Rel + SLRU bases and meta puts each feed the sampler.
-            self.record_gc_trim_bases(rel_rows.iter().map(|r| r.as_ref()), "ingest");
-            self.record_gc_trim_bases(&slru_rows, "ingest");
-            self.record_gc_trim_bases(&meta_rows, "ingest");
+            self.record_gc_trim_bases(
+                rel_rows.iter().map(|r| r.as_ref()),
+                crate::metrics::GcEmitPath::Ingest,
+            );
+            self.record_gc_trim_bases(&slru_rows, crate::metrics::GcEmitPath::Ingest);
+            self.record_gc_trim_bases(&meta_rows, crate::metrics::GcEmitPath::Ingest);
             // Everything at lsn ≤ ingest_frontier is now durable: rows
             // ≤ frontier were either already durable or in the
             // snapshots we just wrote (see the frontier capture above).
@@ -5078,7 +5081,7 @@ mod tests {
             build_page_row(k(9), Lsn(100), &image()).unwrap(),
             build_page_row(k(9), Lsn(10), &image()).unwrap(),
         ];
-        w.record_gc_trim_bases(rows.iter(), "ingest");
+        w.record_gc_trim_bases(rows.iter(), crate::metrics::GcEmitPath::Ingest);
         w.flush_gc_trim_candidates().await;
         assert_eq!(
             all_pending(store.clone(), branch).await,

@@ -39,19 +39,23 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let mut emitted = 0.0;
     let mut deleted = 0.0;
     let mut read = 0.0;
+    let mut drained = 0.0;
+    // The drained-tick count is polled, not read once after the loop:
+    // `rows_deleted` now advances as each delete statement commits (#1142), so
+    // it goes positive mid-tick and no longer implies a tick has finished.
     for _ in 0..45 {
         sleep(Duration::from_secs(1)).await;
         emitted = c.metric_sum(http, "pageserver_yb_gc_candidates_emitted_total").await?;
         read = c.metric_sum(http, "pageserver_yb_gc_candidates_read_total").await?;
         deleted = c.metric_sum(http, "pageserver_yb_gc_rows_deleted_total").await?;
-        if emitted > 0.0 && read > 0.0 && deleted > 0.0 {
+        drained = c
+            .metric_sum(http, "pageserver_yb_gc_drain_ticks_total{outcome=\"drained\"")
+            .await?;
+        if emitted > 0.0 && read > 0.0 && deleted > 0.0 && drained >= 1.0 {
             break;
         }
     }
     let cutoff = c.metric_sum(http, "pageserver_yb_gc_applied_cutoff_lsn").await?;
-    let drained = c
-        .metric_sum(http, "pageserver_yb_gc_drain_ticks_total{outcome=\"drained\"")
-        .await?;
 
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
     c.yb_quiet(&["pageserver", "stop", "ep_gc_metrics", "-m", "immediate"]);
