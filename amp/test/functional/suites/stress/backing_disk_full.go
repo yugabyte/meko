@@ -62,24 +62,45 @@ func diskFullParamsFromConfig(c *core.Config) diskFullParams {
 // two runs on one backing from freeing each other's file.
 func fillerName(t *core.T) string { return "ampqa_fill_" + t.ResourceSuffix() }
 
-// fillScript grows one file per data dir until keep MiB are left. Data dirs
-// come from the tserver's --fs_data_dirs, else the chart's /mnt/disk* mounts.
+// dataDirsShell sets $dirs to the tserver's data dirs: --fs_data_dirs off its
+// command line or its --flagfile, else the chart's /mnt/disk* mounts.
+const dataDirsShell = `pid=$(pgrep -xo yb-tserver || pgrep -xo yugabyted || echo 1)
+argv=$(tr '\0' '\n' < /proc/$pid/cmdline 2>/dev/null || true)
+dirs=$(printf '%s\n' "$argv" | sed -n 's/^--fs_data_dirs=//p' | tr ',' ' ')
+if [ -z "$dirs" ]; then
+  for f in $(printf '%s\n' "$argv" | awk '/^--flagfile=/{sub(/^--flagfile=/,""); print} /^--flagfile$/{getline; print}'); do
+    dirs="$dirs $(sed -n 's/^--fs_data_dirs=//p' "$f" 2>/dev/null | tr ',' ' ')"
+  done
+fi
+[ -n "$(echo $dirs)" ] || dirs=$(awk '$2 ~ /^\/mnt\/disk/ {print $2}' /proc/mounts)
+dirs=$(echo $dirs)
+`
+
+// fillScript grows one file per data dir until keep MiB are left. A dir on the
+// node's own filesystem is skipped: filling it puts the node under DiskPressure
+// and the kubelet evicts the backing pods, which is not the fault under test.
 func fillScript(file string, keepMiB int) string {
 	return fmt.Sprintf(`set -e
-dirs=$(tr '\0' '\n' < /proc/$(pgrep -xo yb-tserver || pgrep -xo yugabyted || echo 1)/cmdline 2>/dev/null | sed -n 's/^--fs_data_dirs=//p' | tr ',' ' ')
-[ -n "$dirs" ] || dirs=$(awk '$2 ~ /^\/mnt\/disk/ {print $2}' /proc/mounts)
+%s
 [ -n "$dirs" ] || { echo "no data dir found" >&2; exit 3; }
+nodedev=" $(stat -c %%d /) $(stat -c %%d /etc/hosts 2>/dev/null) "
+filled=0
 for d in $dirs; do
+  [ -d "$d" ] || { echo "skip $d: missing"; continue; }
+  case "$nodedev" in *" $(stat -c %%d "$d") "*) echo "skip $d: on the node's own filesystem"; continue;; esac
   avail=$(df -Pk "$d" | awk 'NR==2{print $4}')
   want=$((avail - %d*1024))
   [ "$want" -gt 1024 ] || { echo "skip $d avail=${avail}k"; continue; }
   fallocate -l "${want}k" "$d/%s" || dd if=/dev/zero of="$d/%s" bs=1M count=$((want/1024)) status=none
   echo "filled $d by ${want}k, left $(df -Pk "$d" | awk 'NR==2{print $4}')k"
-done`, keepMiB, file, file)
+  filled=$((filled + 1))
+done
+[ "$filled" -gt 0 ] || { echo "no data dir on its own volume to fill among: $dirs" >&2; exit 4; }`, dataDirsShell, keepMiB, file, file)
 }
 
 func freeScript(file string) string {
-	return fmt.Sprintf(`for d in $(tr '\0' '\n' < /proc/$(pgrep -xo yb-tserver || pgrep -xo yugabyted || echo 1)/cmdline 2>/dev/null | sed -n 's/^--fs_data_dirs=//p' | tr ',' ' ') $(awk '$2 ~ /^\/mnt\/disk/ {print $2}' /proc/mounts); do rm -f "$d/%s"; done; exit 0`, file)
+	return fmt.Sprintf(`%s
+for d in $dirs $(awk '$2 ~ /^\/mnt\/disk/ {print $2}' /proc/mounts); do rm -f "$d/%s"; done; exit 0`, dataDirsShell, file)
 }
 
 // stallStats is what the bounded writers saw while the disks were full.
