@@ -1,0 +1,967 @@
+{
+  "title": "amp — WAL ingest & LSN lag",
+  "uid": "amp-wal-lsn",
+  "tags": [
+    "amp",
+    "wal",
+    "safekeeper",
+    "pageserver"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "description": "The safekeeper → pageserver WAL pipeline: how far ingest trails the committed LSN, throughput at each hop, and receiver health. LSN differences are byte offsets, so a lag is a byte count.",
+  "templating": {
+    "list": [
+      {
+        "name": "endpoint",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "query": "label_values(pg_up, endpoint)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Headline",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Ingest lag (commit → last_record), max",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "max"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max(max by (endpoint, branch_id) (safekeeper_commit_lsn{endpoint=~\"$endpoint\"}) - max by (endpoint, branch_id) (pageserver_last_record_lsn{endpoint=~\"$endpoint\"}))",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Bytes of committed WAL the pageserver has not ingested yet. The number a reader waits on."
+    },
+    {
+      "type": "stat",
+      "title": "WAL ingest rate",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_wal_ingest_bytes_received_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Corruption detected",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "max"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max(safekeeper_ps_corruption_detected{endpoint=~\"$endpoint\"})",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "safekeeper_ps_corruption_detected. Anything above 0 is an incident, not a trend."
+    },
+    {
+      "type": "stat",
+      "title": "walreceiver reconnects/s",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_walreceiver_switches_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Connection churn between pageserver and safekeeper. Steady churn means neither side is stable."
+    },
+    {
+      "type": "row",
+      "title": "LSN lag",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingest lag: commit_lsn − last_record_lsn",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (endpoint, branch_id) (safekeeper_commit_lsn{endpoint=~\"$endpoint\"}) - max by (endpoint, branch_id) (pageserver_last_record_lsn{endpoint=~\"$endpoint\"})",
+          "legendFormat": "{{endpoint}} / {{branch_id}}"
+        }
+      ],
+      "description": "The pipeline's headline lag: WAL the safekeeper has committed but the pageserver has not applied."
+    },
+    {
+      "type": "timeseries",
+      "title": "Safekeeper internal lag: commit_lsn − consistent_lsn",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (endpoint, branch_id) (safekeeper_commit_lsn{endpoint=~\"$endpoint\"}) - max by (endpoint, branch_id) (safekeeper_consistent_lsn{endpoint=~\"$endpoint\"})",
+          "legendFormat": "{{endpoint}} / {{branch_id}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Feedback lag: commit_lsn − ps_last_received_lsn",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (endpoint, branch_id) (safekeeper_commit_lsn{endpoint=~\"$endpoint\"}) - max by (endpoint, branch_id) (safekeeper_ps_last_received_lsn{endpoint=~\"$endpoint\"})",
+          "legendFormat": "{{endpoint}} / {{branch_id}}"
+        }
+      ],
+      "description": "What the safekeeper believes the pageserver has received, from the pageserver's own feedback."
+    },
+    {
+      "type": "timeseries",
+      "title": "Standby horizon lag: commit_lsn − standby_horizon",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (endpoint, branch_id) (safekeeper_commit_lsn{endpoint=~\"$endpoint\"}) - max by (endpoint, branch_id) (pageserver_standby_horizon{endpoint=~\"$endpoint\"})",
+          "legendFormat": "{{endpoint}} / {{branch_id}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Ingest throughput",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL records/s through the pageserver",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_wal_ingest_records_received_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "received {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_wal_ingest_records_committed_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "committed {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_wal_ingest_records_observed_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "observed {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL bytes/s — safekeeper written vs pageserver ingested",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_written_wal_bytes_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "sk written {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_wal_ingest_bytes_received_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "ps ingested {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Safekeeper payload bytes/s — logical vs stored",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_yb_wal_payload_logical_bytes_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "logical {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_yb_wal_payload_stored_bytes_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "stored {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_yb_wal_payload_runs_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "runs {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL batch shape & insert latency",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_yb_wal_batch_rows_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(safekeeper_yb_wal_batch_rows_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "rows/batch {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_yb_wal_batch_bytes_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(safekeeper_yb_wal_batch_bytes_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "bytes/batch {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(safekeeper_yb_wal_insert_seconds_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "p99 insert (s)"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Receiver & replay health",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Receiver queue depth (avg) / receivers / readers",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_wal_receiver_queue_depth_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(safekeeper_wal_receiver_queue_depth_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "queue depth {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (safekeeper_wal_receivers{endpoint=~\"$endpoint\"})",
+          "legendFormat": "receivers {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (safekeeper_wal_readers{endpoint=~\"$endpoint\"})",
+          "legendFormat": "readers {{endpoint}}"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (safekeeper_interpreted_wal_reader_tasks{endpoint=~\"$endpoint\"})",
+          "legendFormat": "interpreted tasks {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "walreceiver churn",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (reason) (rate(pageserver_walreceiver_switches_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "switches {{reason}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_walreceiver_started_connections_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "started {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_walreceiver_broker_updates_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "broker updates {{endpoint}}"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (pageserver_walreceiver_active_managers{endpoint=~\"$endpoint\"})",
+          "legendFormat": "active managers {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Safekeeper I/O time & bytes",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_written_wal_seconds_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "write time/s {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_flushed_wal_seconds_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "flush time/s {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_pg_io_bytes_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "pg io bytes/s {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Replay & records received per timeline",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_replayed_wal_records_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "replayed {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_timeline_wal_records_received_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "timeline received {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_proposer_acceptor_messages_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "proposer msgs {{endpoint}}"
+        }
+      ]
+    }
+  ]
+}

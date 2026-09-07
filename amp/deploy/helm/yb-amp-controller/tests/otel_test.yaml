@@ -385,7 +385,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
-          count: 5
+          count: 6
 
   - it: drops the cadvisor job when podMetrics is off
     capabilities:
@@ -400,7 +400,28 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
-          count: 4
+          count: 5
+
+  # The LFC counters are the only ones behind a non-default metrics_path, so a
+  # job that silently loses it scrapes compute_ctl's own /metrics twice and the
+  # cache dashboards go blank rather than erroring.
+  - it: scrapes the LFC gauges off compute_ctl's /autoscaling_metrics
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.enabled: true
+      otel.podMetrics: false
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[4].job_name
+          value: amp-compute-lfc
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[4].metrics_path
+          value: /autoscaling_metrics
 
   - it: podMetrics off needs no cluster-scoped RBAC at all
     capabilities:

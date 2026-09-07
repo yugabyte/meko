@@ -108,8 +108,10 @@ an install where the operator is absent; there the collectors are skipped and
   controller (`:50051`).
 - **`<release>-compute`** — scrapes every endpoint pod: the postgres_exporter
   sidecar (`:9187`), pageserver (`:9898`), safekeeper (`:7676`), compute_ctl
-  (`:3080`), and (with `otel.podMetrics`) per-pod cAdvisor resource metrics from
-  each node's kubelet.
+  (`:3080`) twice — `/metrics` for compute_ctl's own counters and
+  `/autoscaling_metrics` for the LFC gauges it proxies from the communicator's
+  unix socket — and (with `otel.podMetrics`) per-pod cAdvisor resource metrics
+  from each node's kubelet.
 
 The chart also creates the collector `ServiceAccount` and RBAC sized to what is
 actually scraped: a namespaced **`Role`** on `pods` for discovery — every app

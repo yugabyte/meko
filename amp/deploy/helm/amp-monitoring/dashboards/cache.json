@@ -1,0 +1,1278 @@
+{
+  "title": "amp — Cache hit/miss (buffers → LFC → pageserver)",
+  "uid": "amp-cache",
+  "tags": [
+    "amp",
+    "cache",
+    "postgres",
+    "pageserver"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "description": "Cache behaviour along amp's read path, in the order a page request travels it: Postgres shared buffers, the compute's local file cache (LFC), the pageserver's relsize/fast/basebackup caches, and the safekeeper WAL cache. A miss at each layer is more expensive than the last.",
+  "templating": {
+    "list": [
+      {
+        "name": "endpoint",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "query": "label_values(pg_up, endpoint)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Headline — one stat per cache layer",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Shared-buffers hit ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 98
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum (rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum (rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) + sum (rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0), 1)",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Reads served from shared_buffers. A miss here falls through to the LFC."
+    },
+    {
+      "type": "stat",
+      "title": "LFC hit ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 98
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum (rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum (rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) + sum (rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0), 1)",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Of the reads shared_buffers missed, the share the compute's local file cache served from local disk. A miss here becomes a getpage over the network."
+    },
+    {
+      "type": "stat",
+      "title": "getpage req/s → pageserver",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_smgr_query_started_count_total{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval]))",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "What actually left the compute: a buffer miss the LFC could not serve."
+    },
+    {
+      "type": "stat",
+      "title": "pageserver fast_cache share",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 98
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum(rate(pageserver_yb_page_reads_total{endpoint=~\"$endpoint\",path=\"fast_cache\"}[$__rate_interval])) / clamp_min(sum(rate(pageserver_yb_page_reads_total{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Last layer: of the page reads reaching the pageserver, the share it served without going to YugabyteDB."
+    },
+    {
+      "type": "row",
+      "title": "1. Postgres shared buffers (pg_stat_database / pg_statio)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Hit ratio % per endpoint — the trend to watch",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum by (endpoint) (rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum by (endpoint) (rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) + sum by (endpoint) (rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0), 1)",
+          "legendFormat": "{{endpoint}}"
+        }
+      ],
+      "description": "A downward slope is the signal: the same workload is finding less of its working set in shared_buffers."
+    },
+    {
+      "type": "timeseries",
+      "title": "Buffer hits vs misses /s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "hits {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "misses {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Buffer allocations & bgwriter cleans /s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pg_stat_bgwriter_buffers_alloc_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "alloc {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pg_stat_bgwriter_buffers_clean_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "clean {{endpoint}}"
+        }
+      ],
+      "description": "buffers_alloc is replacement pressure: every allocation evicted something. Rising alloc with a falling hit ratio means the working set no longer fits."
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache sizes: shared_buffers / effective_cache_size / LFC limit",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pg_settings_shared_buffers_bytes{endpoint=~\"$endpoint\"}",
+          "legendFormat": "shared_buffers {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pg_settings_effective_cache_size_bytes{endpoint=~\"$endpoint\"}",
+          "legendFormat": "effective_cache_size {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "pg_settings_yb_amp_file_cache_size_limit_bytes{endpoint=~\"$endpoint\"}",
+          "legendFormat": "LFC limit {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Top relations by blocks read (misses) /s",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "description": "Per-relation blocks read from below shared_buffers (heap + index + toast). Which objects are missing, not just how much.",
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "instant": true,
+          "format": "table",
+          "expr": "topk(15, sum by (endpoint, datname, relname) (rate({__name__=~\"pg_statio_user_tables_(heap|idx|toast|tidx)_blocks_read_total\",endpoint=~\"$endpoint\"}[$__rate_interval])))"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "2. Local file cache (LFC) — compute_ctl /autoscaling_metrics",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "LFC hit ratio % per endpoint",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum by (endpoint) (rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum by (endpoint) (rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) + sum by (endpoint) (rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0), 1)",
+          "legendFormat": "{{endpoint}}"
+        }
+      ],
+      "description": "The layer that decides whether a shared-buffers miss costs a local disk read or a network round trip."
+    },
+    {
+      "type": "timeseries",
+      "title": "LFC hits vs misses /s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(lfc_hits{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "hits {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(lfc_misses{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "misses {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "LFC occupancy — used vs limit",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (lfc_used{endpoint=~\"$endpoint\"}) * 1048576",
+          "legendFormat": "used {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (endpoint) (lfc_cache_size_limit{endpoint=~\"$endpoint\"})",
+          "legendFormat": "limit {{endpoint}}"
+        }
+      ],
+      "description": "lfc_used counts 1MiB chunks. At the limit with a falling hit ratio, the cache is too small for the working set."
+    },
+    {
+      "type": "timeseries",
+      "title": "LFC writes/s & approximate working-set size",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(lfc_writes{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "writes/s {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (duration_seconds) (lfc_approximate_working_set_size_windows{endpoint=~\"$endpoint\",duration_seconds=~\"300|900|1800|3600\"}) * 8192",
+          "legendFormat": "working set {{duration_seconds}}s"
+        }
+      ],
+      "description": "The working-set estimate is what Neon's autoscaler sizes the LFC from: distinct pages touched in the last N seconds, in bytes. Compare it against the LFC limit above."
+    },
+    {
+      "type": "row",
+      "title": "3. Pageserver caches",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "relsize latest cache — hits vs misses /s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_relsize_latest_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "hits {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_relsize_latest_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "misses {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "relsize cache miss ratio %",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum by (endpoint) (rate(pageserver_relsize_latest_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pageserver_relsize_latest_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum by (endpoint) (rate(pageserver_relsize_latest_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pageserver_relsize_latest_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) + sum by (endpoint) (rate(pageserver_relsize_latest_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(pageserver_relsize_latest_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0), 1)",
+          "legendFormat": "latest {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Page reads/s by path (fast_cache vs YB)",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (path) (rate(pageserver_yb_page_reads_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "{{path}}"
+        }
+      ],
+      "description": "The pageserver's own last-level cache. yb_blend is a read that reached YugabyteDB — see the storage-engine dashboard."
+    },
+    {
+      "type": "timeseries",
+      "title": "relsize cache entries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (pageserver_relsize_latest_cache_entries{endpoint=~\"$endpoint\"})",
+          "legendFormat": "latest {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (pageserver_relsize_snapshot_cache_entries{endpoint=~\"$endpoint\"})",
+          "legendFormat": "snapshot {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "relsize misses /s — snapshot & old",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_relsize_snapshot_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "snapshot {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_relsize_cache_misses_old_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "old {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "basebackup cache /s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 65
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_basebackup_cache_read_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "read {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_basebackup_cache_prepare_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "prepare {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "getpage latency p50 / p99",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 65
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(pageserver_smgr_query_seconds_bucket{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_smgr_query_seconds_bucket{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "description": "What a miss all the way down costs. Deeper analysis: the getpage SLO dashboard."
+    },
+    {
+      "type": "row",
+      "title": "4. Safekeeper WAL cache",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL cache hits vs misses /s",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 74
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_wal_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "hits {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(safekeeper_wal_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "misses {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL cache miss ratio % / size",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 74
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum (rate(safekeeper_wal_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(safekeeper_wal_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum (rate(safekeeper_wal_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(safekeeper_wal_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) + sum (rate(safekeeper_wal_cache_hits_total{endpoint=~\"$endpoint\"}[$__rate_interval]) or rate(safekeeper_wal_cache_misses_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0), 1)",
+          "legendFormat": "miss %"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (safekeeper_wal_cache_bytes{endpoint=~\"$endpoint\"})",
+          "legendFormat": "cache bytes {{endpoint}}"
+        }
+      ]
+    }
+  ]
+}

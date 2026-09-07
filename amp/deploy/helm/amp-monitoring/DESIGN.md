@@ -95,6 +95,10 @@ telemetry lands and how humans look at it.
 | amp — Storage layer | `amp-storage` | controller (branches, nodes, HTTP, DB latency), safekeeper (timelines, WAL, disk), pageserver ops, compute_ctl |
 | amp — Pod resources | `amp-pods` | per-pod CPU / memory / network (from cAdvisor) |
 | amp — Endpoint logs | `amp-endpoint-logs` | live tail, errors-only, and per-container log volume for a selected endpoint (from VictoriaLogs) |
+| amp — Cache hit/miss | `amp-cache` | one row per cache layer along the read path: shared buffers, LFC, pageserver relsize/fast/basebackup, safekeeper WAL cache |
+| amp — Storage engine | `amp-yb-storage` | the YB-backed page store: fast-cache reads, materializer/pagewriter, GC drain, YB client latency |
+| amp — WAL ingest & LSN lag | `amp-wal-lsn` | safekeeper → pageserver lag as byte offsets, ingest throughput, receiver health |
+| amp — getpage SLO | `amp-getpage` | getpage and wait_lsn latency, tenant throttling, request batching/pipelining |
 
 The log dashboard is the deliberate entry point for reading endpoint logs, rather
 than leaving Explore as the only door: it templates `endpoint` off the same label

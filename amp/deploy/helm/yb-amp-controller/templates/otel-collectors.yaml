@@ -286,6 +286,22 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            # The compute's local file cache (LFC) counters live in the
+            # communicator worker process and are served over a unix socket in
+            # PGDATA, which nothing outside the container can reach. compute_ctl
+            # proxies them at /autoscaling_metrics (lfc_hits / lfc_misses /
+            # lfc_used / lfc_writes / lfc_cache_size_limit) — the LFC is the layer
+            # between shared_buffers and a getpage over the network, so without
+            # this job a miss is only visible once it has already cost a round trip.
+            - job_name: amp-compute-lfc
+              scrape_interval: 30s
+              metrics_path: /autoscaling_metrics
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-amp-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
             {{- if .Values.otel.podMetrics }}
             - job_name: kubelet-cadvisor
               scrape_interval: 30s

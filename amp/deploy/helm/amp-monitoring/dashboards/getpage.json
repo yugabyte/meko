@@ -1,0 +1,1038 @@
+{
+  "title": "amp — getpage SLO & backpressure",
+  "uid": "amp-getpage",
+  "tags": [
+    "amp",
+    "pageserver",
+    "getpage",
+    "latency"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "description": "What a page request costs once it leaves the compute: wait_lsn (blocking until the requested LSN has been ingested), tenant throttling, request batching/pipelining, and the page_service connection surface.",
+  "templating": {
+    "list": [
+      {
+        "name": "endpoint",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "query": "label_values(pg_up, endpoint)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Headline",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "getpage p99",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_smgr_query_seconds_bucket{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval])))",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "End-to-end getpage latency at the pageserver, excluding the network hop from the compute."
+    },
+    {
+      "type": "stat",
+      "title": "wait_lsn p99",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_wait_lsn_seconds_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Time a request spent blocked waiting for its LSN to be ingested. This is ingest lag showing up as read latency."
+    },
+    {
+      "type": "stat",
+      "title": "Throttled req/s",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_tenant_throttling_count_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "value"
+        }
+      ],
+      "description": "Requests the pageserver deliberately delayed (per-tenant rate limiting)."
+    },
+    {
+      "type": "stat",
+      "title": "pagestream error rate",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "100 * sum(rate(pageserver_pagestream_handler_results_total{endpoint=~\"$endpoint\",outcome!=\"success\"}[$__rate_interval]) or rate(pageserver_pagestream_handler_results_total{endpoint=~\"$endpoint\"}[$__rate_interval]) * 0) / clamp_min(sum(rate(pageserver_pagestream_handler_results_total{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Latency",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "getpage latency by percentile",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(pageserver_smgr_query_seconds_bucket{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(pageserver_smgr_query_seconds_bucket{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval])))",
+          "legendFormat": "p90"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_smgr_query_seconds_bucket{endpoint=~\"$endpoint\",smgr_query_type=\"get_page_at_lsn\"}[$__rate_interval])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "wait_lsn — percentiles & time in flight",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(pageserver_wait_lsn_seconds_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_wait_lsn_seconds_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "p99"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_wait_lsn_in_progress_micros_total{endpoint=~\"$endpoint\"}[$__rate_interval])) / 1e6",
+          "legendFormat": "concurrent waiters (s/s)"
+        }
+      ],
+      "description": "The last series is seconds of waiting accumulated per second — effectively how many requests are blocked at once."
+    },
+    {
+      "type": "timeseries",
+      "title": "wait_lsn throughput",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_wait_lsn_started_count_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "started {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_wait_lsn_finished_count_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "finished {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Vectored get & scan p99 / request mix",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,task_kind) (rate(pageserver_get_vectored_seconds_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "get_vectored p99 {{task_kind}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,task_kind) (rate(pageserver_scan_seconds_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "scan p99 {{task_kind}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests/s by smgr query type",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (smgr_query_type) (rate(pageserver_smgr_query_started_count_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "{{smgr_query_type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "pagestream results/s by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (outcome) (rate(pageserver_pagestream_handler_results_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Batching & pipelining",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch size — avg vs configured max",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_page_service_batch_size_global_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(pageserver_page_service_batch_size_global_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "avg {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (endpoint) (pageserver_page_service_config_max_batch_size{endpoint=~\"$endpoint\"})",
+          "legendFormat": "configured max {{endpoint}}"
+        }
+      ],
+      "description": "An average far below the max with high request rates means batching is being broken up — see the break reasons."
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch wait time p99",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_page_service_pagestream_batch_wait_time_seconds_global_bucket{endpoint=~\"$endpoint\"}[$__rate_interval])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch break reasons/s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (reason) (rate(pageserver_page_service_batch_break_reason_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "description": "Why a batch stopped growing: batch_full is healthy; non_uniform_lsn and executor_steal are not."
+    },
+    {
+      "type": "timeseries",
+      "title": "Pipeline depth & flush time",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_page_service_pipeline_inflight_batches_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(pageserver_page_service_pipeline_inflight_batches_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "inflight batches {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_page_service_pagestream_flush_in_progress_micros_total{endpoint=~\"$endpoint\"}[$__rate_interval])) / 1e6",
+          "legendFormat": "flush time (s/s)"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Throttling, connections & read shape",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Throttling — count/s and wait time",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (kind) (rate(pageserver_tenant_throttling_count_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "throttled {{kind}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(pageserver_tenant_throttling_wait_usecs_sum_total{endpoint=~\"$endpoint\"}[$__rate_interval])) / 1e6",
+          "legendFormat": "wait time (s/s)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "page_service connections",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (pageserver_connection_kind) (rate(pageserver_live_connections_started_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "started {{pageserver_connection_kind}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (pageserver_connection_kind) (rate(pageserver_live_connections_finished_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "finished {{pageserver_connection_kind}}"
+        }
+      ],
+      "description": "Started minus finished is the live count; equal rates with a high value mean connection churn."
+    },
+    {
+      "type": "timeseries",
+      "title": "Read shape — layers per read",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_layers_per_read_global_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(pageserver_layers_per_read_global_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "layers {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_layers_per_read_amortized_global_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(pageserver_layers_per_read_amortized_global_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "amortized {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_layers_per_read_batch_global_sum{endpoint=~\"$endpoint\"}[$__rate_interval])) / clamp_min(sum by (endpoint) (rate(pageserver_layers_per_read_batch_global_count{endpoint=~\"$endpoint\"}[$__rate_interval])), 1)",
+          "legendFormat": "per batch {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Anomalies",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_misrouted_pagestream_requests_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "misrouted {{endpoint}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_gap_blocks_zeroed_on_rel_extend_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "gap blocks zeroed {{endpoint}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (endpoint) (rate(pageserver_circuit_breaker_broken_total{endpoint=~\"$endpoint\"}[$__rate_interval]))",
+          "legendFormat": "circuit breaker broken {{endpoint}}"
+        }
+      ]
+    }
+  ]
+}
