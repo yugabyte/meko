@@ -3336,3 +3336,32 @@ fn chain_to_value_reconstruct_state(
     }
     Ok(state)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An evicted watermark reads back as `Lsn(0)`, indistinguishable from one
+    /// lost to a restart or one that never existed — which is what puts its
+    /// block on the isolated-statement path (#1160). Capacity is the only thing
+    /// that reclaims these entries today (#1162).
+    #[test]
+    fn evicted_trim_watermark_reads_back_as_absent() {
+        let key = |field6: u32| Key { field6, ..Key::MIN };
+        let mut progress = GcDrainProgress::new(2);
+
+        progress.store_trim_watermarks([(key(1), Lsn(10)), (key(2), Lsn(20))]);
+        assert_eq!(
+            progress.trim_watermarks_of(&[key(1), key(2)]),
+            vec![Lsn(10), Lsn(20)]
+        );
+
+        // Key 1 is now the least recently used, so a third entry evicts it.
+        progress.store_trim_watermarks([(key(3), Lsn(30))]);
+        assert_eq!(
+            progress.trim_watermarks_of(&[key(1), key(2), key(3)]),
+            vec![Lsn(0), Lsn(20), Lsn(30)],
+            "the evicted key is on the same path as one that never had a watermark"
+        );
+    }
+}

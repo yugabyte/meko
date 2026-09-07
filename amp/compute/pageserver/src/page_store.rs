@@ -1196,6 +1196,51 @@ const GC_TRIM_NESTED_LOOP_HINT: &str = concat!(
     "Set(enable_material off) Leading((bound p)) */"
 );
 
+/// One trim statement's bounds — the `(key, watermark, anchor)` triples its
+/// `bound(...)` unnests as three parallel arrays.
+type GcTrimBounds<T> = Vec<(T, i64, i64)>;
+
+/// Split a trim's bounds into the ones that can share a statement and the ones
+/// that cannot: a bound with no watermark scans from 0, so batching it takes the
+/// whole statement past YB's history retention, and the `SNAPSHOT_TOO_OLD`
+/// rollback costs every bound in that batch its progress (#1160).
+fn gc_split_watermarkless_bounds<T>(bounds: GcTrimBounds<T>) -> (GcTrimBounds<T>, GcTrimBounds<T>) {
+    bounds
+        .into_iter()
+        .partition(|(_, watermark, _)| *watermark != 0)
+}
+
+/// Statement order for `pages`, which fans its DELETEs out over buckets: every
+/// bucket's batch, then one watermark-less block per statement. The order is the
+/// point — a failing statement ends the call, so whatever runs after it loses
+/// its tick.
+fn gc_batch_bounds_per_bucket(
+    bounds_by_bucket: Vec<GcTrimBounds<i64>>,
+) -> Vec<(i16, GcTrimBounds<i64>)> {
+    let mut batches = Vec::new();
+    let mut singles = Vec::new();
+    for (bucket, bounds) in bounds_by_bucket.into_iter().enumerate() {
+        let bucket = bucket as i16;
+        let (batched, isolated) = gc_split_watermarkless_bounds(bounds);
+        if !batched.is_empty() {
+            batches.push((bucket, batched));
+        }
+        singles.extend(isolated.into_iter().map(|bound| (bucket, vec![bound])));
+    }
+    batches.append(&mut singles);
+    batches
+}
+
+/// Statement order for `slru_pages` and `meta`, which have no buckets: the
+/// batch, then one watermark-less bound per statement.
+fn gc_batch_bounds<T>(bounds: GcTrimBounds<T>) -> impl Iterator<Item = GcTrimBounds<T>> {
+    let (batched, isolated) = gc_split_watermarkless_bounds(bounds);
+    (!batched.is_empty())
+        .then_some(batched)
+        .into_iter()
+        .chain(isolated.into_iter().map(|bound| vec![bound]))
+}
+
 /// Encode a `Key` to its fixed 18-byte wire form — the `pending_gc.key`
 /// (and `meta.key`) bytea.
 pub(crate) fn key_to_bytes(key: &Key) -> Vec<u8> {
@@ -3161,7 +3206,8 @@ impl PageStore {
     /// the whole range — and the anchor this trim reached is appended to
     /// `trimmed_to` as each statement commits, for the caller to store as the
     /// next watermark. A statement that rolls back trimmed nothing, so its
-    /// blocks are absent and keep the watermark they had.
+    /// blocks are absent and keep the watermark they had. A block with no
+    /// watermark gets a statement to itself — see [`gc_split_watermarkless_bounds`].
     ///
     /// TODO(gc_whole_fork_threshold): above a per-fork block count,
     /// switch to a whole-fork variant in blknum-range batches.
@@ -3173,7 +3219,6 @@ impl PageStore {
         cutoff: Lsn,
         trimmed_to: &mut Vec<(i64, Lsn)>,
     ) -> Result<u64> {
-        self.write_gate("GC trim of amp_storage.pages");
         if block_watermarks.is_empty() {
             return Ok(0);
         }
@@ -3223,51 +3268,56 @@ impl PageStore {
             })?;
         // The DELETE stays per bucket: unlike the anchors lateral it is one
         // scan of `pages`, so `bucket_id` has to be a bound value for it to
-        // prune to that bucket's tablets. Binned straight into the three
-        // parallel arrays the statement's `bound(blknum, watermark, anchor)`
-        // unnests.
-        let mut by_bucket: Vec<(Vec<i64>, Vec<i64>, Vec<i64>)> =
-            vec![Default::default(); PAGE_BUCKETS as usize];
+        // prune to that bucket's tablets.
+        let mut bounds_by_bucket: Vec<GcTrimBounds<i64>> = vec![Vec::new(); PAGE_BUCKETS as usize];
         for r in &rows {
             let blknum: i64 = r.get("blknum");
-            let (blknums, watermarks, anchors) =
-                &mut by_bucket[page_bucket_id(relnode, blknum) as usize];
-            blknums.push(blknum);
-            watermarks.push(r.get("watermark"));
-            anchors.push(r.get("anchor"));
+            let watermark: i64 = r.get("watermark");
+            let anchor: i64 = r.get("anchor");
+            bounds_by_bucket[page_bucket_id(relnode, blknum) as usize]
+                .push((blknum, watermark, anchor));
         }
 
         let mut deleted = 0u64;
-        for (bucket, (blknums, watermarks, anchors)) in by_bucket.iter().enumerate() {
-            if blknums.is_empty() {
-                continue;
-            }
-            let bucket = bucket as i16;
+        for (bucket, bounds) in gc_batch_bounds_per_bucket(bounds_by_bucket) {
+            let (blknums, watermarks, anchors): (Vec<i64>, Vec<i64>, Vec<i64>) =
+                bounds.into_iter().multiunzip();
             // The plan-independent floor: every block in this statement is
             // bounded below by its own watermark, so the batch's lowest one
             // bounds the scan whatever the planner does with the join.
             let floor = *watermarks.iter().min().expect("non-empty");
+            self.write_gate("GC trim of amp_storage.pages");
             deleted += self
                 .ysql_client
                 .execute(
                     &delete_sql,
                     &[
-                        &branch_id, &spcnode, &dbnode, &relnode, &forknum, blknums, watermarks,
-                        anchors, &bucket, &floor, &cutoff_i,
+                        &branch_id,
+                        &spcnode,
+                        &dbnode,
+                        &relnode,
+                        &forknum,
+                        &blknums,
+                        &watermarks,
+                        &anchors,
+                        &bucket,
+                        &floor,
+                        &cutoff_i,
                     ],
                 )
                 .await
                 .with_context(|| {
                     format!(
                         "gc_act_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
-                         bucket={bucket} blocks={}",
-                        blknums.len()
+                         bucket={bucket} blocks={} first={}",
+                        blknums.len(),
+                        blknums[0]
                     )
                 })?;
             trimmed_to.extend(
                 blknums
                     .iter()
-                    .zip(anchors)
+                    .zip(&anchors)
                     .map(|(blk, anchor)| (*blk, Lsn(*anchor as u64))),
             );
         }
@@ -3659,7 +3709,6 @@ impl PageStore {
         cutoff: Lsn,
         trimmed_to: &mut Vec<(i64, Lsn)>,
     ) -> Result<u64> {
-        self.write_gate("GC trim of amp_storage.slru_pages");
         if block_watermarks.is_empty() {
             return Ok(0);
         }
@@ -3694,7 +3743,7 @@ impl PageStore {
             })?;
         // Blocks with no base <= cutoff are absent, which is what leaves them
         // untouched.
-        let (blknums, watermarks, anchors): (Vec<i64>, Vec<i64>, Vec<i64>) = rows
+        let all_bounds: GcTrimBounds<i64> = rows
             .iter()
             .map(|r| {
                 (
@@ -3703,40 +3752,46 @@ impl PageStore {
                     r.get::<_, i64>("anchor"),
                 )
             })
-            .multiunzip();
-        // The plan-independent floor; no anchored block means nothing to do.
-        let Some(&floor) = watermarks.iter().min() else {
-            return Ok(0);
-        };
+            .collect();
 
-        let deleted = self
-            .ysql_client
-            .execute(
-                &self.gc_trim_slru_sql(),
-                &[
-                    &branch_id,
-                    &kind,
-                    &segno,
-                    &blknums,
-                    &cutoff_i,
-                    &watermarks,
-                    &anchors,
-                    &floor,
-                ],
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno} blocks={}",
-                    blknums.len()
+        let slru_sql = self.gc_trim_slru_sql();
+        let mut deleted = 0u64;
+        for bounds in gc_batch_bounds(all_bounds) {
+            let (blknums, watermarks, anchors): (Vec<i64>, Vec<i64>, Vec<i64>) =
+                bounds.into_iter().multiunzip();
+            let floor = *watermarks.iter().min().expect("non-empty");
+            self.write_gate("GC trim of amp_storage.slru_pages");
+            deleted += self
+                .ysql_client
+                .execute(
+                    &slru_sql,
+                    &[
+                        &branch_id,
+                        &kind,
+                        &segno,
+                        &blknums,
+                        &cutoff_i,
+                        &watermarks,
+                        &anchors,
+                        &floor,
+                    ],
                 )
-            })?;
-        trimmed_to.extend(
-            blknums
-                .iter()
-                .zip(&anchors)
-                .map(|(blk, anchor)| (*blk, Lsn(*anchor as u64))),
-        );
+                .await
+                .with_context(|| {
+                    format!(
+                        "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno} \
+                         blocks={} first={}",
+                        blknums.len(),
+                        blknums[0]
+                    )
+                })?;
+            trimmed_to.extend(
+                blknums
+                    .iter()
+                    .zip(&anchors)
+                    .map(|(blk, anchor)| (*blk, Lsn(*anchor as u64))),
+            );
+        }
         Ok(deleted)
     }
 
@@ -3828,7 +3883,6 @@ impl PageStore {
         cutoff: Lsn,
         trimmed_to: &mut Vec<(Key, Lsn)>,
     ) -> Result<u64> {
-        self.write_gate("GC trim of amp_storage.meta");
         if key_watermarks.is_empty() {
             return Ok(0);
         }
@@ -3853,7 +3907,7 @@ impl PageStore {
             })?;
         // A key with no version <= cutoff is absent, which is what leaves it
         // untouched.
-        let (key_bytes, watermarks, anchors): (Vec<Vec<u8>>, Vec<i64>, Vec<i64>) = rows
+        let all_bounds: GcTrimBounds<Vec<u8>> = rows
             .iter()
             .map(|r| {
                 (
@@ -3862,38 +3916,43 @@ impl PageStore {
                     r.get::<_, i64>("anchor"),
                 )
             })
-            .multiunzip();
-        // The plan-independent floor, as in the block trims.
-        let Some(&floor) = watermarks.iter().min() else {
-            return Ok(0);
-        };
+            .collect();
 
-        let deleted = self
-            .ysql_client
-            .execute(
-                &self.gc_trim_meta_sql(),
-                &[
-                    &branch_id,
-                    &key_bytes,
-                    &cutoff_i,
-                    &watermarks,
-                    &anchors,
-                    &floor,
-                ],
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "gc_act_trim_meta branch={branch_id} keys={}",
-                    key_bytes.len()
+        let meta_sql = self.gc_trim_meta_sql();
+        let mut deleted = 0u64;
+        for bounds in gc_batch_bounds(all_bounds) {
+            let (key_bytes, watermarks, anchors): (Vec<Vec<u8>>, Vec<i64>, Vec<i64>) =
+                bounds.into_iter().multiunzip();
+            let floor = *watermarks.iter().min().expect("non-empty");
+            self.write_gate("GC trim of amp_storage.meta");
+            deleted += self
+                .ysql_client
+                .execute(
+                    &meta_sql,
+                    &[
+                        &branch_id,
+                        &key_bytes,
+                        &cutoff_i,
+                        &watermarks,
+                        &anchors,
+                        &floor,
+                    ],
                 )
-            })?;
-        trimmed_to.extend(
-            key_bytes
-                .iter()
-                .zip(&anchors)
-                .map(|(key, anchor)| (Key::from_slice(key), Lsn(*anchor as u64))),
-        );
+                .await
+                .with_context(|| {
+                    format!(
+                        "gc_act_trim_meta branch={branch_id} keys={} first={}",
+                        key_bytes.len(),
+                        Key::from_slice(&key_bytes[0])
+                    )
+                })?;
+            trimmed_to.extend(
+                key_bytes
+                    .iter()
+                    .zip(&anchors)
+                    .map(|(key, anchor)| (Key::from_slice(key), Lsn(*anchor as u64))),
+            );
+        }
         Ok(deleted)
     }
 
@@ -8385,6 +8444,126 @@ mod tests {
         );
     }
 
+    /// The statement split the three trims share (#1160): watermarked bounds
+    /// stay one batch and go first, each watermark-less one gets its own
+    /// statement.
+    #[test]
+    fn gc_batch_bounds_isolates_watermarkless() {
+        let statements = |bounds: Vec<(i64, i64, i64)>| {
+            gc_batch_bounds(bounds)
+                .map(|s| s.into_iter().map(|(blk, _, _)| blk).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        assert!(statements(vec![]).is_empty());
+        assert_eq!(
+            statements(vec![(1, 10, 20), (2, 30, 40)]),
+            vec![vec![1, 2]],
+            "an all-warm fork is one statement, as before #1160"
+        );
+        assert_eq!(
+            statements(vec![(1, 0, 20), (2, 0, 40)]),
+            vec![vec![1], vec![2]]
+        );
+        assert_eq!(
+            statements(vec![(1, 0, 20), (2, 30, 40), (3, 0, 60), (4, 50, 70)]),
+            vec![vec![2, 4], vec![1], vec![3]],
+            "the batch commits before a watermark-less bound can fail the call"
+        );
+    }
+
+    /// For `pages` the guarantee is fork-wide, not per bucket: a cold block in
+    /// bucket 0 must not be sequenced ahead of bucket 1's batch (#1160).
+    #[test]
+    fn gc_batch_bounds_per_bucket_runs_every_batch_first() {
+        let ordered = gc_batch_bounds_per_bucket(vec![
+            vec![(1, 0, 20), (2, 30, 40)],
+            vec![(3, 50, 60)],
+            vec![],
+            vec![(4, 0, 80)],
+        ]);
+        let shape: Vec<(i16, Vec<i64>)> = ordered
+            .into_iter()
+            .map(|(b, bounds)| (b, bounds.into_iter().map(|(blk, _, _)| blk).collect()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![(0, vec![2]), (1, vec![3]), (0, vec![1]), (3, vec![4])],
+            "both batches precede both isolated blocks"
+        );
+    }
+
+    /// A watermark-less block and a watermarked one in the same bucket, one
+    /// call (#1160). Pins the outcome, not the split: `bound.watermark` is
+    /// per bound, so a single shared statement deletes exactly these rows too.
+    /// The split itself is pinned by the two pure tests above.
+    #[tokio::test]
+    async fn gc_trim_isolates_watermarkless_block_from_its_bucket() {
+        let (store, _schema) = make_store("gc_trim_cold").await;
+        let branch = rand_branch();
+        let rel = 16460u32;
+        let (blk_a, blk_b) = (1u32, 2u32);
+        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+
+        store
+            .put_pages(
+                branch,
+                &[
+                    // A, no watermark: the whole range below its anchor at 30.
+                    page_row(key(blk_a), 10, true, true, b"a10"),
+                    page_row(key(blk_a), 20, false, false, b"a20"),
+                    page_row(key(blk_a), 30, true, true, b"a30"),
+                    page_row(key(blk_a), 40, false, false, b"a40"),
+                    // B, watermark 50, anchor 60. lsn 45 is the discriminator:
+                    // below B's watermark but above A's floor of 0, so a shared
+                    // statement would have taken it.
+                    page_row(key(blk_b), 10, true, true, b"b10"),
+                    page_row(key(blk_b), 45, false, false, b"b45"),
+                    page_row(key(blk_b), 50, true, true, b"b50"),
+                    page_row(key(blk_b), 55, false, false, b"b55"),
+                    page_row(key(blk_b), 60, true, true, b"b60"),
+                    page_row(key(blk_b), 70, false, false, b"b70"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let mut wm = Vec::new();
+        store
+            .gc_act_trim_blocks(
+                branch,
+                (GC_SPC, GC_DB, rel as i64, 0),
+                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(50))],
+                Lsn(100),
+                &mut wm,
+            )
+            .await
+            .unwrap();
+
+        wm.sort_unstable();
+        assert_eq!(wm, vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]);
+        assert_eq!(
+            store
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
+                .await
+                .unwrap(),
+            vec![(30, true, true), (40, false, false)],
+            "A is trimmed from 0"
+        );
+        assert_eq!(
+            store
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_b as i64)
+                .await
+                .unwrap(),
+            vec![
+                (10, true, true),
+                (45, false, false),
+                (60, true, true),
+                (70, false, false)
+            ],
+            "B keeps lsn 10 and 45: below its own watermark"
+        );
+    }
+
     /// Rel-size meta row (LE u32 payload) for the drop/shrink tests.
     fn rel_size_row(relnode: u32, forknum: u8, lsn: u64, nblocks: u32) -> MetaRow {
         MetaRow {
@@ -8599,6 +8778,82 @@ mod tests {
         );
     }
 
+    /// The SLRU half of `gc_trim_isolates_watermarkless_block_from_its_bucket`
+    /// (#1160) — outcome preservation for this table's own bind list, on the
+    /// same terms: it passes batched too.
+    #[tokio::test]
+    async fn gc_trim_slru_isolates_watermarkless_block() {
+        let (store, _schema) = make_store("gc_trim_slru_cold").await;
+        let branch = rand_branch();
+        let (seg, blk_a, blk_b) = (11u32, 1u32, 2u32);
+        let kind = SlruKind::Clog as i16;
+        let row = |blk: u32, lsn: u64, will_init: bool| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: seg,
+            blknum: blk,
+            lsn: Lsn(lsn),
+            is_image: will_init,
+            will_init,
+            payload: Bytes::from_static(b"x"),
+        };
+        store
+            .put_slru_pages(
+                branch,
+                &[
+                    row(blk_a, 10, true),
+                    row(blk_a, 20, false),
+                    row(blk_a, 30, true),
+                    row(blk_a, 40, false),
+                    // B is bounded by its own watermark of 50; lsn 45 is below
+                    // it and above A's floor of 0.
+                    row(blk_b, 10, true),
+                    row(blk_b, 45, false),
+                    row(blk_b, 50, true),
+                    row(blk_b, 55, false),
+                    row(blk_b, 60, true),
+                    row(blk_b, 70, false),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let mut wm = Vec::new();
+        store
+            .gc_act_trim_slru(
+                branch,
+                (kind, seg as i64),
+                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(50))],
+                Lsn(100),
+                &mut wm,
+            )
+            .await
+            .unwrap();
+
+        wm.sort_unstable();
+        assert_eq!(wm, vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]);
+        assert_eq!(
+            store
+                .test_raw_slru_versions(branch, kind, seg as i64, blk_a as i64)
+                .await
+                .unwrap(),
+            vec![(30, true, true), (40, false, false)],
+            "A is trimmed from 0"
+        );
+        assert_eq!(
+            store
+                .test_raw_slru_versions(branch, kind, seg as i64, blk_b as i64)
+                .await
+                .unwrap(),
+            vec![
+                (10, true, true),
+                (45, false, false),
+                (60, true, true),
+                (70, false, false)
+            ],
+            "B keeps lsn 10 and 45: below its own watermark"
+        );
+    }
+
     /// The `meta` twin, and the opposite off-by-one: the range is half-open,
     /// so the watermark row is the previous anchor and is still live. Tick 2
     /// must delete it only once a newer version has become the anchor (#1155).
@@ -8680,6 +8935,72 @@ mod tests {
                 .unwrap(),
             vec![45, 60],
             "B keeps lsn 45: above the batch floor, below its own watermark"
+        );
+    }
+
+    /// The `meta` half of `gc_trim_isolates_watermarkless_block_from_its_bucket`
+    /// (#1160) — outcome preservation, and it passes batched too. Half-open
+    /// range here: the anchor row itself survives.
+    #[tokio::test]
+    async fn gc_trim_meta_isolates_watermarkless_key() {
+        use pageserver_api::key::twophase_file_key;
+
+        let (store, _schema) = make_store("gc_trim_meta_cold").await;
+        let branch = rand_branch();
+        let (key_a, key_b) = (twophase_file_key(41), twophase_file_key(42));
+        let row = |k: &Key, lsn: u64| MetaRow {
+            key: Bytes::from(key_to_bytes(k)),
+            lsn: Lsn(lsn),
+            payload: Bytes::from_static(b"x"),
+        };
+        store
+            .put_meta(
+                branch,
+                &[
+                    row(&key_a, 10),
+                    row(&key_a, 20),
+                    row(&key_a, 30),
+                    // B is bounded by its own watermark of 50; lsn 45 is below
+                    // it and above A's floor of 0.
+                    row(&key_b, 10),
+                    row(&key_b, 45),
+                    row(&key_b, 50),
+                    row(&key_b, 60),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let mut wm = Vec::new();
+        store
+            .gc_act_trim_meta(
+                branch,
+                &[(key_a, Lsn(0)), (key_b, Lsn(50))],
+                Lsn(100),
+                &mut wm,
+            )
+            .await
+            .unwrap();
+
+        wm.sort_unstable();
+        let mut expected = vec![(key_a, Lsn(30)), (key_b, Lsn(60))];
+        expected.sort_unstable();
+        assert_eq!(wm, expected);
+        assert_eq!(
+            store
+                .test_raw_meta_versions(branch, &key_to_bytes(&key_a))
+                .await
+                .unwrap(),
+            vec![30],
+            "A is trimmed from 0"
+        );
+        assert_eq!(
+            store
+                .test_raw_meta_versions(branch, &key_to_bytes(&key_b))
+                .await
+                .unwrap(),
+            vec![10, 45, 60],
+            "B keeps lsn 10 and 45: below its own watermark"
         );
     }
 

@@ -306,8 +306,12 @@ impl Timeline {
             )
         };
 
-        // Cancel is checked once, up front: a mid-tick cancel just
-        // leaves candidates queued (idempotent, re-drained next tick).
+        // Cancel is checked here and again per trimmed object in `act_trims`: a
+        // mid-tick cancel just leaves candidates queued (idempotent, re-drained
+        // next tick), but a trim issues one statement per watermark-less key
+        // (#1160), so a whole tick is no longer a bounded wait. One object's own
+        // statements still run to completion — bounding that needs the token in
+        // `PageStore`, which has no cancellation plumbing today.
         if self.cancel.is_cancelled() {
             return Err(GcError::TimelineCancelled);
         }
@@ -488,7 +492,7 @@ impl Timeline {
         f: impl Fn(Arc<crate::page_store::PageStore>, T) -> Fut,
     ) -> Result<u64, GcError>
     where
-        Fut: std::future::Future<Output = anyhow::Result<u64>>,
+        Fut: std::future::Future<Output = Result<u64, GcError>>,
     {
         use futures::{StreamExt as _, TryStreamExt as _};
         // Fan-out width: GC_ACTION_PARALLELISM scaled by the tenant
@@ -500,8 +504,7 @@ impl Timeline {
         let deleted: Vec<u64> = futures::stream::iter(items.map(|item| f(store.clone(), item)))
             .buffer_unordered(parallelism)
             .try_collect()
-            .await
-            .map_err(GcError::Persistence)?;
+            .await?;
         Ok(deleted.into_iter().sum())
     }
 
@@ -561,6 +564,7 @@ impl Timeline {
                         row.due_lsn,
                     )
                     .await
+                    .map_err(GcError::Persistence)
             })
             .await?;
 
@@ -665,6 +669,7 @@ impl Timeline {
                 store
                     .gc_act_shrink_fork(branch_id, fork, relsize, due_lsn)
                     .await
+                    .map_err(GcError::Persistence)
             },
         )
         .await
@@ -728,6 +733,9 @@ impl Timeline {
                 store,
                 rel_keys_by_fork.into_iter(),
                 |store, (fork, keys)| async move {
+                    if self.cancel.is_cancelled() {
+                        return Err(GcError::TimelineCancelled);
+                    }
                     let watermarks = self.block_trim_watermarks(&keys);
                     let mut trimmed_to = Vec::new();
                     let deleted = store
@@ -740,7 +748,7 @@ impl Timeline {
                         )
                         .await;
                     self.store_block_trim_watermarks(&keys[0], &trimmed_to);
-                    deleted
+                    deleted.map_err(GcError::Persistence)
                 },
             )
             .await?;
@@ -750,6 +758,9 @@ impl Timeline {
                 store,
                 slru_keys_by_seg.into_iter(),
                 |store, (seg, keys)| async move {
+                    if self.cancel.is_cancelled() {
+                        return Err(GcError::TimelineCancelled);
+                    }
                     let watermarks = self.block_trim_watermarks(&keys);
                     let mut trimmed_to = Vec::new();
                     let deleted = store
@@ -762,11 +773,14 @@ impl Timeline {
                         )
                         .await;
                     self.store_block_trim_watermarks(&keys[0], &trimmed_to);
-                    deleted
+                    deleted.map_err(GcError::Persistence)
                 },
             )
             .await?;
 
+        if self.cancel.is_cancelled() {
+            return Err(GcError::TimelineCancelled);
+        }
         // Meta trim: one batched keep-newest over all meta keys. Its keys are
         // not block keys, so it drives the map directly rather than through the
         // two helpers above.
@@ -775,21 +789,26 @@ impl Timeline {
             let watermarks = progress.trim_watermarks_of(&meta_keys);
             meta_keys.iter().copied().zip(watermarks).collect()
         };
-        let mut meta_trimmed_to = Vec::new();
-        let meta_deleted = store
-            .gc_act_trim_meta(
-                branch_id,
-                &key_watermarks,
-                applied_cutoff,
-                &mut meta_trimmed_to,
-            )
-            .await
-            .map_err(GcError::Persistence)?;
-        self.gc_drain
-            .progress
-            .lock()
-            .unwrap()
-            .store_trim_watermarks(meta_trimmed_to);
+        // Stores before propagating, as the two block trims above do — see
+        // `store_block_trim_watermarks` for why.
+        let meta_deleted = {
+            let mut meta_trimmed_to = Vec::new();
+            let deleted = store
+                .gc_act_trim_meta(
+                    branch_id,
+                    &key_watermarks,
+                    applied_cutoff,
+                    &mut meta_trimmed_to,
+                )
+                .await;
+            self.gc_drain
+                .progress
+                .lock()
+                .unwrap()
+                .store_trim_watermarks(meta_trimmed_to);
+            deleted
+        }
+        .map_err(GcError::Persistence)?;
 
         Ok(rel_deleted + slru_deleted + meta_deleted)
     }

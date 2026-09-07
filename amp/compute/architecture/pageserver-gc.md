@@ -454,19 +454,36 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    amp2's planner picked it for all three tables, `pages` included, which is
    why `enable_material off` joined the hint in #1155.
 
-   A key with **no** watermark — every key after a restart — has `Lsn(0)` for
-   its watermark, so it is still unbounded below, still batched with the rest of
-   its statement, and can still take that statement past YB's history retention,
-   where it rolls back everything it deleted and the key makes no progress at
-   any runtime. Bounding it means telling a deep cold key from a shallow one
-   before trimming it, which is a change of its own.
+   A key with **no** watermark — after a restart, an LRU eviction, or a
+   first-ever trim — has `Lsn(0)` for its watermark and is still unbounded
+   below, so it gets a **statement of its own** (#1160). Batched, it takes the
+   whole statement past YB's history retention and the `SNAPSHOT_TOO_OLD`
+   rollback costs every key in that batch its progress, repeated every tick.
+   Each keyspace runs its watermarked keys first — for `pages`, one batch per
+   bucket — then one statement per watermark-less key, so a cold key that fails
+   cannot cost a batch the same call had already issued. It does still end the
+   tick: `act` is a phase barrier and the fork fan-out `try_collect`s, so the
+   remaining forks, the other two keyspaces and the dequeue are all abandoned.
+   Narrowing that to the failing key is #1144. A depth probe to keep the shallow
+   cold keys batched was measured and rejected: it costs more than the statement
+   it saves, and a cold key is cold once — its first successful trim gives it a
+   watermark and it rejoins the batch.
+
+   **What this costs after a restart.** Every key is watermark-less then, so a
+   tick issues one statement per key it trims — up to `gc_drain_limit` (10 000),
+   where before it issued at most `PAGE_BUCKETS` per fork. `GC_ACTION_PARALLELISM`
+   is 1 and the `pageserver:gc` pool is sized to it, so they run serially on one
+   connection: a fully cold 10 000-block fork spends tens of seconds in its trim
+   phase against a `gc_period` base of 30 s. It drains once per restart and the
+   cost spreads over the ticks it takes, so the lever if it ever fails to fit is
+   the pool width, not the batching.
 
    Depth is why all three have one. Measured on amp2 after ~16 days without GC:
    a single clog block held over 10 000 versions below the cutoff, and across
    8 523 `meta` keys the average was 1 948 with a maximum of 3.77 M — a
    `rel_size` sentinel takes a version per extension, so its depth tracks the
    relation's block count. Neither table fans out over buckets, so within one
-   statement deep keys sum rather than splitting across statements.
+   statement watermarked deep keys sum rather than splitting across statements.
 
    All three also bind their block or key set, the batch's lowest watermark and
    the cutoff on the DELETE, not just in the anchor. The join predicate alone
@@ -655,8 +672,8 @@ per-branch is also per-instance today.
 | --- | --- | --- |
 | `enable_gc` | `true` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
-| `gc_trim_watermark_cache_capacity` | `100 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that key a full-range trim. Read once at activation. |
-| `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
+| `gc_trim_watermark_cache_capacity` | `100 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that key a full-range trim in a statement of its own (#1160). Read once at activation. |
+| `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Also bounds the trim **statement** count, which after a restart is one per key rather than one per bucket (#1160). Read fresh each tick. |
 | `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
