@@ -93,7 +93,8 @@ func TestPhaseRatio(t *testing.T) {
 	}
 }
 
-// TestMicrobenchDatapoints: every phase becomes a gated ms datapoint, the ratio
+// TestMicrobenchDatapoints: every single-shot phase is a gated ms datapoint, a
+// repeated group gates its median and keeps the cycles as info, the ratio
 // becomes its own datapoint, and it fails the run when it crosses the limit —
 // with no baseline anywhere in the picture.
 func TestMicrobenchDatapoints(t *testing.T) {
@@ -113,10 +114,17 @@ func TestMicrobenchDatapoints(t *testing.T) {
 	if !strings.Contains(err.Error(), ratioDatapoint) {
 		t.Errorf("error = %q, want it to name the ratio datapoint", err)
 	}
-	if len(gated) != len(results) {
-		t.Errorf("gated %d datapoints, want one per phase (%d)", len(gated), len(results))
+	wantGated := map[string]float64{
+		"microbench.create": 12, "microbench.insert_cold": 3704, "microbench.truncate_1": 31,
+		"microbench.insert_after_truncate": 18499,
+	}
+	if len(gated) != len(wantGated) {
+		t.Errorf("gated %d datapoints, want one per group (%d): %+v", len(gated), len(wantGated), gated)
 	}
 	for _, dp := range gated {
+		if want, ok := wantGated[dp.Name]; !ok || dp.Value != want {
+			t.Errorf("gated %s = %v, want %v (median for a repeated group)", dp.Name, dp.Value, want)
+		}
 		if dp.Unit != "ms" || dp.Direction != core.LowerIsBetter {
 			t.Errorf("phase datapoint %+v, want ms / lower-is-better", dp)
 		}
@@ -124,11 +132,18 @@ func TestMicrobenchDatapoints(t *testing.T) {
 			t.Errorf("phase datapoint %q is not namespaced", dp.Name)
 		}
 	}
-	if len(info) != 1 || info[0].Name != ratioDatapoint || info[0].Unit != "x" {
-		t.Fatalf("info datapoints = %+v, want the single ratio in x", info)
+	if len(info) != 4 || info[0].Name != "microbench.insert_after_truncate_1" {
+		t.Fatalf("info datapoints = %+v, want the three cycles then the ratio", info)
 	}
-	if math.Abs(info[0].Value-4.994) > 0.01 {
-		t.Errorf("ratio datapoint = %v, want ~4.99", info[0].Value)
+	ratio := info[3]
+	if ratio.Name != ratioDatapoint || ratio.Unit != "x" {
+		t.Fatalf("last info datapoint = %+v, want the ratio in x", ratio)
+	}
+	if math.Abs(ratio.Value-4.994) > 0.01 {
+		t.Errorf("ratio datapoint = %v, want ~4.99", ratio.Value)
+	}
+	if best := microbenchBestValues(results); len(best) != 1 || best["microbench.insert_after_truncate"] != 17419 {
+		t.Errorf("best values = %v, want only the repeated group's fastest cycle", best)
 	}
 
 	// Under the limit, and with the gate disabled, the datapoints still flow.
@@ -139,7 +154,7 @@ func TestMicrobenchDatapoints(t *testing.T) {
 	if err != nil {
 		t.Errorf("max_phase_ratio 0 must disable the assertion, got %v", err)
 	}
-	if len(info) != 1 {
+	if len(info) != 4 {
 		t.Errorf("max_phase_ratio 0 dropped the ratio datapoint: %+v", info)
 	}
 
@@ -153,6 +168,35 @@ func TestMicrobenchDatapoints(t *testing.T) {
 		{Name: "insert_after_truncate_1", Group: phaseInsertAfterTruncate, MS: 500},
 	}, microbenchParams{MaxPhaseRatio: 2}); err != nil || len(info) != 0 {
 		t.Errorf("zero-ms cold phase produced info %+v, err %v", info, err)
+	}
+}
+
+// TestMicrobenchLiveArmGateCycles: the 0.260905.0 run. Cycle 3 alone was +35.9%
+// against the baseline's fastest draw while the group medians sat 2% apart, so
+// the median-plus-best verdict passes; a uniform slowdown of every cycle fails.
+func TestMicrobenchLiveArmGateCycles(t *testing.T) {
+	cycles := func(a, b, c float64) []phaseResult {
+		return []phaseResult{
+			{Name: "insert_cold", Group: phaseInsertCold, MS: 1896},
+			{Name: "insert_after_truncate_1", Group: phaseInsertAfterTruncate, MS: a},
+			{Name: "insert_after_truncate_2", Group: phaseInsertAfterTruncate, MS: b},
+			{Name: "insert_after_truncate_3", Group: phaseInsertAfterTruncate, MS: c},
+		}
+	}
+	thr := float64Thresholds{DropPct: 20, RisePct: 35}
+	base := cycles(1689, 1781, 1265)
+	baseGated, _, _ := microbenchDatapoints(base, microbenchParams{})
+
+	cur := cycles(1722, 1446, 1719)
+	gated, _, _ := microbenchDatapoints(cur, microbenchParams{})
+	if _, err := liveArmGate(gated, baseGated, microbenchBestValues(cur), microbenchBestValues(base), thr, "0.260904.1"); err != nil {
+		t.Errorf("one slow cycle against the baseline's fastest failed the gate: %v", err)
+	}
+
+	slow := cycles(2500, 2600, 2400)
+	gated, _, _ = microbenchDatapoints(slow, microbenchParams{})
+	if _, err := liveArmGate(gated, baseGated, microbenchBestValues(slow), microbenchBestValues(base), thr, "0.260904.1"); err == nil {
+		t.Error("every cycle ~45% slower on median and best passed the gate")
 	}
 }
 

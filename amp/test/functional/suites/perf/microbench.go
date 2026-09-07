@@ -287,7 +287,8 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 		baselineUp := len(baseResults) > 0
 		if baselineUp {
 			baseGated, _, _ := microbenchDatapoints(baseResults, params)
-			tableTxt, gerr := liveArmGate(gated, baseGated, nil, nil,
+			tableTxt, gerr := liveArmGate(gated, baseGated,
+				microbenchBestValues(results), microbenchBestValues(baseResults),
 				float64Thresholds{DropPct: cfg.ThroughputDropPct, RisePct: cfg.LatencyRisePct}, tag)
 			lbErr = gerr
 			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
@@ -402,11 +403,23 @@ func runPhasesPaired(ctx context.Context, client pgExecer, phases []phase, logf 
 // params.MaxPhaseRatio (a ratio of two phases of the SAME run, so the assertion
 // holds with no stored baseline). A missing or zero cold phase leaves the ratio
 // unreported rather than dividing by it. Pure — unit-tested.
+// Gated: one datapoint per phase group. A repeated group (the truncate cycles)
+// gates its MEDIAN and keeps the per-cycle timings as info, so the history still
+// records them. One 200k-row INSERT swings 20-40% between cycles of the same run,
+// so gating each cycle against its twin on the other arm gated that jitter.
 func microbenchDatapoints(results []phaseResult, params microbenchParams) (gated, info []core.Datapoint, err error) {
+	seen := map[string]bool{}
 	for _, r := range results {
-		gated = append(gated, core.Datapoint{
-			Name: microbenchDatapointPrefix + r.Name, Value: r.MS, Unit: "ms", Direction: core.LowerIsBetter,
-		})
+		vals := groupValues(results, r.Group)
+		if len(vals) == 1 {
+			gated = append(gated, phaseDatapoint(microbenchDatapointPrefix+r.Name, r.MS))
+			continue
+		}
+		info = append(info, phaseDatapoint(microbenchDatapointPrefix+r.Name, r.MS))
+		if !seen[r.Group] {
+			seen[r.Group] = true
+			gated = append(gated, phaseDatapoint(microbenchDatapointPrefix+r.Group, median(vals)))
+		}
 	}
 	ratio, ok := phaseRatio(results, phaseInsertAfterTruncate, phaseInsertCold)
 	if !ok {
@@ -420,6 +433,22 @@ func microbenchDatapoints(results []phaseResult, params microbenchParams) (gated
 			ratioDatapoint, ratio, params.MaxPhaseRatio, ratio)
 	}
 	return gated, info, err
+}
+
+func phaseDatapoint(name string, ms float64) core.Datapoint {
+	return core.Datapoint{Name: name, Value: ms, Unit: "ms", Direction: core.LowerIsBetter}
+}
+
+// microbenchBestValues is each repeated group's fastest cycle, the second leg
+// of the live-arm verdict: a real regression slows the best draw too.
+func microbenchBestValues(results []phaseResult) map[string]float64 {
+	out := map[string]float64{}
+	for _, r := range results {
+		if vals := groupValues(results, r.Group); len(vals) > 1 {
+			out[microbenchDatapointPrefix+r.Group] = aggregate(vals).Min
+		}
+	}
+	return out
 }
 
 // phaseRatio is median(numerator group) / denominator-group median, or ok=false
