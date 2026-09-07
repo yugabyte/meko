@@ -298,12 +298,24 @@ func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
 	if err := c.Bind(&rep); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	found, err := h.svc.ApplyStatus(e.UUID, rep)
+	res, err := h.svc.ApplyStatus(e.UUID, rep)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-	if !found {
+	if !res.Found {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "unknown environment")
+	}
+	// A task delta that could not be stored is NOT a failed heartbeat: the state and
+	// inventory this report carried are durable, and answering 5xx would have the
+	// agent re-send a snapshot that already landed. But it is also not a plain
+	// success, because a delta is delivered once -- an agent told "accepted" retires
+	// it, and the transition is then unrecoverable. So say so in the body and let the
+	// agent hold that delta for the next tick.
+	//
+	// 200-with-a-body only in that case; the common path stays 204, so a report with
+	// no tasks (every meko agent, and most amp ticks) is unchanged on the wire.
+	if !res.TasksRecorded {
+		return ok(c, http.StatusOK, map[string]any{"tasks_recorded": false})
 	}
 	return c.NoContent(http.StatusNoContent)
 }

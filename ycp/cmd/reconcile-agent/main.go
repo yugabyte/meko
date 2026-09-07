@@ -104,6 +104,7 @@ func main() {
 		envName:   envName,
 		placement: placement,
 		agentVer:  agentVer,
+		tasks:     ampbackend.NewTaskCollector(backend, log.Printf),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -216,6 +217,13 @@ type agent struct {
 	envUUID  string
 	lastGood api.DesiredState
 	haveGood bool
+
+	// tasks relays the controller's task log so the console can see what is running
+	// and what failed. Its own reader, not part of the reconcile engine: the engine
+	// only cares about tasks it planned for a resource it is converging, while the
+	// console needs every task, including ones an operator or the amp UI planned
+	// directly.
+	tasks *ampbackend.TaskCollector
 }
 
 // enrollWithRetry performs the startup check-in, falling back to the persisted
@@ -308,9 +316,30 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 		AppliedRevision:  ds.Revision,
 		Resources:        inventory(res),
 	}
-	err := a.ycp.PostStatus(ctx, report)
+	// Task visibility is additive: a controller that will not serve its task log
+	// must not also cost us the convergence report, which is what the environment's
+	// state and every resource row ride on. So this logs and carries on.
+	tasks, commitTasks, err := a.tasks.Collect(ctx)
+	if err != nil {
+		log.Printf("collect amp tasks (reporting inventory anyway): %v", err)
+	}
+	report.Tasks = tasks
+
+	tasksAccepted, err := a.ycp.PostStatus(ctx, report)
 	if errors.Is(err, ycpclient.ErrUnauthorized) {
 		log.Printf("STATUS REJECTED (401): the API key is revoked or bound to no environment")
+	}
+	switch {
+	case err != nil:
+		// The report did not land, so the delta is still ours to deliver.
+	case !tasksAccepted:
+		// The control plane took the report but could not store the tasks. Holding the
+		// delta is the whole point of the two-phase commit: committing here would
+		// retire a transition nothing has recorded, and the feed cannot re-offer it.
+		log.Printf("status accepted but the task delta was NOT stored; holding %d task(s) for the next tick",
+			len(tasks))
+	default:
+		commitTasks()
 	}
 	return err
 }

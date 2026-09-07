@@ -547,9 +547,10 @@ const (
 )
 
 // taskOutcome reads a planned task's status and, when it failed, its error. A
-// task the controller no longer knows (404 — its log was pruned) is reported
-// succeeded: there is nothing left to wait for, and the echoed generation is the
-// authority on whether the work landed.
+// task the controller no longer knows (404) is reported succeeded: there is nothing
+// left to wait for, and the echoed generation is the authority on whether the work
+// landed. Defensive rather than observed — the controller has no task retention
+// today, so its log only grows; nothing in YCP should depend on that staying true.
 func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (status, taskErr string, err error) {
 	resp, err := b.api.GetTask(ctx, taskID)
 	if err != nil {

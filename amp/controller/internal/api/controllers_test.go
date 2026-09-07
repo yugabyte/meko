@@ -1228,3 +1228,94 @@ func TestCreateClusterWithWriterIsHeldToTheFloor(t *testing.T) {
 		t.Fatalf("writer deploy spec = %+v, want one {8, 64Gi}", dep.created)
 	}
 }
+
+// TestListTasksChangeFeed covers the updated_since change feed: the ordering it
+// switches to, the case that ordering exists for, its inclusivity, and the
+// ordered_by field a reader uses to confirm the parameter was honoured.
+func TestListTasksChangeFeed(t *testing.T) {
+	client, _, tasks := newTestServer(t)
+	ctx := context.Background()
+
+	// The shape the default created_at ordering cannot serve: `old` was created
+	// first but touched LAST, so under created_at DESC it sits at the bottom of the
+	// page, below rows an incremental reader has already consumed. A watermark over
+	// that ordering skips it -- which is the whole reason updated_since reorders.
+	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	old, mid, recent := uuid.New(), uuid.New(), uuid.New()
+	for _, s := range []struct {
+		id      uuid.UUID
+		created time.Time
+		updated time.Time
+		status  task.Status
+	}{
+		{old, base, base.Add(30 * time.Minute), task.StatusFailed},
+		{mid, base.Add(time.Minute), base.Add(time.Minute), task.StatusSucceeded},
+		{recent, base.Add(2 * time.Minute), base.Add(2 * time.Minute), task.StatusRunning},
+	} {
+		tasks.Seed(&task.Task{
+			ID: s.id, Kind: "create_endpoint", Status: s.status,
+			CreatedAt: s.created, UpdatedAt: s.updated,
+		}, nil)
+	}
+
+	// Default listing: no updated_since, so created_at DESC and ordered_by says so.
+	def, err := client.ListTasksWithResponse(ctx, nil)
+	if err != nil || def.JSON200 == nil {
+		t.Fatalf("ListTasks: %v, body = %s", err, def.Body)
+	}
+	if def.JSON200.OrderedBy == nil || *def.JSON200.OrderedBy != api.CreatedAtDesc {
+		t.Errorf("default ordered_by = %v, want created_at_desc", def.JSON200.OrderedBy)
+	}
+	if def.JSON200.Tasks[len(def.JSON200.Tasks)-1].Id != old {
+		t.Fatalf("expected `old` last under created_at DESC; the premise of this test does not hold")
+	}
+
+	// The change feed: a watermark after `mid` and `recent` were stamped still
+	// returns `old`, because `old` was UPDATED after it.
+	since := base.Add(3 * time.Minute)
+	feed, err := client.ListTasksWithResponse(ctx, &api.ListTasksParams{UpdatedSince: &since})
+	if err != nil || feed.JSON200 == nil {
+		t.Fatalf("ListTasks(updated_since): %v, body = %s", err, feed.Body)
+	}
+	if feed.JSON200.OrderedBy == nil || *feed.JSON200.OrderedBy != api.UpdatedAtAsc {
+		t.Errorf("feed ordered_by = %v, want updated_at_asc", feed.JSON200.OrderedBy)
+	}
+	if len(feed.JSON200.Tasks) != 1 || feed.JSON200.Tasks[0].Id != old {
+		t.Fatalf("feed = %v, want exactly the task updated after the watermark (%s)", feed.JSON200.Tasks, old)
+	}
+	if feed.JSON200.Total != 1 {
+		t.Errorf("feed total = %d, want 1 (total must respect the filter)", feed.JSON200.Total)
+	}
+
+	// Ascending, ties on id ascending -- what makes offset paging safe: new rows
+	// land at the far end of the page rather than shifting the window.
+	from := base
+	asc, err := client.ListTasksWithResponse(ctx, &api.ListTasksParams{UpdatedSince: &from})
+	if err != nil || asc.JSON200 == nil {
+		t.Fatalf("ListTasks(updated_since=base): %v, body = %s", err, asc.Body)
+	}
+	got := make([]uuid.UUID, 0, len(asc.JSON200.Tasks))
+	for _, tk := range asc.JSON200.Tasks {
+		got = append(got, tk.Id)
+	}
+	want := []uuid.UUID{mid, recent, old} // updated_at ASC
+	if len(got) != len(want) {
+		t.Fatalf("feed ids = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("feed ids = %v, want %v (updated_at ASC)", got, want)
+		}
+	}
+
+	// Inclusive: a watermark set to a task's own updated_at returns that task, so a
+	// reader resuming from the last row it saw cannot drop a same-instant twin.
+	exact := base.Add(30 * time.Minute)
+	incl, err := client.ListTasksWithResponse(ctx, &api.ListTasksParams{UpdatedSince: &exact})
+	if err != nil || incl.JSON200 == nil {
+		t.Fatalf("ListTasks(updated_since=exact): %v, body = %s", err, incl.Body)
+	}
+	if len(incl.JSON200.Tasks) != 1 || incl.JSON200.Tasks[0].Id != old {
+		t.Fatalf("inclusive feed = %v, want the task stamped exactly at the watermark", incl.JSON200.Tasks)
+	}
+}

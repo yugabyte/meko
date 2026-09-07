@@ -22,7 +22,7 @@ func TestEnrolledStack_ReturnsTheStackTheEnvironmentWasRegisteredWith(t *testing
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
 
 	const spec = `{"images":{"database":"registry/yugabyte-db/ybdb-meko-release:t"},"secret_ref":"creds"}`
 	mock.ExpectQuery(`SELECT kind, name, .* FROM meko_system\.environment_desired_resources`).
@@ -54,7 +54,7 @@ func TestEnrolledStack_ReflectsAReplacedStack(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{
 		Enabled: true, Release: testRelease,
 	})
 
@@ -84,7 +84,7 @@ func TestEnrolledStack_AbsentIsNil(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
 
 	mock.ExpectQuery(`SELECT kind, name, .* FROM meko_system\.environment_desired_resources`).
 		WithArgs("acme-prod").

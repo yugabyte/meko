@@ -50,7 +50,7 @@ func newEnvSvc(t *testing.T) (*EnvironmentService, sqlmock.Sqlmock, func()) {
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	return NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{}), mock, func() { db.Close() }
+	return NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{}), mock, func() { db.Close() }
 }
 
 // testEnvID is the environment every test here reads; envRow stores it under acctA.
@@ -245,7 +245,7 @@ func TestRegister_StoresCanonicalAPIKeyID(t *testing.T) {
 // api_key_id is the environment's only agent credential binding, so registering
 // without one (or with a malformed one) is refused before any write.
 func TestRegister_RequiresAPIKeyID(t *testing.T) {
-	svc := NewEnvironmentService(nil, BootstrapDefaults{}) // validation precedes any repo call
+	svc := NewEnvironmentService(nil, nil, BootstrapDefaults{}) // validation precedes any repo call
 	for _, bad := range []string{"", "not-a-uuid", "ycp_enr_deadbeef"} {
 		_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: bad}, "")
 		if !errors.Is(err, ErrValidation) {

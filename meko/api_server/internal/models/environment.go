@@ -81,6 +81,42 @@ type DesiredResource struct {
 	Generation int64 `json:"generation,omitempty"`
 }
 
+// EnvironmentTask is one amp controller task as the control plane stores it: the
+// history behind an environment's inventory, so the console can say what is running
+// and what failed. Kind-agnostic -- Kind and Result are stored and served without
+// interpretation, so a controller that adds a task kind needs no change here.
+type EnvironmentTask struct {
+	TaskID    string `json:"task_id"`
+	Kind      string `json:"kind"`
+	Status    string `json:"status"` // pending | running | succeeded | failed
+	ClusterID string `json:"cluster_id,omitempty"`
+	TargetRef string `json:"target_ref,omitempty"`
+	// Error is the controller's own failure reason, set when Status is failed. It is
+	// what the console shows instead of an operator reading agent logs in a cluster
+	// they may not have access to.
+	Error  string          `json:"error,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	// YCPGeneration is nil for a task an operator or the amp UI planned directly
+	// rather than YCP driving it.
+	YCPGeneration *int64 `json:"ycp_generation,omitempty"`
+	// CreatedAt/UpdatedAt are the CONTROLLER's timestamps; ReportedAt is when the
+	// agent last relayed this row. The pair is what lets a console distinguish a task
+	// that has not moved from an agent that has stopped reporting -- see also the
+	// environment's last_heartbeat_at.
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	ReportedAt time.Time `json:"reported_at"`
+}
+
+// EnvironmentTaskStatuses is every status a task may hold, which is the amp
+// controller's own enum. The handler whitelists a caller's status filter against it
+// rather than passing the value through to SQL.
+var EnvironmentTaskStatuses = []string{"pending", "running", "succeeded", "failed"}
+
+// TerminalTaskStatuses are the statuses a task cannot leave. Retention prunes only
+// these: a pending or running task is live state, however old its timestamp looks.
+var TerminalTaskStatuses = []string{"succeeded", "failed"}
+
 // Entitlement is the plan/limits envelope the console reads to decide what it may
 // offer. Sourced from the billing system upstream; static for now.
 type Entitlement struct {

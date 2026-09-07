@@ -268,8 +268,9 @@ func (s *MemStore) Get(_ context.Context, id uuid.UUID) (*Task, error) {
 }
 
 // List returns a page of tasks matching f, ordered created_at DESC (newest
-// first), plus the total matching count. It mirrors PgStore.List so the two
-// stores paginate identically: ties on created_at break on id DESC.
+// first) -- or updated_at ASC when f.UpdatedSince is set -- plus the total
+// matching count. It mirrors PgStore.List so the two stores paginate
+// identically: ties break on id, in the same direction as the primary key.
 func (s *MemStore) List(_ context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,14 +285,27 @@ func (s *MemStore) List(_ context.Context, f TaskFilter, limit, offset int) ([]*
 		if f.ClusterID != nil && (t.ClusterID == nil || *t.ClusterID != *f.ClusterID) {
 			continue
 		}
+		// Inclusive, matching PgStore's `updated_at >= $n`.
+		if f.UpdatedSince != nil && t.UpdatedAt.Before(*f.UpdatedSince) {
+			continue
+		}
 		matched = append(matched, t)
 	}
-	sort.SliceStable(matched, func(i, j int) bool {
-		if matched[i].CreatedAt.Equal(matched[j].CreatedAt) {
-			return matched[i].ID.String() > matched[j].ID.String() // id DESC tiebreak
-		}
-		return matched[i].CreatedAt.After(matched[j].CreatedAt) // created_at DESC
-	})
+	if f.UpdatedSince != nil {
+		sort.SliceStable(matched, func(i, j int) bool {
+			if matched[i].UpdatedAt.Equal(matched[j].UpdatedAt) {
+				return matched[i].ID.String() < matched[j].ID.String() // id ASC tiebreak
+			}
+			return matched[i].UpdatedAt.Before(matched[j].UpdatedAt) // updated_at ASC
+		})
+	} else {
+		sort.SliceStable(matched, func(i, j int) bool {
+			if matched[i].CreatedAt.Equal(matched[j].CreatedAt) {
+				return matched[i].ID.String() > matched[j].ID.String() // id DESC tiebreak
+			}
+			return matched[i].CreatedAt.After(matched[j].CreatedAt) // created_at DESC
+		})
+	}
 	total := len(matched)
 	matched = page(matched, limit, offset)
 	out := make([]*Task, len(matched))

@@ -36,7 +36,7 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{
 		Enabled:         true,
 		Release:         testRelease,
 		ImagePullSecret: "meko-ecr",
@@ -149,7 +149,7 @@ func TestRegister_SurvivesDesiredStateWriteFailure(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true})
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{Enabled: true})
 
 	expectRegisterInsert(mock, envUUID)
 	mock.ExpectBegin().WillReturnError(errTest)

@@ -42,6 +42,10 @@ func TestRouter_BasePath_MountsWholeSurface(t *testing.T) {
 		// The operator's half of the same state: the agent GET resolves by a key id
 		// bound to the environment, which nobody at a console holds.
 		"/ycp/api/v1/environments/:id/desired",
+		// The task history rides the same fleet group, so it inherits the
+		// admin-secret + account middleware rather than being wired its own.
+		"/ycp/api/v1/environments/:id/tasks",
+		"/ycp/api/v1/environments/:id/tasks/:task_id",
 		"/ycp/api/v1/admin/metrics",
 		"/ycp/success",
 		"/ycp/swagger/*",

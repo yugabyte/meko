@@ -256,6 +256,53 @@ Datapacks are **not** modelled here. An environment is the unit YCP manages; wha
 runs inside Meko — datapacks, users, tenants — is Meko's own concern, created
 through its api-server once the stack is up.
 
+## Seeing what ran in an amp environment
+
+An amp environment's reconcile agent relays the controller's task log on its status
+heartbeat, so operations are readable from the control plane without cluster access:
+
+```bash
+# what is running right now
+curl -sS -H "X-Meko-Admin-Secret: $SECRET" -H "X-Meko-Account-ID: $ACCOUNT" \
+  "$YCP/api/v1/environments/$ENV/tasks?active=true" | jq '.data.items'
+
+# what has failed, most recent first
+curl -sS -H "X-Meko-Admin-Secret: $SECRET" -H "X-Meko-Account-ID: $ACCOUNT" \
+  "$YCP/api/v1/environments/$ENV/tasks?status=failed" | jq '.data.items[] | {kind, target_ref, error}'
+
+# one operation in full
+curl -sS -H "X-Meko-Admin-Secret: $SECRET" -H "X-Meko-Account-ID: $ACCOUNT" \
+  "$YCP/api/v1/environments/$ENV/tasks/$TASK_ID" | jq .data
+```
+
+| Parameter | Meaning |
+|---|---|
+| `active=true` | shorthand for `status=pending` + `status=running` |
+| `status` | repeatable, or comma-separated: `pending`, `running`, `succeeded`, `failed`. An unrecognized value is **dropped, not rejected**, so a stale client gets results rather than a 400 |
+| `kind` | exact match, e.g. `resize_endpoint`, `create_branch` |
+| `cluster_id` | only tasks scoped to one cluster |
+| `page`, `page_size` | 1-based; default 25, max 200 |
+
+Response fields worth knowing:
+
+- `error` is the **controller's own** failure reason, not the agent's summary of it.
+- `ycp_generation` is `null` for a task an operator or the amp UI planned directly
+  rather than YCP driving it — how to tell "the console did this" from "someone went
+  around the control plane".
+- `reported_at` (per task) and `last_heartbeat_at` (per response) are what separate a
+  task that has not moved from an agent that has stopped reporting. A stale
+  `last_heartbeat_at` means the whole page is stale, whatever the statuses say.
+
+**History depth is 30 days.** The agent forgets what it relayed when its pod restarts
+and the control plane cannot reach into the data plane to re-read the log, so its own
+table is the durable copy and that retention is the answer to "how far back can I ask
+what ran".
+Terminal tasks past the window are deleted on the next heartbeat that records one;
+`pending` and `running` tasks are never pruned however old they look.
+
+A `kind: meko` environment runs no controller and so has no task log: these routes
+return an empty page rather than an error.
+
 ## Which environments a fleet call sees
 
 The admin secret is a fleet-wide credential, so a caller presenting only it — the
@@ -338,6 +385,8 @@ Failure modes worth knowing:
 | `ENROLL REJECTED (401)`, repeating | the API key was revoked. Redeploy with a fresh key Secret pointed at a newly registered environment -- an environment cannot be rebound to a different key once registered. |
 | `desired-state unavailable … holding what we last read and changing nothing else` | the control plane is unreachable or erroring. The agent keeps reconciling toward the last desired state it read — that is the point of persisting it — and skips only garbage collection, since it cannot know what an operator withdrew from a response it never got. A data plane survives a control plane being deleted outright: one ran for two and a half days that way, six components healthy throughout. |
 | every pod `ImagePullBackOff` | no `image_pull_secret`. The whole release is private; the control plane warns about this at boot. |
+| `amp task feed unavailable: the controller ignored updated_since` | the reconcile agent is newer than the amp controller it drives. Task reporting stays off for the life of the agent (inventory is unaffected); restart it against a controller built from this repo's `main` or later. |
+| `collect amp tasks (reporting inventory anyway)` | the controller's task API is erroring. Deliberately non-fatal: the environment's state and inventory still land, and the unreported tasks are re-sent on a later tick. |
 | the database is `1/1` but `create extension mage` fails | the wrong database image. `mage` and `pg_dist_rag` are in `yugabyte-db/ybdb-meko-release`, not the public `yugabytedb` image. |
 | `api-server` sits at `Init:0/1` | it is waiting for the YSQL port. Normal for the first ~90s; persisting past that means the database is not coming up. |
 | a component is `0/1` with `InvalidImageName` | an image reference the kubelet cannot parse — nearly always a placeholder left in a copied example (`…`, `<registry>`, `<tag>`). The agent refuses these now and says so on the component row, so seeing it means the workload predates that check. |

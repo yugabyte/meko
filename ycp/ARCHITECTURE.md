@@ -107,10 +107,39 @@ agent → YCP. YCP never dials into a customer cluster.
    that was actually read — the agent cannot know what an operator withdrew from a
    response it never got.
 5. **Report** — the agent `POST`s `/agent/status` with real facts,
-   component health. This drives the fleet registry and the console's live view.
+   component health. This drives the fleet registry and the console's live view. An
+   amp agent also relays the controller's **task log** here — see below.
 
 Because desired state is resource-typed, adding a new managed resource needs
 only a new agent-side reconciler — no protocol change.
+
+### Tasks: the operations behind the inventory
+
+Inventory says an endpoint is `updating`; the amp controller's task log says *why*, and
+whether the operation failed. That log lives inside the customer's cluster, and there
+is no inbound path to a BYOC data plane — `agent_base_url` is the YBM pass-through the
+agent *dials*, not an address the control plane can call — so the agent relays it on
+the same status heartbeat, and `GET /api/v1/environments/{id}/tasks` serves it back.
+
+The relay is a **change feed, not a snapshot**. The agent reads
+`GET /tasks?updated_since=<watermark>` (ordered `updated_at` ascending) and reports only
+what moved, so a quiet tick carries nothing. Ordering by `updated_at` is what catches a
+task created and finished inside one tick — `create_branch` routinely is — which
+polling non-terminal tasks never observes at all.
+
+Two properties are load-bearing:
+
+- **The control plane holds the history.** The agent's memory of what it relayed dies
+  with its pod, and nothing can re-read the log on its behalf, so
+  `meko_system.environment_tasks` is the durable copy. Its retention is therefore the
+  console's history depth — see [DEPLOY.md](DEPLOY.md).
+- **A delta is delivered once.** The agent retires one only after the whole report is
+  accepted, so a failed heartbeat re-sends rather than loses it; the control plane's
+  upsert is guarded on `task_updated_at` so a re-sent or reordered report cannot walk a
+  terminal task back to `running`.
+
+This does not soften "state is observed, not narrated": YCP invents no tasks and drives
+no state machine of its own, it relays what the controller recorded.
 
 `POST /environments` still accepts `"desired": [...]` to declare an environment's
 resources explicitly — including `[]` for one that runs nothing until told — and

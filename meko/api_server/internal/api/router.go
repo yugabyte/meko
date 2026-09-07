@@ -232,7 +232,11 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	var envSvc *service.EnvironmentService
 	var metricsSvc *service.MetricsService
 	if cfg.ControlPlaneMode {
-		envSvc = service.NewEnvironmentService(repository.NewEnvironmentRepo(cfg.SystemDB), cfg.BootstrapDefaults)
+		envSvc = service.NewEnvironmentService(
+			repository.NewEnvironmentRepo(cfg.SystemDB),
+			repository.NewEnvironmentTaskRepo(cfg.SystemDB),
+			cfg.BootstrapDefaults,
+		)
 		metricsSvc = service.NewMetricsService(cfg.MetricsURL)
 		slog.Info("control-plane mode enabled (YCP fleet + agent routes)")
 		if !metricsSvc.Configured() {
@@ -438,6 +442,9 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.POST("/environments/:id/desired", envH.SetDesired)
 		fleet.GET("/environments/:id/metrics",
 			handlers.NewEnvironmentMetricsHandler(reg.envSvc, reg.metricsSvc).Get)
+		tasksH := handlers.NewEnvironmentTasksHandler(reg.envSvc)
+		fleet.GET("/environments/:id/tasks", tasksH.List)
+		fleet.GET("/environments/:id/tasks/:task_id", tasksH.Get)
 		fleet.GET("/entitlements", envH.Entitlements)
 		// The agent surface has no account header — the key id names the environment
 		// on its own — so it hangs off v1 directly with its own auth pair rather

@@ -330,6 +330,29 @@ unfiltered) maps straight from the spec's query parameters. `List` is backed by
 `tasks_runnable` partial index (also `0001_task_log`), which serves the worker's claim path,
 not the list path.
 
+`TaskFilter.UpdatedSince` turns the same endpoint into a **change feed**: only tasks
+whose `updated_at` is at or after it, ordered `updated_at` ASC instead of the default
+`created_at` DESC, backed by `tasks_by_updated_at` (`0017_tasks_updated_at_index`).
+The ordering has to change with the filter, which is why it is one field and not two.
+
+It exists for the YCP reconcile agent, which relays this log to the control plane so a
+console can show what is running and what failed. Neither of the obvious alternatives
+works. Polling `status=pending|running` misses any task created and completed between
+two of the agent's ticks — `create_branch` routinely is — because it is never observed
+in flight. And a watermark cannot be walked over the default ordering: a task created
+an hour ago that has just reached terminal sorts *below* rows the reader already
+consumed, so `created_at` DESC skips exactly the transitions the reader most wants.
+`updated_at` is stamped on every status transition (`store.go` — claim, fail, succeed),
+so it is the one column that orders changes rather than creations.
+
+The bound is inclusive (`>=`): two tasks can share a timestamp, and an exclusive bound
+set to the last row's `updated_at` would drop its same-instant twin. Readers therefore
+re-receive the boundary rows and must tolerate the repeat. `TaskList.ordered_by` echoes
+the ordering actually applied, so a reader can tell a change feed from the default page
+instead of assuming its parameter was honoured — a controller predating `updated_since`
+ignores it and omits the field, and a reader that assumed otherwise would advance its
+watermark over a `created_at`-ordered page and lose everything it had not already seen.
+
 ## 5. Dependency ports
 
 Steps depend on narrow interfaces, not concrete collaborators, so they

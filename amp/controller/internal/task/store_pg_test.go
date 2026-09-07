@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -299,4 +300,115 @@ func migratedPool(t *testing.T) (*db.Pool, context.Context) {
 		t.Fatalf("connect: %v", err)
 	}
 	return pool, ctx
+}
+
+// TestPgListChangeFeed covers the updated_since feed against real SQL, where the
+// MemStore mirror cannot help: MemStore sorts in Go, so a wrong ORDER BY or a
+// wrong comparison operator in the query passes there and fails only here.
+//
+// The seeded shape is the one the default created_at ordering cannot serve — a
+// task created first but touched last — because that is the case updated_since
+// exists for.
+func TestPgListChangeFeed(t *testing.T) {
+	pool, ctx := migratedPool(t)
+	t.Cleanup(pool.Close)
+	resetTasks(t, pool)
+	s := NewPgStore(pool)
+
+	mk := func(kind string) *Task {
+		t.Helper()
+		got, err := s.Create(ctx, TaskSpec{
+			Kind:  KindCreateEndpoint,
+			Steps: []StepSpec{{Kind: StepCreateEndpoint, Args: json.RawMessage(`{}`)}},
+		})
+		if err != nil {
+			t.Fatalf("create %s: %v", kind, err)
+		}
+		return got
+	}
+	// Created in this order, so created_at DESC reads third, second, first.
+	first, second, third := mk("first"), mk("second"), mk("third")
+
+	// Touch `first` last. now() advances between statements, so this is the real
+	// interleaving rather than a hand-set timestamp.
+	if _, err := pool.Exec(ctx, `UPDATE tasks SET status = 'failed', updated_at = now() WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("touch the oldest task: %v", err)
+	}
+
+	ids := func(ts []*Task) []string {
+		out := make([]string, 0, len(ts))
+		for _, t := range ts {
+			out = append(out, t.ID.String())
+		}
+		return out
+	}
+
+	// Default ordering: created_at DESC, so the just-updated oldest task is LAST.
+	// This is the premise -- a watermark over this ordering would skip it.
+	def, _, err := s.List(ctx, TaskFilter{}, 100, 0)
+	if err != nil {
+		t.Fatalf("List(default): %v", err)
+	}
+	if got := ids(def); len(got) != 3 || got[0] != third.ID.String() || got[2] != first.ID.String() {
+		t.Fatalf("default order = %v, want [third second first]; the premise of this test does not hold", got)
+	}
+
+	// The feed, ordered updated_at ASC: the touched task moves to the END, so a
+	// reader paging forward reaches it instead of stepping over it.
+	epoch := time.Unix(0, 0).UTC()
+	feed, total, err := s.List(ctx, TaskFilter{UpdatedSince: &epoch}, 100, 0)
+	if err != nil {
+		t.Fatalf("List(updated_since=epoch): %v", err)
+	}
+	want := []string{second.ID.String(), third.ID.String(), first.ID.String()}
+	if got := ids(feed); !slices.Equal(got, want) {
+		t.Fatalf("feed order = %v, want %v (updated_at ASC)", got, want)
+	}
+	if total != 3 {
+		t.Errorf("feed total = %d, want 3", total)
+	}
+
+	// Read the post-update stamp back from the database rather than deriving a
+	// watermark arithmetically. timestamptz is MICROSECOND resolution, so adding a
+	// nanosecond to a value that came out of the database rounds straight back to the
+	// same microsecond and the row it was meant to exclude still matches.
+	var touched time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM tasks WHERE id = $1`, first.ID).Scan(&touched); err != nil {
+		t.Fatalf("read back the touched task's updated_at: %v", err)
+	}
+
+	// The watermark set to that stamp returns exactly that task: inclusive (>=, not
+	// >) so a reader resuming from the last row it saw cannot drop a same-instant
+	// twin, and nothing stamped earlier comes with it. total respects the filter
+	// rather than counting the whole log.
+	narrowed, narrowTotal, err := s.List(ctx, TaskFilter{UpdatedSince: &touched}, 100, 0)
+	if err != nil {
+		t.Fatalf("List(updated_since=touched): %v", err)
+	}
+	if got := ids(narrowed); !slices.Equal(got, []string{first.ID.String()}) {
+		t.Fatalf("narrowed feed = %v, want just %s", got, first.ID)
+	}
+	if narrowTotal != 1 {
+		t.Errorf("narrowed total = %d, want 1 (the count must respect updated_since)", narrowTotal)
+	}
+
+	// And one microsecond past it -- the next value the column can represent --
+	// excludes it, so the bound really is a bound and not a no-op.
+	past := touched.Add(time.Microsecond)
+	empty, emptyTotal, err := s.List(ctx, TaskFilter{UpdatedSince: &past}, 100, 0)
+	if err != nil {
+		t.Fatalf("List(updated_since=past): %v", err)
+	}
+	if len(empty) != 0 || emptyTotal != 0 {
+		t.Errorf("a watermark past every row returned %v (total %d), want none", ids(empty), emptyTotal)
+	}
+
+	// Composes with the other filters rather than replacing them.
+	withKind, _, err := s.List(ctx, TaskFilter{UpdatedSince: &epoch, Kind: "no_such_kind"}, 100, 0)
+	if err != nil {
+		t.Fatalf("List(updated_since + kind): %v", err)
+	}
+	if len(withKind) != 0 {
+		t.Errorf("feed with a non-matching kind returned %d tasks, want 0", len(withKind))
+	}
 }

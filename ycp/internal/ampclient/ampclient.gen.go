@@ -246,6 +246,24 @@ func (e MigrationVoyagerPhaseStatus) Valid() bool {
 	}
 }
 
+// Defines values for TaskListOrderedBy.
+const (
+	CreatedAtDesc TaskListOrderedBy = "created_at_desc"
+	UpdatedAtAsc  TaskListOrderedBy = "updated_at_asc"
+)
+
+// Valid indicates whether the value is a known member of the TaskListOrderedBy enum.
+func (e TaskListOrderedBy) Valid() bool {
+	switch e {
+	case CreatedAtDesc:
+		return true
+	case UpdatedAtAsc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusFailed    TaskStatus = "failed"
@@ -1296,11 +1314,33 @@ type Task struct {
 type TaskList struct {
 	// Count The number of items returned in this response (this page).
 	Count PageCount `json:"count"`
-	Tasks []Task    `json:"tasks"`
+
+	// OrderedBy The ordering actually applied to this page. `updated_at_asc` when
+	// `updated_since` was honoured, `created_at_desc` otherwise.
+	//
+	// It exists so an incremental reader can tell a change feed from the
+	// default listing rather than assuming it. A controller predating
+	// `updated_since` ignores the parameter and omits this field, and a reader
+	// that assumed its watermark had been honoured would advance it over a
+	// `created_at`-ordered page and silently skip tasks. Absent means
+	// `created_at_desc`.
+	OrderedBy *TaskListOrderedBy `json:"ordered_by,omitempty"`
+	Tasks     []Task             `json:"tasks"`
 
 	// Total The number of items matching the request across all pages (ignores limit/offset).
 	Total TotalCount `json:"total"`
 }
+
+// TaskListOrderedBy The ordering actually applied to this page. `updated_at_asc` when
+// `updated_since` was honoured, `created_at_desc` otherwise.
+//
+// It exists so an incremental reader can tell a change feed from the
+// default listing rather than assuming it. A controller predating
+// `updated_since` ignores the parameter and omits this field, and a reader
+// that assumed its watermark had been honoured would advance it over a
+// `created_at`-ordered page and silently skip tasks. Absent means
+// `created_at_desc`.
+type TaskListOrderedBy string
 
 // TaskStatus The lifecycle state of a task, or of one of its subtasks — they share it,
 // because a subtask is one step with durable status.
@@ -1589,6 +1629,18 @@ type ListTasksParams struct {
 
 	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+
+	// UpdatedSince Only return tasks whose `updated_at` is at or after this instant, ordered
+	// `updated_at` ascending (ties on `id` ascending) rather than the default
+	// `created_at` descending. `updated_at` is stamped on every status
+	// transition, so paging with a watermark over it yields each change exactly
+	// once.
+	//
+	// The bound is **inclusive**, because two tasks can share a timestamp and an
+	// exclusive bound set to the last row's `updated_at` would drop its
+	// same-instant twin. A reader that resumes from the last `updated_at` it saw
+	// therefore re-receives that row and must tolerate the repeat.
+	UpdatedSince *time.Time `form:"updated_since,omitempty" json:"updated_since,omitempty"`
 
 	// Status Only return tasks in this status.
 	Status *ListTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -4230,6 +4282,18 @@ func NewListTasksRequest(server string, params *ListTasksParams) (*http.Request,
 		if params.Offset != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "offset", *params.Offset, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.UpdatedSince != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "updated_since", *params.UpdatedSince, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "date-time"}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {

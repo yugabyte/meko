@@ -49,7 +49,7 @@ func newScopeHandler(t *testing.T) (*EnvironmentHandler, sqlmock.Sqlmock, func()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	svc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), service.BootstrapDefaults{})
+	svc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), service.BootstrapDefaults{})
 	return NewEnvironmentHandler(svc), mock, func() { db.Close() }
 }
 

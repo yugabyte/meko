@@ -11,7 +11,7 @@ import (
 )
 
 func TestRegisterEnvironment_RequiresValidName(t *testing.T) {
-	svc := service.NewEnvironmentService(nil, service.BootstrapDefaults{}) // validation happens before any repo call
+	svc := service.NewEnvironmentService(nil, nil, service.BootstrapDefaults{}) // validation happens before any repo call
 	for _, name := range []string{"", "ab"} {
 		_, err := svc.Register(service.RegisterEnvironmentRequest{
 			Name: name, APIKeyID: "b0000000-0000-0000-0000-00000000000a",
@@ -31,7 +31,7 @@ func TestRegisterEnvironment_KeepsTheAgentBaseURL(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), service.BootstrapDefaults{})
+	svc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), service.BootstrapDefaults{})
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).

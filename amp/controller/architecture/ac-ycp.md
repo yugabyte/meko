@@ -142,6 +142,15 @@ doing this work. The map is in-process and lost on restart, which is safe — wi
 an entry the update is simply re-issued, and both updatable kinds answer that
 `409`.
 
+That map is the **engine's** view of tasks, and deliberately narrow: it holds only the
+task this agent planned for a resource it is converging. The console needs the whole
+log — including tasks an operator or the amp UI planned directly — so a separate
+`ampbackend.TaskCollector` reads `GET /tasks?updated_since=` as a change feed and the
+agent relays the delta on its status heartbeat. The two do not share state: losing the
+inflight map costs a verdict, while the collector's watermark is what guarantees
+delivery, so folding them together would trade one's failure mode for the other's. See
+[ac-tasks.md](ac-tasks.md) §4.1 for why the feed orders by `updated_at`.
+
 Adding an update path keeps this by construction. Every `Backend.Update` arm hands
 its call to one `applyUpdate` helper that owns the task lookup, the verdict and
 recording the new task, so an arm bypassing it loses the whole mechanism rather

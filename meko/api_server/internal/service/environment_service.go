@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,8 +80,21 @@ func normalizeKind(kind string) (string, error) {
 // binding, status ingestion, and generic desired-state. Control-plane mode only.
 type EnvironmentService struct {
 	repo      *repository.EnvironmentRepo
+	taskRepo  *repository.EnvironmentTaskRepo
 	bootstrap BootstrapDefaults
+
+	// pruneMu guards lastPruned, which rate-limits the fleet-wide task-retention
+	// delete. Every environment's agent heartbeats every 10s, so pruning on each
+	// report that carried a task would run one fleet-wide DELETE per environment per
+	// tick to delete nothing almost every time.
+	pruneMu    sync.Mutex
+	lastPruned time.Time
 }
+
+// pruneEvery is the floor between task-retention passes. Retention is 30 days, so
+// the exact moment a row past the window goes is not interesting; not hammering the
+// table is.
+const pruneEvery = time.Hour
 
 // BootstrapDefaults is the stack a newly registered environment is told to run, so
 // that an agent bootstraps Meko as soon as it enrolls rather than sitting idle until
@@ -123,8 +138,12 @@ type mekoStackSpec struct {
 }
 
 // NewEnvironmentService constructs the service.
-func NewEnvironmentService(repo *repository.EnvironmentRepo, bootstrap BootstrapDefaults) *EnvironmentService {
-	return &EnvironmentService{repo: repo, bootstrap: bootstrap}
+func NewEnvironmentService(
+	repo *repository.EnvironmentRepo,
+	taskRepo *repository.EnvironmentTaskRepo,
+	bootstrap BootstrapDefaults,
+) *EnvironmentService {
+	return &EnvironmentService{repo: repo, taskRepo: taskRepo, bootstrap: bootstrap}
 }
 
 // ---- request DTOs ----
@@ -228,6 +247,32 @@ type StatusReport struct {
 	// it (nil); ApplyStatus leaves the stored inventory untouched when it is nil
 	// and replaces it (including with an empty set) when it is present.
 	Resources []ResourceStatus `json:"resources,omitempty"`
+	// Tasks is a DELTA of the amp controller's task log: the tasks whose status has
+	// moved since the agent's previous report. A meko agent omits it.
+	//
+	// Read it the OPPOSITE way to Resources above. Resources is a snapshot, so an
+	// empty set means "this environment owns nothing" and replaces what was stored.
+	// Tasks is a delta, so an empty set means "nothing changed this tick" -- the
+	// common case -- and writes nothing. The control plane accumulates these deltas,
+	// which is why it, and not the agent, holds the history.
+	Tasks []TaskStatus `json:"tasks,omitempty"`
+}
+
+// TaskStatus is one amp controller task as the agent relays it. Kind-agnostic: the
+// control plane stores and serves Kind and Result without interpreting either, so a
+// controller that adds a task kind needs no change here.
+type TaskStatus struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Status    string `json:"status"`
+	ClusterID string `json:"cluster_id,omitempty"`
+	TargetRef string `json:"target_ref,omitempty"`
+	// Error is the controller's own failure reason, set when Status is failed.
+	Error         string          `json:"error,omitempty"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	YCPGeneration *int64          `json:"ycp_generation,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 func slug(name string) string {
@@ -420,11 +465,30 @@ func (s *EnvironmentService) ResolveAgent(apiKeyID string) (*models.Environment,
 	return s.repo.GetByAPIKeyID(apiKeyID)
 }
 
-// ApplyStatus merges an agent status report. ok=false ⇒ unknown environment.
-func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (bool, error) {
+// StatusResult is what ApplyStatus managed to persist.
+//
+// TasksRecorded is reported separately from the error because the two halves of a
+// report have different durability requirements. The environment's state and
+// inventory are written first and unconditionally -- they are what its health rides
+// on, and a task-table problem must not stop the fleet view updating. But the task
+// delta is delivered ONCE: if the agent is told the report succeeded it retires that
+// delta, and a transition dropped here is then gone for good, leaving a row stuck
+// non-terminal that PruneTerminal deliberately spares. So the agent has to be told
+// which half landed, rather than inferring it from a status code that covers both.
+type StatusResult struct {
+	// Found is false when the environment is unknown.
+	Found bool
+	// TasksRecorded is false only when the report carried a task delta that could not
+	// be stored. True when it carried none, so a caller with nothing to retire is not
+	// told to hold it.
+	TasksRecorded bool
+}
+
+// ApplyStatus merges an agent status report. Found=false ⇒ unknown environment.
+func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (StatusResult, error) {
 	e, err := s.repo.GetByUUID(envUUID)
 	if err != nil || e == nil {
-		return false, err
+		return StatusResult{}, err
 	}
 	now := time.Now().UTC()
 	e.State = r.EnvironmentState
@@ -444,9 +508,95 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (bool, 
 		}
 	}
 	if err := s.repo.Update(e); err != nil {
-		return false, err
+		return StatusResult{}, err
 	}
-	return true, nil
+	res := StatusResult{Found: true, TasksRecorded: true}
+
+	// Tasks are a delta, so unlike Resources above an empty set is not a report of
+	// "no tasks" -- it is the quiet tick, which is most of them. Only a non-empty
+	// delta writes.
+	//
+	// Recorded after the heartbeat rather than in the same transaction: state and
+	// inventory are what the environment's health rides on, and a task write that
+	// failed must not cost us those. What it DOES cost is this report's claim on the
+	// delta -- see StatusResult.
+	if len(r.Tasks) > 0 {
+		if err := s.recordTasks(envUUID, r.Tasks); err != nil {
+			slog.Warn("record amp tasks for environment (the agent is told to hold the delta)",
+				"env_uuid", envUUID, "tasks", len(r.Tasks), "error", err)
+			res.TasksRecorded = false
+		}
+	}
+	return res, nil
+}
+
+// recordTasks upserts a relayed task delta and prunes what has aged out.
+func (s *EnvironmentService) recordTasks(envUUID string, tasks []TaskStatus) error {
+	if s.taskRepo == nil {
+		return nil
+	}
+	rows := make([]models.EnvironmentTask, 0, len(tasks))
+	for _, t := range tasks {
+		rows = append(rows, models.EnvironmentTask{
+			TaskID:        t.ID,
+			Kind:          t.Kind,
+			Status:        t.Status,
+			ClusterID:     t.ClusterID,
+			TargetRef:     t.TargetRef,
+			Error:         t.Error,
+			Result:        t.Result,
+			YCPGeneration: t.YCPGeneration,
+			CreatedAt:     t.CreatedAt,
+			UpdatedAt:     t.UpdatedAt,
+		})
+	}
+	if err := s.taskRepo.UpsertTasks(envUUID, rows); err != nil {
+		return err
+	}
+	// Pruning on the one path that grows the table means there is no separate loop to
+	// run, own or forget -- but rate-limited, since that path is every environment's
+	// 10s heartbeat.
+	if s.claimPrune() {
+		if n, err := s.taskRepo.PruneTerminal(repository.TaskRetention); err != nil {
+			slog.Warn("prune aged amp tasks", "error", err)
+		} else if n > 0 {
+			slog.Info("pruned aged amp tasks", "rows", n, "retention", repository.TaskRetention)
+		}
+	}
+	return nil
+}
+
+// claimPrune reports whether this caller should run the retention pass, and marks it
+// claimed if so. Per process, not per fleet: two api-server replicas may each run one,
+// which is harmless -- the delete is idempotent and the second finds nothing.
+func (s *EnvironmentService) claimPrune() bool {
+	s.pruneMu.Lock()
+	defer s.pruneMu.Unlock()
+	now := time.Now()
+	// The zero value claims immediately, so a freshly started control plane clears
+	// whatever aged out while it was down rather than waiting an hour first.
+	if !s.lastPruned.IsZero() && now.Sub(s.lastPruned) < pruneEvery {
+		return false
+	}
+	s.lastPruned = now
+	return true
+}
+
+// Tasks returns one page of an environment's relayed amp task history. The caller
+// resolves the environment first, so this takes the row's uuid and never an id.
+func (s *EnvironmentService) Tasks(envUUID string, opts repository.EnvironmentTaskListOpts) (repository.EnvironmentTaskListResult, error) {
+	if s.taskRepo == nil {
+		return repository.EnvironmentTaskListResult{Items: []models.EnvironmentTask{}}, nil
+	}
+	return s.taskRepo.ListTasks(envUUID, opts)
+}
+
+// Task returns one relayed task of an environment, or nil when there is none.
+func (s *EnvironmentService) Task(envUUID, taskID string) (*models.EnvironmentTask, error) {
+	if s.taskRepo == nil {
+		return nil, nil
+	}
+	return s.taskRepo.GetTask(envUUID, taskID)
 }
 
 // SetState moves an environment to an agent-reported bootstrap phase. Distinct

@@ -1335,6 +1335,15 @@ func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObj
 	if request.Params.ClusterId != nil {
 		f.ClusterID = request.Params.ClusterId
 	}
+	// updated_since switches the query to the change feed, which also switches the
+	// ordering (see task.TaskFilter.UpdatedSince). The response says which ordering
+	// was applied so a reader never has to assume its watermark was honoured.
+	ordering := CreatedAtDesc
+	if request.Params.UpdatedSince != nil {
+		since := request.Params.UpdatedSince.UTC()
+		f.UpdatedSince = &since
+		ordering = UpdatedAtAsc
+	}
 
 	tasks, total, err := c.tasks.List(ctx, f, limit, offset)
 	if err != nil {
@@ -1344,7 +1353,9 @@ func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObj
 	for _, t := range tasks {
 		out = append(out, taskToAPI(t))
 	}
-	return ListTasks200JSONResponse(TaskList{Tasks: out, Total: total, Count: len(out)}), nil
+	return ListTasks200JSONResponse(TaskList{
+		Tasks: out, Total: total, Count: len(out), OrderedBy: &ordering,
+	}), nil
 }
 
 // --- mapping helpers -------------------------------------------------------

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -159,7 +160,8 @@ type Store interface {
 
 	// List returns a page of tasks matching the filter, ordered by created_at
 	// DESC (newest first), plus the total number of matching tasks (ignoring the
-	// page window). A zero-value TaskFilter is unfiltered.
+	// page window). A zero-value TaskFilter is unfiltered. Setting
+	// TaskFilter.UpdatedSince orders updated_at ASC instead -- see that field.
 	List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error)
 
 	// ActiveByKind returns the oldest non-terminal task of kind — pending or
@@ -182,6 +184,23 @@ type TaskFilter struct {
 	Status    Status     // "" => any
 	Kind      string     // "" => any
 	ClusterID *uuid.UUID // nil => any
+
+	// UpdatedSince turns the query into a change feed: only tasks whose
+	// updated_at is at or after it, ordered updated_at ASC instead of the default
+	// created_at DESC. nil => any, with the default ordering.
+	//
+	// The ordering has to change with the filter, which is why this is one field
+	// and not two. `updated_at` is written on every status transition, so it is
+	// the only column an incremental reader can page by: ordered created_at DESC,
+	// a task created an hour ago that just reached a terminal state sits below
+	// rows the reader has already consumed, so a watermark over that ordering
+	// skips it. Ascending, so paging forward through a backlog cannot skip a row
+	// as newer ones land at the far end.
+	//
+	// Inclusive (>=, not >) because two tasks can share a timestamp: an exclusive
+	// bound set to the last row's updated_at would drop its same-instant twin.
+	// Callers therefore re-read the boundary rows and must tolerate the repeat.
+	UpdatedSince *time.Time
 }
 
 // PgStore is the YBDB-backed Store.
@@ -440,9 +459,10 @@ func (s *PgStore) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
 	return t, err
 }
 
-// List returns a page of tasks matching f, ordered created_at DESC, plus the
-// total matching count. Filters are applied via optional, positionally-numbered
-// predicates so an unset field widens the result rather than excluding rows.
+// List returns a page of tasks matching f, ordered created_at DESC -- or
+// updated_at ASC when f.UpdatedSince is set -- plus the total matching count.
+// Filters are applied via optional, positionally-numbered predicates so an unset
+// field widens the result rather than excluding rows.
 func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error) {
 	var (
 		where string
@@ -466,6 +486,11 @@ func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 	if f.ClusterID != nil {
 		add("cluster_id = $%d::uuid", f.ClusterID.String())
 	}
+	orderBy := "created_at DESC, id DESC"
+	if f.UpdatedSince != nil {
+		add("updated_at >= $%d", *f.UpdatedSince)
+		orderBy = "updated_at ASC, id ASC"
+	}
 
 	var total int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tasks`+where, args...).Scan(&total); err != nil {
@@ -477,8 +502,8 @@ func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 	offsetArg := len(args) + 2
 	args = append(args, limit, offset)
 	rows, err := s.pool.Query(ctx,
-		fmt.Sprintf(`SELECT %s FROM tasks%s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`,
-			taskColumns, where, limitArg, offsetArg),
+		fmt.Sprintf(`SELECT %s FROM tasks%s ORDER BY %s LIMIT $%d OFFSET $%d`,
+			taskColumns, where, orderBy, limitArg, offsetArg),
 		args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list tasks: %w", err)

@@ -343,6 +343,99 @@ fi
 
 fi
 
+# --- relayed task history: what ran, and what failed ---
+#
+# The tasks above have all completed by now, so this asserts the HISTORY rather than
+# racing a live one. That is deliberate: several amp task kinds finish inside one
+# reconcile interval and are never observed pending or running, so asserting an
+# intermediate status here would make the test flaky on exactly the behaviour the
+# change feed exists to guarantee.
+hdr "the console can see what ran (GET /environments/{id}/tasks)"
+
+tasks_json() {
+  # $1: query string, appended as-is.
+  curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" \
+    "$CP/environments/${YCP_ENV_ID}/tasks${1:-}" 2>/dev/null
+}
+
+# The agent relays on its heartbeat, so give it a few ticks to arrive.
+tj=""; total=0
+for ((i=0; i<24; i++)); do
+  tj=$(tasks_json)
+  total=$(printf '%s' "$tj" | jq -r '.data.total // 0' 2>/dev/null)
+  [ "${total:-0}" -gt 0 ] && break
+  sleep 5
+done
+[ "${total:-0}" -gt 0 ] \
+  && ok "relayed task history has $total tasks" \
+  || bad "no tasks reached the control plane after 120s (the agent is not relaying the task log)"
+
+if [ "${total:-0}" -gt 0 ]; then
+  # Every task the agent drove must carry a kind and a terminal status. A row with an
+  # empty kind means the mapping dropped a field on the way through.
+  kinds=$(printf '%s' "$tj" | jq -r '[.data.items[]?|.kind]|unique|join(",")' 2>/dev/null)
+  [ -n "$kinds" ] && ok "task kinds relayed: $kinds" || bad "relayed tasks carry no kind"
+
+  # The endpoint create is the one task kind this smoke definitely planned.
+  if printf '%s' "$kinds" | grep -q 'create_endpoint'; then
+    ok "the create_endpoint task is in the history"
+  else
+    bad "create_endpoint is absent from the history (kinds=${kinds:-none}) — a task that completed between ticks was lost"
+  fi
+
+  # ycp_generation is what distinguishes a task YCP drove from one planned around it.
+  driven=$(printf '%s' "$tj" | jq -r '[.data.items[]?|select(.ycp_generation != null)]|length' 2>/dev/null)
+  [ "${driven:-0}" -gt 0 ] \
+    && ok "$driven task(s) carry a ycp_generation (YCP-driven, not planned around the control plane)" \
+    || bad "no relayed task carries a ycp_generation"
+
+  # The status filter is the console's primary query. Everything here has finished, so
+  # active must be empty while the unfiltered page is not -- which also proves the
+  # filter is actually applied rather than ignored.
+  active=$(tasks_json '?active=true' | jq -r '.data.total // -1' 2>/dev/null)
+  [ "${active:-1}" = 0 ] \
+    && ok "active=true is empty now that every task has finished" \
+    || bad "active=true returned ${active:-?} with no task in flight (the status filter is not applied)"
+
+  succeeded=$(tasks_json '?status=succeeded' | jq -r '.data.total // 0' 2>/dev/null)
+  [ "${succeeded:-0}" -gt 0 ] \
+    && ok "status=succeeded returns $succeeded task(s) — success is persisted, not just observed in flight" \
+    || bad "status=succeeded is empty though $total tasks are recorded"
+
+  # An unknown status is dropped, not rejected, so a stale console still gets results.
+  bogus=$(tasks_json '?status=cancelled' | jq -r '.data.total // -1' 2>/dev/null)
+  [ "${bogus:-−1}" = "$total" ] \
+    && ok "an unrecognized status is dropped, not rejected (still $total)" \
+    || bad "status=cancelled returned ${bogus:-?}, want the unfiltered $total"
+
+  # One task in full, by id -- the console's detail drawer.
+  tid=$(printf '%s' "$tj" | jq -r '.data.items[0].task_id // empty' 2>/dev/null)
+  if [ -n "$tid" ]; then
+    one=$(curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" \
+      "$CP/environments/${YCP_ENV_ID}/tasks/${tid}" 2>/dev/null | jq -r '.data.task_id // empty' 2>/dev/null)
+    [ "$one" = "$tid" ] && ok "GET tasks/$tid returns that task" \
+      || bad "GET tasks/$tid returned '${one:-nothing}'"
+  fi
+
+  # Staleness: the page carries the heartbeat, so a console can tell a task that has
+  # not moved from an agent that has stopped talking.
+  beat=$(printf '%s' "$tj" | jq -r '.data.last_heartbeat_at // empty' 2>/dev/null)
+  [ -n "$beat" ] && ok "the page reports last_heartbeat_at ($beat)" \
+    || bad "last_heartbeat_at is absent; staleness is indistinguishable from an idle environment"
+
+  # History must survive the agent restarting -- the control plane is the durable copy,
+  # and the agent forgets what it relayed when its pod goes.
+  if kubectl -n "$NS" rollout restart deploy/amp-reconcile-agent >/dev/null 2>&1; then
+    kubectl -n "$NS" rollout status deploy/amp-reconcile-agent --timeout=180s >/dev/null 2>&1
+    after=$(tasks_json | jq -r '.data.total // -1' 2>/dev/null)
+    [ "${after:-0}" -ge "$total" ] \
+      && ok "task history survived the agent restart ($total -> $after, no rows lost or duplicated)" \
+      || bad "task history shrank across the agent restart ($total -> ${after:-?})"
+  else
+    printf '  \033[1;33mskip\033[0m task history across an agent restart (no amp-reconcile-agent deployment)\n'
+  fi
+fi
+
 # --- authoritative GC: withdraw the cluster subtree, keep the pool ---
 hdr "withdraw cluster from desired -> agent deletes it (cascade)"
 KEEP_POOL=$(jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" \

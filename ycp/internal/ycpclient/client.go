@@ -95,19 +95,37 @@ func (c *Client) Desired(ctx context.Context) (api.DesiredState, error) {
 	return ds, nil
 }
 
-// PostStatus posts a status heartbeat. Returns ErrUnauthorized on a 401.
-func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) error {
-	code, err := c.do(ctx, http.MethodPost, "/agent/status", r, nil)
+// PostStatus posts a status heartbeat and reports whether the task delta it carried
+// was stored.
+//
+// tasksAccepted is false only when the control plane took the report but could not
+// store the tasks -- a 200 whose body says so. The caller must then hold that delta
+// rather than retiring it, because a delta is delivered once and a dropped
+// transition cannot be recovered from the feed (see ampbackend.TaskCollector).
+//
+// It defaults to TRUE for anything without that body: a 204 (the common path, and
+// what a control plane predating task reporting always answers). Defaulting the
+// other way would wedge an agent against such a control plane -- it would re-send
+// the same delta forever, never advancing its watermark, for tasks nothing is going
+// to store or display.
+func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) (tasksAccepted bool, err error) {
+	var body struct {
+		TasksRecorded *bool `json:"tasks_recorded"`
+	}
+	code, err := c.do(ctx, http.MethodPost, "/agent/status", r, &body)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if code == http.StatusUnauthorized {
-		return ErrUnauthorized
+		return false, ErrUnauthorized
 	}
 	if code >= 300 {
-		return fmt.Errorf("ycp: status -> HTTP %d", code)
+		return false, fmt.Errorf("ycp: status -> HTTP %d", code)
 	}
-	return nil
+	if body.TasksRecorded != nil {
+		return *body.TasksRecorded, nil
+	}
+	return true, nil
 }
 
 // do issues one request and decodes the {"data","error"} envelope. It returns

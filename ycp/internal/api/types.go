@@ -168,6 +168,15 @@ type StatusReport struct {
 	ClusterFacts     ClusterFacts     `json:"cluster_facts"`
 	Components       []Component      `json:"components"`
 	Resources        []ResourceStatus `json:"resources,omitempty"` // amp controller's inventory; meko omits it
+	// Tasks is a DELTA of the amp controller's task log -- every task whose status
+	// moved since the previous report -- not the whole log and not a snapshot. An
+	// amp agent sends it; a meko agent omits it.
+	//
+	// Unlike Resources, an empty slice therefore does NOT mean "this environment
+	// has no tasks": it means nothing changed this tick, which is the common case.
+	// The control plane accumulates these deltas, so it is the side that holds the
+	// history; see TaskStatus.
+	Tasks []TaskStatus `json:"tasks,omitempty"`
 }
 
 // ResourceStatus is one item of an amp environment's reported inventory: a
@@ -205,6 +214,38 @@ type ResourceStatus struct {
 	// backend has none.
 	Attrs map[string]string `json:"attrs,omitempty"`
 }
+
+// TaskStatus is one amp controller task, relayed from its write-ahead task log so
+// the console can answer "what is running" and "what failed" without reaching into
+// the data plane. Kind-agnostic: YCP stores and serves these without interpreting
+// Kind or Result, so a controller that adds a task kind needs no change here.
+type TaskStatus struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`   // e.g. create_cluster, resize_endpoint
+	Status string `json:"status"` // pending | running | succeeded | failed
+	// ClusterID and TargetRef are the task's target, as the controller reports it.
+	// TargetRef pairs with Kind to say which resource moved.
+	ClusterID string `json:"cluster_id,omitempty"`
+	TargetRef string `json:"target_ref,omitempty"`
+	// Error is the controller's own failure reason, set when Status is failed. This
+	// is the string the console shows instead of an operator reading agent logs in a
+	// cluster they may not have access to.
+	Error string `json:"error,omitempty"`
+	// Result is the task's final step result, opaque JSON. For resize_endpoint it
+	// carries in_place_resize / in_place_message; absent until a step records one.
+	Result json.RawMessage `json:"result,omitempty"`
+	// YCPGeneration is the desired-state generation this task applies, or nil for a
+	// task an operator or the amp UI planned directly rather than YCP driving it.
+	// Worth keeping: it is what distinguishes "the console did this" from "someone
+	// went around the control plane".
+	YCPGeneration *int64    `json:"ycp_generation,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// Params is deliberately absent from TaskStatus: it is the whole originating
+// request, it would ride every heartbeat, and Kind + TargetRef + Result already
+// answer what the console asks.
 
 // BootstrapProgress is the pre-agent installer's outbound report.
 type BootstrapProgress struct {
