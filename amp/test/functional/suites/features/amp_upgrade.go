@@ -1,13 +1,6 @@
-// There is no endpoint-upgrade route on the controller today, so this covers the
-// control plane only: the endpoint side is asserted through what the API does
-// promise, that the controller deploys the endpoint image tag it was given.
-//
-// STATUS: written, UNVALIDATED end to end. No run has reached the upgrade itself,
-// so every assertion past the seed is unproven. Progress so far: the env gate is
-// cleared, and the previous release's control
-// plane does deploy (provision_backing, wait_backing_ready and deploy_amp_from all
-// passed on 2026-08-13). The seed then failed on a fork point, since fixed by
-// seeding on the cluster's own branch. Next run should reach the upgrade.
+// The control plane is upgraded in place, then the endpoint fleet is rolled onto
+// the new endpoint image through POST /endpoint-upgrades (meko#809), which is the
+// order an operator follows.
 //
 // The release to upgrade FROM needs no configuration. The run's env.ampstack
 // images are the release under test; the previous release is the newest one the
@@ -28,6 +21,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -53,6 +47,8 @@ const (
 	// upgradeReleaseFetchTimeout bounds the portal read that names the previous
 	// release. The portal is reference data here, not the system under test.
 	upgradeReleaseFetchTimeout = 1 * time.Minute
+	// upgradeRollBudget bounds the fleet roll of the one seeded endpoint.
+	upgradeRollBudget = 10 * time.Minute
 	// DefaultUpgradeRows is the functional.upgrade.rows default.
 	DefaultUpgradeRows = 2000
 )
@@ -65,7 +61,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "upgrade"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "In-place control-plane upgrade on its own backing and control plane, apart from the shared environment: resolve the previous release from the report portal (or functional.upgrade.from_*_image), deploy it, seed checksummed data through an endpoint, upgrade the controller image to the release under test, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, and a new endpoint gets the post-upgrade image.",
+		Description: "In-place control-plane upgrade on its own backing and control plane, apart from the shared environment: resolve the previous release from the report portal (or functional.upgrade.from_*_image), deploy it, seed checksummed data through an endpoint, upgrade the controller image to the release under test, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, a whole-fleet POST /endpoint-upgrades rolls that endpoint onto the new endpoint image with its data intact, and a new endpoint gets the post-upgrade image.",
 		Params:      []string{"functional", "functional.upgrade", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     45 * time.Minute,
 		Run:         runAmpUpgrade,
@@ -197,6 +193,7 @@ func runAmpUpgrade(t *core.T) error {
 		{"controller_runs_new_image", u.controllerRunsNewImage},
 		{"controller_serves_new_version", u.controllerServesNewVersion},
 		{"existing_endpoint_survives", u.existingEndpointSurvives},
+		{"roll_endpoints_to_new_version", u.rollEndpoints},
 		{"new_endpoint_uses_new_image", u.newEndpointUsesNewImage},
 	}
 	return runLifecycle(t.Context, step, f.td, phases, f.logf, f.collectDiagnostics, f.onTeardownDone)
@@ -475,8 +472,8 @@ func (u *upgradeRun) controllerServesNewVersion(ctx context.Context) error {
 
 // existingEndpointSurvives asserts the pre-upgrade endpoint still serves SQL and
 // its seeded rows verify exactly, on a fresh connection. Whether its pod was
-// rolled is recorded, not asserted: an endpoint upgrade is not implemented today,
-// and a rolled pod must stay legal once it is.
+// rolled is recorded, not asserted: the control-plane upgrade alone must not move
+// an endpoint, and the roll that does is the next phase.
 func (u *upgradeRun) existingEndpointSurvives(ctx context.Context) error {
 	f := u.f
 	conn, err := f.endpointSQL(ctx, u.ep)
@@ -499,6 +496,98 @@ func (u *upgradeRun) existingEndpointSurvives(ctx context.Context) error {
 	u.set("endpoint_pod_rolled", u.prePod != "" && pod != u.prePod)
 	u.set("endpoint_image_changed", u.preImages != "" && images != u.preImages)
 	return nil
+}
+
+// rollEndpoints is the operator's second step after the control-plane upgrade:
+// one whole-fleet POST /endpoint-upgrades onto the new endpoint image tag. This
+// control plane is the test's own, so the fleet is exactly the seeded endpoint.
+// The upgraded controller must roll an endpoint the PREVIOUS release created,
+// the pod must come back on the new image, and the seeded rows must survive it.
+func (u *upgradeRun) rollEndpoints(ctx context.Context) error {
+	f := u.f
+	cl, err := f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	target := imageTag(u.toEndpoint)
+	u.set("roll_target_version", target)
+	task, loc, err := cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: target})
+	if status := apiErrorStatus(err); status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented {
+		u.set("roll", "unsupported: "+err.Error())
+		f.logf("upgrade: the upgraded controller has no usable POST /endpoint-upgrades (%v); the endpoint roll is not asserted", err)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("plan the fleet roll onto endpoint version %q on the upgraded controller: %w", target, err)
+	}
+	taskID := controller.TaskRef(task, loc)
+	rctx, cancel := context.WithTimeout(ctx, upgradeRollBudget)
+	done, err := cl.WaitTask(rctx, taskID)
+	cancel()
+	if err != nil {
+		subs, _ := cl.ListSubtasks(ctx, taskID)
+		return fmt.Errorf("the fleet roll %s onto %q failed on the upgraded controller: %w (subtasks: %s). An endpoint created by release %s must be rollable by the release that follows it",
+			taskID, target, err, describeSubtasks(subs.Subtasks), u.fromController)
+	}
+	report, ok := done.RollReport()
+	if !ok {
+		return fmt.Errorf("the succeeded roll %s recorded no report (%s)", taskID, string(done.Result))
+	}
+	u.set("roll_report", fmt.Sprintf("upgraded=%d skipped=%d failed=%d unattempted=%d", report.Upgraded, report.Skipped, report.Failed, report.Unattempted))
+	var line *controller.RollLine
+	for i := range report.Endpoints {
+		if report.Endpoints[i].EndpointID == u.ep.ID {
+			line = &report.Endpoints[i]
+		}
+	}
+	if line == nil {
+		return fmt.Errorf("the whole-fleet roll %s did not enumerate the pre-upgrade endpoint %s at all (report: %+v); every live endpoint with an address is part of the fleet", taskID, u.ep.ID, report.Endpoints)
+	}
+	if line.Outcome != controller.RollUpgraded {
+		return fmt.Errorf("the pre-upgrade endpoint %s ended the roll %q (%s), want upgraded: it was recorded at the previous release's version (or none), so a roll onto %q must move it", u.ep.ID, line.Outcome, line.Reason, target)
+	}
+
+	got, err := cl.GetEndpoint(ctx, u.proj.poolID, u.proj.projID, u.seedBranchID, u.ep.ID)
+	if err != nil {
+		return fmt.Errorf("read the rolled endpoint %s: %w", u.ep.ID, err)
+	}
+	u.set("endpoint_version_after_roll", got.Version)
+	if strings.TrimSpace(got.Version) != target {
+		return fmt.Errorf("endpoint %s records version %q after the roll onto %q", u.ep.ID, got.Version, target)
+	}
+	if kube := f.ampKube(); kube != nil {
+		if err := ampstack.WaitEndpointWorkloadReady(ctx, kube, u.ep.ID, upgradePodReadTimeout); err != nil {
+			return fmt.Errorf("endpoint %s compute is not ready after the roll: %w", u.ep.ID, err)
+		}
+		pod, images, err := u.endpointPod(ctx, u.ep.ID)
+		if err != nil {
+			return fmt.Errorf("read the rolled endpoint's pod: %w", err)
+		}
+		u.set("endpoint_pod_after_roll", pod)
+		u.set("endpoint_image_after_roll", images)
+		if !imageMatches(images, u.toEndpoint) {
+			return fmt.Errorf("endpoint %s reports upgraded but pod %s runs %q, want the post-upgrade endpoint image %q", u.ep.ID, pod, images, u.toEndpoint)
+		}
+		if u.prePod != "" && pod == u.prePod {
+			return fmt.Errorf("endpoint %s reports upgraded but still runs its pre-upgrade pod %s", u.ep.ID, pod)
+		}
+	}
+	conn, err := f.endpointSQL(ctx, got)
+	if err != nil {
+		return fmt.Errorf("the rolled endpoint %s no longer accepts connections: %w", u.ep.ID, err)
+	}
+	defer conn.Close()
+	return verifyUpgradeSeed(ctx, conn, u.rows, "the endpoint rolled onto the new version")
+}
+
+// imageTag is the tag of an image ref (the whole ref when it carries none).
+func imageTag(image string) string {
+	image = strings.TrimSpace(image)
+	slash := strings.LastIndexByte(image, '/')
+	if i := strings.LastIndexByte(image, ':'); i > slash {
+		return image[i+1:]
+	}
+	return image
 }
 
 // newEndpointUsesNewImage asserts the upgraded controller deploys endpoints from

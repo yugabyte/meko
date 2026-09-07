@@ -749,9 +749,12 @@ parent against real `token_acquire` — the layer-2 assertion, which MemLocks ca
 model but only this can decide — at a short lease as the other `TestPg…` lock
 tests do.
 
-Integration: extend the upgrade scenario QA added under
-[#455](https://github.com/yugabyte/meko/issues/455) to assert the endpoint's
-reported `version` after a roll, rather than recording the pod roll as a property.
+Integration (`test/functional`): `features/amp_upgrade` rolls the fleet after the
+control-plane upgrade and asserts the pre-upgrade endpoint's reported `version`, its
+pod's image and its data; `features/amp_endpoint_upgrade_roll` rolls named endpoints
+onto the previous release and back on the shared control plane, and holds the
+report, the subtasks, the 409 on a concurrent roll and the `skipped` line for an
+unknown id.
 
 ## 9. Deliberately not in this slice
 

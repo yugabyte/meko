@@ -38,13 +38,14 @@ not by tier.
 
 ---
 
-## `regression` — every PR / master change (64 tests)
+## `regression` — every PR / master change (68 tests)
 
 Fast, deterministic, each asserting a distinct core guarantee. The table below is
 the core-guarantee subset; the tier also carries the amp-feature tests
 (`amp_branch_isolation`, `amp_endpoint_lifecycle`, `amp_compute_restart`), the
-control-plane upgrade tests (`amp_upgrade`, `amp_upgrade_chain`) and the extension
-/ PG-compatibility matrix. Env-portable: the
+control-plane upgrade tests (`amp_upgrade`, `amp_upgrade_chain`), the control-plane
+contract tests (`amp_pool_lifecycle`, `amp_endpoint_upgrade_roll`, the resize and
+race tests) and the extension / PG-compatibility matrix. Env-portable: the
 tests depend on env *capabilities* (`pgEnv` to reach the endpoint's Postgres, plus
 `computeRestarter` for the restart tests), not a concrete env — so the same tests
 run against a self-built or a standing control plane alike:

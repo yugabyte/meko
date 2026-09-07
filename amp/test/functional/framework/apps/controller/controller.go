@@ -161,6 +161,12 @@ type StoragePoolList struct {
 	Count        int           `json:"count"`
 }
 
+// UpdateStoragePoolRequest renames a pool; the name must be unique among live
+// pools (409 otherwise).
+type UpdateStoragePoolRequest struct {
+	Name string `json:"name"`
+}
+
 // Branch is a PG timeline in a cluster.
 type Branch struct {
 	ClusterID      string  `json:"cluster_id"`
@@ -227,6 +233,10 @@ type Endpoint struct {
 	PgSettings         map[string]string `json:"pg_settings"`
 	PageserverSettings map[string]any    `json:"pageserver_settings"`
 	SafekeeperSettings map[string]any    `json:"safekeeper_settings"`
+	// Version is what the endpoint is recorded as running (today the endpoint
+	// image tag). Empty on a controller predating version tracking, or for an
+	// endpoint nothing has reported one for.
+	Version string `json:"version"`
 }
 
 // EndpointResources is a compute reservation: cpu + memory as Kubernetes
@@ -358,6 +368,82 @@ func (t Task) InPlaceResize() (outcome, message string) {
 	return r.Outcome, r.Message
 }
 
+// UpgradeEndpointsRequest rolls endpoints onto a version (POST
+// /endpoint-upgrades). Empty EndpointIDs means the whole fleet; an id named
+// here is rolled even when already recorded at Version. MaxParallel 0 sends the
+// field absent, so the controller applies its default.
+type UpgradeEndpointsRequest struct {
+	Version     string   `json:"version"`
+	EndpointIDs []string `json:"endpoint_ids,omitempty"`
+	MaxParallel int      `json:"max_parallel,omitempty"`
+}
+
+// Roll outcomes an upgrade_endpoints task reports per endpoint.
+const (
+	RollUpgraded    = "upgraded"
+	RollSkipped     = "skipped"
+	RollFailed      = "failed"
+	RollUnattempted = "unattempted"
+)
+
+// RollLine is one endpoint's account in an upgrade_endpoints task result.
+type RollLine struct {
+	EndpointID string `json:"endpoint_id"`
+	Outcome    string `json:"outcome"`
+	Reason     string `json:"reason"`
+	SubtaskID  string `json:"subtask_id"`
+}
+
+// RollReport is the result an upgrade_endpoints task records on success.
+type RollReport struct {
+	Version     string     `json:"version"`
+	Endpoints   []RollLine `json:"endpoints"`
+	Upgraded    int        `json:"upgraded"`
+	Skipped     int        `json:"skipped"`
+	Failed      int        `json:"failed"`
+	Unattempted int        `json:"unattempted"`
+}
+
+// RollReport decodes the report an upgrade_endpoints task recorded; ok is false
+// when the task has no result yet or is another kind.
+func (t Task) RollReport() (RollReport, bool) {
+	var r RollReport
+	if len(t.Result) == 0 || json.Unmarshal(t.Result, &r) != nil || r.Version == "" {
+		return RollReport{}, false
+	}
+	return r, true
+}
+
+// Subtask is one child of a fan-out task (an upgrade_endpoint child of a roll).
+type Subtask struct {
+	ID        string          `json:"id"`
+	TaskID    string          `json:"task_id"`
+	Kind      string          `json:"kind"`
+	Status    string          `json:"status"`
+	Args      json.RawMessage `json:"args"`
+	Result    json.RawMessage `json:"result"`
+	Error     *string         `json:"error"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// EndpointID reads the endpoint an upgrade_endpoint child was created for.
+func (s Subtask) EndpointID() string {
+	var a struct {
+		EndpointID string `json:"endpoint_id"`
+	}
+	if json.Unmarshal(s.Args, &a) != nil {
+		return ""
+	}
+	return a.EndpointID
+}
+
+// SubtaskList is every child of one task, oldest first.
+type SubtaskList struct {
+	Subtasks []Subtask `json:"subtasks"`
+	Count    int       `json:"count"`
+}
+
 // TaskList is a page of tasks.
 type TaskList struct {
 	Tasks []Task `json:"tasks"`
@@ -444,6 +530,27 @@ func (c *Client) ListStoragePools(ctx context.Context, limit, offset int) (Stora
 	var out StoragePoolList
 	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools"+pageQuery(limit, offset), nil, &out)
 	return out, err
+}
+
+// GetStoragePool reads one pool (404 once deleted).
+func (c *Client) GetStoragePool(ctx context.Context, poolID string) (StoragePool, error) {
+	var out StoragePool
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID, nil, &out)
+	return out, err
+}
+
+// UpdateStoragePool renames a pool (sync 200).
+func (c *Client) UpdateStoragePool(ctx context.Context, poolID string, req UpdateStoragePoolRequest) (StoragePool, error) {
+	var out StoragePool
+	_, _, err := c.doJSON(ctx, http.MethodPatch, c.apiURL+"/storage-pools/"+poolID, req, &out)
+	return out, err
+}
+
+// DeleteStoragePool deletes an empty pool (sync 204; 409 while it holds a live
+// cluster).
+func (c *Client) DeleteStoragePool(ctx context.Context, poolID string) error {
+	_, _, err := c.doJSON(ctx, http.MethodDelete, c.apiURL+"/storage-pools/"+poolID, nil, nil)
+	return err
 }
 
 // --- clusters ---
@@ -613,6 +720,19 @@ func (c *Client) ListAllEndpoints(ctx context.Context, poolID, clusterID, branch
 			return all, nil
 		}
 	}
+}
+
+// UpgradeEndpoints plans an async fleet roll (202). 409 while another roll is
+// non-terminal, 501 on a controller without the endpoint deployer.
+func (c *Client) UpgradeEndpoints(ctx context.Context, req UpgradeEndpointsRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.apiURL+"/endpoint-upgrades", req)
+}
+
+// ListSubtasks returns every child of a fan-out task, oldest first.
+func (c *Client) ListSubtasks(ctx context.Context, taskID string) (SubtaskList, error) {
+	var out SubtaskList
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/tasks/"+taskID+"/subtasks", nil, &out)
+	return out, err
 }
 
 // --- tasks ---
@@ -991,6 +1111,10 @@ func parseAPIError(status int, data []byte) *APIError {
 	}
 	return e
 }
+
+// TaskRef resolves the id a 202 answer names: the Location header
+// (/api/v1/tasks/{id}) wins over the body's id.
+func TaskRef(task Task, location string) string { return taskRef(task, location) }
 
 // taskRef prefers the id embedded in a Location header (/api/v1/tasks/{id}),
 // falling back to the task body's id.
