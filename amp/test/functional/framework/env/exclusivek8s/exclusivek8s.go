@@ -290,7 +290,8 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 
 // ampstackConfig translates the provider's per-test config into an ampstack
 // Config for one namespace. exclusivek8s owns its own namespace, so it keeps the
-// chart-default cluster-scoped RBAC and no helm shim; it never mints an ECR
+// chart-default RBAC (namespaced, plus the read-only node ClusterRole the chart
+// defaults on) and no helm shim; it never mints an ECR
 // secret (ECRRegistry left empty), applying a pre-encoded pull secret or letting
 // ampstack mint one from quay credentials when either is configured.
 func (p *Provider) ampstackConfig(ns string) (ampstack.Config, error) {

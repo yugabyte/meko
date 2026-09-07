@@ -30,9 +30,11 @@
 // exec/k8s.Kubectl.
 //
 // The chart is deployed as the chart wrote it: nothing here overrides
-// rbac.clusterScoped or edits the rendered docs, so a run installs the RBAC a
-// real install would get — namespace-scoped by the chart's own default, which is
-// what BYOC grants (meko#602). Because the
+// rbac.nodeRead or rbac.clusterScoped or edits the rendered docs, so a run
+// installs the RBAC a real install would get. That default includes a
+// cluster-scoped node read (a ClusterRole + ClusterRoleBinding named after the
+// namespace), which a namespace delete leaves behind — Teardown and Reap sweep
+// it, see deleteControllerClusterRBAC. Because the
 // currently-deployed controller image predates the fix that stopped passing
 // helm --create-namespace, HelmShim (default on) installs a tiny PATH-wrapper
 // that strips that flag until a controller image built without it ships.
@@ -44,6 +46,7 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1580,19 +1583,7 @@ func (a *App) Teardown(ctx context.Context) error {
 	if a.cfg.Namespace == "" {
 		return fmt.Errorf("ampstack teardown: no namespace")
 	}
-	cluster := a.clusterKube()
-	label, err := cluster.Get(ctx, "namespace", a.cfg.Namespace, "{.metadata.labels."+labelPath(ManagedByLabel)+"}")
-	if err != nil {
-		return fmt.Errorf("read managed-by label on %s: %w", a.cfg.Namespace, err)
-	}
-	if label != ManagedByValue {
-		return fmt.Errorf("refusing to delete namespace %s: not ampqa-managed (%s=%q, want %q)",
-			a.cfg.Namespace, ManagedByLabel, label, ManagedByValue)
-	}
-	if err := cluster.DeleteNamespace(ctx, a.cfg.Namespace); err != nil {
-		return fmt.Errorf("delete namespace %s: %w", a.cfg.Namespace, err)
-	}
-	return nil
+	return reapNamespace(ctx, a.clusterKube(), a.cfg.Namespace)
 }
 
 // Reap deletes an ampstack namespace given only its kube settings + name — the
@@ -1605,6 +1596,13 @@ func Reap(ctx context.Context, kubeContext, kubeconfig, namespace string) error 
 		return fmt.Errorf("ampstack reap: empty namespace")
 	}
 	kube := k8s.New(k8s.Config{Context: kubeContext}).WithRunner(k8s.KubeconfigRunner(kubeconfig))
+	return reapNamespace(ctx, kube, namespace)
+}
+
+// reapNamespace is the one teardown behind Teardown and Reap: refuse a namespace
+// without the managed-by label, sweep the controller chart's cluster-scoped RBAC,
+// delete the namespace.
+func reapNamespace(ctx context.Context, kube *k8s.Kubectl, namespace string) error {
 	label, err := kube.Get(ctx, "namespace", namespace, "{.metadata.labels."+labelPath(ManagedByLabel)+"}")
 	if err != nil {
 		return fmt.Errorf("read managed-by label on %s: %w", namespace, err)
@@ -1613,8 +1611,43 @@ func Reap(ctx context.Context, kubeContext, kubeconfig, namespace string) error 
 		return fmt.Errorf("refusing to delete namespace %s: not ampqa-managed (%s=%q, want %q)",
 			namespace, ManagedByLabel, label, ManagedByValue)
 	}
+	if err := deleteControllerClusterRBAC(ctx, kube, namespace); err != nil {
+		return err
+	}
 	if err := kube.DeleteNamespace(ctx, namespace); err != nil {
 		return fmt.Errorf("delete namespace %s: %w", namespace, err)
+	}
+	return nil
+}
+
+// controllerChartSelector matches every object the yb-amp-controller chart
+// renders, including its cluster-scoped RBAC.
+const controllerChartSelector = "app.kubernetes.io/name=yb-amp-controller"
+
+// deleteControllerClusterRBAC removes the ClusterRoleBindings the controller
+// chart rendered for namespace, and the ClusterRoles they bind. The chart's
+// default rbac.nodeRead=true renders one pair per install, named
+// "<namespace>-<controller>-nodes", and a namespace delete does not touch
+// cluster-scoped kinds — so without this every run leaves a pair behind. The
+// binding's subject namespace is what ties it to this install; the label keeps
+// the sweep to the chart's own objects.
+func deleteControllerClusterRBAC(ctx context.Context, kube *k8s.Kubectl, namespace string) error {
+	out, err := kube.GetSelector(ctx, "clusterrolebinding", controllerChartSelector,
+		`{range .items[*]}{.metadata.name}{" "}{.roleRef.name}{" "}{.subjects[*].namespace}{"\n"}{end}`)
+	if err != nil {
+		return fmt.Errorf("list the controller chart's clusterrolebindings: %w", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 || !slices.Contains(f[2:], namespace) {
+			continue
+		}
+		if err := kube.Delete(ctx, "clusterrolebinding", f[0]); err != nil {
+			return fmt.Errorf("delete clusterrolebinding %s: %w", f[0], err)
+		}
+		if err := kube.Delete(ctx, "clusterrole", f[1]); err != nil {
+			return fmt.Errorf("delete clusterrole %s: %w", f[1], err)
+		}
 	}
 	return nil
 }

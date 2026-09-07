@@ -208,6 +208,27 @@ type CreateClusterRequest struct {
 	// Engine names a bundle of catalog extensions seeded onto the default branch
 	// (postgres, aidb, oracle); it unions with Extensions.
 	Engine string `json:"engine,omitempty"`
+	// WithWriter also creates and deploys the default branch's read_write
+	// endpoint in the same task.
+	WithWriter bool `json:"with_writer,omitempty"`
+	// Connectivity is the writer's client reachability. Only meaningful with
+	// WithWriter: the controller rejects it with 400 otherwise.
+	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
+}
+
+// Endpoint connectivity modes: how clients reach the Postgres port.
+const (
+	ConnectivityClusterIP   = "cluster_ip"   // in-cluster only (the default)
+	ConnectivityNLBInternal = "nlb_internal" // a Postgres-only Service behind the cloud's internal L4 load balancer
+	ConnectivityNLBExternal = "nlb_external" // the same, internet-facing
+)
+
+// EndpointConnectivity is an endpoint's client reachability. AllowedCIDRs is the
+// load balancer's source allow-list (CIDRs with a prefix length) and applies to
+// the nlb_* modes only.
+type EndpointConnectivity struct {
+	Mode         string   `json:"mode,omitempty"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 }
 
 // AddBranchExtensionsRequest enables more externalized extensions on an existing
@@ -224,6 +245,10 @@ type Endpoint struct {
 	Role           string `json:"role"`
 	Address        string `json:"address"`
 	TailnetAddress string `json:"tailnet_address"`
+	// Connectivity is the endpoint's client reachability as stored. Nil on a
+	// controller predating configurable connectivity (which behaves as
+	// cluster_ip), so a caller can detect the capability without probing.
+	Connectivity *EndpointConnectivity `json:"connectivity"`
 	// Resources is the endpoint's current compute reservation, read back from its
 	// persisted config. Nil on a controller predating in-place resize, which is
 	// how a caller detects the capability without probing the runtime.
@@ -278,6 +303,8 @@ type CreateEndpointRequest struct {
 	// scalars. Unknown or protected keys are rejected with 400.
 	PageserverSettings map[string]any `json:"pageserver_settings,omitempty"`
 	SafekeeperSettings map[string]any `json:"safekeeper_settings,omitempty"`
+	// Connectivity selects the client reachability; nil is cluster_ip.
+	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
 }
 
 // UpdateSettingsRequest is the body of the two settings PATCHes. The controller

@@ -1046,6 +1046,53 @@ func TestTeardownDeletesManagedNamespace(t *testing.T) {
 	}
 }
 
+// The chart's default rbac.nodeRead renders a ClusterRole + ClusterRoleBinding
+// per install, and a namespace delete leaves cluster-scoped kinds behind.
+func TestTeardownSweepsControllerClusterRBAC(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get namespace", exec.Result{Stdout: ManagedByValue})
+	rec.on("get clusterrolebinding", exec.Result{Stdout: "" +
+		"ampqa-test-amp-controller-nodes ampqa-test-amp-controller-nodes ampqa-test\n" +
+		"other-amp-controller-nodes other-amp-controller-nodes other\n" +
+		"ampqa-test-amp-controller-namespaces ampqa-test-amp-controller-namespaces ampqa-test\n"})
+	a := testApp(Config{}, rec)
+	if err := a.Teardown(context.Background()); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	calls := rec.snapshot()
+	for _, want := range []string{
+		"get clusterrolebinding -l " + controllerChartSelector,
+		"delete clusterrolebinding ampqa-test-amp-controller-nodes",
+		"delete clusterrole ampqa-test-amp-controller-nodes",
+		"delete clusterrolebinding ampqa-test-amp-controller-namespaces",
+		"delete clusterrole ampqa-test-amp-controller-namespaces",
+		"delete namespace ampqa-test",
+	} {
+		if !hasCall(calls, want) {
+			t.Errorf("missing %q\ncalls: %v", want, calls)
+		}
+	}
+	if hasCall(calls, "other-amp-controller-nodes") {
+		t.Errorf("Teardown touched another namespace's RBAC\ncalls: %v", calls)
+	}
+}
+
+func TestReapSweepsControllerClusterRBAC(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get namespace", exec.Result{Stdout: ManagedByValue})
+	rec.on("get clusterrolebinding", exec.Result{Stdout: "ns1-amp-controller-nodes ns1-amp-controller-nodes ns1\n"})
+	kube := k8s.New(k8s.Config{}).WithRunner(rec.run)
+	if err := reapNamespace(context.Background(), kube, "ns1"); err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	calls := rec.snapshot()
+	for _, want := range []string{"delete clusterrolebinding ns1-amp-controller-nodes", "delete clusterrole ns1-amp-controller-nodes", "delete namespace ns1"} {
+		if !hasCall(calls, want) {
+			t.Errorf("missing %q\ncalls: %v", want, calls)
+		}
+	}
+}
+
 func TestStatusMapsReadiness(t *testing.T) {
 	rec := newRecorder()
 	rec.on("get pods -o name", exec.Result{Stdout: "pod/amp-controller-abc\npod/yugabyted-0\n"})
