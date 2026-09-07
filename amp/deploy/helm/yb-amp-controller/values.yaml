@@ -21,13 +21,24 @@ fullnameOverride: ""
 
 # RBAC. The namespaced ServiceAccount + Role + RoleBinding are always created.
 rbac:
-  # -- Also create the *controller's* cluster-scoped ClusterRole +
-  # ClusterRoleBinding: namespaces get/list/create (Helm --create-namespace
-  # probing) and nodes get/list (NodePort endpoint node-IP resolution, and the
-  # cloud detection behind the nlb_* endpoint connectivity modes). Default off —
-  # with the default controller (internal-lb) and endpoint (ClusterIP) service
-  # types nothing reads nodes. Enable it for a NodePort deploy, or for nlb_*
-  # endpoints unless the controller is given --deploy-cloud instead.
+  # -- Create a read-only cluster-scoped ClusterRole for `nodes get, list`. The
+  # controller reads a node's spec.providerID to tell which cloud it is on,
+  # which selects the load-balancer annotations for the per-endpoint `nlb_*`
+  # connectivity modes; the NodePort address resolver reads node IPs from the
+  # same objects. Read-only, and cluster-wide only because Node is a
+  # cluster-scoped kind.
+  #
+  # Default ON: without it an `nlb_internal` create fails outright, since the
+  # endpoint chart refuses to render an internal load balancer for an unknown
+  # cloud rather than silently defaulting it to internet-facing. Set it false
+  # only where the install may hold no cluster-scoped binding at all — and then
+  # set controller.endpoint.cloud, or `nlb_internal` will not work.
+  nodeRead: true
+  # -- Also create a ClusterRole + ClusterRoleBinding for namespaces
+  # get/list/create, which Helm's --create-namespace probing needs. Default off:
+  # this is the grant that can change the cluster, and the deploy namespace is
+  # the controller's own, so nothing creates one in the normal path. The node
+  # read moved to rbac.nodeRead above — it is read-only and defaults on.
   #
   # This governs the controller only. The metrics collectors carry their own
   # RBAC, sized to what they scrape: a namespaced Role for pod discovery always,
@@ -125,6 +136,13 @@ controller:
     # (tailscale.com/expose=true in service.annotations). Empty disables tailnet
     # address reporting (AMP_DEPLOY_TAILNET_SUFFIX).
     tailnetSuffix: ""
+    # -- Override the cloud whose load-balancer annotations the per-endpoint
+    # `nlb_*` connectivity modes render: "aws", "gcp" or "azure"
+    # (AMP_DEPLOY_CLOUD). Empty (the normal case) = detect it from a node's
+    # spec.providerID, which rbac.nodeRead grants by default. Set this only
+    # where that read is unavailable, or where the provider IDs say something
+    # the controller reads wrongly.
+    cloud: ""
     service:
       # -- Service type for each deployed endpoint: ClusterIP | NodePort | LoadBalancer (AMP_DEPLOY_SERVICE_TYPE).
       type: "ClusterIP"

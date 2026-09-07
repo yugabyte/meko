@@ -334,8 +334,20 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	// is false (default), no endpoint is created — compute is a separate resource.
 	// resources is only honored alongside with_writer.
 	withWriter := request.Body.WithWriter != nil && *request.Body.WithWriter
-	var cpu, memory string
+	// Refused rather than ignored: `resources` on a writerless create is a size
+	// for nothing, but `connectivity` is a request for an exposure, and silently
+	// dropping it would report success for something that never happened.
+	if !withWriter && request.Body.Connectivity != nil {
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"connectivity applies to the writer created by with_writer; set with_writer, or create the endpoint separately"))}, nil
+	}
+	var cpu, memory, connectivity string
+	var allowedCIDRs []string
 	if withWriter {
+		var apiErr *Error
+		if connectivity, allowedCIDRs, apiErr = endpointConnectivity(request.Body.Connectivity, c.prov.Deployer); apiErr != nil {
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
+		}
 		oCPU, oMem, errMsg := parseResourceOverrides(request.Body.Resources)
 		if errMsg != "" {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
@@ -355,14 +367,16 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	// write endpoint are all created by the worker; a duplicate cluster name now
 	// surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateCluster(ctx, task.CreateClusterInput{
-		PoolID:     request.PoolId,
-		Name:       name,
-		PgVersion:  pgVersion,
-		WithWriter: withWriter,
-		CPU:        cpu,
-		Memory:     memory,
-		Engine:     engine,
-		Extensions: exts,
+		PoolID:       request.PoolId,
+		Name:         name,
+		PgVersion:    pgVersion,
+		WithWriter:   withWriter,
+		CPU:          cpu,
+		Memory:       memory,
+		Connectivity: connectivity,
+		AllowedCIDRs: allowedCIDRs,
+		Engine:       engine,
+		Extensions:   exts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create cluster task: %w", err)

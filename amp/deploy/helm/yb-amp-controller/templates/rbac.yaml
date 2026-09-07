@@ -47,11 +47,51 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "yb-amp-controller.controllerName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.rbac.nodeRead }}
+---
+# Read-only node access, on its own so it does not ride along with the namespace
+# grant below. The controller reads a node's spec.providerID to tell which cloud
+# it is on, which is what selects the load-balancer annotations for the nlb_*
+# endpoint connectivity modes; the NodePort address resolver reads node IPs from
+# the same objects. Both are read-only and cluster-wide only because Node is a
+# cluster-scoped kind — this grants nothing that can change the cluster.
+#
+# Default on, because without it an nlb_internal create fails outright: the
+# endpoint chart refuses to render an internal load balancer for an unknown
+# cloud rather than defaulting it to internet-facing. Turn it off only where a
+# tenant may hold no cluster-scoped binding at all, and then set
+# controller.endpoint.cloud so the controller does not need to look.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-nodes
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-nodes
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-nodes
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "yb-amp-controller.controllerName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- if .Values.rbac.clusterScoped }}
 ---
-# Cluster-scoped reads: Helm's --create-namespace probes namespaces; node IPs are
-# read by the NodePort endpoint address resolver and by the cloud detection the
-# nlb_* endpoint connectivity modes need (--deploy-cloud skips that lookup).
+# Namespace get/list/create, for Helm's --create-namespace probing. This is the
+# grant that can change the cluster, which is why it stays default-off and
+# separate from the node read above.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -62,9 +102,6 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, create]
-  - apiGroups: [""]
-    resources: [nodes]
-    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -92,7 +92,7 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper HTTP |
 | `service.connectivity` | `cluster_ip` | client reachability: `cluster_ip`, `nlb_internal`, `nlb_external` |
-| `service.cloud` | _(set by the controller)_ | whose LB annotations to render: `aws`, `gcp`, `azure`. The controller passes its `--deploy-cloud`, or what it detected from node provider IDs; required for `nlb_internal` |
+| `service.cloud` | _(set by the controller)_ | whose LB annotations to render: `aws`, `gcp`, `azure`. The controller passes what it detected from node provider IDs, or its `--deploy-cloud` override; required for `nlb_internal` |
 | `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted |
 | `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
 | `metrics.postgresExporter.image.tag` | `v0.17.1` | exporter image tag |

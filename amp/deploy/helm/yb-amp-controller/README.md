@@ -128,6 +128,8 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `imagePullSecrets` | `[]` | pull secrets for both images; `[0].name` also becomes `AMP_DEPLOY_PULL_SECRET` |
 | `imageRegistry` | `quay.io/yugabyte` | prefixed onto any image repository below that names no registry host of its own |
 | `imageTag` | _(empty)_ | tag for every image that sets none of its own; empty ⇒ chart appVersion, which is **not published** — a real deploy sets this |
+| `rbac.nodeRead` | `true` | create a read-only cluster-scoped ClusterRole for `nodes get, list`. What lets the controller detect the cloud (for the `nlb_*` endpoint connectivity modes) and resolve NodePort node IPs. Set `false` only where the install may hold no cluster-scoped binding — then `controller.endpoint.cloud` is required for `nlb_internal` |
+| `rbac.clusterScoped` | `false` | additionally create a ClusterRole for `namespaces get, list, create` (Helm `--create-namespace`). Separate from `nodeRead` because this one can change the cluster |
 | `controller.image.repository` / `.tag` | `amp-controller` / `imageTag` ⇒ appVersion | controller image |
 | `controller.databaseUrl` | `postgres://yugabyte@yb-tserver:5433/yb_storage?sslmode=disable` | `AMP_DATABASE_URL` |
 | `controller.dbSchema` | `controller` | `AMP_DB_SCHEMA` |
@@ -143,6 +145,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` (a **floor**; the size itself is 20 GiB × the endpoint's vCPU) |
 | `controller.endpoint.memoryGiBPerVCPU` | `0` | `AMP_DEPLOY_MEMORY_GIB_PER_VCPU` — GiB of memory per endpoint vCPU. Fills in the memory when a create names only CPU, and is the **floor** every request is held to (a pair below it is a `400`). `0` ⇒ the built-in 8. Lower it only for a cluster whose nodes cannot back that shape |
 | `controller.endpoint.diskSizeOverride` | _(empty)_ | `AMP_DEPLOY_DISK_SIZE_OVERRIDE` — flat `/data` size for every endpoint whatever its CPU, bypassing the ratio and the floor. Empty ⇒ CPU-proportional. Test clusters only |
+| `controller.endpoint.cloud` | _(empty ⇒ detect)_ | `AMP_DEPLOY_CLOUD` — which cloud's load-balancer annotations the per-endpoint `nlb_*` connectivity modes render: `aws` \| `gcp` \| `azure`. Empty detects it from a node's `spec.providerID`, which `rbac.nodeRead` grants by default; set it only where that read is unavailable, or where the provider IDs are read wrongly. A value outside the enum fails the render |
 | `controller.endpoint.service.type` | `ClusterIP` | `AMP_DEPLOY_SERVICE_TYPE` (ClusterIP \| NodePort \| LoadBalancer) |
 | `controller.endpoint.service.nodePortValue` | _(empty)_ | reserved — the deployer currently auto-assigns the endpoint NodePort |
 | `controller.endpoint.service.annotations` | `[]` | list of `"k=v"` strings → `AMP_DEPLOY_SERVICE_ANNOTATIONS` (CSV) |

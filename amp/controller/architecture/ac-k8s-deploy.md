@@ -391,7 +391,7 @@ Kubernetes driver:
 | `--deploy-compute-port` | compute Postgres port the Service publishes |
 | `--deploy-service-type` | endpoint Service type: `ClusterIP` (default), `NodePort`, or `LoadBalancer` |
 | `--deploy-service-annotations` | `k=v,k=v` annotations on the endpoint Service (e.g. internal-LB) |
-| `--deploy-cloud` | cloud whose LB annotations the `nlb_*` connectivity modes render: `aws`, `gcp` or `azure`. Empty = detect from a node's `spec.providerID`, which needs `nodes get, list` (`rbac.clusterScoped`) |
+| `--deploy-cloud` | override the cloud whose LB annotations the `nlb_*` connectivity modes render: `aws`, `gcp` or `azure`. Empty (normal) = detect from a node's `spec.providerID`, which `rbac.nodeRead` grants by default. Chart value: `controller.endpoint.cloud` |
 | `--deploy-storage-class` | storage class for the endpoint `/data` PVC (EBS/PD); empty = ephemeral `emptyDir` |
 | `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 20 GiB × the endpoint's vCPU |
 | `--deploy-disk-gib-per-vcpu` | GiB of `/data` per endpoint vCPU (`0` = the built-in 20; for a pool built to a different disk-per-core shape) |
@@ -417,12 +417,18 @@ billed resource that counts against the account's per-region quota.
 **Portable across clouds.** The mode is the concept; the annotations that
 implement it are per-provider, so the deployer detects the cloud from a node's
 `spec.providerID` (`aws://` / `gce://` / `azure://`) and passes it to the chart
-as `service.cloud` — it cannot drift from the cluster it describes. Reading a
-node needs `nodes get, list`, which the controller chart grants only under
-`rbac.clusterScoped` (**default false**), so an `nlb_*` endpoint on a default
-install needs either that value set or `--deploy-cloud` (`aws`/`gcp`/`azure`),
-which skips the lookup. Detection memoizes only a successful answer; a failed
-node list is retried on the next create.
+as `service.cloud` — it cannot drift from the cluster it describes, and it needs
+no configuration. Reading a node needs `nodes get, list`, granted by the
+controller chart's `rbac.nodeRead` (**default true**): a read-only ClusterRole,
+cluster-wide only because Node is a cluster-scoped kind, and deliberately
+separate from `rbac.clusterScoped`, which carries the `namespaces create` grant
+and stays off. Detection memoizes only a successful answer; a failed node list is
+retried on the next create.
+
+`--deploy-cloud` (chart: `controller.endpoint.cloud`) overrides it, for an
+install that may hold no cluster-scoped binding at all, or a cluster whose
+provider IDs the controller reads wrongly. Without either, an `nlb_internal`
+create fails in the chart rather than defaulting to internet-facing.
 
 | Cloud | Internal | External |
 |---|---|---|

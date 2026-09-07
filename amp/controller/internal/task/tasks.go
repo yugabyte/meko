@@ -156,6 +156,11 @@ type CreateClusterInput struct {
 	// Ignored when WithWriter is false.
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Connectivity and AllowedCIDRs are that endpoint's client reachability
+	// (deploy.Connectivity*). Ignored when WithWriter is false — the handler
+	// refuses that combination rather than letting it reach here.
+	Connectivity string   `json:"connectivity,omitempty"`
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 	// Engine is the named extension bundle to provision as ("postgres", "aidb",
 	// "oracle"). The handler validates it and folds its bundle into Extensions;
 	// this records what the cluster was created as. Empty means the default.
@@ -195,13 +200,15 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Ta
 	}
 	if in.WithWriter {
 		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
-			EndpointID: uuid.New(),
-			ClusterID:  clusterID,
-			BranchID:   branchID,
-			Role:       roleReadWrite,
-			PgVersion:  in.PgVersion,
-			CPU:        in.CPU,
-			Memory:     in.Memory,
+			EndpointID:   uuid.New(),
+			ClusterID:    clusterID,
+			BranchID:     branchID,
+			Role:         roleReadWrite,
+			PgVersion:    in.PgVersion,
+			CPU:          in.CPU,
+			Memory:       in.Memory,
+			Connectivity: in.Connectivity,
+			AllowedCIDRs: in.AllowedCIDRs,
 		}))
 	}
 	// TargetRef is the new default branch: the UI pre-selects it once the task

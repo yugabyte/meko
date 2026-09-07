@@ -33,6 +33,7 @@ import type {
   Branch,
   CreateBranchInput,
   Cluster,
+  EndpointConnectivityMode,
   SettingsUpdateResult,
   StoragePool,
   Task,
@@ -217,11 +218,15 @@ export function useCreateClusterWithWriter() {
       memory?: string;
       engine?: string;
       extensions?: string[];
+      connectivity?: EndpointConnectivityMode;
+      allowedCidrs?: string[];
     }) =>
       createClusterWithWriter(input.poolId, {
         name: input.name,
         cpu: input.cpu,
         memory: input.memory,
+        connectivity: input.connectivity,
+        allowedCidrs: input.allowedCidrs,
         engine: input.engine,
         extensions: input.extensions,
       }),

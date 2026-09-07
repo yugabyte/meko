@@ -442,6 +442,71 @@ UPDATE controller.tasks
 
 A roll retired this way never ran its step, so it created no subtasks and no
 endpoint moved; re-issue the upgrade once a worker is running.
+
+## `nlb_internal` create fails: `needs service.cloud to be one of aws, gcp, azure`
+
+**Symptom.** A create with `connectivity.mode: nlb_internal` fails its task with a
+helm render error:
+
+```
+deploy endpoint: helm deploy yb-ep-<id>: ... exit status 1: Error: execution error at
+(yb-amp-endpoint/templates/service-lb.yaml:28:4): service.connectivity=nlb_internal
+needs service.cloud to be one of aws, gcp, azure (got "") — without it the Service
+would default to an internet-facing load balancer
+```
+
+`nlb_external` is unaffected — it needs no annotation on any provider.
+
+**Cause.** The controller could not name the cloud. It normally reads a node's
+`spec.providerID`, which needs `nodes get, list`. The render is refused rather
+than defaulted because every provider defaults a LoadBalancer Service to
+internet-facing, so guessing would publish what the caller asked to keep private.
+
+**Check** what the controller decided, from its own log — it says which branch it
+took on each `nlb_*` create:
+
+```sh
+kubectl -n "$NS" logs deploy/amp-controller -c controller \
+  | grep -E 'detected cloud|could not (list nodes|determine the cloud)'
+```
+
+`detected cloud for load-balancer annotations cloud=gcp` means detection works and
+this is not your failure. Either warning means it did not.
+
+**Do not** diagnose this with `kubectl auth can-i list nodes --as=...`: on GKE that
+returns `no` for a ServiceAccount that demonstrably can list nodes, so it is a false
+negative that sends you to the wrong fix. To test the permission directly, use the
+ServiceAccount's own token:
+
+```sh
+TOK=$(kubectl -n "$NS" create token amp-controller --duration=10m)
+API=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+curl -s -k -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
+  "$API/api/v1/nodes?limit=1"     # 200 = granted, 403 = not
+```
+
+Whether the override is set at all:
+
+```sh
+kubectl -n "$NS" get deploy amp-controller -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AMP_DEPLOY_CLOUD")].value}{"\n"}'
+```
+
+**Fix**, either:
+
+```sh
+# grant the read the controller already knows how to use (chart default)
+helm upgrade <release> <chart> -n "$NS" --reuse-values --set rbac.nodeRead=true
+
+# or name the cloud and skip the lookup, for an install that may hold no
+# cluster-scoped binding
+helm upgrade <release> <chart> -n "$NS" --reuse-values --set controller.endpoint.cloud=gcp
+```
+
+Detection caches only a successful answer, so granting the read takes effect on
+the next create with no controller restart. `controller.endpoint.cloud` restarts
+the pod, and a value outside `aws|gcp|azure` fails the render rather than
+installing a controller that exits at startup.
+
 ## Endpoint stuck on a pod IP after an `nlb_*` create
 
 **Symptom.** An endpoint created with `connectivity.mode` `nlb_internal` or

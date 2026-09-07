@@ -1525,6 +1525,13 @@ components:
           description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
         resources:
           $ref: '#/components/schemas/EndpointResources'
+        connectivity:
+          allOf:
+            - $ref: '#/components/schemas/EndpointConnectivity'
+          description: |
+            Client reachability for the writer this call creates. Only meaningful
+            alongside `with_writer`: sending it without one is a 400 rather than a
+            silent no-op, since it asks for an exposure nothing would get.
         engine:
           type: string
           enum: [postgres, aidb, oracle]

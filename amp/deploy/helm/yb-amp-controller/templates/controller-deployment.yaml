@@ -76,6 +76,18 @@ spec:
               value: {{ .Values.controller.endpoint.service.type | quote }}
             - name: AMP_DEPLOY_SERVICE_ANNOTATIONS
               value: {{ join "," .Values.controller.endpoint.service.annotations | quote }}
+            # Cloud for the per-endpoint nlb_* load-balancer annotations. Empty
+            # falls back to detection from a node's spec.providerID, which needs
+            # the cluster-scoped node read (rbac.nodeRead).
+            #
+            # Checked here because the controller validates this value at startup
+            # and EXITS on a bad one — so an unchecked typo installs cleanly and
+            # then CrashLoopBackOffs the whole control plane, not just nlb_*.
+            {{- if not (has (.Values.controller.endpoint.cloud | default "") (list "" "aws" "gcp" "azure")) }}
+            {{- fail (printf "controller.endpoint.cloud must be one of aws|gcp|azure (or empty to detect it), got %q" .Values.controller.endpoint.cloud) }}
+            {{- end }}
+            - name: AMP_DEPLOY_CLOUD
+              value: {{ .Values.controller.endpoint.cloud | default "" | quote }}
             # Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each
             # endpoint's tailnet address when its Service is tailnet-exposed;
             # empty disables tailnet address reporting.

@@ -30,6 +30,14 @@ import {
 } from "@/components/ui/select";
 import { Stepper } from "@/components/ui/stepper";
 import { ComputeSizeField, type ComputeSize } from "@/components/ui/compute-size-field";
+import {
+  ConnectivityField,
+  ConnectivityWarning,
+  CONNECTIVITY_LABELS,
+  DEFAULT_CONNECTIVITY,
+  parseCidrs,
+  type Connectivity,
+} from "@/components/ui/connectivity-field";
 import { DB_ENGINES, EngineField, engineExtensions } from "@/components/ui/engine-field";
 import { ExtensionsField } from "@/components/ui/extensions-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
@@ -60,6 +68,7 @@ export function CreateClusterWizard({
     cpu: DEFAULT_ENDPOINT_CPU,
     memory: DEFAULT_ENDPOINT_MEMORY,
   });
+  const [connectivity, setConnectivity] = useState<Connectivity>(DEFAULT_CONNECTIVITY);
 
   const navigate = useNavigate();
   const createCluster = useCreateClusterWithWriter();
@@ -73,6 +82,7 @@ export function CreateClusterWizard({
       setPoolId("");
       setExtensions([]);
       setSize({ cpu: DEFAULT_ENDPOINT_CPU, memory: DEFAULT_ENDPOINT_MEMORY });
+      setConnectivity(DEFAULT_CONNECTIVITY);
     }
   }, [open]);
 
@@ -103,6 +113,8 @@ export function CreateClusterWizard({
         name: trimmedName,
         cpu: size.cpu.trim(),
         memory: size.memory.trim(),
+        connectivity: connectivity.mode,
+        allowedCidrs: parseCidrs(connectivity.allowedCidrs),
         engine,
         extensions,
       },
@@ -206,6 +218,10 @@ export function CreateClusterWizard({
                 Sizes the cluster's read-write endpoint on the <code>main</code> branch.
               </p>
               <ComputeSizeField value={size} onChange={setSize} />
+              <div className="pt-1">
+                <ConnectivityField value={connectivity} onChange={setConnectivity} />
+                <ConnectivityWarning value={connectivity} />
+              </div>
             </div>
           )}
 
@@ -220,6 +236,16 @@ export function CreateClusterWizard({
                 mono={allExtensions.length > 0}
               />
               <ReviewRow k="Writer compute" v={`${size.cpu} vCPU · ${size.memory}`} mono />
+              <ReviewRow
+                k="Connectivity"
+                v={
+                  CONNECTIVITY_LABELS[connectivity.mode] +
+                  (parseCidrs(connectivity.allowedCidrs).length
+                    ? ` · ${parseCidrs(connectivity.allowedCidrs).join(", ")}`
+                    : "")
+                }
+                mono={connectivity.mode !== "cluster_ip"}
+              />
             </div>
           )}
         </div>

@@ -13,6 +13,7 @@ import type {
   CreateStoragePoolInput,
   CreateUserInput,
   Endpoint,
+  EndpointConnectivityMode,
   EndpointList,
   Cluster,
   ClusterList,
@@ -184,11 +185,27 @@ export async function createCluster(
 // the writer; empty takes the controller default (2 cores / 4Gi).
 export function createClusterWithWriter(
   poolId: string,
-  input: { name: string; cpu?: string; memory?: string; engine?: string; extensions?: string[] },
+  input: {
+    name: string;
+    cpu?: string;
+    memory?: string;
+    engine?: string;
+    extensions?: string[];
+    connectivity?: EndpointConnectivityMode;
+    allowedCidrs?: string[];
+  },
 ): Promise<Task> {
   const body: Record<string, unknown> = { name: input.name, with_writer: true };
   if (input.cpu || input.memory) {
     body.resources = { cpu: input.cpu || undefined, memory: input.memory || undefined };
+  }
+  // Same rule as createEndpoint: only sent when the caller chose something, so an
+  // omitted block takes the controller's cluster_ip default.
+  if (input.connectivity && input.connectivity !== "cluster_ip") {
+    body.connectivity = {
+      mode: input.connectivity,
+      ...(input.allowedCidrs?.length ? { allowed_cidrs: input.allowedCidrs } : {}),
+    };
   }
   // The engine is a named extension bundle the controller resolves and unions
   // into `extensions`, so the two compose and the client sends both verbatim.

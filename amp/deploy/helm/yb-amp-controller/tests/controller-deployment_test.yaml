@@ -166,3 +166,35 @@ tests:
           value: api
       - notExists:
           path: spec.template.spec.containers[0].livenessProbe
+
+  - it: passes the deploy cloud through, so nlb_* works where the node read is not granted
+    set:
+      controller:
+        endpoint:
+          cloud: gcp
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_CLOUD
+            value: "gcp"
+
+  - it: leaves the deploy cloud empty by default, falling back to node detection
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_CLOUD
+            value: ""
+
+  # The controller validates this at startup and EXITS on a bad value, so an
+  # unchecked typo would install cleanly and then CrashLoopBackOff the whole
+  # control plane. Failing the render turns that into a helm error.
+  - it: refuses a deploy cloud outside the enum
+    set:
+      controller:
+        endpoint:
+          cloud: GCP
+    asserts:
+      - failedTemplate:
+          errorMessage: controller.endpoint.cloud must be one of aws|gcp|azure (or empty to detect it), got "GCP"
