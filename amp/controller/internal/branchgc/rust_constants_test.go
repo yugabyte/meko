@@ -15,10 +15,11 @@ import (
 //
 // Where each authority lives:
 const (
-	gcBucketsRustSource = "../../../compute/pageserver/src/page_store.rs"
+	gcBucketsRustSource = "../../../compute/pageserver/src/page_store/gc.rs"
 	// The authority for slru_pages.kind is the map that WRITES it, not the enum.
 	// `SlruKind`'s discriminants and the stored values are separate hand-written
-	// sequences, free to diverge.
+	// sequences, free to diverge. It stayed in page_store.rs when GC's storage
+	// layer moved to the submodule, so the two authorities are separate files.
 	slruKindsRustSource = "../../../compute/pageserver/src/page_store.rs"
 )
 
@@ -45,7 +46,7 @@ func TestGCBucketsMatchesRust(t *testing.T) {
 	src, err := os.ReadFile(gcBucketsRustSource)
 	if err != nil {
 		t.Fatalf("read the GC_BUCKETS authority: %v\n"+
-			"If the pageserver moved, update gcBucketsRustSource — do not delete this test.", err)
+			"If gc.rs moved, update gcBucketsRustSource — do not delete this test.", err)
 	}
 	m := gcBucketsDecl.FindSubmatch(src)
 	if m == nil {

@@ -283,6 +283,9 @@ jobs:
       # a real YB with the migrated production schema; they run in the integration
       # job (run.sh's `unit` selection) where that cluster exists. Keep
       # this filter in sync with test/integration/compute/main.rs::unit_tests.
+      # A live-DB module's submodules need their own entry — `page_store::gc`
+      # is not covered by `page_store::tests::`, and page_store's pure-logic
+      # test modules must keep running here, so this can't be widened.
       # `write_fence::tests::live::` is only the resource-token half of that
       # module — the fence's own tests need no database and run here, and the
       # same split applies to `registry::tests::live::` (the supervisor's
@@ -292,7 +295,7 @@ jobs:
       - name: Unit tests
         run: |
           cargo nextest run --workspace --locked --profile ci \
-            -E 'not (test(/^page_store::tests::/) | test(/^page_writer::tests::/) | test(/^yb_wal_storage::tests::/) | test(/^write_fence::tests::live::/) | test(/^registry::tests::live::/))'
+            -E 'not (test(/^page_store::tests::/) | test(/^page_store::gc::tests::/) | test(/^page_writer::tests::/) | test(/^yb_wal_storage::tests::/) | test(/^write_fence::tests::live::/) | test(/^registry::tests::live::/))'
 
       - name: Publish unit-test report
         uses: dorny/test-reporter@v3

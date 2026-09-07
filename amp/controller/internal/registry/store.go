@@ -373,7 +373,7 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 	// inside that serialized statement. Gated on the child row being
 	// NEWLY inserted: a re-record must stay a no-op even after the cutoff
 	// advances. Mirrored by `fork_txn` in
-	// compute/pageserver/src/page_store.rs (tests) — keep in lockstep.
+	// compute/pageserver/src/page_store/gc.rs (tests) — keep in lockstep.
 	//
 	// Serialized by writing the same row rather than by a row lock, as with the drop
 	// interlock above. A lock would cost more here: its extra FOR NO KEY UPDATE would

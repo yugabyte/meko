@@ -322,8 +322,8 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 /// cluster's controller just migrated is that YB, isolated per run:
 ///
 /// 1. The pageserver/safekeeper module tests (`page_store::tests`,
-///    `page_writer::tests`, `yb_wal_storage::tests`) — assert against the
-///    production `amp_storage` schema over YSQL — plus
+///    `page_store::gc::tests`, `page_writer::tests`, `yb_wal_storage::tests`)
+///    — assert against the production `amp_storage` schema over YSQL — plus
 ///    `utils::write_fence::tests::live`, which races the resource-token store
 ///    in `amp_registry` (the write fence's mutual-exclusion guarantee lives in
 ///    one SQL statement, so only a real cluster can confirm it holds).
@@ -353,6 +353,7 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         "--lib",
         "--",
         "page_store::tests::",
+        "page_store::gc::tests::",
         "page_writer::tests::",
         "yb_wal_storage::tests::",
         "write_fence::tests::live::",

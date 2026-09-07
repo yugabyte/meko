@@ -167,7 +167,8 @@ base re-covers it.
 
 ## Drain
 
-Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
+Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs the
+steps below. Every statement they issue is in `page_store/gc.rs`.
 
 1. **Cutoff.** Compute `min(retention window, live leases,
    consistent_lsn)`, floored at the branch's own ancestor LSN. Persist
@@ -445,7 +446,7 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    inner index scan rescanned per `bound` row, so the range is a scan
    *parameter*. Anything else pushes it to a Join Filter and the scan reads the
    key's whole history (107x the rows on amp2 for `pages`). So all three share
-   one hint (`GC_TRIM_NESTED_LOOP_HINT`), and each of its four directives
+   one hint (`TRIM_NESTED_LOOP_HINT`), and each of its four directives
    removes one such plan: hash join, a table-outer nested loop
    (`Leading((bound p))` pins the order), a merge join — which also
    materialises the DELETE's own scan into a tuplestore — and a `Materialize`

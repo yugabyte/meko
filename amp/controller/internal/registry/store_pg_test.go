@@ -17,7 +17,7 @@ import (
 // TestPgRecordBranchForkValidation is the fork ↔ GC-cutoff validation in
 // RecordBranch against a real database — the touch on the ancestor's row,
 // its error classification, and the roll-back of the whole registration.
-// The Rust stress test (page_store.rs, fork_txn) covers the SQL protocol
+// The Rust stress test (page_store/gc.rs, fork_txn) covers the SQL protocol
 // racing a live GC publish; this covers the Go path itself: sentinel
 // errors, txn atomicity, and the newly-inserted gate that keeps
 // re-records idempotent.

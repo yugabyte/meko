@@ -1174,6 +1174,8 @@ The compute opens libpq connections to the pageserver per backend
 - `compute/pageserver/src/page_writer.rs` — `PageWriter`: buffered
   write path, flush + `consistent_lsn` advance, backpressure,
   materialise triggers, blended reads.
+- `compute/pageserver/src/page_store/gc.rs` — the `pending_gc` queue and every
+  SQL statement GC issues (see [`pageserver-gc.md`](pageserver-gc.md)).
 - `compute/pageserver/src/gc_trim_candidates.rs` — `GcTrimCandidateEmitter`: the
   shared best-effort GC trim-candidate buffer both producers feed
   (see [`pageserver-gc.md`](pageserver-gc.md)).
