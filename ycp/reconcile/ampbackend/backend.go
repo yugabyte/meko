@@ -98,15 +98,19 @@ type index struct {
 	// Update diffs a branch spec against it: which extensions to add, and which
 	// other declared fields it did not apply.
 	branchRow map[string]ampclient.Branch
+	// endpointRow is the same for endpoints, kept so Update can tell a declared
+	// connectivity apart from the one the endpoint was created with.
+	endpointRow map[string]ampclient.Endpoint
 }
 
 func newIndex() index {
 	return index{
-		pool:      map[string]openapi_types.UUID{},
-		cluster:   map[string]openapi_types.UUID{},
-		branch:    map[string]openapi_types.UUID{},
-		endpoint:  map[string]openapi_types.UUID{},
-		branchRow: map[string]ampclient.Branch{},
+		pool:        map[string]openapi_types.UUID{},
+		cluster:     map[string]openapi_types.UUID{},
+		branch:      map[string]openapi_types.UUID{},
+		endpoint:    map[string]openapi_types.UUID{},
+		branchRow:   map[string]ampclient.Branch{},
+		endpointRow: map[string]ampclient.Endpoint{},
 	}
 }
 
@@ -330,6 +334,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 					}
 					epPath := join([]string{poolPath, cl.Name, br.Name, epName})
 					idx.endpoint[epPath] = ep.Id
+					idx.endpointRow[epPath] = ep
 					ready := ep.Address != ""
 					state := "provisioning"
 					if ready {
@@ -594,11 +599,154 @@ func (b *Backend) resizeEndpoint(ctx context.Context, r api.DesiredResource) err
 	if err := unmarshalSpec(r, &req); err != nil {
 		return err
 	}
-	return b.applyUpdate(ctx, reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}, r.Generation,
+
+	// Computed before anything is issued, for the same reason as updateBranch:
+	// resize is the only endpoint verb, so a spec declaring connectivity — which
+	// no update verb carries — never fully lands, and claiming the generation
+	// would leave the engine Noop'ing the endpoint forever at a generation its
+	// spec never met.
+	spec, err := endpointSpecOf(r)
+	if err != nil {
+		return err
+	}
+	drift := unappliedEndpoint(spec, idx.endpointRow[r.Name])
+
+	gen := r.Generation
+	if len(drift) > 0 {
+		gen = 0 // claim nothing; see the drift note above
+	}
+	if err := b.applyUpdate(ctx, reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}, gen,
 		func(c context.Context, gen int64) (*http.Response, error) {
-			req.YcpGeneration = &gen
+			if gen > 0 {
+				req.YcpGeneration = &gen
+			}
 			return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
-		})
+		}); err != nil && len(drift) == 0 {
+		return err
+	}
+	if len(drift) > 0 {
+		return reconcile.Permanent(fmt.Errorf("update endpoint %q: %s", r.Name, strings.Join(drift, "; ")))
+	}
+	return nil
+}
+
+// endpointSpec is an endpoint's desired spec as Update reads it: the fields it
+// can only check. resources is the one thing resize applies, so everything else
+// CreateEndpointRequest accepts lands here. Every field is a pointer so an
+// omitted one — unmanaged — is distinguishable from a declared empty one.
+type endpointSpec struct {
+	Connectivity       *ampclient.EndpointConnectivity      `json:"connectivity"`
+	Role               *ampclient.CreateEndpointRequestRole `json:"role"`
+	PgSettings         *map[string]string                   `json:"pg_settings"`
+	PageserverSettings *ampclient.DaemonSettings            `json:"pageserver_settings"`
+	SafekeeperSettings *ampclient.DaemonSettings            `json:"safekeeper_settings"`
+	ExtendedConfig     *map[string]interface{}              `json:"extended_config"`
+}
+
+func endpointSpecOf(r api.DesiredResource) (endpointSpec, error) {
+	var spec endpointSpec
+	err := unmarshalSpec(r, &spec)
+	return spec, err
+}
+
+// connectivityMode is the mode an endpoint effectively has. An endpoint created
+// before connectivity was configurable reports none and behaves as cluster_ip
+// (openapi_spec.yaml: EndpointConnectivity), so absent and an explicit
+// cluster_ip are the same thing — a spec declaring the default is not drift.
+func connectivityMode(c *ampclient.EndpointConnectivity) ampclient.EndpointConnectivityMode {
+	if c == nil || c.Mode == nil {
+		return ampclient.ClusterIp
+	}
+	return *c.Mode
+}
+
+// allowedCidrs is the declared or reported source ranges, sorted so an
+// order-only difference is not reported as drift.
+func allowedCidrs(c *ampclient.EndpointConnectivity) []string {
+	if c == nil || c.AllowedCidrs == nil {
+		return nil
+	}
+	out := append([]string(nil), (*c.AllowedCidrs)...)
+	sort.Strings(out)
+	return out
+}
+
+// unappliedEndpoint names the endpoint-spec fields whose declared value the
+// controller does not report, i.e. the ones this update did not and cannot
+// apply. resize carries resources and nothing else, so every other field an
+// endpoint spec may declare is a candidate: connectivity and role are
+// create-time in the controller, and the three settings maps plus
+// extended_config have an updateEndpointSettings verb this agent does not wire
+// — the endpoint analogue of the branch pg_settings case unapplied covers.
+//
+// disk_type is deliberately not compared: the Endpoint response does not report
+// it, so a declared value cannot be told from the one the endpoint was created
+// with, and a mismatch would not reliably mean drift.
+func unappliedEndpoint(spec endpointSpec, ep ampclient.Endpoint) []string {
+	var out []string
+	if spec.Connectivity != nil {
+		if connectivityMode(spec.Connectivity) != connectivityMode(ep.Connectivity) {
+			out = append(out, "connectivity.mode")
+		}
+		// Only compared when declared: an omitted list leaves whatever create set.
+		if spec.Connectivity.AllowedCidrs != nil &&
+			!equalStrings(allowedCidrs(spec.Connectivity), allowedCidrs(ep.Connectivity)) {
+			out = append(out, "connectivity.allowed_cidrs")
+		}
+	}
+	if spec.Role != nil && string(*spec.Role) != string(ep.Role) {
+		out = append(out, "role")
+	}
+	if spec.PgSettings != nil {
+		have := map[string]string{}
+		if ep.PgSettings != nil {
+			have = *ep.PgSettings
+		}
+		for k, v := range *spec.PgSettings {
+			if cur, ok := have[k]; !ok || cur != v {
+				out = append(out, "pg_settings."+k)
+			}
+		}
+	}
+	if spec.PageserverSettings != nil && !sameJSON(spec.PageserverSettings, ep.PageserverSettings) {
+		out = append(out, "pageserver_settings")
+	}
+	if spec.SafekeeperSettings != nil && !sameJSON(spec.SafekeeperSettings, ep.SafekeeperSettings) {
+		out = append(out, "safekeeper_settings")
+	}
+	if spec.ExtendedConfig != nil && !sameJSON(spec.ExtendedConfig, ep.ExtendedConfig) {
+		out = append(out, "extended_config")
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sameJSON compares a declared value against the reported one structurally. Go
+// marshals map keys sorted and struct fields in declaration order, so the
+// encoding is stable enough to compare; an unreported value encodes as null and
+// so differs from anything declared.
+func sameJSON(declared, reported any) bool {
+	a, err := json.Marshal(declared)
+	if err != nil {
+		return false
+	}
+	b, err := json.Marshal(reported)
+	if err != nil {
+		return false
+	}
+	return string(a) == string(b)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // updateBranch applies the one branch change amp can make after create — adding

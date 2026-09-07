@@ -42,6 +42,13 @@ it drives the amp controller's REST API to converge an environment to desired st
 is that environment's sole YCP client — see
 [`amp/controller/architecture/ac-ycp.md`](amp/controller/architecture/ac-ycp.md).
 
+Its typed client for that REST API is generated from a **copy** of the controller's
+`openapi_spec.yaml` vendored at `ycp/internal/ampclient/`, because the two are separate
+Go modules that must not cross-import. Editing either side means re-running
+`ycp/internal/ampclient/sync-spec.sh` in the same PR — a stale copy is self-consistent
+and compiles, so only that check notices. The obligation is repeated for spec editors in
+[`amp/controller/AGENTS.md`](amp/controller/AGENTS.md).
+
 An **environment** is the unit YCP manages — one namespace running a Meko stack.
 Registering one is the whole operator step: the control plane resolves the Meko release
 (pinned in `meko/api_server/internal/service/dataplane_release.go`) and the enroll

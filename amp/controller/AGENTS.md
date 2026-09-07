@@ -103,3 +103,10 @@ Don't hand-edit `api.gen.go`. The controllers (`internal/api/handlers.go`)
 implement the generated `StrictServerInterface`, so a spec change that drops or
 reshapes an operation fails the build until the handlers match. Keep
 `architecture/ac-apis.md` in sync with the spec.
+
+**The spec has a second consumer outside this module.** `ycp/internal/ampclient/`
+generates the YCP reconcile agent's client from a vendored **copy** of it, because ycp
+is a separate Go module that must not cross-import this one. So editing the spec means
+also running `ycp/internal/ampclient/sync-spec.sh` and committing its result **in the
+same PR** — a unit test and the `meko_ycp` CI job fail otherwise. A stale copy compiles
+and passes everything, so nothing else catches it; it once sat two features behind.

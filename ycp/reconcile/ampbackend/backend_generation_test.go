@@ -43,6 +43,10 @@ type genServer struct {
 	taskError  string
 	// mutateStatus overrides the status code the two mutating calls return.
 	mutateStatus int
+	// endpointConnectivity is spliced into the endpoint row as the raw JSON value
+	// of its `connectivity` property. Empty renders no property at all, i.e. an
+	// endpoint from before connectivity was configurable.
+	endpointConnectivity string
 
 	resizes  []ampclient.ResizeEndpointRequest
 	extAdds  []ampclient.AddBranchExtensionsRequest
@@ -86,9 +90,13 @@ func (g *genServer) start(t *testing.T) *Backend {
 			g.extAdds = append(g.extAdds, req)
 			g.writeMutateResponse(w)
 		case strings.HasSuffix(p, "/endpoints"):
+			conn := ""
+			if g.endpointConnectivity != "" {
+				conn = `,"connectivity":` + g.endpointConnectivity
+			}
 			io.WriteString(w, `{"endpoints":[{"id":"`+genEndpointID+`","name":"rw","branch_id":"`+genBranchID+
 				`","cluster_id":"`+genClusterID+`","role":"read_write","address":"ep.host:5433",`+
-				`"resources":{"cpu":"2","memory":"4Gi"},"ycp_generation":`+jsonGen(g.endpointGen)+
+				`"resources":{"cpu":"2","memory":"4Gi"},"ycp_generation":`+jsonGen(g.endpointGen)+conn+
 				`,"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/branches"):
 			io.WriteString(w, `{"branches":[{"branch_id":"`+genBranchID+`","cluster_id":"`+genClusterID+
@@ -519,5 +527,161 @@ func TestUpdateBranchWithDriftClaimsNoGeneration(t *testing.T) {
 	}
 	if got := g.extAdds[0].YcpGeneration; got != nil {
 		t.Errorf("sent ycp_generation = %d, want none — this generation is not fully applied", *got)
+	}
+}
+
+// connectivity is create-time only in the controller: no update verb carries it,
+// so resize drops it and a generation bump that changed it can never converge.
+// Claiming the generation anyway would stamp the row, echo back at the desired
+// generation and Noop the endpoint forever — converged on a spec that never
+// landed, which is the meko#985 failure. Until connectivity became expressible
+// an endpoint spec could only say `resources`, which resize applies in full, so
+// this is the first field an endpoint can declare and not get.
+func TestUpdateEndpointWithConnectivityDriftClaimsNoGeneration(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1)} // no connectivity on the row: cluster_ip
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"connectivity":{"mode":"nlb_internal"}}`),
+	})
+
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update = %v (%T), want the drift reported as permanent", err, err)
+	}
+	if !strings.Contains(err.Error(), "connectivity.mode") {
+		t.Errorf("err = %v, want it to name the field it cannot apply", err)
+	}
+	// The resize still goes out — one unfixable field does not block the resources
+	// change — but without a generation.
+	if len(g.resizes) != 1 {
+		t.Fatalf("resize calls = %d, want the resize still issued", len(g.resizes))
+	}
+	if got := g.resizes[0].YcpGeneration; got != nil {
+		t.Errorf("sent ycp_generation = %d, want none — this generation is not fully applied", *got)
+	}
+}
+
+// The allowed CIDR list is create-time for the same reason, so a change to it is
+// drift even when the mode already matches.
+func TestUpdateEndpointWithAllowedCidrDriftClaimsNoGeneration(t *testing.T) {
+	g := &genServer{
+		endpointGen:          gen64(1),
+		endpointConnectivity: `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16"]}`,
+	}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":["10.1.0.0/16"]}}`),
+	})
+
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update = %v (%T), want the drift reported as permanent", err, err)
+	}
+	if !strings.Contains(err.Error(), "connectivity.allowed_cidrs") {
+		t.Errorf("err = %v, want it to name the field it cannot apply", err)
+	}
+	if got := g.resizes[0].YcpGeneration; got != nil {
+		t.Errorf("sent ycp_generation = %d, want none", *got)
+	}
+}
+
+// A declared connectivity the endpoint already has is not drift, or every
+// endpoint spec that pins its connectivity would latch permanently on the first
+// resize. Absent on the row means cluster_ip, so declaring the default matches.
+func TestUpdateEndpointWithMatchingConnectivityClaimsTheGeneration(t *testing.T) {
+	for name, spec := range map[string]string{
+		"default against an absent row": `{"resources":{"cpu":"4","memory":"8Gi"},"connectivity":{"mode":"cluster_ip"}}`,
+		"connectivity not declared":     `{"resources":{"cpu":"4","memory":"8Gi"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := &genServer{endpointGen: gen64(1)}
+			b := g.start(t)
+
+			mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+				Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+				Spec: json.RawMessage(spec),
+			}))
+			if got := g.resizes[0].YcpGeneration; got == nil || *got != 4 {
+				t.Errorf("resize ycp_generation = %v, want 4 — nothing here is unappliable", got)
+			}
+		})
+	}
+}
+
+// An order-only difference in the CIDR list is the same set, so it must not be
+// reported as a permanent latch.
+func TestUpdateEndpointIgnoresAllowedCidrOrder(t *testing.T) {
+	g := &genServer{
+		endpointGen:          gen64(1),
+		endpointConnectivity: `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16","10.2.0.0/16"]}`,
+	}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":["10.2.0.0/16","10.0.0.0/16"]}}`),
+	}))
+	if got := g.resizes[0].YcpGeneration; got == nil || *got != 4 {
+		t.Errorf("resize ycp_generation = %v, want 4 — the set is unchanged", got)
+	}
+}
+
+// resize carries only `resources`, so every other field CreateEndpointRequest
+// accepts is dropped the same way connectivity was — and all of these predate
+// connectivity, so the latch was already open for them. pg_settings and the two
+// daemon settings maps are the direct endpoint analogue of the branch case
+// unapplied covers: the controller has updateEndpointSettings and this agent
+// does not wire it.
+func TestUpdateEndpointReportsEveryFieldResizeCannotApply(t *testing.T) {
+	for name, tc := range map[string]struct{ declare, want string }{
+		"pg_settings":         {`"pg_settings":{"work_mem":"64MB"}`, "pg_settings.work_mem"},
+		"role":                {`"role":"read_only"`, "role"},
+		"pageserver_settings": {`"pageserver_settings":{"get_page_timeout":"5s"}`, "pageserver_settings"},
+		"safekeeper_settings": {`"safekeeper_settings":{"flush_timeout":"1s"}`, "safekeeper_settings"},
+		"extended_config":     {`"extended_config":{"shared_preload_libraries":"pg_stat_statements"}`, "extended_config"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := &genServer{endpointGen: gen64(1)}
+			b := g.start(t)
+
+			err := b.Update(t.Context(), api.DesiredResource{
+				Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+				Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` + tc.declare + `}`),
+			})
+
+			var perm *reconcile.PermanentError
+			if !errors.As(err, &perm) {
+				t.Fatalf("Update = %v (%T), want the drift reported as permanent", err, err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to name %s", err, tc.want)
+			}
+			if got := g.resizes[0].YcpGeneration; got != nil {
+				t.Errorf("sent ycp_generation = %d, want none — this generation is not fully applied", *got)
+			}
+		})
+	}
+}
+
+// A declared value the endpoint already carries is not drift: the row reports
+// role read_write, so pinning it in the spec must still claim the generation.
+// Otherwise every spec that names its role would latch on the first resize.
+func TestUpdateEndpointMatchingRoleClaimsTheGeneration(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1)}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"role":"read_write"}`),
+	}))
+	if got := g.resizes[0].YcpGeneration; got == nil || *got != 4 {
+		t.Errorf("resize ycp_generation = %v, want 4 — the declared role is the one it has", got)
 	}
 }

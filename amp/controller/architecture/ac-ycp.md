@@ -70,7 +70,8 @@ onto the resource's `ResourceStatus.Error` (`ycp/internal/api`):
 - **Permanent drift** — a verb that cannot succeed for the spec as declared: a
   storage pool has no delete, pools and clusters have no update, a branch's
   `extensions` cannot be removed (and is the one field it cannot be *created*
-  with — below), and the controller refuses some bodies outright with a `400`.
+  with — below), an endpoint spec declares anything but `resources` (below), and
+  the controller refuses some bodies outright with a `400`.
   The engine reports it and stops re-issuing it (no backoff flap) rather than
   treating an unfixable call as a failure; it does **not** by itself degrade the
   environment. Backends flag these with `reconcile.Permanent`. The mark is held
@@ -205,6 +206,31 @@ create *merges* over what the fork inherited, that PATCH *replaces* — and pick
 one is an operator-facing decision, not a mapping detail. Until it is, a
 `pg_settings` value the branch does not already carry is reported as drift, naming
 the settings that were not applied.
+
+### Endpoints converge `resources` and nothing else
+
+`resizeEndpoint` is the only endpoint verb the agent wires, and it carries
+`resources` alone. Every other field `createEndpoint` accepts — `connectivity`,
+`role`, `pg_settings`, `pageserver_settings`, `safekeeper_settings`,
+`extended_config` — is therefore permanent drift on an **existing** endpoint,
+named in the resource's `Error`. Omitting a field leaves it unmanaged.
+
+The two reasons differ. `connectivity` and `role` are create-time in the
+controller: no update verb carries them, so they can never converge and
+recreating the endpoint is the only path. The settings maps do have a verb
+(`updateEndpointSettings`), unwired here for the same merge-vs-replace reason as
+`updateBranchSettings` below.
+
+`disk_type` is the exception: the `Endpoint` response does not report it, so a
+declared value cannot be told from the one the endpoint was created with and is
+not checked. The agent keeps each endpoint row from `List` to make this
+comparison, the way it keeps branch rows.
+
+Reporting it matters more than the refusal reading well. A dropped field that
+still stamped `ycp_generation` would have the engine Noop the endpoint forever,
+converged on a spec that never applied — and for `connectivity` that means an
+endpoint silently unreachable, or an `allowed_cidrs` narrowing that never took
+effect.
 
 ## Environment `kind`
 

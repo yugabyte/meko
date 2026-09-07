@@ -3,11 +3,13 @@
 # openapi_spec.yaml is a vendored copy of
 # amp/controller/internal/api/openapi_spec.yaml. amp/controller and meko/ycp are
 # separate Go modules that must not cross-import, so the shared artifact is the
-# spec file, not the generated Go: copy the spec over and regenerate here when
-# the controller's API changes. Client + models only (no echo server), so this
+# spec file, not the generated Go. Client + models only (no echo server), so this
 # package stays a thin HTTP client with no server dependency.
 #
-# Regenerate with `go -C ycp generate ./internal/ampclient/...`.
+# Re-vendor the spec and regenerate with `./sync-spec.sh`; CI runs it with
+# --check, so a controller spec change that skips this fails the build. Plain
+# `go -C ycp generate ./internal/ampclient/...` regenerates from the vendored
+# copy without refreshing it.
 package: ampclient
 output: ampclient.gen.go
 generate:

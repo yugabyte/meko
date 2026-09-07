@@ -39,6 +39,10 @@ generated file is checked in. The codegen config is
 [`oapi-codegen.yaml`](../internal/api/oapi-codegen.yaml); the tool is pinned as a
 Go tool dependency in `controller/go.mod`, so generation needs no preinstalled binary.
 
+The YCP reconcile agent generates its own client from a vendored copy of this spec at
+`ycp/internal/ampclient/` (ycp is a separate Go module and cannot import this one), so a
+spec edit also needs `ycp/internal/ampclient/sync-spec.sh` run in the same PR.
+
 The spec is linted with the rest of the repo's specs by `make lint-openapi-spec`
 (redocly). Auth is deferred (below), so the `security-defined` warnings are
 expected.

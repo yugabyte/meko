@@ -21,7 +21,11 @@ name: Meko CI
 #   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
 #                     (vitest), and the production build.
 #   meko_ycp        — ycp (the BYOC agent + dpmcp): gofmt, `go build`, `go vet`,
-#                     `go test ./...`.
+#                     `go test ./...`, and a check that the client generated from
+#                     the amp spec vendored at ycp/internal/ampclient/ is current
+#                     (the spec copy itself is guarded by a unit test). Also fires
+#                     on that spec, since a controller-only PR is what leaves the
+#                     copy stale.
 #   meko_ycp_e2e    — YCP build + deploy smoke test: builds the api-server and
 #                     agent images and deploys them to a throwaway kind cluster,
 #                     asserting the control plane migrates and serves, an agent
@@ -97,8 +101,12 @@ jobs:
             meko_ui:
               - 'meko/meko_ui/**'
               - '.github/workflows/meko-pr-build.yml'
+            # The amp spec is here because ycp vendors a copy of it: a PR that
+            # edits only the controller's spec is exactly the one that leaves the
+            # copy stale, and it touches nothing under ycp/.
             meko_ycp:
               - 'ycp/**'
+              - 'amp/controller/internal/api/openapi_spec.yaml'
               - '.github/workflows/meko-pr-build.yml'
             meko_docs:
               - 'meko/docs/content/docs/**'
@@ -389,6 +397,13 @@ jobs:
             gofmt -d .
             exit 1
           fi
+
+      # The spec copy itself is guarded by a unit test (spec_vendor_test.go), so
+      # this step is here for the other half: that ampclient.gen.go was actually
+      # regenerated from it. Regenerates into a scratch tree, so it reports drift
+      # without touching the checkout.
+      - name: Generated amp client in sync
+        run: ./internal/ampclient/sync-spec.sh --check
 
       - name: Build
         run: go build ./...
