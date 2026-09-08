@@ -1,9 +1,11 @@
-// Multi-step create-cluster wizard (Cluster → Compute → Review). Fires ONE
-// composite call (create_project with_writer) that provisions the database, its
-// `main` branch, and a read_write endpoint as a single background task;
-// api_server polls it to completion and returns the created cluster (well under
-// a minute), then we toast + close. Replaces the old single-field CreateClusterDialog.
-import { useEffect, useState } from "react";
+// Multi-step create-cluster wizard (Cluster → Extensions → Compute → Review).
+// Fires ONE composite call (create_cluster with_writer) that provisions the
+// database, its `main` branch (seeded with the picked extensions), and a
+// read_write endpoint as a single background task; api_server polls it to
+// completion and returns the created cluster (well under a minute), then we
+// toast + close. Mirrors amp_ui's wizard, minus the pool step (a datapack has
+// exactly one AMP pool, resolved server-side).
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,18 +23,14 @@ import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 import { useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
 import { DEFAULT_CPU, DEFAULT_MEMORY } from "../datapack-clusters/resize";
+import {
+  AMP_EXTENSIONS,
+  DB_ENGINES,
+  engineExtensions,
+  engineLabel,
+} from "../datapack-clusters/extensions";
 
-const STEPS = ["Cluster", "Compute", "Review"];
-
-// PostgreSQL 18 is the only engine AMP supports today; the rest are roadmap,
-// shown greyed as "coming soon" so the direction is visible without implying support.
-const DB_ENGINES: { id: string; label: string; comingSoon?: boolean }[] = [
-  { id: "postgres", label: "PostgreSQL 18" },
-  { id: "aidb", label: "AI Database", comingSoon: true },
-  { id: "oracle", label: "Oracle", comingSoon: true },
-  { id: "sqlserver", label: "SQL Server", comingSoon: true },
-  { id: "documentdb", label: "DocumentDB", comingSoon: true },
-];
+const STEPS = ["Cluster", "Extensions", "Compute", "Review"];
 
 export type CreateClusterWizardProps = {
   open: boolean;
@@ -44,6 +42,10 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   const [step, setStep] = useState(0);
   const [engine, setEngine] = useState("postgres");
   const [name, setName] = useState("");
+  // User-picked EXTRA extensions only — the engine's own bundle is added by the
+  // controller, so we track and send just the extras (keeps the picker's
+  // locked-vs-toggle state unambiguous; the controller also de-dupes).
+  const [extensions, setExtensions] = useState<string[]>([]);
   const [cpu, setCpu] = useState(DEFAULT_CPU);
   const [memory, setMemory] = useState(DEFAULT_MEMORY);
   const [error, setError] = useState<string | null>(null);
@@ -56,21 +58,49 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
       setStep(0);
       setEngine("postgres");
       setName("");
+      setExtensions([]);
       setCpu(DEFAULT_CPU);
       setMemory(DEFAULT_MEMORY);
       setError(null);
     }
   }, [open]);
 
+  const fromEngine = useMemo(() => engineExtensions(engine), [engine]);
+  const locked = useMemo(() => new Set(fromEngine), [fromEngine]);
+  // Every extension enabled on the cluster: the engine's bundle plus the extras.
+  const allExtensions = useMemo(
+    () => [...fromEngine, ...extensions.filter((e) => !locked.has(e))],
+    [fromEngine, extensions, locked],
+  );
+
   const trimmedName = name.trim();
   const stepValid =
-    step === 0 ? Boolean(trimmedName) : step === 1 ? Boolean(cpu.trim() && memory.trim()) : true;
+    step === 0 ? Boolean(trimmedName) : step === 2 ? Boolean(cpu.trim() && memory.trim()) : true;
+
+  const pickEngine = (id: string) => {
+    setEngine(id);
+    // Drop any extras the new engine now seeds itself, so they render locked
+    // (not double-toggled) and aren't re-sent.
+    const seeded = new Set(engineExtensions(id));
+    setExtensions((prev) => prev.filter((e) => !seeded.has(e)));
+  };
+
+  const toggleExtension = (n: string) => {
+    if (locked.has(n)) return;
+    setExtensions((prev) => (prev.includes(n) ? prev.filter((e) => e !== n) : [...prev, n]));
+  };
 
   const create = async () => {
     if (!trimmedName || pending) return;
     setError(null);
     try {
-      await createMut.mutateAsync({ name: trimmedName, cpu: cpu.trim(), memory: memory.trim() });
+      await createMut.mutateAsync({
+        name: trimmedName,
+        cpu: cpu.trim(),
+        memory: memory.trim(),
+        engine,
+        extensions: extensions.filter((e) => !locked.has(e)),
+      });
       toast({ title: `Cluster "${trimmedName}" created` });
       onOpenChange(false);
     } catch (e) {
@@ -105,24 +135,35 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {DB_ENGINES.map((e) => {
                     const selected = engine === e.id;
+                    const seeds = engineExtensions(e.id);
                     return (
                       <button
                         key={e.id}
                         type="button"
+                        aria-pressed={selected}
                         disabled={e.comingSoon}
-                        onClick={() => setEngine(e.id)}
+                        onClick={() => pickEngine(e.id)}
                         className={cn(
                           "rounded-lg border px-3 py-2.5 text-left transition-colors",
                           selected
-                            ? "border-brand bg-brand/10"
+                            ? "border-brand bg-brand/10 ring-1 ring-brand"
                             : "border-border bg-background hover:bg-muted/50",
                           e.comingSoon && "cursor-not-allowed opacity-60 hover:bg-background",
                         )}
                       >
-                        <span className="block text-sm font-medium text-foreground">{e.label}</span>
+                        <span className="block text-sm font-medium text-foreground">
+                          {e.label}
+                          {e.sub ? (
+                            <span className="ml-1 text-xs text-muted-foreground">{e.sub}</span>
+                          ) : null}
+                        </span>
                         {e.comingSoon ? (
                           <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-muted-foreground">
                             Coming soon
+                          </span>
+                        ) : seeds.length ? (
+                          <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                            {seeds.join(" · ")}
                           </span>
                         ) : null}
                       </button>
@@ -147,6 +188,64 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
           ) : null}
 
           {step === 1 ? (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Enabled on the cluster's <code>main</code> branch — every compute on it mounts them.
+                Pick them now: they can't be changed after the cluster is created.
+                {fromEngine.length ? ` ${engineLabel(engine)} includes ${fromEngine.join(", ")}.` : ""}
+              </p>
+              <div className="space-y-2">
+                {AMP_EXTENSIONS.map((x) => {
+                  const isLocked = locked.has(x.name);
+                  const on = isLocked || extensions.includes(x.name);
+                  return (
+                    <button
+                      key={x.name}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      disabled={isLocked}
+                      onClick={() => toggleExtension(x.name)}
+                      className={cn(
+                        "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
+                        on
+                          ? "border-brand bg-brand/10"
+                          : "border-border bg-background hover:bg-muted/50",
+                        isLocked && "cursor-not-allowed opacity-80 hover:bg-brand/10",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                          // primary is the orange fill with navy text in BOTH themes (~6.9:1);
+                          // brand-foreground is white in light mode (~2.74:1, fails WCAG AA —
+                          // index.css:124-125), so it can't be used on an orange fill.
+                          on ? "border-primary bg-primary text-primary-foreground" : "border-border",
+                        )}
+                        aria-hidden
+                      >
+                        {on ? "✓" : ""}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="flex items-baseline gap-2">
+                          <span className="font-mono text-sm text-foreground">{x.name}</span>
+                          <span className="text-[10px] text-muted-foreground">{x.version}</span>
+                          {isLocked ? (
+                            <span className="text-[10px] uppercase tracking-wide text-brand">
+                              Enabled
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="block text-xs text-muted-foreground">{x.description}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {step === 2 ? (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
@@ -175,10 +274,11 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
             </div>
           ) : null}
 
-          {step === 2 ? (
+          {step === 3 ? (
             <div className="rounded-lg border border-border">
               <ReviewRow k="Name" v={trimmedName || "—"} mono />
-              <ReviewRow k="Engine" v="PostgreSQL 18" />
+              <ReviewRow k="Engine" v={engineLabel(engine)} />
+              <ReviewRow k="Extensions" v={allExtensions.length ? allExtensions.join(", ") : "None"} />
               <ReviewRow k="Writer compute" v={`${cpu} vCPU · ${memory}`} mono />
             </div>
           ) : null}

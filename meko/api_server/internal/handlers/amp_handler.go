@@ -41,6 +41,11 @@ type createClusterRequest struct {
 	WithWriter bool   `json:"with_writer,omitempty"`
 	CPU        string `json:"cpu,omitempty"`
 	Memory     string `json:"memory,omitempty"`
+	// Engine is the optional cluster engine ("postgres" default, "aidb",
+	// "oracle"); Extensions is the optional set of catalog extensions to seed on
+	// the default branch. Both are opt-in — empty means a plain Postgres cluster.
+	Engine     string   `json:"engine,omitempty"`
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 // CreateCluster handles POST /api/v1/datapacks/:datapack_id/amp/clusters.
@@ -79,6 +84,8 @@ func (h *AMPHandler) CreateCluster(c echo.Context) error {
 		PgVersion:    req.PgVersion,
 		CPU:          strings.TrimSpace(req.CPU),
 		Memory:       strings.TrimSpace(req.Memory),
+		Engine:       strings.TrimSpace(req.Engine),
+		Extensions:   req.Extensions,
 	}
 	// with_writer provisions the writer endpoint in the same task. Both paths
 	// poll the task to completion and return the materialized cluster (201).

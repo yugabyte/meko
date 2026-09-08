@@ -50,8 +50,13 @@ export function useClusters(datapackId: string, options?: { enabled?: boolean })
 export function useCreateCluster(datapackId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { name: string; cpu?: string; memory?: string }) =>
-      ampCreateCluster(datapackId, payload),
+    mutationFn: (payload: {
+      name: string;
+      cpu?: string;
+      memory?: string;
+      engine?: string;
+      extensions?: string[];
+    }) => ampCreateCluster(datapackId, payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) }),
   });
 }

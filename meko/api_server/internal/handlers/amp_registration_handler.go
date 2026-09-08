@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/repository"
+	"meko/api_server/internal/service"
 )
 
 // AMPRegistrationHandler serves admin registration CRUD.
@@ -47,8 +48,11 @@ func (h *AMPRegistrationHandler) Get(c echo.Context) error {
 	if reg == nil {
 		return ok(c, http.StatusOK, nil)
 	}
+	// Normalize on read too: a row that predates write-path normalization still
+	// holds a bare host, and both consoles render this url as a link — a
+	// scheme-less value would resolve relative to the console origin.
 	return ok(c, http.StatusOK, map[string]any{
-		"name": reg.Name, "url": reg.BaseURL, "username": reg.Username,
+		"name": reg.Name, "url": service.NormalizeAMPBaseURL(reg.BaseURL), "username": reg.Username,
 	})
 }
 
@@ -59,7 +63,11 @@ func (h *AMPRegistrationHandler) Register(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_BODY", "invalid request body")
 	}
-	url := strings.TrimSpace(body.URL)
+	// Normalize on write so the stored row carries a scheme (bare hosts otherwise
+	// break meko_admin's "visit the controller" link, which renders the URL
+	// verbatim). NormalizeAMPBaseURL also trims a trailing slash, so check
+	// emptiness after it.
+	url := service.NormalizeAMPBaseURL(body.URL)
 	if url == "" {
 		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "url is required")
 	}
@@ -99,7 +107,7 @@ func (h *AMPRegistrationHandler) Patch(c echo.Context) error {
 	}
 	next := repository.AMPRegistration{
 		Name:     strings.TrimSpace(str("name", cur.Name)),
-		BaseURL:  strings.TrimSpace(str("url", cur.BaseURL)),
+		BaseURL:  service.NormalizeAMPBaseURL(str("url", cur.BaseURL)),
 		Username: str("username", cur.Username),
 		Password: str("password", cur.Password),
 	}

@@ -51,12 +51,26 @@ export async function ampListClusters(datapackId: string, options: RouteOptions 
  *  omit either for AMP's default (2 cores / 4Gi). */
 export async function ampCreateCluster(
   datapackId: string,
-  payload: { name: string; cpu?: string; memory?: string; pg_version?: number },
+  payload: {
+    name: string;
+    cpu?: string;
+    memory?: string;
+    pg_version?: number;
+    // Optional engine ("postgres" default, "aidb", "oracle") and catalog
+    // extensions to seed on the default branch. Both are opt-in and composable;
+    // sent only when set so a plain Postgres cluster keeps the same payload.
+    engine?: string;
+    extensions?: string[];
+  },
 ) {
   const body: Record<string, unknown> = { name: payload.name.trim(), with_writer: true };
   if (payload.cpu?.trim()) body.cpu = payload.cpu.trim();
   if (payload.memory?.trim()) body.memory = payload.memory.trim();
   if (payload.pg_version != null) body.pg_version = payload.pg_version;
+  if (payload.engine?.trim() && payload.engine.trim() !== "postgres")
+    body.engine = payload.engine.trim();
+  const extensions = (payload.extensions ?? []).map((e) => e.trim()).filter(Boolean);
+  if (extensions.length > 0) body.extensions = extensions;
   return request<AmpCluster>(clustersRoute(datapackId), "POST", body);
 }
 

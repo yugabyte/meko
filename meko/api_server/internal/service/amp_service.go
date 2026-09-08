@@ -64,6 +64,12 @@ type CreateClusterInput struct {
 	PgVersion    *int   // optional; omit to take AMP's default (18, the only supported version today)
 	CPU          string // writer sizing (Kubernetes quantity, e.g. "2"); only used with_writer
 	Memory       string // writer sizing (e.g. "4Gi"); only used with_writer
+	// Engine is the optional cluster engine ("postgres" default, "aidb",
+	// "oracle") — a named bundle of extensions on the controller. Extensions is
+	// the optional set of catalog extensions to seed on the default branch; it
+	// composes with the engine's bundle. Both are opt-in: empty = plain Postgres.
+	Engine     string
+	Extensions []string
 }
 
 // ampPoolName is the name given to a datapack's AMP shared pool. storage_pool.name
@@ -110,7 +116,7 @@ func (s *AMPService) CreateCluster(ctx context.Context, in CreateClusterInput) (
 	}
 
 	// Step 2 — create the cluster (an AMP cluster) in the pool.
-	return c.CreateCluster(ctx, pool.ID, name, in.PgVersion)
+	return c.CreateCluster(ctx, pool.ID, name, in.PgVersion, in.Engine, in.Extensions)
 }
 
 // CreateClusterWithWriter is the composite "create cluster" the wizard uses: it
@@ -142,7 +148,7 @@ func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClust
 	}
 
 	// Step 2 — run the composite task (cluster + main branch + writer).
-	return c.CreateClusterWithWriter(ctx, pool.ID, name, in.PgVersion, in.CPU, in.Memory)
+	return c.CreateClusterWithWriter(ctx, pool.ID, name, in.PgVersion, in.CPU, in.Memory, in.Engine, in.Extensions)
 }
 
 // ListClusters returns the clusters in a datapack's AMP pool. If no pool has

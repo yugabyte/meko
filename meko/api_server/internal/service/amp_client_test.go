@@ -100,8 +100,10 @@ func TestCreateClusterWithWriter_SendsWithWriterAndPollsToCluster(t *testing.T) 
 	t.Cleanup(srv.Close)
 	c := NewAMPClient(srv.URL, http.DefaultClient)
 
-	// Polls the task to completion and returns the materialized cluster.
-	p, err := c.CreateClusterWithWriter(context.Background(), "p", "orders", nil, "4", "8Gi")
+	// Polls the task to completion and returns the materialized cluster. Default
+	// engine (postgres) and no extensions: neither key is sent, so the default
+	// path stays byte-for-byte identical to before engine/extensions existed.
+	p, err := c.CreateClusterWithWriter(context.Background(), "p", "orders", nil, "4", "8Gi", "", nil)
 	if err != nil {
 		t.Fatalf("CreateClusterWithWriter: %v", err)
 	}
@@ -115,6 +117,74 @@ func TestCreateClusterWithWriter_SendsWithWriterAndPollsToCluster(t *testing.T) 
 	res, _ := body["resources"].(map[string]any)
 	if res == nil || res["cpu"] != "4" || res["memory"] != "8Gi" {
 		t.Errorf("resources = %v, want cpu=4 memory=8Gi", body["resources"])
+	}
+	if _, ok := body["engine"]; ok {
+		t.Errorf("engine key present for default engine: %v", body["engine"])
+	}
+	if _, ok := body["extensions"]; ok {
+		t.Errorf("extensions key present with none picked: %v", body["extensions"])
+	}
+}
+
+// TestCreateCluster_SendsEngineAndExtensions asserts the opt-in path: a
+// non-default engine and picked extensions are forwarded, while a default
+// "postgres" engine and blank extension names are dropped.
+func TestCreateCluster_SendsEngineAndExtensions(t *testing.T) {
+	var body map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/storage-pools/p/clusters", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"t1","kind":"create_cluster","status":"pending"}`))
+	})
+	mux.HandleFunc("/api/v1/tasks/t1", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"t1","kind":"create_cluster","status":"succeeded","cluster_id":"c1"}`))
+	})
+	mux.HandleFunc("/api/v1/storage-pools/p/clusters/c1", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AMPCluster{ID: "c1", Name: "vec"})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := NewAMPClient(srv.URL, http.DefaultClient)
+
+	if _, err := c.CreateCluster(context.Background(), "p", "vec", nil, "aidb", []string{"pgvector", "  ", "age"}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if body["engine"] != "aidb" {
+		t.Errorf("engine = %v, want aidb", body["engine"])
+	}
+	exts, _ := body["extensions"].([]any)
+	if len(exts) != 2 || exts[0] != "pgvector" || exts[1] != "age" {
+		t.Errorf("extensions = %v, want [pgvector age] (blanks dropped)", body["extensions"])
+	}
+
+	// A default "postgres" engine is omitted so the common-path body is
+	// unchanged (the controller applies the same default either way).
+	body = nil
+	if _, err := c.CreateCluster(context.Background(), "p", "vec", nil, "postgres", nil); err != nil {
+		t.Fatalf("CreateCluster (default engine): %v", err)
+	}
+	if _, ok := body["engine"]; ok {
+		t.Errorf("engine key present for postgres default: %v", body["engine"])
+	}
+}
+
+// TestNormalizeAMPBaseURL covers the missing-scheme repair that unblocks a bare
+// host registered in meko_system.amp_registration (e.g. "100.84.82.87").
+func TestNormalizeAMPBaseURL(t *testing.T) {
+	cases := map[string]string{
+		"100.84.82.87":      "http://100.84.82.87",
+		"100.84.82.87:8080": "http://100.84.82.87:8080",
+		"  100.84.82.87/  ": "http://100.84.82.87",
+		"http://host:8080":  "http://host:8080",
+		"https://host":      "https://host",
+		"http://host/":      "http://host",
+		"":                  "",
+	}
+	for in, want := range cases {
+		if got := NormalizeAMPBaseURL(in); got != want {
+			t.Errorf("NormalizeAMPBaseURL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

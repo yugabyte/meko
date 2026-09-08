@@ -49,6 +49,28 @@ describe("ampApi wire contract", () => {
     });
   });
 
+  it("ampCreateCluster forwards a non-default engine + non-blank extensions", async () => {
+    await ampCreateCluster("dp1", {
+      name: "vec",
+      engine: "aidb",
+      extensions: ["pgvector", "  ", "age"],
+    });
+    expect(mockRequest).toHaveBeenCalledWith("/datapacks/dp1/amp/clusters", "POST", {
+      name: "vec",
+      with_writer: true,
+      engine: "aidb",
+      extensions: ["pgvector", "age"],
+    });
+  });
+
+  it("ampCreateCluster omits the default postgres engine and an empty extension list", async () => {
+    await ampCreateCluster("dp1", { name: "plain", engine: "postgres", extensions: [] });
+    expect(mockRequest).toHaveBeenCalledWith("/datapacks/dp1/amp/clusters", "POST", {
+      name: "plain",
+      with_writer: true,
+    });
+  });
+
   it("ampDeleteCluster → DELETE /datapacks/:id/amp/clusters/:cid", async () => {
     await ampDeleteCluster("dp1", "cl1");
     expect(mockRequest).toHaveBeenCalledWith("/datapacks/dp1/amp/clusters/cl1", "DELETE");

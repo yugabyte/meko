@@ -31,9 +31,28 @@ type AMPClient struct {
 // pool is reused (creating one per request defeats keep-alive).
 func NewAMPClient(baseURL string, httpClient *http.Client) *AMPClient {
 	return &AMPClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: NormalizeAMPBaseURL(baseURL),
 		http:    httpClient,
 	}
+}
+
+// NormalizeAMPBaseURL trims trailing slashes and defaults a missing scheme to
+// http:// (the AMP controller speaks plain HTTP today). Without this a bare host
+// registered in meko_system.amp_registration (e.g. "100.84.82.87") produces
+// `unsupported protocol scheme ""` on the first request. We test for "://"
+// rather than url.Parse because a bare "host:port" parses with the host as the
+// scheme, which url.Parse would not flag as missing.
+//
+// The registration handler applies this on the write path too, so the stored
+// row (and thus meko_admin's "visit the controller" link, which renders the URL
+// verbatim) is normalized; this constructor keeps repairing any row that
+// predates that.
+func NormalizeAMPBaseURL(raw string) string {
+	s := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if s == "" || strings.Contains(s, "://") {
+		return s
+	}
+	return "http://" + s
 }
 
 /* ---- wire types (subset of the controller's schema) ---- */
@@ -161,13 +180,41 @@ func (c *AMPClient) createCluster(ctx context.Context, poolID string, body map[s
 	return p, err
 }
 
+// ampDefaultEngine is the controller's default cluster engine (a plain Postgres
+// with no engine-bundled extensions). We omit `engine` from the request when it
+// is empty or this default so the common path (e.g. the MCP tool) sends the same
+// body it always has — the controller applies the same default either way.
+const ampDefaultEngine = "postgres"
+
+// applyClusterEngineExtensions sets the optional `engine` and `extensions`
+// fields on a create_cluster body. Both are opt-in: engine is sent only for a
+// non-default engine, extensions only when at least one non-blank name is
+// picked. Extensions compose with the engine's own bundle on the controller, so
+// they are independent (e.g. pgvector on a plain postgres cluster).
+func applyClusterEngineExtensions(body map[string]any, engine string, extensions []string) {
+	if e := strings.TrimSpace(engine); e != "" && e != ampDefaultEngine {
+		body["engine"] = e
+	}
+	clean := make([]string, 0, len(extensions))
+	for _, x := range extensions {
+		if x = strings.TrimSpace(x); x != "" {
+			clean = append(clean, x)
+		}
+	}
+	if len(clean) > 0 {
+		body["extensions"] = clean
+	}
+}
+
 // CreateCluster creates a database in a pool (no compute), polling the task to
-// completion and reading the materialized cluster back.
-func (c *AMPClient) CreateCluster(ctx context.Context, poolID, name string, pgVersion *int) (AMPCluster, error) {
+// completion and reading the materialized cluster back. engine/extensions are
+// optional (see applyClusterEngineExtensions).
+func (c *AMPClient) CreateCluster(ctx context.Context, poolID, name string, pgVersion *int, engine string, extensions []string) (AMPCluster, error) {
 	body := map[string]any{"name": name}
 	if pgVersion != nil {
 		body["pg_version"] = *pgVersion
 	}
+	applyClusterEngineExtensions(body, engine, extensions)
 	return c.createCluster(ctx, poolID, body)
 }
 
@@ -177,7 +224,7 @@ func (c *AMPClient) CreateCluster(ctx context.Context, poolID, name string, pgVe
 // writer provisions in well under a minute, so we wait (consistent with every
 // other Meko→controller call) rather than leave the caller guessing. cpu/memory
 // size the writer; omit either to take AMP's default (2 cores / 4Gi).
-func (c *AMPClient) CreateClusterWithWriter(ctx context.Context, poolID, name string, pgVersion *int, cpu, memory string) (AMPCluster, error) {
+func (c *AMPClient) CreateClusterWithWriter(ctx context.Context, poolID, name string, pgVersion *int, cpu, memory, engine string, extensions []string) (AMPCluster, error) {
 	body := map[string]any{"name": name, "with_writer": true}
 	if pgVersion != nil {
 		body["pg_version"] = *pgVersion
@@ -192,6 +239,7 @@ func (c *AMPClient) CreateClusterWithWriter(ctx context.Context, poolID, name st
 		}
 		body["resources"] = res
 	}
+	applyClusterEngineExtensions(body, engine, extensions)
 	return c.createCluster(ctx, poolID, body)
 }
 
