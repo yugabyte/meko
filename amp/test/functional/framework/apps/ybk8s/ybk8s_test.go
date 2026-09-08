@@ -727,3 +727,30 @@ func TestDiagnoseNamespaceNamesTheCause(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNodeSelectorAndHelmEscape(t *testing.T) {
+	got := ParseNodeSelector("node.kubernetes.io/instance-type=e2-standard-8, cloud.google.com/gke-nodepool=perf ")
+	if len(got) != 2 || got["node.kubernetes.io/instance-type"] != "e2-standard-8" || got["cloud.google.com/gke-nodepool"] != "perf" {
+		t.Errorf("ParseNodeSelector = %v", got)
+	}
+	for _, bad := range []string{"", "novalue", "=v", "k=", ","} {
+		if len(ParseNodeSelector(bad)) != 0 {
+			t.Errorf("%q must yield no selector, got %v", bad, ParseNodeSelector(bad))
+		}
+	}
+	// Unescaped dots would make helm read a nested path instead of one label key.
+	if want := `node\.kubernetes\.io/instance-type`; helmEscapeKey("node.kubernetes.io/instance-type") != want {
+		t.Errorf("helmEscapeKey = %q, want %q", helmEscapeKey("node.kubernetes.io/instance-type"), want)
+	}
+}
+
+func TestHelmSetsCarriesNodeSelector(t *testing.T) {
+	d := &Deployer{cfg: Config{NodeSelector: "node.kubernetes.io/instance-type=e2-standard-8"}}
+	sets := d.helmSets()
+	if got := sets[`nodeSelector.node\.kubernetes\.io/instance-type`]; got != "e2-standard-8" {
+		t.Errorf("node selector missing from helm sets: %v", sets)
+	}
+	if len((&Deployer{cfg: Config{}}).helmSets()[`nodeSelector.node\.kubernetes\.io/instance-type`]) != 0 {
+		t.Error("no selector configured must set nothing")
+	}
+}

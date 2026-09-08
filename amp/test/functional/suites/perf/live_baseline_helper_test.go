@@ -114,3 +114,24 @@ func TestStartBarrierWaitHonorsContext(t *testing.T) {
 		t.Fatal("a barrier missing an arrival must respect the context, not hang")
 	}
 }
+
+// perf/lifecycle's load phase measured 42s-151s inside one run, so a +96% delta
+// against history says nothing. The run's own spread has to veto the accusation.
+func TestLocalGateItemsSpreadVetoesRegression(t *testing.T) {
+	pg := portalGateConfig{MADK: 3, FloorPct: 5, MinRuns: 3}
+	prev := portalGatePrev{N: 10, Median: 75524, MAD: 20000}
+	noisy := []core.Datapoint{{Name: "lifecycle.load", Value: 148300, Direction: core.LowerIsBetter, SpreadPct: 259}}
+	quiet := []core.Datapoint{{Name: "lifecycle.load", Value: 148300, Direction: core.LowerIsBetter, SpreadPct: 8}}
+	items := []portalGateItem{{Name: "lifecycle.load", Value: 148300, Prev: prev}}
+
+	if got := localGateItems(noisy, items, pg)[0].Verdict; got != verdictSpreadVetoed {
+		t.Errorf("a +96%% delta under a 259%% within-run spread: verdict %q, want %s", got, verdictSpreadVetoed)
+	}
+	// It must not be counted as a short history window; that is a different fact.
+	if _, _, noSignal := gateCounts(localGateItems(noisy, items, pg)); noSignal != 0 {
+		t.Error("a spread veto is not a missing history window")
+	}
+	if got := localGateItems(quiet, items, pg)[0].Verdict; got != "regressed" {
+		t.Errorf("the same delta from a steady run must still regress, got %q", got)
+	}
+}

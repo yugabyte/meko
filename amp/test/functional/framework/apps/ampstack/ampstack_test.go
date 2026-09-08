@@ -1555,3 +1555,16 @@ func TestRenderDeclaresNothingWhenTheCRDIsAbsent(t *testing.T) {
 		}
 	}
 }
+
+func TestEndpointNodeSelectorPairs(t *testing.T) {
+	got := endpointNodeSelectorPairs("z=1, node.kubernetes.io/instance-type=e2-standard-8")
+	want := []string{"node.kubernetes.io/instance-type=e2-standard-8", "z=1"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("pairs = %v, want %v (sorted for a stable render)", got, want)
+	}
+	for _, bad := range []string{"", "novalue", "=v", "k=", ","} {
+		if len(endpointNodeSelectorPairs(bad)) != 0 {
+			t.Errorf("%q must yield no pairs, got %v", bad, endpointNodeSelectorPairs(bad))
+		}
+	}
+}

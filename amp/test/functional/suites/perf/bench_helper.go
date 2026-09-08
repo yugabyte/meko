@@ -249,6 +249,15 @@ func aggregate(vals []float64) BenchStats {
 	return s
 }
 
+// spreadPct is the sample's max-over-min spread, 0 when there is nothing to
+// spread over.
+func spreadPct(s BenchStats) float64 {
+	if len(s.Values) < 2 || s.Min <= 0 {
+		return 0
+	}
+	return (s.Max - s.Min) / s.Min * 100
+}
+
 // median is the middle value (average of the two middle values for an even
 // count). Empty → 0.
 func median(vals []float64) float64 {

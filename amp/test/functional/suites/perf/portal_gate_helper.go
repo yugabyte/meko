@@ -116,8 +116,10 @@ func portalGateCall(ctx context.Context, pg portalGateConfig, testName, ybVersio
 // Recomputes delta/band/verdict from the portal's data, ignoring its verdicts: band = max(mad_k x MAD%, floor%), delta signed in the worse direction.
 func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGateConfig) []portalGateItem {
 	dirByName := map[string]core.Direction{}
+	spreadByName := map[string]float64{}
 	for _, dp := range gated {
 		dirByName[dp.Name] = dp.Direction
+		spreadByName[dp.Name] = dp.SpreadPct
 	}
 	out := make([]portalGateItem, len(items))
 	for i, it := range items {
@@ -136,6 +138,11 @@ func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGat
 		out[i].Threshold = band
 		out[i].ThresholdFrom = "framework"
 		switch {
+		case d > band && d <= spreadByName[it.Name]:
+			// The run's own iterations disagreed by more than the delta, so it
+			// never measured the difference it would be accusing. Distinct from
+			// no_signal, which means the history window was too short.
+			out[i].Verdict = verdictSpreadVetoed
 		case d > band:
 			out[i].Verdict = "regressed"
 		case d < -band:
@@ -146,6 +153,10 @@ func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGat
 	}
 	return out
 }
+
+// verdictSpreadVetoed marks a datapoint whose delta cleared the history band but
+// not the run's own iteration spread.
+const verdictSpreadVetoed = "spread_vetoed"
 
 func gateCounts(items []portalGateItem) (regressed, improved, noSignal int) {
 	for _, it := range items {
@@ -188,8 +199,18 @@ func portalGateSummary(testName string, out *portalGateResponse) string {
 	if out.Regressed > 0 {
 		verdict = "fail"
 	}
-	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history (window %d, train %s)",
-		verdict, testName, out.Regressed, out.Total, out.Improved, out.NoSignal, out.Window, orNone(out.YBTrain))
+	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history, %d inside their own run spread (window %d, train %s)",
+		verdict, testName, out.Regressed, out.Total, out.Improved, out.NoSignal, spreadVetoed(out.Items), out.Window, orNone(out.YBTrain))
+}
+
+func spreadVetoed(items []portalGateItem) int {
+	n := 0
+	for _, it := range items {
+		if it.Verdict == verdictSpreadVetoed {
+			n++
+		}
+	}
+	return n
 }
 
 func portalRegressionError(testName string, out *portalGateResponse) error {

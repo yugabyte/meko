@@ -150,6 +150,10 @@ type Config struct {
 
 	// ExtraNamespaceLabels are merged onto the namespace (e.g. a reaper stamp).
 	ExtraNamespaceLabels map[string]string
+
+	// NodeSelector pins the master/tserver pods, as a "k=v,k=v" CSV of node
+	// labels.
+	NodeSelector string
 }
 
 // Getter is the minimal typed-config surface FromConfig needs (structurally
@@ -215,6 +219,7 @@ func FromConfig(get Getter) Config {
 		Reach:               ReachMode(get.GetString("apps.ybk8s.reach", string(DefaultReach))),
 		HelmRelease:         get.GetString("apps.ybk8s.helm_release", ""),
 		HelmTimeout:         get.GetDuration("apps.ybk8s.helm_timeout", DefaultHelmTimeout),
+		NodeSelector:        get.GetString("apps.ybk8s.node_selector", ""),
 	}
 }
 
@@ -693,8 +698,30 @@ func (d *Deployer) helmSets() map[string]string {
 	if d.cfg.ImagePullSecret != "" {
 		sets["Image.pullSecretName"] = d.cfg.ImagePullSecretName
 	}
+	for k, v := range ParseNodeSelector(d.cfg.NodeSelector) {
+		sets["nodeSelector."+helmEscapeKey(k)] = v
+	}
 	return sets
 }
+
+// ParseNodeSelector reads a "k=v,k=v" CSV. Malformed pairs are dropped: a
+// selector is an optimisation, and failing a deploy over a typo in one would
+// cost more than scheduling anywhere.
+func ParseNodeSelector(csv string) map[string]string {
+	out := map[string]string{}
+	for _, pair := range strings.Split(csv, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if !ok || strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+// helmEscapeKey escapes the dots inside a map key so helm --set reads
+// "node.kubernetes.io/instance-type" as one key and not a nested path.
+func helmEscapeKey(k string) string { return strings.ReplaceAll(k, ".", `\.`) }
 
 // helmInstallArgs builds the `helm install --wait` argv.
 func (d *Deployer) helmInstallArgs(chartDir string) []string {

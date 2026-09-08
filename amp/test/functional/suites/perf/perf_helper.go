@@ -47,6 +47,12 @@ const (
 	DefaultLatencyRisePct    = 35.0
 	DefaultReadyTimeout      = 5 * time.Minute
 	DefaultHealthTimeout     = 5 * time.Minute
+	// default-big is the one node pool a benchmark may run on: uniform
+	// e2-standard-16, ours, and outside GKE node auto-provisioning. Unpinned, a
+	// pod lands in whichever nap-* pool has room, and an arm on the slower
+	// machine measured delete_half at 5200ms against 2538ms for the identical
+	// image elsewhere (run 84ad29eb). Override with perf.arm_node_selector.
+	DefaultArmNodeSelector = "cloud.google.com/gke-nodepool=default-big"
 )
 
 // perfConfig is the resolved perf.* configuration.
@@ -66,6 +72,9 @@ type perfConfig struct {
 	LatencyRisePct    float64
 	ReadyTimeout      time.Duration
 	HealthTimeout     time.Duration
+	// ArmNodeSelector pins both arms' tservers and endpoint computes to one
+	// machine type, so their delta is the build. Empty disables the pin.
+	ArmNodeSelector string
 	// Benchmark is the BenchBase workload the perf/tpcc test runs
 	// (apps.benchbase.benchmark: tpcc | tpch | ycsb | smallbank | …); default
 	// tpcc. Lets a different BenchBase benchmark run config-only, no code change.
@@ -89,6 +98,7 @@ func perfFromConfig(c *core.Config) perfConfig {
 		LatencyRisePct:    c.GetFloat("perf.latency_rise_pct", DefaultLatencyRisePct),
 		ReadyTimeout:      c.GetDuration("perf.ready_timeout", DefaultReadyTimeout),
 		HealthTimeout:     c.GetDuration("perf.health_timeout", DefaultHealthTimeout),
+		ArmNodeSelector:   c.GetString("perf.arm_node_selector", DefaultArmNodeSelector),
 		Benchmark:         c.GetString("apps.benchbase.benchmark", "tpcc"),
 	}
 }

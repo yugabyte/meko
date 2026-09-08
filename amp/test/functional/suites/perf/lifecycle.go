@@ -136,7 +136,7 @@ func runLifecycle(t *core.T) error {
 	if err != nil {
 		return err
 	}
-	return gateLifecycle(t, params, id, all, sizes, nil, "", logf)
+	return gateLifecycle(t, params, id, all, sizes, nil, "", nil, logf)
 }
 
 // runLifecycleProvisioned is the live-baseline body: two self-provisioned
@@ -151,7 +151,7 @@ func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf
 	id := identityFromConfig(t.Options, "", frameworkCommit(), load)
 	t.SetPerfIdentity(id.core())
 
-	cur, base, err := provisionLiveArms(t, cfg, tag, logf)
+	cur, base, baseErr, err := provisionLiveArms(t, cfg, tag, logf)
 	if cur != nil {
 		defer cur.teardown(logf)
 	}
@@ -163,7 +163,6 @@ func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf
 	}
 
 	var baseAll []phaseResult
-	var baseErr error
 	var wg sync.WaitGroup
 	var pair *phaseBarrier
 	if base != nil {
@@ -177,13 +176,15 @@ func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf
 	all, sizes, err := lifecycleIterations(t, cur.cl, cur, cur.kube, params, "", pair, logf)
 	wg.Wait()
 	if err != nil {
+		cur.collectDiag(t, logf)
 		return err
 	}
 	if baseErr != nil {
+		base.collectDiag(t, logf)
 		logf("perf: WARN live baseline arm failed (%v) — gating on history instead", baseErr)
 		baseAll = nil
 	}
-	return gateLifecycle(t, params, id, all, sizes, baseAll, tag, logf)
+	return gateLifecycle(t, params, id, all, sizes, baseAll, tag, baseErr, logf)
 }
 
 // lifecycleIterations runs the iteration goroutines against one control plane
@@ -619,7 +620,7 @@ func (r *lifecycleRun) deleteCluster() error {
 }
 
 func gateLifecycle(t *core.T, p lifecycleParams, id Identity, results []phaseResult, sizes []float64,
-	baseResults []phaseResult, tag string, logf func(string, ...any)) error {
+	baseResults []phaseResult, tag string, baseErr error, logf func(string, ...any)) error {
 	return t.Step("gate_lifecycle", func(s *core.StepHandle) error {
 		t.Chart(phaseChart(medianPhases(results)))
 		gated, info, ratioErr := lifecycleDatapoints(results, sizes, p)
@@ -630,6 +631,11 @@ func gateLifecycle(t *core.T, p lifecycleParams, id Identity, results []phaseRes
 		cfg := perfFromConfig(t.Options)
 		var lbErr error
 		baselineUp := tag != "" && len(baseResults) > 0
+		// A degraded run gates on history instead, so record why the arm is missing:
+		// the reason otherwise lives only in the Jenkins console.
+		if !baselineUp && baseErr != nil {
+			s.Set("live_baseline", "arm failed, gated on history: "+baseErr.Error())
+		}
 		if baselineUp {
 			baseGated, _, _ := lifecycleDatapoints(baseResults, nil, p)
 			tableTxt, gerr := liveArmGate(gated, baseGated,
@@ -676,7 +682,8 @@ func lifecycleDatapoints(results []phaseResult, sizes []float64, p lifecyclePara
 			continue
 		}
 		st := aggregate(vals)
-		gated = append(gated, core.Datapoint{Name: lifecyclePrefix + g, Value: st.Median, Unit: "ms", Direction: core.LowerIsBetter})
+		gated = append(gated, core.Datapoint{Name: lifecyclePrefix + g, Value: st.Median, Unit: "ms",
+			Direction: core.LowerIsBetter, SpreadPct: spreadPct(st)})
 		if g == "load" && st.Median > 0 {
 			info = append(info, core.Datapoint{Name: lifecyclePrefix + "load_rows_per_s", Value: float64(p.Rows) / (st.Median / 1000), Unit: "rows/s", Direction: core.HigherIsBetter})
 		}

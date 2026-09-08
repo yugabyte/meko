@@ -3,6 +3,8 @@ package perf
 import (
 	"strings"
 	"testing"
+
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 func TestLifecycleDatapointsGateForkRatio(t *testing.T) {
@@ -98,5 +100,42 @@ func TestLifecycleDatapointsSingleIterationHasNoSpread(t *testing.T) {
 		if strings.HasSuffix(dp.Name, ".cv") || strings.HasSuffix(dp.Name, ".mad") {
 			t.Errorf("single iteration emitted %s", dp.Name)
 		}
+	}
+}
+
+func TestLifecycleDatapointsStampSpread(t *testing.T) {
+	results := []phaseResult{
+		{Name: "load", Group: "load", MS: 1000},
+		{Name: "load2", Group: "load", MS: 3000},
+		{Name: "delete_half", Group: "delete_half", MS: 500},
+	}
+	gated, _, _ := lifecycleDatapoints(results, nil, lifecycleParams{})
+	byName := map[string]core.Datapoint{}
+	for _, dp := range gated {
+		byName[dp.Name] = dp
+	}
+	// (3000-1000)/1000*100.
+	if got := byName["lifecycle.load"].SpreadPct; got != 200 {
+		t.Errorf("lifecycle.load SpreadPct = %v, want 200", got)
+	}
+	// One sample cannot disagree with itself, so it carries no spread and the
+	// gates fall back to their thresholds.
+	if got := byName["lifecycle.delete_half"].SpreadPct; got != 0 {
+		t.Errorf("a single iteration must carry no spread, got %v", got)
+	}
+}
+
+func TestSpreadPctGuards(t *testing.T) {
+	if got := spreadPct(aggregate([]float64{5})); got != 0 {
+		t.Errorf("one value = %v, want 0", got)
+	}
+	if got := spreadPct(aggregate(nil)); got != 0 {
+		t.Errorf("no values = %v, want 0", got)
+	}
+	if got := spreadPct(aggregate([]float64{0, 4})); got != 0 {
+		t.Errorf("a zero minimum has no defined ratio, got %v", got)
+	}
+	if got := spreadPct(aggregate([]float64{2, 4, 3})); got != 100 {
+		t.Errorf("(4-2)/2*100 = %v, want 100", got)
 	}
 }

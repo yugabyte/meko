@@ -202,7 +202,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 	id := identityFromConfig(t.Options, "", frameworkCommit(), load)
 	t.SetPerfIdentity(id.core())
 
-	cur, base, err := provisionLiveArms(t, cfg, tag, logf)
+	cur, base, armErr, err := provisionLiveArms(t, cfg, tag, logf)
 	if cur != nil {
 		defer cur.teardown(logf)
 	}
@@ -216,7 +216,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 	var curClient, baseClient *pg.Client
 	if err := t.Step("create_endpoints", func(*core.StepHandle) error {
 		var wg sync.WaitGroup
-		var curErr, baseErr error
+		curErr, baseErr := error(nil), armErr
 		wg.Add(1)
 		go func() { defer wg.Done(); curClient, curErr = cur.endpointClient(t.Context) }()
 		if base != nil {

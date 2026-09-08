@@ -63,9 +63,29 @@ type liveArm struct {
 	poolID  string
 	pgReady time.Duration
 	td      *teardownStack
+	ybKube  *k8s.Kubectl // the arm's own backing namespace
 
 	mu  sync.Mutex
 	pfs []*k8s.PortForward
+}
+
+// collectDiag dumps the arm's own namespace. Without it a suite body that fails
+// against a provisioned arm leaves nothing but the env control plane's logs,
+// which never touched the arm (run 5c88ed3c: three create_endpoint deploys hit
+// the controller's 35m helm timeout with no controller log to say why).
+// The run context is already cancelled in the case this exists for (the perf
+// watchdog fires on a timeout overrun), so collection gets its own deadline.
+func (a *liveArm) collectDiag(t *core.T, logf func(string, ...any)) {
+	if a == nil || a.kube == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), perfTeardownBudget)
+	defer cancel()
+	sink := attachSink{t: t, logf: logf}
+	diag.CollectK8sDiagnostics(ctx, a.kube, a.ns, sink, logf)
+	if a.ybKube != nil {
+		diag.CollectK8sDiagnostics(ctx, a.ybKube, a.ybKube.Namespace(), sink, logf)
+	}
 }
 
 func (a *liveArm) AmpController(context.Context) (*controller.Client, error) { return a.cl, nil }
@@ -136,7 +156,11 @@ func provisionLiveArm(ctx context.Context, t *core.T, cfg perfConfig, amp ampsta
 	}()
 	sink := attachSink{t: t, logf: logf}
 
-	info, kube, err := deployYBBacking(ctx, t, cfg.RF, sfx, td, logf)
+	ybBacking := clampBackingRF(ybk8s.FromConfig(t.Options), cfg.RF)
+	if cfg.ArmNodeSelector != "" && ybBacking.NodeSelector == "" {
+		ybBacking.NodeSelector = cfg.ArmNodeSelector
+	}
+	info, kube, err := deployYBBackingCfg(ctx, t, ybBacking, sfx, td, logf)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +169,9 @@ func provisionLiveArm(ctx context.Context, t *core.T, cfg perfConfig, amp ampsta
 	}
 
 	ybCfg := ybk8s.FromConfig(t.Options)
+	if cfg.ArmNodeSelector != "" && amp.EndpointNodeSelector == "" {
+		amp.EndpointNodeSelector = cfg.ArmNodeSelector
+	}
 	scfg := ampStackConfig(amp, ybCfg, info, sfx)
 	app := ampstack.New(scfg).WithLogf(logf)
 	if ybCfg.Kubeconfig != "" {
@@ -175,16 +202,19 @@ func provisionLiveArm(ctx context.Context, t *core.T, cfg perfConfig, amp ampsta
 	logf("perf: arm %s ready in %s (controller %s)", orNone(tag), scfg.Namespace, url)
 	return &liveArm{
 		tag: tag, sfx: sfx, app: app, kube: app.Kube(), ns: scfg.Namespace,
-		cl: cl, poolID: pool.ID, pgReady: cfg.ReadyTimeout, td: td,
+		cl: cl, poolID: pool.ID, pgReady: cfg.ReadyTimeout, td: td, ybKube: kube,
 	}, nil
 }
 
 // provisionLiveArms stands the current and baseline arms up concurrently. The
 // current arm's error fails the caller; the baseline arm is best-effort and
-// comes back nil (WARN logged) so the caller can fall back to the history gate.
-func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, ...any)) (cur, base *liveArm, err error) {
+// comes back nil with its error as baseErr, so the caller can fall back to the
+// history gate and still record why the arm is missing.
+func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, ...any)) (cur, base *liveArm, baseErr error, err error) {
+	var armErr error
 	stepErr := t.Step("provision_arms", func(s *core.StepHandle) error {
 		s.Set("baseline", tag)
+		s.Set("node_selector", orNone(cfg.ArmNodeSelector))
 		baseAmp := ampstack.FromConfig(t.Options.Derive(baselineOverrides(tag)))
 		var wg sync.WaitGroup
 		var curErr, baseErr error
@@ -198,12 +228,13 @@ func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, 
 			base, baseErr = provisionLiveArm(t.Context, t, cfg, baseAmp, tag, t.ResourceSuffix()+"b", logf)
 		}()
 		wg.Wait()
+		armErr = baseErr
 		if baseErr != nil {
-			logf("perf: WARN live baseline arm failed (%v) — gating on history instead", baseErr)
+			logf("perf: WARN live baseline arm failed to provision (%v) — gating on history instead", baseErr)
 		}
 		return curErr
 	})
-	return cur, base, stepErr
+	return cur, base, armErr, stepErr
 }
 
 // liveArmGate compares the two arms' gated datapoints by name: delta in the
@@ -223,7 +254,7 @@ func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]fl
 	var b strings.Builder
 	var violations []string
 	fmt.Fprintf(&b, "live baseline: this run vs release %s (same workload, concurrent stacks)\n", tag)
-	fmt.Fprintf(&b, "%-40s %14s %14s %9s %11s\n", "datapoint", "current", "baseline", "delta%", "allowed%")
+	fmt.Fprintf(&b, "%-40s %14s %14s %9s %11s %9s\n", "datapoint", "current", "baseline", "delta%", "allowed%", "spread%")
 	for _, dp := range current {
 		rdp, ok := ref[dp.Name]
 		if !ok || dp.Value == 0 || rdp.Value == 0 {
@@ -237,21 +268,31 @@ func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]fl
 		if dp.Direction == core.HigherIsBetter {
 			allowed = thr.DropPct
 		}
-		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%%\n", dp.Name, dp.Value, rdp.Value, d, allowed)
+		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%% %8.1f%%\n", dp.Name, dp.Value, rdp.Value, d, allowed, dp.SpreadPct)
 		// A percentage gate needs signal: one-shot ms-scale ops through two
 		// port-forwards jitter by tens of ms, so a violation must also clear an
 		// absolute floor.
 		if dp.Unit == "ms" && math.Abs(dp.Value-rdp.Value) < liveArmNoiseFloorMS {
 			continue
 		}
+		corroborated := false
 		if curBest != nil && baseBest != nil && dp.Direction == core.LowerIsBetter {
 			cb, cok := curBest[dp.Name]
 			bb, bok := baseBest[dp.Name]
 			if cok && bok && cb > 0 && bb > 0 {
-				if bd, ok := regressionPct(bb, cb, dp.Direction); !ok || bd <= allowed {
+				bd, ok := regressionPct(bb, cb, dp.Direction)
+				if !ok || bd <= allowed {
 					continue
 				}
+				corroborated = true
 			}
+		}
+		// A delta inside the arm's own iteration spread is two draws from one
+		// distribution, so it is no verdict. This is the cruder of the two
+		// guards: where the best draw regressed too, that corroboration is the
+		// stronger evidence and wins.
+		if !corroborated && dp.SpreadPct > 0 && d <= dp.SpreadPct {
+			continue
 		}
 		if allowed > 0 && d > allowed {
 			violations = append(violations, fmt.Sprintf("%s %+.1f%% vs the live %s baseline (allowed %.1f%%: current %.4g, baseline %.4g %s)",

@@ -252,10 +252,10 @@ rather than network-attached, which is why `emptyDir` is the right backing for
 this pool and a PVC/generic-ephemeral volume — provisioned by a CSI driver
 against a storage class — would silently move `/data` onto a network disk.
 
-The controller deliberately does **not** inspect nodes to size this. Deriving
-the ratio from a node's own allocatable disk needs a cluster-scoped
-`nodes: [get, list]` read, which BYOC deployments will not grant (#584), and it
-could only ever be an estimate: the controller knows neither which node the pod
+The controller deliberately does **not** inspect nodes to size this. `rbac.nodeRead`
+does grant a cluster-scoped `nodes: [get, list]` since #1166, so the read is
+available where it once was not (#584) — but sizing from it could only ever be an
+estimate: the controller knows neither which node the pod
 will land on nor which endpoints will land there afterwards. The scheduler knows
 both, and `ephemeral-storage` is how it is told. Reading it from inside a pod is
 no better — an `emptyDir`'s `sizeLimit` is enforced by the kubelet watching disk

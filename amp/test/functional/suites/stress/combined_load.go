@@ -94,10 +94,11 @@ func runCombinedLoad(t *core.T) (err error) {
 	}
 
 	r := &combinedRun{
-		t:    t,
-		cfg:  cfg,
-		td:   &teardownStack{},
-		logf: t.Masker().Logf(log.Printf),
+		t:       t,
+		cfg:     cfg,
+		td:      &teardownStack{},
+		logf:    t.Masker().Logf(log.Printf),
+		ddlGate: make(chan struct{}, 1),
 	}
 	r.sink = attachSink{t: t, logf: r.logf}
 
@@ -162,6 +163,9 @@ type combinedRun struct {
 	chaosMu       sync.Mutex
 	chaosInjects  int
 	chaosRecovers int
+
+	// One workload at a time may be inside its table-creating startup.
+	ddlGate chan struct{}
 }
 
 func (r *combinedRun) suffix() string { return r.t.ResourceSuffix() }
@@ -383,10 +387,8 @@ func (r *combinedRun) buildWorkloads() []*managedWorkload {
 	}
 }
 
-// sampleWorkload builds a managed sample-app workload: Start → WaitReady →
-// run for cfg.RunTime, with a report_kill (collect-before-stop) teardown.
-func (r *combinedRun) sampleWorkload(w sampleapp.Workload, name string, skipWorkload, skipDDL bool) *managedWorkload {
-	spec := sampleapp.RunSpec{
+func (r *combinedRun) sampleSpec(w sampleapp.Workload, name string, skipWorkload, skipDDL bool) sampleapp.RunSpec {
+	return sampleapp.RunSpec{
 		JarPath:         r.jarPath,
 		Workload:        w,
 		Hosts:           []string{r.inClusterHost},
@@ -400,7 +402,12 @@ func (r *combinedRun) sampleWorkload(w sampleapp.Workload, name string, skipWork
 		SkipWorkload:    skipWorkload,
 		SkipDDL:         skipDDL,
 	}
-	return r.sampleWorkloadFromSpec(name, spec)
+}
+
+// sampleWorkload builds a managed sample-app workload: Start → WaitReady →
+// run for cfg.RunTime, with a report_kill (collect-before-stop) teardown.
+func (r *combinedRun) sampleWorkload(w sampleapp.Workload, name string, skipWorkload, skipDDL bool) *managedWorkload {
+	return r.sampleWorkloadFromSpec(name, r.sampleSpec(w, name, skipWorkload, skipDDL))
 }
 
 // dataLoadWorkload is the concurrent SqlDataLoad phase 2: --skip_ddl loads data
@@ -412,17 +419,54 @@ func (r *combinedRun) dataLoadWorkload() *managedWorkload {
 	return r.sampleWorkloadFromSpec("sql_data_load", spec)
 }
 
+// holdDDLGate serialises the startup of every workload that creates its own
+// tables: the two sample apps and BenchBase's --create phase. Two of them issuing
+// DROP/CREATE at once lose the catalog-version race and the jar exits on the spot
+// ("Catalog Version Mismatch: A DDL occurred while processing this query").
+// Creating the tables in schema_setup instead is not an option for
+// SqlBankTransfer: its preWorkload seeds accounts in the same pass, so a second
+// pass fails on the primary key.
+//
+// The holder must not release until its DDL is done. For a sample app that means
+// waiting on sampleLoadMarker, not on WaitReady's default: with no load marker
+// WaitReady only requires a non-empty log, which is true seconds after launch and
+// long before DROP/CREATE and preWorkload finish.
+func (r *combinedRun) holdDDLGate(ctx context.Context) (func(), error) {
+	select {
+	case r.ddlGate <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-r.ddlGate }) }, nil
+	case <-ctx.Done():
+		return func() {}, ctx.Err()
+	}
+}
+
+// sampleLoadMarker is the throughput line yb-sample-apps prints once the
+// workload threads are running, so it appears only after DDL and preWorkload.
+const sampleLoadMarker = "ops/sec"
+
 func (r *combinedRun) sampleWorkloadFromSpec(name string, spec sampleapp.RunSpec) *managedWorkload {
 	app := sampleapp.New(r.podExec, spec,
 		sampleapp.WithLogf(r.logf),
+		sampleapp.WithLoadMarker(sampleLoadMarker),
 		sampleapp.WithReadyTimeout(r.cfg.ReadyTimeout))
 	return &managedWorkload{
 		name: name,
 		run: func(ctx context.Context) error {
+			release := func() {}
+			var err error
+			if !spec.SkipDDL {
+				if release, err = r.holdDDLGate(ctx); err != nil {
+					return fmt.Errorf("%s start: %w", name, err)
+				}
+			}
 			if err := app.Start(ctx); err != nil {
+				release()
 				return fmt.Errorf("%s start: %w", name, err)
 			}
-			if err := app.WaitReady(ctx); err != nil {
+			err = app.WaitReady(ctx)
+			release()
+			if err != nil {
 				return fmt.Errorf("%s not generating load: %w", name, err)
 			}
 			return sleepCtx(ctx, r.cfg.RunTime)
@@ -469,6 +513,21 @@ func (r *combinedRun) benchWorkload() *managedWorkload {
 		name:        "benchbase_tpcc",
 		tolerateErr: true, // TPC-C has no connection-death retry; a chaos node-kill aborts it (expected).
 		run: func(ctx context.Context) error {
+			// --create is DDL against the same database as the sample apps, so it
+			// takes the gate. Splitting it off also keeps the execute phase, which
+			// is what chaos is meant to hit, out of the serialised window.
+			release, err := r.holdDDLGate(ctx)
+			if err != nil {
+				return fmt.Errorf("benchbase tpcc create: %w", err)
+			}
+			create := spec
+			create.Create, create.Load, create.Execute = benchbase.Ptr(true), benchbase.Ptr(false), benchbase.Ptr(false)
+			_, cerr := benchbase.Run(ctx, r.podExec, create)
+			release()
+			if cerr != nil {
+				return fmt.Errorf("benchbase tpcc create: %w", cerr)
+			}
+			spec.Create = benchbase.Ptr(false)
 			res, err := benchbase.Run(ctx, r.podExec, spec)
 			mu.Lock()
 			raw = res.Raw

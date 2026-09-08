@@ -246,6 +246,12 @@ type Config struct {
 	// never torn down here).
 	Backing Backing
 
+	// EndpointNodeSelector pins every endpoint pod the deployed control plane
+	// creates, as a "k=v,k=v" CSV of node labels. Reaches the pods through the
+	// chart's controller.endpoint.nodeSelector, which the controller forwards as
+	// AMP_DEPLOY_NODE_SELECTOR.
+	EndpointNodeSelector string
+
 	// DeployTimeout is the controller's own endpoint helm --wait budget
 	// (AMP_DEPLOY_TIMEOUT). Empty = the binary default (10m), which a multi-node
 	// backing's first endpoint (node scale-up + image pull) does not fit.
@@ -408,6 +414,7 @@ func FromConfig(get Getter) Config {
 			AdminHostPorts: get.GetString("env.ampstack.backing.admin_host_ports", ""),
 		},
 		DeployTimeout:             get.GetString("env.ampstack.deploy_timeout", "20m"),
+		EndpointNodeSelector:      get.GetString("env.ampstack.endpoint_node_selector", ""),
 		HelmShim:                  get.GetBool("env.ampstack.helm_shim", true),
 		MCPEnabled:                get.GetBool("env.ampstack.mcp_enabled", false),
 		UIEnabled:                 get.GetBool("env.ampstack.ui_enabled", false),
@@ -1236,6 +1243,9 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 	// --set-string additionally keeps helm from coercing the value (numeric
 	// host:port digits, etc). Both go through helmEscape so any literal comma
 	// survives as one value instead of being torn into bogus assignments.
+	for i, pair := range endpointNodeSelectorPairs(a.cfg.EndpointNodeSelector) {
+		argv = append(argv, "--set-string", fmt.Sprintf("controller.endpoint.nodeSelector[%d]=%s", i, helmEscape(pair)))
+	}
 	argv = append(argv, "--set-string", "controller.endpoint.ybHostPorts="+helmEscape(a.backingHostPorts()))
 	argv = append(argv, "--set-string", "controller.databaseUrl="+helmEscape(a.dbURL()))
 	for _, v := range apiVersions {
@@ -1650,6 +1660,22 @@ func deleteControllerClusterRBAC(ctx context.Context, kube *k8s.Kubectl, namespa
 		}
 	}
 	return nil
+}
+
+// endpointNodeSelectorPairs reads a "k=v,k=v" CSV into the chart's list form,
+// sorted so the rendered manifest is stable.
+func endpointNodeSelectorPairs(csv string) []string {
+	var out []string
+	for _, pair := range strings.Split(csv, ",") {
+		pair = strings.TrimSpace(pair)
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok || strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		out = append(out, pair)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Signal is a no-op for the control-plane stack (nothing to pause/stop short of

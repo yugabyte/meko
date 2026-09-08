@@ -114,10 +114,10 @@ func TestByocPermissionStepsNeedsBothHalves(t *testing.T) {
 		deny[p.String()] = "no"
 	}
 	if _, err := byocPermissionSteps(context.Background(), answer(deny, "yes")); err != nil {
-		t.Errorf("a namespace-scoped controller must pass: %v", err)
+		t.Errorf("a BYOC-shaped controller must pass: %v", err)
 	}
 
-	leaked := rbacProbe{verb: "list", resource: "nodes", cluster: true}
+	leaked := rbacProbe{verb: "list", resource: "pods", cluster: true}
 	granted := map[string]string{}
 	for k, v := range deny {
 		granted[k] = v
@@ -133,8 +133,38 @@ func TestByocPermissionStepsNeedsBothHalves(t *testing.T) {
 		starved[k] = v
 	}
 	_, err = byocPermissionSteps(context.Background(), answer(starved, "no"))
+	if err == nil || !strings.Contains(err.Error(), byocAllowedClusterProbes[0].String()) {
+		t.Errorf("a controller denied the node read must fail and name the probe, got %v", err)
+	}
+
+	noRole := map[string]string{}
+	for k, v := range deny {
+		noRole[k] = v
+	}
+	for _, p := range byocAllowedClusterProbes {
+		noRole[p.String()] = "yes"
+	}
+	for _, p := range byocAllowedProbes {
+		noRole[p.String()] = "no"
+	}
+	_, err = byocPermissionSteps(context.Background(), answer(noRole, "no"))
 	if err == nil || !strings.Contains(err.Error(), byocAllowedProbes[0].String()) {
 		t.Errorf("a controller denied its own Role must fail and name the probe, got %v", err)
+	}
+}
+
+// rbac.nodeRead is on by default, so node reads are expected and node writes are
+// not. Getting this backwards is what made the test red on 0.260907.1.
+func TestByocNodeProbesSplitReadFromWrite(t *testing.T) {
+	for _, p := range byocDeniedProbes {
+		if p.resource == "nodes" && (p.verb == "get" || p.verb == "list") {
+			t.Errorf("%q is denied, but rbac.nodeRead grants it by default", p)
+		}
+	}
+	for _, p := range byocAllowedClusterProbes {
+		if p.resource != "nodes" || !p.cluster {
+			t.Errorf("%q is allowed at cluster scope, but nodeRead is the chart's only cluster grant", p)
+		}
 	}
 }
 
@@ -161,9 +191,20 @@ func TestByocBindingSteps(t *testing.T) {
 			return rbs, nil
 		}
 	}
+	nodeRead := byocNodeReadBinding(ns, sa)
 	ok := []byocBinding{{name: "amp-controller", roleRef: "Role/amp-controller", subjects: []string{subject}}}
 	if _, err := byocBindingSteps(context.Background(), list(nil, ok), ns, sa); err != nil {
 		t.Errorf("a namespace-scoped controller must pass the fallback: %v", err)
+	}
+
+	chartNodes := []byocBinding{{name: nodeRead, roleRef: "ClusterRole/" + nodeRead, subjects: []string{subject}}}
+	if _, err := byocBindingSteps(context.Background(), list(chartNodes, ok), ns, sa); err != nil {
+		t.Errorf("the chart's nodeRead pair must pass the fallback: %v", err)
+	}
+
+	impostor := []byocBinding{{name: nodeRead, roleRef: "ClusterRole/cluster-admin", subjects: []string{subject}}}
+	if _, err := byocBindingSteps(context.Background(), list(impostor, ok), ns, sa); err == nil {
+		t.Error("a nodeRead-named binding pointing at another ClusterRole must fail")
 	}
 
 	stray := []byocBinding{{name: "legacy-admin", roleRef: "ClusterRole/cluster-admin", subjects: []string{subject}}}

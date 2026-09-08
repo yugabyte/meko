@@ -24,6 +24,10 @@ type Datapoint struct {
 	// Baseline is the gate's comparison against the stored baseline, or nil when
 	// no baseline existed (a first run) or the datapoint was emitted ungated.
 	Baseline *BaselineComparison
+	// SpreadPct is (max-min)/min*100 over the iterations Value was reduced from,
+	// 0 when there was one sample. A gate must not accuse a delta smaller than
+	// this: the run could not measure the difference it is being blamed for.
+	SpreadPct float64
 }
 
 // BaselineComparison is a Datapoint's comparison against its baseline value:

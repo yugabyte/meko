@@ -1,9 +1,8 @@
-// amp_byoc_scope proves the controller runs on namespace-scoped RBAC only, the
-// permission shape a BYOC install grants. The verdict comes from the API server
-// (kubectl auth can-i --as the controller's service account), not from the
-// rendered chart: a chart can look namespace-scoped while a stray
-// ClusterRoleBinding from elsewhere still holds the service account
-// cluster-scoped rights.
+// amp_byoc_scope proves the controller runs on the permission shape a BYOC
+// install grants: namespaced rights plus the chart's one read-only cluster
+// grant, node get/list (rbac.nodeRead). The verdict comes from the API server,
+// not the rendered chart: a chart can look scoped while a stray
+// ClusterRoleBinding from elsewhere still holds the service account more.
 package features
 
 import (
@@ -28,14 +27,21 @@ const (
 // what another subject may do needs impersonate rights of our own.
 var errByocNoImpersonation = errors.New("kubectl auth can-i --as is not permitted for the credentials this run holds")
 
-// byocDeniedProbes are the cluster-scoped actions a namespace-scoped controller
-// must not be able to take. Each is asked with --all-namespaces so a namespaced
-// Role can never answer for it.
+// Each probe is asked with --all-namespaces so a namespaced Role can never answer
+// for it. The node writes are here because rbac.nodeRead grants reads on the same
+// kind, and read-only is the whole claim.
 var byocDeniedProbes = []rbacProbe{
 	{verb: "list", resource: "namespaces", cluster: true},
-	{verb: "list", resource: "nodes", cluster: true},
 	{verb: "list", resource: "pods", cluster: true},
 	{verb: "get", resource: "clusterroles", cluster: true},
+	{verb: "patch", resource: "nodes", cluster: true},
+	{verb: "delete", resource: "nodes", cluster: true},
+}
+
+// byocAllowedClusterProbes is the chart's only cluster-scoped grant.
+var byocAllowedClusterProbes = []rbacProbe{
+	{verb: "get", resource: "nodes", cluster: true},
+	{verb: "list", resource: "nodes", cluster: true},
 }
 
 // byocAllowedProbes are the namespaced actions the chart's controller Role
@@ -59,7 +65,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Prove the controller operates under namespace-scoped RBAC only, as a BYOC install grants: the API server denies the controller's service account every cluster-scoped probe, still grants the namespaced ones its Role declares, and a real endpoint deploy plus query goes through under that restriction.",
+		Description: "Prove the controller operates under the RBAC a BYOC install grants: the API server denies its service account every cluster-scoped probe but the chart's read-only node get/list, still grants the namespaced verbs its Role declares, and a real endpoint deploy plus query goes through under that restriction.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     20 * time.Minute,
 		Run:         runAmpByocScope,
@@ -165,28 +171,41 @@ func (b *byocRun) permissionScope(ctx context.Context) error {
 	return berr
 }
 
-// byocPermissionSteps asks the API server both halves and returns every answer it
-// gave: the cluster-scoped probes must come back "no", the namespaced ones "yes".
 // Checking only the denials would also pass for a controller holding no
 // permissions at all.
 func byocPermissionSteps(ctx context.Context, canI canIFunc) (map[string]string, error) {
 	answers := map[string]string{}
-	for _, p := range byocDeniedProbes {
+	ask := func(p rbacProbe) (string, error) {
 		ans, err := canI(ctx, p)
+		if err != nil {
+			return "", err
+		}
+		answers[p.String()] = ans
+		return ans, nil
+	}
+	for _, p := range byocDeniedProbes {
+		ans, err := ask(p)
 		if err != nil {
 			return answers, err
 		}
-		answers[p.String()] = ans
 		if ans != "no" {
-			return answers, fmt.Errorf("probe %q: the API server answered %q, want \"no\": the controller's service account still holds a cluster-scoped permission, which a BYOC install does not grant, so something outside the chart's namespace-scoped RBAC is binding it", p, ans)
+			return answers, fmt.Errorf("probe %q: the API server answered %q, want \"no\": the controller's service account holds a cluster-scoped permission beyond the chart's read-only node grant, so something outside its RBAC is binding it", p, ans)
+		}
+	}
+	for _, p := range byocAllowedClusterProbes {
+		ans, err := ask(p)
+		if err != nil {
+			return answers, err
+		}
+		if ans != "yes" {
+			return answers, fmt.Errorf("probe %q: the API server answered %q, want \"yes\": rbac.nodeRead grants this by default and cloud detection reads spec.providerID through it, so an nlb_internal endpoint create fails without it", p, ans)
 		}
 	}
 	for _, p := range byocAllowedProbes {
-		ans, err := canI(ctx, p)
+		ans, err := ask(p)
 		if err != nil {
 			return answers, err
 		}
-		answers[p.String()] = ans
 		if ans != "yes" {
 			return answers, fmt.Errorf("probe %q: the API server answered %q, want \"yes\": the controller chart's Role declares this verb and the controller uses it, so a namespace-scoped install that lacks it cannot deploy an endpoint", p, ans)
 		}
@@ -194,22 +213,30 @@ func byocPermissionSteps(ctx context.Context, canI canIFunc) (map[string]string,
 	return answers, nil
 }
 
-// byocBindingSteps is the honest fallback when impersonation is unavailable: no
-// ClusterRoleBinding may reference the controller's service account, and at least
-// one RoleBinding in its namespace must. It returns the bindings it saw.
+// byocNodeReadBinding is the name the chart renders for its nodeRead pair.
+func byocNodeReadBinding(ns, sa string) string { return ns + "-" + sa + "-nodes" }
+
+// The fallback when impersonation is unavailable: the only ClusterRoleBinding that
+// may reference the controller's service account is the chart's own nodeRead pair,
+// and at least one RoleBinding in its namespace must.
 func byocBindingSteps(ctx context.Context, list byocBindingLister, ns, sa string) ([]string, error) {
 	subject := "ServiceAccount/" + ns + "/" + sa
+	nodeRead := byocNodeReadBinding(ns, sa)
 	seen := []string{}
 	crbs, err := list(ctx, true, "")
 	if err != nil {
 		return seen, err
 	}
 	for _, bnd := range crbs {
-		if bnd.references(subject) {
-			seen = append(seen, "ClusterRoleBinding/"+bnd.name)
-			return seen, fmt.Errorf("ClusterRoleBinding %s binds %s to %s: the controller's service account holds cluster-scoped rights, which a BYOC install does not grant. This is a binding-level check, not the API server's own decision: kubectl auth can-i --as is not permitted for this run's credentials",
-				bnd.name, bnd.roleRef, subject)
+		if !bnd.references(subject) {
+			continue
 		}
+		seen = append(seen, "ClusterRoleBinding/"+bnd.name)
+		if bnd.name == nodeRead && bnd.roleRef == "ClusterRole/"+nodeRead {
+			continue
+		}
+		return seen, fmt.Errorf("ClusterRoleBinding %s binds %s to %s: the controller's service account holds cluster-scoped rights beyond the chart's %s node-read pair, which a BYOC install does not grant. This is a binding-level check, not the API server's own decision: kubectl auth can-i --as is not permitted for this run's credentials",
+			bnd.name, bnd.roleRef, subject, nodeRead)
 	}
 	rbs, err := list(ctx, false, ns)
 	if err != nil {
@@ -227,9 +254,10 @@ func byocBindingSteps(ctx context.Context, list byocBindingLister, ns, sa string
 }
 
 // endToEnd drives a real endpoint + query through the controller under the
-// restriction the phase above proved. Endpoint deploy sizes the compute pod's
-// emptyDir from the node list, a cluster-scoped read the controller does not have
-// here (meko#584), so this is where a re-introduced dependency surfaces.
+// restriction the phase above proved. It is the surviving half of the #584
+// guard: node get/list are granted now, so a re-introduced node-list dependency
+// no longer fails the probe phase, and a deploy that needs more than the
+// chart's read-only node grant fails here instead.
 func (b *byocRun) endToEnd(ctx context.Context) error {
 	cl, err := b.a.f.controllerClient(ctx)
 	if err != nil {
@@ -458,9 +486,17 @@ func byocLastLine(out string) string {
 }
 
 // byocAnswerLine renders the probe answers in probe order for the step property.
+// byocProbeOrder is every probe byocPermissionSteps asks, in the order it asks
+// them. Kept in one place so a new probe list cannot go unrecorded.
+func byocProbeOrder() []rbacProbe {
+	out := append([]rbacProbe{}, byocDeniedProbes...)
+	out = append(out, byocAllowedClusterProbes...)
+	return append(out, byocAllowedProbes...)
+}
+
 func byocAnswerLine(answers map[string]string) string {
 	var parts []string
-	for _, p := range append(append([]rbacProbe{}, byocDeniedProbes...), byocAllowedProbes...) {
+	for _, p := range byocProbeOrder() {
 		if ans, ok := answers[p.String()]; ok {
 			parts = append(parts, p.String()+"="+ans)
 		}
