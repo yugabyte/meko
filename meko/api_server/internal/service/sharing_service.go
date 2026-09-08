@@ -102,6 +102,12 @@ type SharingService struct {
 	cognito   CognitoInviter
 	langfuseS *LangfuseService
 	emailer   EmailSender
+	// agentKAdminEmail: invites addressed to this one account are
+	// auto-accepted (see InviteToDatapack) instead of left pending --
+	// it's a designated service account (the shared AgentK deployment's
+	// own identity), not a human who can click "accept" on every lab
+	// user's share. Empty disables the behavior entirely.
+	agentKAdminEmail string
 }
 
 // NewSharingService creates a new SharingService. The cognito parameter
@@ -121,6 +127,12 @@ func (s *SharingService) SetCognito(c CognitoInviter) {
 // datapack-share membership into Langfuse org/project memberships.
 func (s *SharingService) SetLangfuse(l *LangfuseService) {
 	s.langfuseS = l
+}
+
+// SetAgentKAdminEmail configures the one recipient address whose invites
+// InviteToDatapack auto-accepts. Empty (the default) disables the behavior.
+func (s *SharingService) SetAgentKAdminEmail(email string) {
+	s.agentKAdminEmail = strings.TrimSpace(email)
 }
 
 // SetEmailer late-binds the EmailSender used to dispatch SES invite emails.
@@ -205,6 +217,19 @@ func (s *SharingService) InviteToDatapack(
 		"recipient", email,
 		"user_exists", recipientUserID != nil,
 	)
+
+	// A designated service account (the shared AgentK deployment's own
+	// identity) can't click "accept" on every lab user's share -- auto-accept
+	// on its behalf instead of leaving the invite pending. Scoped to exactly
+	// one configured email; every other invite behaves exactly as before.
+	if s.agentKAdminEmail != "" && recipientUserID != nil && strings.EqualFold(email, s.agentKAdminEmail) {
+		if acceptErr := s.repo.AcceptInvite(inv.InviteID, *recipientUserID, datapackID, grantToPermissions(inv.GrantRole)); acceptErr != nil {
+			slog.Warn("invite: agentk-admin auto-accept failed, invite left pending",
+				"invite_id", inv.InviteID, "error", acceptErr)
+		} else {
+			inv.Status = "accepted"
+		}
+	}
 
 	emailParams := InviteEmailParams{
 		RecipientEmail: email,

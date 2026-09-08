@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 
-/** Shared degrade prompt for the 4 stages that need a datapack already
+/** Shared degrade prompt for every stage that needs a datapack already
  *  selected — CreateDatapackStage is the only stage that sets the
  *  selection, so every other stage degrades to this until it does. */
 export function LabStageNeedsDatapack({ onGoToCreateDatapack }: { onGoToCreateDatapack: () => void }) {

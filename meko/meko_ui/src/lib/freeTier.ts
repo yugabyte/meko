@@ -82,6 +82,13 @@ export function isGatedTier(userType?: string | null): boolean {
   return t === "free" || t === "standard";
 }
 
+/** True for any paid tier (standard and above) — used to gate deploying a
+ *  dedicated agent instance in Labs, which free-tier users can't do (they
+ *  can still use a lab's shared instance, which needs no deploy at all). */
+export function canDeployDedicatedAgent(userType?: string | null): boolean {
+  return !isFreeTier(userType);
+}
+
 export type TierLimits = typeof FREE_TIER_LIMITS;
 
 /** Cap set for the given tier. Pro / enterprise / unknown → Infinity per field,

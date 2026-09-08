@@ -8,7 +8,7 @@ vi.mock("@/lib/runtimeEnv", () => ({
     name === "MEKO_FREE_TIER_QUOTA_ENABLED" ? "true" : undefined,
 }));
 
-import { isFreeTier, getFreeTierStatus, FREE_TIER_LIMITS } from "@/lib/freeTier";
+import { canDeployDedicatedAgent, isFreeTier, getFreeTierStatus, FREE_TIER_LIMITS } from "@/lib/freeTier";
 import type { AccountUsage } from "@/lib/api/mekoApi";
 
 const usage = (over: Partial<AccountUsage> = {}): AccountUsage =>
@@ -32,6 +32,22 @@ describe("isFreeTier", () => {
     expect(isFreeTier("")).toBe(false);
     expect(isFreeTier(null)).toBe(false);
     expect(isFreeTier(undefined)).toBe(false);
+  });
+});
+
+describe("canDeployDedicatedAgent", () => {
+  it("is false only for the free tier", () => {
+    expect(canDeployDedicatedAgent("free")).toBe(false);
+    expect(canDeployDedicatedAgent("  FREE ")).toBe(false);
+  });
+  it("is true for paid tiers", () => {
+    expect(canDeployDedicatedAgent("standard")).toBe(true);
+    expect(canDeployDedicatedAgent("pro")).toBe(true);
+    expect(canDeployDedicatedAgent("enterprise")).toBe(true);
+  });
+  it("is true (not blocking) when the tier is unknown/not yet loaded", () => {
+    expect(canDeployDedicatedAgent(null)).toBe(true);
+    expect(canDeployDedicatedAgent(undefined)).toBe(true);
   });
 });
 

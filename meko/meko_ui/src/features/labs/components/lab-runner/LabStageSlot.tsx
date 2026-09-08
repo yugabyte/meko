@@ -1,8 +1,12 @@
 import { CollaborateStage } from "../stages/CollaborateStage";
+import { ContextIntroStage } from "../stages/ContextIntroStage";
+import { ConversationStage } from "../stages/ConversationStage";
 import { CreateDatapackStage } from "../stages/CreateDatapackStage";
 import { DeployAgentStage } from "../stages/DeployAgentStage";
+import { KnowledgeBaseStage } from "../stages/KnowledgeBaseStage";
+import { MemoryStage } from "../stages/MemoryStage";
 import { RunReviewStage } from "../stages/RunReviewStage";
-import { SeedContextStage } from "../stages/SeedContextStage";
+import { ShareWithAgentStage } from "../stages/ShareWithAgentStage";
 import type { useLabProgress } from "../../hooks/useLabProgress";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDefinition } from "../../types";
@@ -10,7 +14,7 @@ import type { LabDefinition } from "../../types";
 /**
  * Main content pane of the lab runner: switches on progress.currentStage.id
  * (closed union, same convention the old LabDemoAppSlot used for
- * demoApp.kind) to render one of the 5 fixed stage components.
+ * demoApp.kind) to render one of the 9 fixed stage components.
  */
 export function LabStageSlot({
   lab,
@@ -21,8 +25,8 @@ export function LabStageSlot({
   session: ReturnType<typeof useLabRunnerSession>;
   progress: ReturnType<typeof useLabProgress>;
 }) {
-  const goToCreateDatapack = () => progress.goToStage(0);
-  const goToDeployAgent = () => progress.goToStage(2);
+  const goToCreateDatapack = () => progress.goToStageById("create-datapack");
+  const goToDeployAgent = () => progress.goToStageById("deploy-agent");
 
   switch (progress.currentStage.id) {
     case "create-datapack":
@@ -38,12 +42,20 @@ export function LabStageSlot({
           onContinue={progress.goToNext}
         />
       );
-    case "seed-context":
-      return <SeedContextStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    case "context-intro":
+      return <ContextIntroStage />;
+    case "knowledge-base":
+      return <KnowledgeBaseStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    case "memory":
+      return <MemoryStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    case "conversation":
+      return <ConversationStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
     case "deploy-agent":
       return (
         <DeployAgentStage demoApp={lab.demoApp} session={session} onGoToCreateDatapack={goToCreateDatapack} />
       );
+    case "share-with-agent":
+      return <ShareWithAgentStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
     case "run-review":
       return (
         <RunReviewStage

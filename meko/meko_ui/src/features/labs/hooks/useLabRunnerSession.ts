@@ -10,8 +10,11 @@ import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { getLocalItem, removeLocalItem, setLocalItem } from "@/lib/browserStorage";
 
-import { useDeploymentStatus } from "./useDeployments";
+import { useDeploymentStatus, useSharedDeploymentStatus } from "./useDeployments";
 import type { LabDefinition } from "../types";
+import type { LessonTrace } from "../lib/lessonTrace";
+
+export type DeploymentMode = "shared" | "dedicated";
 
 function selectedDatapackStorageKey(labId: string): string {
   return `meko:lab-datapack:${labId}`;
@@ -19,6 +22,10 @@ function selectedDatapackStorageKey(labId: string): string {
 
 function selectedDeploymentStorageKey(labId: string): string {
   return `meko:lab-deployment:${labId}`;
+}
+
+function selectedDeploymentModeStorageKey(labId: string): string {
+  return `meko:lab-deployment-mode:${labId}`;
 }
 
 /**
@@ -66,6 +73,13 @@ export function useLabRunnerSession(lab: LabDefinition) {
   const [refreshTick, setRefreshTick] = useState(0);
 
   const bumpRefreshTick = useCallback(() => setRefreshTick((t) => t + 1), []);
+
+  // The X-Ray pane's data: the calls the most recently completed lesson
+  // made. Not persisted -- resets on remount, which is correct, it's
+  // "since you opened this run." Recorded alongside bumpRefreshTick, not
+  // instead of it -- this carries no signal about *what* to refetch.
+  const [lastLessonTrace, setLastLessonTrace] = useState<LessonTrace | null>(null);
+  const recordLessonTrace = useCallback((trace: LessonTrace) => setLastLessonTrace(trace), []);
 
   const selectDatapack = useCallback(
     (id: string) => {
@@ -192,7 +206,28 @@ export function useLabRunnerSession(lab: LabDefinition) {
     setDeploymentIdState(null);
     removeLocalItem(selectedDeploymentStorageKey(lab.id));
   }, [lab.id]);
-  const { data: deployment } = useDeploymentStatus(deploymentId);
+
+  // Which AgentK this lab run uses: the one pre-deployed shared instance
+  // (default -- no deploy wait), or one the user deploys themselves.
+  // Persisted per lab, same pattern as datapackId/deploymentId above.
+  const [deploymentMode, setDeploymentModeState] = useState<DeploymentMode>(
+    () => (getLocalItem(selectedDeploymentModeStorageKey(lab.id)) as DeploymentMode | null) ?? "shared",
+  );
+  const selectDeploymentMode = useCallback(
+    (mode: DeploymentMode) => {
+      setDeploymentModeState(mode);
+      setLocalItem(selectedDeploymentModeStorageKey(lab.id), mode);
+    },
+    [lab.id],
+  );
+
+  const sharedAgentSlug = lab.demoApp.deployable?.agentSlug ?? null;
+  const { data: dedicatedDeployment } = useDeploymentStatus(deploymentId);
+  const { data: sharedDeployment } = useSharedDeploymentStatus(
+    sharedAgentSlug,
+    deploymentMode === "shared" && sharedAgentSlug !== null,
+  );
+  const deployment = deploymentMode === "shared" ? (sharedDeployment ?? null) : (dedicatedDeployment ?? null);
   const deploymentActive = deployment?.status === "active";
 
   return useMemo(
@@ -213,10 +248,14 @@ export function useLabRunnerSession(lab: LabDefinition) {
       error,
       refreshTick,
       bumpRefreshTick,
+      lastLessonTrace,
+      recordLessonTrace,
       deploymentId,
       selectDeployment,
       clearDeployment,
-      deployment: deployment ?? null,
+      deploymentMode,
+      selectDeploymentMode,
+      deployment,
       deploymentActive,
     }),
     [
@@ -236,9 +275,13 @@ export function useLabRunnerSession(lab: LabDefinition) {
       error,
       refreshTick,
       bumpRefreshTick,
+      lastLessonTrace,
+      recordLessonTrace,
       deploymentId,
       selectDeployment,
       clearDeployment,
+      deploymentMode,
+      selectDeploymentMode,
       deployment,
       deploymentActive,
     ],

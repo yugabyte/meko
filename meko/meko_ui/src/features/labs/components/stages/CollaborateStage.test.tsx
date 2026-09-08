@@ -43,9 +43,13 @@ function fakeSession(datapackId: string | null): ReturnType<typeof useLabRunnerS
     error: null,
     refreshTick: 0,
     bumpRefreshTick: vi.fn(),
+    lastLessonTrace: null,
+    recordLessonTrace: vi.fn(),
     deploymentId: null,
     selectDeployment: vi.fn(),
     clearDeployment: vi.fn(),
+    deploymentMode: "shared" as const,
+    selectDeploymentMode: vi.fn(),
     deployment: null,
     deploymentActive: false,
   };

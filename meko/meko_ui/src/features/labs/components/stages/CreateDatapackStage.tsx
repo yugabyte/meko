@@ -94,7 +94,7 @@ export function CreateDatapackStage({
                   }
                 />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-h-[300px]">
                 {datapacks.map((dp) => (
                   <SelectItem key={dp.datapack_id} value={dp.datapack_id}>
                     {dp.datapack_name}
@@ -121,7 +121,7 @@ export function CreateDatapackStage({
         </div>
       )}
       <Button onClick={onContinue} disabled={!selectedId}>
-        Continue to Seed Context
+        Next
       </Button>
     </div>
   );

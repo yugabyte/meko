@@ -1,5 +1,7 @@
-import { Loader2 } from "lucide-react";
-import { Link, Navigate, useLocation } from "react-router-dom";
+import { Loader2, LogOut } from "lucide-react";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
+
+import { Button } from "@/components/ui/button";
 
 import { ROUTES } from "@/app/routes/paths";
 import NotFoundPage from "@/features/system/pages/NotFoundPage";
@@ -14,10 +16,10 @@ import { LabStageSlot } from "../components/lab-runner/LabStageSlot";
 import { LabObservationSlot } from "../components/lab-runner/LabObservationSlot";
 import type { LabStageId } from "../types";
 
-// The only 2 stages that read session.userToken (SeedContextChat,
-// PrReviewDemoApp) -- Deploy Agent and Collaborate need just
-// session.datapackId, which is available synchronously.
-const STAGES_NEEDING_TOKEN: LabStageId[] = ["seed-context", "run-review"];
+// The only stages that read session.userToken (MemoryStage,
+// ConversationStage's SeedContextChat, PrReviewDemoApp) -- Deploy Agent and
+// Collaborate need just session.datapackId, which is available synchronously.
+const STAGES_NEEDING_TOKEN: LabStageId[] = ["memory", "conversation", "run-review"];
 
 export function shouldShowProvisionStatusSpinner(loading: boolean, stageId: LabStageId): boolean {
   return loading && STAGES_NEEDING_TOKEN.includes(stageId);
@@ -25,6 +27,7 @@ export function shouldShowProvisionStatusSpinner(loading: boolean, stageId: LabS
 
 export default function LabRunnerPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const parsed = parseLabRoute(location.pathname);
   const lab = parsed?.isRunner ? getLabDefinition(parsed.labId) : undefined;
   const showLabs = useLabsNavFlag();
@@ -42,22 +45,26 @@ export default function LabRunnerPage() {
 
   const showSpinner = shouldShowProvisionStatusSpinner(session.loading, progress.currentStage.id);
 
+  const LabIcon = lab.icon;
+
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
-      <div className="flex items-center gap-4 border-b border-border px-4 py-2">
-        <Link to={ROUTES.labs} className="shrink-0 text-sm text-muted-foreground hover:text-foreground">
-          &larr; Labs
-        </Link>
+    <div className="flex h-screen h-dvh w-full flex-col overflow-hidden bg-background text-foreground">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <LabIcon className="h-5 w-5 shrink-0 text-primary" aria-hidden />
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{lab.title}</h1>
+        <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.labs)}>
+          <LogOut className="h-3.5 w-3.5" aria-hidden />
+          End Lab
+        </Button>
       </div>
       {session.error && (
         <p className="border-b border-border bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {session.error}
         </p>
       )}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[340px_1fr_320px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[340px_1fr_440px]">
         <div className="hidden min-h-0 flex-col overflow-hidden lg:flex">
-          <LabStageNav stages={lab.stages} progress={progress} />
+          <LabStageNav chapters={lab.chapters} progress={progress} />
         </div>
         <div className="flex min-h-0 flex-col overflow-hidden">
           {showSpinner ? (
@@ -75,6 +82,7 @@ export default function LabRunnerPage() {
             datapackName={session.datapackName}
             datapackGrant={session.datapackGrant}
             refreshTick={session.refreshTick}
+            lastLessonTrace={session.lastLessonTrace}
           />
         </div>
       </div>

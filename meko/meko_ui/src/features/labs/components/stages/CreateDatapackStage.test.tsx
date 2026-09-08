@@ -32,19 +32,19 @@ function renderStage(overrides: Partial<Parameters<typeof CreateDatapackStage>[0
 }
 
 describe("CreateDatapackStage", () => {
-  it("Continue is disabled until a datapack is selected", () => {
+  it("Next is disabled until a datapack is selected", () => {
     renderStage({ selectedId: null });
-    expect((screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("Continue is enabled once a datapack is selected", () => {
+  it("Next is enabled once a datapack is selected", () => {
     renderStage({ selectedId: "dp-1" });
-    expect((screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("clicking Continue calls onContinue", () => {
+  it("clicking Next calls onContinue", () => {
     const { onContinue } = renderStage({ selectedId: "dp-1" });
-    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(onContinue).toHaveBeenCalled();
   });
 

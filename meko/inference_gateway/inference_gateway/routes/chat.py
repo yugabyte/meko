@@ -430,3 +430,62 @@ async def index_conversation(req: IndexConversationRequest, request: Request) ->
         reason=str(payload.get("reason") or ""),
         quota_exceeded=bool(payload.get("quota_exceeded", False)),
     )
+
+
+class MemoryAddRequest(BaseModel):
+    """Body for POST /memory/add — save a fact directly, not routed through
+    a conversation (Labs' 'add a memory' lesson)."""
+
+    text: str = Field(..., min_length=1, max_length=2000)
+    user_token: str = Field(..., min_length=1)
+    datapack_id: str = Field(..., min_length=1)
+
+
+class MemoryAddResponse(BaseModel):
+    # memory_add's return shape isn't documented (see mcp-server.md) --
+    # surfaced defensively, same as IndexConversationResponse handles its
+    # own tool's payload: an id when the tool returns one, else just `ok`.
+    ok: bool = True
+    memory_id: Optional[str] = None
+
+
+@router.post("/memory/add", response_model=MemoryAddResponse)
+async def memory_add(req: MemoryAddRequest, request: Request) -> MemoryAddResponse:
+    """Save a memory directly via the MCP memory_add tool -- a "remember
+    this" request, not extracted from a conversation."""
+    cfg: AppConfig = request.app.state.config
+    try:
+        tools = await build_mcp_tools(cfg.mcp_endpoint, req.user_token)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MCP tool discovery failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"MCP tool discovery failed: {exc}") from exc
+
+    tool = tools.get("memory_add")
+    if tool is None:
+        raise HTTPException(status_code=502, detail="memory_add tool unavailable")
+
+    args: Dict[str, Any] = {
+        "text": req.text,
+        "agent_id": cfg.agent_id,
+        "datapack_id": req.datapack_id,
+        "metadata": {"source": "labs-memory-lesson"},
+    }
+    try:
+        raw = await tool.ainvoke(args)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("memory_add failed")
+        raise HTTPException(status_code=502, detail=f"memory add failed: {exc}") from exc
+
+    if isinstance(raw, dict):
+        payload = raw
+    elif isinstance(raw, str) and raw.strip():
+        payload = json.loads(raw)
+    else:
+        payload = {}
+    err = payload.get("error")
+    if err:
+        raise HTTPException(status_code=502, detail=str(payload.get("detail") or err))
+    return MemoryAddResponse(
+        ok=True,
+        memory_id=payload.get("memory_id") or payload.get("id"),
+    )

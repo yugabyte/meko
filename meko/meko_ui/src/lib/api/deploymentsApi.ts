@@ -52,3 +52,12 @@ export async function createManagedDeployment(agentSlug: string) {
 export async function getDeployment(id: string, options: { signal?: AbortSignal } = {}) {
   return request<Deployment>(`/deployments/${encodeURIComponent(id)}`, "GET", undefined, options);
 }
+
+/** GET /deployments/shared/:agent_slug — the farm of pre-deployed instances
+ *  every signed-in user can invoke without deploying their own, one per
+ *  agent_slug. Looked up server-side from an operator-maintained table, not
+ *  the caller's own account. 404s when this agent has no shared instance
+ *  configured yet. */
+export async function getSharedDeployment(agentSlug: string, options: { signal?: AbortSignal } = {}) {
+  return request<Deployment>(`/deployments/shared/${encodeURIComponent(agentSlug)}`, "GET", undefined, options);
+}

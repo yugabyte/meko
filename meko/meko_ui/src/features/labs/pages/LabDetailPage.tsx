@@ -1,3 +1,4 @@
+import { ArrowRight } from "lucide-react";
 import { Link, Navigate, useLocation } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +33,7 @@ export default function LabDetailPage() {
           <Icon className="h-8 w-8 text-primary" />
         </div>
         <h1 className="text-2xl font-semibold">{lab.title}</h1>
+        <p className="text-sm text-muted-foreground">{lab.description}</p>
         <div className="flex flex-wrap justify-center gap-1.5">
           {lab.tags.map((tag) => (
             <Badge key={tag} variant="secondary">
@@ -44,29 +46,40 @@ export default function LabDetailPage() {
         </Button>
       </div>
       <div className="mx-auto w-full max-w-3xl px-6 pb-10">
-        <Tabs defaultValue="overview">
+        {/* How this lab starts, in three boxes -- replaces a paragraph of
+            prose with something scannable at a glance. */}
+        <div className="mb-8 flex items-stretch gap-2">
+          {lab.startingPoint.map((step, i) => (
+            <div key={step.title} className="flex flex-1 items-stretch gap-2">
+              <div className="flex-1 rounded-lg bg-muted/50 p-3 text-center">
+                <p className="text-sm font-medium">{step.title}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{step.subtitle}</p>
+              </div>
+              {i < lab.startingPoint.length - 1 && (
+                <div className="flex shrink-0 items-center text-muted-foreground" aria-hidden>
+                  <ArrowRight className="h-4 w-4" />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Chapters only, not individual stages -- this lab has 2 today but
+            more are coming, and only the selected chapter's summary shows
+            at once instead of stacking every chapter's text on the page. */}
+        <Tabs defaultValue={lab.chapters[0].id}>
           <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
+            {lab.chapters.map((chapter, i) => (
+              <TabsTrigger key={chapter.id} value={chapter.id}>
+                {i + 1}. {chapter.title}
+              </TabsTrigger>
+            ))}
           </TabsList>
-          <TabsContent value="overview" className="flex flex-col gap-6 pt-4">
-            <p className="text-sm text-muted-foreground">{lab.description}</p>
-            <ol className="relative flex items-start justify-between gap-2">
-              <div className="absolute left-0 right-0 top-4 h-0.5 bg-border" aria-hidden />
-              {lab.stages.map((stage, i) => (
-                <li key={stage.id} className="relative z-10 flex flex-1 flex-col items-center gap-1.5 text-center">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground ring-4 ring-background">
-                    {i + 1}
-                  </span>
-                  <p className="text-xs font-semibold sm:text-sm">{stage.title}</p>
-                  <div className="flex flex-col gap-0.5 text-[11px] leading-tight text-muted-foreground sm:text-xs">
-                    {stage.highlights.map((highlight, hi) => (
-                      <span key={hi}>{highlight}</span>
-                    ))}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </TabsContent>
+          {lab.chapters.map((chapter) => (
+            <TabsContent key={chapter.id} value={chapter.id} className="pt-4">
+              <p className="text-sm text-muted-foreground">{chapter.summary}</p>
+            </TabsContent>
+          ))}
         </Tabs>
       </div>
     </div>

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
@@ -84,6 +85,7 @@ func (cfg DeploymentConfig) ImageURI(agentSlug string) string {
 // GetAgentRuntime orchestration.
 type DeploymentService struct {
 	repo        *repository.DeploymentRepo
+	sharedRepo  *repository.SharedDeploymentRepo
 	cfg         DeploymentConfig
 	sts         *sts.Client
 	base        aws.Config
@@ -112,7 +114,7 @@ func WithAgentCoreClients(control agentCoreAPI, data agentCoreDataAPI) Deploymen
 // config once (IRSA / instance profile / env) -- used directly for managed
 // mode and as the base a BYOC per-deployment assumed-role config is copied
 // from, extending marketplace_service.go's pattern.
-func NewDeploymentService(ctx context.Context, repo *repository.DeploymentRepo, cfg DeploymentConfig, opts ...DeploymentServiceOption) (*DeploymentService, error) {
+func NewDeploymentService(ctx context.Context, repo *repository.DeploymentRepo, sharedRepo *repository.SharedDeploymentRepo, cfg DeploymentConfig, opts ...DeploymentServiceOption) (*DeploymentService, error) {
 	region := cfg.DefaultRegion
 	if region == "" {
 		region = "us-east-1"
@@ -121,8 +123,14 @@ func NewDeploymentService(ctx context.Context, repo *repository.DeploymentRepo, 
 	if err != nil {
 		return nil, fmt.Errorf("deployments: load aws config: %w", err)
 	}
+	// Logged because a wrong region here (stale env var, process not
+	// restarted after a config change) surfaces later as a confusing
+	// AWS-side "resource not found" rather than an obvious region mismatch --
+	// this line is the one place to confirm what actually got loaded.
+	slog.Info("deployments: aws config loaded", "region", region)
 	svc := &DeploymentService{
 		repo:        repo,
+		sharedRepo:  sharedRepo,
 		cfg:         cfg,
 		sts:         sts.NewFromConfig(awsConf),
 		base:        awsConf,
@@ -408,6 +416,70 @@ func (s *DeploymentService) Invoke(ctx context.Context, userID, id string, paylo
 	})
 	if err != nil {
 		return nil, fmt.Errorf("deployments: invoke agent runtime: %w", err)
+	}
+	return out.Response, nil
+}
+
+// SharedStatus reports on the shared AgentCore Runtime configured for
+// agentSlug -- one entry in the farm of pre-deployed instances any
+// signed-in user can invoke without deploying their own (see the
+// shared-deployment handlers). Looked up from meko_system.shared_deployments,
+// not the deployments table: these runtimes are created and operated
+// entirely outside Meko (typically by hand via the AWS CLI/console), so
+// there's no owning Meko account and no deploy lifecycle to track here.
+// Returns (nil, nil) when agentSlug has no shared ARN configured yet.
+//
+// There's no cheap way to ask AWS for a shared ARN's live status --
+// GetAgentRuntime takes an AgentRuntimeId, not an ARN, and the id isn't
+// derivable from the ARN's own suffix (compare runtimeName's naming, which
+// AWS doesn't preserve verbatim into the id it assigns) -- so this always
+// reports "active" once an ARN is configured: the operator is expected to
+// only add a farm entry once they've confirmed the runtime is ready. A
+// caller that invokes it before it's actually ready just gets whatever
+// error AWS's InvokeAgentRuntime returns.
+func (s *DeploymentService) SharedStatus(ctx context.Context, agentSlug string) (*models.Deployment, error) {
+	arn, err := s.sharedRepo.GetARN(ctx, agentSlug)
+	if err != nil {
+		return nil, fmt.Errorf("deployments: shared status: %w", err)
+	}
+	if arn == "" {
+		return nil, nil
+	}
+	now := time.Now()
+	return &models.Deployment{
+		ID:              "shared:" + agentSlug,
+		AgentSlug:       agentSlug,
+		Runtime:         models.DeploymentRuntimeAgentCore,
+		AccountMode:     models.DeploymentAccountModeManaged,
+		Status:          models.DeploymentStatusActive,
+		AgentRuntimeARN: &arn,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}, nil
+}
+
+// InvokeShared streams a request through to the shared AgentCore Runtime
+// configured for agentSlug -- see SharedStatus for how it's looked up. Uses
+// the same ambient-AWS-config data-plane client managed-mode deployments
+// use, since a manually-created runtime reachable this way is expected to
+// live in Meko's own AWS account too.
+func (s *DeploymentService) InvokeShared(ctx context.Context, agentSlug string, payload []byte) (io.ReadCloser, error) {
+	arn, err := s.sharedRepo.GetARN(ctx, agentSlug)
+	if err != nil {
+		return nil, fmt.Errorf("deployments: invoke shared: %w", err)
+	}
+	if arn == "" {
+		return nil, fmt.Errorf("shared deployment for agent_slug %q not found", agentSlug)
+	}
+
+	out, err := s.managedData.InvokeAgentRuntime(ctx, &bedrockagentcore.InvokeAgentRuntimeInput{
+		AgentRuntimeArn: aws.String(arn),
+		Payload:         payload,
+		Accept:          aws.String("text/event-stream"),
+		ContentType:     aws.String("application/json"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("deployments: invoke shared agent runtime: %w", err)
 	}
 	return out.Response, nil
 }

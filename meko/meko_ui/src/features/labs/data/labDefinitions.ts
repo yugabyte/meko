@@ -1,18 +1,23 @@
 import { GitPullRequest } from "lucide-react";
 
 import type { LabDefinition } from "../types";
-import { ADLC_REVIEW_AGENT_LAB_STAGES } from "./adlcReviewAgentLab/stages";
+import { ADLC_REVIEW_AGENT_LAB_CHAPTERS } from "./adlcReviewAgentLab/chapters";
 
 export const ADLC_REVIEW_AGENT_LAB: LabDefinition = {
   id: "adlc-review-agent",
   title: "Review a PR with AgentK",
   summary: "AgentK reviews a pull request against your org's coding standards, live.",
   description:
-    "AgentK reviews a pull request against your org's coding standards, maintained in a Meko datapack: it retrieves them from a knowledge base, reviews the PR against them, and every turn is captured as real memories and traces you can watch happen in the panel on the right.",
-  tags: ["ADLC", "Code Review"],
+    "A sample project with no coding standards yet — you'll build context with a Meko datapack, then watch AgentK use it for reviewing a PR.",
+  tags: ["ADLC", "Code review"],
   icon: GitPullRequest,
   estimatedMinutes: 5,
-  stages: ADLC_REVIEW_AGENT_LAB_STAGES,
+  startingPoint: [
+    { title: "Sample project", subtitle: "No standards yet, ungoverned" },
+    { title: "Build context", subtitle: "Knowledge, memory, conversation" },
+    { title: "AgentK reviews", subtitle: "Against what you built" },
+  ],
+  chapters: ADLC_REVIEW_AGENT_LAB_CHAPTERS,
   demoApp: {
     kind: "pr-review-chat",
     agentDisplayName: "AgentK",

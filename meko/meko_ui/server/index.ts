@@ -178,6 +178,11 @@ app.use((req, res, next) => {
     // hide the tile entirely) without a rebuild.
     "MEKO_ENABLE_STANDARD_TIER",
     "MEKO_AWS_MARKETPLACE_URL",
+    // The account a Labs datapack gets shared with in the "share with
+    // AgentK" lesson (ShareWithAgentStage.tsx). Same var name as
+    // api_server's own MEKO_LABS_AGENTK_ADMIN_EMAIL by convention, but a
+    // separate config surface -- both need to be set independently.
+    "MEKO_LABS_AGENTK_ADMIN_EMAIL",
   ];
   app.get("/runtime-config.js", (_req, res) => {
     const cfg: Record<string, string> = {};

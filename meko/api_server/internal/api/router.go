@@ -85,6 +85,8 @@ type serviceRegistry struct {
 	// Deployments: agent deployments to a serverless runtime (AgentCore
 	// today). Routes are always registered; deploymentSvc.cfg.Enabled()
 	// gates create/byoc-init specifically (see DeploymentHandler).
+	// DeploymentService itself also holds a SharedDeploymentRepo, backing
+	// GET/POST /deployments/shared/:agent_slug* -- see NewDeploymentService.
 	deploymentRepo *repository.DeploymentRepo
 	deploymentSvc  *service.DeploymentService
 }
@@ -124,6 +126,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	sharingRepo := repository.NewSharingRepo(cfg.SystemDB)
 	sharingSvc := service.NewSharingService(sharingRepo, nil)
+	sharingSvc.SetAgentKAdminEmail(cfg.LabsAgentKAdminEmail)
 	feedbackRepo := repository.NewFeedbackRepo(cfg.SystemDB)
 	var s3Svc *service.S3Service
 	if cfg.S3Bucket != "" {
@@ -269,7 +272,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	}
 
 	deploymentRepo := repository.NewDeploymentRepo(cfg.SystemDB)
-	deploymentSvc, dErr := service.NewDeploymentService(context.Background(), deploymentRepo, service.DeploymentConfig{
+	sharedDeploymentRepo := repository.NewSharedDeploymentRepo(cfg.SystemDB)
+	deploymentSvc, dErr := service.NewDeploymentService(context.Background(), deploymentRepo, sharedDeploymentRepo, service.DeploymentConfig{
 		DefaultRegion:           cfg.DeploymentsRegion,
 		AgentImagesRepo:         cfg.LabsAgentImagesRepo,
 		ManagedExecutionRoleARN: cfg.DeploymentsManagedExecutionRoleARN,
@@ -533,6 +537,11 @@ func registerDeploymentRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.POST("/deployments/:id/invoke", h.Invoke)
 	g.POST("/deployments/byoc/init", h.StartBYOC)
 	g.POST("/deployments/:id/byoc/confirm", h.ConfirmBYOC)
+	// The farm of pre-deployed instances any signed-in user can invoke
+	// without deploying their own -- one ARN per agent_slug, looked up from
+	// meko_system.shared_deployments, not a Meko deployments-table row.
+	g.GET("/deployments/shared/:agent_slug", h.GetShared)
+	g.POST("/deployments/shared/:agent_slug/invoke", h.InvokeShared)
 	slog.Info("deployment routes registered")
 }
 

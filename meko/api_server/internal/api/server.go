@@ -152,6 +152,15 @@ type ServerConfig struct {
 	// DeploymentsMekoAWSAccountID is embedded as the trusted principal in
 	// every BYOC trust-policy template (see service/agentcore_client.go).
 	DeploymentsMekoAWSAccountID string
+	// LabsAgentKAdminEmail is the account a Labs datapack gets shared
+	// with so the shared AgentK deployment (which authenticates as this
+	// account, not the invoking user) can read it. Sharing normally
+	// requires the recipient to accept before access is granted;
+	// SharingService auto-accepts invites to this one specific address
+	// so the lab's "share with AgentK" step doesn't need a human to
+	// click accept on agentk-admin's behalf. Empty disables auto-accept
+	// (every invite behaves exactly as it does today).
+	LabsAgentKAdminEmail string
 	// MCPPATFlushInterval controls how often the background
 	// goroutine drains the in-memory last_used_at touch map onto the
 	// database. Zero (the default) falls back to

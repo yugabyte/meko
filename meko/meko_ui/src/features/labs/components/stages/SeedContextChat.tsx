@@ -9,7 +9,7 @@ import { useCallback, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/markdown-message";
-import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
+import { getInferenceGatewayErrorMessage, postChat, type ProcessingStep } from "@/lib/inferenceGateway";
 import { ChatInput } from "@/features/workbench-lm/components/workbench-lm-chat/ChatInput";
 import type { Message } from "@/features/workbench-lm/components/workbench-lm-chat/types";
 
@@ -18,11 +18,19 @@ export function SeedContextChat({
   userId,
   userToken,
   onTurnComplete,
+  examplePrompts,
 }: {
   datapackId: string;
   userId: string | null;
   userToken: string | null;
-  onTurnComplete: () => void;
+  /** Called after a successful turn with the MCP tool calls the gateway
+   *  made (`res.processing_steps`) -- e.g. `memory_search`,
+   *  `conversation_add_message` -- so the caller can surface them (X-Ray). */
+  onTurnComplete: (steps: ProcessingStep[]) => void;
+  /** Optional ready-made prompts rendered as clickable chips above the
+   *  input — clicking one prefills the input rather than sending it, so
+   *  the user can still edit before submitting. */
+  examplePrompts?: string[];
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -53,7 +61,7 @@ export function SeedContextChat({
           ...prev,
           { id: crypto.randomUUID(), role: "assistant", content: res.message, langfuseMessageId: res.message_id },
         ]);
-        onTurnComplete();
+        onTurnComplete(res.processing_steps ?? []);
       } catch (err) {
         setSendError(getInferenceGatewayErrorMessage(err));
       } finally {
@@ -87,6 +95,20 @@ export function SeedContextChat({
         {sending && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         {sendError && <p className="text-sm text-destructive">{sendError}</p>}
       </div>
+      {examplePrompts && examplePrompts.length > 0 && (
+        <div className="flex flex-wrap gap-2 border-t border-border p-2">
+          {examplePrompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => setInput(prompt)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-border/80 hover:text-foreground"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      )}
       <ChatInput
         value={input}
         onChange={setInput}

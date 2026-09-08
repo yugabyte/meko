@@ -22,6 +22,16 @@ type Props = {
 
 export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const { pathname } = useLocation();
+  const isLabRunner = parseLabRoute(pathname)?.isRunner ?? false;
+
+  // The lab runner takes over the whole viewport -- no Sidebar, no shared
+  // shell -- so users get a focused, distraction-free lab experience with
+  // its own top bar (LabRunnerPage owns its own exit-to-list action). It
+  // self-guards internally (showLabs flag, invalid :labId), so no extra
+  // logic is needed here beyond the early return itself.
+  if (isLabRunner) {
+    return <LabRunnerPage />;
+  }
 
   if (isOnboardingRoute) {
     // Keep the same shell (Sidebar + workspace) as the rest of the
@@ -54,7 +64,6 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
 
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
   const isLabsRoute = pathname === ROUTES.labs || pathname.startsWith(`${ROUTES.labs}/`);
-  const isLabRunner = parseLabRoute(pathname)?.isRunner ?? false;
   const isLabsListOrDetail = isLabsRoute && !isLabRunner;
   // Admin console (flag-gated). Conditionally mounted like WorkbenchLM so its
   // /admin/* data fetches never tick while the user is elsewhere.
@@ -132,12 +141,6 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
             <BillingPage />
           </div>
           {isMarketplaceComplete ? <MarketplaceCompletePage /> : null}
-          {/* Lab runner — conditionally mounted like WorkbenchLM/Admin, since
-              it drives the same live-observation polling. List/detail don't
-              poll, so they stay display-toggled below -- both self-guard on
-              the showLabs flag internally (LabsSection/LabRunnerPage), same
-              as BillingPage/AdminPage below. */}
-          {isLabRunner ? <LabRunnerPage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isLabsListOrDetail ? "contents" : "none" }}

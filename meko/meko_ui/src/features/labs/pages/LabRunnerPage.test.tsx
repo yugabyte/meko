@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
-import { labRunnerPath } from "@/app/routes/paths";
+import { labRunnerPath, ROUTES } from "@/app/routes/paths";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import LabRunnerPage, { shouldShowProvisionStatusSpinner } from "./LabRunnerPage";
+
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
 
 afterEach(() => {
   cleanup();
@@ -49,21 +55,31 @@ describe("LabRunnerPage pre-GA gating", () => {
     renderPage();
     expect(screen.queryByText("404 Page Not Found")).toBeNull();
   });
+
+  it("clicking End Lab navigates back to the labs list", () => {
+    localStorage.setItem("meko:show_labs_nav", "true");
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /end lab/i }));
+    expect(mockNavigate).toHaveBeenCalledWith(ROUTES.labs);
+  });
 });
 
 describe("shouldShowProvisionStatusSpinner", () => {
-  it("blocks seed-context and run-review while the provision-status lookup is loading", () => {
-    expect(shouldShowProvisionStatusSpinner(true, "seed-context")).toBe(true);
+  it("blocks memory, conversation, and run-review while the provision-status lookup is loading", () => {
+    expect(shouldShowProvisionStatusSpinner(true, "memory")).toBe(true);
+    expect(shouldShowProvisionStatusSpinner(true, "conversation")).toBe(true);
     expect(shouldShowProvisionStatusSpinner(true, "run-review")).toBe(true);
   });
 
-  it("doesn't block create-datapack, deploy-agent, or collaborate -- none read session.userToken", () => {
+  it("doesn't block create-datapack, context-intro, knowledge-base, deploy-agent, or collaborate -- none read session.userToken", () => {
     expect(shouldShowProvisionStatusSpinner(true, "create-datapack")).toBe(false);
+    expect(shouldShowProvisionStatusSpinner(true, "context-intro")).toBe(false);
+    expect(shouldShowProvisionStatusSpinner(true, "knowledge-base")).toBe(false);
     expect(shouldShowProvisionStatusSpinner(true, "deploy-agent")).toBe(false);
     expect(shouldShowProvisionStatusSpinner(true, "collaborate")).toBe(false);
   });
 
   it("never blocks once loading is false", () => {
-    expect(shouldShowProvisionStatusSpinner(false, "seed-context")).toBe(false);
+    expect(shouldShowProvisionStatusSpinner(false, "memory")).toBe(false);
   });
 });

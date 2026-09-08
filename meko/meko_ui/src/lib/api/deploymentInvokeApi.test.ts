@@ -79,17 +79,21 @@ describe("invokeDeployment", () => {
     await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow("deployment not active");
   });
 
-  it("throws on a mid-stream error frame", async () => {
-    // A fresh stream per call -- ReadableStream can only be read once, and
-    // both assertions below need their own invocation.
+  it("throws on a mid-stream error frame, preferring `error`/`error_type` over the SDK's generic `message`", async () => {
+    // bedrock_agentcore's own _sync_stream_with_error_handling always sets
+    // `message` to this same generic string regardless of what actually
+    // failed -- the real detail is in `error` (str(exception)) and
+    // `error_type` (the exception's class name). A fresh stream per call --
+    // ReadableStream can only be read once, and both assertions below need
+    // their own invocation.
     vi.mocked(fetch).mockImplementation(async () =>
       fakeStreamingResponse([
-        'data: {"type":"meta","conversation_id":"conv-1"}\n\ndata: {"error":"boom","error_type":"RuntimeError","message":"Meko error: boom"}\n\n',
+        'data: {"type":"meta","conversation_id":"conv-1"}\n\ndata: {"error":"boom","error_type":"RuntimeError","message":"An error occurred during streaming"}\n\n',
       ]),
     );
 
     await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow(InvokeDeploymentError);
-    await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow("Meko error: boom");
+    await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow("RuntimeError: boom");
   });
 
   it("falls back to parsing a plain (non-SSE) JSON error body from a stale deployed image", async () => {

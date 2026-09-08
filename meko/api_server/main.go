@@ -289,6 +289,9 @@ func run() error {
 	deploymentsMekoAWSAccountID := flag.String("deployments-meko-aws-account-id",
 		os.Getenv("MEKO_DEPLOYMENTS_MEKO_AWS_ACCOUNT_ID"),
 		"Meko's own AWS account id, embedded as the trusted principal in every BYOC trust-policy template.")
+	labsAgentKAdminEmail := flag.String("labs-agentk-admin-email",
+		os.Getenv("MEKO_LABS_AGENTK_ADMIN_EMAIL"),
+		"Account a Labs datapack is shared with so the shared AgentK deployment can read it. Invites to this one address are auto-accepted instead of left pending; empty disables auto-accept.")
 
 	flag.Parse()
 
@@ -536,6 +539,7 @@ func run() error {
 		LabsAgentImagesRepo:                *labsAgentImagesRepo,
 		DeploymentsManagedExecutionRoleARN: *deploymentsManagedExecutionRoleARN,
 		DeploymentsMekoAWSAccountID:        *deploymentsMekoAWSAccountID,
+		LabsAgentKAdminEmail:               *labsAgentKAdminEmail,
 	})
 }
 

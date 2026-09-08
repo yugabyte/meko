@@ -46,7 +46,7 @@ func TestDeployment_Invoke_StreamsSSEBody(t *testing.T) {
 	repo := repository.NewDeploymentRepo(db)
 	wantBody := "data: {\"type\":\"text_delta\",\"text\":\"hello\"}\n\ndata: {\"type\":\"done\"}\n\n"
 	svc, err := service.NewDeploymentService(
-		context.Background(), repo, service.DeploymentConfig{
+		context.Background(), repo, nil, service.DeploymentConfig{
 			DefaultRegion: "us-east-1", AgentImagesRepo: "repo",
 			ManagedExecutionRoleARN: "arn:aws:iam::123456789012:role/x", MekoAWSAccountID: "123456789012",
 		},

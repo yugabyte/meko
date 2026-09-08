@@ -16,6 +16,7 @@ build/
 # was imported from meko-devops. Checked-in suites need an explicit negation.
 tests/
 !deploy/helm/meko/tests/
+!inference_gateway/tests/
 
 # Linter caches
 .mypy_cache/

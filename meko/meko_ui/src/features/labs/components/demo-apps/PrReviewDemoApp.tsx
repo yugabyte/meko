@@ -13,17 +13,19 @@
 // (conversation_id + prior_review_text, reusing the same conversation).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, ExternalLink, Loader2, Send } from "lucide-react";
+import { ExternalLink, Loader2, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { InvokeDeploymentError, invokeDeployment } from "@/lib/api/deploymentInvokeApi";
+import { InvokeDeploymentError, invokeDeployment, invokeSharedDeployment } from "@/lib/api/deploymentInvokeApi";
 import { ChatInput } from "@/features/workbench-lm/components/workbench-lm-chat/ChatInput";
 import type { Message } from "@/features/workbench-lm/components/workbench-lm-chat/types";
 
-import { fetchPullRequestDiff, fetchPullRequestSummary, parsePrRef } from "@/lib/api/githubApi";
+// Bring-your-own-PR (a real GitHub PAT + owner/repo#123) is deferred to a
+// later chapter -- this stage only reviews the bundled sample diff for now.
+// lib/api/githubApi.ts's fetchPullRequestDiff/fetchPullRequestSummary/
+// parsePrRef stay in place unused here, for that future chapter to import.
 import { postToSlackChannel } from "@/lib/api/slackApi";
 import { SAMPLE_DIFF_CONTENT, SAMPLE_DIFF_TITLE } from "../../data/adlcReviewAgentLab/sampleDiff";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
@@ -73,19 +75,19 @@ export function PrReviewDemoApp({
   // agent's reply, and any follow-up question/answer) renders normally.
   const [reviewPromptMessageId, setReviewPromptMessageId] = useState<string | null>(null);
 
-  const [githubToken, setGithubToken] = useState("");
-  const [prRefInput, setPrRefInput] = useState("");
-  const [prError, setPrError] = useState<string | null>(null);
-  const [fetchingPr, setFetchingPr] = useState(false);
-
   const [slackToken, setSlackToken] = useState("");
   const [slackChannel, setSlackChannel] = useState("");
   const [slackStatus, setSlackStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
   const [reviewConfig, setReviewConfig] = useState<ReviewAgentConfig>(DEFAULT_REVIEW_AGENT_CONFIG);
 
+  // Shared mode needs no deploymentId/userToken of its own -- the shared
+  // instance authenticates with its own credential, and RunReviewStage
+  // already gates rendering this component behind session.deploymentActive.
   const canReview = Boolean(
-    session.datapackId && session.userToken && session.userId && session.deploymentId,
+    session.datapackId &&
+      session.userId &&
+      (session.deploymentMode === "shared" || Boolean(session.userToken && session.deploymentId)),
   );
 
   // Aborts an in-flight invokeDeployment call on unmount -- otherwise a user
@@ -99,7 +101,7 @@ export function PrReviewDemoApp({
 
   const send = useCallback(
     async (payload: Record<string, unknown>, userText: string, isReviewPrompt = false) => {
-      if (!session.deploymentId) return;
+      if (session.deploymentMode === "dedicated" && !session.deploymentId) return;
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setSending(true);
@@ -116,7 +118,11 @@ export function PrReviewDemoApp({
         // "" (not null), wrongly flipping canFollowUp on with an empty
         // prior_review_text for every subsequent question.
         let accumulatedText = "";
-        for await (const event of invokeDeployment(session.deploymentId, payload, controller.signal)) {
+        const stream =
+          session.deploymentMode === "shared"
+            ? invokeSharedDeployment(demoApp.deployable?.agentSlug ?? "", payload, controller.signal)
+            : invokeDeployment(session.deploymentId as string, payload, controller.signal);
+        for await (const event of stream) {
           if (event.type === "meta") {
             setConversationId(event.conversation_id);
           } else if (event.type === "text_delta") {
@@ -144,38 +150,17 @@ export function PrReviewDemoApp({
   );
 
   const handleRunReview = useCallback(async () => {
-    setPrError(null);
-    let title = SAMPLE_DIFF_TITLE;
-    let diff = SAMPLE_DIFF_CONTENT;
-
-    if (githubToken.trim() && prRefInput.trim()) {
-      const ref = parsePrRef(prRefInput);
-      if (!ref) {
-        setPrError('Expected the format "owner/repo#123".');
-        return;
-      }
-      setFetchingPr(true);
-      try {
-        const [summary, realDiff] = await Promise.all([
-          fetchPullRequestSummary(ref, githubToken),
-          fetchPullRequestDiff(ref, githubToken),
-        ]);
-        title = summary.title;
-        diff = realDiff;
-      } catch (err) {
-        setPrError(err instanceof Error ? err.message : "Failed to fetch the pull request.");
-        setFetchingPr(false);
-        return;
-      }
-      setFetchingPr(false);
-    }
+    const title = SAMPLE_DIFF_TITLE;
+    const diff = SAMPLE_DIFF_CONTENT;
 
     setDiffTitle(title);
     setDiffContent(diff);
     await send(
       {
         datapack_id: session.datapackId,
-        meko_pat: session.userToken,
+        // Shared mode: the deployed instance authenticates with its own
+        // credential, not one forwarded from the browser per request.
+        ...(session.deploymentMode === "dedicated" ? { meko_pat: session.userToken } : {}),
         pr_title: title,
         pr_diff: diff,
         ...reviewConfigPayload(reviewConfig),
@@ -183,7 +168,7 @@ export function PrReviewDemoApp({
       buildReviewPrompt(title, diff),
       true,
     );
-  }, [githubToken, prRefInput, send, session.datapackId, session.userToken, reviewConfig]);
+  }, [send, session.datapackId, session.userToken, session.deploymentMode, reviewConfig]);
 
   const handleFollowUp = useCallback(
     (text: string) => {
@@ -191,7 +176,7 @@ export function PrReviewDemoApp({
       void send(
         {
           datapack_id: session.datapackId,
-          meko_pat: session.userToken,
+          ...(session.deploymentMode === "dedicated" ? { meko_pat: session.userToken } : {}),
           conversation_id: conversationId,
           question: text,
           prior_review_text: reviewText,
@@ -200,7 +185,7 @@ export function PrReviewDemoApp({
         text,
       );
     },
-    [conversationId, reviewText, send, session.datapackId, session.userToken, reviewConfig],
+    [conversationId, reviewText, send, session.datapackId, session.userToken, session.deploymentMode, reviewConfig],
   );
 
   const handlePostToSlack = useCallback(async () => {
@@ -227,44 +212,13 @@ export function PrReviewDemoApp({
       <div className="flex-1 overflow-y-auto p-4">
         {!hasReviewed ? (
           <div className="flex flex-col gap-4 rounded-md border border-border p-4">
-            <div>
-              <Label htmlFor="lab-gh-token">GitHub personal access token (optional)</Label>
-              <Input
-                id="lab-gh-token"
-                type="password"
-                placeholder="ghp_..."
-                value={githubToken}
-                onChange={(e) => setGithubToken(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="lab-pr-ref">Pull request (owner/repo#123)</Label>
-              <Input
-                id="lab-pr-ref"
-                placeholder="owner/repo#123"
-                value={prRefInput}
-                onChange={(e) => setPrRefInput(e.target.value)}
-              />
-            </div>
-            {prError && (
-              <p className="flex items-center gap-1.5 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4 shrink-0" /> {prError}
-              </p>
-            )}
-            <p className="text-sm text-muted-foreground">
-              Leave both blank to review the bundled sample diff instead.
-            </p>
             <ReviewAgentConfigPanel
               value={reviewConfig}
               onChange={setReviewConfig}
               agentDisplayName={demoApp.agentDisplayName}
             />
-            <Button onClick={handleRunReview} disabled={!canReview || fetchingPr || sending}>
-              {fetchingPr || sending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
+            <Button onClick={handleRunReview} disabled={!canReview || sending}>
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Run review
             </Button>
           </div>

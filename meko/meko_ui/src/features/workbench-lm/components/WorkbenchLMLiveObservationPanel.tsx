@@ -1,9 +1,15 @@
 // Right-rail "Live observation" panel for the WorkbenchLM.
-// Three stacked sections (top 5 each):
+// Two sections (top 5 each), rendered per `layout`:
 //   - Learnings        (purple) — agent memories not yet promoted to KB.
 //                                  Each tile has a "Promote to Ko" button.
 //   - Collective Memory (sky)   — memories already promoted into the KB.
-//   - Shared Knowledge  (emerald) — KB documents.
+// `layout="stacked"` (default, used by WorkbenchLM itself) stacks the two
+// above. `layout="columns"` (used by Labs' CONTEXT panel) splits into a left
+// "Private Memory" column (Learnings only -- not yet shared with anyone) and
+// a right column grouping Collective Memory with a third section, Shared
+// Knowledge (emerald, KB documents) -- both already visible to the whole
+// datapack, so they read as one "shared" side, mirroring how the Datapack
+// detail page's own Collective Memory / Shared Knowledge cards pair up.
 //
 // Refresh sources:
 //   1. `refreshTick` prop — bumped by the parent after each chat turn.
@@ -25,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpToLine,
+  FileText,
   Layers,
   Loader2,
   RefreshCw,
@@ -39,10 +46,12 @@ import {
   deleteMemory,
   formatMemoryAuthor,
   getApiErrorMessage,
+  getKnowledgeBaseDocuments,
   listMemories,
   listPromotedMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
   promoteMemories,
+  type KnowledgeBaseDocument,
   type Memory,
   type PromotedMemory,
 } from "@/lib/api/mekoApi";
@@ -50,14 +59,24 @@ import {
   isDatapackGrantEligibleToPromoteMemoryToKnowledge,
   type DatapackShareGrant,
 } from "@/lib/datapackShareGrants";
+import {
+  kbDocumentStatusLabel,
+  kbDocumentStatusTone,
+  kbDocumentStatusTooltip,
+} from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";
 
-type Props = {
+export type WorkbenchLMLiveObservationPanelProps = {
   datapackId: string | null;
   datapackName: string | null;
   /** Bumped by the parent (e.g. after a chat turn) to force refetch. */
   refreshTick?: number;
   datapackGrant?: DatapackShareGrant | null;
   paused?: boolean;
+  /** "stacked" (default): today's WorkbenchLM layout, Learnings + Collective
+   *  Memory in one vertical stack. "columns": Labs' CONTEXT panel — the same
+   *  two sections form a "Private Memory" left column, with a new "Shared
+   *  Knowledge" (KB documents) right column. */
+  layout?: "stacked" | "columns";
 };
 
 const TOP_N = 5;
@@ -70,7 +89,8 @@ export function WorkbenchLMLiveObservationPanel({
   refreshTick = 0,
   datapackGrant = null,
   paused = false,
-}: Props) {
+  layout = "stacked",
+}: WorkbenchLMLiveObservationPanelProps) {
   // Internal ticker that bumps every AUTO_REFRESH_INTERVAL_MS while the tab
   // is visible AND the user isn't interacting with the panel. Combined with
   // `refreshTick` (parent-driven, post-chat-turn) so each child section
@@ -136,7 +156,9 @@ export function WorkbenchLMLiveObservationPanel({
       <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-purple-400" aria-hidden />
-          <h2 className="text-sm font-medium text-foreground">Live observation</h2>
+          <h2 className="text-sm font-medium text-foreground">
+            {layout === "columns" ? "Meko Context - Live" : "Live observation"}
+          </h2>
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -166,32 +188,58 @@ export function WorkbenchLMLiveObservationPanel({
         </Tooltip>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col divide-y divide-border/50 overflow-y-auto px-4">
-        <div style={{ marginTop: '16px' }}>
-          <LearningsSection
-            datapackId={datapackId}
-            datapackGrant={datapackGrant}
-            refreshTick={effectiveTick}
-            // Bump the internal poll tick so siblings (Collective Memory in
-            // particular) refetch immediately after the user promotes a
-            // memory — the new entry shows up there without waiting for
-            // the next 10s tick.
-            onPromoted={() => setAutoTick((t) => t + 1)}
-          />
+      {layout === "columns" ? (
+        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-border/50 overflow-y-auto sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <div className="flex min-h-0 flex-col px-4" data-testid="private-memory-column">
+            <div style={{ marginTop: '16px' }}>
+              <LearningsSection
+                datapackId={datapackId}
+                datapackGrant={datapackGrant}
+                refreshTick={effectiveTick}
+                onPromoted={() => setAutoTick((t) => t + 1)}
+              />
+            </div>
+          </div>
+          <div
+            className="flex min-h-0 flex-col divide-y divide-border/50 px-4"
+            data-testid="shared-side-column"
+          >
+            <div style={{ marginTop: '16px' }}>
+              <CollectiveMemorySection
+                datapackId={datapackId}
+                refreshTick={effectiveTick}
+              />
+            </div>
+            <div style={{ marginTop: '16px' }}>
+              <SharedKnowledgeSection
+                datapackId={datapackId}
+                refreshTick={effectiveTick}
+              />
+            </div>
+          </div>
         </div>
-        <div style={{ marginTop: '16px' }}>
-          <CollectiveMemorySection
-            datapackId={datapackId}
-            refreshTick={effectiveTick}
-          />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col divide-y divide-border/50 overflow-y-auto px-4">
+          <div style={{ marginTop: '16px' }}>
+            <LearningsSection
+              datapackId={datapackId}
+              datapackGrant={datapackGrant}
+              refreshTick={effectiveTick}
+              // Bump the internal poll tick so siblings (Collective Memory in
+              // particular) refetch immediately after the user promotes a
+              // memory — the new entry shows up there without waiting for
+              // the next 10s tick.
+              onPromoted={() => setAutoTick((t) => t + 1)}
+            />
+          </div>
+          <div style={{ marginTop: '16px' }}>
+            <CollectiveMemorySection
+              datapackId={datapackId}
+              refreshTick={effectiveTick}
+            />
+          </div>
         </div>
-        {/* <div style={{ marginTop: '16px' }}>
-          <SharedKnowledgeSection
-            datapackName={datapackName}
-            refreshTick={effectiveTick}
-          />
-        </div> */}
-      </div>
+      )}
     </aside>
   );
 }
@@ -637,6 +685,145 @@ function CollectiveMemorySection({
                   agent · {m.agent_id}
                 </p>
               ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </SectionShell>
+  );
+}
+
+// --- Shared Knowledge (emerald: distinct from purple/learnings + sky/collective
+// so each section keeps its own accent). Lists KB documents for the datapack —
+// only used in `layout="columns"` (Labs' CONTEXT panel) today. ---
+
+const KNOWLEDGE_TONE = {
+  border: "border-emerald-400 dark:border-emerald-500/40",
+  bg:
+    "bg-gradient-to-br from-emerald-50 via-card to-card " +
+    "dark:from-emerald-950/65 dark:via-[#0e2420] dark:to-meko-navy-950",
+  text: "text-emerald-700 dark:text-emerald-200/95",
+  badge:
+    "border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+};
+
+// Matches KnowledgeFilesTable.tsx's StatusBadge tone map exactly, so a
+// document reads the same color here as on the datapack detail page.
+const KB_STATUS_TONE: Record<string, string> = {
+  muted: "border-border/60 bg-muted/30 text-muted-foreground",
+  blue: "border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-200",
+  yellow: "border-yellow-500/35 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300",
+  green: "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+  red: "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-200",
+};
+
+function KbStatusBadge({ status }: { status: string }) {
+  const tone = kbDocumentStatusTone(status);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide cursor-default",
+            KB_STATUS_TONE[tone],
+          )}
+        >
+          {kbDocumentStatusLabel(status)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-[260px] text-center">
+        {kbDocumentStatusTooltip(status)}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SharedKnowledgeSection({
+  datapackId,
+  refreshTick,
+}: {
+  datapackId: string | null;
+  refreshTick: number;
+}) {
+  const [items, setItems] = useState<KnowledgeBaseDocument[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchDocs = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!datapackId) {
+        setItems([]);
+        setTotal(0);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const page = await getKnowledgeBaseDocuments(datapackId, {
+          page: 1,
+          page_size: TOP_N,
+          signal,
+        });
+        setItems(page.items ?? []);
+        setTotal(page.total ?? 0);
+      } catch (err) {
+        if ((err as { name?: string })?.name === "CanceledError") return;
+        setError(getApiErrorMessage(err, "Failed to load shared knowledge."));
+        setItems([]);
+        setTotal(0);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [datapackId],
+  );
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void fetchDocs(ac.signal);
+    return () => ac.abort();
+  }, [fetchDocs, refreshTick]);
+
+  return (
+    <SectionShell
+      title="Shared Knowledge"
+      icon={<FileText className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-300" aria-hidden />}
+      toneText={KNOWLEDGE_TONE.text}
+      toneBadge={KNOWLEDGE_TONE.badge}
+      count={datapackId ? Math.min(items.length, total) : undefined}
+      loading={loading}
+      error={error}
+      onRefresh={() => void fetchDocs()}
+    >
+      {!datapackId ? (
+        <p className="text-xs text-muted-foreground">Select a datapack to see shared knowledge.</p>
+      ) : loading && items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Loading shared knowledge…</p>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No knowledge sources yet.</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.slice(0, TOP_N).map((doc) => (
+            <li
+              key={doc.id}
+              className={cn(
+                "rounded-lg border px-3 py-2 animate-in fade-in slide-in-from-bottom-1 duration-300",
+                KNOWLEDGE_TONE.border,
+                KNOWLEDGE_TONE.bg,
+              )}
+              title={doc.document_name}
+              tabIndex={0}
+            >
+              <p className="line-clamp-2 text-xs text-foreground dark:text-white/95">
+                {doc.document_name}
+              </p>
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="truncate text-[10px] text-emerald-700 dark:text-emerald-200/70">
+                  {doc.chunks_processed ? `${doc.chunks_processed} chunks` : " "}
+                </span>
+                <KbStatusBadge status={doc.status} />
+              </div>
             </li>
           ))}
         </ul>

@@ -30,6 +30,15 @@ type Props = {
   /** Existing shares before this invite (members excl. owner + pending), for is_first_share / total_shares. */
   priorShareCount?: number;
   onInviteSent: () => void | Promise<void>;
+  /**
+   * When set, the recipient is fixed to this address and the email field is
+   * not editable -- used by ShareWithAgentStage, where the recipient is a
+   * configured account (MEKO_LABS_AGENTK_ADMIN_EMAIL), not a user's choice.
+   * Sending is still a user-initiated click, only who/what grant is locked.
+   */
+  lockedEmail?: string;
+  /** When set, the grant is fixed and the role picker (dropdown + tiles) is disabled. */
+  lockedGrant?: DatapackShareGrant;
 };
 
 export function InviteByEmailSection({
@@ -38,13 +47,17 @@ export function InviteByEmailSection({
   sharedByRole,
   priorShareCount = 0,
   onInviteSent,
+  lockedEmail,
+  lockedGrant,
 }: Props) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(lockedEmail ?? "");
   const [emailError, setEmailError] = useState<string | null>(null);
-  const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
+  const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(lockedGrant ?? DATAPACK_SHARE_GRANT_CONTRIBUTOR);
   // Mirrors inviteRole so the three role tiles reflect the same selection as the dropdown.
-  const [tileRole, setTileRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
+  const [tileRole, setTileRole] = useState<ShareInviteRoleId>(lockedGrant ?? DATAPACK_SHARE_GRANT_CONTRIBUTOR);
   const [submitting, setSubmitting] = useState(false);
+  const emailLocked = Boolean(lockedEmail);
+  const grantLocked = Boolean(lockedGrant);
 
   const syncSelectFromTiles = (id: ShareInviteRoleId) => {
     setTileRole(id);
@@ -122,7 +135,7 @@ export function InviteByEmailSection({
               if (emailError) setEmailError(null);
             }}
             className={cn("bg-background/80", emailError && "border-destructive/60")}
-            disabled={submitting}
+            disabled={submitting || emailLocked}
           />
           {emailError ? <p className="text-xs text-destructive">{emailError}</p> : null}
         </div>
@@ -134,7 +147,7 @@ export function InviteByEmailSection({
               setInviteRole(id);
               setTileRole(id);
             }}
-            disabled={submitting}
+            disabled={submitting || grantLocked}
           >
             <SelectTrigger className="w-full sm:w-[200px] bg-background/80">
               <SelectValue />
@@ -166,14 +179,14 @@ export function InviteByEmailSection({
             <button
               key={r.id}
               type="button"
-              disabled={submitting}
+              disabled={submitting || grantLocked}
               onClick={() => syncSelectFromTiles(r.id)}
               className={cn(
                 "flex flex-col gap-2 rounded-xl border p-4 text-left transition-colors",
                 selected
                   ? "border-brand/60 bg-brand/10 shadow-[inset_0_0_0_1px_hsl(var(--brand)/0.35)]"
                   : "border-border bg-muted/20 hover:border-muted-foreground/30 hover:bg-muted/30",
-                submitting && "pointer-events-none opacity-60",
+                (submitting || grantLocked) && "pointer-events-none opacity-60",
               )}
             >
               <Icon className={cn("h-5 w-5", selected ? "text-brand" : "text-muted-foreground")} aria-hidden />

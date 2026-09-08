@@ -7,23 +7,36 @@ lab means adding config, not touching those pages.
 
 ## Minimum to add a lab that reuses the existing demo-app kind
 
-1. Add `data/<yourLab>/` with your lab's stage content (`LabStage[]`) and
-   any fixture files the demo app needs (see `adlcReviewAgentLab/stages.ts`
-   for the pattern).
+1. Add `data/<yourLab>/` with your lab's chapters (`LabChapter[]`, each
+   holding its own `LabStage[]`) and any fixture files the demo app needs
+   (see `adlcReviewAgentLab/chapters.ts` for the pattern).
 2. Add a `LabDefinition` to `data/labDefinitions.ts` and push it onto
    `LAB_DEFINITIONS`.
 3. Run `npm run test -- labs` — `labDefinitions.test.ts` checks your config
    for the common mistakes (duplicate ids, empty summaries) before you get
    to manual testing.
 
-## The 5 fixed stages
+## The 8 fixed stages, grouped into chapters
 
-Every lab walks the same 5 stages (`LabStageId` in `types.ts`): Create
-Datapack → Seed Context → Deploy Agent → Run a Review → Collaborate. They're
-a closed union, not per-lab config — a lab supplies the `title`/`summary`/
+Every lab walks the same 8 stages (`LabStageId` in `types.ts`): Create
+Datapack → What is context? → Build a knowledge base → Add a memory → Chat
+about a preference → Deploy Agent → Run a Review → Collaborate. They're a
+closed union, not per-lab config — a lab supplies the `title`/`summary`/
 `highlights` copy for each, but the stage components themselves
 (`components/stages/*`) are shared across every lab. `LabStageSlot.tsx`
 switches on `LabStage.id` to render the right one.
+
+A `LabDefinition` groups its stages into one or more `LabChapter`s
+(`chapters: LabChapter[]`, each `{ id, title, stages: LabStage[] }`) — the
+grouping a lab chooses is its own. `LabStageNav` shows only the current
+chapter's own stages at a time (never another chapter's, even collapsed),
+with an explicit "Next Chapter" / "Previous chapter" control to move between
+them — moving chapters is always a deliberate action, not a side effect of
+finishing the last stage. Stage numbering ("Step N.") restarts at 1 in each
+chapter. `flattenLabStages` (`lib/labChapters.ts`) gives the flat, ordered
+stage list other call sites need regardless of chapters (e.g.
+`LabDetailPage`'s overview timeline, which keeps continuous 1..N numbering
+since it shows every stage across every chapter on one page).
 
 ## Adding a new kind of demo app
 

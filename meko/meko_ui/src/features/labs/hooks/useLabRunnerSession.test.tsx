@@ -31,8 +31,12 @@ vi.mock("@/features/observe/observeRefresh", () => ({
   notifyDatapacksListChanged: vi.fn(),
 }));
 
+type MockDeployment = { id: string; status: string } | undefined;
+let mockDedicatedDeployment: MockDeployment;
+let mockSharedDeployment: MockDeployment;
 vi.mock("./useDeployments", () => ({
-  useDeploymentStatus: () => ({ data: undefined }),
+  useDeploymentStatus: () => ({ data: mockDedicatedDeployment }),
+  useSharedDeploymentStatus: () => ({ data: mockSharedDeployment }),
 }));
 
 type MockDatapack = { datapack_id: string; datapack_name: string; grant: string };
@@ -42,7 +46,10 @@ vi.mock("@/features/datapacks/hooks/useDatapacks", () => ({
   useDatapacks: () => ({ data: mockDatapacks, isLoading: false }),
 }));
 
-const FIXTURE_LAB = { id: "test-lab" } as LabDefinition;
+const FIXTURE_LAB = {
+  id: "test-lab",
+  demoApp: { deployable: { agentSlug: "adlc-review-agent", sourceRepoUrl: "https://example.com" } },
+} as LabDefinition;
 
 function wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -53,6 +60,8 @@ beforeEach(() => {
   mockDatapacks = [];
   mockCreateDatapack.mockReset();
   mockGetDatapackProvisionStatus.mockReset();
+  mockDedicatedDeployment = undefined;
+  mockSharedDeployment = undefined;
 });
 
 afterEach(() => {
@@ -103,5 +112,56 @@ describe("useLabRunnerSession", () => {
     mockDatapacks = [];
     act(() => rerender());
     await waitFor(() => expect(result.current.datapackId).toBeNull());
+  });
+
+  it("starts with no lesson trace, and recordLessonTrace sets it for X-Ray to read", () => {
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+
+    expect(result.current.lastLessonTrace).toBeNull();
+
+    act(() =>
+      result.current.recordLessonTrace({
+        lessonTitle: "Add a memory",
+        calls: [{ name: "memory_add", durationMs: 42, status: "ok" }],
+      }),
+    );
+
+    expect(result.current.lastLessonTrace).toEqual({
+      lessonTitle: "Add a memory",
+      calls: [{ name: "memory_add", durationMs: 42, status: "ok" }],
+    });
+  });
+
+  it("defaults to shared mode, and resolves deployment/deploymentActive from the shared status", () => {
+    mockSharedDeployment = { id: "shared-1", status: "active" };
+    mockDedicatedDeployment = { id: "dedicated-1", status: "active" };
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+
+    expect(result.current.deploymentMode).toBe("shared");
+    // Even though a dedicated deployment is also "active", shared mode
+    // reads from the shared status, not the dedicated one.
+    expect(result.current.deployment).toEqual({ id: "shared-1", status: "active" });
+    expect(result.current.deploymentActive).toBe(true);
+  });
+
+  it("selectDeploymentMode('dedicated') switches deployment/deploymentActive to the dedicated status", () => {
+    mockSharedDeployment = { id: "shared-1", status: "active" };
+    mockDedicatedDeployment = { id: "dedicated-1", status: "deploying" };
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+
+    act(() => result.current.selectDeploymentMode("dedicated"));
+
+    expect(result.current.deploymentMode).toBe("dedicated");
+    expect(result.current.deployment).toEqual({ id: "dedicated-1", status: "deploying" });
+    expect(result.current.deploymentActive).toBe(false);
+  });
+
+  it("persists the deployment mode choice per lab across remounts", () => {
+    const { result, unmount } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+    act(() => result.current.selectDeploymentMode("dedicated"));
+    unmount();
+
+    const { result: result2 } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+    expect(result2.current.deploymentMode).toBe("dedicated");
   });
 });

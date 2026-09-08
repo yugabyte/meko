@@ -35,9 +35,13 @@ function fakeSession(
     error: null,
     refreshTick: 0,
     bumpRefreshTick: vi.fn(),
+    lastLessonTrace: null,
+    recordLessonTrace: vi.fn(),
     deploymentId: deploymentActive ? "dep-1" : null,
     selectDeployment: vi.fn(),
     clearDeployment: vi.fn(),
+    deploymentMode: "shared" as const,
+    selectDeploymentMode: vi.fn(),
     deployment: deploymentStatus
       ? ({ id: "dep-1", status: deploymentStatus } as ReturnType<typeof useLabRunnerSession>["deployment"])
       : null,

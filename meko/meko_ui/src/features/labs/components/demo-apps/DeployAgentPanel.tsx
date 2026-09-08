@@ -1,31 +1,33 @@
-// Deploy-agent step: shown inside DeployAgentStage. Orchestrates three
-// sub-steps: pick a runtime target (only AgentCore is live; Vercel/Lyzr are
-// visible "coming soon"), pick managed vs BYOC, and either deploy
-// immediately (managed) or walk the BYOC role-setup wizard.
+// Deploy-agent step: shown inside DeployAgentStage. Lesson 1 of "Deploy an
+// agent" -- users pick between the shared, pre-deployed AgentK (no wait) and
+// deploying their own dedicated instance (gated to a paid tier). Deploying
+// your own is two sub-steps: pick a runtime target (only AgentCore is live;
+// Vercel/Lyzr are visible "coming soon"), then walk the BYOC role-setup
+// wizard -- deploying into Meko's own AWS account isn't offered here at all;
+// a dedicated instance always means the user's own AWS account.
 // agentDisplayName is per-lab (e.g. "AgentK") -- this component is shared
 // across labs, so it never hardcodes one lab's agent name.
 //
-// Deployment selection lives in `session` (useLabRunnerSession), not local
-// state -- Run a Review (a different stage entirely) needs to know which
-// deployment to invoke, so it has to survive navigating away from this
-// stage, the same way session.datapackId already does.
+// Deployment mode/selection live in `session` (useLabRunnerSession), not
+// local state -- Run a Review (a different stage entirely) needs to know
+// which deployment to invoke, so it has to survive navigating away from
+// this stage, the same way session.datapackId already does.
 
 import { useState } from "react";
-import { ExternalLink, Loader2, Rocket } from "lucide-react";
+import { CheckCircle2, ExternalLink, Loader2, Rocket } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { canDeployDedicatedAgent } from "@/lib/freeTier";
 
-import { useCreateManagedDeployment } from "../../hooks/useDeployments";
+import { useSharedDeploymentStatus } from "../../hooks/useDeployments";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
-import { AccountModePicker, type AccountMode } from "./deploy/AccountModePicker";
 import { ByocRoleSetup } from "./deploy/ByocRoleSetup";
+import { DeploymentModeChooser } from "./deploy/DeploymentModeChooser";
 import { DeploymentStatus } from "./deploy/DeploymentStatus";
 import { RuntimeTargetPicker, type RuntimeTargetId } from "./deploy/RuntimeTargetPicker";
 
 // Numbered step heading, reused for each stage of the picker so the flow
-// reads as one sequence instead of cards just appearing with no context —
-// this is what was "disjointed" before: AccountModePicker would show up
-// under RuntimeTargetPicker with nothing marking it as the next step.
+// reads as one sequence instead of cards just appearing with no context.
 function DeployStepHeading({ number, title }: { number: number; title: string }) {
   return (
     <div className="flex items-center gap-2">
@@ -86,9 +88,91 @@ export function DeployAgentPanel({
   sourceRepoUrl: string;
   session: ReturnType<typeof useLabRunnerSession>;
 }) {
+  const { deploymentMode, selectDeploymentMode } = session;
+  const canDeployDedicated = canDeployDedicatedAgent(session.currentUser?.user_type);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <DeploymentModeChooser
+        selected={deploymentMode}
+        onSelect={selectDeploymentMode}
+        canDeployDedicated={canDeployDedicated}
+      />
+      {deploymentMode === "shared" ? (
+        <SharedAgentPanel agentSlug={agentSlug} agentDisplayName={agentDisplayName} sourceRepoUrl={sourceRepoUrl} />
+      ) : (
+        <DedicatedAgentPanel
+          agentSlug={agentSlug}
+          agentDisplayName={agentDisplayName}
+          sourceRepoUrl={sourceRepoUrl}
+          session={session}
+        />
+      )}
+    </div>
+  );
+}
+
+// Nothing to configure -- fetches the same shared-deployment status
+// useLabRunnerSession resolves session.deployment/deploymentActive from
+// (same query cache key, so no duplicate requests). Just shows what it is
+// and whether it's ready.
+function SharedAgentPanel({
+  agentSlug,
+  agentDisplayName,
+  sourceRepoUrl,
+}: {
+  agentSlug: string;
+  agentDisplayName: string;
+  sourceRepoUrl: string;
+}) {
+  const { data: deployment, isLoading, isError } = useSharedDeploymentStatus(agentSlug, true);
+  const active = deployment?.status === "active";
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+      <div className="flex items-center gap-2">
+        <Rocket className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <p className="text-sm font-medium">Shared {agentDisplayName}</p>
+      </div>
+      <AboutAgent
+        agentDisplayName={agentDisplayName}
+        sourceRepoUrl={sourceRepoUrl}
+        containerUri={deployment?.container_uri ?? null}
+      />
+      {active ? (
+        <p className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
+          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+          Ready — click Next to continue.
+        </p>
+      ) : isError ? (
+        <p className="text-xs text-destructive">
+          This lab isn't configured with a shared instance yet — deploy your own instead.
+        </p>
+      ) : deployment ? (
+        <p className="text-xs text-destructive">
+          The shared instance isn't available right now ({deployment.status}) — try deploying your own instead.
+        </p>
+      ) : (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+          Checking the shared instance…
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DedicatedAgentPanel({
+  agentSlug,
+  agentDisplayName,
+  sourceRepoUrl,
+  session,
+}: {
+  agentSlug: string;
+  agentDisplayName: string;
+  sourceRepoUrl: string;
+  session: ReturnType<typeof useLabRunnerSession>;
+}) {
   const [runtime, setRuntime] = useState<RuntimeTargetId | null>(null);
-  const [accountMode, setAccountMode] = useState<AccountMode | null>(null);
-  const createManaged = useCreateManagedDeployment();
   const { deployment, selectDeployment, clearDeployment } = session;
 
   if (deployment) {
@@ -132,38 +216,8 @@ export function DeployAgentPanel({
 
       {runtime === "bedrock-agentcore" && (
         <div className="flex flex-col gap-3 border-t border-border pt-4">
-          <DeployStepHeading number={2} title="Choose an AWS account" />
-          <AccountModePicker selected={accountMode} onSelect={setAccountMode} />
-        </div>
-      )}
-
-      {accountMode !== null && (
-        <div className="flex flex-col gap-3 border-t border-border pt-4">
-          <DeployStepHeading number={3} title="Deploy" />
-
-          {accountMode === "managed" && (
-            <div className="flex flex-col gap-2">
-              <Button
-                onClick={() =>
-                  createManaged.mutate(agentSlug, { onSuccess: (dep) => selectDeployment(dep.id) })
-                }
-                disabled={createManaged.isPending}
-                className="self-start"
-              >
-                {createManaged.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-                Deploy to Meko's managed AWS account
-              </Button>
-              {createManaged.isError && (
-                <p className="text-sm text-destructive">
-                  {createManaged.error instanceof Error ? createManaged.error.message : "Deploy failed."}
-                </p>
-              )}
-            </div>
-          )}
-
-          {accountMode === "byoc" && (
-            <ByocRoleSetup agentSlug={agentSlug} onDeployed={(dep) => selectDeployment(dep.id)} />
-          )}
+          <DeployStepHeading number={2} title="Deploy into your own AWS account" />
+          <ByocRoleSetup agentSlug={agentSlug} onDeployed={(dep) => selectDeployment(dep.id)} />
         </div>
       )}
     </div>

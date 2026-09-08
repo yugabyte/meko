@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { invokeDeployment, type ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
+import { invokeDeployment, invokeSharedDeployment, type ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
 import { PrReviewDemoApp } from "./PrReviewDemoApp";
@@ -11,10 +11,12 @@ import { PrReviewDemoApp } from "./PrReviewDemoApp";
 // untouched — these are real settings the agent acts on, not decorative UI.
 vi.mock("@/lib/api/deploymentInvokeApi", () => ({
   invokeDeployment: vi.fn(),
+  invokeSharedDeployment: vi.fn(),
   InvokeDeploymentError: class InvokeDeploymentError extends Error {},
 }));
 
 const mockInvokeDeployment = vi.mocked(invokeDeployment);
+const mockInvokeSharedDeployment = vi.mocked(invokeSharedDeployment);
 
 async function* fakeStream(events: ReviewStreamEvent[]) {
   for (const event of events) yield event;
@@ -33,7 +35,9 @@ const DEMO_APP_WITH_DEPLOYABLE: LabDemoAppConfig = {
   deployable: { agentSlug: "adlc-review-agent", sourceRepoUrl: "https://github.com/yugabyte/canned-agents" },
 };
 
-function fakeSession(): ReturnType<typeof useLabRunnerSession> {
+function fakeSession(
+  overrides: Partial<ReturnType<typeof useLabRunnerSession>> = {},
+): ReturnType<typeof useLabRunnerSession> {
   return {
     userId: "user-1",
     currentUser: {
@@ -57,11 +61,16 @@ function fakeSession(): ReturnType<typeof useLabRunnerSession> {
     error: null,
     refreshTick: 0,
     bumpRefreshTick: vi.fn(),
+    lastLessonTrace: null,
+    recordLessonTrace: vi.fn(),
     deploymentId: "dep-1",
     selectDeployment: vi.fn(),
     clearDeployment: vi.fn(),
+    deploymentMode: "dedicated" as const,
+    selectDeploymentMode: vi.fn(),
     deployment: { id: "dep-1", status: "active" } as ReturnType<typeof useLabRunnerSession>["deployment"],
     deploymentActive: true,
+    ...overrides,
   };
 }
 
@@ -69,6 +78,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mockInvokeDeployment.mockReturnValue(fakeStream(DEFAULT_STREAM));
+  mockInvokeSharedDeployment.mockReturnValue(fakeStream(DEFAULT_STREAM));
 });
 
 describe("PrReviewDemoApp guided-customization wiring", () => {
@@ -156,6 +166,24 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(followUpPayload.conversation_id).toBe("conv-1");
     expect(followUpPayload.question).toBe("Why is that a problem?");
     expect(followUpPayload.prior_review_text).toBe("Looks good.");
+  });
+
+  it("shared mode calls invokeSharedDeployment instead, with no meko_pat in the payload", async () => {
+    render(
+      <PrReviewDemoApp
+        demoApp={DEMO_APP}
+        session={fakeSession({ deploymentMode: "shared", deploymentId: null, userToken: null })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(mockInvokeSharedDeployment).toHaveBeenCalledTimes(1));
+    expect(mockInvokeDeployment).not.toHaveBeenCalled();
+    const [, payload] = mockInvokeSharedDeployment.mock.calls[0];
+    expect(payload.datapack_id).toBe("dp-1");
+    expect(payload.meko_pat).toBeUndefined();
+    expect("meko_pat" in payload).toBe(false);
   });
 
   it("aborts the in-flight invokeDeployment call on unmount", async () => {

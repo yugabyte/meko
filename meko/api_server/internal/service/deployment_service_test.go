@@ -64,7 +64,7 @@ func newTestDeploymentService(t *testing.T, cfg service.DeploymentConfig) *servi
 	t.Helper()
 	// nil repo is safe for every case exercised here: validation (including
 	// the cfg.Enabled() gate) runs before any repo call.
-	svc, err := service.NewDeploymentService(context.Background(), nil, cfg)
+	svc, err := service.NewDeploymentService(context.Background(), nil, nil, cfg)
 	if err != nil {
 		t.Fatalf("NewDeploymentService: unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func newRepoBackedDeploymentService(t *testing.T, db *sql.DB, data *fakeAgentCor
 	t.Helper()
 	repo := repository.NewDeploymentRepo(db)
 	svc, err := service.NewDeploymentService(
-		context.Background(), repo, enabledTestConfig(),
+		context.Background(), repo, nil, enabledTestConfig(),
 		service.WithAgentCoreClients(nil, data),
 	)
 	if err != nil {

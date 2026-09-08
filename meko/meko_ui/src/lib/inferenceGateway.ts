@@ -237,6 +237,25 @@ export async function indexConversation(
   return data;
 }
 
+/** Body of POST /memory/add — save a fact directly, not routed through a
+ *  conversation (Labs' "add a memory" lesson). Mirrors
+ *  inference_gateway/routes/chat.py's MemoryAddRequest. */
+export type MemoryAddRequest = {
+  text: string;
+  user_token: string;
+  datapack_id: string;
+};
+
+export type MemoryAddResponse = {
+  ok: boolean;
+  memory_id?: string | null;
+};
+
+export async function addMemory(body: MemoryAddRequest): Promise<MemoryAddResponse> {
+  const { data } = await client.post<MemoryAddResponse>("/memory/add", body);
+  return data;
+}
+
 /**
  * Pull a human-readable error string out of an axios failure against the
  * gateway. FastAPI surfaces structured errors via `{ detail: "..." }` (raised

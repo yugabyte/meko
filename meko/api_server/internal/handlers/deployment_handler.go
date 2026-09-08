@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -170,6 +171,13 @@ func (h *DeploymentHandler) Invoke(c echo.Context) error {
 	if err != nil {
 		return deploymentServiceError(c, err)
 	}
+	return streamDeploymentResponse(c, upstream)
+}
+
+// streamDeploymentResponse writes an SSE response, copying upstream to the
+// client as bytes arrive instead of buffering. Shared by Invoke and
+// InvokeShared -- identical proxying, just a different resolved (userID, id).
+func streamDeploymentResponse(c echo.Context, upstream io.ReadCloser) error {
 	defer upstream.Close()
 
 	resp := c.Response()
@@ -288,7 +296,88 @@ func (h *DeploymentHandler) ConfirmBYOC(c echo.Context) error {
 	return ok(c, http.StatusOK, dep)
 }
 
+// GetShared handles GET /api/v1/deployments/shared/:agent_slug -- the
+// status-poll target for the shared AgentCore Runtime configured for that
+// agent (one entry in the farm of pre-deployed instances every signed-in
+// user can invoke without deploying their own). Looked up from
+// meko_system.shared_deployments, not a Meko deployments-table row -- any
+// authenticated caller reaches it. See DeploymentService.SharedStatus for
+// why this always reports "active" rather than a live AWS status.
+//
+//	@Summary	Get a shared agent deployment's status
+//	@Tags		deployments
+//	@Produce	json
+//	@Param		agent_slug	path		string	true	"Agent slug"
+//	@Success	200			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
+//	@Failure	404			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/deployments/shared/{agent_slug} [get]
+func (h *DeploymentHandler) GetShared(c echo.Context) error {
+	if account, err := auth.GetAccount(c); err != nil || account == nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+	}
+	agentSlug := c.Param("agent_slug")
+	if agentSlug == "" {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "agent_slug is required")
+	}
+
+	dep, err := h.svc.SharedStatus(c.Request().Context(), agentSlug)
+	if err != nil {
+		return deploymentServiceError(c, err)
+	}
+	if dep == nil {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no shared deployment configured for this agent")
+	}
+	return ok(c, http.StatusOK, dep)
+}
+
+// InvokeShared handles POST /api/v1/deployments/shared/:agent_slug/invoke --
+// same opaque-payload proxy as Invoke, against that agent's shared
+// deployment instead of one the caller owns. The payload for this path
+// carries no `meko_pat`: the deployed agent authenticates to Meko with its
+// own credential, not a per-request token forwarded from the browser.
+//
+//	@Summary	Invoke a shared agent deployment and stream its response
+//	@Tags		deployments
+//	@Accept		json
+//	@Produce	text/event-stream
+//	@Param		agent_slug	path	string	true	"Agent slug"
+//	@Param		body		body	object	true	"Opaque payload forwarded to the deployed agent"
+//	@Success	200
+//	@Failure	400	{object}	APIResponse
+//	@Failure	401	{object}	APIResponse
+//	@Failure	404	{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/deployments/shared/{agent_slug}/invoke [post]
+func (h *DeploymentHandler) InvokeShared(c echo.Context) error {
+	if account, err := auth.GetAccount(c); err != nil || account == nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+	}
+	agentSlug := c.Param("agent_slug")
+	if agentSlug == "" {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "agent_slug is required")
+	}
+
+	body, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "could not read request body")
+	}
+
+	upstream, err := h.svc.InvokeShared(c.Request().Context(), agentSlug, body)
+	if err != nil {
+		return deploymentServiceError(c, err)
+	}
+	return streamDeploymentResponse(c, upstream)
+}
+
+// deploymentServiceError maps a service-layer error to an HTTP response and
+// logs it server-side -- previously this package returned the error to the
+// client only, so a failure here (e.g. an AWS-side AccessDenied or
+// ResourceNotFound from Invoke) was invisible in server logs.
 func deploymentServiceError(c echo.Context, err error) error {
+	slog.Error("deployment request failed",
+		"method", c.Request().Method, "path", c.Path(), "error", err)
 	if errors.Is(err, service.ErrValidation) {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 	}

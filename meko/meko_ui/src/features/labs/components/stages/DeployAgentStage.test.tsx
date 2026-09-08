@@ -30,9 +30,13 @@ function fakeSession(datapackId: string | null): ReturnType<typeof useLabRunnerS
     error: null,
     refreshTick: 0,
     bumpRefreshTick: vi.fn(),
+    lastLessonTrace: null,
+    recordLessonTrace: vi.fn(),
     deploymentId: null,
     selectDeployment: vi.fn(),
     clearDeployment: vi.fn(),
+    deploymentMode: "dedicated" as const,
+    selectDeploymentMode: vi.fn(),
     deployment: null,
     deploymentActive: false,
   };
@@ -59,7 +63,7 @@ describe("DeployAgentStage", () => {
       <DeployAgentStage demoApp={DEPLOYABLE_DEMO_APP} session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />,
     );
     expect(screen.getByText(/deploy agentk/i)).toBeTruthy();
-    expect(screen.getByText("How AgentK reads your datapack")).toBeTruthy();
+    expect(screen.getByText("What context changes")).toBeTruthy();
   });
 
   it("shows a plain message when the lab has nothing to deploy", () => {
@@ -68,8 +72,8 @@ describe("DeployAgentStage", () => {
     expect(screen.getByText(/nothing to deploy/i)).toBeTruthy();
   });
 
-  it("collapses the diagram into a compact strip once scrolled past the threshold, and does NOT auto-revert on a scroll event reporting scrollTop back near 0", () => {
-    // Regression test for a real bounce-loop bug: collapsing the diagram
+  it("collapses the comparison into a compact strip once scrolled past the threshold, and does NOT auto-revert on a scroll event reporting scrollTop back near 0", () => {
+    // Regression test for a real bounce-loop bug: collapsing the comparison
     // removes more height than this stage typically has to scroll, so the
     // browser clamps scrollTop back to 0 right after collapsing. A
     // two-way toggle reading live scrollTop would see that clamp and
@@ -84,18 +88,18 @@ describe("DeployAgentStage", () => {
 
     Object.defineProperty(scrollRoot, "scrollTop", { value: 100, writable: true });
     fireEvent.scroll(scrollRoot);
-    expect(screen.queryByText("How AgentK reads your datapack")).toBeNull();
-    expect(screen.getByText(/click to show the diagram again/i)).toBeTruthy();
+    expect(screen.queryByText("What context changes")).toBeNull();
+    expect(screen.getByText(/click to show again/i)).toBeTruthy();
 
     // Simulate the browser clamping scrollTop back to 0 (no more overflow
     // once collapsed) and firing another scroll event for it.
     Object.defineProperty(scrollRoot, "scrollTop", { value: 0, writable: true });
     fireEvent.scroll(scrollRoot);
-    expect(screen.queryByText("How AgentK reads your datapack")).toBeNull();
-    expect(screen.getByText(/click to show the diagram again/i)).toBeTruthy();
+    expect(screen.queryByText("What context changes")).toBeNull();
+    expect(screen.getByText(/click to show again/i)).toBeTruthy();
   });
 
-  it("re-expands the diagram only via an explicit click on the compact strip", () => {
+  it("re-expands the comparison only via an explicit click on the compact strip", () => {
     renderStage(
       <DeployAgentStage demoApp={DEPLOYABLE_DEMO_APP} session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />,
     );
@@ -104,8 +108,8 @@ describe("DeployAgentStage", () => {
     Object.defineProperty(scrollRoot, "scrollTop", { value: 100, writable: true });
     fireEvent.scroll(scrollRoot);
 
-    fireEvent.click(screen.getByRole("button", { name: /click to show the diagram again/i }));
-    expect(screen.getByText("How AgentK reads your datapack")).toBeTruthy();
-    expect(screen.queryByText(/click to show the diagram again/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /click to show again/i }));
+    expect(screen.getByText("What context changes")).toBeTruthy();
+    expect(screen.queryByText(/click to show again/i)).toBeNull();
   });
 });

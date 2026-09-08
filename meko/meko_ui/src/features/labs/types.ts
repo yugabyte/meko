@@ -5,11 +5,21 @@
 
 import type { LucideIcon } from "lucide-react";
 
-/** One of the 5 fixed workflow stages a lab run walks through. A closed
- *  union (not an arbitrary string) because LabStageSlot switches on it to
- *  pick a concrete stage component — adding a 6th stage means adding a case
- *  there too, same convention LabStageSlot uses elsewhere for demoApp.kind. */
-export type LabStageId = "create-datapack" | "seed-context" | "deploy-agent" | "run-review" | "collaborate";
+/** One of the fixed workflow stages a lab run walks through, grouped into
+ *  chapters (see LabChapter below). A closed union (not an arbitrary string)
+ *  because LabStageSlot switches on it to pick a concrete stage component —
+ *  adding a stage means adding a case there too, same convention LabStageSlot
+ *  uses elsewhere for demoApp.kind. */
+export type LabStageId =
+  | "create-datapack"
+  | "context-intro"
+  | "knowledge-base"
+  | "memory"
+  | "conversation"
+  | "deploy-agent"
+  | "share-with-agent"
+  | "run-review"
+  | "collaborate";
 
 export type LabStage = {
   id: LabStageId;
@@ -19,10 +29,24 @@ export type LabStage = {
   title: string;
   /** One or two sentences shown under the title on the left-rail nav card. */
   summary: string;
-  /** Exactly two bullet points shown under this stage in LabDetailPage's
-   *  overview timeline — a slightly more concrete "what this does" than
-   *  `summary`, which is written for the in-progress runner instead. */
+  /** Exactly two bullet points shown under this stage on its own left-rail
+   *  nav card -- a slightly more concrete "what this does" than `summary`. */
   highlights: [string, string];
+};
+
+/** Groups a lab's stages into named chapters -- e.g. "Setup your Context"
+ *  containing several stages, "Review cycle" containing others. LabStageNav
+ *  always shows the current chapter's header and only its own stages;
+ *  moving between chapters is an explicit "Next Chapter" / "Previous
+ *  chapter" action, not an implicit consequence of finishing a chapter's
+ *  last stage. */
+export type LabChapter = {
+  id: string;
+  title: string;
+  /** One or two sentences shown on LabDetailPage's chapter overview --
+   *  the landing page shows only chapters, not individual stages. */
+  summary: string;
+  stages: LabStage[];
 };
 
 export type LabDemoAppConfig = {
@@ -46,15 +70,29 @@ export type LabObservationConfig = {
   kind: "workbench-live-observation";
 };
 
+/** One box in LabDetailPage's "how this lab starts" flow diagram --
+ *  subtitle is a diagram label, not a sentence, so keep it to a few words. */
+export type LabStartingPointStep = {
+  title: string;
+  subtitle: string;
+};
+
 export type LabDefinition = {
   id: string;
   title: string;
   summary: string;
+  /** One-sentence hook shown under the title on LabDetailPage -- the
+   *  landing page's flow diagram and chapter list carry the detail, so
+   *  this should stay short. */
   description: string;
   tags: string[];
   icon: LucideIcon;
   estimatedMinutes: number;
-  stages: LabStage[];
+  /** Exactly three steps: the ungoverned starting point, what the user
+   *  builds, and what it's used for -- rendered as a 3-box flow on
+   *  LabDetailPage. */
+  startingPoint: [LabStartingPointStep, LabStartingPointStep, LabStartingPointStep];
+  chapters: LabChapter[];
   demoApp: LabDemoAppConfig;
   observation: LabObservationConfig;
 };

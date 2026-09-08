@@ -31,16 +31,49 @@ type ReviewStreamErrorFrame = { error: string; error_type?: string; message?: st
 
 export class InvokeDeploymentError extends Error {}
 
+/** `message` on the SDK's own mid-stream error frame is ALWAYS the same
+ *  hardcoded string ("An error occurred during streaming", from
+ *  bedrock_agentcore's runtime/app.py _sync_stream_with_error_handling) --
+ *  the real detail is in `error` (str(exception)), with `error_type` (the
+ *  exception's class name) as useful extra context. Prefer those; `message`
+ *  is only ever a fallback for some other, differently-shaped error frame. */
+function formatStreamError(event: ReviewStreamErrorFrame): string {
+  const detail = event.error || event.message || "Unknown error";
+  return event.error_type ? `${event.error_type}: ${detail}` : detail;
+}
+
 /** Streams a review (or follow-up) from a deployed agent. `body` is opaque
  *  to this function — it's the agent's own payload contract, forwarded
  *  through api_server verbatim; see `agentcore_entrypoint.py`'s two payload
  *  shapes (initial review vs. follow-up). */
-export async function* invokeDeployment(
+export function invokeDeployment(
   deploymentId: string,
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): AsyncGenerator<ReviewStreamEvent> {
-  const res = await fetch(`${API_BASE}/deployments/${encodeURIComponent(deploymentId)}/invoke`, {
+  return streamInvoke(`/deployments/${encodeURIComponent(deploymentId)}/invoke`, body, signal);
+}
+
+/** Same streaming contract as invokeDeployment, against agentSlug's shared
+ *  deployment (one entry in the farm every signed-in user can use, via
+ *  GET/POST /deployments/shared/:agent_slug*) instead of one they deployed
+ *  themselves. `body` carries no `meko_pat` -- the shared instance
+ *  authenticates to Meko with its own credential, not one forwarded from
+ *  the browser per request. */
+export function invokeSharedDeployment(
+  agentSlug: string,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): AsyncGenerator<ReviewStreamEvent> {
+  return streamInvoke(`/deployments/shared/${encodeURIComponent(agentSlug)}/invoke`, body, signal);
+}
+
+async function* streamInvoke(
+  path: string,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): AsyncGenerator<ReviewStreamEvent> {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -74,7 +107,7 @@ export async function* invokeDeployment(
         sawAnyFrame = true;
         const event = JSON.parse(dataLine.slice(5).trim()) as ReviewStreamEvent | ReviewStreamErrorFrame;
         if ("error" in event) {
-          throw new InvokeDeploymentError(event.message ?? event.error);
+          throw new InvokeDeploymentError(formatStreamError(event));
         }
         yield event;
       }
@@ -90,7 +123,7 @@ export async function* invokeDeployment(
         sawAnyFrame = true;
         buffer = "";
         if ("error" in event) {
-          throw new InvokeDeploymentError(event.message ?? event.error);
+          throw new InvokeDeploymentError(formatStreamError(event));
         }
         yield event;
       } catch (err) {
@@ -118,8 +151,7 @@ export async function* invokeDeployment(
       return;
     }
     if (parsed && typeof parsed === "object" && "error" in parsed) {
-      const err = parsed as { error: string; message?: string };
-      throw new InvokeDeploymentError(err.message ?? err.error);
+      throw new InvokeDeploymentError(formatStreamError(parsed as ReviewStreamErrorFrame));
     }
     throw new InvokeDeploymentError(
       "This deployment's image doesn't support streaming reviews -- redeploy the agent to pick up the latest image.",
