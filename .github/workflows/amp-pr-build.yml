@@ -226,9 +226,10 @@ jobs:
         with:
           workspaces: amp
 
-      # scripts/build.py reuses pg_install/v18 when its .pg_commit stamp
-      # matches the checked-out submodule commit, so key the cache on the
-      # gitlink plus the build plumbing that shapes the install.
+      # scripts/build.py reuses pg_install/v18 only while both its stamps match:
+      # .pg_commit (the submodule commit) and .pg_makefiles (Makefile +
+      # postgres.mk). Key the cache on the same two inputs, so a cache hit here
+      # means what a local reuse means.
       - name: Compute PostgreSQL cache key
         id: pgrev
         run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"

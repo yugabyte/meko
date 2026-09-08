@@ -337,9 +337,11 @@ It does everything the build needs, so there's no manual `git submodule
 update` or `make` to remember. Specifically it:
 
 - Checks out the vendored **PostgreSQL v18** tree (`compute/vendor/postgres-v18`)
-  on a fresh clone, and re-syncs + rebuilds PostgreSQL whenever the
-  submodule gitlink has moved; otherwise it reuses the cached
-  `pg_install/v18`.
+  on a fresh clone, and reuses the cached `pg_install/v18` only while it still
+  matches what produced it: the submodule commit (`.pg_commit`), the makefiles
+  that shaped the build (`.pg_makefiles` — `Makefile` + `postgres.mk`, so a new
+  contrib module or a changed configure flag counts), and the release build
+  type. Otherwise it rebuilds PostgreSQL.
 - Installs the **PostgreSQL server headers** before `cargo build` (the
   `postgres_ffi` crate generates Rust bindings from them, so a bare
   `cargo build` would otherwise fail with `bindgen_deps.h: 'c.h' file not

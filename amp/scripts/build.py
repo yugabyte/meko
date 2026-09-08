@@ -25,14 +25,17 @@ PostgreSQL submodule handling (every mode):
     `compute/vendor/postgres-v18` git submodule. This script checks it out if it is
     missing, and when the gitlink recorded in HEAD differs from the commit in
     the working tree (e.g. a rebase/pull bumped it) it re-syncs and rebuilds
-    PostgreSQL from source. When the submodule already matches and
-    pg_install/v18 exists, the cached install is reused (PG_INSTALL_CACHED=1)
-    and only the C extensions are recompiled. This closes the footgun where a
-    bumped gitlink would otherwise ship a stale Postgres against the cache.
+    PostgreSQL from source. The cached install is reused (PG_INSTALL_CACHED=1,
+    only the C extensions recompiled) when it matches on both halves of its key:
+    the submodule commit it was built from (.pg_commit) and the makefiles that
+    produced it (.pg_makefiles — Makefile + postgres.mk). Without the second, a
+    contrib module added to postgres.mk, or a configure flag edited into either
+    file, ships a stale Postgres.
 """
 
 import argparse
 import datetime
+import hashlib
 import os
 import shutil
 import socket
@@ -121,22 +124,52 @@ def git_out(*args):
 # only way to notice that a header/source change (e.g. an FMGR_ABI_EXTRA bump)
 # invalidated the cached PG + every extension linked against it, since the
 # gitlink and the checked-out working tree can match while the *install* is
-# stale. Shared with test/integration/compute/run.sh, which reads/writes the same file.
+# stale.
 PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
 
 
-# contrib modules the cached install must carry because a compute preloads them
-# (postgres.mk installs them alongside PostgreSQL). A missing preload library is a
-# hard postmaster start failure, a missing required one fails the CREATE EXTENSION
-# that needs it, and the commit stamp above cannot see the contrib list itself
-# change.
-PRELOADED_CONTRIB = ["pg_stat_statements.so", "tsm_system_rows.so"]
+# The other half of the cache key. The commit stamp says which PG source; these
+# say how it was built — postgres.mk's contrib set, and the PG_CFLAGS /
+# PG_CONFIGURE_OPTS the Makefile hands configure. Editing either bumps no
+# submodule commit, so the commit stamp alone calls a stale install fresh. CI
+# keys on the same two files (amp-pr-build.yml hashFiles).
+#
+# File contents only: flags that reach configure from the environment or host
+# (CFLAGS, WITH_SANITIZERS, the .docker_build branch) leave these bytes
+# unchanged, so WITH_SANITIZERS=yes still reuses a non-sanitized install.
+PG_MAKEFILES_STAMP = PG_INSTALL / ".pg_makefiles"
+PG_MAKEFILES = ("Makefile", "postgres.mk")
 
 
-def missing_preloaded_contrib():
-    """Committed contrib modules absent from the cached pg_install."""
-    libdir = PG_INSTALL / "lib" / "postgresql"
-    return [lib for lib in PRELOADED_CONTRIB if not (libdir / lib).is_file()]
+def worktree_pg_makefiles_hash():
+    """Hash of the makefiles as they stand in the checkout right now.
+
+    Framed by name and length: concatenating the contents alone would hash the
+    same whether a line sits at the end of Makefile or the start of postgres.mk.
+    """
+    h = hashlib.sha256()
+    for name in PG_MAKEFILES:
+        data = (ROOT / name).read_bytes()
+        h.update(f"{name}:{len(data)}\n".encode())
+        h.update(data)
+    return h.hexdigest()
+
+
+def built_pg_makefiles_hash():
+    """The makefiles hash pg_install/v18 was last built from, or None."""
+    return (
+        PG_MAKEFILES_STAMP.read_text().strip() if PG_MAKEFILES_STAMP.is_file() else None
+    )
+
+
+def pg_makefiles_changed():
+    """True if the makefiles differ from the ones pg_install/v18 was built from."""
+    return built_pg_makefiles_hash() != worktree_pg_makefiles_hash()
+
+
+def record_pg_makefiles():
+    """Stamp pg_install with the makefiles it was just built from."""
+    PG_MAKEFILES_STAMP.write_text(worktree_pg_makefiles_hash() + "\n")
 
 
 def built_pg_commit():
@@ -151,45 +184,36 @@ def record_pg_commit():
         PG_COMMIT_STAMP.write_text(have + "\n")
 
 
-def sync_submodule_if_needed():
-    """Check out / re-sync compute/vendor/postgres-v18. Return True if PG needs a rebuild.
+def pg_install_matches_commit():
+    """True if pg_install/v18 was built from the commit now checked out.
 
-    PG must be rebuilt when the working tree doesn't match the gitlink (a bump,
-    or a fresh/absent checkout), when pg_install/v18 was never built, when the
-    cached install was built from a DIFFERENT submodule commit than the one now
-    checked out, or when it lacks a contrib module a compute preloads. The commit
-    case is the one a bare gitlink/working-tree check misses: after a commit bumps
-    the submodule and the tree is re-synced, the gitlink and working tree agree
-    while the install still holds the old PG (and old headers), so a header change
-    like FMGR_ABI_EXTRA would otherwise ship a stale ABI to every extension.
+    Call ensure_submodule() first, so this compares against a submodule already
+    at the gitlink and a bump can only surface as .pg_commit disagreeing. An
+    absent install does not match. Reads only; main() does the wiping.
     """
-    want = git_out("rev-parse", f"HEAD:{submodule_in_tree()}")
-    have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
-    pg_built = (PG_INSTALL / "bin" / "postgres").is_file()
-
-    if want != have:
-        where = have[:12] if have else "absent"
-        gitlink = want[:12] if want else "unresolved"
-        say(f"{SUBMODULE} gitlink ({gitlink}) != working tree ({where})")
-        say("Syncing submodule and rebuilding PostgreSQL from source...")
-        run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
-        return True
-    if not pg_built:
+    if not (PG_INSTALL / "bin" / "postgres").is_file():
         say("pg_install/v18 missing — building PostgreSQL from source...")
-        run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
-        return True
+        return False
+    have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
     built = built_pg_commit()
     if built != have:
         say(f"pg_install/v18 was built from {(built or 'unknown')[:12]} but the "
-            f"submodule is at {have[:12]} — rebuilding PostgreSQL")
-        return True
-    missing = missing_preloaded_contrib()
-    if missing:
-        say(f"pg_install/v18 is missing preloaded contrib ({', '.join(missing)}) "
-            "— reinstalling PostgreSQL")
-        return True
-    say(f"{SUBMODULE} up to date ({have[:12]}) — reusing cached pg_install/v18")
-    return False
+            f"submodule is at {(have or 'unknown')[:12]} — rebuilding PostgreSQL")
+        return False
+    return True
+
+
+def ensure_submodule():
+    """Check compute/vendor/postgres-v18 out if it isn't already at the gitlink.
+
+    Self-guarding, so callers need not work out whether a checkout is due.
+    """
+    if git_out("rev-parse", f"HEAD:{submodule_in_tree()}") == git_out(
+        "-C", SUBMODULE, "rev-parse", "HEAD"
+    ):
+        return
+    say(f"Syncing {SUBMODULE}...")
+    run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
 
 
 def make_env(*, cached):
@@ -218,17 +242,17 @@ def pg_install_is_release():
     return res.returncode == 0 and "--enable-cassert" not in res.stdout
 
 
-def force_pg_release_reconfigure():
-    """Drop the PG build tree + install so the next build reconfigures release.
+def wipe_pg_trees(why):
+    """Drop the PG build tree + install so the next build reconfigures cleanly.
 
-    The build type is baked into build/<v>/config.status, and the release
-    configure omits `--enable-depend`, so simply re-running `make` with a new
-    BUILD_TYPE won't switch a debug tree to release — the stale config.status
-    would be reused. Removing both dirs forces a clean release configure.
+    config.status is a bare file target in postgres.mk with no prerequisite on
+    the makefiles, so make reuses it however the recipe changed — re-running
+    `make` picks up neither a new build type nor new PG_CONFIGURE_OPTS.
+    Removing both dirs is what forces configure to run again.
     """
     for p in (BUILD_DIR / PG_VERSION, PG_INSTALL):
         if p.exists():
-            say(f"Removing {p} to force a clean release PostgreSQL rebuild")
+            say(f"Removing {p} — {why}")
             shutil.rmtree(p)
 
 
@@ -339,7 +363,9 @@ def main():
 
     say(f"Mode: {mode} (amp stack + extensions BUILD_TYPE={build_type}; "
         f"PostgreSQL always {PG_BUILD_TYPE})")
-    rebuild_pg = sync_submodule_if_needed()
+    # Ahead of the mode dispatch: --headers builds none of PostgreSQL but still
+    # configures from the submodule source.
+    ensure_submodule()
 
     pg_target = f"postgres-install-{PG_VERSION}"
     headers_target = f"postgres-headers-install-{PG_VERSION}"
@@ -348,7 +374,9 @@ def main():
     if mode == "headers":
         # postgres-headers-install-% installs into pg_install/v18/include so a
         # bare cargo build/check can generate the postgres_ffi bindings. Headers
-        # are build-type-independent, so this mode never wipes/rebuilds PG.
+        # are build-type-independent, so this mode never wipes/rebuilds PG — it
+        # runs while a local cluster is up, and a wipe would strip bin/postgres
+        # and every contrib .so out from under it.
         say(f"Installing PostgreSQL server headers ({PG_BUILD_TYPE})...")
         run(
             ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", headers_target],
@@ -357,14 +385,28 @@ def main():
         say("Headers installed under pg_install/v18/include/. `cargo check` will work now.")
         return
 
+    # Below the --headers return, which does none of this work.
+    rebuild_pg = not pg_install_matches_commit()
+
+    # Asked here, not inside the check above, so the wipe cannot be shadowed by
+    # whichever trigger fires first: a rebuild that keeps config.status picks up
+    # no new configure flags, yet record_pg_makefiles() would stamp it as if it
+    # had.
+    if pg_makefiles_changed():
+        wipe_pg_trees("postgres.mk/Makefile changed since this install was built")
+        rebuild_pg = True
+
     # PostgreSQL must be a release build regardless of mode. If the cache is a
     # debug build (or a partially-configured debug tree), wipe it so the build
     # below reconfigures release — the type is baked into config.status.
     if not pg_install_is_release():
         if PG_INSTALL.exists() or (BUILD_DIR / PG_VERSION).exists():
             say("Cached pg_install is not a release build — rebuilding PostgreSQL in release mode")
-            force_pg_release_reconfigure()
+            wipe_pg_trees("the cached PostgreSQL is not a release build")
         rebuild_pg = True
+
+    if not rebuild_pg:
+        say(f"{SUBMODULE} up to date — reusing cached pg_install/v18")
 
     # Build (or rebuild) PostgreSQL in release *before* cargo: postgres_ffi's
     # build script generates bindings from the installed server headers
@@ -377,6 +419,7 @@ def main():
             env=make_env(cached=False),
         )
         record_pg_commit()
+        record_pg_makefiles()
         # PG headers just moved (struct layout, FMGR_ABI_EXTRA, ...). The PGXS
         # extension build has no header-dependency tracking, so an incremental
         # `make` would relink stale .o files into an ABI-mismatched .so. Wipe the
@@ -434,3 +477,7 @@ if __name__ == "__main__":
     except subprocess.CalledProcessError as e:
         print(f"\nbuild failed: command exited {e.returncode}", file=sys.stderr)
         sys.exit(e.returncode)
+    except OSError as e:
+        # e.g. a partial checkout missing a file the makefiles hash reads.
+        print(f"\nbuild failed: {e}", file=sys.stderr)
+        sys.exit(1)
