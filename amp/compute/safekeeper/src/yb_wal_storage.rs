@@ -2789,6 +2789,26 @@ mod tests {
         assert_eq!(quote_relation("a\"b.c\"d"), "\"a\"\"b\".\"c\"\"d\"");
     }
 
+    /// Both transient classes must classify as races and a real error must
+    /// not. The `already exists` and `deleted while still in use` literals are
+    /// verbatim CI captures (#508, #1130); the `42710` case and the negative
+    /// are synthesized.
+    #[test]
+    fn scratch_table_catalog_races_are_retryable() {
+        assert!(is_scratch_table_catalog_race(
+            "db error: ERROR: relation \"wals_test_trunc_cache_12e58617\" already exists"
+        ));
+        assert!(is_scratch_table_catalog_race(
+            "db error: ERROR: relation 16920 deleted while still in use"
+        ));
+        assert!(is_scratch_table_catalog_race(
+            "db error: ERROR: type \"wals_test_a1b2c3d4\" already exists"
+        ));
+        assert!(!is_scratch_table_catalog_race(
+            "db error: ERROR: syntax error at or near \"CRAETE\""
+        ));
+    }
+
     #[test]
     fn bake_branch_id_bakes_and_shifts() {
         let b: BranchId = "00112233-4455-6677-8899-aabbccddeeff".parse().unwrap();
@@ -2952,30 +2972,108 @@ mod tests {
         format!("{prefix}_{:08x}", h.finish() as u32)
     }
 
+    /// The two classes the setup loop tolerates. Different mechanisms, all
+    /// cleared by re-running the DROP-then-CREATE pair:
+    ///
+    /// - `deleted while still in use` (#1130), the failure this loop was added
+    ///   for. YSQL raises it when a relcache rebuild finds no pg_class row
+    ///   for an OID whose entry is still pinned, which is consistent with the
+    ///   DROP's own invalidation landing mid-statement. Relcache entries go at
+    ///   transaction end, so the next attempt starts clean.
+    /// - `already exists`, two shapes. The live one is `42710 type "..."
+    ///   already exists`, where a CREATE's pg_class and pg_type checks
+    ///   disagree across a mid-statement catalog version change — YSQL's own
+    ///   `Catalog Version Mismatch ... Try again.` context says to retry.
+    ///   Open as yugabyte-db#24403, whose repro is this helper's two
+    ///   statements; `IF NOT EXISTS` does not cover it, since the guard gates
+    ///   only the pg_class check the CREATE already passed. The other is
+    ///   #508's `42P07` from a *bare* CREATE that had committed, where
+    ///   re-running the DROP is what converges it; #556's `IF NOT EXISTS`
+    ///   fixed that shape.
+    ///
+    /// Advisory, not exhaustive: anything unrecognised is a real failure.
+    fn is_scratch_table_catalog_race(msg: &str) -> bool {
+        msg.contains("already exists") || msg.contains("deleted while still in use")
+    }
+
+    /// DROP-then-CREATE `table`, retrying [`is_scratch_table_catalog_race`].
+    /// `create_sql` is re-run per attempt and must create `table`; the DROP is
+    /// derived from the name, not from the SQL. This tolerates the two races,
+    /// it does not prevent them: three attempts with a heartbeat-length wait
+    /// has been enough on CI, and an exhausted budget panics rather than
+    /// hiding one.
+    ///
+    /// Both statements have to survive a re-send. On a dropped connection
+    /// `execute` repeats a statement without learning whether it committed
+    /// (`compute/architecture/yugabyte.md`, the client retry contract). The
+    /// CREATE survives that through `IF NOT EXISTS`, so keep the guard even
+    /// under the unconditional DROP. Without it a re-send of a committed
+    /// CREATE fails `42P07` permanently rather than transiently (#508/#556),
+    /// and removing it stalled the suite to 183s against a normal 6.5s.
+    ///
+    /// The DROP does not survive one. It resolves its name to an OID when it
+    /// runs, so a re-send drops whatever holds the name by then. Nothing
+    /// creates these names concurrently: the controller's migrations create the
+    /// `amp_storage` tables idempotently and never DROP them, neither daemon
+    /// issues DDL, and each test here owns one name. `make_wals_table` below
+    /// rules out the one case that would break that.
+    ///
+    /// Do not re-add the `DROP TYPE IF EXISTS ... CASCADE` from #1041. It was
+    /// added on the theory that a replayed CREATE strands the rowtype in
+    /// pg_type with no pg_class row to match. No such row can exist: the
+    /// pg_type rows and the pg_class row go in one DDL transaction, so an
+    /// abort past the rowtype leaves neither. (The DocDB table is *not* in
+    /// that transaction. A separate master RPC creates it, and the master's
+    /// DDL verifier reconciles it afterwards.)
+    ///
+    /// The `42710` it was reacting to is real but transient — a stale cached
+    /// pg_type answer, not a stranded row (yugabyte-db#24403, above). The
+    /// retry clears that; the cleanup would not, since it resolves the name
+    /// from one syscache and deletes through another, raising `cache lookup
+    /// failed for type` on the state it targeted. It also fails `2BP01` when
+    /// the name is a live table.
+    async fn recreate_scratch_table(client: &YsqlClient, table: &str, create_sql: &str) {
+        let q = quote_relation(table);
+        let drop_table = format!("DROP TABLE IF EXISTS {q}");
+        // Labelled so the panic names the failing statement: `deleted while
+        // still in use` means different things on the DROP and the CREATE.
+        let steps = [
+            ("drop scratch wals table", drop_table.as_str()),
+            ("create scratch wals table", create_sql),
+        ];
+        const ATTEMPTS: u32 = 3;
+        for attempt in 1..=ATTEMPTS {
+            let mut failure = None;
+            for (label, sql) in steps {
+                if let Err(e) = client.execute(sql, &[]).await {
+                    failure = Some((label, e));
+                    break;
+                }
+            }
+            let Some((label, e)) = failure else { return };
+            assert!(
+                attempt < ATTEMPTS && is_scratch_table_catalog_race(&e.to_string()),
+                "{label} {table} (attempt {attempt} of {ATTEMPTS}): {e:#}"
+            );
+            // Plain backoff: `execute` classifies both Fatal (42xxx, and an
+            // XX000 with no transient pattern), so it never backs off itself.
+            // Sized to the default 1s `heartbeat_interval_ms`, since a catalog
+            // version reaches tservers on that heartbeat and a shorter wait
+            // re-reads the state that just failed. #1130 does not need the
+            // wait; the DROP on the next attempt is what fixes both classes.
+            tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
+        }
+    }
+
     /// Per-test `wals`-shaped scratch table. Names are FIXED per test
-    /// (not randomized): the DROP-IF-EXISTS here self-heals any table a
-    /// panicked/killed earlier run left behind, where random suffixes
-    /// accumulated leaked tables until the dev YB's tablet count
+    /// (not randomized): `recreate_scratch_table`'s DROP-IF-EXISTS self-heals
+    /// any table a panicked/killed earlier run left behind, where random
+    /// suffixes accumulated leaked tables until the dev YB's tablet count
     /// degraded every daemon start on the box. Trade-off: two
     /// simultaneous `cargo test -p safekeeper` invocations on one
     /// cluster would collide — don't do that.
-    ///
-    /// IF-(NOT-)EXISTS on both: `execute` replays on transient errors, and a
-    /// bare CREATE returns `42P07` — #508.
-    ///
-    /// `IF NOT EXISTS` alone does not close that hole. It is a pg_class
-    /// lookup, but a CREATE TABLE that is replayed after its first attempt
-    /// half-applied can leave the row's composite type in pg_type with no
-    /// pg_class entry to match — so the guard passes and the create then dies
-    /// on `42710 type "..." already exists`. Seen in CI. Dropping the stranded
-    /// type and retrying once is the only way out; a second failure is a real
-    /// one and panics.
     async fn make_wals_table(client: &YsqlClient, table: &str) {
         let q = quote_relation(table);
-        client
-            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
-            .await
-            .expect("drop scratch wals table");
         // Same shape as the production schema (all-range key led by
         // `bucket_id`); the migration's `SPLIT AT VALUES` is omitted —
         // placement is not under test and default tablet counts keep setup
@@ -2995,28 +3093,7 @@ mod tests {
                PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
              )"
         );
-        let create = client.execute(&create_sql, &[]).await;
-        if let Err(e) = create {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("already exists"),
-                "create scratch wals table: {e:#}"
-            );
-            // A replayed CREATE stranded the composite type; clear it and
-            // retry once (see this fn's doc).
-            client
-                .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
-                .await
-                .expect("re-drop scratch wals table");
-            client
-                .execute(&format!("DROP TYPE IF EXISTS {q} CASCADE"), &[])
-                .await
-                .expect("drop stranded scratch wals type");
-            client
-                .execute(&create_sql, &[])
-                .await
-                .expect("create scratch wals table after clearing a stranded type");
-        }
+        recreate_scratch_table(client, table, &create_sql).await;
     }
 
     /// One `wals` row, encoded the way the write path stores it.
@@ -5386,33 +5463,23 @@ mod tests {
         );
         let branch_id = BranchId::generate();
         let q = quote_relation(&table);
-        client
-            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
-            .await
-            .expect("drop scratch wals table");
         // The post-migration shape: all-range PK, no hash columns, led by
         // `bucket_id` (the split boundaries have to be literals, and branch IDs
         // are minted at runtime). The split point is given in key order and
         // deliberately cuts one segno's chunk range in half.
-        // IF NOT EXISTS: replay-safe, as in `make_wals_table` (#508).
-        client
-            .execute(
-                &format!(
-                    "CREATE TABLE IF NOT EXISTS {q} (\
-                       bucket_id        SMALLINT NOT NULL,\
-                       branch_id        uuid     NOT NULL,\
-                       segno            BIGINT   NOT NULL,\
-                       chunk_offset     BIGINT   NOT NULL,\
-                       chunk_size       INT      NOT NULL,\
-                       data             BYTEA    NOT NULL,\
-                       last_modified_us BIGINT   NOT NULL,\
-                       PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
-                     ) SPLIT AT VALUES ((0, '{branch_id}', 1, 2000))"
-                ),
-                &[],
-            )
-            .await
-            .expect("create range-sharded scratch wals table");
+        let create_sql = format!(
+            "CREATE TABLE IF NOT EXISTS {q} (\
+               bucket_id        SMALLINT NOT NULL,\
+               branch_id        uuid     NOT NULL,\
+               segno            BIGINT   NOT NULL,\
+               chunk_offset     BIGINT   NOT NULL,\
+               chunk_size       INT      NOT NULL,\
+               data             BYTEA    NOT NULL,\
+               last_modified_us BIGINT   NOT NULL,\
+               PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
+             ) SPLIT AT VALUES ((0, '{branch_id}', 1, 2000))"
+        );
+        recreate_scratch_table(&client, &table, &create_sql).await;
 
         // Chunks at 0, 1000, 2000, 3000 — each 1000 bytes, so the one at 1000
         // spans the fetch position 1500 and is the true covering chunk.
@@ -5476,10 +5543,7 @@ mod tests {
             "the covering chunk must actually span the fetch position"
         );
 
-        client
-            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
-            .await
-            .expect("drop scratch table");
+        drop_wals_table(&client, &table).await;
     }
 
     /// Live hot-path round trip: flush through the real producer/consumer,

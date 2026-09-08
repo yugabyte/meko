@@ -15,8 +15,11 @@
 //! boundary would surface here as a crash/failure, so this doubles as an
 //! ABI sanity check for the prebuilt shim.
 //!
-//! Fixture DDL is DROP IF EXISTS + CREATE IF NOT EXISTS: `execute` replays
-//! on transient errors, and a bare CREATE returns `42P07` — #508.
+//! Fixture DDL goes through `recreate_table`, which rides out the transient
+//! DROP→CREATE catalog races the shared cluster throws at it (#508, #1130),
+//! and teardown through `drop_table`, which is best-effort.
+
+use std::time::Duration;
 
 use bytes::Bytes;
 use yb_thin_client::{BindValue, RangeRead, ReadOp, TsClient, TsClientConfig, UpsertRow};
@@ -63,6 +66,65 @@ async fn ysql() -> YsqlClient {
         .expect("ysql connect")
 }
 
+/// DROP-then-CREATE the fixture `table`, retrying the two classes that broke
+/// this suite's setup under its own concurrent DDL: `deleted while still in
+/// use` (#1130) and `already exists` (#508). Different mechanisms, and the
+/// retry clears both only because it re-runs the DROP ahead of the CREATE.
+/// `create_sql` is re-run per attempt and must create `table`; the DROP is
+/// derived from the name, not from the SQL. This tolerates the two classes
+/// rather than preventing them, and an exhausted budget panics.
+///
+/// Keep `IF NOT EXISTS` on the CREATE even under the unconditional DROP: on a
+/// dropped connection `execute` repeats a statement without learning whether
+/// it committed, and without the guard such a repeat fails `42P07`
+/// permanently rather than transiently (#508/#556). The DROP has no such
+/// guard and would drop
+/// whatever holds the name on a repeat, which is harmless here only because
+/// each fixture owns one `const TABLE` and production never drops these names.
+/// The same helper in `safekeeper/src/yb_wal_storage.rs` carries the full
+/// reasoning for both.
+async fn recreate_table(ysql: &YsqlClient, table: &str, create_sql: &str) {
+    let drop_table = format!("DROP TABLE IF EXISTS {table}");
+    // Labelled so the panic names the failing statement: `deleted while still
+    // in use` means different things on the DROP and the CREATE.
+    let steps = [
+        ("drop fixture table", drop_table.as_str()),
+        ("create fixture table", create_sql),
+    ];
+    const ATTEMPTS: u32 = 3;
+    for attempt in 1..=ATTEMPTS {
+        let mut failure = None;
+        for (label, sql) in steps {
+            if let Err(e) = ysql.execute(sql, &[]).await {
+                failure = Some((label, e));
+                break;
+            }
+        }
+        let Some((label, e)) = failure else { return };
+        let msg = e.to_string();
+        assert!(
+            attempt < ATTEMPTS
+                && (msg.contains("already exists") || msg.contains("deleted while still in use")),
+            "{label} {table} (attempt {attempt} of {ATTEMPTS}): {e:#}"
+        );
+        // Plain backoff: `execute` classifies both Fatal, so it never backs
+        // off itself. Sized to the default 1s `heartbeat_interval_ms`, the
+        // heartbeat a new catalog version rides to the tservers. The DROP on
+        // the next attempt is what fixes both classes.
+        tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
+    }
+}
+
+/// Best-effort fixture teardown. The error is ignored on purpose: some call
+/// sites drop before their final assertion, and a teardown that hit the same
+/// catalog race would panic over the result the test exists to report. A table
+/// left behind is dropped by the next run.
+async fn drop_table(ysql: &YsqlClient, table: &str) {
+    let _ = ysql
+        .execute(&format!("DROP TABLE IF EXISTS {table}"), &[])
+        .await;
+}
+
 /// `(db_oid, table_oid)` for a `public` table — table_oid is the
 /// relfilenode when set (YB's DocDB table id), else the pg_class oid.
 async fn table_oids(ysql: &YsqlClient, table: &str) -> (u32, u32) {
@@ -96,10 +158,9 @@ async fn table_oids(ysql: &YsqlClient, table: &str) -> (u32, u32) {
 async fn smoke_connect_open_upsert_read() {
     const TABLE: &str = "thin_smoke";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL,
@@ -108,10 +169,8 @@ async fn smoke_connect_open_upsert_read() {
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
 
     // connect — loads the shim, does a Heartbeat, opens a server session.
@@ -205,9 +264,7 @@ async fn smoke_connect_open_upsert_read() {
         batch.used_read_time_ht
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
 
 /// A `uuid` key column binds as bytea, and the 16 raw bytes are the value.
@@ -234,10 +291,9 @@ async fn uuid_key_column_binds_as_bytea() {
     const ID_TEXT: &str = "00112233-4455-6677-8899-aabbccddeeff";
 
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id uuid NOT NULL,
@@ -245,10 +301,8 @@ async fn uuid_key_column_binds_as_bytea() {
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
 
     let client = TsClient::connect(&TsClientConfig {
@@ -321,9 +375,7 @@ async fn uuid_key_column_binds_as_bytea() {
         "the thin lane's bytes must be the uuid the control plane knows"
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
 
 /// Repro for the `branch_ancestor` wedge: a forward `limit(1)` read on a table
@@ -340,22 +392,19 @@ async fn repro_desc_pk_limit1_newest() {
     use yb_thin_client::RangeRead;
     const TABLE: &str = "descpk_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
     // Distills amp_storage.meta's read shape: hash key + trailing `lsn DESC`
     // (the real table has a `key` range column in between; see
     // `repro_meta_bytea_limit1_newest` for the exact shape).
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, lsn BIGINT NOT NULL, payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     // Three versions of the same key at ascending lsns (like checkpoint updates).
     ysql.execute(
         &format!("INSERT INTO {TABLE} VALUES ('m',10,'\\x0a'),('m',20,'\\x14'),('m',30,'\\x1e')"),
@@ -389,9 +438,7 @@ async fn repro_desc_pk_limit1_newest() {
     println!(
         "repro desc-pk limit1: forward read of ((k) HASH, lsn DESC) limit 1 -> lsn={seen:?} (want Some(30), the NEWEST)"
     );
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
     assert_eq!(
         seen,
         Some(30),
@@ -413,17 +460,16 @@ async fn repro_concurrent_multikey_reads() {
     const TABLE: &str = "ckey_repro";
     const N: i64 = 64;
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL, tag BIGINT NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
-        &[],
-    ).await.unwrap();
+    )
+    .await;
     // Key i: two versions (lsn 100 tag=i, lsn 200 tag=i+1000). Reading key i
     // capped at lsn<=150 must return tag=i (its own lsn-100 row).
     ysql.execute(
@@ -485,9 +531,7 @@ async fn repro_concurrent_multikey_reads() {
         "repro concurrent multikey: {wrong} wrong results across {} reads",
         N * 20
     );
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
     assert_eq!(
         wrong, 0,
         "concurrent reads returned WRONG key's row {wrong} times — shim mis-routes concurrent read responses"
@@ -504,20 +548,17 @@ async fn repro_real_ckpt_read() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "realck_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     // Real CHECKPOINT_KEY (18 bytes) + OTHER meta keys (controlfile, dbdir, a
     // reldir), ALL with a row at 22469680 and 22889880 — mirroring how main's
     // meta table holds many keys that each got their initial row at the same
@@ -575,9 +616,7 @@ async fn repro_real_ckpt_read() {
     println!(
         "repro real ckpt: lsn<=22891280 limit1 -> {seen:?} (want Some(22889880); bug=Some(22469680))"
     );
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
     assert_eq!(
         seen,
         Some(22889880),
@@ -599,19 +638,16 @@ async fn repro_desc_pk_capped_limit1() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "cappk_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, lsn BIGINT NOT NULL, payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     ysql.execute(
         &format!(
             "INSERT INTO {TABLE} SELECT 'm', g*100, '\\x00'::bytea FROM generate_series(1,16) g"
@@ -645,9 +681,7 @@ async fn repro_desc_pk_capped_limit1() {
     println!(
         "repro capped desc-pk limit1: lsn<=850 limit 1 -> {seen:?} (want Some(800) newest<=cap; bug=Some(100) oldest)"
     );
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
     assert_eq!(
         seen,
         Some(800),
@@ -669,20 +703,17 @@ async fn repro_cross_client_visibility() {
     use yb_thin_client::{CondOp, RangeRead, UpsertRow};
     const TABLE: &str = "xclient_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
     // Client A = the "ancestor's" writer (like main's pageserver).
     let a = TsClient::connect(&TsClientConfig {
@@ -734,9 +765,7 @@ async fn repro_cross_client_visibility() {
     println!(
         "repro cross-client: A wrote up to lsn=1600; fresh client B reads lsn={seen:?} (want 1600)"
     );
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
     assert_eq!(
         seen,
         Some(1600),
@@ -761,21 +790,18 @@ async fn repro_meta_bytea_limit1_newest() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "meta_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
     // Exactly amp_storage.meta's shape.
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     // 16 versions of ONE (branch, key) at ascending lsns — like the checkpoint
     // key rewritten as nextXid advances. Payload encodes the lsn so we can tell
     // which version came back.
@@ -817,9 +843,7 @@ async fn repro_meta_bytea_limit1_newest() {
     println!(
         "repro meta bytea limit1 (branch hash + BYTEA range key, cap 850): got lsn={seen:?} (want Some(800) newest<=cap; bug=Some(100) oldest)"
     );
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
     assert_eq!(
         seen,
         Some(800),
@@ -841,20 +865,17 @@ async fn repro_concurrent_read_write() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "crw_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, seg BIGINT NOT NULL, off BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, seg, off))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     ysql.execute(
         &format!(
             "INSERT INTO {TABLE} SELECT 'c', 1, g, '\\x01'::bytea FROM generate_series(0,50) g"
@@ -924,9 +945,7 @@ async fn repro_concurrent_read_write() {
         r.unwrap()
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
 
 /// The "covering chunk" arm is the only caller that uses
@@ -947,20 +966,17 @@ async fn repro_wals_covering_read() {
     use yb_thin_client::{CondOp, RangeRead, ReadOp};
     const TABLE: &str = "wals_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
                  chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     // Chunks for (branch 'b', bucket 0, segno 1) at offsets 0,100,200,300.
     ysql.execute(
         &format!(
@@ -1106,9 +1122,7 @@ async fn repro_wals_covering_read() {
         "large data payload truncated/corrupted"
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
 
 /// The `pages` bucket function, mirroring `page_store::page_bucket_id`.
@@ -1138,10 +1152,9 @@ async fn repro_pages_multipage_scan() {
     const N: i64 = 1000; // blocks 0..N — 4 stretches of 256, so 4 buckets
     const REL: i64 = 3;
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  bucket_id SMALLINT NOT NULL,
@@ -1154,10 +1167,8 @@ async fn repro_pages_multipage_scan() {
                               lsn DESC, is_image DESC))
              SPLIT AT VALUES ((1), (2), (3), (4), (5))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     // Insert N rows (branch 'b', identity 1/2/REL/0), one version per block.
     // bucket_id is computed in SQL with the same integer-division expression as
     // the migration's CHECK, which is what makes the Rust helper above a real
@@ -1368,9 +1379,7 @@ async fn repro_pages_multipage_scan() {
     assert!(rwill_init, "will_init wrong after thin write→read");
     assert_eq!(rpayload, b"pg", "payload wrong after thin write→read");
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
 
 /// Repro for the `branch_ancestor` integration wedge: read-after-write
@@ -1392,20 +1401,17 @@ async fn repro_read_after_write_visibility() {
     const TABLE: &str = "raw_repro";
     const N: i64 = 400;
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
     // A WAL-log-shaped table: latest write = highest lsn for the branch.
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, lsn BIGINT NOT NULL, payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
     // One client, 1 read + 1 write session — the safekeeper's exact config.
     let client = TsClient::connect(&TsClientConfig {
@@ -1495,9 +1501,7 @@ async fn repro_read_after_write_visibility() {
          {stale} reads did NOT immediately see the committed write; worst lag {max_lag:?} at lsn={worst}"
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 
     assert_eq!(
         stale, 0,
@@ -1534,13 +1538,12 @@ async fn repro_wals_range_sharded() {
     use yb_thin_client::{ColKind, CondOp, YbError};
     const TABLE: &str = "wals_range_repro";
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
     // The wals schema with an all-range PK. Split on the (branch_id, bucket_id,
     // segno) prefix — a split point shorter than the full key is legal, the
     // remaining columns read as -Inf.
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
@@ -1548,10 +1551,8 @@ async fn repro_wals_range_sharded() {
                  PRIMARY KEY (branch_id ASC, bucket_id ASC, segno ASC, chunk_offset ASC))
              SPLIT AT VALUES (('b', 0, 2), ('b', 0, 4))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     // Branch 'b': segno 1..5 × chunk_offset 0,100,200,300 = 20 rows, spread
     // over all three tablets.
     ysql.execute(
@@ -1820,9 +1821,7 @@ async fn repro_wals_range_sharded() {
         "one-Perform upsert did not land one row in each of the three tablets"
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
 
 /// Repro for #739: on a RANGE-sharded table, `range_values` sets only where a
@@ -1864,12 +1863,11 @@ async fn repro_range_scan_walks_past_its_key_range() {
     const BUCKETS: i16 = 6;
 
     let ysql = ysql().await;
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
     // The production `wals` shape and split: bucket-leading all-range PK, one
     // tablet per bucket.
-    ysql.execute(
+    recreate_table(
+        &ysql,
+        TABLE,
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  bucket_id SMALLINT NOT NULL, branch_id TEXT NOT NULL, segno BIGINT NOT NULL,
@@ -1877,10 +1875,8 @@ async fn repro_range_scan_walks_past_its_key_range() {
                  PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC))
              SPLIT AT VALUES ((1), (2), (3), (4), (5))"
         ),
-        &[],
     )
-    .await
-    .unwrap();
+    .await;
     ysql.execute(
         &format!(
             "INSERT INTO {TABLE} SELECT b::smallint, 'b', {SEGNO}, {CHUNK_OFFSET}, 100, \
@@ -2025,7 +2021,5 @@ async fn repro_range_scan_walks_past_its_key_range() {
          runs to the physical end of the table in whichever direction it scans."
     );
 
-    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
-        .await
-        .unwrap();
+    drop_table(&ysql, TABLE).await;
 }
