@@ -3,7 +3,7 @@
  * without deploying their own -- one row per deployable agent_slug (see
  * service.SupportedDeploymentAgentSlugs). Distinct from meko_system.deployments:
  * these runtimes are created and operated entirely outside Meko (typically
- * by hand via the AWS CLI/console against MEKO_DEPLOYMENTS_MANAGED_EXECUTION_ROLE_ARN),
+ * by hand via the AWS CLI/console against MEKO_LABS_MANAGED_EXECUTION_ROLE_ARN),
  * so there is no owning user_id and no lifecycle for api_server to drive --
  * this table only tracks "which ARN is the shared instance for this agent."
  * Written by an operator (direct SQL today), read by GET/POST

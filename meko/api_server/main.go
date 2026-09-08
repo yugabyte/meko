@@ -275,19 +275,22 @@ func run() error {
 		os.Getenv("AWS_MARKETPLACE_ROLE_ARN"),
 		"Cross-account IAM role ARN in the Marketplace seller account (STS:AssumeRole target for ResolveCustomer + GetEntitlements). Empty = use ambient AWS credentials.")
 
-	// Agent deployments (AWS Bedrock AgentCore). Create / BYOC-init 400 with
-	// a clear error until the last three of these are all set.
-	deploymentsRegion := flag.String("deployments-region",
-		os.Getenv("MEKO_DEPLOYMENTS_REGION"),
+	// Agent deployments (AWS Bedrock AgentCore). Create / BYOC-init return a
+	// clear 500 error until labs-agent-images-repo, labs-managed-execution-role-arn,
+	// and labs-deployments-aws-account-id are all set (DeploymentConfig.Enabled).
+	// labs-agentk-admin-email is unrelated to this gate -- it drives datapack
+	// auto-share, not deployment creation.
+	deploymentsRegion := flag.String("labs-region",
+		os.Getenv("MEKO_LABS_REGION"),
 		"AWS region agent deployments are created in (default us-east-1).")
 	labsAgentImagesRepo := flag.String("labs-agent-images-repo",
 		os.Getenv("MEKO_LABS_AGENT_IMAGES_REPO"),
 		"Shared ECR repo every deployable lab agent's image is published under by CI, keyed by agent_slug: {repo}/{agent_slug}:latest. Adding a new deployable lab needs no new env var -- just a new entry in service.SupportedDeploymentAgentSlugs and an image at the conventional path.")
-	deploymentsManagedExecutionRoleARN := flag.String("deployments-managed-execution-role-arn",
-		os.Getenv("MEKO_DEPLOYMENTS_MANAGED_EXECUTION_ROLE_ARN"),
+	deploymentsManagedExecutionRoleARN := flag.String("labs-managed-execution-role-arn",
+		os.Getenv("MEKO_LABS_MANAGED_EXECUTION_ROLE_ARN"),
 		"Meko-owned IAM role AgentCore assumes to run managed-mode deployments' containers.")
-	deploymentsMekoAWSAccountID := flag.String("deployments-meko-aws-account-id",
-		os.Getenv("MEKO_DEPLOYMENTS_MEKO_AWS_ACCOUNT_ID"),
+	deploymentsMekoAWSAccountID := flag.String("labs-deployments-aws-account-id",
+		os.Getenv("MEKO_LABS_DEPLOYMENTS_AWS_ACCOUNT_ID"),
 		"Meko's own AWS account id, embedded as the trusted principal in every BYOC trust-policy template.")
 	labsAgentKAdminEmail := flag.String("labs-agentk-admin-email",
 		os.Getenv("MEKO_LABS_AGENTK_ADMIN_EMAIL"),
