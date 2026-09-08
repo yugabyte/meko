@@ -503,3 +503,38 @@ func TestAssertResizeTasksNeverOverlapped(t *testing.T) {
 		t.Errorf("a single task must pass, got %v", err)
 	}
 }
+
+// Contenders are indexed by construction order, not by the order the lock
+// admitted them, so the winner has to be decided by the controller's own task
+// stamps. Run 691ccf01 admitted contender 0 (500m) after contender 5 (1750m)
+// settled, and the endpoint kept 500m.
+func TestLastResizeToHoldTheLock(t *testing.T) {
+	at := func(cpu string, createdAt time.Time) resizeAttempt {
+		return resizeAttempt{cpu: cpu, task: controller.Task{ID: cpu}, settled: controller.Task{ID: cpu, CreatedAt: createdAt}}
+	}
+	base := time.Date(2026, 9, 8, 7, 0, 20, 0, time.UTC)
+	accepted := []resizeAttempt{
+		at("500m", base.Add(2*time.Second)), // index 0, admitted last
+		at("1750m", base),                   // index 5, admitted first
+	}
+	got, err := lastResizeToHoldTheLock(accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.cpu != "500m" {
+		t.Errorf("winner = %s, want 500m — the highest index is not the last to hold the lock", got.cpu)
+	}
+
+	if got, err := lastResizeToHoldTheLock(accepted[1:2]); err != nil || got.cpu != "1750m" {
+		t.Errorf("a single acceptance is its own winner, got %s (%v)", got.cpu, err)
+	}
+
+	// No stamp means no decidable order, and a guess would silently assert the
+	// wrong size.
+	if _, err := lastResizeToHoldTheLock([]resizeAttempt{at("500m", base), {cpu: "750m"}}); err == nil {
+		t.Error("a task with no created_at must fail rather than pick a winner")
+	}
+	if _, err := lastResizeToHoldTheLock([]resizeAttempt{{cpu: "750m"}}); err == nil {
+		t.Error("a lone task with no created_at must fail too")
+	}
+}

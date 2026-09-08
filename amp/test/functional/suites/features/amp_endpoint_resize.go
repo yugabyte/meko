@@ -303,13 +303,7 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 		return err
 	}
 
-	type attempt struct {
-		cpu    string
-		task   controller.Task
-		status int // HTTP status of a rejection; 0 when the resize was accepted
-		err    error
-	}
-	attempts := make([]attempt, resizeContenders)
+	attempts := make([]resizeAttempt, resizeContenders)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range attempts {
@@ -334,7 +328,7 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	close(start)
 	wg.Wait()
 
-	var accepted []attempt
+	var accepted []resizeAttempt
 	rejected := 0
 	for _, at := range attempts {
 		switch {
@@ -357,7 +351,7 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	}
 
 	settled := make([]controller.Task, 0, len(accepted))
-	for _, at := range accepted {
+	for i, at := range accepted {
 		task, err := cl.WaitTask(ctx, at.task.ID)
 		if err != nil {
 			return fmt.Errorf("an accepted concurrent resize (cpu=%s, task %s) never settled: %w", at.cpu, at.task.ID, err)
@@ -365,6 +359,7 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 		if outcome, _ := task.InPlaceResize(); outcome != "" {
 			a.f.logf("accepted resize cpu=%s settled with in-place outcome %q", at.cpu, outcome)
 		}
+		accepted[i].settled = task
 		settled = append(settled, task)
 	}
 	if err := assertResizeTasksNeverOverlapped(settled); err != nil {
@@ -372,8 +367,10 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	}
 	a.f.logf("resize lock held: %d accepted in strict succession, %d rejected with 409", len(accepted), rejected)
 
-	// Acceptances were serialised, so the last one to hold the lock lands.
-	last := accepted[len(accepted)-1]
+	last, err := lastResizeToHoldTheLock(accepted)
+	if err != nil {
+		return fmt.Errorf("endpoint %s: %w", ep.ID, err)
+	}
 	if err := a.assertResourcesCPU(ctx, cl, ep.ID, last.cpu); err != nil {
 		return err
 	}
@@ -383,6 +380,37 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 		return fmt.Errorf("a resize issued after every burst resize reached terminal was not accepted, want the first-writer-wins lock released: %w", err)
 	}
 	return a.assertResourcesCPU(ctx, cl, ep.ID, resizeCPUB)
+}
+
+// resizeAttempt is one contender in the lock burst and, once it settled, the
+// task the controller recorded for it.
+type resizeAttempt struct {
+	cpu     string
+	task    controller.Task
+	status  int // HTTP status of a rejection; 0 when the resize was accepted
+	err     error
+	settled controller.Task
+}
+
+// lastResizeToHoldTheLock is the accepted resize whose task the controller
+// created last, which is the size the endpoint keeps. Contenders are indexed by
+// the order they were built, not the order the lock admitted them: a burst where
+// contender 0 (500m) is admitted after contender 5 (1750m) reached terminal
+// leaves the endpoint at 500m while the highest index says 1750m (run 691ccf01).
+func lastResizeToHoldTheLock(accepted []resizeAttempt) (resizeAttempt, error) {
+	last := accepted[0]
+	for _, at := range accepted[1:] {
+		if at.settled.CreatedAt.IsZero() {
+			return resizeAttempt{}, fmt.Errorf("accepted resize (cpu=%s, task %s) came back without created_at, so which one held the lock last cannot be decided", at.cpu, at.task.ID)
+		}
+		if at.settled.CreatedAt.After(last.settled.CreatedAt) {
+			last = at
+		}
+	}
+	if last.settled.CreatedAt.IsZero() {
+		return resizeAttempt{}, fmt.Errorf("accepted resize (cpu=%s, task %s) came back without created_at, so which one held the lock last cannot be decided", last.cpu, last.task.ID)
+	}
+	return last, nil
 }
 
 // assertResizeTasksNeverOverlapped reports whether any two tasks were
