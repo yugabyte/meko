@@ -387,6 +387,7 @@ functional:
       - amcheck
       - pg_stat_statements
       - tsm_system_rows
+      - postgres_fdw
     catalog:
       - "pgvector:vector"
       - "pg_cron:pg_cron"

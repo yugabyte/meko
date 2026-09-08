@@ -25,6 +25,7 @@ import (
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
 	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements", "tsm_system_rows",
+	"postgres_fdw",
 }
 
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName

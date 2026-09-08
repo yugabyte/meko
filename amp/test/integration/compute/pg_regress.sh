@@ -43,6 +43,10 @@ Options:
                       but more PS->YB connection-pool pressure.
   --schedule <file>   schedule to run (default: the vendored parallel_schedule).
                       Relative to the regress dir or an absolute path.
+  --contrib <name>    also run contrib/<name>'s own upstream suite against the
+                      same cluster, after the schedule above. Repeatable. The
+                      module must be one postgres.mk installs, or its .so is
+                      absent and every test fails to load it.
   --keep              leave the cluster + regression DB up for postmortem
                       (default: tear down on exit).
   -h, --help          show this help
@@ -65,6 +69,7 @@ cd "$REPO"
 PROFILE=release
 JOBS=8
 SCHEDULE=parallel_schedule
+CONTRIB=()
 KEEP=0
 NO_BUILD=0
 while [[ $# -gt 0 ]]; do
@@ -74,6 +79,7 @@ while [[ $# -gt 0 ]]; do
         --release) PROFILE=release ;;
         -j|--jobs) JOBS="$2"; shift ;;
         --schedule) SCHEDULE="$2"; shift ;;
+        --contrib) CONTRIB+=("$2"); shift ;;
         --keep) KEEP=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
@@ -312,6 +318,48 @@ status=0
     --schedule="$SCHEDULE" \
     --host=127.0.0.1 --port="$COMPUTE" --user=cloud_admin --dbname=regression \
     --max-connections="$JOBS" || status=$?
+
+# Contrib modules keep their suite next to their source (sql/ + expected/) with
+# no schedule, so drive pg_regress at the test list from their Makefile's REGRESS.
+# Same endpoint as above — the cluster bring-up is the expensive part.
+for mod in ${CONTRIB[@]+"${CONTRIB[@]}"}; do
+    src="$REPO/compute/vendor/postgres-v18/contrib/$mod"
+    [[ -d "$src/sql" ]] || { echo ">>> $mod has no sql/ suite" >&2; status=1; continue; }
+    tests="$(sed -n 's/^REGRESS[[:space:]]*=[[:space:]]*//p' "$src/Makefile" | head -1)"
+    [[ -n "$tests" ]] || tests="$mod"
+
+    # Add a peer superuser role for the run, as extensions.sh does for
+    # hexabridge: amp's superuser is cloud_admin, but upstream suites assume the
+    # role their own CI runs as. Here it cannot be a fixed name — postgres_fdw's
+    # `CREATE USER MAPPING FOR public` passes no `user`, so libpq derives the OS
+    # user for the wrapper's loopback connection, and pg_regress has to connect
+    # as that same role or the user-mapping tests do not resolve. Superuser
+    # because the suite does CREATE EXTENSION on an untrusted module and sets
+    # password_required. Dies with the cluster in finish().
+    # psql cannot bind :'var' inside a dollar-quoted block, so the name is
+    # interpolated by the shell; format('%I') quotes it as an identifier, and
+    # `id -un` is machine state, not input.
+    osuser="$(id -un)"
+    "$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d postgres -v ON_ERROR_STOP=1 \
+        -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$osuser') THEN EXECUTE format('CREATE ROLE %I SUPERUSER LOGIN', '$osuser'); END IF; END \$\$" >/dev/null
+
+    echo ">>> running pg_regress (contrib/$mod: $tests) against 127.0.0.1:$COMPUTE as $osuser"
+    mkdir -p "$OUTDIR/contrib-$mod"
+    "$PGINST/lib/postgresql/pgxs/src/test/regress/pg_regress" \
+        --inputdir="$src" --outputdir="$OUTDIR/contrib-$mod" --bindir="$PGINST/bin" \
+        --dlpath="$PKGLIB" \
+        --host=127.0.0.1 --port="$COMPUTE" --user="$osuser" --dbname="contrib_$mod" \
+        $tests || {
+        status=$?
+        # The results dir survives teardown but the workflow's artifact upload
+        # globs *.log, so a diff is unreachable from CI unless printed here —
+        # same reason extensions.sh cats its own.
+        if [[ -s "$OUTDIR/contrib-$mod/regression.diffs" ]]; then
+            echo ">>> regression.diffs (contrib/$mod):"
+            cat "$OUTDIR/contrib-$mod/regression.diffs"
+        fi
+    }
+done
 
 echo
 echo ">>> results under: $OUTDIR"

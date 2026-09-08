@@ -434,10 +434,12 @@ jobs:
       # the OS ephemeral floor — above it, an outbound socket can take a port
       # between pg_regress.sh's probe and the bind (INTEGRATION_PORT_BASE is its
       # first candidate, not a hard pin).
-      - name: pg_regress suite (upstream PostgreSQL)
+      # --contrib runs postgres_fdw's own upstream suite against the same cluster
+      # once the core schedule finishes; the bring-up is what costs, not the suite.
+      - name: pg_regress suite (upstream PostgreSQL + contrib)
         env:
           INTEGRATION_PORT_BASE: "18000"
-        run: test/integration/compute/pg_regress.sh --no-build
+        run: test/integration/compute/pg_regress.sh --no-build --contrib postgres_fdw
 
       - name: Upload run logs
         if: failure()
