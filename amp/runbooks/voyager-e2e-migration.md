@@ -54,8 +54,23 @@ Build the Voyager job image (embeds `/opt/amp/voyager/assess.sh` and
 docker build -t yb-amp/voyager:dev -f deploy/voyager/Dockerfile .
 ```
 
-Build or pull the endpoint image according to your local AMP development
-setup before continuing.
+Build the endpoint image from the AMP repository root. The Quay base
+`quay.io/yugabyte/amp-build-tools:v1` is private — `docker login quay.io`
+
+```bash
+docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
+```
+
+A warm BuildKit cargo cache can skip regenerating
+`communicator/communicator_bindings.h`. The cargo target dir is a
+BuildKit cache mount, so `--no-cache` only drops layer cache and the
+stale fingerprints remain. If `yb-amp-pg-ext` fails on that header,
+clear the cache mount and rebuild:
+
+```bash
+docker builder prune --filter type=exec.cachemount
+docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
+```
 
 ## 2. Define local configuration
 
@@ -79,10 +94,18 @@ export VOYAGER_IMAGE='yb-amp/voyager:dev'
 export SOURCE_PASSWORD='change-this-local-test-password'
 ```
 
-Create an isolated network:
+Create an isolated network and record its gateway. Voyager jobs run on
+this network, so the target address the controller stores must be
+reachable from a container — not `127.0.0.1` (that is the Voyager job
+itself). `AMP_DEPLOY_EXTERNAL_HOST` defaults to `127.0.0.1` and is what
+the Docker deployer writes into `target.host`.
 
 ```bash
 docker network create "$NETWORK" 2>/dev/null || true
+export DEPLOY_EXTERNAL_HOST=$(
+  docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' "$NETWORK"
+)
+echo "DEPLOY_EXTERNAL_HOST=$DEPLOY_EXTERNAL_HOST"
 ```
 
 ## 3. Start controller-state YugabyteDB
@@ -95,7 +118,12 @@ its storage-plane migrations use YugabyteDB-specific DDL. YugabyteDB stores:
 - `amp_voyager_control.migration_run`;
 - Voyager visualizer data written by Voyager.
 
-Start a single-node, development-only YugabyteDB:
+Start a single-node, development-only YugabyteDB. This image treats
+`--listen` as a deprecated alias of `--advertise_address` and exits if
+both are set to different values (`0.0.0.0` vs the container name). Pass
+only `--advertise_address`. YSQL still listens on the container address
+that Docker publishes as `-p 5433:5433`, and the controller/Voyager
+containers reach it as `voyager-yb:5433` on `$NETWORK`.
 
 ```bash
 docker run -d --name "$YB_CONTAINER" --network "$NETWORK" \
@@ -103,7 +131,6 @@ docker run -d --name "$YB_CONTAINER" --network "$NETWORK" \
   yugabytedb/yugabyte:2025.1.1.1-b1 \
   bin/yugabyted start \
     --daemon=false \
-    --listen=0.0.0.0 \
     --advertise_address="$YB_CONTAINER"
 ```
 
@@ -212,10 +239,13 @@ docker run -d --name "$CONTROLLER_CONTAINER" \
   -e AMP_DEPLOY_YB_HOST_PORTS='voyager-yb:5433' \
   -e AMP_DEPLOY_YB_USER='yugabyte' \
   -e AMP_DEPLOY_YB_DBNAME='yugabyte' \
+  -e AMP_DEPLOY_EXTERNAL_HOST="$DEPLOY_EXTERNAL_HOST" \
   yb-amp/controller:dev
 ```
 
-Wait for startup and confirm that Voyager was enabled:
+Wait for startup. The HTTP server starts only after control-plane
+migrations apply (tens of seconds). `curl` may see `Connection reset by
+peer` until then — keep polling:
 
 ```bash
 until curl -fsS "$API/version" | jq
@@ -261,25 +291,31 @@ Expected: `reachable: true`.
 
 ## 7. Create the migration
 
+Build the body with `jq` rather than a heredoc inside `$(...)`. Pasting
+`curl ... -d @- <<JSON | jq` into an interactive shell often fails to
+parse the terminator, leaves `MIGRATION_ID` empty, and the follow-up GET
+returns `not_found`.
+
 ```bash
-MIGRATION_ID=$(
-  curl -sS "$API/migrations" \
-    -H 'Content-Type: application/json' \
-    -d @- <<JSON |
-  jq -r '.id'
-{
-  "name": "shop-postgres-to-amp",
-  "source": {
-    "db_type": "postgresql",
-    "host": "voyager-source-pg",
-    "port": 5432,
-    "username": "source_user",
-    "password": "$SOURCE_PASSWORD",
-    "database": "shop",
-    "schemas": ["public"]
+REQ=$(jq -n --arg pw "$SOURCE_PASSWORD" '{
+  name: "shop-postgres-to-amp",
+  source: {
+    db_type: "postgresql",
+    host: "voyager-source-pg",
+    port: 5432,
+    username: "source_user",
+    password: $pw,
+    database: "shop",
+    schemas: ["public"]
   }
-}
-JSON
+}')
+
+MIGRATION_ID=$(
+  echo "$REQ" |
+    curl -sS "$API/migrations" \
+      -H 'Content-Type: application/json' \
+      -d @- |
+    jq -r '.id'
 )
 
 echo "Migration: $MIGRATION_ID"
@@ -349,20 +385,25 @@ echo "Pool: $POOL_ID"
 
 ## 10. Provision and attach the migration target
 
-`vcpu` is normally chosen from the assessment. This local run uses two vCPUs.
+The route is `POST /migrations/{id}/provision-target`. `POST .../target`
+returns `404`. `vcpu` is normally chosen from the assessment. This local
+run uses two vCPUs. Use a unique `project_name` if you retry after a
+failed provision — a half-created cluster makes the next attempt fail
+with `ensure cluster+default branch: conflict`.
 
 ```bash
+TARGET_REQ=$(jq -n --arg pool "$POOL_ID" --arg proj "shop-migrated-$(date +%s)" '{
+  pool_id: $pool,
+  vcpu: 2,
+  project_name: $proj
+}')
+
 TARGET_TASK_ID=$(
-  curl -sS -X POST "$API/migrations/$MIGRATION_ID/target" \
-    -H 'Content-Type: application/json' \
-    -d @- <<JSON |
-  jq -r '.id'
-{
-  "pool_id": "$POOL_ID",
-  "vcpu": 2,
-  "project_name": "shop-migrated"
-}
-JSON
+  echo "$TARGET_REQ" |
+    curl -sS -X POST "$API/migrations/$MIGRATION_ID/provision-target" \
+      -H 'Content-Type: application/json' \
+      -d @- |
+    jq -r '.id'
 )
 
 echo "Target-provisioning task: $TARGET_TASK_ID"
@@ -382,8 +423,11 @@ done
 curl -sS "$API/migrations/$MIGRATION_ID" | jq '.target'
 ```
 
-The returned target contains the host, port, username, and database name used
-by Voyager. It intentionally contains no target password.
+The returned target contains the host, port, username, and database name
+used by Voyager. Host should be `$DEPLOY_EXTERNAL_HOST` (the Docker
+network gateway), not `127.0.0.1`. The response intentionally contains
+no target password. The Docker-deployed endpoint uses `cloud_admin` /
+`cloud_admin`.
 
 ## 11. Start the actual migration
 
@@ -457,7 +501,7 @@ Run validation from a temporary Postgres client container on the same network:
 
 ```bash
 docker run --rm --network "$NETWORK" \
-  -e PGPASSWORD='' \
+  -e PGPASSWORD=cloud_admin \
   postgres:17 \
   psql \
     -h "$TARGET_HOST" \
@@ -479,7 +523,9 @@ For this sample, expected counts are:
 Also compare schema objects:
 
 ```bash
-docker run --rm --network "$NETWORK" postgres:17 \
+docker run --rm --network "$NETWORK" \
+  -e PGPASSWORD=cloud_admin \
+  postgres:17 \
   psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$TARGET_USER" -d "$TARGET_DB" \
   -c '\dt public.*'
 ```
@@ -530,6 +576,15 @@ docker ps -a --filter 'name=voyager-'
 docker logs <voyager-container-id>
 ```
 
+### YugabyteDB container exits immediately
+
+```text
+ERROR: --listen and --advertise_address flags are same. --listen is depricated.
+```
+
+This image rejects `--listen` when it differs from `--advertise_address`.
+Drop `--listen` and keep only `--advertise_address="$YB_CONTAINER"`.
+
 ### `target_not_attached` on `/migrate`
 
 The target-provisioning task has not completed successfully. Re-check:
@@ -549,8 +604,13 @@ docker rm -f \
   "$SOURCE_CONTAINER" \
   "$YB_CONTAINER" 2>/dev/null || true
 
-for id in $(docker ps -aq --filter 'name=voyager-assess-' --filter 'name=voyager-migrate-'); do
-  docker rm -f "$id"
+for pat in voyager-assess- voyager-migrate- yb-ep-; do
+  for id in $(docker ps -aq --filter "name=$pat"); do
+    docker rm -f "$id"
+  done
+done
+for vol in $(docker volume ls -q --filter 'name=voyager-exp-'); do
+  docker volume rm "$vol"
 done
 docker network rm "$NETWORK" 2>/dev/null || true
 ```
