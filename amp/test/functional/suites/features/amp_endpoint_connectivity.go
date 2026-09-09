@@ -46,9 +46,11 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer.",
+		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Run:         runAmpEndpointConnectivity,
+		// Two load balancers, each waited out to a cloud-assigned ingress.
+		Timeout: 45 * time.Minute,
+		Run:     runAmpEndpointConnectivity,
 	})
 }
 
@@ -57,6 +59,7 @@ func runAmpEndpointConnectivity(t *core.T) error {
 		return []phase{
 			{"connectivity_validation", a.connectivityValidation},
 			{"nlb_internal_endpoint", a.nlbInternalEndpoint},
+			{"with_writer_connectivity", a.withWriterConnectivity},
 		}
 	})
 }
@@ -93,6 +96,11 @@ func (a *ampFeatureRun) connectivityValidation(ctx context.Context) error {
 		if _, err := lbServiceIngress(ctx, kube, ep.ID); !isNotFound(err) {
 			return fmt.Errorf("a cluster_ip endpoint has a load-balancer Service %s (lookup error: %v), want none", lbServiceName(ep.ID), err)
 		}
+	}
+	// Released here, not at teardown: a branch takes one read_write endpoint
+	// (endpoints_one_writer_per_branch) and the nlb_internal create wants it.
+	if _, err := cl.DeleteEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID); err != nil {
+		return fmt.Errorf("delete the cluster_ip endpoint: %w", err)
 	}
 	return connectivityValidationSteps(ctx, cl, a.proj, "conn-"+a.f.suffix(), a.f.cfg.PgVersion)
 }
@@ -207,6 +215,61 @@ func (a *ampFeatureRun) nlbInternalEndpoint(ctx context.Context) error {
 	return waitLBGone(ctx, kube, ep.ID, lbGoneTimeout)
 }
 
+// withWriterConnectivity is the accepted half of the cluster-create block: the
+// writer the create deploys must come out on the load balancer it asked for.
+func (a *ampFeatureRun) withWriterConnectivity(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	kube := a.f.ampKube()
+	if kube == nil {
+		a.f.t.Skip("the control plane is reached by a direct URL with no kube access, so the writer's load-balancer Service cannot be inspected")
+		return nil
+	}
+	cloud, err := clusterCloud(ctx, kube)
+	if err != nil || cloud == "" {
+		a.f.t.Skip("this cluster's cloud cannot be named from a node's providerID, so an nlb_internal writer cannot be asked for: " + fmt.Sprint(err))
+		return nil
+	}
+
+	name := "connw-" + a.f.suffix()
+	if _, err := cl.CreateClusterAndWait(ctx, a.proj.poolID, controller.CreateClusterRequest{
+		Name:         name,
+		PgVersion:    a.f.cfg.PgVersion,
+		WithWriter:   true,
+		Connectivity: &controller.EndpointConnectivity{Mode: controller.ConnectivityNLBInternal},
+	}); err != nil {
+		return fmt.Errorf("create a cluster with a writer on nlb_internal: %w", err)
+	}
+	proj, err := findClusterCtl(ctx, cl, a.proj.poolID, name)
+	if err != nil {
+		return err
+	}
+	a.f.register("delete with_writer connectivity cluster", func(ctx context.Context) error {
+		_, e := cl.DeleteClusterAndWait(ctx, a.proj.poolID, proj.ID)
+		return e
+	})
+
+	branch := ampCluster{poolID: a.proj.poolID, projID: proj.ID, branchID: proj.DefaultBranch.BranchID}
+	ep, err := endpointWithMode(ctx, cl, branch, controller.ConnectivityNLBInternal)
+	if err != nil {
+		return fmt.Errorf("the cluster create carrying connectivity was accepted with a writer, but that writer does not record the mode it asked for: %w", err)
+	}
+	lbHost, err := waitLBIngress(ctx, kube, ep.ID, lbReadyTimeout)
+	if err != nil {
+		return err
+	}
+	svc, err := readLBService(ctx, kube, ep.ID)
+	if err != nil {
+		return err
+	}
+	if err := lbServiceVerdict(svc, cloud, addrPortOf(ep.Address)); err != nil {
+		return fmt.Errorf("the writer's load-balancer Service %s: %w", lbServiceName(ep.ID), err)
+	}
+	return lbAddressVerdict(ep.Address, lbHost)
+}
+
 func (a *ampFeatureRun) connectThrough(ctx context.Context, ep controller.Endpoint) error {
 	ci, err := a.f.endpointConnInfo(ep)
 	if err != nil {
@@ -269,11 +332,17 @@ func parseLBService(out string) lbService {
 
 // internalLBAnnotation is what marks a LoadBalancer Service internal on each
 // cloud, as the endpoint chart renders it.
-var internalLBAnnotation = map[string]string{
-	"aws":   "service.beta.kubernetes.io/aws-load-balancer-scheme:internal",
-	"gcp":   "networking.gke.io/load-balancer-type:Internal",
-	"azure": "service.beta.kubernetes.io/azure-load-balancer-internal:true",
+var internalLBAnnotation = map[string]lbAnnotation{
+	"aws":   {"service.beta.kubernetes.io/aws-load-balancer-scheme", "internal"},
+	"gcp":   {"networking.gke.io/load-balancer-type", "Internal"},
+	"azure": {"service.beta.kubernetes.io/azure-load-balancer-internal", "true"},
 }
+
+// lbAnnotation is a key and a value, not "key:value": kubectl prints JSON.
+type lbAnnotation struct{ key, value string }
+
+// json renders the pair as it appears in that object.
+func (a lbAnnotation) json() string { return `"` + a.key + `":"` + a.value + `"` }
 
 // lbServiceVerdict checks the Service is a LoadBalancer publishing exactly the
 // Postgres port and carrying the cloud's internal annotation. The single port is
@@ -290,8 +359,8 @@ func lbServiceVerdict(svc lbService, cloud string, pgPort string) error {
 	if !ok {
 		return fmt.Errorf("no internal load-balancer annotation is known for cloud %q", cloud)
 	}
-	if !strings.Contains(svc.Annotations, want) {
-		return fmt.Errorf("lacks the %s internal annotation %q; the load balancer would be internet-facing. annotations: %s", cloud, want, svc.Annotations)
+	if !strings.Contains(svc.Annotations, want.json()) {
+		return fmt.Errorf("lacks the %s internal annotation %s=%s; the load balancer would be internet-facing. annotations: %s", cloud, want.key, want.value, svc.Annotations)
 	}
 	return nil
 }

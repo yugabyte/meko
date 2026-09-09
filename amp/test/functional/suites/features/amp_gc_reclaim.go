@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pageserver"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
@@ -44,6 +45,32 @@ var gcReclaimPageserverSettings = map[string]any{
 	"tenant_config.lsn_lease_length": "2s",
 }
 
+const (
+	gcRowsDeletedMetric        = "pageserver_yb_gc_rows_deleted_total"
+	gcCandidatesDequeuedMetric = "pageserver_yb_gc_candidates_dequeued_total"
+	gcCandidatesEmittedMetric  = "pageserver_yb_gc_candidates_emitted_total"
+)
+
+// gcEmitPaths are the producer paths the emitted counter seeds at startup.
+var gcEmitPaths = []string{"ingest", "materialiser", "drop", "shrink"}
+
+// gcCountersPresent requires the GC counters before GC has run: they are
+// registered at startup so an idle drain reads zero, and an absent series cannot
+// be read as flat. https://github.com/yugabyte/meko/issues/1142
+func gcCountersPresent(s pageserver.Samples) error {
+	for _, name := range []string{gcCandidatesDequeuedMetric, gcRowsDeletedMetric} {
+		if _, ok := s.Value(name, nil); !ok {
+			return fmt.Errorf("the pageserver does not export %s before any GC work: an operator cannot tell a GC with nothing to do from one that is switched off, which is why it is registered at startup", name)
+		}
+	}
+	for _, path := range gcEmitPaths {
+		if _, ok := s.Value(gcCandidatesEmittedMetric, map[string]string{"path": path}); !ok {
+			return fmt.Errorf("the pageserver exports no %s{path=%q} before any GC work: every producer path is seeded off the enum's variants so a childless vec cannot hide one, and an unseeded path reads as \"nothing is emitting\"", gcCandidatesEmittedMetric, path)
+		}
+	}
+	return nil
+}
+
 func init() {
 	core.Register(core.Test{
 		Name:        "features/amp_gc_reclaim",
@@ -52,7 +79,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
-		Description: "DROP TABLE reclamation end to end: on an endpoint whose GC retention is tightened via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive.",
+		Description: "DROP TABLE reclamation end to end: on an endpoint whose GC retention is tightened via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive. The pageserver exports its three GC counters, every emitted producer path included, before any GC has run, and its rows-deleted counter moves with the drain.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     25 * time.Minute,
 		Run:         runAmpGCReclaim,
@@ -156,13 +183,20 @@ func gcReclaimSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect end
 			"SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = $1 AND substring(key FROM 10 FOR 4) = decode($2, 'hex')",
 			branchID, pendingGCKeyHex(relnode))
 	}
-	// The forced pageserver flush is a determinism aid, not a requirement: a
-	// control plane reached by a direct URL has no kube context to exec through,
-	// and the poll below covers the pageserver's own flush cadence.
+	// No kube context is structural; anything else is a flake that would leave
+	// this test green while asserting nothing it exists to assert.
+	ps, psErr := findPS(ctx, ep)
+	psOK := psErr == nil
+	switch {
+	case psOK:
+	case errors.Is(psErr, errNoKubeContext):
+		logf("amp_gc_reclaim: no kube context, so the forced flush and the GC counter contract are not asserted: %v", psErr)
+	default:
+		return core.AsEnvFailure(fmt.Errorf("reach the pageserver serving endpoint %s, which this test needs to read the GC counters: %w", ep.ID, psErr))
+	}
+	// A determinism aid: the poll below covers the pageserver's flush cadence.
 	forceFlush := func() {
-		ps, err := findPS(ctx, ep)
-		if err != nil {
-			logf("amp_gc_reclaim: no pageserver access for a forced flush (best-effort): %v", err)
+		if !psOK {
 			return
 		}
 		lsn, err := c.QueryString(ctx, "SELECT pg_current_wal_flush_lsn()::text")
@@ -172,6 +206,19 @@ func gcReclaimSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect end
 		if err := ps.FlushBranch(ctx, branchID, lsn); err != nil {
 			logf("amp_gc_reclaim: forced flush failed (best-effort): %v", err)
 		}
+	}
+
+	// Before this endpoint's GC has reclaimed anything.
+	var deletedBefore float64
+	if psOK {
+		idle, err := ps.Metrics(ctx)
+		if err != nil {
+			return fmt.Errorf("scrape the pageserver's metrics before the drain: %w", err)
+		}
+		if err := gcCountersPresent(idle); err != nil {
+			return err
+		}
+		deletedBefore, _ = idle.Value(gcRowsDeletedMetric, nil)
 	}
 
 	forceFlush()
@@ -233,6 +280,24 @@ func gcReclaimSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect end
 	}
 	metric("gc_reclaim.drop_to_zero_seconds", time.Since(dropAt).Seconds(), "s")
 	metric("gc_reclaim.victim_pages_reclaimed", float64(stored), "rows")
+
+	// Charged per committed statement, so a drain that emptied the relation has
+	// to move it; it used to be charged once, on the success path only.
+	if psOK {
+		drained, err := ps.Metrics(ctx)
+		if err != nil {
+			return fmt.Errorf("scrape the pageserver's metrics after the drain: %w", err)
+		}
+		deletedAfter, ok := drained.Value(gcRowsDeletedMetric, nil)
+		if !ok {
+			return fmt.Errorf("%s was exported before the drain and is absent after it", gcRowsDeletedMetric)
+		}
+		if deletedAfter <= deletedBefore {
+			return fmt.Errorf("%s reads %.0f after the drain, unchanged from %.0f before it, but amp_storage went from %d page row(s) for the dropped relation to none: the deletes are charged as each statement commits, so a monitor reading this counter sees a GC that reclaimed nothing",
+				gcRowsDeletedMetric, deletedAfter, deletedBefore, stored)
+		}
+		metric("gc_reclaim.rows_deleted_reported", deletedAfter-deletedBefore, "rows")
+	}
 
 	// GC must not have overreached: the keeper's data reads back intact through
 	// the endpoint, and its stored pages are still there.

@@ -54,7 +54,8 @@ func init() {
 		OwningTeam: core.TeamCompute,
 		Description: "Settings reach a running compute the cheapest way that applies them: " +
 			"a reloadable setting keeps its connections, one fixed at server start restarts and says so, " +
-			"one nothing can apply restarts nothing, and an identical write costs nothing.",
+			"one nothing can apply restarts nothing, and an identical write costs nothing. " +
+			"With track_commit_timestamp in force a freshly committed row reports its own commit timestamp back.",
 		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:    runAmpEndpointSettings,
 	})
@@ -104,6 +105,26 @@ func showSetting(ctx context.Context, c pg.Session, name string) (string, error)
 // cost" — the reply says which happened, and this is the independent check.
 func startedAt(ctx context.Context, c pg.Session) (string, error) {
 	return c.QueryString(ctx, "SELECT pg_postmaster_start_time()::text")
+}
+
+// commitTimestampRecorded reads a freshly committed row's own timestamp back.
+func commitTimestampRecorded(ctx context.Context, c sqlConn) error {
+	if _, err := c.Exec(ctx, "CREATE TABLE IF NOT EXISTS amp_commit_ts_probe (id int primary key)"); err != nil {
+		return fmt.Errorf("create the commit-timestamp probe table: %w", err)
+	}
+	if _, err := c.Exec(ctx, "INSERT INTO amp_commit_ts_probe (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = 1"); err != nil {
+		return fmt.Errorf("write the commit-timestamp probe row: %w", err)
+	}
+	// Bounded, not just non-null: an epoch timestamp reads as present.
+	fresh, err := c.QueryInt(ctx,
+		"SELECT (pg_xact_commit_timestamp(xmin) > now() - interval '1 hour')::int FROM amp_commit_ts_probe WHERE id = 1")
+	if err != nil {
+		return fmt.Errorf("read the probe row's commit timestamp back with %s in force: %w", settingsRestartName, err)
+	}
+	if fresh != 1 {
+		return fmt.Errorf("the row just written reports a commit timestamp older than an hour, so no timestamp was recorded for its transaction even though %s is in force", settingsRestartName)
+	}
+	return nil
 }
 
 // reconnect waits out a restart. Bounded and polling, because the endpoint's
@@ -287,6 +308,12 @@ func endpointSettingsSteps(ctx context.Context, cl ampCtl, proj ampCluster, conn
 	// it.
 	if got, err = showSetting(ctx, conn, settingsReloadName); err != nil || got != settingsReloadValue {
 		return fmt.Errorf("%s = %s after the restart, want %s (err %v)", settingsReloadName, got, settingsReloadValue, err)
+	}
+	// The only check here that goes through storage rather than the config: the
+	// timestamp lives in the clog the pageserver reconstructs, which is also what
+	// turns a pitr_interval into an LSN.
+	if err := commitTimestampRecorded(ctx, conn); err != nil {
+		return err
 	}
 
 	// 3. A setting nothing can apply. It must be reported, and it must not cost

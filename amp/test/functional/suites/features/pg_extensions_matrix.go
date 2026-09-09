@@ -60,7 +60,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a cluster opted into all of it, each created, version-matched and canary-queried.",
+		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a cluster opted into all of it, each created, version-matched and canary-queried, postgres_fdw over a loopback foreign server so the module is proven to connect and fetch rather than merely to install.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     20 * time.Minute,
 		Run:         runPgExtensionsMatrix,
@@ -448,5 +448,53 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 		return fmt.Errorf("TABLESAMPLE SYSTEM_ROWS(5) returned %d rows out of 20, want exactly 5", n)
 	}
 
+	return fdwLoopbackCanary(ctx, c, table)
+}
+
+// fdwLoopbackCanary reads the canary table back over a foreign server on the
+// compute's own postmaster. No password: pg_hba trusts 127.0.0.1 and the role is
+// the compute's superuser, which is what exempts it from fdw's password rule.
+func fdwLoopbackCanary(ctx context.Context, c sqlConn, table string) error {
+	server, foreign := table+"_fdw_srv", table+"_fdw_ft"
+	// From the session, not assumed, and interpolated because an OPTION takes a
+	// literal only: the compute does not serve Postgres on 5432.
+	port, err := c.QueryString(ctx, "SELECT current_setting('port')")
+	if err != nil {
+		return fmt.Errorf("read the compute's port for the foreign server: %w", err)
+	}
+	dbname, err := c.QueryString(ctx, "SELECT current_database()")
+	if err != nil {
+		return fmt.Errorf("read the current database for the foreign server: %w", err)
+	}
+	user, err := c.QueryString(ctx, "SELECT current_user")
+	if err != nil {
+		return fmt.Errorf("read the current user for the foreign server: %w", err)
+	}
+	if _, err := c.Exec(ctx,
+		"CREATE SERVER "+server+" FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host '127.0.0.1', port '"+port+"', dbname '"+dbname+"')"); err != nil {
+		return fmt.Errorf("create a postgres_fdw foreign server: %w", err)
+	}
+	defer func() { _, _ = c.Exec(ctx, "DROP SERVER IF EXISTS "+server+" CASCADE") }()
+	if _, err := c.Exec(ctx, "CREATE USER MAPPING FOR CURRENT_USER SERVER "+server+" OPTIONS (user '"+user+"')"); err != nil {
+		return fmt.Errorf("create the postgres_fdw user mapping: %w", err)
+	}
+	if _, err := c.Exec(ctx, "CREATE FOREIGN TABLE "+foreign+" (id int, status int) SERVER "+server+" OPTIONS (table_name '"+table+"')"); err != nil {
+		return fmt.Errorf("create a foreign table over the canary table: %w", err)
+	}
+	n, err := c.QueryInt(ctx, "SELECT count(*) FROM "+foreign)
+	if err != nil {
+		return fmt.Errorf("postgres_fdw could not read the canary table back over a loopback foreign server. The extension is installed and the server is defined, so this is the module failing to connect or to fetch: %w", err)
+	}
+	if n != 20 {
+		return fmt.Errorf("postgres_fdw read %d rows from the canary table over a loopback foreign server, want the 20 that were inserted", n)
+	}
+	// A restriction as well as a bare count.
+	filtered, err := c.QueryInt(ctx, "SELECT count(*) FROM "+foreign+" WHERE status = 1")
+	if err != nil {
+		return fmt.Errorf("postgres_fdw could not run a qualified read over the loopback foreign server: %w", err)
+	}
+	if filtered != 5 {
+		return fmt.Errorf("postgres_fdw counted %d foreign rows with status = 1, want 5 of the 20 seeded", filtered)
+	}
 	return nil
 }

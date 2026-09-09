@@ -66,18 +66,29 @@ func TestConnectivityValidationDemandsFour400s(t *testing.T) {
 }
 
 func TestLBServiceVerdict(t *testing.T) {
-	gke := parseLBService("LoadBalancer|55433|map[networking.gke.io/load-balancer-type:Internal]")
+	// Verbatim kubectl jsonpath output, which is JSON. A fixture in Go's map[k:v]
+	// rendering passed against a matcher that could never match a real Service.
+	const gkeReal = `{"cloud.google.com/neg":"{\"ingress\":true}",` +
+		`"meta.helm.sh/release-name":"yb-ep-5e6a03af-e4c9-4c66-b659-4de5fd1c24cf",` +
+		`"networking.gke.io/backend-service":"a4eb6e4c334e54a11b1ca0c974bc4d01",` +
+		`"networking.gke.io/load-balancer-type":"Internal"}`
+	gke := parseLBService("LoadBalancer|55433|" + gkeReal)
 	if err := lbServiceVerdict(gke, "gcp", "55433"); err != nil {
 		t.Errorf("gke internal: %v", err)
 	}
-	aws := parseLBService("LoadBalancer|55433|map[service.beta.kubernetes.io/aws-load-balancer-scheme:internal service.beta.kubernetes.io/aws-load-balancer-type:nlb]")
+	aws := parseLBService(`LoadBalancer|55433|{"service.beta.kubernetes.io/aws-load-balancer-scheme":"internal","service.beta.kubernetes.io/aws-load-balancer-type":"nlb"}`)
 	if err := lbServiceVerdict(aws, "aws", "55433"); err != nil {
 		t.Errorf("aws internal: %v", err)
 	}
+	azure := parseLBService(`LoadBalancer|55433|{"service.beta.kubernetes.io/azure-load-balancer-internal":"true"}`)
+	if err := lbServiceVerdict(azure, "azure", "55433"); err != nil {
+		t.Errorf("azure internal: %v", err)
+	}
 	cases := map[string]lbService{
-		"ClusterIP":          parseLBService("ClusterIP|55433|map[networking.gke.io/load-balancer-type:Internal]"),
-		"supervisor exposed": parseLBService("LoadBalancer|55433 9899|map[networking.gke.io/load-balancer-type:Internal]"),
-		"internet-facing":    parseLBService("LoadBalancer|55433|map[]"),
+		"ClusterIP":          parseLBService("ClusterIP|55433|" + gkeReal),
+		"supervisor exposed": parseLBService("LoadBalancer|55433 9899|" + gkeReal),
+		"internet-facing":    parseLBService("LoadBalancer|55433|{}"),
+		"external scheme":    parseLBService(`LoadBalancer|55433|{"networking.gke.io/load-balancer-type":"External"}`),
 	}
 	for name, svc := range cases {
 		if err := lbServiceVerdict(svc, "gcp", "55433"); err == nil {

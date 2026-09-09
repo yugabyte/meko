@@ -45,16 +45,29 @@ const (
 	// carries a postgres-exporter sidecar, and only this one answers on the
 	// pageserver's management port).
 	endpointPodContainer = "endpoint"
+
+	pitrTable = "amp_gc_pitr"
+	// pitrRetention is waited out once, so it trades against the test's budget.
+	pitrRetention = 45 * time.Second
+	// pitrSlack keeps the protected LSN off the window's edge and absorbs clock
+	// skew between the coordinator and the pageserver.
+	pitrSlack = 20 * time.Second
+	// pitrRounds writes enough WAL that the space horizon alone would pass the
+	// protected LSN, so the first assertion is about pitr, not an idle branch.
+	pitrRounds = 2
 )
 
-// forkCutoffPageserverSettings makes the ancestor's applied GC cutoff reachable
-// inside a test window. GC itself is on by default; what blocks the cutoff is
-// retention. `pitr_interval` defaults to 1 day and is authoritative over the
-// space horizon whenever it is non-zero, so the forced GC's small gc_horizon
-// cannot move the cutoff until it is 0. `lsn_lease_length` doubles as GC's
-// startup grace (`lsn_lease_deadline = startup + lsn_lease_length`), so at the
-// 10-minute default no tick in this test would run at all. Same trap
-// `features/amp_gc_reclaim` documents.
+// pitrCutoffPageserverSettings put the branch under time-based retention: once
+// the timestamp resolves, find_gc_cutoffs overwrites the space horizon with it.
+var pitrCutoffPageserverSettings = map[string]any{
+	"tenant_config.enable_gc":        true,
+	"tenant_config.pitr_interval":    pitrRetention.String(),
+	"tenant_config.lsn_lease_length": "2s",
+}
+
+// forkCutoffPageserverSettings make the applied cutoff reachable in a test
+// window: pitr_interval defaults to 1 day and overwrites the space horizon once
+// resolved, and lsn_lease_length doubles as GC's startup grace.
 var forkCutoffPageserverSettings = map[string]any{
 	"tenant_config.pitr_interval":    "0s",
 	"tenant_config.lsn_lease_length": "2s",
@@ -65,6 +78,9 @@ var forkCutoffPageserverSettings = map[string]any{
 // an environment condition. An HTTP error FROM the pageserver is not.
 var errNoPageserverAccess = errors.New("pageserver management API unreachable")
 
+// errNoKubeContext is the structural half of the above: no retry can help.
+var errNoKubeContext = errors.New("no kube context to reach a pageserver through")
+
 func init() {
 	core.Register(core.Test{
 		Name:        "features/amp_fork_below_gc_cutoff",
@@ -73,11 +89,12 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Force the ancestor's GC past a captured LSN, then assert a fork at that reclaimed LSN is rejected at registration rather than registered and left unusable.",
+		Description: "The GC cutoff and what it makes legal. Under a test-sized pitr_interval an LSN committed inside the window survives a forced GC at a 1 KiB horizon and a fork at it is accepted, and it stops being protected once the window passes it; then force the ancestor's GC past a captured LSN and assert a fork at that reclaimed LSN is rejected at registration rather than registered and left unusable.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		// A doomed-endpoint deploy (6m) on top of two endpoint creates cannot fit
-		// the category default; timing out mid-classification reads as a hang.
-		Timeout: 20 * time.Minute,
+		// A doomed-endpoint deploy (6m) on top of three endpoint creates and the
+		// pitr phase's wait cannot fit the category default; timing out
+		// mid-classification reads as a hang.
+		Timeout: 30 * time.Minute,
 		Run:     runAmpForkBelowGCCutoff,
 	})
 }
@@ -97,7 +114,10 @@ func init() {
 // product: a pod the cluster never placed is an environment failure.
 func runAmpForkBelowGCCutoff(t *core.T) error {
 	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
-		return []phase{{"fork_below_gc_cutoff", a.forkBelowGCCutoff}}
+		return []phase{
+			{"pitr_cutoff", a.pitrCutoff},
+			{"fork_below_gc_cutoff", a.forkBelowGCCutoff},
+		}
 	})
 }
 
@@ -127,7 +147,7 @@ type pageserverFinder func(ctx context.Context, ep controller.Endpoint) (pageser
 func (f *flow) endpointPageserver(ctx context.Context, ep controller.Endpoint) (pageserverAdmin, error) {
 	kube := f.ampKube()
 	if kube == nil {
-		return nil, fmt.Errorf("%w: this control plane is reached by a direct URL, so there is no kube context to exec into endpoint %s's pod", errNoPageserverAccess, ep.ID)
+		return nil, fmt.Errorf("%w: %w: this control plane is reached by a direct URL, so there is no kube context to exec into endpoint %s's pod", errNoPageserverAccess, errNoKubeContext, ep.ID)
 	}
 	pod, err := (&kubeComputeRoller{kube: kube}).podName(ctx, ep.ID)
 	if err != nil {
@@ -293,6 +313,188 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	return fmt.Errorf("forking at LSN %s was ACCEPTED and its endpoint serves reads, but branch %s's applied GC cutoff is %s, above the fork point, so that history is already reclaimed and the fork had to be rejected at registration", earlyLSN, branchID, info.AppliedGCCutoffLSN)
 }
 
+// pitrCutoff checks the time-based cutoff both ways: an LSN inside the window
+// survives a forced GC and is forkable, and stops being protected once the
+// window passes it. https://github.com/yugabyte/meko/issues/924
+func (a *ampFeatureRun) pitrCutoff(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	// Its own cluster: the endpoint outlives this phase and a branch takes one
+	// writer, and a branch with no endpoint has no fork point to fork from.
+	proj, err := createClusterOnPool(ctx, cl, a.proj.poolID, "gc-pitr-"+a.f.suffix(), a.f.cfg.PgVersion, a.f.register)
+	if err != nil {
+		return fmt.Errorf("create the cluster for the pitr phase: %w", err)
+	}
+	return pitrCutoffSteps(ctx, cl, proj, "pitr-fork-"+a.f.suffix(), a.f.endpointSQL, a.f.endpointPageserver, a.f.logf, a.f.t.Skip)
+}
+
+func pitrCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, forkName string, connect endpointConnector, findPS pageserverFinder, logf func(string, ...any), skip func(string)) error {
+	ep, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
+		Role:               roleReadWrite,
+		PageserverSettings: pitrCutoffPageserverSettings,
+	})
+	if err != nil {
+		return fmt.Errorf("create the pitr endpoint with a %s retention: %w", pitrRetention, err)
+	}
+	got, err := cl.GetEndpoint(ctx, proj.poolID, proj.projID, proj.branchID, ep.ID)
+	if err != nil {
+		return fmt.Errorf("read endpoint %s back: %w", ep.ID, err)
+	}
+	if len(got.PageserverSettings) == 0 {
+		skip("this controller does not persist pageserver_settings, so the branch cannot be put under a test-sized pitr_interval")
+		return nil
+	}
+	c, err := connect(ctx, ep)
+	if err != nil {
+		return fmt.Errorf("connect the pitr endpoint: %w", err)
+	}
+	defer c.Close()
+	ps, err := findPS(ctx, ep)
+	if err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+	branchID, err := c.QueryString(ctx, "SELECT current_setting('yb_amp.branch_id')")
+	if err != nil {
+		return fmt.Errorf("read the pitr endpoint's branch id: %w", err)
+	}
+
+	if _, err := c.Exec(ctx, "CREATE TABLE "+pitrTable+" (id int primary key, payload text)"); err != nil {
+		return fmt.Errorf("create %s: %w", pitrTable, err)
+	}
+	if _, err := c.Exec(ctx, "INSERT INTO "+pitrTable+" (id, payload) VALUES (1, 'anchor')"); err != nil {
+		return fmt.Errorf("write the anchor row: %w", err)
+	}
+	// Inside the window for the first check, outside it for the second.
+	protectedLSN, err := currentLSN(ctx, c)
+	if err != nil {
+		return err
+	}
+	protectedAt := time.Now()
+
+	inside, err := pitrForcedCutoff(ctx, c, ps, branchID, pitrTable, pitrRounds)
+	if err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+	passed, err := cutoffPassed(inside.AppliedGCCutoffLSN, protectedLSN)
+	if err != nil {
+		return err
+	}
+	if passed {
+		return fmt.Errorf("branch %s's applied GC cutoff is %s, past the LSN %s committed %s earlier, on a branch whose pitr_interval is %s: a resolved time cutoff is authoritative over the space horizon, so a forced GC at %d bytes must not reclaim inside the window. Point-in-time recovery to any moment in the last %s is already impossible on this branch (last record %s, min readable %s)",
+			branchID, inside.AppliedGCCutoffLSN, protectedLSN, time.Since(protectedAt).Round(time.Second), pitrRetention,
+			cutoffForceGCHorizonBytes, pitrRetention, inside.LastRecordLSN, inside.MinReadableLSN)
+	}
+	logf("pitr_cutoff: inside the %s window the applied cutoff is %s, still below the protected LSN %s (last record %s)",
+		pitrRetention, inside.AppliedGCCutoffLSN, protectedLSN, inside.LastRecordLSN)
+
+	// What the interval is FOR, and the sharpest check that GC has not
+	// over-reclaimed: a cutoff that ran ahead surfaces here as a refusal. No
+	// endpoint on it, since the fork phase covers the deploy-time consequence.
+	if _, err := cl.CreateBranchAndWait(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
+		Name: forkName, ParentBranchID: proj.branchID, ForkPointLSN: protectedLSN,
+	}); err != nil {
+		return fmt.Errorf("forking branch %s at LSN %s, committed %s ago and so inside its %s pitr window, was refused. Time-based retention is what makes that fork point recoverable, so refusing it means the history it promises to keep is already gone (applied cutoff %s, min readable %s): %w",
+			branchID, protectedLSN, time.Since(protectedAt).Round(time.Second), pitrRetention,
+			inside.AppliedGCCutoffLSN, inside.MinReadableLSN, err)
+	}
+	if child, err := findBranchCtl(ctx, cl, proj.poolID, proj.projID, forkName); err == nil {
+		if _, err := cl.DeleteBranchAndWait(ctx, proj.poolID, proj.projID, child.BranchID); err != nil {
+			logf("pitr_cutoff: could not delete the in-window fork %s, leaving it to the cluster cascade: %v", forkName, err)
+		}
+	}
+
+	// Waited from here, not from the protected commit: the churn above committed
+	// after it, and leaving that churn inside the window pins the cutoff at the
+	// protected LSN instead of past it.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(pitrRetention + pitrSlack):
+	}
+
+	outside, err := pitrForcedCutoff(ctx, c, ps, branchID, pitrTable, pitrRounds)
+	if err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+	// Reached, not passed: the cutoff is a commit LSN found by searching clog
+	// page trailers, so it resolves to a boundary. Demanding one byte more failed
+	// a run where retention worked (0/1516A28 -> 0/1554A98, captured 0/1554A98).
+	advanced, err := cutoffPassed(outside.AppliedGCCutoffLSN, inside.AppliedGCCutoffLSN)
+	if err != nil {
+		return err
+	}
+	reached, err := cutoffReached(outside.AppliedGCCutoffLSN, protectedLSN)
+	if err != nil {
+		return err
+	}
+	if !advanced || !reached {
+		// Same escape hatch the fork phase carries: a deployment that switched GC
+		// off can never move a cutoff, and blaming wall-clock retention for that
+		// sends whoever triages it after a bug that is not there.
+		if samples, mErr := ps.Metrics(ctx); mErr == nil {
+			if ticks, known := gcDrainDisabled(samples); known && ticks > 0 {
+				skip(fmt.Sprintf("this deployment's pageserver is not running GC (%s{outcome=\"disabled\"} = %.0f), so no applied cutoff can move whatever the retention says",
+					gcDrainTicksMetric, ticks))
+				return nil
+			}
+		}
+		return fmt.Errorf("branch %s's applied GC cutoff is %s: it was %s while the LSN %s was inside the window and that LSN was committed %s ago, past the branch's %s pitr_interval, with more WAL written and flushed since. The cutoff had to advance to at least it. A wall-clock retention that is not resolved to an LSN leaves the branch retaining history forever (last record %s, min readable %s)",
+			branchID, outside.AppliedGCCutoffLSN, inside.AppliedGCCutoffLSN, protectedLSN,
+			time.Since(protectedAt).Round(time.Second), pitrRetention,
+			outside.LastRecordLSN, outside.MinReadableLSN)
+	}
+	logf("pitr_cutoff: %s after the commit the applied cutoff advanced %s -> %s, reaching the protected LSN %s",
+		time.Since(protectedAt).Round(time.Second), inside.AppliedGCCutoffLSN, outside.AppliedGCCutoffLSN, protectedLSN)
+
+	// The window moving does not license losing the live row.
+	n, err := c.QueryInt(ctx, "SELECT count(*) FROM "+pitrTable+" WHERE id = 1")
+	if err != nil {
+		return fmt.Errorf("re-read the anchor row after the cutoff advanced: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("the anchor row is gone from %s after the GC cutoff advanced past it: reclaiming history below the cutoff must not touch the live page", pitrTable)
+	}
+	return nil
+}
+
+// pitrForcedCutoff churns, flushes and forces a GC, reporting the cutoff.
+func pitrForcedCutoff(ctx context.Context, c sqlConn, ps pageserverAdmin, branchID, table string, rounds int) (pageserver.BranchInfo, error) {
+	for round := range rounds {
+		if _, err := c.Exec(ctx, "INSERT INTO "+table+" (id, payload) SELECT g, repeat('x', 512) FROM generate_series($1::int, $2::int) g",
+			round*cutoffChurnRows+2, (round+1)*cutoffChurnRows+1); err != nil {
+			return pageserver.BranchInfo{}, fmt.Errorf("pitr churn round %d insert: %w", round, err)
+		}
+		if _, err := c.Exec(ctx, "DELETE FROM "+table+" WHERE id > 1"); err != nil {
+			return pageserver.BranchInfo{}, fmt.Errorf("pitr churn round %d delete: %w", round, err)
+		}
+		if _, err := c.Exec(ctx, "CHECKPOINT"); err != nil {
+			return pageserver.BranchInfo{}, fmt.Errorf("pitr churn round %d checkpoint: %w", round, err)
+		}
+	}
+	frontier, err := currentLSN(ctx, c)
+	if err != nil {
+		return pageserver.BranchInfo{}, err
+	}
+	if err := ps.FlushBranch(ctx, branchID, frontier); err != nil {
+		return pageserver.BranchInfo{}, err
+	}
+	if _, err := ps.ForceGC(ctx, branchID, cutoffForceGCHorizonBytes); err != nil {
+		return pageserver.BranchInfo{}, err
+	}
+	return ps.BranchInfo(ctx, branchID)
+}
+
 // skipUnreachablePageserver records an environment skip when the pageserver's
 // management port cannot be reached at all, and reports whether it did. An HTTP
 // error from the pageserver itself falls through to the caller as a failure.
@@ -316,6 +518,19 @@ func cutoffPassed(cutoff, forkLSN string) (bool, error) {
 		return false, fmt.Errorf("read the captured fork LSN: %w", err)
 	}
 	return c > f, nil
+}
+
+// cutoffReached reports whether the cutoff has reached the captured LSN.
+func cutoffReached(cutoff, forkLSN string) (bool, error) {
+	c, err := pageserver.ParseLSN(cutoff)
+	if err != nil {
+		return false, fmt.Errorf("read the applied GC cutoff: %w", err)
+	}
+	f, err := pageserver.ParseLSN(forkLSN)
+	if err != nil {
+		return false, fmt.Errorf("read the captured LSN: %w", err)
+	}
+	return c >= f, nil
 }
 
 // gcDrainDisabled reports the pageserver's count of GC ticks that reclaimed

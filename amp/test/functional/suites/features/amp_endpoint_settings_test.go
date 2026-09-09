@@ -75,7 +75,16 @@ type settingsConn struct {
 }
 
 func (c *settingsConn) Exec(context.Context, string, ...any) (int64, error) { return 0, nil }
-func (c *settingsConn) QueryInt(context.Context, string, ...any) (int64, error) {
+
+// QueryInt answers the commit-timestamp probe as a healthy compute would, and
+// fails it on a dead connection the way every other read here does.
+func (c *settingsConn) QueryInt(_ context.Context, sql string, _ ...any) (int64, error) {
+	if c.dead != nil && *c.dead {
+		return 0, errors.New("connection reset by peer")
+	}
+	if strings.Contains(sql, "pg_xact_commit_timestamp") {
+		return 1, nil
+	}
 	return 0, nil
 }
 
