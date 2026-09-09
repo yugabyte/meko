@@ -343,11 +343,15 @@ func (p *Provider) defaultNewStack(runTag string) (ybaStack, error) {
 	return ybastack.New(ybastack.FromConfig(p.provisionCfg), runTag, p.resolveSecret).WithLogf(p.logf), nil
 }
 
+// A whole-client timeout is not retried by the forwarded transport, so a short
+// one turns a slow YBA answer into an env_failure.
+const provisionerRequestTimeout = 4 * time.Minute
+
 // defaultNewProvisioner builds a real *yba.Client pointed at the freshly-deployed
 // YBA (its URL/customer/token from Info), with an insecure-TLS transport when
 // configured (YBA is commonly self-signed).
 func (p *Provider) defaultNewProvisioner(info ybastack.Info) ybaProvisioner {
-	hc := &http.Client{Timeout: 60 * time.Second}
+	hc := &http.Client{Timeout: provisionerRequestTimeout}
 	if p.cfg.InsecureTLS {
 		hc.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // YBA is commonly self-signed; opt-in via config
 	}

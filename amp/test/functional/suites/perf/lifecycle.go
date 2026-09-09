@@ -461,6 +461,10 @@ func (r *lifecycleRun) forkEndpoint() error {
 		})
 		return err
 	}); err != nil {
+		// Without this the caller's diagnostics capture the parent's healthy endpoint.
+		if eps, lerr := r.cl.ListAllEndpoints(ctx, r.poolID, r.fork.ClusterID, r.fork.BranchID); lerr == nil && len(eps) > 0 {
+			r.fork.Endpoint = eps[len(eps)-1]
+		}
 		return err
 	}
 	eps, err := r.cl.ListAllEndpoints(ctx, r.poolID, r.fork.ClusterID, r.fork.BranchID)

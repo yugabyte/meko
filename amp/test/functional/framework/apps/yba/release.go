@@ -2,6 +2,7 @@ package yba
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -192,7 +193,12 @@ func (c *Client) EnsureRelease(ctx context.Context, version, arch, tarballURL st
 		}
 		var out map[string]any
 		if _, err := c.doJSON(ctx, http.MethodPost, c.custURL("/ybdb_release"), payload, &out); err != nil {
-			return fmt.Errorf("create release %s (%s): %w", version, arch, err)
+			// Only YBA's own non-2xx is final; a transport failure may have landed.
+			var apiErr *APIError
+			if errors.As(err, &apiErr) {
+				return fmt.Errorf("create release %s (%s): %w", version, arch, err)
+			}
+			c.log("yba: create release %s (%s) did not answer (%v); the catalog decides whether it landed", version, ybArch, err)
 		}
 	}
 	// The release download runs async; wait until the artifact actually appears

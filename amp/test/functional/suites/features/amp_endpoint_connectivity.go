@@ -36,7 +36,7 @@ const (
 	lbNoCloudRender = "needs service.cloud"
 )
 
-var errConnectivityUnsupported = errors.New("this controller does not report endpoint connectivity, so it predates configurable connectivity")
+var errConnectivityUnsupported = errors.New("this controller drops an explicit connectivity block from the endpoint it creates, so it predates configurable connectivity")
 
 func init() {
 	core.Register(core.Test{
@@ -73,7 +73,12 @@ func (a *ampFeatureRun) connectivityValidation(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ep, err := createEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID)
+	// Explicit, because a supporting controller reports null for a default create.
+	conn := controller.EndpointConnectivity{Mode: controller.ConnectivityClusterIP}
+	ep, err := createEndpointReq(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{
+		Role:         roleReadWrite,
+		Connectivity: &conn,
+	})
 	if err != nil {
 		return fmt.Errorf("create the cluster_ip endpoint: %w", err)
 	}
@@ -82,7 +87,7 @@ func (a *ampFeatureRun) connectivityValidation(ctx context.Context) error {
 		return nil
 	}
 	if ep.Connectivity.Mode != controller.ConnectivityClusterIP {
-		return fmt.Errorf("an endpoint created without a connectivity block reports mode %q, want %s", ep.Connectivity.Mode, controller.ConnectivityClusterIP)
+		return fmt.Errorf("an endpoint created with connectivity.mode=%s reports mode %q", controller.ConnectivityClusterIP, ep.Connectivity.Mode)
 	}
 	if kube := a.f.ampKube(); kube != nil {
 		if _, err := lbServiceIngress(ctx, kube, ep.ID); !isNotFound(err) {
