@@ -47,6 +47,11 @@ const (
 	DefaultLatencyRisePct    = 35.0
 	DefaultReadyTimeout      = 5 * time.Minute
 	DefaultHealthTimeout     = 5 * time.Minute
+	// One datapoint this far past its allowance fails on its own. Below that it
+	// takes DefaultLiveArmMinViolations agreeing: a single moderate outlier out of
+	// ten is the shape noise takes here, several at once is not.
+	DefaultLiveArmGrossFactor   = 2.0
+	DefaultLiveArmMinViolations = 2
 	// default-big is the one node pool a benchmark may run on: uniform
 	// e2-standard-16, ours, and outside GKE node auto-provisioning. Unpinned, a
 	// pod lands in whichever nap-* pool has room, and an arm on the slower
@@ -72,6 +77,8 @@ type perfConfig struct {
 	LatencyRisePct    float64
 	ReadyTimeout      time.Duration
 	HealthTimeout     time.Duration
+	// LiveArm is how the two-arm comparison turns deltas into a verdict.
+	LiveArm liveArmPolicy
 	// ArmNodeSelector pins both arms' tservers and endpoint computes to one
 	// machine type, so their delta is the build. Empty disables the pin.
 	ArmNodeSelector string
@@ -98,8 +105,17 @@ func perfFromConfig(c *core.Config) perfConfig {
 		LatencyRisePct:    c.GetFloat("perf.latency_rise_pct", DefaultLatencyRisePct),
 		ReadyTimeout:      c.GetDuration("perf.ready_timeout", DefaultReadyTimeout),
 		HealthTimeout:     c.GetDuration("perf.health_timeout", DefaultHealthTimeout),
-		ArmNodeSelector:   c.GetString("perf.arm_node_selector", DefaultArmNodeSelector),
-		Benchmark:         c.GetString("apps.benchbase.benchmark", "tpcc"),
+		LiveArm: liveArmPolicy{
+			Thr: float64Thresholds{
+				DropPct: c.GetFloat("perf.throughput_drop_pct", DefaultThroughputDropPct),
+				RisePct: c.GetFloat("perf.latency_rise_pct", DefaultLatencyRisePct),
+			},
+			UseHistoryBand: c.GetBool("perf.live_arm.use_history_band", true),
+			GrossFactor:    c.GetFloat("perf.live_arm.gross_factor", DefaultLiveArmGrossFactor),
+			MinViolations:  c.GetInt("perf.live_arm.min_violations", DefaultLiveArmMinViolations),
+		},
+		ArmNodeSelector: c.GetString("perf.arm_node_selector", DefaultArmNodeSelector),
+		Benchmark:       c.GetString("apps.benchbase.benchmark", "tpcc"),
 	}
 }
 

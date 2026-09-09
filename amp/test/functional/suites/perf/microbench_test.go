@@ -189,13 +189,13 @@ func TestMicrobenchLiveArmGateCycles(t *testing.T) {
 
 	cur := cycles(1722, 1446, 1719)
 	gated, _, _ := microbenchDatapoints(cur, microbenchParams{})
-	if _, err := liveArmGate(gated, baseGated, microbenchBestValues(cur), microbenchBestValues(base), thr, "0.260904.1"); err != nil {
+	if _, _, err := liveArmGate(gated, baseGated, microbenchBestValues(cur), microbenchBestValues(base), strictPolicy(thr), "0.260904.1"); err != nil {
 		t.Errorf("one slow cycle against the baseline's fastest failed the gate: %v", err)
 	}
 
 	slow := cycles(2500, 2600, 2400)
 	gated, _, _ = microbenchDatapoints(slow, microbenchParams{})
-	if _, err := liveArmGate(gated, baseGated, microbenchBestValues(slow), microbenchBestValues(base), thr, "0.260904.1"); err == nil {
+	if _, _, err := liveArmGate(gated, baseGated, microbenchBestValues(slow), microbenchBestValues(base), strictPolicy(thr), "0.260904.1"); err == nil {
 		t.Error("every cycle ~45% slower on median and best passed the gate")
 	}
 }

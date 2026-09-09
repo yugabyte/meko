@@ -1711,6 +1711,26 @@ perf:
   baseline:
     live: true
     image_version: ""
+    # allow_same_image keeps the arm up when the baseline resolves to the image
+    # under test. That is an A/A run: the arms differ in nothing, so every delta
+    # it reports is this harness measuring its own noise. Run 9cadd192 reported
+    # lifecycle.delete_fork_branch +118.2% that way.
+    allow_same_image: false
+  # live_arm turns the two arms' per-datapoint deltas into one verdict.
+  live_arm:
+    # use_history_band raises a datapoint's allowance to its own trailing
+    # dispersion from the portal, max(perf.gate.mad_k x MAD%, perf.gate.floor_pct).
+    # It only ever widens: a metric whose series is steady keeps the flat
+    # throughput_drop_pct / latency_rise_pct below. The band is CROSS-RUN
+    # dispersion standing in for arm-to-arm dispersion, which nothing measures
+    # yet; see the note on liveArmPolicy.
+    use_history_band: true
+    # A datapoint this many times past its allowance fails on its own.
+    gross_factor: 2.0
+    # Otherwise it takes this many datapoints past their allowance in one run.
+    # A lone moderate outlier across ten datapoints and six nightly perf tests is
+    # the shape noise takes here.
+    min_violations: 2
   # baseline_path is the JSON baseline store (per version → test → datapoint). A
   # relative path resolves against the process working directory. A first run (no
   # baseline) establishes it and WARNs; a later run gates against it. Baselines
@@ -1727,7 +1747,10 @@ perf:
   # throughput_drop_pct, latency may RISE up to latency_rise_pct, before the
   # datapoint is flagged regressed and the test fails. Sized to absorb the
   # residual run-to-run variance of a small co-located TPC-C (tail latency is the
-  # noisiest); tighten these once you drive a larger, steadier load.
+  # noisiest); tighten these once you drive a larger, steadier load. For the
+  # two-arm suites these are the FLOOR: perf.live_arm.use_history_band may raise
+  # a datapoint's allowance, and perf.live_arm.min_violations decides how many
+  # datapoints past their allowance it takes to fail.
   throughput_drop_pct: 20.0
   latency_rise_pct: 35.0
   # Timeouts.

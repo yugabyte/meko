@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -638,10 +639,15 @@ func gateLifecycle(t *core.T, p lifecycleParams, id Identity, results []phaseRes
 		}
 		if baselineUp {
 			baseGated, _, _ := lifecycleDatapoints(baseResults, nil, p)
-			tableTxt, gerr := liveArmGate(gated, baseGated,
-				lifecycleBestValues(results), lifecycleBestValues(baseResults),
-				float64Thresholds{DropPct: cfg.ThroughputDropPct, RisePct: cfg.LatencyRisePct}, tag)
+			pol := cfg.LiveArm
+			pol.Bands = historyBands(t, portalGateFromConfig(t.Options), testNameLifecycle, gated, id, logf)
+			s.Set("live_arm_bands", len(pol.Bands))
+			tableTxt, suspects, gerr := liveArmGate(gated, baseGated,
+				lifecycleBestValues(results), lifecycleBestValues(baseResults), pol, tag)
 			lbErr = gerr
+			if len(suspects) > 0 {
+				s.Set("live_arm_suspects", strings.Join(suspects, "; "))
+			}
 			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
 			info = append(info, liveArmDatapoints(baseGated)...)
 			logf("perf: live baseline gate for %s vs %s: %s", testNameLifecycle, tag, verdictWord(gerr))

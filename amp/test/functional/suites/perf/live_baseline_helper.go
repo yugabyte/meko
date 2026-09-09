@@ -18,12 +18,17 @@ const liveBaselineArtifact = "live-baseline.txt"
 type liveBaselineConfig struct {
 	Enabled      bool
 	ImageVersion string
+	// AllowSameImage keeps the arm up when the baseline resolves to the image
+	// under test. That is an A/A run: the two arms differ in nothing, so every
+	// delta it reports is this harness measuring its own noise.
+	AllowSameImage bool
 }
 
 func liveBaselineFromConfig(c *core.Config) liveBaselineConfig {
 	return liveBaselineConfig{
-		Enabled:      c.GetBool("perf.baseline.live", true),
-		ImageVersion: strings.TrimSpace(c.GetString("perf.baseline.image_version", "")),
+		Enabled:        c.GetBool("perf.baseline.live", true),
+		ImageVersion:   strings.TrimSpace(c.GetString("perf.baseline.image_version", "")),
+		AllowSameImage: c.GetBool("perf.baseline.allow_same_image", false),
 	}
 }
 

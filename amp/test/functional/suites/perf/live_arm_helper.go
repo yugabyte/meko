@@ -43,6 +43,9 @@ func resolveLiveArmTag(t *core.T, logf func(string, ...any)) string {
 	case err != nil:
 		logf("perf: WARN live baseline unavailable (%v) — gating on history instead", err)
 		return ""
+	case tag != "" && tag == currentAmpTag(t.Options) && lb.AllowSameImage:
+		logf("perf: A/A run — both arms on %s, so every delta reported is harness noise", tag)
+		return tag
 	case tag == "" || tag == currentAmpTag(t.Options):
 		logf("perf: live baseline skipped (no prior release distinct from %q) — gating on history instead", orNone(currentAmpTag(t.Options)))
 		return ""
@@ -237,24 +240,74 @@ func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, 
 	return cur, base, armErr, stepErr
 }
 
+// liveArmPolicy turns per-datapoint deltas into one verdict.
+//
+// Thr is the flat allowance. Bands raises it per datapoint, never lowers it, to
+// that metric's trailing dispersion from the portal (perf.gate.mad_k x MAD).
+//
+// That band is CROSS-RUN dispersion, and the two arms exist to strip cross-run
+// variance out, so using it here is a compromise and not the right statistic.
+// The right one is arm-to-arm dispersion, which nothing measures yet. It is used
+// because the arms turn out not to share weather: A/A run 9cadd192, both arms on
+// one image, reported lifecycle.delete_fork_branch +118.2%, and the A/B beside it
+// +124.3%. The band is the only per-metric noise estimate available today, so it
+// stands in until enough A/A runs exist to replace it.
+//
+// It widens more than it looks: on the fbf0de9f replay, 5 of 10 lifecycle
+// datapoints land above the flat 35%, lifecycle.load among them at 83.4% because
+// its window still holds pre-pinning runs. Expect that to tighten as pinned runs
+// age into the window, and read the band as a ceiling on our own confidence
+// rather than as a property of the build.
+//
+// GrossFactor and MinViolations decide when a violation is worth failing on. Ten
+// datapoints per test across six nightly perf tests means even a 2% per-datapoint
+// false alarm rate reds the board most nights, so a lone moderate outlier is not
+// enough: either one datapoint is GrossFactor past its allowance, or
+// MinViolations of them agree. Both scale with the band, so a wide band raises
+// the gross bar too: on a metric whose own noise is 80%, no single run can
+// distinguish a regression below that, and only persistence across runs can.
+type liveArmPolicy struct {
+	Thr            float64Thresholds
+	Bands          map[string]float64
+	UseHistoryBand bool
+	GrossFactor    float64
+	MinViolations  int
+}
+
+func (p liveArmPolicy) allowanceFor(dp core.Datapoint) float64 {
+	allowed := p.Thr.RisePct
+	if dp.Direction == core.HigherIsBetter {
+		allowed = p.Thr.DropPct
+	}
+	if p.UseHistoryBand {
+		if band, ok := p.Bands[dp.Name]; ok && band > allowed {
+			return band
+		}
+	}
+	return allowed
+}
+
 // liveArmGate compares the two arms' gated datapoints by name: delta in the
-// worse direction, allowed by the direction's threshold (drop for
-// higher-is-better, rise for lower-is-better). Datapoints only one arm produced
-// are skipped — they have no counterpart to accuse. curBest/baseBest carry each
+// worse direction, allowed by policy. Datapoints only one arm produced are
+// skipped — they have no counterpart to accuse. curBest/baseBest carry each
 // name's best iteration: endpoint pods land on whatever node type the
 // autoscaler has (observed run 55349d45: highcpu-8 and standard-8 mixed within
 // one arm), so a median-only verdict gates the node lottery; a real regression
 // also slows the best draw. nil maps skip that check (single-sample suites).
 // Returns the attachable table and the verdict.
-func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]float64, thr float64Thresholds, tag string) (string, error) {
+// The second return is the violations that were reported but did not fail, so a
+// caller can surface them: with the live arm up nothing else asserts, and a
+// regression under the quorum would otherwise leave no trace outside the
+// attached table.
+func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]float64, pol liveArmPolicy, tag string) (string, []string, error) {
 	ref := map[string]core.Datapoint{}
 	for _, dp := range base {
 		ref[dp.Name] = dp
 	}
 	var b strings.Builder
-	var violations []string
+	var gross, moderate []string
 	fmt.Fprintf(&b, "live baseline: this run vs release %s (same workload, concurrent stacks)\n", tag)
-	fmt.Fprintf(&b, "%-40s %14s %14s %9s %11s %9s\n", "datapoint", "current", "baseline", "delta%", "allowed%", "spread%")
+	fmt.Fprintf(&b, "%-40s %14s %14s %9s %11s %9s %8s\n", "datapoint", "current", "baseline", "delta%", "allowed%", "spread%", "verdict")
 	for _, dp := range current {
 		rdp, ok := ref[dp.Name]
 		if !ok || dp.Value == 0 || rdp.Value == 0 {
@@ -264,45 +317,69 @@ func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]fl
 		if !ok {
 			continue
 		}
-		allowed := thr.RisePct
-		if dp.Direction == core.HigherIsBetter {
-			allowed = thr.DropPct
-		}
-		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%% %8.1f%%\n", dp.Name, dp.Value, rdp.Value, d, allowed, dp.SpreadPct)
+		allowed := pol.allowanceFor(dp)
+		verdict := "ok"
+		switch {
+		case allowed <= 0 || d <= allowed:
 		// A percentage gate needs signal: one-shot ms-scale ops through two
 		// port-forwards jitter by tens of ms, so a violation must also clear an
-		// absolute floor.
-		if dp.Unit == "ms" && math.Abs(dp.Value-rdp.Value) < liveArmNoiseFloorMS {
-			continue
-		}
-		corroborated := false
-		if curBest != nil && baseBest != nil && dp.Direction == core.LowerIsBetter {
-			cb, cok := curBest[dp.Name]
-			bb, bok := baseBest[dp.Name]
-			if cok && bok && cb > 0 && bb > 0 {
-				bd, ok := regressionPct(bb, cb, dp.Direction)
-				if !ok || bd <= allowed {
-					continue
-				}
-				corroborated = true
+		// absolute floor. Ordered after the allowance so "floor" marks only the
+		// rows the floor actually suppressed.
+		case dp.Unit == "ms" && math.Abs(dp.Value-rdp.Value) < liveArmNoiseFloorMS:
+			verdict = "floor"
+		default:
+			verdict = liveArmSuspect(dp, d, allowed, curBest, baseBest)
+			if verdict == "suspect" && pol.GrossFactor > 0 && d > allowed*pol.GrossFactor {
+				verdict = "gross"
 			}
 		}
-		// A delta inside the arm's own iteration spread is two draws from one
-		// distribution, so it is no verdict. This is the cruder of the two
-		// guards: where the best draw regressed too, that corroboration is the
-		// stronger evidence and wins.
-		if !corroborated && dp.SpreadPct > 0 && d <= dp.SpreadPct {
+		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%% %8.1f%% %8s\n",
+			dp.Name, dp.Value, rdp.Value, d, allowed, dp.SpreadPct, verdict)
+		if verdict != "gross" && verdict != "suspect" {
 			continue
 		}
-		if allowed > 0 && d > allowed {
-			violations = append(violations, fmt.Sprintf("%s %+.1f%% vs the live %s baseline (allowed %.1f%%: current %.4g, baseline %.4g %s)",
-				dp.Name, d, tag, allowed, dp.Value, rdp.Value, dp.Unit))
+		line := fmt.Sprintf("%s %+.1f%% vs the live %s baseline (allowed %.1f%%: current %.4g, baseline %.4g %s)",
+			dp.Name, d, tag, allowed, dp.Value, rdp.Value, dp.Unit)
+		if verdict == "gross" {
+			gross = append(gross, line)
+		} else {
+			moderate = append(moderate, line)
 		}
 	}
-	if len(violations) > 0 {
-		return b.String(), fmt.Errorf("perf regression vs the live baseline: %s", strings.Join(violations, "; "))
+	if len(gross) > 0 {
+		return b.String(), moderate, fmt.Errorf("perf regression vs the live baseline: %s", strings.Join(gross, "; "))
 	}
-	return b.String(), nil
+	if len(moderate) >= max(pol.MinViolations, 1) {
+		return b.String(), nil, fmt.Errorf("perf regression vs the live baseline, %d datapoints past their allowance: %s",
+			len(moderate), strings.Join(moderate, "; "))
+	}
+	for _, m := range moderate {
+		fmt.Fprintf(&b, "below the %d-datapoint quorum, reported but not failed: %s\n", max(pol.MinViolations, 1), m)
+	}
+	return b.String(), moderate, nil
+}
+
+// liveArmSuspect classifies a delta that already cleared its allowance.
+func liveArmSuspect(dp core.Datapoint, d, allowed float64, curBest, baseBest map[string]float64) string {
+	corroborated := false
+	if curBest != nil && baseBest != nil && dp.Direction == core.LowerIsBetter {
+		cb, cok := curBest[dp.Name]
+		bb, bok := baseBest[dp.Name]
+		if cok && bok && cb > 0 && bb > 0 {
+			bd, ok := regressionPct(bb, cb, dp.Direction)
+			if !ok || bd <= allowed {
+				return "best-ok"
+			}
+			corroborated = true
+		}
+	}
+	// A delta inside the arm's own iteration spread is two draws from one
+	// distribution, so it is no verdict. This is the cruder of the two guards:
+	// where the best draw regressed too, that corroboration wins.
+	if !corroborated && dp.SpreadPct > 0 && d <= dp.SpreadPct {
+		return "spread"
+	}
+	return "suspect"
 }
 
 // phaseBarrier pairs the arms' equally-numbered iterations phase by phase, so

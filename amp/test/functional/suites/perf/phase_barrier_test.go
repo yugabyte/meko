@@ -89,7 +89,7 @@ func TestLiveArmGateFailsWhenTheBestIterationRegressesToo(t *testing.T) {
 	base := []core.Datapoint{msDatapoint("x.load", 15000)}
 	curBest := map[string]float64{"x.load": 24000}
 	baseBest := map[string]float64{"x.load": 14000}
-	if _, err := liveArmGate(cur, base, curBest, baseBest, thr, "0.1.2-abc"); err == nil {
+	if _, _, err := liveArmGate(cur, base, curBest, baseBest, strictPolicy(thr), "0.1.2-abc"); err == nil {
 		t.Fatal("a phase slower on both the median and the best iteration must fail the gate")
 	}
 }
@@ -102,7 +102,7 @@ func TestLiveArmGateSuppressesUnregressedBestIteration(t *testing.T) {
 	base := []core.Datapoint{msDatapoint("x.fork_small", 1212)}
 	curBest := map[string]float64{"x.fork_small": 1250}
 	baseBest := map[string]float64{"x.fork_small": 1200}
-	if _, err := liveArmGate(cur, base, curBest, baseBest, thr, "0.1.2-abc"); err != nil {
+	if _, _, err := liveArmGate(cur, base, curBest, baseBest, strictPolicy(thr), "0.1.2-abc"); err != nil {
 		t.Fatalf("a median-only regression with an unregressed best iteration must be suppressed: %v", err)
 	}
 }
@@ -113,11 +113,11 @@ func TestLiveArmGateNoiseFloorSuppressesTinyMsDeltas(t *testing.T) {
 	thr := float64Thresholds{DropPct: 20, RisePct: 35}
 	cur := []core.Datapoint{msDatapoint("x.truncate", 82.8)}
 	base := []core.Datapoint{msDatapoint("x.truncate", 48.4)}
-	if _, err := liveArmGate(cur, base, nil, nil, thr, "0.1.2-abc"); err != nil {
+	if _, _, err := liveArmGate(cur, base, nil, nil, strictPolicy(thr), "0.1.2-abc"); err != nil {
 		t.Fatalf("a +71%% violation worth 34ms must be suppressed by the noise floor: %v", err)
 	}
 	big := []core.Datapoint{msDatapoint("x.truncate", 48.4+liveArmNoiseFloorMS+10)}
-	if _, err := liveArmGate(big, base, nil, nil, thr, "0.1.2-abc"); err == nil {
+	if _, _, err := liveArmGate(big, base, nil, nil, strictPolicy(thr), "0.1.2-abc"); err == nil {
 		t.Fatal("a delta past the noise floor must still fail the gate")
 	}
 }

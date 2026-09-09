@@ -113,6 +113,33 @@ func portalGateCall(ctx context.Context, pg portalGateConfig, testName, ybVersio
 	return &out, buf.Bytes(), nil
 }
 
+// historyBands is each datapoint's trailing dispersion as a percent, the same
+// max(mad_k x MAD%, floor%) the history gate uses. The live-arm gate takes it as
+// a per-metric allowance floor. Datapoints with too little history are absent,
+// and any failure returns nil, so a portal we cannot reach costs us the band and
+// not the gate.
+// The version axis is ybVersionOf, not a caller's choice: the portal buckets
+// history by YB version, and a product version there returns an empty window and
+// silently costs every band.
+func historyBands(t *core.T, pg portalGateConfig, testName string, gated []core.Datapoint, id Identity, logf func(string, ...any)) map[string]float64 {
+	if pg.URL == "" {
+		return nil
+	}
+	out, _, err := portalGateCall(t.Context, pg, testName, ybVersionOf(t), gated, id)
+	if err != nil {
+		logf("perf: WARN history bands unavailable (%v) — the live-arm gate uses its flat thresholds", err)
+		return nil
+	}
+	bands := map[string]float64{}
+	for _, it := range out.Items {
+		if it.Prev.N < pg.MinRuns || it.Prev.Median <= 0 {
+			continue
+		}
+		bands[it.Name] = math.Max(pg.MADK*(it.Prev.MAD/it.Prev.Median*100), pg.FloorPct)
+	}
+	return bands
+}
+
 // Recomputes delta/band/verdict from the portal's data, ignoring its verdicts: band = max(mad_k x MAD%, floor%), delta signed in the worse direction.
 func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGateConfig) []portalGateItem {
 	dirByName := map[string]core.Direction{}

@@ -1549,6 +1549,18 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetInt("perf.gate.min_runs", -1); got != perf.DefaultGateMinRuns {
 		t.Errorf("perf.gate.min_runs = %d, want %d", got, perf.DefaultGateMinRuns)
 	}
+	if got := cfg.GetBool("perf.baseline.allow_same_image", true); got != false {
+		t.Error("perf.baseline.allow_same_image must default false")
+	}
+	if got := cfg.GetBool("perf.live_arm.use_history_band", false); got != true {
+		t.Error("perf.live_arm.use_history_band must default true")
+	}
+	if got := cfg.GetFloat("perf.live_arm.gross_factor", -1); got != perf.DefaultLiveArmGrossFactor {
+		t.Errorf("perf.live_arm.gross_factor = %v, want %v", got, perf.DefaultLiveArmGrossFactor)
+	}
+	if got := cfg.GetInt("perf.live_arm.min_violations", -1); got != perf.DefaultLiveArmMinViolations {
+		t.Errorf("perf.live_arm.min_violations = %d, want %d", got, perf.DefaultLiveArmMinViolations)
+	}
 	if got := cfg.GetBool("perf.baseline.live", false); got != true {
 		t.Error("perf.baseline.live must default true")
 	}
