@@ -194,7 +194,8 @@ Spec fields, all optional unless noted. Secret fields are **names**, never value
 | `meko-stack` | `images.database` | **required** | The MAGE-enabled YugabyteDB build. No default: `mage` and `pg_dist_rag` are not in the public `yugabytedb` image, so a fallback would start cleanly and then fail every `CREATE EXTENSION`. |
 | | `images.api_server` / `.mcp_server` / `.rag_worker` / `.inference_gateway` / `.ui` | _(none)_ | Private images, no tag worth guessing. A component with no image is reported as failed and the rest of the stack still comes up. |
 | | `image_pull_secret` / `secret_ref` | _(none)_ | Secret **names** in the agent's namespace, applied to every component. `secret_ref` is mounted with `envFrom` and `optional: true`, so a Secret the operator has not created yet does not block the rollout. |
-| `datapack` | `description` | _(none)_ | Reconciled by the **reconcile-agent**, not the meko-agent: it is a resource inside a running Meko rather than a workload. The resource's `name` is the datapack's name — a rename is a different key, so it is a delete plus a create. There is no `agent_id` field; the agent stamps its own (below). |
+| `agent` | _(none)_ | | A user-scoped agent, named by the resource. Datapacks hang off it: `"<agent>/<datapack>"`. |
+| `datapack` | `description` | _(none)_ | Named `"<agent>/<datapack>"`, so the agent it is attributed to is its parent and is created first. The leaf is the datapack's name — a rename is a different key, so it is a delete plus a create. There is no `agent_id` field; it comes from the path. |
 | | `database` | `{engine: yugabytedb}` | A full `database` spec (below). The engine defaults to `yugabytedb` here rather than `postgres`, and `master_flags`/`tserver_flags` default to `ysql_yb_enable_mage=true` on both. Declaring either flag list replaces that default rather than merging with it — a flag you cannot unset is worse than one you have to set. |
 | | `database_name` | `meko` | Created by the agent, and where the extensions go. |
 | | `extensions` | `["mage","pg_dist_rag"]` | An explicit `[]` installs none, for an external database whose owner manages its own. Names must be plain identifiers. |
@@ -451,7 +452,6 @@ environment runs follows from whether it declares a stack, and the install hint 
 |-----|---------|---------|
 | `ENV_KIND` | `amp` | Which backend to run. `amp` drives the amp controller; `meko` drives meko's api-server. The enrollment carries it, and a mismatch with the environment's registered kind is fatal — it can never succeed, and resuming a persisted identity through it would converge an environment whose enrolment was refused. |
 | `MEKO_API_URL` | `http://meko-api-server-service:80/api/v1` | The api-server to converge against, **including** its API path (a `--base-path` prefix sits before `/api/v1`). The chart defaults it to the release's own api-server by FQDN. |
-| `MEKO_AGENT_ID` | `ycp-reconcile-agent` | The ownership boundary. Every datapack the agent creates is stamped with it (`created_by_agent_id`) and it converges no others, so datapacks made in the UI are invisible to it. Changing it on a running environment orphans everything already created. |
 | `MEKO_API_TOKEN` | _(unset)_ | An MCP token with the read and write scopes. Not needed against an api-server running **without** Cognito, which authenticates nobody — the BYOC shape. With Cognito on it is required, and picks the account the agent's datapacks belong to. |
 
 

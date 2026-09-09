@@ -3,10 +3,8 @@
 # running the pair has two writers racing on one environment. What this pins:
 #
 #   1. Enabling both fails the install, rather than producing that race.
-#   2. MEKO_AGENT_ID is always set, and set to the same id the agent stamps. The
-#      agent defaults it and List matches on equality, so an unset one converges
-#      nothing rather than everything — but a value that drifts from what a
-#      previous release stamped orphans every datapack it already created.
+#   2. ENV_KIND is meko, which is what selects the backend at all — the default is
+#      amp, so an unset one drives the wrong API.
 #   3. MEKO_API_URL defaults to the api-server this release deploys, by FQDN, so the
 #      agent works from a namespace other than the api-server's.
 #
@@ -40,7 +38,7 @@ tests:
       - failedTemplate:
           errorMessage: "reconcileAgent.ycpUrl is required when reconcileAgent.enabled=true"
 
-  - it: stamps an agent id and takes an optional token from a Secret
+  - it: selects the meko backend and takes an optional token from a Secret
     template: templates/reconcile-agent/deployment.yaml
     set:
       global.imageRegistry: reg.example.com
@@ -49,11 +47,6 @@ tests:
       reconcileAgent.envName: acme
       reconcileAgent.image.tag: custom-abc
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: MEKO_AGENT_ID
-            value: ycp-reconcile-agent
       # Optional: a BYOC api-server runs without Cognito and has no token to give,
       # and a required key the Secret does not hold blocks the pod from starting.
       - contains:

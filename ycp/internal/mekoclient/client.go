@@ -77,9 +77,18 @@ type CreateDatapackRequest struct {
 }
 
 // CreateAgentRequest is the body of POST /agents. The id is chosen by the
-// caller, not assigned, which is what lets a reconciler use a fixed one.
+// caller, not assigned, which is what lets a reconciler declare one by name.
 type CreateAgentRequest struct {
 	AgentID string `json:"agent_id"`
+}
+
+// Agent is one row of GET /agents: a user-scoped name that datapacks are
+// attributed to. It carries no credential — an agent is an attribution, not an
+// access grant.
+type Agent struct {
+	AgentID   string    `json:"agent_id"`
+	UserID    string    `json:"user_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // CreateDatapackResponse is what POST /datapacks returns, minus the credential
@@ -130,6 +139,21 @@ func (c *Client) ListDatapacks(ctx context.Context) ([]Datapack, error) {
 // present treat as success.
 func (c *Client) CreateAgent(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/agents", CreateAgentRequest{AgentID: id}, nil)
+}
+
+// ListAgents returns every agent the caller's account holds.
+func (c *Client) ListAgents(ctx context.Context) ([]Agent, error) {
+	var out []Agent
+	if err := c.do(ctx, http.MethodGet, "/agents", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeleteAgent removes one agent. Its datapacks are detached, not deleted — the
+// row is an attribution, so withdrawing it costs the attribution and nothing else.
+func (c *Client) DeleteAgent(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/agents/"+id, nil, nil)
 }
 
 // CreateDatapack creates one datapack. The api-server assigns its UUID.

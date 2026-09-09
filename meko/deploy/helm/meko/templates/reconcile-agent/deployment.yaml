@@ -74,16 +74,10 @@ spec:
                   name: {{ $c.secrets.existing.apiKey }}
                   key: dev-api-key-id
                   optional: true
-            # What this agent owns: every datapack it creates is stamped with this
-            # id and it converges no others, so a person's datapacks in the same
-            # api-server are invisible to it rather than garbage.
-            - name: MEKO_AGENT_ID
-              value: {{ $c.agentId | quote }}
             # Optional, because a BYOC api-server runs with Cognito off and
             # authenticates nobody — there is no token to give. With Cognito on it
-            # is required and the Secret below must exist: it picks the account the
-            # agent's datapacks belong to, while MEKO_AGENT_ID still picks which of
-            # them are its own.
+            # is required and the Secret below must exist: it names the account
+            # whose inventory this agent converges.
             - name: MEKO_API_TOKEN
               valueFrom:
                 secretKeyRef:

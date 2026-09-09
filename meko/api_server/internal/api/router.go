@@ -855,16 +855,20 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		dpDirect.DELETE("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.DeleteCompute, write, dpOwner)
 	}
 
-	// Create is on the PAT-accepting group; list and delete stay JWT-only. An agent
+	// The whole user-scoped agent CRUD is PAT-accepting, scoped read/write. An agent
 	// row is a name the caller's own datapacks are attributed to, not an access
-	// grant — and a write-scoped PAT can already create the datapacks that reference
-	// one, so refusing it the row is an inconsistency rather than a boundary. The
-	// YCP reconcile-agent needs exactly this call and nothing else here
-	// (ycp/reconcile/mekobackend). Deleting an agent detaches datapacks from it, so
-	// that one keeps the interactive path.
+	// grant, and a write-scoped PAT can already create the datapacks that reference
+	// one — so gating the row itself was an inconsistency rather than a boundary.
+	//
+	// All three, not just create, because YCP models an agent as a declarative
+	// resource (ycp/reconcile/mekobackend): its reconciler is List-driven, so it can
+	// neither report nor garbage-collect a kind it cannot enumerate, and a kind it
+	// cannot delete is one desired state can only ever add to. Deleting an agent
+	// detaches its datapacks rather than removing them, so a withdrawn agent costs
+	// the attribution, not the data.
 	dpDirect.POST("/agents", agentH.CreateUser, auth.RequireScope(auth.ScopeWrite))
-	g.GET("/agents", agentH.ListUser)
-	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
+	dpDirect.GET("/agents", agentH.ListUser, auth.RequireScope(auth.ScopeRead))
+	dpDirect.DELETE("/agents/:agent_id", agentH.DeleteUser, auth.RequireScope(auth.ScopeWrite))
 
 	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc, reg.langfuseSvc, reg.dpRepo)
 	dpDirect.GET("/memories", memoriesH.ListGET, auth.RequireScope(auth.ScopeRead))

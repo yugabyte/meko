@@ -69,11 +69,6 @@ func main() {
 	// Defaulted to amp so a yb-amp-controller release that sets nothing keeps
 	// working; a meko install opts in.
 	kind := env("ENV_KIND", kindAmp)
-	// The agent id every datapack this agent creates is stamped with, and the only
-	// ones it converges. Defaulted rather than required: the default is already a
-	// name no person picks, and an install that forgot it would otherwise fail
-	// where it could simply be correct.
-	mekoAgentID := env("MEKO_AGENT_ID", "ycp-reconcile-agent")
 	envName := env("ENV_NAME", "")
 	placement := env("ENV_PLACEMENT", "cloud")
 	apiKey := os.Getenv("YCP_API_KEY")
@@ -142,12 +137,8 @@ func main() {
 			log.Printf("MEKO_API_TOKEN is unset: calling %s unauthenticated, "+
 				"which works only against an api-server running without Cognito", mekoURL)
 		}
-		mb, berr := mekobackend.New(mekoURL, token, mekoAgentID, nil)
-		if berr != nil {
-			log.Fatalf("meko backend: %v", berr)
-		}
-		log.Printf("driving the meko api-server at %s as agent %q", mekoURL, mekoAgentID)
-		backend = mb
+		log.Printf("driving the meko api-server at %s", mekoURL)
+		backend = mekobackend.New(mekoURL, token, nil)
 	default:
 		// The switch is the only place the served kinds are written down, so a
 		// kind added to the constants without a case here fails at startup
