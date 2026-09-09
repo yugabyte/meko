@@ -18,7 +18,7 @@
 #      which is the command the control plane's own install hint prints;
 #   4. creates a datapack directly through the api-server, as a person would in the
 #      UI, so there is something the agent must NOT touch;
-#   5. declares two datapacks in desired state and waits for them to appear;
+#   5. declares an agent and two datapacks under it, and waits for them to appear;
 #   6. withdraws one and waits for it to be garbage-collected;
 #   7. asserts the person's datapack survived every step.
 #
@@ -64,12 +64,11 @@ AGENT_IMAGE="ycp-reconciler-agent:local"
 # in as an archive instead.
 DOCKER="${DOCKER:-$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)}"
 if [ "$DOCKER" = podman ]; then export KIND_EXPERIMENTAL_PROVIDER=podman; fi
-# The id the agent stamps on everything it creates, and the only ones it converges.
-# It must match the chart default (reconcileAgent.agentId) — the assertions below
-# distinguish the agent's datapacks from the person's by exactly this.
-AGENT_ID=ycp-reconcile-agent
-# What a person's datapack carries instead: the default agent every account gets at
-# signup (repository.DefaultAgentID).
+# The agent this run declares. Datapacks hang off it: "<agent>/<datapack>".
+AGENT_ID=ycp-smoke
+# The account's signup agent (repository.DefaultAgentID). The reconciler keeps it and
+# anything attributed to it out of its inventory entirely, which is what the
+# hand-made assertion below turns on.
 HUMAN_AGENT_ID=meko_agent
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -262,9 +261,11 @@ for d in json.load(sys.stdin)["data"] or []:
     print(d["datapack_name"], d.get("created_by_agent_id") or "-")'
 }
 
+# The hand-made datapack is attributed to the signup agent, which the reconciler
+# excludes from its inventory — so it is never reported and never collected.
 assert_human_intact() {
   datapacks | grep -qx "handmade $HUMAN_AGENT_ID" ||
-    die "the person'\''s datapack is gone — the agent deleted something that was not its own"
+    die "the hand-made datapack is gone — the reconciler collected something outside its inventory"
 }
 assert_human_intact
 echo "    handmade created"
@@ -290,11 +291,12 @@ wait_gone() {
   die "$what"
 }
 
-log "declaring two datapacks in desired state"
+log "declaring an agent and two datapacks in desired state"
 api POST "/api/v1/environments/$ENV_NAME/desired" -H 'content-type: application/json' \
-  -d '{"resources":[
-        {"kind":"datapack","name":"team-a","spec":{"description":"the A team"}},
-        {"kind":"datapack","name":"team-b"}]}' >/dev/null ||
+  -d "{\"resources\":[
+        {\"kind\":\"agent\",\"name\":\"$AGENT_ID\"},
+        {\"kind\":\"datapack\",\"name\":\"$AGENT_ID/team-a\",\"spec\":{\"description\":\"the A team\"}},
+        {\"kind\":\"datapack\",\"name\":\"$AGENT_ID/team-b\"}]}" >/dev/null ||
   die "POST desired failed"
 
 wait_for "team-a was never created" "^team-a $AGENT_ID\$"
@@ -306,7 +308,9 @@ echo "    both created, stamped $AGENT_ID; handmade untouched"
 
 log "withdrawing team-b"
 api POST "/api/v1/environments/$ENV_NAME/desired" -H 'content-type: application/json' \
-  -d '{"resources":[{"kind":"datapack","name":"team-a","spec":{"description":"the A team"}}]}' >/dev/null ||
+  -d "{\"resources\":[
+        {\"kind\":\"agent\",\"name\":\"$AGENT_ID\"},
+        {\"kind\":\"datapack\",\"name\":\"$AGENT_ID/team-a\",\"spec\":{\"description\":\"the A team\"}}]}" >/dev/null ||
   die "POST desired failed"
 
 wait_gone "team-b was never garbage-collected" "team-b"

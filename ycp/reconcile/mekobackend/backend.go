@@ -73,11 +73,17 @@ var allKinds = []string{KindAgent, KindDatapack}
 
 const sep = "/"
 
-// defaultAgentID is repository.DefaultAgentID in meko's api_server: the agent every
-// account gets at signup, and the one the server stamps on a create that names
-// none. It is the parent a datapack with no attribution is reported under, so an
-// account's pre-existing rows land somewhere the engine can address rather than
-// being silently dropped from the inventory.
+// defaultAgentID is repository.DefaultAgentID in meko's api_server: the row every
+// account gets at signup, and the agent the server stamps on a create that names
+// none.
+//
+// It is account infrastructure rather than a resource, and is excluded from the
+// inventory for the same reason amp does not model users as a kind: it cannot be
+// safely deleted. DeleteAgent drops the account's agent_access rows along with the
+// agent, and the share and invite grants are written under exactly this id — so
+// collecting it because desired state does not name it would silently revoke every
+// datapack shared into the account, and break every later create that names no
+// agent, with nothing to recreate the row but a fresh signup.
 const defaultAgentID = "meko_agent"
 
 // Backend drives one meko api_server. Safe for concurrent use within a tick: List
@@ -142,6 +148,12 @@ func checkName(kind, name string) error {
 	if kind == KindDatapack {
 		want = 2
 	}
+	if segs[0] == defaultAgentID {
+		return reconcile.Permanent(fmt.Errorf(
+			"%s %q: %q is the account's signup agent and is not managed here — deleting "+
+				"it would drop the account's share grants and break every create that "+
+				"names no agent", kind, name, defaultAgentID))
+	}
 	if len(segs) != want || segs[0] == "" || segs[want-1] == "" {
 		shape := "<agent>"
 		if kind == KindDatapack {
@@ -178,6 +190,9 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 	idx := newIndex()
 	var out []reconcile.Actual
 	for _, a := range agents {
+		if a.AgentID == defaultAgentID {
+			continue // account infrastructure, not a resource — see defaultAgentID
+		}
 		idx.agent[a.AgentID] = a
 		out = append(out, reconcile.Actual{
 			Key: reconcile.ResourceKey{Kind: KindAgent, Name: a.AgentID},
@@ -195,11 +210,14 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 		return nil, fmt.Errorf("list datapacks: %w", err)
 	}
 	for _, dp := range dps {
-		// The server stamps its default when a create names no agent, so an
-		// unattributed row is reported under that name rather than dropped.
 		agent := dp.CreatedByAgent
-		if agent == "" {
-			agent = defaultAgentID
+		if agent == "" || agent == defaultAgentID {
+			// Attributed to the signup default, which is not in the inventory, so
+			// neither is this. Reporting it would give it a parent the engine
+			// cannot see, and loop.go skips a child whose parent is undeclared —
+			// so it would sit in the report forever, never converged and never
+			// collected.
+			continue
 		}
 		path := agent + sep + dp.Name
 		idx.datapack[path] = dp
@@ -344,6 +362,19 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 		if _, ok := b.agentAt(key.Name); !ok {
 			return nil
 		}
+		// Cascade, because the engine assumes it. loop.go skips a child's delete
+		// when the parent is going too ("the backend cascades the rest"), and
+		// meko's DeleteAgent does not: it removes the agent_access and agents rows
+		// and leaves the datapacks pointing at an id that no longer exists. Without
+		// this, withdrawing an agent together with its datapacks orphans them
+		// permanently — the next List cannot report them (their agent is gone), so
+		// no later tick can collect them, and each one holds a free-tier creation
+		// slot that is never refunded.
+		for _, dp := range b.datapacksUnder(key.Name) {
+			if err := notFoundIsFine(b.api.DeleteDatapack(ctx, dp.ID)); err != nil {
+				return fmt.Errorf("cascade delete datapack %q of agent %q: %w", dp.Name, key.Name, err)
+			}
+		}
 		return notFoundIsFine(b.api.DeleteAgent(ctx, key.Name))
 	case KindDatapack:
 		cur, ok := b.datapackAt(key.Name)
@@ -361,6 +392,21 @@ func notFoundIsFine(err error) error {
 		return nil
 	}
 	return classify(err)
+}
+
+// datapacksUnder returns the datapacks the last List saw under an agent, for the
+// cascade its delete has to perform itself.
+func (b *Backend) datapacksUnder(agent string) []mekoclient.Datapack {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	var out []mekoclient.Datapack
+	for path, dp := range b.idx.datapack {
+		if strings.SplitN(path, sep, 2)[0] == agent {
+			out = append(out, dp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func (b *Backend) agentAt(path string) (mekoclient.Agent, bool) {

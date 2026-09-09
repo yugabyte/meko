@@ -8,17 +8,15 @@ import (
 
 // The Meko release a data plane runs, and the one place it is pinned.
 //
-// The control plane decides the version, not the caller. Registering an environment is
-// a `POST /api/v1/environments` with a name in it; everything a data plane needs to
-// come up — six image references, the Secret names to reach them and to configure them
-// — is resolved here and written into that environment's desired state. A caller who
-// had to supply image tags would need to know which six are compatible with each other,
-// which is precisely the knowledge a control plane exists to hold.
+// The control plane decides the version, not the operator. A data plane's workloads
+// come from its chart, so this is not written into desired state; it is what the
+// install hint on GET /environments/{id} pins the chart's per-component image tags to,
+// so the operator installs a set the control plane says goes together rather than six
+// tags they had to pick themselves.
 //
-// To ship a new data-plane release, bump the tags in pinnedDataPlaneRelease below. That
-// is the whole change: every environment registered afterwards gets the new set, and
-// existing ones keep what they were registered with until an operator replaces their
-// desired state.
+// To ship a new data-plane release, bump the tags in pinnedDataPlaneRelease below.
+// Hints rendered afterwards carry the new set; an already-installed release keeps what
+// it was installed with until someone upgrades the chart.
 
 // DefaultDataPlaneRegistry is where the Meko images live. Every reference in the
 // pinned release is a bare repository path qualified by this, so a deployment mirroring
@@ -26,8 +24,9 @@ import (
 const DefaultDataPlaneRegistry = "161908593886.dkr.ecr.us-east-2.amazonaws.com"
 
 // DataPlaneRelease is one image reference per data-plane component. The JSON tags are
-// the agent's meko-stack `images` object (ycp/cmd/agent/mekostack.go), so this struct
-// is serialized into desired state as-is.
+// the retired meko-stack spec's flat component names, not chart values — the chart
+// nests image.repository/image.tag under a differently-named key per component. The
+// install hint maps between them.
 type DataPlaneRelease struct {
 	Database         string `json:"database,omitempty"`
 	APIServer        string `json:"api_server,omitempty"`
@@ -37,7 +36,7 @@ type DataPlaneRelease struct {
 	UI               string `json:"ui,omitempty"`
 }
 
-// pinnedDataPlaneRelease is the release this control plane installs.
+// pinnedDataPlaneRelease is the release this control plane hands out.
 //
 // The database is Yugabyte's Meko build rather than a public YugabyteDB: MAGE and
 // pg_dist_rag are in this one, and the stack is built on both — api_server's own data

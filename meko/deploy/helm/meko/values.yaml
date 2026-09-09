@@ -591,59 +591,24 @@ mekoMcpServer:
       mcpInternal: meko-mcp-internal-secret
 
 # ---------------------------------------------------------------------------
-# meko-agent — the BYOC pull agent, run INSIDE this data plane. When enabled it
-# enrolls this environment into an YCP control plane and reconciles/report its
-# state over OUTBOUND HTTPS only (agent -> YCP, agent -> in-cluster k8s API).
-# Data-plane only: suppressed in `ycp` mode. OFF by default — a data-plane
-# install opts in by setting agent.enabled=true + agent.ycpUrl + an agent API key
-# Secret. This is how "an actual meko" registers itself with the control
-# plane, without a separate chart.
-# ---------------------------------------------------------------------------
-agent:
-  enabled: false
-  namespace: meko-system
-  # Keep this at 1. The agent is a singleton per environment: replicas share one
-  # API-key identity and race on the shared meko-agent-state Secret. There is no
-  # leader election. Scaling this does not give redundancy, it gives two agents
-  # fighting over one identity.
-  replicas: 1
-  image:
-    repository: meko/meko-agent
-    tag: ""                      # REQUIRED when enabled
-  # YCP control-plane base URL (outbound). In-cluster to a demo YCP, e.g.
-  # http://ycp.ycp-demo.svc.cluster.local:80 ; or the control plane's internal-LB URL.
-  ycpUrl: ""
-  # Environment identity as registered in YCP (POST /api/v1/environments).
-  # Empty → falls back to the release namespace.
-  envName: ""
-  placement: cloud               # cloud | onprem
-  provider: ""                   # ENV_PROVIDER (agent defaults to gke when empty)
-  region: ""                     # ENV_REGION
-  agentVersion: v1.4.2
-  resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits: { cpu: 250m, memory: 256Mi }
-  # Pre-created Secret holding the YBM API key every YCP call authenticates with.
-  # Key: api-key. (No secret material lives in the chart.) Dev mode against a
-  # standalone control plane (no YBM): put dev-admin-secret and dev-api-key-id
-  # keys in the same Secret instead of api-key.
-  secrets:
-    existing:
-      apiKey: meko-agent-api-key
-
-# ---------------------------------------------------------------------------
-# reconcile-agent
+# reconcile-agent — the BYOC pull agent, run INSIDE this data plane. When enabled
+# it enrolls this environment into a YCP control plane and converges the agents
+# and datapacks the environment declares over the api-server's REST API, over
+# OUTBOUND HTTPS only (agent -> YCP, agent -> api-server). It applies no
+# manifests: this release's workloads are the chart's.
 #
-# The other YCP client, and the mutually exclusive one: `agent` reconciles the
-# Meko stack into k8s, this one converges the environment's datapacks over the
-# api-server's REST API. An environment has exactly one, so enabling both fails
-# the install.
+# It is the api-server's only caller and is authoritative over it — anything
+# desired state stops declaring is collected — so do not enable it against an
+# api-server people use directly.
+#
+# Data-plane only: suppressed in `ycp` mode. OFF by default; an install opts in
+# with reconcileAgent.enabled=true + ycpUrl + an agent API key Secret.
 # ---------------------------------------------------------------------------
 reconcileAgent:
   enabled: false
   namespace: meko-system
-  # Keep this at 1, for the same reason as `agent`: replicas share one API-key
-  # identity and race on the shared reconcile-agent-state Secret.
+  # Keep this at 1: replicas would share one API-key identity, race on the
+  # reconcile-agent-state Secret, and each garbage-collect the other's work.
   replicas: 1
   image:
     # Quay rather than the Meko ECR — the same registry the control-plane image
@@ -651,7 +616,8 @@ reconcileAgent:
     registry: quay.io
     repository: yugabyte/ycp-reconciler-agent
     tag: ""                      # REQUIRED when enabled
-  # YCP control-plane base URL (outbound). Same value as agent.ycpUrl.
+  # YCP control-plane base URL (outbound), including its API path — YBM's
+  # pass-through, or the control plane's own /api/v1 behind any --base-path.
   ycpUrl: ""
   # Environment identity as registered in YCP. Empty -> the release namespace.
   envName: ""
@@ -665,8 +631,9 @@ reconcileAgent:
     limits: { cpu: 250m, memory: 256Mi }
   secrets:
     existing:
-      # As agent.secrets.existing.apiKey: the YBM API key every YCP call
-      # authenticates with (key: api-key), or the dev-mode pair.
+      # The YBM API key every YCP call authenticates with (key: api-key), or
+      # the dev-mode pair (dev-admin-secret + dev-api-key-id) against a
+      # standalone control plane.
       apiKey: meko-agent-api-key
       # Optional Secret holding the MCP token this agent drives the api-server
       # with (key: meko-api-token). Not needed for a BYOC data plane, whose

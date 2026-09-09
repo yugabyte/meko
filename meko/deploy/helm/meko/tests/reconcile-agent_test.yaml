@@ -1,12 +1,10 @@
-# The reconcile-agent is the meko-agent's alternative, not its companion: both
-# authenticate with one api-key identity and both POST /agent/status, so a release
-# running the pair has two writers racing on one environment. What this pins:
+# The reconcile-agent is the environment's only YCP client. What this pins:
 #
-#   1. Enabling both fails the install, rather than producing that race.
-#   2. ENV_KIND is meko, which is what selects the backend at all — the default is
+#   1. ENV_KIND is meko, which is what selects the backend at all — the default is
 #      amp, so an unset one drives the wrong API.
-#   3. MEKO_API_URL defaults to the api-server this release deploys, by FQDN, so the
+#   2. MEKO_API_URL defaults to the api-server this release deploys, by FQDN, so the
 #      agent works from a namespace other than the api-server's.
+#   3. get/patch on its state Secret are pinned by resourceNames; create cannot be.
 #
 #   helm unittest charts/meko
 suite: reconcile-agent
@@ -14,20 +12,6 @@ templates:
   - templates/reconcile-agent/deployment.yaml
   - templates/reconcile-agent/rbac.yaml
 tests:
-  - it: refuses to render when both agents are enabled
-    template: templates/reconcile-agent/deployment.yaml
-    set:
-      global.imageRegistry: reg.example.com
-      agent.enabled: true
-      agent.ycpUrl: https://ycp.example
-      agent.image.tag: t
-      reconcileAgent.enabled: true
-      reconcileAgent.ycpUrl: https://ycp.example/api/v1
-      reconcileAgent.image.tag: t
-    asserts:
-      - failedTemplate:
-          errorMessage: "agent and reconcileAgent are both enabled: an environment has exactly one YCP client. Enable the meko-agent (it reconciles the stack into k8s) or the reconcile-agent (it converges datapacks over the api-server), not both."
-
   - it: requires a control-plane URL
     template: templates/reconcile-agent/deployment.yaml
     set:
@@ -79,7 +63,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: MEKO_API_URL
-            value: "http://meko-api-server-service.meko-dp.svc.cluster.local:80/api/v1"
+            value: "http://meko-api-server-service.meko-dp.svc.cluster.local.:80/api/v1"
 
   # basePath prefixes the whole api-server, /api/v1 included, so the auto-derived
   # URL has to carry it or the agent dials a path this release does not serve.
@@ -99,7 +83,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: MEKO_API_URL
-            value: "http://meko-api-server-service.meko-dp.svc.cluster.local:80/ycp/api/v1"
+            value: "http://meko-api-server-service.meko-dp.svc.cluster.local.:80/ycp/api/v1"
 
   - it: honours an explicit api-server URL
     template: templates/reconcile-agent/deployment.yaml

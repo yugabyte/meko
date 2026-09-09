@@ -8,7 +8,7 @@
 # langfuse are all suppressed by the mode, regardless of their `enabled` flags).
 #
 # This runs inside the Meko/Aeon VPC — NOT a customer cluster. Customer data
-# planes run the separate meko-agent chart, which reaches this control plane
+# planes run this chart in agent mode, which reaches this control plane
 # over outbound HTTPS only.
 #
 # Compose with a cloud preset + an env preset, and pass THIS FILE LAST:

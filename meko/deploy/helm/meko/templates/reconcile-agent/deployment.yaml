@@ -1,12 +1,4 @@
 {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "reconcileAgent")) "true") }}
-{{- /* One environment, one YCP client. Both agents authenticate with the same
-       api-key identity and both POST /agent/status, so a release running both
-       has two writers racing on one environment's state — and each reports the
-       other's kinds as unconvergeable. Fail the install rather than let that
-       land looking healthy. */}}
-{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "agent")) "true") }}
-{{- fail "agent and reconcileAgent are both enabled: an environment has exactly one YCP client. Enable the meko-agent (it reconciles the stack into k8s) or the reconcile-agent (it converges datapacks over the api-server), not both." }}
-{{- end }}
 {{- $c := .Values.reconcileAgent }}
 {{- $ns := include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
 {{- if not $c.ycpUrl }}{{ fail "reconcileAgent.ycpUrl is required when reconcileAgent.enabled=true" }}{{ end }}

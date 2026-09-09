@@ -1,9 +1,40 @@
 # YCP — current state
 
-Checkpoint as of 2026-07-31. Snapshot of what is deployed and what is open; for how
+Checkpoint as of 2026-09-09. Snapshot of what is deployed and what is open; for how
 to deploy see [`meko/deploy/helm/meko/YCP-RUNBOOK.md`](../meko/deploy/helm/meko/YCP-RUNBOOK.md)
 and [`DEPLOY.md`](./DEPLOY.md), and for the design see
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+## One agent, and it does not deploy the stack
+
+The newest change, and the one that invalidates most of what follows: **`cmd/agent`
+is retired.** There is one data-plane agent now, `cmd/reconcile-agent`, and it is the
+same binary for both kinds — `ENV_KIND=amp` drives the amp controller, `ENV_KIND=meko`
+drives meko's api-server, over the same `reconcile` engine and the same
+`/environments` + `/agents` contract.
+
+What that moves:
+
+- **A data plane's workloads come from its chart, not from the control plane.**
+  Registration seeds no desired state; the `meko-stack` kind, the k8s reconcilers
+  behind it (`database`, `mcp-server`, `rag-worker`) and the whole apply path are gone
+  with the binary that ran them. The `--no-bootstrap-defaults` and `--dataplane-*`
+  flags are accepted no-ops that warn at boot, removed in the release after this.
+- **A meko environment models `agent` and `datapack`**, converged over the api-server's
+  REST API — hierarchical names (`"<agent>/<datapack>"`) with the path as the parent
+  link, exactly as the amp backend does it. Deleting an `agent` cascades its datapacks
+  first, because the api-server's own delete would strand them. The signup agent
+  (`meko_agent`) is excluded from the model entirely.
+- **The reconcile-agent is the api-server's only caller** and is authoritative over it:
+  a datapack made by hand that desired state does not declare is collected.
+- **The e2e no longer drives an agent.** `cmd/agent` could stand a stack up from public
+  images alone, which is what made that assertable without credentials; the
+  reconcile-agent needs an api-server or a controller to converge against. `test/e2e/`
+  is now a control-plane smoke, and the reconcile loop is covered by `test/local/` and
+  the backends' unit tests until a fixture exists.
+
+Everything below this section predates it. The parts describing what the agent
+deploys, the stack kinds, and what registration seeds are kept as history.
 
 ## There is one implementation
 
@@ -20,22 +51,19 @@ the response envelope (`{"data":…}` vs flat), which broke the agent
 ([meko#399](https://github.com/yugabyte/meko/issues/399)) while the e2e stayed
 green — because the e2e was testing the copy nobody deploys.
 
-`test/e2e/run.sh` now stands up `api_server --control-plane-mode` on a plain
-Postgres in kind and drives register → enroll → READY → **restart, re-enrolling
-and reporting again** → **command → bootstrap → GC**. The restart assertion is the
-one that would have caught [meko#401](https://github.com/yugabyte/meko/issues/401).
+`test/e2e/run.sh` stands up `api_server --control-plane-mode` on a plain Postgres in
+kind and asserts the surface it presents: rollout including the migrate init
+container, `/api/v1/health`, the fleet API refusing an unauthenticated call,
+registration binding an `api_key_id` and seeding nothing, and the install hint dialling
+the `agent_base_url` the registration stored. It drove an agent through
+register → enroll → READY → restart → command → GC until `cmd/agent` retired; see the
+section above for why that coverage moved.
 
-What it deliberately does not cover: the full stack **running**. Every image in the
-pinned release is private and the kind cluster has no registry credentials, so the e2e
-asserts what a plain registration *seeds* (one `meko-stack`, six pinned images, the
-MAGE-enabled database among them) on a throwaway environment, and points the agent it
-actually runs at a public database image. Standing the real stack up is
-`test/local/meko-stack.sh`, which needs AWS credentials and so cannot run in CI.
+## Registering an environment deploys Meko *(superseded)*
 
-## Registering an environment deploys Meko
-
-The newest change, and the one that moves the most: **a data plane is deployed from its
-enrollment, not from a command.**
+*History. This is what registration did while `cmd/agent` existed; it now seeds
+nothing and the stack comes from the chart. The operational lessons below still hold
+— the chart installs the same workloads, and they fail the same ways.*
 
 - `POST /api/v1/environments` takes a **name** and the **`api_key_id`** the agent
   authenticates with. The control plane resolves the whole Meko release itself — six
@@ -106,12 +134,10 @@ fails inside `first_install_init_auth` with `insufficient disk space`. Today the
 way out is discarding the volume. The agent could close it: on a managed database, when
 the configured password is rejected, `ALTER ROLE` it to the Secret's value.
 
-## The agent acts on commands now
+## The agent acts on commands now *(superseded)*
 
-*The step before the one above, kept for the record. What it says about the seed — a
-`database` plus an `mcp-server` — is what registration used to do; it now seeds one
-`meko-stack`. The individual kinds still work and are still how an operator declares
-something bespoke.*
+*History, two steps back: the seed was a `database` plus an `mcp-server` before it
+became one `meko-stack`. Neither kind exists now.*
 
 Desired state was readable by the agent long before anything could act on it: the
 only reconciler produced an empty namespace with no database to put anything in. So an environment could be commanded and quietly do nothing, and
@@ -151,26 +177,30 @@ What changed:
   `<ns>` and `<this control plane>` left for the reader, and
   `--set agent.enabled=true`, which switches the agent on without switching the other
   seven components off. It now renders the real chart, the URL the caller reached YCP
-  on (base path included), and `-f values-agent.yaml`.
+  on (base path included), and `-f values-agent.yaml`. (The hint has since been
+  rewritten again for the reconcile-agent: the meko chart with
+  `reconcileAgent.enabled=true`, per-component image tags, and `-f values-byoc.yaml`.)
 
 Verified on kind three ways — see [`GETTING_STARTED.md`](./GETTING_STARTED.md):
 the e2e (level 2, no credentials), the real `meko-mcp-server` image via
 `test/local/meko-stack.sh` (level 2.5, needs ECR access), and the operator path via
 `test/local/ycp-helm-bootstrap.sh` (level 2.75 — register in YCP, run the Helm command
-it prints, and the stack comes up on its own).
+it prints, and the stack comes up on its own). Both scripts are deleted; `test/local/`
+now holds `ycp-on-cluster.sh` and `meko-reconcile.sh`.
 
 The chart change this needs landed alongside, in
 [meko-devops](https://github.com/yugabyte/meko-devops): the agent ClusterRole gains
 `patch` (server-side apply) plus `statefulsets` and `configmaps`. Without it an agent
-enrolls and then 403s on everything it tries to reconcile. `test/e2e/agent.yaml` has
-the same set, and `charts/meko/tests/agent-rbac_test.yaml` pins it.
+enrolls and then 403s on everything it tries to reconcile. The reconcile-agent needs
+none of it — it applies no manifests, and its only RBAC is `get`/`create`/`update` on
+its own state Secret.
 
 ## Deployed (meko-dev-eks)
 
 | Namespace | Contents |
 |---|---|
 | `ycp-system` | `meko-api-server` (control-plane mode) + `ycp-postgres` StatefulSet, Helm release `ycp` |
-| `ycp-agent` | `meko-agent`, Helm release `meko-agent`, enrolled as environment `meko-dev` |
+| `ycp-agent` | the retired `meko-agent`, Helm release `meko-agent`, enrolled as environment `meko-dev`. Nothing publishes that image any more; redeploy the namespace from the meko chart with `reconcileAgent.enabled=true` |
 
 - Console + API: **http://ycp.tail5955.ts.net** — tailnet only (device tagged
   `tag:k8s-meko`), because the console has no auth of its own. Off-tailnet:
@@ -187,10 +217,8 @@ the same set, and `charts/meko/tests/agent-rbac_test.yaml` pins it.
 
 ## Images
 
-`meko/meko-agent` publishes to
-`161908593886.dkr.ecr.us-east-2.amazonaws.com` automatically on merge to `main`
-(`.github/workflows/ycp-images.yml`, OIDC — no secrets). `meko/ycp` and
-`meko/dpmcp` are no longer built; nothing deploys them.
+`meko/meko-agent`, `meko/ycp` and `meko/dpmcp` are no longer built; nothing deploys
+them, and `.github/workflows/ycp-images.yml` is deleted with the binaries.
 
 `meko/meko-api-server` is not published to ECR on merge, but there is now an
 **on-demand build** of the control-plane image: `meko/api_server/build-image.sh`
@@ -203,14 +231,14 @@ starts — an image without `--control-plane-mode`, then one without
 `-only-controlplane-migrate`. The e2e also builds it from source on every PR
 touching `ycp/`, so the flags cannot silently disappear.
 
-The **reconcile-agent** (`cmd/reconcile-agent`, the amp backend) ships the same
+The **reconcile-agent** (`cmd/reconcile-agent`, both backends) ships the same
 on-demand way: `ycp/build-reconciler-agent-image.sh` pushes
 `quay.io/yugabyte/ycp-reconciler-agent` (`custom-<sha>`, plus `latest` only on a
 `main` build), wrapped by
 `.github/workflows/ycp-reconciler-agent-image.yml` on `main` and
-`workflow_dispatch`, build-only when `QUAY_AMP_TOKEN` is absent. Quay rather
-than the ECR registry `meko-agent` uses, so a cluster pulls it without ECR
-cross-account pull-secret setup — the same reason the control plane ships on Quay.
+`workflow_dispatch`, build-only when `QUAY_AMP_TOKEN` is absent. Quay rather than the
+platform ECR, so a cluster pulls it without cross-account pull-secret setup — the same
+reason the control plane ships on Quay.
 
 ## Open
 
@@ -222,25 +250,24 @@ cross-account pull-secret setup — the same reason the control plane ships on Q
 
 Known gaps not yet filed:
 
-- `langfuse` has no reconciler. Langfuse v3 needs ClickHouse, Redis and object
-  storage alongside it, so it is a chart's job rather than three more spec structs
-  here; a declared `langfuse` resource is logged and skipped.
-- Resizing a managed database is rejected on every tick: `volumeClaimTemplates` are
-  immutable, so a changed `storage_size` cannot be applied in place. The agent now
-  says so explicitly and keeps the rest of the stack running, but it will not
-  recreate the StatefulSet — deleting the workload that owns the data is an
-  operator's decision.
-- `console.html` is duplicated between the retired `ycp/web/` and
-  `api_server/internal/handlers/web/` — with `ycp/web/` deleted this is now a single
-  copy, which is the fix.
-- Agent defaults are demo residue: `ENV_NAME=itest-mcs`, `ENV_PROVIDER=gke`,
-  `ENV_REGION=us-west1`, `AGENT_VERSION=v1.4.2` hardcoded, and `DPMCP_IMAGE`
-  defaulting to `postgrest/postgrest`. The chart sets all of them, so nothing is
-  broken; an unset one enrolls as the wrong environment rather than failing.
-- On a transient control-plane error the agent used to garbage-collect everything it
-  manages; the desired-state guard now skips the tick instead. The GC is still
-  unconditional on a *successful* empty desired state, which is correct but
-  unforgiving.
+- The api-server has no fixture the reconcile loop can be tested against in CI, so the
+  meko backend's coverage stops at unit tests and `test/local/`. This is the gap the
+  retirement opened; new e2e coverage is the follow-up.
+- The enroll response still carries a `stack` field, and `EnrolledStack` /
+  `mekoStackSpec` / `BootstrapDefaults` still exist to serve it. Nothing writes one and
+  no agent reads it; they go with the deprecated flags.
+- `POST /environments` accepts any resource kind and does not validate it against the
+  environment's kind, so a typo lands as a resource the backend will refuse forever
+  rather than being rejected at declare time.
+- `langfuse` is still not part of the stack: v3 needs ClickHouse, Redis and object
+  storage alongside it. The chart is where that would go.
+
+Fixed by the retirement, kept so the class is not rediscovered: the stack-apply
+failures (a `storage_size` change rejected on an immutable `volumeClaimTemplates`, an
+unparseable image reaching a pod spec, a GC that ran on a transient control-plane
+error) all belonged to the k8s reconcilers, which no longer exist. Agent defaults are
+no longer demo residue either — `ENV_NAME` has no default and is required, and
+`AGENT_VERSION` comes from the image tag.
 
 ## Next
 
@@ -250,6 +277,8 @@ Known gaps not yet filed:
    + `meko-control-plane-image.yml` publish `quay.io/yugabyte/ycp-api-server`.
 3. meko-devops#42 remainder — Secrets, and a storage class that is not per-cluster
    guesswork.
+4. New e2e coverage for the reconcile loop, and drop the `stack` field with the
+   deprecated `--dataplane-*` flags.
 
 ## amp environments
 
@@ -257,9 +286,9 @@ YCP now registers **amp** environments too, not just meko ones — an amp
 environment is a running **amp controller** that reports the storage pools,
 databases, branches and compute endpoints it owns. Registration takes a
 `kind` (`amp` | `meko`, default meko); a meko id stays a bare `<slug>` while an
-amp id is prefixed `amp-<slug>`, and the enroll handshake checks the kind, so the
-two coexist in one fleet and neither attaches to the other's environment. An amp environment seeds no `meko-stack`;
-its install hint installs the `yb-amp-controller` chart with the reconcile-agent
+amp id is prefixed `amp-<slug>`, and the enroll handshake checks the kind — a mismatch
+is fatal to the agent — so the two coexist in one fleet and neither attaches to the
+other's environment. An amp environment's install hint installs the `yb-amp-controller` chart with the reconcile-agent
 (`agent.enabled=true`) turned on — the agent is the sole YCP client and drives the
 controller over its REST API. Everything the control plane can know is filled in —
 the namespace (defaulted to the environment id, one per environment per cluster), the

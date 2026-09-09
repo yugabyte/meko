@@ -189,7 +189,7 @@ knowing before you set it:
   console is now at `:8080/ycp/`, and `/` returns 404. Every `curl` in this runbook
   needs the prefix too.
 
-Agents must point at the prefixed URL — `--set agent.ycpUrl=https://…/ycp/api/v1`.
+Agents must point at the prefixed URL — `--set reconcileAgent.ycpUrl=https://…/ycp/api/v1`.
 The base path itself must be a plain path prefix, not a URL; the api-server
 refuses to start otherwise rather than mounting somewhere unreachable.
 
@@ -199,7 +199,7 @@ refuses to start otherwise rather than mounting somewhere unreachable.
 KEY_ID=$(uuidgen | tr 'A-Z' 'a-z')
 curl -sX POST localhost:8080/api/v1/environments \
   -H "X-Meko-Admin-Secret: $K" -H 'content-type: application/json' \
-  -d '{"name":"meko-dev","account_id":"yugabyte","placement":"cloud","region":"us-east-2","api_key_id":"'$KEY_ID'"}'
+  -d '{"name":"meko-dev","kind":"meko","account_id":"yugabyte","placement":"cloud","region":"us-east-2","api_key_id":"'$KEY_ID'"}'
 ```
 
 The environment is bound to that `api_key_id`. Through YBM the id belongs to a real
@@ -207,43 +207,58 @@ YBM API key the agent sends as a bearer; direct against the control plane (this
 runbook's shape) the agent runs in dev mode, sending the admin secret + the id as
 headers.
 
+`GET /api/v1/environments/<id>` then renders an install hint with the namespace, this
+control plane's URL and the stack's image tags already filled in. Run that. It looks
+like this:
+
 ```bash
-ANS=ycp-agent
+ANS=meko-dp
 kubectl create namespace $ANS
 kubectl -n $ANS create secret generic meko-agent-api-key \
   --from-literal=dev-admin-secret="$K" --from-literal=dev-api-key-id="$KEY_ID"
 
-helm upgrade --install meko-agent charts/meko -n $ANS \
+helm upgrade --install meko charts/meko -n $ANS \
   -f charts/meko/values-aws.yaml \
   -f charts/meko/values-dev.yaml \
-  -f charts/meko/values-agent.yaml \
-  --set agent.ycpUrl=http://meko-api-server-service.$NS.svc.cluster.local:80/api/v1 \
-  --set agent.envName=meko-dev \
-  --set agent.provider=aws --set agent.region=us-east-2 \
-  --set-string agent.image.tag=$AGENT_TAG \
+  -f charts/meko/values-byoc.yaml \
+  --set-string apiServer.image.tag=$API_TAG \
+  --set-string mekoMcpServer.image.tag=$MCP_TAG \
+  --set-string mekoUi.image.tag=$UI_TAG \
+  --set reconcileAgent.enabled=true \
+  --set reconcileAgent.ycpUrl=http://meko-api-server-service.$NS.svc.cluster.local.:80/api/v1 \
+  --set reconcileAgent.envName=meko-dev \
+  --set-string reconcileAgent.image.tag=$AGENT_TAG \
   --wait
 ```
 
-`mode: agent` in that preset suppresses every other component, so the seven
-`--set <comp>.enabled=false` flags this used to need are gone — and with them the
-failure mode where missing one deployed a stray data-plane workload into a
-customer's cluster. The agent lands in the release namespace, so it needs no
-`agent.namespace` either.
+This installs the whole data plane, agent included — the stack's workloads are the
+chart's, not the control plane's. `values-byoc.yaml` goes **last**: it is what
+collapses the release into one self-contained namespace, and an earlier preset
+otherwise wins.
 
 **Include the env preset.** It is what sets `global.imageRegistry`, and dev and prod
 are different ECR accounts, so the registry cannot live in the cloud preset. Without
-it the image renders as a bare `meko/meko-agent:<tag>` and the pull fails.
+it the stack images render bare and the pulls fail. The agent's own image is on Quay
+and is unaffected.
 
-`agent.envName` must match the registered environment's id — the slug of the name you
-registered.
+**The three stack tags differ** — they are versioned per component, not per release,
+so one shared `$TAG` renders three references that cannot be pulled. The hint prints
+each.
+
+`reconcileAgent.envName` must match the registered environment's id — the slug of the
+name you registered. A mismatch, or an `ENV_KIND` that disagrees with how the
+environment was registered, is fatal to the agent rather than retried.
 
 Success:
 
 ```
-enrolled: environment_id=meko-dev
-status: state=PROVISIONING … -> 204
-status: state=READY        … -> 204
+reconcile-agent starting: kind=meko env=meko-dev ycp=http://…
+driving the meko api-server at http://meko-api-server-service.meko-dp.svc.cluster.local.:80/api/v1
+enrolled env=meko-dev id=meko-dev uuid=…
 ```
+
+and then **nothing**: a tick that converges and reports cleanly is silent, so an idle
+log is the healthy state.
 
 Then `GET /api/v1/environments` shows it `state=READY live=true` with real
 `node_count` — that combination is the signal the whole chain works: the agent
@@ -289,14 +304,14 @@ the fleet routes carry real per-user auth.
 ## Tear down
 
 ```bash
-helm uninstall meko-agent -n $ANS && kubectl delete namespace $ANS
-helm uninstall ycp -n $NS        && kubectl delete namespace $NS
+helm uninstall meko -n $ANS && kubectl delete namespace $ANS
+helm uninstall ycp  -n $NS  && kubectl delete namespace $NS
 ```
 
-`helm uninstall` removes the agent's cluster-scoped `meko-agent` ClusterRole and
-ClusterRoleBinding, and the Tailscale operator reaps its proxy once the annotated
-Service goes. Deleting the namespace destroys the `ycp-postgres` PVC and with it the
-fleet registry — there is no other copy.
+The Tailscale operator reaps its proxy once the annotated Service goes. Deleting the
+data-plane namespace destroys the stack's PVCs — including the YugabyteDB holding
+every datapack in it — and deleting the control-plane namespace destroys the
+`ycp-postgres` PVC and with it the fleet registry. There is no other copy of either.
 
 **Uninstalling without deleting the namespace, then reinstalling, is the one case
 where Option A can bite.** A StatefulSet's PVC outlives both the release and the
@@ -351,9 +366,15 @@ means registering a new environment for the replacement.
 **Agent logs `enroll -> 500`** — a server-side error; `kubectl logs
 deploy/meko-api-server` shows the cause on an `enroll failed:` line.
 
-**Agent reaches `ATTESTING` and stops, status reports 400** — the agent image predates
-the response-envelope fix ([meko#399](https://github.com/yugabyte/meko/issues/399)).
-Use an agent built from `main` after that landed.
+**Agent exits on `enroll: environment kind mismatch`** — `ENV_KIND` disagrees with
+the kind the environment was registered as. Fatal by design; register a new
+environment with the right kind, or point the agent at the matching one.
 
-**`kubectl exec` into a pod gives no shell** — the ycp/agent/dpmcp images are
-distroless. Use logs and port-forward.
+**Agent logs a resource as permanently drifted and never retries** — the api-server
+refused it for a reason retrying cannot change: a name it rejects (400), a conflict
+(409), a revoked or unscoped token (401/403), or the free-tier cap (402), whose
+counter is lifetime and is never refunded on delete. Fix the desired state.
+
+**`kubectl exec` into the agent gives no shell** — it is
+`gcr.io/distroless/static:nonroot`. Use logs and port-forward. (The api-server image
+is Alpine and does have one.)

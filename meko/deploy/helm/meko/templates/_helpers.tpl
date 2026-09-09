@@ -47,12 +47,10 @@ Usage: {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi"
 {{- /* Of those, the ones that make no sense in a data plane and are suppressed
        there even if enabled — the mirror of the rule above. */ -}}
 {{- $controlPlaneOnly := list "controlPlaneDb" -}}
-{{- /* agent mode renders an agent and nothing else. Both agents are listed
-       because they are alternatives, not companions — the reconcile-agent
-       deployment fails the install if both are enabled. ecrCredentialRefresh is
-       allowed alongside because a GKE-from-ECR cluster needs the pull-credential
-       CronJob for the agent image itself. */ -}}
-{{- $agentMode := list "agent" "reconcileAgent" "ecrCredentialRefresh" -}}
+{{- /* agent mode renders the reconcile-agent and nothing else.
+       ecrCredentialRefresh is allowed alongside because a GKE-from-ECR cluster
+       needs the pull-credential CronJob for the images it pulls. */ -}}
+{{- $agentMode := list "reconcileAgent" "ecrCredentialRefresh" -}}
 {{- $active := $enabled -}}
 {{- if eq $mode "ycp" -}}
 {{- $active = and $enabled (has $comp $controlPlane) -}}
@@ -342,7 +340,9 @@ untouched.
      reconcileAgent.mekoApiUrl wins; otherwise the in-cluster Service this release
      deploys, addressed by FQDN so the agent works from another namespace. The
      /api/v1 suffix is part of it: the agent dials the path as given, and an
-     api-server behind --base-path needs that prefix here too. */}}
+     api-server behind --base-path needs that prefix here too. The FQDN is
+     absolute (trailing dot): it has four dots, and ndots:5 would otherwise make
+     the resolver walk the whole search list before trying the name as written. */}}
 {{- define "meko.reconcileAgentApiUrl" -}}
 {{- $root := . -}}
 {{- $c := $root.Values.reconcileAgent -}}
@@ -353,6 +353,6 @@ untouched.
 {{- /* basePath prefixes the whole api-server, /api/v1 included, so the agent's URL
        has to carry it — the same value the api-server itself is started with. */ -}}
 {{- $base := default "" $root.Values.apiServer.basePath | trimSuffix "/" -}}
-{{- printf "http://meko-api-server-service.%s.svc.cluster.local:%v%s/api/v1" $apiNs $root.Values.apiServer.service.port $base -}}
+{{- printf "http://meko-api-server-service.%s.svc.cluster.local.:%v%s/api/v1" $apiNs $root.Values.apiServer.service.port $base -}}
 {{- end -}}
 {{- end -}}

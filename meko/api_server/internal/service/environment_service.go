@@ -96,46 +96,21 @@ type EnvironmentService struct {
 // table is.
 const pruneEvery = time.Hour
 
-// BootstrapDefaults is the stack a newly registered environment is told to run, so
-// that an agent bootstraps Meko as soon as it enrolls rather than sitting idle until
-// somebody remembers to send it a command.
-//
-// Registering an environment is already a statement of intent — nobody registers a
-// data plane in order to run nothing in it — so the default desired state is written
-// at registration. A caller can still override it per request, and an operator can
-// replace it at any time through POST /environments/{id}/desired.
-//
-// What gets seeded is the whole Meko data plane, as one `meko-stack` resource: the
-// MAGE-enabled YugabyteDB with the mage and pg_dist_rag extensions, Meko's own
-// api-server over it, the MCP server, the RAG worker, the inference gateway and the
-// web UI. The images come from the pinned release in dataplane_release.go, because the
-// control plane is what knows which versions go together — see the comment there.
+// BootstrapDefaults carried the stack registration used to seed. Registration seeds
+// nothing now — a data plane's workloads come from its chart — so nothing here is
+// read on the register path; it is still plumbed so the --no-bootstrap-defaults and
+// --dataplane-* flags stay accepted (main.go warns that they do nothing) and so the
+// pinned release stays reachable for the install hint. Deleted with those flags.
 type BootstrapDefaults struct {
-	// Enabled is false when --no-bootstrap-defaults is set: registration then seeds
-	// nothing and every environment waits for an explicit command.
-	Enabled bool
-	// Release is the image set the seeded stack runs.
-	Release DataPlaneRelease
-	// ImagePullSecret and SecretRef are Secret NAMES in the agent's namespace: the
-	// registry credentials, and the operator's own Secret holding OPENAI_API_KEY, the
-	// AWS keys and the Cognito client secret. The control plane never learns either
-	// value — desired state carries no secret material.
+	Enabled         bool
+	Release         DataPlaneRelease
 	ImagePullSecret string
 	SecretRef       string
 }
 
-// BootstrapDefaultsEnabled reports whether registration seeds a stack at all. The
-// install hint needs it: with --no-bootstrap-defaults every meko environment has an
-// empty desired state, so emptiness no longer says which agent the environment runs.
-func (s *EnvironmentService) BootstrapDefaultsEnabled() bool { return s.bootstrap.Enabled }
-
-// mekoStackSpec mirrors the agent's kind "meko-stack" spec (ycp/cmd/agent/mekostack.go).
-// Only the fields the control plane sets are here; the agent defaults the rest, so an
-// older control plane and a newer agent still agree.
-//
-// Not shared as a package: ycp is a separate Go module, and the wire types between the
-// two sides are duplicated rather than imported throughout (models.DesiredResource is
-// the same story). The JSON tags are the contract.
+// mekoStackSpec mirrors the retired meko-agent's "meko-stack" spec. Nothing writes
+// one any more; it is kept so an environment registered by an older control plane
+// still decodes, and so EnrolledStack can hand that stored spec back unchanged.
 type mekoStackSpec struct {
 	Images          DataPlaneRelease `json:"images"`
 	ImagePullSecret string           `json:"image_pull_secret,omitempty"`
@@ -204,9 +179,9 @@ type RegisterEnvironmentRequest struct {
 	// read renders the same hint rather than a URL the agent cannot reach.
 	AgentBaseURL string `json:"agent_base_url,omitempty"`
 
-	// Desired overrides the desired state this environment starts with. An explicit
-	// empty array registers an environment that runs nothing until commanded; omitted,
-	// the server's bootstrap defaults apply.
+	// Desired is the desired state this environment starts with — the only way it
+	// starts with anything, since registration seeds nothing. Omitted, the
+	// environment runs nothing until an operator POSTs a desired set.
 	Desired *[]models.DesiredResource `json:"desired,omitempty"`
 }
 
@@ -371,7 +346,7 @@ func (s *EnvironmentService) Register(
 	// moment it enrolls. Failing to write it must not fail the registration: the
 	// environment and its key binding are already stored, and a desired-state write
 	// can always be retried or replaced by the operator.
-	if res := s.initialDesired(req, kind); res != nil {
+	if res := s.initialDesired(req); res != nil {
 		if err := s.repo.ReplaceDesired(e.UUID, res); err != nil {
 			return e, nil //nolint:nilerr // see above: the registration stands
 		}
@@ -379,40 +354,19 @@ func (s *EnvironmentService) Register(
 	return e, nil
 }
 
-// initialDesired resolves what a newly registered environment should be running:
-// whatever the caller asked for, else the server's bootstrap defaults, else nothing.
-func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest, kind string) []models.DesiredResource {
+// initialDesired is what a newly registered environment starts out declaring: what
+// the caller asked for, or nothing.
+//
+// There is no server-side default any more, for either kind. A data plane's
+// workloads are installed by its chart — yb-amp-controller for amp, the meko chart
+// for meko — and the agent converges only what lives inside them, so a seeded
+// meko-stack had no consumer once cmd/agent retired and could only ever report as
+// undeliverable.
+func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest) []models.DesiredResource {
 	if req.Desired != nil {
 		return *req.Desired
 	}
-	// The meko-stack bootstrap default is meko's data plane; it is meaningless to
-	// an amp environment, which is a running amp controller reporting the storage
-	// pools / databases / branches / endpoints it already owns. An amp environment
-	// therefore seeds nothing (the reconcile loop that would push amp desired state
-	// is a later phase) unless the caller passed an explicit `desired`.
-	if kind == KindAmp {
-		return nil
-	}
-	if !s.bootstrap.Enabled {
-		return nil
-	}
-	// One resource, because the stack is one thing. The agent orders the components
-	// within it and knows which of them depends on which — that ordering is a property
-	// of the data plane, not of a control-plane payload, and six resources here would
-	// mean six specs that all have to keep agreeing about the same database, registry
-	// and Secrets.
-	spec, err := json.Marshal(mekoStackSpec{
-		Images:          s.bootstrap.Release,
-		ImagePullSecret: s.bootstrap.ImagePullSecret,
-		SecretRef:       s.bootstrap.SecretRef,
-	})
-	if err != nil {
-		return nil
-	}
-	// No datapack: a datapack is a customer's own artifact, created through the Meko
-	// api-server this stack runs, once it is up. Seeding a placeholder would provision
-	// one nobody asked for and then need explaining.
-	return []models.DesiredResource{{Kind: "meko-stack", Name: "meko", Spec: spec}}
+	return nil
 }
 
 // EnrollByKey is the agent's key-authenticated first check-in: it resolves the
@@ -621,18 +575,10 @@ func (s *EnvironmentService) Entitlement() models.Entitlement {
 	return models.Entitlement{Plan: "enterprise", Source: "ybm-aeon"}
 }
 
-// EnrolledStack is the meko-stack spec an enrolling agent is handed: everything it
-// needs to deploy the Meko data plane, in the enroll response.
-//
-// It is read out of the environment's stored resources rather than recomposed from the
-// bootstrap defaults, so that the stack an agent is given is the one this environment
-// was actually registered with — including a `desired` override passed at registration,
-// and any replacement an operator has POSTed since. One source of truth, whichever way
-// the agent asks for it.
-//
-// Returns nil when the environment has no stack: --no-bootstrap-defaults, or a
-// registration that declared individual resources instead. The agent then runs whatever
-// desired state declares, which is the behaviour that predates this.
+// EnrolledStack returns a meko-stack resource from the environment's stored desired
+// state, for the enroll response's legacy `stack` field. Nothing seeds one and no
+// current agent reads it, so this is nil for every environment registered since the
+// meko-agent retired; it survives for the ones registered before.
 func (s *EnvironmentService) EnrolledStack(envUUID string) (json.RawMessage, error) {
 	res, err := s.repo.ListDesired(envUUID)
 	if err != nil {

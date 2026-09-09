@@ -2,8 +2,9 @@
 
 One environment, on a real cluster, from nothing. The whole Meko stack — YugabyteDB with
 the `mage` and `pg_dist_rag` extensions, then `api-server`, `mcp-server`, `rag-worker`,
-`inference-gateway` and `ui` — comes up because an environment was **registered**. No
-`kubectl apply`, and no desired state POSTed by hand.
+`inference-gateway` and `ui` — comes up from the `meko` chart, with a reconcile-agent
+enrolled beside it that converges the agents and datapacks the environment declares.
+No `kubectl apply`.
 
 This is [`GETTING_STARTED.md`](./GETTING_STARTED.md)'s level 2.9 written out with
 everything that bit during a real run. For what the pieces are, read
@@ -27,7 +28,7 @@ Verified 2026-08-03 on `gke_yugabyte_us-west1_itest-mcs`.
 GKE auth expires and cannot be refreshed non-interactively — if `kubectl` starts failing
 with `Reauthentication failed`, run `gcloud auth login`.
 
-## 1. Build and push both images
+## 1. Build and push the api-server image
 
 ```bash
 cd ~/code/meko
@@ -36,18 +37,19 @@ TAG="mekostack-$(git rev-parse --short HEAD)"
 ECR=161908593886.dkr.ecr.us-east-2.amazonaws.com
 
 podman build --platform linux/amd64 -f meko/api_server/Dockerfile -t "$ECR/meko/meko-api-server:$TAG" meko/api_server
-podman build --platform linux/amd64 -f ycp/Dockerfile.agent  -t "$ECR/meko/meko-agent:$TAG"      ycp
 
 # Check the architecture before pushing. An arm64 image pulls cleanly and then dies with
 # `exec format error`, which reads like a broken build rather than a wrong platform.
-for n in meko-api-server meko-agent; do
-  podman inspect "$ECR/meko/$n:$TAG" --format "$n: {{.Os}}/{{.Architecture}}"
-done
+podman inspect "$ECR/meko/meko-api-server:$TAG" --format "{{.Os}}/{{.Architecture}}"
 
 aws ecr get-login-password --region us-east-2 |
   podman login --username AWS --password-stdin "$ECR"
-for n in meko-api-server meko-agent; do podman push "$ECR/meko/$n:$TAG"; done
+podman push "$ECR/meko/meko-api-server:$TAG"
 ```
+
+The **reconcile-agent** is not built here: it publishes to Quay
+(`ycp-reconciler-agent-image.yml`), and `ycp/build-reconciler-agent-image.sh` is the
+local equivalent. The script pulls whatever tag `reconcileAgent.image.tag` names.
 
 `--platform linux/amd64` is not optional from an Apple-silicon laptop. The Dockerfiles
 cross-compile, so this builds natively rather than emulating the Go toolchain.
@@ -95,7 +97,6 @@ addresses, and a `curl` that replaces the environment's desired state.
 ```
 ==> checking the fleet API reports the stack healthy
     state=PROVISIONING
-      meko-agent         1/1 v1.4.2
       yugabytedb         1/1 2026.1.0.0-b53
       api-server         1/1 console-943437724
       mcp-server         1/1 2.1.0-20260731-7b3fdd3
@@ -124,9 +125,9 @@ kubectl --context $C -n $NS exec meko-yugabytedb-0 -- env PGPASSWORD="$PW" bash 
 kubectl --context $C -n $NS logs deploy/meko-api-server -c migrate | tail -3
 # "Migrated data schema to version 3" / "Migrated system schema to version 9"
 
-# What the agent provisioned, and the loop.
-kubectl --context $C -n $NS get all,cm -l meko.dev/stack=true
-kubectl --context $C -n $NS logs -f deploy/meko-agent
+# The reconcile loop. A tick that converges and reports cleanly is silent, so an
+# idle log after "enrolled" is the healthy state.
+kubectl --context $C -n $NS logs -f deploy/meko-reconcile-agent
 ```
 
 ## 4. Reach it
@@ -150,50 +151,46 @@ kubectl --context $C -n ycp-anijhawan get secret meko-admin-api-key \
   -o jsonpath='{.data.admin-api-key}' | base64 -d
 ```
 
-The UI does **not** get a LoadBalancer by default. Ask for one in desired state:
+The UI's Service type is the chart's: set `mekoUi.service.type=LoadBalancer` (and the
+internal-LB annotation for your cloud) at install time. Off the VPN, port-forward
+instead — that needs no exposure at all:
 
 ```bash
-# expose: {"ui": "internal"} — VPC-only. "external" is a public address, and see the
-# warning below before reaching for it.
-KEY=$(kubectl --context $C -n ycp-anijhawan get secret meko-admin-api-key -o jsonpath='{.data.admin-api-key}' | base64 -d)
-YCP=http://$(kubectl --context $C -n ycp-anijhawan get svc meko-api-server-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-
-# Desired state is REPLACED, not merged: read it back, edit, POST the whole set.
-curl -s -H "X-Meko-Admin-Secret: $KEY" "$YCP/api/v1/environments/itest-mcs/desired" |
-  python3 -c 'import json,sys
-r = json.load(sys.stdin)["data"]["resources"]
-next(x for x in r if x["kind"] == "meko-stack")["spec"]["expose"] = {"ui": "internal"}
-print(json.dumps({"resources": r}))' |
-  curl -s -X POST -H "X-Meko-Admin-Secret: $KEY" -H 'content-type: application/json' \
-    --data-binary @- "$YCP/api/v1/environments/itest-mcs/desired"
-```
-
-Off the VPN, port-forward instead — that needs no exposure at all:
-
-```bash
-kubectl --context $C -n $NS get svc meko-ui  # no LoadBalancer needed for this
 kubectl --context $C -n $NS port-forward svc/meko-ui 5000:5000
 ```
 
 ## 5. Drive it
 
-Registering is the only step the API *requires*. Afterwards, desired state is the control
-surface, and it is replaced rather than merged:
+Registering binds the environment to an API key and gives you the install hint.
+Desired state is the control surface afterwards, and it is replaced rather than merged:
 
 ```bash
-# Withdraw everything. The agent garbage-collects the stack on its next tick, and the
-# environment goes back to READY with just the agent.
+KEY=$(kubectl --context $C -n ycp-anijhawan get secret meko-admin-api-key -o jsonpath='{.data.admin-api-key}' | base64 -d)
+YCP=http://$(kubectl --context $C -n ycp-anijhawan get svc meko-api-server-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+
+# Declare an agent and two datapacks under it.
+curl -s -X POST -H "X-Meko-Admin-Secret: $KEY" -H 'content-type: application/json' \
+  -d '{"resources":[
+        {"kind":"agent","name":"itest"},
+        {"kind":"datapack","name":"itest/team-a","spec":{"description":"team A"}},
+        {"kind":"datapack","name":"itest/team-b","spec":{"description":"team B"}}
+      ]}' "$YCP/api/v1/environments/itest-mcs/desired"
+
+# Withdraw everything. The agent collects both datapacks and then the agent on its
+# next tick — deleting an agent cascades its datapacks first, because the api-server's
+# own delete would strand them.
 curl -s -X POST -H "X-Meko-Admin-Secret: $KEY" -H 'content-type: application/json' \
   -d '{"resources":[]}' "$YCP/api/v1/environments/itest-mcs/desired"
 ```
 
-Two things the GC deliberately leaves behind, because destroying them is an operator's
-decision and not a side effect of an edit:
+**The agent is authoritative over this api-server.** A datapack created by hand that
+desired state does not declare is collected on the next tick — the signup agent
+(`meko_agent`) and anything attributed to it are the sole exception, excluded from the
+model entirely because they carry the account's share and invite grants.
 
-- the database's **PersistentVolumeClaim** (`data-meko-yugabytedb-0`),
-- the Secrets the agent generated (`meko-database`, `meko-mcp-server-db`,
-  `meko-rag-worker-db`). Leave them and a fresh stack reuses the old password; delete them
-  and it mints a new one.
+The stack's own storage is untouched by any of this: the workloads and their
+PersistentVolumeClaims belong to the Helm release, so withdrawing desired state
+removes datapacks, not the database holding them.
 
 ## Teardown
 
@@ -222,14 +219,13 @@ kubectl --context $C -n $NS create secret generic meko-data-plane \
 kubectl --context $C -n $NS rollout restart deploy/meko-inference-gateway
 ```
 
-Or leave it out and drop the component, which reaches `READY` honestly:
-`"disable": ["inference-gateway"]` in the stack spec.
+Or leave it out and drop the component: `--set inferenceGateway.enabled=false`.
 
 ### Healthy is not the same as working
 
 The api-server answering `/api/v1/health` with 200 proves it can reach its database, and
 nothing more. **`api_server` does not migrate on boot** — it migrates only when
-`-migrate-only` is passed. The agent gives it a `migrate` init container for exactly this
+`-migrate-only` is passed. The chart gives it a `migrate` init container for exactly this
 reason; without one the stack comes up entirely green and every real request fails with
 `relation "meko_system.users" does not exist`. If the UI loads and then 401s with
 `dev account setup failed`, check that init container.
@@ -252,8 +248,8 @@ a separate one, pass a name that is not taken.
 ### A StatefulSet blocks its own replacement
 
 A pod that can never become Ready — `InvalidImageName`, `ImagePullBackOff` — stops the
-rolling update that would replace it. Correcting `images.database` therefore does **not**
-self-heal; delete the pod:
+rolling update that would replace it. A corrected image tag therefore does **not**
+self-heal on `helm upgrade`; delete the pod:
 
 ```bash
 kubectl --context $C -n $NS delete pod meko-yugabytedb-0
@@ -280,8 +276,8 @@ kubectl --context $C -n $NS delete pod meko-yugabytedb-0
 
 An image reference is applied as written. A snippet pasted with `…`, `<registry>` or
 `<tag>` still in it produces `InvalidImageName`, and the reason lives in pod status rather
-than anywhere you are looking. The agent refuses unparseable references now and names the
-field, but write them out in full.
+than anywhere you are looking. Registration's install hint prints the three stack tags as
+shell variables for this reason — fill them in rather than editing mid-command.
 
 ---
 
@@ -295,8 +291,9 @@ public at it:
   dev account. Configure `COGNITO_REGION` / `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` /
   `COGNITO_CLIENT_SECRET` / `COGNITO_DOMAIN` in the `meko-data-plane` Secret to change
   that.
-- **So `expose: external` puts an unauthenticated Meko, and a live YugabyteDB, on the
-  internet.** `internal` is VPC-only and is what the control plane itself uses. Prefer it.
+- **So a public LoadBalancer on it puts an unauthenticated Meko, and a live YugabyteDB,
+  on the internet.** Use an internal LB (VPC-only, what the control plane itself uses) or
+  port-forward.
 - **The console has no auth of its own** beyond the admin secret, and that secret is a
   fleet-admin credential. `--console-embed-admin-secret` writes it into the page so the
   console stops asking — reasonable where the console is already the trust boundary

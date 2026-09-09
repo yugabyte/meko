@@ -128,12 +128,10 @@ func run() error {
 	// YCP control-plane mode (BYOC). Gates the fleet registry + agent API.
 	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable YCP fleet registry + agent API (control plane)")
 
-	// What a newly registered environment is told to run, so an enrolling agent
-	// bootstraps Meko instead of idling until somebody sends it a command. That is the
-	// whole Meko stack — YugabyteDB with MAGE and dist_rag, api-server, MCP server, RAG
-	// worker, inference gateway, UI — at the release pinned in
-	// internal/service/dataplane_release.go. Registering takes a name and nothing else;
-	// the versions are the control plane's business.
+	// Deprecated: these all described the stack registration used to seed, which it no
+	// longer does — a data plane's workloads come from its chart. Accepted only so a
+	// control plane already passing them does not crash-loop on an undefined flag (the
+	// warning below says so), and removed in the release after this.
 	noBootstrapDefaults := flag.Bool("no-bootstrap-defaults", envBoolOrDefault("MEKO_NO_BOOTSTRAP_DEFAULTS", false),
 		"register environments with empty desired state (they then run nothing until explicitly commanded)")
 	dataplaneRegistry := flag.String("dataplane-registry", envOrDefault("MEKO_DATAPLANE_REGISTRY", service.DefaultDataPlaneRegistry),
@@ -464,25 +462,16 @@ func run() error {
 		ImagePullSecret: *dataplanePullSecret,
 		SecretRef:       *dataplaneSecretRef,
 	}
-	if bootstrapDefaults.Enabled && *controlPlaneMode {
-		slog.Info("registered environments will be seeded with the full Meko stack",
-			"database", bootstrapDefaults.Release.Database,
-			"api_server", bootstrapDefaults.Release.APIServer,
-			"mcp_server", bootstrapDefaults.Release.MCPServer,
-			"rag_worker", bootstrapDefaults.Release.RAGWorker,
-			"inference_gateway", bootstrapDefaults.Release.InferenceGateway,
-			"ui", bootstrapDefaults.Release.UI)
-		if ok, missing := bootstrapDefaults.Release.Complete(); !ok {
-			slog.Warn("some data-plane components have no image and will be reported as failed by the agent",
-				"missing", strings.Join(missing, ", "))
-		}
-		if bootstrapDefaults.ImagePullSecret == "" {
-			// Every image in the release is private. Without pull credentials in the
-			// agent's namespace the whole stack lands in ImagePullBackOff, which reads
-			// as a broken agent rather than as missing configuration.
-			slog.Warn("no --dataplane-image-pull-secret configured: the seeded stack is all private images, " +
-				"so every workload will fail to pull unless the agent's namespace already has credentials")
-		}
+	// Deliberately silent about seeding, because there is none: registration
+	// declares only what its caller declares. The flags are still accepted so a
+	// control plane already passing them does not crash-loop on an undefined flag,
+	// but a startup line asserting they do something would be a lie an operator
+	// acts on. They are removed in the release after this.
+	if *controlPlaneMode && (!bootstrapDefaults.Enabled || bootstrapDefaults.ImagePullSecret != "" ||
+		bootstrapDefaults.SecretRef != "") {
+		slog.Warn("--no-bootstrap-defaults and the --dataplane-* flags no longer do anything: " +
+			"registration seeds no desired state, and a data plane's workloads come from its " +
+			"chart. Safe to drop from your deployment.")
 	}
 
 	return api.Run(api.ServerConfig{

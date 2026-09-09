@@ -29,87 +29,20 @@ const defaultAgentNamespace = "ycp-agent"
 // substitutes the real value; an operator reading the hint raw pastes their own.
 const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder, not a credential
 
-// stackKinds are the desired-state kinds the meko-agent reconciles into k8s.
-// Their presence is what distinguishes the two meko install models: an
-// environment that declares one runs the stack from its own desired state, and
-// one that declares none has its stack installed by the chart.
-var stackKinds = map[string]bool{
-	"meko-stack": true,
-	"database":   true,
-	"mcp-server": true,
-	"rag-worker": true,
-}
-
-func declaresStack(desired []models.DesiredResource) bool {
-	for _, r := range desired {
-		if stackKinds[r.Kind] {
-			return true
-		}
-	}
-	return false
-}
-
 // installHint renders the commands that attach an agent to an environment. It is the
 // only place an operator is told how to do this, so it has to be runnable as printed,
 // not a sketch.
 //
-// Three shapes, because an environment has exactly one YCP client and which one it
-// is follows from what it declares:
-//
-//   - amp — the amp controller plus the reconcile-agent that drives its REST API.
-//   - meko declaring a stack — the meko-agent, which reconciles that stack into k8s.
-//   - meko declaring none — the chart installs the stack and the reconcile-agent
-//     converges the environment's datapacks over the api-server.
-//
-// desired is the environment's current desired state. A read that failed passes
-// nil, which renders the meko-agent hint: it is the older model and the one every
-// environment registered before this had, so an unreadable desired state falls back
-// to what is far more likely to be right.
-func installHint(c echo.Context, e *models.Environment, desired []models.DesiredResource) string {
+// One shape per kind, because each kind has one agent: an amp environment installs
+// the amp controller and its reconcile-agent, a meko environment installs the meko
+// stack and the same reconcile-agent. Which components an environment runs is the
+// chart's business either way; desired state declares only what lives inside them.
+func installHint(c echo.Context, e *models.Environment) string {
 	url := agentURL(c, e.AccountID, e.AgentBaseURL)
 	if e.Kind == "amp" {
 		return ampInstallHint(url, e.ID, e.Placement, e.AccountID)
 	}
-	if desired != nil && !declaresStack(desired) {
-		return mekoReconcileInstallHint(url, e.ID, service.DefaultDataPlaneRelease(""))
-	}
-	return mekoInstallHint(url, e.ID)
-}
-
-// mekoInstallHint attaches the meko-agent to a meko environment.
-//
-// The previous version was a sketch, and each gap in it was a support question: it
-// named a `meko/meko-agent` chart in a `meko` Helm repo (neither exists — the agent
-// is a component of the `meko` chart in meko-devops), left `<ns>` and
-// `<this control plane>` for the reader to fill in, and used
-// `--set agent.enabled=true`, which switches the agent on without switching the
-// other seven components off. That last one is how a data-plane install ends up
-// putting an api-server and a Langfuse in a customer's cluster; `values-agent.yaml`
-// is the preset that exists to prevent it.
-func mekoInstallHint(ycpURL, envID string) string {
-	ns := defaultAgentNamespace
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable there)\n")
-	fmt.Fprintf(&b, "kubectl create namespace %s\n", ns)
-	fmt.Fprintf(&b, "kubectl -n %s create secret generic meko-agent-api-key \\\n", ns)
-	fmt.Fprintf(&b, "  --from-literal=api-key=%s\n\n", apiKeyPlaceholder)
-
-	fmt.Fprintf(&b, "# 2 — install the agent, from a meko-devops checkout\n")
-	fmt.Fprintf(&b, "#      swap values-aws.yaml for values-gcp.yaml, and values-dev.yaml for\n")
-	fmt.Fprintf(&b, "#      values-prod.yaml, to match the cluster. values-agent.yaml goes LAST:\n")
-	fmt.Fprintf(&b, "#      it is what suppresses every component except the agent.\n")
-	fmt.Fprintf(&b, "helm upgrade --install meko-agent charts/meko -n %s \\\n", ns)
-	fmt.Fprintf(&b, "  -f charts/meko/values-aws.yaml -f charts/meko/values-dev.yaml \\\n")
-	fmt.Fprintf(&b, "  -f charts/meko/values-agent.yaml \\\n")
-	fmt.Fprintf(&b, "  --set agent.ycpUrl=%s \\\n", ycpURL)
-	fmt.Fprintf(&b, "  --set agent.envName=%s \\\n", envID)
-	fmt.Fprintf(&b, "  --set-string agent.image.tag=<meko-agent tag>\n\n")
-
-	fmt.Fprintf(&b, "# The agent enrolls, then brings up what this environment was registered with.\n")
-	fmt.Fprintf(&b, "# There is no third step: registration already declared its desired state.\n")
-	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/meko-agent\n", ns)
-	return b.String()
+	return mekoReconcileInstallHint(url, e.ID, service.DefaultDataPlaneRelease(""))
 }
 
 // mekoStackNamespace is where a chart-installed meko data plane goes when the
@@ -121,15 +54,17 @@ const mekoStackNamespace = "meko"
 // secretKeyRef cannot drift, even though it is the chart's default.
 const mekoTokenSecretName = "meko-reconcile-agent-token" //nolint:gosec // a Secret NAME, not a credential
 
-// mekoReconcileInstallHint attaches a meko environment whose stack the chart
-// installs: the whole data plane plus the reconcile-agent, which converges the
-// environment's datapacks over the api-server's REST API.
+// mekoReconcileInstallHint attaches a meko environment: the whole data plane from
+// the chart, plus the reconcile-agent, which converges the environment's declared
+// resources over the api-server's REST API.
 //
 // The only values it cannot know are the image tags, so they are lifted into a
 // header the operator edits once rather than left mid-command. There is no
 // api-server credential step: this preset's api-server runs without Cognito and
-// authenticates nobody, and what keeps the reconciler off a person's datapacks is
-// the agent id it stamps, not an identity.
+// authenticates nobody. Nothing keeps the reconciler off a person's datapacks —
+// it is the api-server's only caller and is authoritative over it, which the hint
+// says outright, because an operator who points one at a shared api-server needs
+// to know before running it.
 func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease) string {
 	ns := namespaceFor(envID, mekoStackNamespace)
 	chart := "meko/deploy/helm/meko"
@@ -173,14 +108,15 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "  --set reconcileAgent.envName=%s \\\n", envID)
 	fmt.Fprintf(&b, "  --set-string reconcileAgent.image.tag=\"${AGENT_TAG}\"\n\n")
 
-	fmt.Fprintf(&b, "# The agent enrolls, then converges the datapacks this environment declares.\n")
+	fmt.Fprintf(&b, "# The agent enrolls, then converges the agents and datapacks this environment\n")
+	fmt.Fprintf(&b, "# declares.\n")
 	fmt.Fprintf(&b, "# Declare them with POST %s/environments/%s/desired.\n", ycpURL, envID)
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" rollout status deploy/meko-api-server\n")
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs -f deploy/meko-reconcile-agent\n")
 	fmt.Fprintf(&b, "#\n")
-	fmt.Fprintf(&b, "# It converges only the datapacks it created (created_by_agent_id =\n")
-	fmt.Fprintf(&b, "# ycp-reconcile-agent), so datapacks made in the UI are never touched. On an\n")
-	fmt.Fprintf(&b, "# api-server with Cognito ON, add the account's MCP token:\n")
+	fmt.Fprintf(&b, "# The agent is this api-server's only caller and is authoritative over it:\n")
+	fmt.Fprintf(&b, "# anything desired state stops declaring is collected. On an api-server with\n")
+	fmt.Fprintf(&b, "# Cognito ON, add the account's MCP token:\n")
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" create secret generic %s \\\n", mekoTokenSecretName)
 	fmt.Fprintf(&b, "#     --from-literal=meko-api-token=<token>\n")
 	return b.String()

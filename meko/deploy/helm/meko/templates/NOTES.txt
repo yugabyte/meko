@@ -24,8 +24,8 @@ Enabled components:
 {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true" }}
   - provisioner       ns={{ .Values.provisioner.namespace }} (installCRD={{ .Values.provisioner.installCRD }}, mcpProxy={{ .Values.provisioner.mcpProxy.enabled }})
 {{- end }}
-{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "agent")) "true" }}
-  - meko-agent        ns={{ .Values.agent.namespace | default .Release.Namespace }} → enrolls env "{{ .Values.agent.envName | default .Release.Namespace }}" into YCP at {{ .Values.agent.ycpUrl }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "reconcileAgent")) "true" }}
+  - reconcile-agent   ns={{ .Values.reconcileAgent.namespace | default .Release.Namespace }} → enrolls env "{{ .Values.reconcileAgent.envName | default .Release.Namespace }}" into YCP at {{ .Values.reconcileAgent.ycpUrl }}
 {{- end }}
 
 Ingress class: {{ .Values.ingress.className }}, TLS mode: {{ .Values.ingress.tls.mode }}

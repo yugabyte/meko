@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -26,117 +25,40 @@ var testRelease = DataPlaneRelease{
 	UI:               "registry/meko/meko-ui:t",
 }
 
-// Registering an environment is a statement of intent: nobody registers a data plane
-// in order to run nothing in it. So registration seeds desired state, and an agent
-// bootstraps Meko as soon as it enrolls instead of idling until somebody remembers to
-// send it a separate command.
-func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{
-		Enabled:         true,
-		Release:         testRelease,
-		ImagePullSecret: "meko-ecr",
-		SecretRef:       "meko-data-plane",
-	})
-
-	expectRegisterInsert(mock, envUUID)
-	// ReplaceDesired upserts-and-prunes: read existing keys (none on a fresh
-	// register), upsert the seeded meko-stack, prune nothing.
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT kind, name FROM meko_system\.environment_desired_resources WHERE env_uuid = \$1`).
-		WithArgs(envUUID).WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}))
-	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
-		WithArgs(envUUID, "meko-stack", "meko", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-
-	e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1", APIKeyID: keyA}, "")
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if e == nil {
-		t.Fatal("Register returned no environment")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unmet expectations: %v", err)
-	}
-}
-
-// Registering takes a name and nothing else, and what it seeds is the whole stack: the
-// caller is not expected to know which six image tags go together, which is the reason
-// the release is pinned on the control plane at all.
-func TestRegister_SeedsTheWholeStackInOneResource(t *testing.T) {
-	svc := &EnvironmentService{bootstrap: BootstrapDefaults{
-		Enabled: true, Release: testRelease,
-		ImagePullSecret: "meko-ecr", SecretRef: "meko-data-plane",
-	}}
-	res := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA}, KindMeko)
-	if len(res) != 1 || res[0].Kind != "meko-stack" {
-		t.Fatalf("seeded %+v, want a single meko-stack resource", res)
-	}
-
-	// The spec has to decode: the agent unmarshals it, and a malformed one would make
-	// it report a bad spec for a resource the server invented.
-	var spec mekoStackSpec
-	if err := json.Unmarshal(res[0].Spec, &spec); err != nil {
-		t.Fatalf("seeded spec is not valid JSON (%s): %v", res[0].Spec, err)
-	}
-	if spec.Images != testRelease {
-		t.Errorf("seeded images = %+v, want the configured release %+v", spec.Images, testRelease)
-	}
-	if spec.ImagePullSecret != "meko-ecr" || spec.SecretRef != "meko-data-plane" {
-		t.Errorf("Secret names not carried into the seed: %+v", spec)
-	}
-
-	// Secret NAMES only. If a value ever reaches desired state it is persisted in the
-	// fleet registry and handed to every agent that asks, which is the one thing this
-	// protocol promises not to do.
-	if s := string(res[0].Spec); strings.Contains(s, "password") || strings.Contains(s, "sk-") {
-		t.Errorf("seeded spec looks like it carries secret material: %s", s)
-	}
-}
-
-// A datapack is a customer's own artifact, created through the api-server this stack
-// runs. Seeding a placeholder would provision one nobody asked for.
-func TestRegister_SeedsNoDatapack(t *testing.T) {
+// Registration declares nothing of its own. This is the behaviour change the
+// reconcile model rests on: a data plane's workloads come from its chart, and the
+// agent converges only what lives inside them, so a seeded meko-stack had no
+// consumer once cmd/agent retired. It is asserted directly rather than inferred
+// from a loop over the result, which passes for free once the result is empty.
+func TestRegister_SeedsNothing(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: true, Release: testRelease}}
-	for _, r := range svc.initialDesired(RegisterEnvironmentRequest{Name: acctA}, KindMeko) {
-		if r.Kind == "datapack" {
-			t.Errorf("registration seeded a datapack (%s), which nobody asked for", r.Name)
+	for _, name := range []string{"acme-meko", "acme-amp"} {
+		if got := svc.initialDesired(RegisterEnvironmentRequest{Name: name}); got != nil {
+			t.Errorf("%s: registration seeded %+v, want nothing", name, got)
 		}
 	}
 }
 
-// The caller can override the seed, including with an explicit empty set — which is
-// how you register an environment that must run nothing until commanded.
+// What the caller declares is what the environment starts with — now the only way
+// it starts with anything. An explicit empty set stays non-nil, because it is a
+// declaration ("run nothing until commanded") rather than an absence, and Register
+// only stores a non-nil result.
 func TestRegister_ExplicitDesiredWins(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: true, Release: testRelease}}
 
 	empty := []models.DesiredResource{}
-	got := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA, Desired: &empty}, KindMeko)
-	if len(got) != 0 {
-		t.Errorf("explicit empty desired state was overridden with %+v", got)
+	got := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA, Desired: &empty})
+	if got == nil || len(got) != 0 {
+		t.Errorf("explicit empty desired state = %+v, want an empty non-nil set", got)
 	}
 
 	custom := []models.DesiredResource{
-		{Kind: "database", Name: "byo", Spec: json.RawMessage(`{"mode":"external","host":"db"}`)},
+		{Kind: "agent", Name: "ycp"},
+		{Kind: "datapack", Name: "ycp/smoke", Spec: json.RawMessage(`{"description":"d"}`)},
 	}
-	got = svc.initialDesired(RegisterEnvironmentRequest{Name: acctA, Desired: &custom}, KindMeko)
-	if len(got) != 1 || got[0].Name != "byo" {
+	got = svc.initialDesired(RegisterEnvironmentRequest{Name: acctA, Desired: &custom})
+	if len(got) != 2 || got[0].Kind != "agent" || got[1].Name != "ycp/smoke" {
 		t.Errorf("explicit desired state not used: %+v", got)
-	}
-}
-
-// --no-bootstrap-defaults turns the whole thing off, for a control plane whose
-// operators want to declare every environment by hand.
-func TestRegister_BootstrapDisabled(t *testing.T) {
-	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: false, Release: testRelease}}
-	if got := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA}, KindMeko); got != nil {
-		t.Errorf("seeded %+v with bootstrap defaults disabled", got)
 	}
 }
 

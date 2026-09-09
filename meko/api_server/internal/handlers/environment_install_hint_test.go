@@ -28,55 +28,12 @@ func hintForEnv(
 	}
 	c := echo.New().NewContext(req, httptest.NewRecorder())
 	e.AgentBaseURL = agentBaseURL
-	// nil desired: these cases assert the amp hint and the meko-agent hint, both of
-	// which render the same whatever the environment declares.
-	return installHint(c, e, nil)
-}
-
-// The hint is the only place an operator is told how to attach an agent, so it has to
-// be runnable as printed. These are the specific ways the old one was not.
-func TestInstallHint_IsRunnableAsPrinted(t *testing.T) {
-	hint := hintFor(t, "meko", "/api/v1/environments", "ycp.example.com", "", "", nil)
-
-	for _, want := range []string{
-		// The key placeholder, in a Secret rather than on a command line. The YBM UI
-		// substitutes the real key; the control plane never sees it.
-		"create secret generic meko-agent-api-key",
-		"--from-literal=api-key=<YCP_AGENT_API_KEY>",
-		// The chart that actually exists: a component of `meko` in meko-devops.
-		"helm upgrade --install meko-agent charts/meko",
-		// values-agent.yaml is what suppresses the other seven components. Without it
-		// a data-plane install puts an api-server and a Langfuse in someone's cluster.
-		"-f charts/meko/values-agent.yaml",
-		// No agent_base_url: the direct-to-meko shape, with the API base appended.
-		"--set agent.ycpUrl=http://ycp.example.com/api/v1",
-		"--set agent.envName=acme-prod",
-		// The one thing the server genuinely cannot know.
-		"--set-string agent.image.tag=",
-	} {
-		if !strings.Contains(hint, want) {
-			t.Errorf("hint is missing %q:\n%s", want, hint)
-		}
-	}
-
-	// The retired token flow must not resurface, and the old hint's placeholders
-	// must stay gone.
-	for _, unwanted := range []string{
-		"enrollment-token", "30-minute", "ycp_enr_",
-		"<ns>", "<this control plane>", "--set agent.enabled=true",
-		// The meko chart has no otel block; the amp hint's metrics values are not
-		// hers to set.
-		"otel.",
-	} {
-		if strings.Contains(hint, unwanted) {
-			t.Errorf("hint still contains %q:\n%s", unwanted, hint)
-		}
-	}
+	return installHint(c, e)
 }
 
 // An amp environment gets a different hint: it installs the amp controller chart
 // with its reconcile-agent turned on (the agent is the sole YCP client), not the
-// meko-agent. It must be runnable as printed and must not leak the meko chart into
+// It must be runnable as printed and must not leak the meko chart into
 // an amp install.
 //
 // "Runnable as printed" is load-bearing here: the chart's own defaults are not
@@ -123,12 +80,12 @@ func TestInstallHint_Amp(t *testing.T) {
 	}
 
 	// The retired token flow and controller-side YCP loop must not reappear, the
-	// meko-agent install must not bleed into an amp hint, and the placeholders this
+	// meko install must not bleed into an amp hint, and the placeholders this
 	// rewrite removed must not come back.
 	for _, unwanted := range []string{
 		"enrollment-token", "ycp_enr_",
 		"controller.ycp", // the controller no longer talks to YCP
-		"meko-agent", "values-agent.yaml",
+		"values-byoc.yaml",
 		"<your YugabyteDB DSN>", "<reconcile-agent tag>",
 		"--set controller.databaseUrl=", // the mis-tokenizing form
 	} {
@@ -263,7 +220,7 @@ func TestNamespaceFor(t *testing.T) {
 func TestInstallHint_UsesAgentBaseURL(t *testing.T) {
 	hint := hintFor(t, "meko", "/api/v1/environments", "meko.internal",
 		acctA, "https://devcloud.yugabyte.com/api/public/v1/", nil)
-	want := "--set agent.ycpUrl=https://devcloud.yugabyte.com/api/public/v1/accounts/" + acctA + "/ycp"
+	want := "--set reconcileAgent.ycpUrl=https://devcloud.yugabyte.com/api/public/v1/accounts/" + acctA + "/ycp"
 	if !strings.Contains(hint, want) {
 		t.Errorf("hint did not compose the YBM pass-through URL %q:\n%s", want, hint)
 	}
@@ -277,7 +234,7 @@ func TestInstallHint_UsesAgentBaseURL(t *testing.T) {
 func TestInstallHint_AgentBaseURLNeedsAccount(t *testing.T) {
 	hint := hintFor(t, "meko", "/api/v1/environments", "ycp.internal",
 		"", "https://devcloud.yugabyte.com/api/public/v1", nil)
-	if !strings.Contains(hint, "--set agent.ycpUrl=http://ycp.internal/api/v1") {
+	if !strings.Contains(hint, "--set reconcileAgent.ycpUrl=http://ycp.internal/api/v1") {
 		t.Errorf("hint should fall back to the direct shape without an account:\n%s", hint)
 	}
 }
@@ -289,7 +246,7 @@ func TestInstallHint_CarriesTheBasePath(t *testing.T) {
 	hint := hintFor(t, "meko", "/ycp/api/v1/environments", "devcloud.yugabyte.com", "", "", map[string]string{
 		"X-Forwarded-Proto": "https",
 	})
-	if !strings.Contains(hint, "--set agent.ycpUrl=https://devcloud.yugabyte.com/ycp/api/v1") {
+	if !strings.Contains(hint, "--set reconcileAgent.ycpUrl=https://devcloud.yugabyte.com/ycp/api/v1") {
 		t.Errorf("hint did not carry scheme + base path:\n%s", hint)
 	}
 }
@@ -302,7 +259,7 @@ func TestInstallHint_HonorsForwardedHeaders(t *testing.T) {
 		"X-Forwarded-Proto": "https, http",
 		"X-Forwarded-Host":  "ycp.example.com, internal",
 	})
-	if !strings.Contains(hint, "--set agent.ycpUrl=https://ycp.example.com") {
+	if !strings.Contains(hint, "--set reconcileAgent.ycpUrl=https://ycp.example.com") {
 		t.Errorf("forwarded scheme/host not used:\n%s", hint)
 	}
 	if strings.Contains(hint, "10.0.0.5") {

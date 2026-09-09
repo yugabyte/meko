@@ -68,8 +68,9 @@ type Datapack struct {
 // the api-server overwrites it from the authenticated account, so a value here
 // would be silently ignored rather than honoured.
 //
-// AgentID is stored as the datapack's created_by_agent_id and is what marks it
-// as the reconciler's. The agent it names must already exist (CreateAgent).
+// AgentID is the agent the datapack is attributed to — the first segment of the
+// resource's path — and must already exist (CreateAgent), which is what the
+// backend's parent gating guarantees. It comes back as created_by_agent_id.
 type CreateDatapackRequest struct {
 	Name        string `json:"name"`
 	AgentID     string `json:"agent_id,omitempty"`

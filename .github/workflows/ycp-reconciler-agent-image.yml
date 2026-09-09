@@ -19,8 +19,7 @@ name: Reconcile-agent image
 # The Quay repository must exist and the robot must have write on it before the
 # first push.
 #
-# Published to Quay rather than the ECR registry the other ycp images use
-# (ycp-images.yml), so a cluster can pull it without ECR cross-account
+# Published to Quay so a cluster can pull it without ECR cross-account
 # pull-secret setup — the same reason the control plane ships on Quay.
 on:
   push:

@@ -31,16 +31,16 @@ can't be recovered; use a file, or an old SHA (all pre-move SHAs still resolve).
 
 ## `ycp/` — shared, top-level
 
-The BYOC **data plane** for YCP (Yugabyte Control Plane): the Meko pull agent
-(`cmd/agent`), the wire types both sides share (`internal/api`), and the kind e2e. Its
-own `go.mod`. The control plane itself is `meko/api_server --control-plane-mode`.
+The BYOC **data plane** for YCP (Yugabyte Control Plane): the pull agent
+(`cmd/reconcile-agent`), the wire types both sides share (`internal/api`), and the
+kind e2e. Its own `go.mod`. The control plane itself is
+`meko/api_server --control-plane-mode`.
 
-It lives at the root rather than under `meko/` because it is shared with amp. amp's
-data plane uses the same contract through `cmd/reconcile-agent` (built on the
-backend-agnostic `reconcile` engine): instead of applying k8s directly like `cmd/agent`,
-it drives a REST API to converge an environment to desired state, picking the backend
-from `ENV_KIND` — the amp controller, or meko's own `api_server`. It is that
-environment's sole YCP client — see
+It lives at the root rather than under `meko/` because it is shared with amp. One
+agent serves both, built on the backend-agnostic `reconcile` engine and picking its
+backend from `ENV_KIND`: it drives a REST API — the amp controller, or meko's own
+`api_server` — to converge an environment to desired state, and never applies a
+manifest itself. It is that environment's sole YCP client — see
 [`amp/controller/architecture/ac-ycp.md`](amp/controller/architecture/ac-ycp.md).
 
 Its typed client for that REST API is generated from a **copy** of the controller's
@@ -50,13 +50,12 @@ Go modules that must not cross-import. Editing either side means re-running
 and compiles, so only that check notices. The obligation is repeated for spec editors in
 [`amp/controller/AGENTS.md`](amp/controller/AGENTS.md).
 
-An **environment** is the unit YCP manages — one namespace running a Meko stack.
-Registering one is the whole operator step: the control plane resolves the Meko release
-(pinned in `meko/api_server/internal/service/dataplane_release.go`) and the enroll
-response hands it to the agent, which deploys YugabyteDB with the `mage`/`pg_dist_rag`
-extensions plus `api-server`, `mcp-server`, `rag-worker`, `inference-gateway` and `ui` —
-one `meko-stack` resource. Datapacks are Meko's own concern, created through that
-api-server once it is up, and are not modelled here. See
+An **environment** is the unit YCP manages — one namespace running a Meko stack. Its
+workloads come from a chart, not from the control plane: `yb-amp-controller` for an amp
+environment, the `meko` chart for a meko one, and the agent is a component of that
+release. Registration declares nothing of its own; the agent then converges whatever
+desired state holds — for meko, `agent` and `datapack` resources through the
+api-server's REST API, the same shape amp's agent uses against its controller. See
 [`ycp/ARCHITECTURE.md`](ycp/ARCHITECTURE.md) and [`ycp/DEPLOY.md`](ycp/DEPLOY.md), and
 [`ycp/BYOC-ON-GKE.md`](ycp/BYOC-ON-GKE.md) to stand one up on a real cluster.
 
@@ -64,31 +63,25 @@ api-server once it is up, and are not modelled here. See
 # unit tests need nothing running
 (cd ycp && go test ./...)
 
-# build + deploy end-to-end: builds the api-server and agent images, stands the
-# control plane up on a throwaway kind cluster, and asserts register -> enroll ->
-# READY -> restart-and-re-enroll -> command -> bootstrap -> GC. Needs kind +
-# docker or podman; no registry credentials.
+# control-plane smoke test on kind: builds the api-server image, stands it up, and
+# asserts rollout -> health -> base path -> auth gate -> register -> install hint.
+# Needs kind + docker or podman; no registry credentials. It does NOT cover an agent
+# converging anything — every image the agent would drive is private.
 (cd ycp && ./test/e2e/run.sh)
 
-# the kind=meko reconcile loop: chart-installed stack + reconcile-agent converging
-# datapacks, asserting it leaves a hand-made datapack alone. Same kept cluster.
+# the reconcile loop itself, on a cluster the e2e left up (YCP_E2E_KEEP=1): the
+# chart-installed stack plus the reconcile-agent converging an agent and its
+# datapacks, and collecting a withdrawn one. Needs Meko ECR credentials.
 (cd ycp && AWS_PROFILE=meko-dev ./test/local/meko-reconcile.sh)
 
-# the same thing on a REAL cluster, no kind: YCP in one namespace, a BYOC data plane
-# in another, registered declaring nothing so the reconcile-agent serves it.
+# the same on a REAL cluster, no kind: YCP in one namespace, a BYOC data plane in
+# another.
 (cd ycp && AWS_PROFILE=meko-dev ./test/local/ycp-on-cluster.sh \
-   --context <ctx> --all --reconcile --tag <api-server tag> --agent-tag <agent tag>)
-
-# the same loop with the private meko-mcp-server image, on a cluster the e2e left up
-# (YCP_E2E_KEEP=1). Needs AWS credentials for the Meko ECR.
-(cd ycp && AWS_PROFILE=meko-dev ./test/local/meko-stack.sh)
-# the whole Meko stack from a registration and nothing else. Same cluster and
-# credentials; OPENAI_API_KEY too, or the inference gateway will not start.
-(cd ycp && AWS_PROFILE=meko-dev ./test/local/full-stack.sh)
+   --context <ctx> --all --tag <api-server tag> --agent-tag <agent tag>)
 ```
 
-Images publish to the platform ECR registry on merge to `main`
-(`.github/workflows/ycp-images.yml`).
+The reconcile-agent image publishes to Quay on merge to `main`
+(`.github/workflows/ycp-reconciler-agent-image.yml`).
 
 ## Repo-wide conventions
 

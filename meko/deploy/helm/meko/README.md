@@ -161,14 +161,15 @@ Three refs stay required, deliberately:
 
 ### Registering a data plane with a control plane (the agent)
 
-The **meko-agent** — the BYOC pull agent — is a component of *this* chart rather
-than a separate one. A data-plane (`mcp` mode) install opts in to enrolling
-itself with an YCP control plane by turning the agent on:
+The **reconcile-agent** — the BYOC pull agent — is a component of *this* chart rather
+than a separate one. A data-plane install opts in to enrolling itself with a YCP
+control plane by turning it on:
 
 ```bash
 # 1. Register the environment with YCP, bound to the agent's api key id
 curl -sX POST "$YCP/api/v1/environments" \
-  -d '{"name":"acme-prod","region":"us-west1","placement":"cloud","api_key_id":"<uuid>"}'
+  -d '{"name":"acme-prod","kind":"meko","region":"us-west1","placement":"cloud",
+       "api_key_id":"<uuid>"}'
 
 # 2. Store the agent's credential as a Secret in the data-plane cluster: the YBM
 #    API key (key `api-key`), or against a standalone control plane the dev-mode
@@ -176,41 +177,8 @@ curl -sX POST "$YCP/api/v1/environments" \
 kubectl -n meko-system create secret generic meko-agent-api-key \
   --from-literal=api-key=<the key YBM showed once>
 
-# 3. Deploy the data plane with the agent enabled, pointed at YCP's API base
-helm upgrade --install meko charts/meko -n meko-system \
-  -f charts/meko/values-gcp.yaml -f charts/meko/values-<env>.yaml \
-  --set agent.enabled=true --set-string agent.image.tag=$VERSION \
-  --set agent.ycpUrl=http://ycp.ycp-demo.svc.cluster.local:80/api/v1 \
-  --set agent.envName=acme-prod
-```
-
-For a cluster that should run *only* the agent — a customer cluster enrolling into
-YCP — use the `values-agent.yaml` preset instead of `--set agent.enabled=true`, and
-pass it last. It suppresses the other seven components; the `--set` form switches the
-agent on without switching anything off, which is how an api-server and a Langfuse end
-up in someone else's cluster. YCP's own register response prints the full command.
-
-The agent enrolls, reconciles desired state, and reports status over **outbound
-HTTPS only**. It is data-plane-only — `ycp` mode never renders it.
-
-**Desired state now includes the Meko stack itself.** YCP seeds an environment's
-desired state when it is registered, and the agent reconciles whatever is declared
-into its own namespace: a `database` it runs, an `mcp-server` (`meko-mcp-server` over
-that database), a `rag-worker`, and per-datapack namespaces. That is why the agent's
-ClusterRole grants `patch` — server-side apply, which is how those converge — plus
-`statefulsets` and `configmaps`. Without them the agent enrolls and then 403s on
-everything it tries to create. The field reference for what can be declared is
-[`ycp/DEPLOY.md`](https://github.com/yugabyte/meko/blob/main/ycp/DEPLOY.md) in the
-meko repo.
-
-#### The other agent: `reconcileAgent`
-
-An environment whose stack this chart installs — a `values-byoc.yaml` release —
-declares no stack in desired state, so there is nothing for the meko-agent to
-reconcile. It gets the **reconcile-agent** instead, which converges the datapacks
-the environment declares over the api-server's own REST API:
-
-```bash
+# 3. Deploy the data plane with the agent enabled, pointed at YCP's API base.
+#    values-byoc.yaml goes LAST: it is what makes this one self-contained namespace.
 helm upgrade --install meko charts/meko -n meko-system \
   -f charts/meko/values-aws.yaml -f charts/meko/values-dev.yaml \
   -f charts/meko/values-byoc.yaml \
@@ -219,29 +187,29 @@ helm upgrade --install meko charts/meko -n meko-system \
   --set-string reconcileAgent.image.tag=$AGENT_TAG
 ```
 
-The two are alternatives, and enabling both fails the install: an environment has
-one YCP client, and a pair would share an api-key identity and race on the status
-heartbeat. Its image comes from Quay rather than the Meko ECR, so no cross-account
-pull secret is needed for it.
+YCP's own register response prints that command with everything it can know already
+filled in — the namespace, the URL it was reached on, and the stack's per-component
+image tags from the release it pins. Prefer it over retyping this.
 
-No api-server credential is needed here: a BYOC api-server runs with Cognito off and
-authenticates nobody. What keeps the reconciler off a person's datapacks is
-`reconcileAgent.agentId` — it stamps every datapack it creates with that id
-(`created_by_agent_id`) and converges no others, so anything made in the UI is
-invisible to it. Against an api-server with Cognito **on**, also supply
+The agent enrolls, converges desired state, and reports status over **outbound HTTPS
+only**. It is data-plane-only — `ycp` mode never renders it. Its image comes from Quay
+rather than the Meko ECR, so it needs no cross-account pull secret.
+
+**It converges resources over the api-server's REST API, not Kubernetes.** The
+workloads are this chart's; what the agent manages is the `agent` and `datapack`
+resources the environment declares, so it needs no cluster RBAC beyond
+`get`/`create`/`update` on its own state Secret. The field reference is
+[`ycp/DEPLOY.md`](https://github.com/yugabyte/meko/blob/main/ycp/DEPLOY.md) in the
+meko repo.
+
+**The agent is the api-server's only caller and is authoritative over it.** Anything
+desired state stops declaring is collected — including a datapack made by hand — so do
+not point one at an api-server people use directly.
+
+No api-server credential is needed against a BYOC api-server, which runs with Cognito
+off and authenticates nobody. With Cognito **on**, supply
 `reconcileAgent.secrets.existing.mekoApiToken` (key `meko-api-token`), which decides
-the account. YCP's register response prints the whole sequence.
-
-Two Secrets must exist in the agent's namespace for a seeded stack to come up, because
-desired state references them **by name** and carries no secret material:
-
-- the **pull secret** for the private Meko images (`global.imagePullSecrets` /
-  `ecrCredentialRefresh.secretName`; the control plane is told its name with
-  `--dataplane-image-pull-secret`), and
-- a **credentials** Secret holding `OPENAI_API_KEY` and any AWS keys, named to the
-  control plane with `--dataplane-secret-ref`.
-
-Neither is needed by an agent that only manages datapacks.
+the account the agent's datapacks belong to.
 
 ## Prerequisites you provide (not created by the chart)
 

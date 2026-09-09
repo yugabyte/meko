@@ -9,7 +9,7 @@ metadata:
   labels:
     {{- include "meko.componentLabels" (dict "app" "meko-reconcile-agent") | nindent 4 }}
 ---
-{{- /* A namespaced Role, where the meko-agent needs a ClusterRole: this agent
+{{- /* A namespaced Role rather than a cluster-scoped one: this agent
        converges datapacks over the api-server's REST API and touches k8s for one
        thing only — persisting the environment id its last check-in confirmed, so
        a restart during a control-plane outage still knows which environment it

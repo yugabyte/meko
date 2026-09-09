@@ -125,8 +125,9 @@ added outside that base passes unit tests and fails deployment.
 ### Mechanics
 
 `ycp/` has its own `go.mod`, so checks run from there (`cd ycp && go test ./...`) —
-`gofmt`/`vet` aimed at the other trees' paths will miss it. Images publish to ECR on
-merge to `main` (`.github/workflows/ycp-images.yml`), so a Dockerfile change ships on
+`gofmt`/`vet` aimed at the other trees' paths will miss it. The reconcile-agent image
+publishes to Quay on merge to `main`
+(`.github/workflows/ycp-reconciler-agent-image.yml`), so a Dockerfile change ships on
 merge rather than at a release.
 
 For anything not covered here — general Go style, migrations — use

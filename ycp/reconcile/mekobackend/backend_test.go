@@ -60,10 +60,12 @@ func reject(t *testing.T) http.HandlerFunc {
 	}
 }
 
-// The agent is authoritative over the whole inventory, as it is over an amp
-// controller's: the api-server has no other caller, so every agent and every
-// datapack is reported and anything desired state stops declaring is collected.
-func TestListReportsTheWholeInventory(t *testing.T) {
+// The agent is authoritative over the inventory, as it is over an amp controller's:
+// the api-server has no other caller, so everything it holds is reported and
+// anything desired state stops declaring is collected. The one exception is the
+// account's signup agent and the rows attributed to it — see
+// TestTheSignupAgentIsNeverInTheInventory.
+func TestListReportsTheInventory(t *testing.T) {
 	b := listing(t, agentYCP+","+agentOther, packSmoke+","+packOther+","+packUnattr, reject(t))
 	got, err := b.List(t.Context())
 	if err != nil {
@@ -73,13 +75,7 @@ func TestListReportsTheWholeInventory(t *testing.T) {
 	for _, a := range got {
 		keys = append(keys, a.Key.String())
 	}
-	// An unattributed datapack lands under the server's default agent, which is
-	// what the server itself stamps on a create that names none — so it is
-	// addressable rather than dropped from the inventory.
-	want := []string{
-		"agent/meko_agent", "agent/ycp",
-		"datapack/meko_agent/legacy", "datapack/meko_agent/orphan", "datapack/ycp/smoke",
-	}
+	want := []string{"agent/ycp", "datapack/ycp/smoke"}
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("List = %v, want %v", keys, want)
 	}
@@ -227,7 +223,9 @@ func TestDeleteUsesTheListedIdsAndTreats404AsSuccess(t *testing.T) {
 	if err := b.Delete(t.Context(), reconcile.ResourceKey{Kind: KindAgent, Name: "ycp"}); err != nil {
 		t.Errorf("Delete agent = %v, want 404 treated as success", err)
 	}
-	want := "DELETE /datapacks/" + dpID + ",DELETE /agents/ycp"
+	// The datapack twice: once directly, once through the agent's cascade. A 404 on
+	// the second is exactly the already-gone case this asserts.
+	want := "DELETE /datapacks/" + dpID + ",DELETE /datapacks/" + dpID + ",DELETE /agents/ycp"
 	if strings.Join(paths, ",") != want {
 		t.Errorf("paths = %v, want %v", paths, want)
 	}
@@ -294,5 +292,71 @@ func TestUnknownKindIsPermanentOnEveryVerb(t *testing.T) {
 	}
 	if err := b.Delete(t.Context(), reconcile.ResourceKey{Kind: "knowledge-base", Name: "x"}); !isPermanent(err) {
 		t.Errorf("Delete: %v", err)
+	}
+}
+
+// The engine skips a child's delete when the parent is going too, on the contract
+// that the backend cascades (loop.go:199, engine.go:47). meko's DeleteAgent does
+// not — it drops the agent_access and agents rows and leaves the datapacks pointing
+// at an id that no longer exists — so this backend has to. Without the cascade,
+// withdrawing an agent and its datapacks together orphans them permanently: the next
+// List cannot see them, so no later tick collects them, and each holds a free-tier
+// creation slot that is never refunded.
+func TestDeletingAnAgentCascadesToItsDatapacks(t *testing.T) {
+	packs := packSmoke + `,{"datapack_id":"44444444-4444-4444-4444-444444444444","datapack_name":"other","created_by_agent_id":"ycp"}`
+	var paths []string
+	b := listing(t, agentYCP, packs, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	})
+	if _, err := b.List(t.Context()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if err := b.Delete(t.Context(), reconcile.ResourceKey{Kind: KindAgent, Name: "ycp"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// Datapacks first, then the agent: the other order leaves rows referencing an
+	// agent the api-server has already dropped.
+	want := "DELETE /datapacks/44444444-4444-4444-4444-444444444444" +
+		",DELETE /datapacks/" + dpID +
+		",DELETE /agents/ycp"
+	if strings.Join(paths, ",") != want {
+		t.Errorf("cascade order = %v,\n want %v", paths, want)
+	}
+}
+
+// meko_agent is the row every account gets at signup, and the id the share and
+// invite grants are written under. Reporting it would let desired state that does
+// not name it plan a Delete, and DeleteAgent drops the account's agent_access rows —
+// silently revoking every datapack shared into the account and breaking every later
+// create that names no agent. It is account infrastructure, so it stays out of the
+// inventory entirely, the way amp declines to model users as a kind.
+func TestTheSignupAgentIsNeverInTheInventory(t *testing.T) {
+	packs := packSmoke + "," + packOther + "," + packUnattr
+	b := listing(t, agentYCP+","+agentOther, packs, reject(t))
+	got, err := b.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var keys []string
+	for _, a := range got {
+		keys = append(keys, a.Key.String())
+	}
+	want := []string{"agent/ycp", "datapack/ycp/smoke"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("List = %v, want %v — the signup agent and its rows must be invisible", keys, want)
+	}
+}
+
+// And a spec cannot reintroduce the hazard by declaring it.
+func TestTheSignupAgentCannotBeDeclared(t *testing.T) {
+	b := serve(t, reject(t))
+	for _, r := range []api.DesiredResource{
+		{Kind: KindAgent, Name: defaultAgentID},
+		{Kind: KindDatapack, Name: defaultAgentID + "/smoke"},
+	} {
+		if err := b.Create(t.Context(), r); !isPermanent(err) {
+			t.Errorf("Create(%s %q) = %v, want permanent", r.Kind, r.Name, err)
+		}
 	}
 }

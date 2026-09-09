@@ -36,8 +36,7 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/agent` | `meko-agent` | Per-environment pull agent for a **Meko** data plane. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles the environment's declared stack directly against k8s, reports status. |
-| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The same pull-agent shape for an environment whose resources live behind a REST API rather than in k8s: it enrolls, reads desired state, and drives that API to converge it, then reports the inventory back. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
+| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
 | `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (`reconcile/ampbackend`, `reconcile/mekobackend`). Level-triggered, so a missed tick self-heals. |
 | `reconcile/mekobackend` | — | The `Backend` for meko's tenant API: the `agent` and `datapack` kinds, converged over `api_server`'s PAT-authenticated routes. Its verbs are synchronous, so unlike amp it needs no applied-generation echo. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
@@ -57,62 +56,59 @@ console), `internal/db/migrations/controlplane/` (its schema).
   ┌────────────────────────────┐   ┌──────────────────────────────────────┐
   │  YCP control plane         │   │      Customer data plane (k8s)         │
   │  api_server                │   │                                        │
-  │  --control-plane-mode      │   │   ┌────────────┐   outbound only       │
-  │  ┌──────────────────────┐  │◀──┼───│ meko-agent │──────────┐            │
-  │  │ fleet API + console  │  │enroll │ cmd/agent  │          │            │
-  │  ├──────────────────────┤  │desired└─────┬──────┘          ▼            │
-  │  │ Postgres / YugabyteDB│  │status       │ provisions   in-cluster      │
-  │  │ (fleet registry)     │  │   │         ▼              k8s API         │
-  │  └──────────────────────┘  │   │   ┌────────────┐                       │
-  └────────────────────────────┘   │   │ Meko stack │  (one per environment)│
-                                    │   │ (database, │                       │
-                                    │   │  mcp-server│                       │
-                                    │   └────────────┘                       │
+  │  --control-plane-mode      │   │  ┌──────────────────┐  outbound only    │
+  │  ┌──────────────────────┐  │◀──┼──│ reconcile-agent  │────────┐          │
+  │  │ fleet API + console  │  │enroll│ cmd/reconcile-   │        │          │
+  │  ├──────────────────────┤  │desired│      agent      │        │ REST     │
+  │  │ Postgres / YugabyteDB│  │status └──────────────────┘        ▼          │
+  │  │ (fleet registry)     │  │   │                    ┌──────────────────┐ │
+  │  └──────────────────────┘  │   │                    │ amp controller,  │ │
+  └────────────────────────────┘   │                    │ or meko's        │ │
+                                    │                    │ api_server       │ │
+                                    │                    │ (chart-installed)│ │
+                                    │                    └──────────────────┘ │
                                     └────────────────────────────────────────┘
 ```
 
-All arrows from the data plane point **out**: agent → k8s API (in-cluster) and
-agent → YCP. YCP never dials into a customer cluster.
+All arrows from the data plane point **out**: agent → YCP, and agent → the
+chart-installed API it converges (in-cluster). YCP never dials into a customer
+cluster.
 
 ## The pull loop
 
 1. **Register** — YBM (or an operator) `POST`s `/api/v1/environments` with a **name**
    and the **`api_key_id`** of the YBM API key the environment's agent will
-   authenticate with. YCP resolves the Meko release the data plane should run (six image
-   references, pinned in `meko/api_server/internal/service/dataplane_release.go`), stores
-   it as that environment's desired state, and returns the environment with an install
-   hint. `GET /api/v1/environments/{id}` renders the same hint, so an operator who did
-   not run the commands there and then can still find them on the environment; the
-   `agent_base_url` the registration gave is stored for exactly that. The key id is
-   unique fleet-wide: one key drives one environment.
-2. **Enroll** — `meko-agent` starts in the customer cluster, reads its
-   service-account token + cluster facts, and `POST`s `/agent/enroll` — like every
-   agent call, authenticated with the API key. YCP resolves the environment bound to
-   the key and returns its identity **together with the stack** the environment runs.
-   The environment moves to `ATTESTING`. Enrollment is an idempotent check-in the
-   agent repeats at every startup.
-3. **Deploy** — the agent has everything it needs in that one response, so it deploys
-   the whole data plane on its first tick. It persists the stack in its state Secret,
-   which means a restart during a control-plane outage brings Meko back with no
-   successful control-plane call in the path. Nothing has to be commanded, and a
-   control plane that is down cannot stop an already-enrolled agent from reconciling.
+   authenticate with. Registration declares nothing of its own: an environment starts
+   with whatever the caller passed as `desired`, or with nothing. It returns the
+   environment plus an install hint, and `GET /api/v1/environments/{id}` renders the
+   same hint, so an operator who did not run the commands there and then can still
+   find them; the `agent_base_url` the registration gave is stored for exactly that.
+   The key id is unique fleet-wide: one key drives one environment.
+2. **Install** — the operator installs the data plane from its chart:
+   `yb-amp-controller` for an amp environment, the `meko` chart for a meko one. The
+   agent is a component of that release. Nothing about the workloads travels through
+   the control plane, which is why the install hint is the only place an operator is
+   told what to run.
+3. **Enroll** — the agent starts in the customer cluster, reads its service-account
+   token + cluster facts, and `POST`s `/agent/enroll` — like every agent call,
+   authenticated with the API key. YCP resolves the environment bound to the key and
+   returns its identity. The environment moves to `ATTESTING`. Enrollment is an
+   idempotent check-in the agent repeats at every startup, so a restart can never lock
+   an agent out.
 4. **Reconcile** — on each tick the agent `GET`s `/agent/desired-state`. Desired
-   state is a generic, resource-typed set (`{kind, name, spec,
-   generation}`, where the control plane bumps `generation` only when a resource's spec
-   changes, so an agent can skip an unchanged resource without keeping its own store);
-   it is where registration wrote the stack and where an operator's later changes go, so
-   **when it can be read it is authoritative** — including when it is empty, which is how
-   an environment is told to run nothing. **When it cannot be read the enrolled stack
-   stands**, and the tick proceeds: an unreachable control plane no longer leaves the
-   data plane untouched. Garbage collection is the one thing that needs a desired state
-   that was actually read — the agent cannot know what an operator withdrew from a
-   response it never got.
-5. **Report** — the agent `POST`s `/agent/status` with real facts,
-   component health. This drives the fleet registry and the console's live view. An
-   amp agent also relays the controller's **task log** here — see below.
+   state is a generic, resource-typed set (`{kind, name, spec, generation}`, where the
+   control plane bumps `generation` only when a resource's spec changes, so an agent
+   can skip an unchanged resource without keeping its own store). **When it can be
+   read it is authoritative** — including when it is empty, which is how an
+   environment is told to hold nothing. Garbage collection is the one thing that needs
+   a desired state that was actually read: the agent cannot know what an operator
+   withdrew from a response it never got.
+5. **Report** — the agent `POST`s `/agent/status` with real facts and the inventory it
+   read back. This drives the fleet registry and the console's live view. An amp agent
+   also relays the controller's **task log** here — see below.
 
-Because desired state is resource-typed, adding a new managed resource needs
-only a new agent-side reconciler — no protocol change.
+Because desired state is resource-typed, adding a new managed resource needs only a
+new case in a backend — no protocol change.
 
 ### Tasks: the operations behind the inventory
 
@@ -142,65 +138,37 @@ Two properties are load-bearing:
 This does not soften "state is observed, not narrated": YCP invents no tasks and drives
 no state machine of its own, it relays what the controller recorded.
 
-`POST /environments` still accepts `"desired": [...]` to declare an environment's
-resources explicitly — including `[]` for one that runs nothing until told — and
-`--no-bootstrap-defaults` turns seeding off fleet-wide. An agent that enrolls into an
-environment with no stack runs only what desired state declares, which is the behaviour
-that predates this.
+`POST /environments` takes `"desired": [...]` to declare an environment's resources —
+including `[]`, which is simply the same as omitting it. There is no server-side seed:
+what an environment holds is what somebody declared.
 
-### What the agent runs
+### What a meko agent converges
 
-| Kind | What the agent does | Where |
-|------|--------------------|-------|
-| `meko-stack` | **The whole data plane, as one resource.** What registration seeds and enrollment hands over. YugabyteDB with the `mage` and `pg_dist_rag` extensions, then Meko's `api-server`, `mcp-server`, `rag-worker`, `inference-gateway` and `ui` over it. | `cmd/agent/mekostack.go` |
-| `database` | Runs the data-plane database itself (StatefulSet + Service + a password Secret it generates), or resolves an external one the operator points it at. Everything else derives its DSN from this. | `cmd/agent/stack.go` |
-| `mcp-server` | Deploys `meko-mcp-server` over that database — the tenant-facing MCP endpoint on `:8000`. | `cmd/agent/stack.go` |
-| `rag-worker` | Deploys the RAG indexing worker over the same database. | `cmd/agent/stack.go` |
+| Kind | Name | What it is |
+|------|------|-----------|
+| `agent` | `"<agent>"` | A user-scoped agent in meko — the name datapacks are attributed to. `POST`/`GET`/`DELETE /agents`. |
+| `datapack` | `"<agent>/<datapack>"` | A datapack under that agent. The path is the hierarchy, so the agent is created first and the datapack gated on it. |
 
-`meko-stack` is built **on** the other three rather than beside them: it resolves its
-database through the same code path as kind `database`, and delegates the MCP server and
-RAG worker to their own reconcilers, lending them its database and its GC key. So
-there is one env contract per workload rather than two that drift — `meko-mcp-server`'s
-alone is fourteen variables split across a ConfigMap, a composed-DSN Secret and an
-`envFrom`.
+The shape is `ampbackend`'s: the path yields the parent for the engine's ordering and,
+at apply time, the parent's id for the request. amp cannot model *its* equivalent —
+users have no delete, so its engine must not list them, and `ampbackend` materializes
+a pool's owner inside `Create` instead. meko's agents do have a delete, so they are
+resources.
 
-### One ordering constraint is real
+Two things the mapping has to do that amp's does not:
 
-The extensions have to exist before the api-server starts. `api_server` runs its
-migrations on boot and the data set references `dist_rag.vector_indexes` and the
-`dist_rag` enum types, so an api-server that reaches a database without `pg_dist_rag`
-fails its own migration and crash-loops. The reconciler therefore goes: database →
-`CREATE DATABASE meko` → `CREATE EXTENSION mage, pg_dist_rag CASCADE` → everything else.
-
-Everything else is deployed whether or not that succeeded, for the same reason the
-mcp-server reconciler already worked that way: a workload that is declared and retrying
-is visible and diagnosable, and an empty namespace while the agent waits for a database
-to accept connections is not.
-
-`mage` additionally needs the `ysql_yb_enable_mage=true` gflag on both the master and
-the tserver — a start-time flag, so the agent renders it into the `yugabyted` command
-rather than issuing SQL. And the image matters: `mage` and `pg_dist_rag` are in
-Yugabyte's Meko build (`yugabyte-db/ybdb-meko-release`), not in the public `yugabytedb`
-image, so `images.database` has no default. A guessed public tag produces a database
-that starts perfectly and then cannot install a single extension the schema needs.
-
-Two properties the specs hold to:
-
-- **Secret values never travel in desired state**, only Secret *names*. Operator
-  credentials (`OPENAI_API_KEY`, AWS keys) reach a workload by `envFrom`
-  secretRef, so the control plane never stores them and the agent never copies
-  them. The one exception is a composed connection string that cannot be
-  assembled from `secretKeyRef`s, which the agent writes into a Secret beside the
-  password it derives from.
-- **Every spec field is optional.** `{"kind":"database","name":"meko"}` with no
-  spec brings up a working database; an unknown field from a newer control plane
-  is ignored rather than fatal. The exception is a private image: `mcp-server`
-  and `rag-worker` refuse to deploy without `spec.image`, because a guessed tag
-  fails minutes later as `ImagePullBackOff` instead of immediately as a bad spec.
-
-Applies are **server-side apply**, not create-if-absent: a changed image in
-desired state has to actually roll out, and the earlier "POST and treat 409 as
-success" was create-once.
+- **Cascade.** The engine skips a child's delete when the parent is going too, on the
+  contract that the backend cascades. meko's `DELETE /agents/{id}` removes the
+  `agent_access` and `agents` rows and leaves the datapacks pointing at an id that no
+  longer exists, so `mekobackend` deletes the datapacks first itself. Without that,
+  withdrawing an agent with its datapacks orphans them permanently — the next list
+  cannot see them, so nothing can ever collect them.
+- **Leave the signup agent alone.** `meko_agent` is the row every account gets at
+  signup and the id the share and invite grants are written under. Deleting it would
+  revoke every datapack shared into the account and break every later create that
+  names no agent, and nothing but a fresh signup restores it. It is account
+  infrastructure, so it is excluded from the inventory entirely — the same call amp
+  makes about users — along with anything attributed to it.
 
 ### Environment state is observed, not narrated
 
@@ -250,17 +218,18 @@ environment for the replacement. A check-in that fails at startup falls back to
 the persisted identity when there is one, for the same reason: a control plane
 that cannot be reached must not take the data plane down with it.
 
-The `meko-agent-state` Secret holds no credential: only the identity the last
-check-in confirmed, the **stack** the agent enrolled with, and the last desired
-state — so a restart during a control-plane outage begins reconciling before its
-first request succeeds. The remaining gap — CA pinning — is tracked in
-[meko#401](https://github.com/yugabyte/meko/issues/401).
+The `reconcile-agent-state` Secret holds no credential: only the identity the last
+check-in confirmed, and the kind it confirmed it as — environment names are unique
+only within a kind, so the name alone cannot tell a resumed identity from a
+same-named environment of the other kind. The remaining gap — CA pinning — is
+tracked in [meko#401](https://github.com/yugabyte/meko/issues/401).
 
 ### The meko api-server has one caller
 
-meko's `api_server` in a BYOC data plane serves the reconcile-agent and nothing
-else — no console, no MCP client, no person. That is what makes the mapping amp's
-without qualification: the agent is authoritative over everything the API holds,
+meko's `api_server` in a BYOC data plane has one *writer*: the reconcile-agent. The
+release ships `meko-ui` and `meko-mcp-server` beside it and they read through it (see
+below), but nothing else is expected to create. That is what makes the mapping amp's:
+the agent is authoritative over everything the API holds,
 exactly as it is over an amp controller's inventory, so it lists every agent and
 every datapack and garbage-collects whatever desired state stops declaring.
 
@@ -292,17 +261,20 @@ rather than of the deployment.
 go test ./...                 # unit tests: no database or cluster needed
 ycp/test/e2e/run.sh           # build + deploy on kind; needs docker + kind
 ycp/test/local/meko-reconcile.sh   # the kind=meko reconcile loop, on a kept e2e
-                                   # cluster; needs ECR credentials and MEKO_TAG
+                                   # cluster; needs ECR credentials
 ```
 
-- `cmd/agent` — decoding of both response envelopes, including the case that
-  broke the agent: a `{"data":…}` wrapper decoded straight into the payload
-  struct, yielding zero values instead of an error.
-  tools/call) plus the unknown-method error path.
-- `test/e2e` — builds the api-server and agent images, stands them up on a
-  throwaway kind cluster, and drives register → bootstrap → command → GC. This is
-  the only test that exercises the real images, the real migrations, RBAC and the
-  token handshake over the wire; see the header comment in `test/e2e/run.sh`.
+- `internal/mekoclient` — decoding of the api-server's `{"data":…,"error":…}`
+  envelope, including the case that once broke the agent: the wrapper decoded
+  straight into the payload struct, yielding zero values instead of an error
+  ([meko#399](https://github.com/yugabyte/meko/issues/399)).
+- `reconcile/mekobackend` — the kind mapping, the cascade, and the rejections that
+  must be permanent rather than retried.
+- `test/e2e` — builds the control-plane image, stands it up on a throwaway kind
+  cluster, and drives rollout → health → base path → auth gate → register → install
+  hint. It exercises the real image, the real migrations and RBAC over the wire. It
+  does **not** cover an agent converging anything; see the header comment for why,
+  and `test/local/meko-reconcile.sh` for where that lives.
 
 The registry's own unit tests live with the implementation, in
 `api_server/internal/service/` and `api_server/internal/repository/`.

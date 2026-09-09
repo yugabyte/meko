@@ -66,7 +66,7 @@ func (h *EnvironmentHandler) Get(c echo.Context) error {
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
 	}
-	e.InstallHint = installHint(c, e, h.desiredForHint(e))
+	e.InstallHint = installHint(c, e)
 	return ok(c, http.StatusOK, e)
 }
 
@@ -92,63 +92,11 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-	// The request, not a read-back. Register deliberately swallows a failed
-	// desired-state write so the registration still stands, and reading back through
-	// that failure would print the chart-installed hint for an environment that was
-	// meant to be seeded with a stack. What the caller declared cannot be wrong here.
 	body := map[string]any{
 		"environment":  e,
-		"install_hint": installHint(c, e, h.declaredDesired(req)),
+		"install_hint": installHint(c, e),
 	}
 	return ok(c, http.StatusCreated, body)
-}
-
-// declaredDesired is what the registration asked for. An explicit "desired": [] is
-// the opt-in to the chart-installed model; anything else — including an omitted
-// field, which means the server's bootstrap defaults — leaves the hint on the
-// meko-agent model.
-//
-// It has to agree with desiredForHint, which the next GET on the same environment
-// goes through, or one environment gets two different install instructions. With
-// seeding off both answer "meko-agent": an explicit [] stores no rows, so the read
-// cannot tell it apart from the empty state every environment has on such a control
-// plane, and the register-time answer must not claim a distinction the read cannot
-// keep.
-func (h *EnvironmentHandler) declaredDesired(req service.RegisterEnvironmentRequest) []models.DesiredResource {
-	if req.Desired == nil || !h.svc.BootstrapDefaultsEnabled() {
-		return nil
-	}
-	return *req.Desired
-}
-
-// desiredForHint reads what the environment declares, so the hint can name the
-// agent that actually serves it. A failed read returns nil rather than an error:
-// the hint is a convenience on a response whose real payload is the environment,
-// and installHint treats nil as the older meko-agent model.
-//
-// So does an empty read on a control plane started with --no-bootstrap-defaults.
-// That flag makes every meko registration seed nothing, so emptiness there says
-// only that the fleet seeds nothing — not that this environment's stack came from
-// the chart. Reading it as the latter flips every environment on such a control
-// plane onto the wrong install model.
-func (h *EnvironmentHandler) desiredForHint(e *models.Environment) []models.DesiredResource {
-	if e.Kind == "amp" {
-		return nil // the amp hint does not branch on desired state
-	}
-	desired, err := h.svc.Desired(e.UUID)
-	if err != nil {
-		return nil
-	}
-	if len(desired) == 0 && !h.svc.BootstrapDefaultsEnabled() {
-		return nil
-	}
-	if desired == nil {
-		// An environment with no rows declares nothing, which is a real answer and
-		// not the same as a read that failed. Distinguish them, or every
-		// chart-installed environment renders the meko-agent hint.
-		return []models.DesiredResource{}
-	}
-	return desired
 }
 
 // SetDesired replaces the environment's desired resource set.
@@ -298,11 +246,10 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	body := map[string]any{
 		"environment_id": e.ID, "environment_uuid": e.UUID, "mcp_base_url": e.MCPBaseURL,
 	}
-	// The stack comes back with enrollment, so an agent that enrolls can deploy the
-	// whole data plane from this one response — no second call, and nothing for an
-	// operator to command. A failure to read it is logged and omitted rather than
-	// failing the enrollment: the agent retries the read on every desired-state tick
-	// anyway.
+	// Legacy: the retired meko-agent deployed the data plane from this field. No
+	// current agent reads it and nothing seeds one, so it is present only for an
+	// environment registered before that change. A failure to read it is logged and
+	// omitted rather than failing the enrollment.
 	if stack, err := h.svc.EnrolledStack(e.UUID); err != nil {
 		slog.Warn("could not read the stack to hand the enrolling agent",
 			"environment", e.ID, "error", err)

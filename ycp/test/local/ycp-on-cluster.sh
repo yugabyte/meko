@@ -25,10 +25,7 @@
 #       --tag bootstrap-7c8776b41
 #   ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --delete    # tear both down
 #
-#   --reconcile picks the reconcile-agent data plane: the chart installs the stack and
-#   the agent converges the environment's datapacks over the api-server. The default
-#   is the meko-agent, which reconciles a seeded meko-stack into k8s.
-#     ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --reconcile \
+#     ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all \
 #         --agent-tag custom-abc123
 #
 #   --storage-class is needed on any cluster without the cloud preset's default: the gcp
@@ -48,12 +45,6 @@ CTX=""
 YCP_NS="${YCP_NS:-ycp}"
 MEKO_NS="${MEKO_NS:-meko}"
 TAG="${TAG:-}"
-# --reconcile installs the OTHER data-plane model: the chart brings the stack up and
-# the reconcile-agent converges the environment's datapacks over the api-server,
-# instead of the meko-agent reconciling a seeded meko-stack into k8s. The two are
-# alternatives — one YCP client per environment — so this is a mode, not a flag that
-# adds something.
-RECONCILE=0
 AGENT_TAG="${AGENT_TAG:-latest}"
 # The control-plane image, when it does not live in the ECR the cloud preset points
 # at. meko/api_server publishes to Quay on demand (meko-control-plane-image.yml), and
@@ -116,7 +107,6 @@ while [ $# -gt 0 ]; do
     --ycp-only)   STAGE=ycp; shift ;;
     --agent-only) STAGE=agent; shift ;;
     --all)        STAGE=all; shift ;;
-    --reconcile)  RECONCILE=1; shift ;;
     --agent-tag)  AGENT_TAG="$2"; shift 2 ;;
     --ycp-image)  YCP_IMAGE="$2"; shift 2 ;;
     --admin-key)  ADMIN_KEY="$2"; shift 2 ;;
@@ -170,26 +160,17 @@ if [ "$DELETE" = "1" ]; then
       echo "    skipping $ns — not created by this script (or absent)"
     fi
   done
-  # Namespaces the agent created itself are labeled by the agent, not by this script,
-  # and sit outside both namespaces above. They belong to the data plane, so they go
-  # only when the data plane does.
-  if [ "$STAGE" != ycp ]; then
-    for dpns in $(k get ns -l app.kubernetes.io/managed-by=meko-agent -o name 2>/dev/null | cut -d/ -f2); do
-      k delete ns "$dpns" --wait=false && echo "    deleting agent-managed namespace $dpns"
-    done
-  fi
   exit 0
 fi
 
-[ -n "$TAG" ] || die "--tag is required: the image tag in ECR to deploy.
+[ -n "$TAG" ] || die "--tag is required: the api-server image tag in ECR to deploy.
   Build and push one from this checkout with:
     export AWS_PROFILE=meko-dev; TAG=bootstrap-\$(git rev-parse --short HEAD)
-    for spec in meko/api_server/Dockerfile:meko/api_server:meko-api-server \\
-                ycp/Dockerfile.agent:ycp:meko-agent; do
-      df=\${spec%%:*}; r=\${spec#*:}; podman build --platform linux/amd64 \\
-        -f \$df -t $ECR/meko/\${r#*:}:\$TAG \${r%%:*} && podman push $ECR/meko/\${r#*:}:\$TAG
-    done
-  --platform linux/amd64 matters: the nodes are amd64 and this laptop may not be."
+    podman build --platform linux/amd64 -f meko/api_server/Dockerfile \\
+      -t $ECR/meko/meko-api-server:\$TAG meko/api_server
+    podman push $ECR/meko/meko-api-server:\$TAG
+  --platform linux/amd64 matters: the nodes are amd64 and this laptop may not be.
+  The reconcile-agent is not built here — it publishes to Quay; see --agent-tag."
 
 # Only the derived default is timestamped. --env-name has to stay the environment id so
 # --agent-only can attach to a control plane that is already running one.
@@ -205,7 +186,7 @@ cleanup() {
     k -n "$YCP_NS" get pods 2>/dev/null | head -8 || true
     if k get ns "$MEKO_NS" >/dev/null 2>&1; then
       k -n "$MEKO_NS" get pods,statefulsets,deployments 2>/dev/null | head -16 || true
-      k -n "$MEKO_NS" logs deploy/meko-agent --tail=30 2>/dev/null | head -40 || true
+      k -n "$MEKO_NS" logs deploy/meko-reconcile-agent --tail=30 2>/dev/null | head -40 || true
     fi
   fi
   exit "$rc"
@@ -403,11 +384,9 @@ fi
 
 log "registering environment $ENV_NAME"
 API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-# "desired": [] is the whole opt-in to the chart-installed model: an environment that
-# declares nothing has no stack for the meko-agent to reconcile, and the control
-# plane's install hint prints the reconcile-agent commands for exactly that shape.
-reg_desired=""
-[ "$RECONCILE" = 1 ] && reg_desired=',"desired":[]'
+# An environment declares nothing at registration — its workloads come from the
+# chart, and its resources are POSTed afterwards.
+reg_desired=',"desired":[]'
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
   -d "{\"name\":\"$ENV_NAME\",\"kind\":\"meko\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\",\"api_key_id\":\"$API_KEY_ID\"$reg_desired}")" ||
   die "registration failed"
@@ -418,35 +397,13 @@ echo "--------- the install command YCP printed ---------"
 printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["install_hint"])'
 echo "--------------------------------------------------"
 
-if [ "$RECONCILE" = 1 ]; then
-  api GET "/api/v1/environments/$ENV_ID/desired" | python3 -c '
+api GET "/api/v1/environments/$ENV_ID/desired" | python3 -c '
 import json, sys
 res = json.load(sys.stdin)["data"]["resources"] or []
 if res:
-    sys.exit("    seeded %s — a reconcile-agent environment must declare nothing"
-             % [r["kind"] for r in res])
+    sys.exit("    seeded %s — registration must declare nothing" % [r["kind"] for r in res])
 print("    seeded nothing, as declared")
-' || die "registration seeded a stack; --reconcile registers an environment that declares none"
-else
-api GET "/api/v1/environments/$ENV_ID/desired" | python3 -c '
-import json, sys
-res = json.load(sys.stdin)["data"]["resources"]
-print("    seeded at registration: " + ", ".join(r["kind"] + "/" + r["name"] for r in res))
-stack = next((r for r in res if r["kind"] == "meko-stack"), None)
-if stack is None:
-    sys.exit("    no meko-stack seeded — registration should resolve the whole release")
-images = stack["spec"].get("images", {})
-missing = [c for c in ("database", "api_server", "mcp_server", "rag_worker", "inference_gateway", "ui")
-           if not images.get(c)]
-if missing:
-    sys.exit("    seeded stack has no image for %s" % ", ".join(missing))
-for c in sorted(images):
-    print("      %-18s %s" % (c, images[c]))
-if not stack["spec"].get("image_pull_secret"):
-    sys.exit("    seeded stack names no image_pull_secret — every image in it is private, "
-             "so nothing would pull")
-' || die "registration did not seed the stack"
-fi
+' || die "registration seeded something; it must declare nothing"
 
 # --------------------------------------------------------------------------- agent
 
@@ -459,239 +416,81 @@ k -n "$MEKO_NS" create secret generic meko-agent-api-key \
 # cluster, so the agent needs no external address — and the dot matters: ndots:5
 # makes the four-dot relative form walk the search list first and stall.
 YCP_URL="http://meko-api-server-service.$YCP_NS.svc.cluster.local.:80/api/v1"
-if [ "$RECONCILE" = 1 ]; then
-  # values-byoc.yaml LAST: it is what makes this one self-contained namespace — the
-  # stack plus its own YugabyteDB, and nothing outside it.
-  h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
-    -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
-    --set-string apiServer.image.tag="$MEKO_API_TAG" \
-    --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
-    --set-string mekoUi.image.tag="$MEKO_UI_TAG" \
-    --set reconcileAgent.enabled=true \
-    --set reconcileAgent.ycpUrl="$YCP_URL" \
-    --set reconcileAgent.envName="$ENV_ID" \
-    --set-string reconcileAgent.image.tag="$AGENT_TAG" \
-    --set ecrCredentialRefresh.enabled=false \
-    --wait --timeout "$TIMEOUT" >/dev/null ||
-    die "the data-plane install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS).
-    If the reconcile-agent image cannot be pulled, quay.io/yugabyte/ycp-reconciler-agent:$AGENT_TAG
-    may never have been pushed — the workflow skips the push without QUAY_AMP_TOKEN.
-    Build and push one with ycp/build-reconciler-agent-image.sh, then pass --agent-tag."
-else
-  h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
-    -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-agent.yaml" \
-    --set agent.ycpUrl="$YCP_URL" \
-    --set agent.envName="$ENV_ID" \
-    --set-string agent.image.tag="$TAG" \
-    --set agent.provider="$CLOUD" \
-    --set ecrCredentialRefresh.enabled=false \
-    --wait --timeout "$TIMEOUT" >/dev/null ||
-    die "the agent install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS)"
-fi
+# values-byoc.yaml LAST: it is what makes this one self-contained namespace — the
+# stack plus its own YugabyteDB, and nothing outside it.
+h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
+  -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
+  --set-string apiServer.image.tag="$MEKO_API_TAG" \
+  --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
+  --set-string mekoUi.image.tag="$MEKO_UI_TAG" \
+  --set reconcileAgent.enabled=true \
+  --set reconcileAgent.ycpUrl="$YCP_URL" \
+  --set reconcileAgent.envName="$ENV_ID" \
+  --set-string reconcileAgent.image.tag="$AGENT_TAG" \
+  --set ecrCredentialRefresh.enabled=false \
+  --wait --timeout "$TIMEOUT" >/dev/null ||
+  die "the data-plane install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS).
+  If the reconcile-agent image cannot be pulled, quay.io/yugabyte/ycp-reconciler-agent:$AGENT_TAG
+  may never have been pushed — the workflow skips the push without QUAY_AMP_TOKEN.
+  Build and push one with ycp/build-reconciler-agent-image.sh, then pass --agent-tag."
 
 # ------------------------------------------------------- watch it bootstrap itself
 
-if [ "$RECONCILE" = 1 ]; then
-  log "waiting for the reconcile-agent to enroll"
-  enrolled=""
-  for _ in $(seq 1 60); do
-    enrolled="$(k -n "$MEKO_NS" logs deploy/meko-reconcile-agent --tail=-1 2>/dev/null |
-                  grep "enrolled env=" | tail -1 || true)"
-    [ -n "$enrolled" ] && break
-    sleep 2
-  done
-  [ -n "$enrolled" ] ||
-    die "the reconcile-agent never enrolled — kubectl -n $MEKO_NS logs deploy/meko-reconcile-agent"
-  printf '    %s\n' "$enrolled"
-
-  log "declaring a datapack and waiting for it to converge"
-  api POST "/api/v1/environments/$ENV_ID/desired" -H 'content-type: application/json' \
-    -d '{"resources":[{"kind":"datapack","name":"smoke","spec":{"description":"declared by YCP"}}]}' \
-    >/dev/null || die "POST desired failed"
-
-  converged=""
-  for _ in $(seq 1 90); do
-    converged="$(api GET "/api/v1/environments/$ENV_ID" | python3 -c '
-import json, sys
-e = json.load(sys.stdin)["data"]
-for r in json.loads(e.get("resources") or "[]"):
-    if r.get("id", "").endswith("smoke"):
-        print(r.get("state", ""), r.get("error", ""))
-' 2>/dev/null | head -1 || true)"
-    case "$converged" in ready*) break ;; esac
-    sleep 2
-  done
-  case "$converged" in
-    ready*) echo "    datapack smoke converged" ;;
-    *) die "the datapack never converged (last reported: ${converged:-nothing}).
-    kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent" ;;
-  esac
-
-  cat <<EOF
-
-==> PASS — $ENV_ID registered in $YCP_NS declaring nothing, the chart installed the
-    stack in $MEKO_NS, and the reconcile-agent converged the datapack YCP declared.
-
-    admin secret: $ADMIN_KEY
-
-    Console:     kubectl --context $CTX -n $YCP_NS port-forward svc/meko-api-server-service 18080:80
-    Agent loop:  kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent
-    Datapacks:   kubectl --context $CTX -n $MEKO_NS port-forward svc/meko-api-server-service 18001:80
-                 curl http://127.0.0.1:18001/api/v1/datapacks
-
-    Declare more (desired state is REPLACED, so send the whole set):
-      curl -X POST http://127.0.0.1:$PORT/api/v1/environments/$ENV_ID/desired \\
-        -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \\
-        -d '{"resources":[{"kind":"datapack","name":"smoke"},{"kind":"datapack","name":"team-b"}]}'
-
-    Withdraw one and it is garbage-collected. A datapack made through the UI carries a
-    different created_by_agent_id and is never touched.
-
-    Tear down:   $0 --context $CTX --ycp-ns $YCP_NS --meko-ns $MEKO_NS --delete
-EOF
-  exit 0
-fi
-
-log "waiting for the agent to enroll"
+log "waiting for the reconcile-agent to enroll"
 enrolled=""
-for _ in $(seq 1 45); do
-  enrolled="$(k -n "$MEKO_NS" logs deploy/meko-agent --tail=-1 2>/dev/null |
-                grep "enrolled: environment_id=$ENV_ID" | tail -1 || true)"
+for _ in $(seq 1 60); do
+  enrolled="$(k -n "$MEKO_NS" logs deploy/meko-reconcile-agent --tail=-1 2>/dev/null |
+                grep "enrolled env=" | tail -1 || true)"
   [ -n "$enrolled" ] && break
   sleep 2
 done
-[ -n "$enrolled" ] || die "the agent never enrolled — kubectl -n $MEKO_NS logs deploy/meko-agent"
+[ -n "$enrolled" ] ||
+  die "the reconcile-agent never enrolled — kubectl -n $MEKO_NS logs deploy/meko-reconcile-agent"
 printf '    %s\n' "$enrolled"
 
-log "waiting for the database the agent was never told to run"
-# Found by label, not by name. The stack names its objects after the resource it was
-# seeded as (meko-yugabytedb), and a hardcoded name here is exactly what broke this
-# script when registration started seeding a meko-stack instead of a database.
-DB=""
-for _ in $(seq 1 60); do
-  DB="$(k -n "$MEKO_NS" get statefulset -l meko.dev/stack=true \
-        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  [ -n "$DB" ] && break
+log "declaring a datapack and waiting for it to converge"
+api POST "/api/v1/environments/$ENV_ID/desired" -H 'content-type: application/json' \
+  -d '{"resources":[{"kind":"datapack","name":"smoke","spec":{"description":"declared by YCP"}}]}' \
+  >/dev/null || die "POST desired failed"
+
+converged=""
+for _ in $(seq 1 90); do
+  converged="$(api GET "/api/v1/environments/$ENV_ID" | python3 -c '
+import json, sys
+e = json.load(sys.stdin)["data"]
+for r in json.loads(e.get("resources") or "[]"):
+  if r.get("id", "").endswith("smoke"):
+      print(r.get("state", ""), r.get("error", ""))
+' 2>/dev/null | head -1 || true)"
+  case "$converged" in ready*) break ;; esac
   sleep 2
 done
-[ -n "$DB" ] ||
-  die "no database StatefulSet — the agent enrolled but did not act on its desired state"
-echo "    StatefulSet $DB"
-k -n "$MEKO_NS" rollout status "statefulset/$DB" --timeout="$TIMEOUT"
-
-log "waiting for the Meko services (the first meko-mcp-server pull is several GB)"
-# Every Deployment the stack owns, by label. The inference gateway is skipped without an
-# OPENAI_API_KEY: it builds its LLM client at import, so it exits rather than degrades,
-# and that is missing configuration rather than a fault in the stack.
-for dep in $(k -n "$MEKO_NS" get deploy -l meko.dev/stack=true \
-             -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
-  case "$dep" in
-    *inference-gateway)
-      if [ -z "${OPENAI_API_KEY:-}" ]; then
-        echo "    skipping $dep — it needs OPENAI_API_KEY to start at all"
-        continue
-      fi ;;
-  esac
-  k -n "$MEKO_NS" rollout status "deploy/$dep" --timeout="$TIMEOUT" || die "$dep never became ready"
-done
-
-log "checking the fleet API reports the stack healthy"
-# Which components to require. `yugabytedb`, not `postgres`: a component reports the
-# engine it is running, and the stack's engine is yugabytedb. The gateway is left out
-# when there is no OPENAI_API_KEY — it builds its LLM client at import so it never
-# starts, and READY means EVERY declared component is up, so READY is then unreachable
-# and demanding it would fail the run over missing configuration.
-WANT="meko-agent yugabytedb api-server mcp-server rag-worker ui"
-[ -n "${OPENAI_API_KEY:-}" ] && WANT="$WANT inference-gateway"
-for _ in $(seq 1 40); do
-  envs="$(api GET /api/v1/environments 2>/dev/null || true)"
-  python3 - "$ENV_ID" "$envs" "$WANT" >/dev/null 2>&1 <<'PY' && break
-import json, sys
-items = json.loads(sys.argv[2] or "{}").get("data", {}).get("items") or []
-e = next((x for x in items if x["id"] == sys.argv[1]), None)
-comps = {c["name"]: c for c in ((e or {}).get("components") or [])}
-sys.exit(0 if all(w in comps and comps[w]["total"] > 0 and comps[w]["healthy"] == comps[w]["total"]
-                  for w in sys.argv[3].split()) else 1)
-PY
-  sleep 5
-done
-python3 - "$ENV_ID" "${envs:-}" "$WANT" "${OPENAI_API_KEY:-}" <<'PY' || die "the fleet API does not report a healthy stack"
-import json, sys
-items = json.loads(sys.argv[2] or "{}").get("data", {}).get("items") or []
-e = next((x for x in items if x["id"] == sys.argv[1]), None)
-if e is None:
-    sys.exit("%s not in the fleet" % sys.argv[1])
-comps = {c["name"]: c for c in (e.get("components") or [])}
-print("    state=%s" % e["state"])
-for c in (e.get("components") or []):
-    print("      %-18s %d/%d %s%s" % (c["name"], c["healthy"], c["total"],
-                                      c.get("version") or "",
-                                      "  ERROR: " + c["error"] if c.get("error") else ""))
-missing = [w for w in sys.argv[3].split()
-           if w not in comps or comps[w]["total"] == 0 or comps[w]["healthy"] != comps[w]["total"]]
-if missing:
-    sys.exit("not reported healthy: %s" % ", ".join(missing))
-if not sys.argv[4]:
-    print("    (PROVISIONING is expected without OPENAI_API_KEY: the gateway is declared "
-          "but cannot start. Set it to reach READY.)")
-elif e["state"] != "READY":
-    sys.exit("state=%s, want READY" % e["state"])
-PY
-
-# The images to print in the example below, read back from what registration actually
-# seeded, so the command matches what is running. A hand-written example drifts from the
-# pinned release, and a partial one is worse: a placeholder that reaches a pod spec
-# produces InvalidImageName rather than an error.
-seeded_images="$(api GET "/api/v1/environments/$ENV_ID/desired" | python3 -c '
-import json, sys
-res = json.load(sys.stdin)["data"]["resources"]
-stack = next((r for r in res if r["kind"] == "meko-stack"), None)
-i = (stack or {}).get("spec", {}).get("images", {})
-for k in ("database", "api_server", "mcp_server", "rag_worker", "inference_gateway", "ui"):
-    print(i.get(k, ""))
-' 2>/dev/null || true)"
-# Defaulted, because `set -u` turns an empty read into "unbound variable" and kills the
-# run AFTER everything succeeded — which is exactly what happened when this block sat in
-# the wrong branch.
-DB_IMAGE="$(printf '%s\n' "$seeded_images" | sed -n 1p)"; DB_IMAGE="${DB_IMAGE:-<database image>}"
-API_IMAGE="$(printf '%s\n' "$seeded_images" | sed -n 2p)"; API_IMAGE="${API_IMAGE:-<api_server image>}"
-MCP_IMAGE="$(printf '%s\n' "$seeded_images" | sed -n 3p)"; MCP_IMAGE="${MCP_IMAGE:-<mcp_server image>}"
-RAG_IMAGE="$(printf '%s\n' "$seeded_images" | sed -n 4p)"; RAG_IMAGE="${RAG_IMAGE:-<rag_worker image>}"
-GW_IMAGE="$(printf '%s\n' "$seeded_images" | sed -n 5p)"; GW_IMAGE="${GW_IMAGE:-<inference_gateway image>}"
-UI_IMAGE="$(printf '%s\n' "$seeded_images" | sed -n 6p)"; UI_IMAGE="${UI_IMAGE:-<ui image>}"
+case "$converged" in
+  ready*) echo "    datapack smoke converged" ;;
+  *) die "the datapack never converged (last reported: ${converged:-nothing}).
+  kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent" ;;
+esac
 
 cat <<EOF
 
-==> PASS — $ENV_ID registered in $YCP_NS, agent installed into $MEKO_NS, Meko up on its own.
+==> PASS — $ENV_ID registered in $YCP_NS declaring nothing, the chart installed the
+  stack in $MEKO_NS, and the reconcile-agent converged the datapack YCP declared.
 
-    admin secret: $ADMIN_KEY
-      (generated for this install; also in the meko-admin-api-key Secret in $YCP_NS)
+  admin secret: $ADMIN_KEY
 
-    Console:     kubectl --context $CTX -n $YCP_NS port-forward svc/meko-api-server-service 18080:80
-                 http://127.0.0.1:18080/
-    MCP server:  kubectl --context $CTX -n $MEKO_NS port-forward svc/meko-mcp-server 18000:8000
-                 then POST http://127.0.0.1:18000/mcp
-    Agent loop:  kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-agent
-    The stack:   kubectl --context $CTX -n $MEKO_NS get all,cm -l meko.dev/stack=true
+  Console:     kubectl --context $CTX -n $YCP_NS port-forward svc/meko-api-server-service 18080:80
+  Agent loop:  kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent
+  Datapacks:   kubectl --context $CTX -n $MEKO_NS port-forward svc/meko-api-server-service 18001:80
+               curl http://127.0.0.1:18001/api/v1/datapacks
 
-    Change what it runs. Desired state is REPLACED, so send the whole set — and the
-    console reads it but does not edit it, so this is the way:
-      curl -X POST http://127.0.0.1:$PORT/api/v1/environments/$ENV_ID/desired \\
-        -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \\
-        -d '{"resources":[{"kind":"meko-stack","name":"meko","spec":{
-              "images":{"database":"$DB_IMAGE",
-                        "api_server":"$API_IMAGE",
-                        "mcp_server":"$MCP_IMAGE",
-                        "rag_worker":"$RAG_IMAGE",
-                        "inference_gateway":"$GW_IMAGE",
-                        "ui":"$UI_IMAGE"},
-              "image_pull_secret":"$PULL_SECRET",
-              "secret_ref":"$CREDS_SECRET",
-              "disable":["inference-gateway"]}}]}'
+  Declare more (desired state is REPLACED, so send the whole set):
+    curl -X POST http://127.0.0.1:$PORT/api/v1/environments/$ENV_ID/desired \\
+      -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \\
+      -d '{"resources":[{"kind":"datapack","name":"smoke"},{"kind":"datapack","name":"team-b"}]}'
 
-    (disable drops a component; the gateway is dropped above because it needs an
-    OPENAI_API_KEY in $CREDS_SECRET to start at all. Withdraw everything with
-    '{"resources":[]}' and the agent garbage-collects the stack.)
+  Withdraw one and it is garbage-collected. A datapack made through the UI carries a
+  the account's signup agent, which the reconciler keeps out of its inventory
+    entirely, so it is never collected.
 
-    Tear down:   $0 --context $CTX --ycp-ns $YCP_NS --meko-ns $MEKO_NS --delete
+  Tear down:   $0 --context $CTX --ycp-ns $YCP_NS --meko-ns $MEKO_NS --delete
 EOF
