@@ -36,7 +36,6 @@
 # Environment:
 #   AWS_PROFILE      profile with Meko ECR access (meko-dev here) — required.
 #   MEKO_CHART       the chart directory (default: this checkout's meko/deploy/helm/meko)
-#   MEKO_MCP_IMAGE   meko-mcp-server ref to seed; default = newest tag in ECR
 #   OPENAI_API_KEY   written into the data-plane Secret when set
 #
 set -euo pipefail
@@ -286,16 +285,6 @@ if [ -n "$existingDB" ]; then
   echo "    reusing the database password already in $YCP_NS (a new one would not match the volume)"
 fi
 
-# The MCP image to seed. Without it the control plane seeds only a database, and the
-# agent brings up half a stack — correct, but not what this script is here to show.
-MCP_IMAGE="${MEKO_MCP_IMAGE:-}"
-if [ -z "$MCP_IMAGE" ]; then
-  t="$(aws ecr describe-images --repository-name meko/meko-mcp-server --region "$ECR_REGION" \
-    --query 'reverse(sort_by(imageDetails,&imagePushedAt))[0].imageTags[0]' --output text 2>/dev/null || true)"
-  [ -n "$t" ] && [ "$t" != "None" ] || die "could not read ECR for the MCP tag (set MEKO_MCP_IMAGE)"
-  MCP_IMAGE="$ECR/meko/meko-mcp-server:$t"
-fi
-
 if [ "$STAGE" = agent ]; then
   k -n "$YCP_NS" get deploy meko-api-server >/dev/null 2>&1 ||
     die "--agent-only, but there is no control plane in $YCP_NS. Run with --ycp-only first."
@@ -305,7 +294,6 @@ if [ "$STAGE" = agent ]; then
   log "using the control plane already in $YCP_NS"
 else
 log "installing the control plane into $YCP_NS"
-echo "    seeding new environments with: $MCP_IMAGE"
 # --ycp-image wins over --tag: a full ref carries its own registry, repository and
 # tag, and mixing the two would install the preset's registry with somebody else's
 # tag — an image reference that resolves to nothing, or worse, to the wrong thing.
@@ -329,9 +317,6 @@ h upgrade --install "$YCP_NS" "$CHART" -n "$YCP_NS" \
   --set controlPlaneSecrets.dbPassword="$DB_PASSWORD" \
   --set controlPlaneSecrets.adminApiKey="$ADMIN_KEY" \
   --set controlPlaneSecrets.mcpInternalSecret="$MCP_INTERNAL" \
-  --set apiServer.dataplane.mcpImage="$MCP_IMAGE" \
-  --set apiServer.dataplane.imagePullSecret="$PULL_SECRET" \
-  --set apiServer.dataplane.secretRef="$CREDS_SECRET" \
   --set ecrCredentialRefresh.enabled=false \
   ${STORAGE_CLASS:+--set global.storageClassName=$STORAGE_CLASS} \
   --wait --timeout "$TIMEOUT" >/dev/null ||
@@ -368,12 +353,12 @@ cat <<EOF
     Fleet API: curl -H "X-Meko-Admin-Secret: $ADMIN_KEY" http://127.0.0.1:18080/api/v1/environments
 
     It has no environments yet. Attach a data plane — registers an environment and
-    installs the agent into $MEKO_NS, which then brings Meko up on its own:
+    installs the meko chart plus the reconcile-agent into $MEKO_NS:
 
       $0 --context $CTX --ycp-ns $YCP_NS --meko-ns $MEKO_NS --tag $TAG --agent-only
 
-    Newly registered environments will be seeded with:
-      database/meko and mcp-server/mcp ($MCP_IMAGE)
+    Registration declares nothing on its own; POST /environments/{id}/desired is
+    what tells the agent to converge an agent and its datapacks.
 
     Tear down: $0 --context $CTX --ycp-ns $YCP_NS --meko-ns $MEKO_NS --delete
 EOF

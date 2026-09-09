@@ -301,25 +301,35 @@ echo "    unauthenticated -> 401, authenticated -> 200"
 
 # 4. Register the environment, bound to this run's api_key_id. This is the
 #    operator step (YBM performs it in production).
-# 4a. First, what a plain registration seeds, over the real API: one meko-stack
-#     resource carrying the pinned release. This is the contract the whole
-#     deploy-on-enroll path rests on — a caller sends a name and the control plane
-#     resolves everything a data plane needs.
-#
-#     Checked on a THROWAWAY environment that no agent ever attaches to, because every
-#     image in the pinned release is private: this cluster has no registry credentials,
-#     so an agent told to run that stack would sit in ImagePullBackOff. What the seed
-#     contains is assertable here; that the images pull is not, and pretending otherwise
-#     is what test/local/meko-stack.sh exists for (it has ECR access). See the note at
-#     the top of this file.
+# 4a. Registration seeds nothing — a data plane's workloads come from its chart — so
+#     what an environment declares is what its caller declared. This one declares the
+#     two kinds a meko agent serves, which is also the positive half of the kind check
+#     below. No agent attaches to it: converging these needs an api-server to converge
+#     against, and this cluster has none.
 log "registering environment $ENV_NAME (api_key_id ${API_KEY_ID:0:8}...)"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
   -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"11111111-1111-1111-1111-111111111111\",\"placement\":\"cloud\",\"region\":\"local\",
        \"api_key_id\":\"$API_KEY_ID\",
-       \"desired\":[{\"kind\":\"database\",\"name\":\"meko\",\"spec\":{}}]}")"
+       \"desired\":[{\"kind\":\"agent\",\"name\":\"ycp\"},
+                   {\"kind\":\"datapack\",\"name\":\"ycp/smoke\",\"spec\":{\"description\":\"declared by the e2e\"}}]}")"
 bound="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["environment"]["api_key_id"])')"
 [ "$bound" = "$API_KEY_ID" ] || die "register response binding is $bound, want $API_KEY_ID: ${reg:0:200}"
 echo "    environment bound to the api key id"
+
+# 4b. What was declared is what reads back, and a kind no meko agent serves is refused
+#     where the operator is standing rather than a tick later as permanent drift. The
+#     404-vs-400 distinction matters: a 400 here proves the kind check ran, not that
+#     the route or the environment is missing.
+declared="$(api GET "/api/v1/environments/$ENV_NAME/desired" |
+  python3 -c 'import json,sys; r=json.load(sys.stdin)["data"]["resources"]; print(",".join(x["kind"]+"/"+x["name"] for x in r))')"
+[ "$declared" = "agent/ycp,datapack/ycp/smoke" ] ||
+  die "declared desired state reads back as '$declared', want 'agent/ycp,datapack/ycp/smoke'"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  "http://127.0.0.1:$PORT$BASE/api/v1/environments/$ENV_NAME/desired" \
+  -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+  -d '{"resources":[{"kind":"database","name":"meko","spec":{}}]}')"
+[ "$code" = "400" ] || die "declaring kind 'database' on a meko environment returned $code, want 400"
+echo "    desired state reads back, and a kind the agent cannot serve is refused (400)"
 
 # 4c. The install hint has to outlive the register response: an operator who did not
 #     paste it there and then reads it back off the environment, byte for byte. This
@@ -336,7 +346,7 @@ echo "    the install hint reads back off the environment"
 #     A YBM-registered environment reads back the pass-through base its registration
 #     gave, which is the whole reason that value is stored: rendered from the request
 #     address instead, the hint would point its agent somewhere it cannot reach.
-#     Throwaway environment, like seed-check above — no agent attaches to it.
+#     Throwaway environment, like the one above — no agent attaches to it.
 hint_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 api POST /api/v1/environments -H 'content-type: application/json' \
   -d '{"name":"hint-check","account_id":"11111111-1111-1111-1111-111111111111","placement":"cloud",

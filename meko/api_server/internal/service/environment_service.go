@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -79,9 +80,8 @@ func normalizeKind(kind string) (string, error) {
 // EnvironmentService owns the YCP fleet-registry logic: the api-key identity
 // binding, status ingestion, and generic desired-state. Control-plane mode only.
 type EnvironmentService struct {
-	repo      *repository.EnvironmentRepo
-	taskRepo  *repository.EnvironmentTaskRepo
-	bootstrap BootstrapDefaults
+	repo     *repository.EnvironmentRepo
+	taskRepo *repository.EnvironmentTaskRepo
 
 	// pruneMu guards lastPruned, which rate-limits the fleet-wide task-retention
 	// delete. Every environment's agent heartbeats every 10s, so pruning on each
@@ -96,34 +96,12 @@ type EnvironmentService struct {
 // table is.
 const pruneEvery = time.Hour
 
-// BootstrapDefaults carried the stack registration used to seed. Registration seeds
-// nothing now — a data plane's workloads come from its chart — so nothing here is
-// read on the register path; it is still plumbed so the --no-bootstrap-defaults and
-// --dataplane-* flags stay accepted (main.go warns that they do nothing) and so the
-// pinned release stays reachable for the install hint. Deleted with those flags.
-type BootstrapDefaults struct {
-	Enabled         bool
-	Release         DataPlaneRelease
-	ImagePullSecret string
-	SecretRef       string
-}
-
-// mekoStackSpec mirrors the retired meko-agent's "meko-stack" spec. Nothing writes
-// one any more; it is kept so an environment registered by an older control plane
-// still decodes, and so EnrolledStack can hand that stored spec back unchanged.
-type mekoStackSpec struct {
-	Images          DataPlaneRelease `json:"images"`
-	ImagePullSecret string           `json:"image_pull_secret,omitempty"`
-	SecretRef       string           `json:"secret_ref,omitempty"`
-}
-
 // NewEnvironmentService constructs the service.
 func NewEnvironmentService(
 	repo *repository.EnvironmentRepo,
 	taskRepo *repository.EnvironmentTaskRepo,
-	bootstrap BootstrapDefaults,
 ) *EnvironmentService {
-	return &EnvironmentService{repo: repo, taskRepo: taskRepo, bootstrap: bootstrap}
+	return &EnvironmentService{repo: repo, taskRepo: taskRepo}
 }
 
 // ---- request DTOs ----
@@ -312,6 +290,14 @@ func (s *EnvironmentService) Register(
 	kind, err := normalizeKind(req.Kind)
 	if err != nil {
 		return nil, err
+	}
+	// Checked before the insert, not after: a declaration this environment's agent
+	// cannot converge should fail the registration outright rather than leave a
+	// registered environment whose desired state was quietly dropped.
+	if req.Desired != nil {
+		if err := checkKinds(kind, *req.Desired); err != nil {
+			return nil, err
+		}
 	}
 	placement := req.Placement
 	if placement == "" {
@@ -575,21 +561,39 @@ func (s *EnvironmentService) Entitlement() models.Entitlement {
 	return models.Entitlement{Plan: "enterprise", Source: "ybm-aeon"}
 }
 
-// EnrolledStack returns a meko-stack resource from the environment's stored desired
-// state, for the enroll response's legacy `stack` field. Nothing seeds one and no
-// current agent reads it, so this is nil for every environment registered since the
-// meko-agent retired; it survives for the ones registered before.
-func (s *EnvironmentService) EnrolledStack(envUUID string) (json.RawMessage, error) {
-	res, err := s.repo.ListDesired(envUUID)
-	if err != nil {
-		return nil, err
+// resourceKinds is the set of resource kinds each environment kind's agent knows how
+// to converge: mekobackend's and ampbackend's, duplicated here because ycp is a
+// separate Go module the api_server must not import (models.DesiredResource is the
+// same story). **A kind added to a backend has to be added here too** — until it is,
+// declaring one is refused, which is the failure direction to prefer over silently
+// storing a resource nothing converges.
+var resourceKinds = map[string][]string{
+	KindMeko: {"agent", "datapack"},
+	KindAmp:  {"storage-pool", "cluster", "branch", "endpoint"},
+}
+
+// checkKinds refuses a declared set naming a kind this environment's agent does not
+// serve. Without it a typo is stored, shipped to the agent, and comes back as
+// permanent drift a tick later — a slow, indirect way to learn about a misspelling
+// the control plane could have caught at declare time.
+//
+// Only the kind is checked. Name shape is the backend's rule (mekobackend requires
+// "<agent>/<datapack>", ampbackend its own paths) and duplicating it here would give
+// two places to drift, with the control plane's copy able to refuse a declaration the
+// agent would have accepted.
+func checkKinds(envKind string, res []models.DesiredResource) error {
+	known, ok := resourceKinds[envKind]
+	if !ok {
+		return nil // an environment kind with no list yet: let the backend judge
 	}
-	for _, r := range res {
-		if r.Kind == "meko-stack" {
-			return r.Spec, nil
+	for i, r := range res {
+		if slices.Contains(known, r.Kind) {
+			continue
 		}
+		return fmt.Errorf("%w: resources[%d] has kind %q, which a %s environment does not serve (want one of %s)",
+			ErrValidation, i, r.Kind, envKind, strings.Join(known, ", "))
 	}
-	return nil, nil
+	return nil
 }
 
 // SetDesired replaces the desired resource set. ok=false ⇒ unknown environment,
@@ -598,6 +602,9 @@ func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []
 	e, err := s.Get(envID, scope)
 	if err != nil || e == nil {
 		return false, err
+	}
+	if err := checkKinds(e.Kind, res); err != nil {
+		return true, err
 	}
 	return true, s.repo.ReplaceDesired(e.UUID, res)
 }

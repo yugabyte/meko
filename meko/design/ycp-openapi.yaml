@@ -230,15 +230,15 @@ paths:
                 cluster_facts: { $ref: '#/components/schemas/ClusterFacts' }
       responses:
         '200':
-          description: The bound environment's identity and the stack it runs.
+          description: The bound environment's identity.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   environment_id: { type: string }
+                  environment_uuid: { type: string, description: The row key; the id is a slug unique only within an account. }
                   mcp_base_url: { type: string }
-                  stack: { type: object, description: The meko-stack spec to deploy. }
         '401': { description: No environment is bound to the API key. }
 
   /api/v1/agent/bootstrap-progress:
@@ -463,7 +463,12 @@ components:
       type: object
       required: [kind, name]
       properties:
-        kind: { type: string, examples: [datapack], description: Resource type; dispatched to a reconciler. }
+        # Constrained by the environment's kind: a meko environment serves agent and
+        # datapack, an amp one storage-pool, cluster, branch and endpoint. Declaring
+        # anything else is refused with 400 at declare time, on registration and on
+        # POST /environments/{id}/desired, rather than reaching the agent and coming
+        # back as permanent drift.
+        kind: { type: string, examples: [datapack], enum: [agent, datapack, storage-pool, cluster, branch, endpoint], description: Resource type; dispatched to a reconciler. }
         name: { type: string, examples: [alpha] }
         # spec references secret NAMES only — never secret values
         spec: { type: object, additionalProperties: true, examples: [{ yugabytedb_secret_ref: meko-shared-credentials }] }

@@ -120,17 +120,6 @@ type EnrollResponse struct {
 	// only within an account, so this is the identity to prefer where one is needed.
 	EnvironmentUUID string `json:"environment_uuid"`
 	MCPBaseURL      string `json:"mcp_base_url"`
-	// Stack is the meko-stack spec this environment runs, resolved by the control plane
-	// when the environment was registered.
-	//
-	// It comes back with enrollment rather than being fetched, so bringing Meko up needs
-	// no second call and no command: an agent that enrolls has, in that one response,
-	// everything it needs to deploy the whole data plane.
-	//
-	// json.RawMessage on purpose — the agent owns the shape of the spec (see
-	// cmd/agent/mekostack.go), so a newer control plane can send richer fields to an
-	// older agent, and this package does not have to know about either.
-	Stack json.RawMessage `json:"stack,omitempty"`
 }
 
 // DesiredState is the generic, resource-typed set the agent reconciles toward.

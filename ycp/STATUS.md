@@ -253,12 +253,11 @@ Known gaps not yet filed:
 - The api-server has no fixture the reconcile loop can be tested against in CI, so the
   meko backend's coverage stops at unit tests and `test/local/`. This is the gap the
   retirement opened; new e2e coverage is the follow-up.
-- The enroll response still carries a `stack` field, and `EnrolledStack` /
-  `mekoStackSpec` / `BootstrapDefaults` still exist to serve it. Nothing writes one and
-  no agent reads it; they go with the deprecated flags.
-- `POST /environments` accepts any resource kind and does not validate it against the
-  environment's kind, so a typo lands as a resource the backend will refuse forever
-  rather than being rejected at declare time.
+- The deprecated `--no-bootstrap-defaults` and `--dataplane-*` flags are still
+  *accepted* — parsed, discarded, warned about. Both chart copies render them as args
+  when the matching `apiServer.dataplane` value is set, so an api-server without them
+  crash-loops a deployment whose values file sets one. Nothing in this repo sets them
+  now; the flags and the chart values go once no out-of-tree values file does either.
 - `langfuse` is still not part of the stack: v3 needs ClickHouse, Redis and object
   storage alongside it. The chart is where that would go.
 
@@ -277,8 +276,9 @@ no longer demo residue either — `ENV_NAME` has no default and is required, and
    + `meko-control-plane-image.yml` publish `quay.io/yugabyte/ycp-api-server`.
 3. meko-devops#42 remainder — Secrets, and a storage class that is not per-cluster
    guesswork.
-4. New e2e coverage for the reconcile loop, and drop the `stack` field with the
-   deprecated `--dataplane-*` flags.
+4. New e2e coverage for the reconcile loop.
+5. Remove the deprecated `--dataplane-*` flags together with the chart args that pass
+   them, once every deployed control plane is new enough to warn about them.
 
 ## amp environments
 

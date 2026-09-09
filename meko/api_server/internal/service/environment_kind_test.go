@@ -39,9 +39,10 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	// Bootstrap defaults ON: an amp registration must still seed nothing, proving
-	// the kind gate — not a disabled default — is what suppresses the meko-stack.
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{Enabled: true, Release: testRelease})
+	// Registration seeds nothing for either kind, so the assertion below is that no
+	// desired-state write happens at all — not that a kind-specific default was
+	// suppressed. There is no default left to suppress.
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 	// Only the environment insert — no desired-state write for amp.
 	expectRegisterInsert(mock, envUUID)
@@ -72,7 +73,7 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{}) // disabled: no desired write
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db)) // registration writes no desired state
 
 	expectRegisterInsert(mock, envUUID)
 
@@ -88,7 +89,7 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 // An unknown kind is a 400, not a silent default: registering "amp" as "app" must
 // fail rather than quietly create a meko environment.
 func TestRegister_RejectsUnknownKind(t *testing.T) {
-	svc := NewEnvironmentService(nil, nil, BootstrapDefaults{}) // validation precedes any repo call
+	svc := NewEnvironmentService(nil, nil) // validation precedes any repo call
 	_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "app", APIKeyID: keyA}, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(kind=app) err = %v, want ErrValidation", err)
@@ -104,7 +105,7 @@ func TestEnrollByKey_RejectsKindMismatch(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyA).
@@ -142,7 +143,7 @@ func TestApplyStatus_StoresReportedResources(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments e WHERE e\.uuid = \$1`).
 		WithArgs(envUUID).

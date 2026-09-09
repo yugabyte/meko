@@ -1,8 +1,6 @@
 package service
 
 import (
-	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -80,38 +78,6 @@ func DefaultDataPlaneRelease(registry string) DataPlaneRelease {
 		*field = qualifyImage(registry, *field)
 	}
 	return out
-}
-
-// SetImage overrides one component's image. The component is a JSON name from the
-// struct above; the image is a full reference, taken as written.
-func (r *DataPlaneRelease) SetImage(component, image string) error {
-	fields := r.dataPlaneComponents()
-	field, ok := fields[component]
-	if !ok {
-		names := make([]string, 0, len(fields))
-		for name := range fields {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		return fmt.Errorf("unknown data-plane component %q (want one of %s)", component, strings.Join(names, ", "))
-	}
-	*field = image
-	return nil
-}
-
-// Complete reports whether every component has an image, and names the ones that do
-// not. A data plane missing one is still worth registering — the agent brings up what
-// it can and reports the rest as failed — but it is worth saying so at boot rather than
-// leaving it to be discovered as an absent component in the console.
-func (r DataPlaneRelease) Complete() (bool, []string) {
-	var missing []string
-	for name, field := range r.dataPlaneComponents() {
-		if strings.TrimSpace(*field) == "" {
-			missing = append(missing, name)
-		}
-	}
-	sort.Strings(missing)
-	return len(missing) == 0, missing
 }
 
 // qualifyImage prefixes registry onto a bare repository path.

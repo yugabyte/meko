@@ -56,14 +56,12 @@ byte-identically to the pre-mode chart.
        exits on an unknown one rather than ignoring it. */}}
 - "--require-account-header"
 {{- end }}
-{{- /* What a newly registered environment is told to run, so an enrolling agent
-       bootstraps Meko instead of idling until somebody sends it a command. The
-       database has a working default and is always seeded; the MCP server is a
-       private image, so it is seeded only when a tag is configured here.
-       Rendered as literal args rather than through the ConfigMap: they are
-       control-plane policy, not per-cluster endpoints, and a literal shows up in
-       `kubectl describe pod` where an operator debugging "my agent runs nothing"
-       will actually look. */}}
+{{- /* Deprecated no-ops. These configured the stack registration used to seed;
+       registration seeds nothing now and a data plane's workloads come from this
+       chart. The api-server still accepts them and warns at boot, so they are
+       rendered only when explicitly set — an operator upgrading past the removal
+       then has nothing to unset. Drop them, and this block, once no control plane
+       in the fleet predates the deprecation warning. */}}
 {{- with $c.dataplane }}
 {{- if .mcpImage }}
 - "--dataplane-mcp-image={{ .mcpImage }}"

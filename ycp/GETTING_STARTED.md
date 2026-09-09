@@ -121,9 +121,8 @@ Three things differ from kind, all of them the cluster's doing rather than YCP's
 - **Images come from ECR**, so they must be pushed first. The tag names the *code*;
   rebuild it after changing anything Go.
 - **Both namespaces need an ECR pull Secret** (`ecr-registry-creds`), because GKE
-  has no AWS IAM — including the namespace the *agent* creates workloads in, which
-  is why the control plane is told the Secret's name
-  (`apiServer.dataplane.imagePullSecret`) and passes it in the seeded desired state.
+  has no AWS IAM. Each release carries its own, through `global.imagePullSecrets` —
+  the control plane is not involved, since it no longer hands anyone a stack.
   ECR tokens last ~12 h; re-running the script refreshes them.
 - **The storage class** comes from the cloud preset (`pd-ssd` on GKE) rather than
   kind's local-path provisioner.

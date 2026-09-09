@@ -24,7 +24,7 @@ func newTasksHandler(t *testing.T) (*EnvironmentTasksHandler, sqlmock.Sqlmock, f
 		t.Fatalf("sqlmock: %v", err)
 	}
 	svc := service.NewEnvironmentService(
-		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), service.BootstrapDefaults{})
+		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 	return NewEnvironmentTasksHandler(svc), mock, func() { db.Close() }
 }
 

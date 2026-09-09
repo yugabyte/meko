@@ -51,7 +51,7 @@ func TestApplyStatus_EmptyTaskDeltaWritesNothing(t *testing.T) {
 			}
 			defer db.Close()
 			svc := NewEnvironmentService(
-				repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
+				repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 			expectHeartbeat(mock)
 			// No task statement is registered, so any Begin/Exec against the task table
@@ -79,7 +79,7 @@ func TestApplyStatus_RecordsTaskDelta(t *testing.T) {
 	}
 	defer db.Close()
 	svc := NewEnvironmentService(
-		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
+		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 	now := time.Now().UTC()
 	expectHeartbeat(mock)
@@ -169,7 +169,7 @@ func TestApplyStatus_TaskWriteFailureIsReportedNotSwallowed(t *testing.T) {
 	}
 	defer db.Close()
 	svc := NewEnvironmentService(
-		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
+		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 	now := time.Now().UTC()
 	expectHeartbeat(mock)
@@ -207,7 +207,7 @@ func TestApplyStatus_TasksRecordedTrueWhenThereWereNone(t *testing.T) {
 	}
 	defer db.Close()
 	svc := NewEnvironmentService(
-		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), BootstrapDefaults{})
+		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 
 	expectHeartbeat(mock)
 	res, err := svc.ApplyStatus(envUUID, StatusReport{EnvironmentState: "READY"})
@@ -228,7 +228,7 @@ func TestApplyStatus_NoTaskRepoIsSafe(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), nil, BootstrapDefaults{})
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), nil)
 
 	expectHeartbeat(mock)
 	now := time.Now().UTC()

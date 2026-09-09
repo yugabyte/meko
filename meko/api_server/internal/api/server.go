@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"meko/api_server/internal/repository"
-	"meko/api_server/internal/service"
 )
 
 // ServerConfig holds the configuration for the API server.
@@ -204,11 +203,6 @@ type ServerConfig struct {
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.
 	ControlPlaneMode bool
-
-	// BootstrapDefaults is the stack a newly registered environment is told to run,
-	// so an enrolling agent has something to do immediately instead of waiting for a
-	// separate command. Control-plane mode only; see service.BootstrapDefaults.
-	BootstrapDefaults service.BootstrapDefaults
 
 	// BasePath mounts every route under a URL prefix (e.g. "/ycp") for
 	// deployments fronted at a subpath of a shared domain instead of their own

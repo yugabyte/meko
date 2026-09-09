@@ -45,7 +45,7 @@ func newMetricsHandler(t *testing.T, configured bool) (
 	if configured {
 		storeURL = store.URL
 	}
-	envSvc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), service.BootstrapDefaults{})
+	envSvc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
 	return NewEnvironmentMetricsHandler(envSvc, service.NewMetricsService(storeURL)),
 		mock, &sent, func() { store.Close(); db.Close() }
 }

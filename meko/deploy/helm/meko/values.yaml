@@ -155,20 +155,11 @@ apiServer:
   # Needs an image built with --require-account-header; Go's flag package exits on
   # an unknown flag, so an older image will not start rather than ignoring it.
   requireAccountHeader: false
-  # ycp mode only — what a newly registered environment is told to run, so an
-  # enrolling agent brings Meko up instead of idling until someone commands it.
-  # The control plane seeds a `database` (which has a working default) at
-  # registration; an `mcp-server` is seeded only when mcpImage is set here,
-  # because it is a private image with no tag worth guessing.
-  #
-  # imagePullSecret and secretRef are names of Secrets that must exist in the
-  # AGENT's namespace, in whatever cluster that is — desired state references
-  # Secrets by name and never carries secret material. On GKE that pull secret is
-  # the same `ecr-registry-creds` the rest of the chart uses.
-  #
-  # An operator can still override the seed per environment (`"desired": [...]` on
-  # POST /environments) or replace it at any time; noBootstrapDefaults turns
-  # seeding off fleet-wide.
+  # DEPRECATED, all four: they configured the stack registration used to seed.
+  # Registration seeds nothing now — a data plane's workloads come from this chart —
+  # and the api-server ignores these and warns at boot. Leave them empty. They are
+  # rendered as args only when set, and go away with the api-server flags once no
+  # control plane in the fleet predates that warning.
   dataplane:
     mcpImage: ""
     imagePullSecret: ""

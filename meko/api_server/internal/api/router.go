@@ -238,7 +238,6 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		envSvc = service.NewEnvironmentService(
 			repository.NewEnvironmentRepo(cfg.SystemDB),
 			repository.NewEnvironmentTaskRepo(cfg.SystemDB),
-			cfg.BootstrapDefaults,
 		)
 		metricsSvc = service.NewMetricsService(cfg.MetricsURL)
 		slog.Info("control-plane mode enabled (YCP fleet + agent routes)")

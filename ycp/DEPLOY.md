@@ -154,6 +154,12 @@ The set is **replaced**, not merged: anything left out is garbage-collected on t
 next tick. **The agent is the api-server's only caller and is authoritative over it** —
 a datapack made by hand that desired state does not declare is deleted.
 
+A kind this environment's agent does not serve is refused with a 400 naming the entry
+(`resources[1] has kind "datapak", which a meko environment does not serve`), on both
+this call and `POST /environments`. Only the **kind** is checked here — name shape is
+the backend's rule, so `"<agent>/<datapack>"` is enforced a tick later as permanent
+drift rather than at declare time.
+
 ### What a meko environment declares
 
 | Kind | Name | Spec | Notes |
@@ -176,9 +182,9 @@ Fleet-wide knobs on the control plane:
 
 | Control-plane flag / env | Chart value | Effect |
 |---|---|---|
-| `--dataplane-registry` / `MEKO_DATAPLANE_REGISTRY` | `apiServer.dataplane.registry` | Where the pinned images the install hint names are pulled from. Set it to point the hint at a mirror without touching six tags. |
 | `--console-embed-admin-secret` / `MEKO_CONSOLE_EMBED_ADMIN_SECRET` | — | Write the admin secret into the console page so it never asks for one. **Off by default, and leave it off where the console is reachable by anyone you would not hand the fleet-admin credential to** — it grants no new capability against that control plane, since the console can already do everything the credential allows, but it does turn "can load the console" into "has the secret". Unset, the console asks in-page and keeps it in `sessionStorage`. |
-| `--no-bootstrap-defaults`, `--dataplane-image`, `--dataplane-mcp-image`, `--dataplane-image-pull-secret`, `--dataplane-secret-ref` | `apiServer.dataplane.*` | **Deprecated no-ops.** They configured the seeded stack. Still accepted so a control plane already passing them does not crash-loop on an undefined flag; it warns at boot and they are removed in the release after this. |
+| `--no-bootstrap-defaults`, `--dataplane-mcp-image`, `--dataplane-image-pull-secret`, `--dataplane-secret-ref` | `apiServer.dataplane.noBootstrapDefaults` / `.mcpImage` / `.imagePullSecret` / `.secretRef` | **Deprecated no-ops.** They configured the stack registration used to seed. Parsed and discarded; the control plane warns at boot if any is set. Still *accepted* because both chart copies render them as **args** when the matching value is set — so removing them would crash-loop a deployment whose values file sets one, with `flag provided but not defined`. Nothing in this repo sets them any more; they go once no out-of-tree values file does. |
+| `--dataplane-registry`, `--dataplane-image` | _(none)_ | Deprecated no-ops with no chart path — nothing renders them. Kept only so the whole set is retired in one step. The install hint reads the pinned release directly and prints tags, never a registry. |
 
 The data plane's own Secrets — registry credentials, and the one holding
 `OPENAI_API_KEY`, the AWS keys and the Cognito settings — are the chart's business and

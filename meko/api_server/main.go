@@ -440,35 +440,17 @@ func run() error {
 		slog.Info("ses invite emails enabled", "from", *sesFromAddress, "region", resolvedSESRegion, "app_url", appURL)
 	}
 
-	dataplaneRelease := service.DefaultDataPlaneRelease(*dataplaneRegistry)
-	if *dataplaneMCPImage != "" {
-		dataplaneImages = append(dataplaneImages, imageOverride{"mcp_server", *dataplaneMCPImage})
-	}
-	for _, o := range dataplaneImages {
-		if err := dataplaneRelease.SetImage(o.component, o.image); err != nil {
-			// Fatal rather than ignored: a misspelt component name silently deploys the
-			// pinned image instead of the one the operator meant, and the mismatch is
-			// only visible as a version string in a console row nobody is reading.
-			return fmt.Errorf("-dataplane-image: %w", err)
-		}
-	}
-
-	// Assembled here rather than inline below so ServerConfig stays a flat list of
-	// one-line fields: a nested literal in the middle of it splits gofmt's alignment
-	// group and rewrites the whitespace of every surrounding line.
-	bootstrapDefaults := service.BootstrapDefaults{
-		Enabled:         !*noBootstrapDefaults,
-		Release:         dataplaneRelease,
-		ImagePullSecret: *dataplanePullSecret,
-		SecretRef:       *dataplaneSecretRef,
-	}
-	// Deliberately silent about seeding, because there is none: registration
-	// declares only what its caller declares. The flags are still accepted so a
-	// control plane already passing them does not crash-loop on an undefined flag,
-	// but a startup line asserting they do something would be a lie an operator
-	// acts on. They are removed in the release after this.
-	if *controlPlaneMode && (!bootstrapDefaults.Enabled || bootstrapDefaults.ImagePullSecret != "" ||
-		bootstrapDefaults.SecretRef != "") {
+	// The deprecated flags are parsed and discarded. They are still *accepted* because
+	// both chart copies render them as args (api-server/_apiserver.tpl here, and the
+	// meko-devops fork that yugabyte-cloud's meko-ycp-deploy.yaml installs), each
+	// under an `if` on its apiServer.dataplane value — so removing them here would
+	// crash-loop any deployment whose values set one, with "flag provided but not
+	// defined". Nothing in this repo sets them any more; they go once no out-of-tree
+	// values file does either. --dataplane-registry and --dataplane-image have no
+	// chart path at all and are kept only so the set is retired in one step.
+	if *controlPlaneMode && (*noBootstrapDefaults || *dataplaneRegistry != service.DefaultDataPlaneRegistry ||
+		*dataplaneMCPImage != "" || *dataplanePullSecret != "" || *dataplaneSecretRef != "" ||
+		len(dataplaneImages) > 0) {
 		slog.Warn("--no-bootstrap-defaults and the --dataplane-* flags no longer do anything: " +
 			"registration seeds no desired state, and a data plane's workloads come from its " +
 			"chart. Safe to drop from your deployment.")
@@ -521,7 +503,6 @@ func run() error {
 		ShowPGAMP:                          *showPGAMP,
 		EnableConversationSearch:           *enableConversationSearch,
 		ControlPlaneMode:                   *controlPlaneMode,
-		BootstrapDefaults:                  bootstrapDefaults,
 		BasePath:                           *basePath,
 		AWSMarketplaceProductCode:          *awsMarketplaceProductCode,
 		AWSMarketplaceRegion:               *awsMarketplaceRegion,

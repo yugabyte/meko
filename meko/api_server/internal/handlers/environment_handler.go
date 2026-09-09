@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -109,6 +108,11 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 	}
 	found, err := h.svc.SetDesired(c.Param("id"), accountScope(c), body.Resources)
 	if err != nil {
+		// A kind this environment's agent does not serve is the caller's mistake, so
+		// it is a 400 here rather than the 500 envLookupError would give it.
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
 		return envLookupError(c, err)
 	}
 	if !found {
@@ -245,16 +249,6 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	// records an unambiguous identity.
 	body := map[string]any{
 		"environment_id": e.ID, "environment_uuid": e.UUID, "mcp_base_url": e.MCPBaseURL,
-	}
-	// Legacy: the retired meko-agent deployed the data plane from this field. No
-	// current agent reads it and nothing seeds one, so it is present only for an
-	// environment registered before that change. A failure to read it is logged and
-	// omitted rather than failing the enrollment.
-	if stack, err := h.svc.EnrolledStack(e.UUID); err != nil {
-		slog.Warn("could not read the stack to hand the enrolling agent",
-			"environment", e.ID, "error", err)
-	} else if len(stack) > 0 {
-		body["stack"] = stack
 	}
 	return ok(c, http.StatusOK, body)
 }
