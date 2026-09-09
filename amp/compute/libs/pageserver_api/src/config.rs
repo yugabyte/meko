@@ -1022,6 +1022,15 @@ pub struct BranchConfigToml {
     /// ingest and the materialiser share one per-block counter. Read once
     /// at activation (see `enable_gc`). Default 10.
     pub gc_candidate_every_n_bases: u32,
+    /// Rows one GC delete statement names before committing and re-issuing.
+    /// Every trim statement carries it, on all three keyspaces; the prefix
+    /// sweeps cap their derived batch with `GC_SWEEP_MAX_ROWS_PER_DELETE`, so
+    /// the name is deliberately not trim-specific. Floored at 1 on read (a
+    /// statement that selects nothing would never let its loop terminate);
+    /// there is no ceiling, so a value large enough to strain the backend's id
+    /// array is the operator's to avoid. Read fresh each tick. Default
+    /// 100_000.
+    pub gc_rows_per_statement: usize,
     /// Per-key trim watermarks the GC drain keeps in memory, per timeline —
     /// one map over rel blocks, SLRU blocks and `meta` keys alike. Nothing
     /// else reclaims them — unlike a sweep cursor a watermark has no dequeue —
@@ -1055,6 +1064,11 @@ pub mod tenant_conf_defaults {
     /// relation — which is where the benefit is. A wide shallow relation's
     /// millions of blocks are one candidate each and lose nothing to eviction.
     pub const DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY: usize = 100_000;
+    /// Where the per-statement overhead is fully amortised: measured on RF-3
+    /// over 1 M versions of one block, 15.7 us/row at 20 000 and 16.2 at
+    /// 100 000, against 26.6 at 5 000. The higher end of the flat stretch, so
+    /// a statement spends less of its cost on overhead.
+    pub const DEFAULT_GC_ROWS_PER_STATEMENT: usize = 100_000;
     pub const DEFAULT_PITR_INTERVAL: &str = "1 day";
     pub const DEFAULT_WALRECEIVER_CONNECT_TIMEOUT: &str = "10 seconds";
     pub const DEFAULT_WALRECEIVER_LAGGING_WAL_TIMEOUT: &str = "10 seconds";
@@ -1098,6 +1112,7 @@ impl Default for BranchConfigToml {
             enable_gc: true,
             gc_candidate_every_n_bases: DEFAULT_GC_CANDIDATE_EVERY_N_BASES,
             gc_trim_watermark_cache_capacity: DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY,
+            gc_rows_per_statement: DEFAULT_GC_ROWS_PER_STATEMENT,
         }
     }
 }

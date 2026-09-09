@@ -10,6 +10,11 @@
 //! `compute/architecture/pageserver-gc.md`.
 
 use super::*;
+use std::fmt::Debug;
+use std::hash::Hash;
+
+use crate::page_store::tokio_postgres::Row;
+use crate::page_store::tokio_postgres::types::FromSql;
 
 /// Placement buckets in `amp_storage.pending_gc`'s hash key; must match
 /// the drain's per-bucket fan-out.
@@ -19,58 +24,97 @@ pub const GC_BUCKETS: i32 = 3;
 /// `pageserver:gc` pool is sized to this.
 pub const GC_ACTION_PARALLELISM: usize = 1;
 
-/// The trims' shared hint. A per-key `(watermark, anchor)` bound reaches the
-/// index only as a parameter of an inner scan rescanned per `bound` row, so
-/// each directive bars one plan that drops it to a Join Filter: hash join, a
-/// table-outer nested loop, a `Materialize` over one unparameterised scan, and
-/// merge join, which also spills the DELETE's scan to a tuplestore (#1133).
-const TRIM_NESTED_LOOP_HINT: &str = concat!(
-    "/*+ Set(enable_mergejoin off) Set(enable_hashjoin off) ",
-    "Set(enable_material off) Leading((bound p)) */"
-);
+pub use pageserver_api::config::GC_SWEEP_MAX_ROWS_PER_DELETE;
 
-/// One trim statement's bounds — the `(key, watermark, anchor)` triples its
-/// `bound(...)` unnests as three parallel arrays.
-type TrimBounds<T> = Vec<(T, i64, i64)>;
-
-/// Split a trim's bounds into the ones that can share a statement and the ones
-/// that cannot: a bound with no watermark scans from 0, so batching it takes the
-/// whole statement past YB's history retention, and the `SNAPSHOT_TOO_OLD`
-/// rollback costs every bound in that batch its progress (#1160).
-fn split_watermarkless_bounds<T>(bounds: TrimBounds<T>) -> (TrimBounds<T>, TrimBounds<T>) {
-    bounds
-        .into_iter()
-        .partition(|(_, watermark, _)| *watermark != 0)
+/// How a trim ended. Cancellation is an outcome, not an error: the rows it
+/// reports are committed either way, and the difference is whether the caller
+/// may take a key's `anchor` as its next watermark — a loop that stopped early
+/// has not covered the range, though every statement it did commit has already
+/// reported its own progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum TrimOutcome {
+    /// Drained every key's range. Rows deleted.
+    Complete(u64),
+    /// Stopped on a cancelled token between statements. Rows deleted so far.
+    Cancelled(u64),
 }
 
-/// Statement order for `pages`, which fans its DELETEs out over buckets: every
-/// bucket's batch, then one watermark-less block per statement. The order is the
-/// point — a failing statement ends the call, so whatever runs after it loses
-/// its tick.
-fn batch_bounds_per_bucket(bounds_by_bucket: Vec<TrimBounds<i64>>) -> Vec<(i16, TrimBounds<i64>)> {
-    let mut batches = Vec::new();
-    let mut singles = Vec::new();
-    for (bucket, bounds) in bounds_by_bucket.into_iter().enumerate() {
-        let bucket = bucket as i16;
-        let (batched, isolated) = split_watermarkless_bounds(bounds);
-        if !batched.is_empty() {
-            batches.push((bucket, batched));
-        }
-        singles.extend(isolated.into_iter().map(|bound| (bucket, vec![bound])));
+/// What a trim statement reports per key: rows deleted, and the highest `lsn`
+/// among them, which becomes that key's watermark. Named because three builders
+/// write these aliases and [`PageStore::run_trim_loop`] reads them back — a
+/// rename on one side alone compiles, then panics.
+const TRIM_DELETED_COUNT_COL: &str = "deleted_count";
+const TRIM_DELETED_TO_COL: &str = "deleted_to";
+
+/// The trims' hint once every statement selects ids and deletes by `ybctid`.
+/// Two directives, where the predicate DELETE needed five.
+///
+/// `CROSS JOIN LATERAL` is what puts each key's `[watermark, anchor)` in the
+/// Index Cond, and it does so by construction rather than by costing: a lateral
+/// reference is only definable per outer row, so a parameterised inner index
+/// scan is the *only* legal plan. The plain `USING unnest(...)` join merely
+/// permits that plan among several, which is why it needed `Leading`, the
+/// merge/hash/material bars, and still landed the per-key ranges in a Join
+/// Filter at realistic widths. `gc_trim_blocks_anchors_sql` has always used a lateral
+/// for the same reason.
+///
+/// `TidScan(del)` is required, not an optimisation: on a table nothing has
+/// ANALYZEd — the state every universe starts in — the planner costs it at 1000
+/// rows and drops the Tid Scan for a full scan above ~27 ids (#970).
+///
+/// The table appears twice, so the aliases are part of the hint's meaning:
+/// `scan` is the half that picks the ids, `del` the half that removes them, and
+/// a bare `TidScan(pages)` is ambiguous — it can force a Tid Scan onto the id
+/// subquery, which is exactly where the index scan is wanted.
+const TRIM_LATERAL_HINT: &str = "/*+ IndexScan(scan {index}_pkey) TidScan(del) */";
+
+/// What one trim runs against: which table, how its keys arrive and how they
+/// are named once deleted. Everything else about the loop is shared and lives
+/// in [`PageStore::run_trim_loop`].
+struct TrimTarget<T, K> {
+    /// Description of the write for the write gate.
+    gate_label: &'static str,
+    /// Result column holding the key.
+    key_col: &'static str,
+    /// The key under which the drain stores this key's watermark. `T` is how
+    /// the statement binds and returns a key, `K` how that map names it.
+    to_watermark_key: fn(&T) -> K,
+    /// Error context, e.g. `gc_act_trim_slru branch=… kind=… segno=…`. The
+    /// loop appends the bound count and first key.
+    err_context: String,
+}
+
+/// One key's delete range, `[watermark, anchor)`. The watermark is the anchor
+/// that key's last successful trim reached, below which everything deletable is
+/// already gone — `0` for a key that has none, which is its whole history. The
+/// anchor is the newest base at-or-below the cutoff, which must survive.
+///
+/// Generic because `pages` and `slru_pages` key on a blknum and `meta` on
+/// encoded key bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrimBound<T> {
+    key: T,
+    /// Inclusive: rises to the highest `lsn` each committed statement deleted.
+    watermark: i64,
+    /// Exclusive — it is the base that has to survive. Fixed for the call.
+    anchor: i64,
+}
+
+impl<T: Clone> TrimBound<T> {
+    /// The three parallel arrays a trim statement's `unnest(...)` binds. Their
+    /// order is the contract with the SQL — the same order as the fields above,
+    /// which is why this lives here — so every trim goes through it.
+    fn unzip(bounds: &[Self]) -> (Vec<T>, Vec<i64>, Vec<i64>) {
+        bounds
+            .iter()
+            .map(|b| (b.key.clone(), b.watermark, b.anchor))
+            .multiunzip()
     }
-    batches.append(&mut singles);
-    batches
 }
 
-/// Statement order for `slru_pages` and `meta`, which have no buckets: the
-/// batch, then one watermark-less bound per statement.
-fn batch_bounds<T>(bounds: TrimBounds<T>) -> impl Iterator<Item = TrimBounds<T>> {
-    let (batched, isolated) = split_watermarkless_bounds(bounds);
-    (!batched.is_empty())
-        .then_some(batched)
-        .into_iter()
-        .chain(isolated.into_iter().map(|bound| vec![bound]))
-}
+/// The bounds one trim statement covers.
+type TrimBounds<T> = Vec<TrimBound<T>>;
 
 /// FNV-1a over the key's 18 encoded bytes. FROZEN: must stay a fixed,
 /// deterministic function of them (golden-value test) — changing it strands
@@ -94,8 +138,6 @@ fn key_hash(key: &Key) -> u64 {
 pub fn gc_bucket_id(key: &Key) -> i32 {
     (key_hash(key) % GC_BUCKETS as u64) as i32
 }
-
-pub use pageserver_api::config::GC_SWEEP_MAX_ROWS_PER_DELETE;
 
 /// GC candidate kind — the `pending_gc.gc_kind` column. Each variant maps
 /// 1:1 to the act function it dispatches to:
@@ -812,92 +854,178 @@ impl PageStore {
     /// block's versions newest-first, so the first `will_init` row below the
     /// cutoff is already the newest one, and the `LIMIT` is what stops the scan
     /// there rather than at the end of the block (#1133).
-    fn gc_trim_anchors_sql(&self) -> String {
+    fn gc_trim_blocks_anchors_sql(&self) -> String {
         format!(
-            "SELECT b.blknum, b.watermark, x.lsn AS anchor \
-             FROM unnest($6::bigint[], $8::smallint[], $9::bigint[]) \
-                 AS b(blknum, bucket, watermark) \
-             CROSS JOIN LATERAL ( \
-                 SELECT lsn \
-                 FROM \"{schema}\".pages \
-                 WHERE bucket_id=b.bucket AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
-                   AND relnode=$4 AND forknum=$5 \
-                   AND blknum = b.blknum \
-                   AND lsn <= $7 AND will_init \
-                 ORDER BY lsn DESC LIMIT 1 \
-             ) x",
+            r#"SELECT b.blknum, b.watermark, x.lsn AS anchor
+            FROM unnest($6::bigint[], $8::smallint[], $9::bigint[])
+                 AS b(blknum, bucket, watermark)
+            CROSS JOIN LATERAL (
+                SELECT lsn
+                FROM "{schema}".pages
+                WHERE bucket_id=b.bucket AND branch_id=$1 AND spcnode=$2 AND dbnode=$3
+                  AND relnode=$4 AND forknum=$5
+                  AND blknum = b.blknum
+                  AND lsn <= $7 AND will_init
+                ORDER BY lsn DESC LIMIT 1
+            ) x"#,
             schema = self.schema
         )
     }
 
-    /// The `pages` trim statement, split out so a test can EXPLAIN it.
+    /// The `pages` trim statement, split out so a test can EXPLAIN it. Per
+    /// `(blknum, watermark, anchor)` bound, the oldest rows in
+    /// `[watermark, anchor)`, capped at `$10` across the batch, deleted by
+    /// `ybctid`. Five things here are load-bearing:
     ///
-    /// `$6`/`$7`/`$8` are parallel arrays — blknum, watermark, anchor — one
-    /// entry per block, so the DELETE's range is `[watermark, anchor)` per
-    /// block. The watermark is the anchor that block's last successful trim
-    /// reached, below which everything deletable is already gone (#1148);
-    /// `Lsn(0)` for a block that has none, which is the whole range.
-    ///
-    /// The `USING` side is a function scan over those arrays and reads no
-    /// table, so unlike a lateral or a CTE there is nothing here the planner
-    /// can re-associate into the join and re-evaluate per row.
-    ///
-    /// Trap: this deletes the previous anchor row itself, sitting at exactly
-    /// the watermark. Intended — reads are admitted at `>= applied_cutoff`,
-    /// above the new anchor.
-    ///
-    /// Trap: half-open, so the same-LSN delta at the anchor survives — the
-    /// delta the materialiser stamped its image over. The PK orders
-    /// `lsn DESC, is_image DESC` and chain reconstruction stops at the first
-    /// `will_init` row, so the image shadows it; that is already the steady
-    /// state between a stamp and the next trim. Sweeping it instead needs an
-    /// `OR (p.lsn = bound.anchor AND NOT p.will_init)`, which costs the pure
-    /// index range and 15-25% of the DELETE (#1153). The next tick's
-    /// `[anchor₁, anchor₂)` starts at this anchor, so it takes the delta.
-    ///
-    /// Trap: `p.blknum = ANY($6)`, `p.lsn >= $10` and `p.lsn <= $11` duplicate
-    /// the join on purpose — the batch's blocks, the lowest watermark among
-    /// them, and the cutoff. Every join qual here references `bound`, so all of
-    /// them bound the scan only under a nested loop; these three are
-    /// single-table and hold whatever the plan. Both `$10` and `$11` are
-    /// implied by the per-block range (`bound.watermark >= $10` by
-    /// construction, `bound.anchor <= $11` because the anchors query resolved
-    /// below the same cutoff), so they cannot change which rows go — they only
-    /// stop the scan running to the ends of the block if the plan slips.
-    ///
-    /// Trap: every directive in [`TRIM_NESTED_LOOP_HINT`] is load-bearing,
-    /// and the method half is not enough on its own. The bounds are per-block,
-    /// so they reach the index scan only as parameters of an inner scan
-    /// rescanned per `bound` row — measured on a dev deployment, 40 blocks:
-    ///
-    /// | plan | rows scanned |
-    /// |---|---|
-    /// | nested loop, `bound` outer, inner rescanned | 310 |
-    /// | nested loop, `pages` outer (`Leading((p bound))`) | 33 283 |
-    /// | hash join | 33 255 |
-    ///
-    /// With `pages` outer the bounds reference the inner relation and all fall
-    /// to a Join Filter; `Leading` rules that out. A `Materialize` under the
-    /// right join order costs the same, more quietly — the inner scan runs once,
-    /// unparameterised — and amp2 picked exactly that for this statement as it
-    /// landed (#1155). `gc_trims_never_plan_a_merge_join` runs under
-    /// `pg_hint_plan.yb_bad_hint_mode = error`, so a directive that stops
-    /// binding fails the test rather than silently costing the 107x.
+    /// - `CROSS JOIN LATERAL`, not `USING unnest(...)`: it makes each key's
+    ///   range an Index Cond by construction rather than by costing — see
+    ///   [`TRIM_LATERAL_HINT`].
+    /// - `= ANY(ARRAY(subquery))`, never `IN (subquery)`. Same rows, 70x apart:
+    ///   `IN` plans as a semi-join with the Tid Scan inner (`loops=N`), a read
+    ///   request *and a flush* per row. `ARRAY` makes it an InitPlan feeding one
+    ///   Tid Scan node (`loops=1`).
+    /// - `MATERIALIZED`, so the id scan runs once though `ids` is read twice —
+    ///   by the DELETE's InitPlan and by the projection.
+    /// - The projection is over `ids`, not a `DELETE ... RETURNING` set: routing
+    ///   the rows out through a second materialisation costs ~80x the reported
+    ///   peak memory for identical counters, and `ids` is the truthful count
+    ///   anyway, where the DELETE's own under-reports when `ysql_client`
+    ///   replays a committed statement.
+    /// - `ORDER BY scan.lsn ASC`, against the PK's `lsn DESC`, so an `Index Scan
+    ///   Backward`. Deleting oldest-first is what lets each committed statement
+    ///   raise the watermark; newest-first leaves a hole and can record nothing
+    ///   until the range drains.
     fn gc_trim_blocks_sql(&self) -> String {
         format!(
-            "{hint} DELETE FROM \"{schema}\".pages p \
-             USING unnest($6::bigint[], $7::bigint[], $8::bigint[]) \
-                 AS bound(blknum, watermark, anchor) \
-             WHERE p.bucket_id=$9 AND p.branch_id=$1 AND p.spcnode=$2 AND p.dbnode=$3 \
-               AND p.relnode=$4 AND p.forknum=$5 \
-               AND p.blknum = ANY($6) \
-               AND p.lsn >= $10 AND p.lsn <= $11 \
-               AND p.blknum = bound.blknum \
-               AND p.lsn >= bound.watermark \
-               AND p.lsn < bound.anchor",
+            r#"{hint}
+            WITH ids AS MATERIALIZED (
+                SELECT x.blknum AS blknum, x.lsn AS lsn, x.tid AS tid
+                FROM unnest($6::bigint[], $7::bigint[], $8::bigint[])
+                     AS bound(blknum, watermark, anchor)
+                CROSS JOIN LATERAL (
+                    SELECT scan.ybctid AS tid, scan.blknum AS blknum, scan.lsn AS lsn
+                    FROM "{schema}".pages AS scan
+                    WHERE scan.bucket_id=$9 AND scan.branch_id=$1 AND scan.spcnode=$2
+                      AND scan.dbnode=$3 AND scan.relnode=$4 AND scan.forknum=$5
+                      AND scan.blknum = bound.blknum
+                      AND scan.lsn >= bound.watermark
+                      AND scan.lsn < bound.anchor
+                    ORDER BY scan.lsn ASC
+                ) x
+                LIMIT $10
+            ), d AS (
+                DELETE FROM "{schema}".pages AS del
+                WHERE del.ybctid = ANY(ARRAY(SELECT tid FROM ids))
+            )
+            SELECT blknum, count(*) AS {deleted_count}, max(lsn) AS {deleted_to}
+            FROM ids GROUP BY blknum"#,
             schema = self.schema,
-            hint = TRIM_NESTED_LOOP_HINT
+            deleted_count = TRIM_DELETED_COUNT_COL,
+            deleted_to = TRIM_DELETED_TO_COL,
+            hint = TRIM_LATERAL_HINT.replace("{index}", "pages")
         )
+    }
+
+    /// Issue `target`'s trim statement until it deletes nothing, committing
+    /// between statements and raising each key's watermark as it goes.
+    ///
+    /// The watermark may rise per statement because the statement committed and
+    /// deleted the *oldest* rows in each range, so everything below what it
+    /// reports is gone. Top-down could not: it leaves a hole above the
+    /// watermark, so nothing is recordable until the whole range is drained and
+    /// a mid-loop failure discards the lot.
+    ///
+    /// Stops on a statement under its cap — proof the lateral ran every bound
+    /// through to its anchor. The bind arrays go to `run_statement` by value so
+    /// its future owns them.
+    async fn run_trim_loop<T, K, F, Fut>(
+        &self,
+        target: TrimTarget<T, K>,
+        bounds: TrimBounds<T>,
+        rows_per_statement: usize,
+        cancel: &CancellationToken,
+        trimmed_to: &mut Vec<(K, Lsn)>,
+        run_statement: F,
+    ) -> Result<TrimOutcome>
+    where
+        T: Eq + Hash + Clone + for<'a> FromSql<'a>,
+        K: Debug,
+        F: Fn(Vec<T>, Vec<i64>, Vec<i64>, i64) -> Fut,
+        Fut: Future<Output = Result<Vec<Row>>>,
+    {
+        // Floored at 1: `LIMIT 0` deletes nothing and never comes back under
+        // its cap, so the loop would spin. No ceiling — that is the operator's.
+        let limit = rows_per_statement.max(1) as i64;
+        let mut cursors = bounds;
+        // A statement reports one row per key it deleted from, and a tick funnels
+        // up to `gc_drain_limit` keys into one loop — shallow keys all fit under
+        // one cap, so both counts reach 10 000 together. Scanning `cursors` per
+        // reported row would be 10^8 key comparisons on the single-threaded GC
+        // task with no await in them.
+        let slot: HashMap<T, usize> = cursors
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.key.clone(), i))
+            .collect();
+        let mut deleted_total = 0u64;
+        loop {
+            if cancel.is_cancelled() {
+                return Ok(TrimOutcome::Cancelled(deleted_total));
+            }
+            let (keys, watermarks, anchors) = TrimBound::unzip(&cursors);
+            self.write_gate(target.gate_label);
+            // One row per key that lost rows; none at all once drained.
+            let report = run_statement(keys, watermarks, anchors, limit)
+                .await
+                .with_context(|| {
+                    format!(
+                        "{} bounds={} first={:?}",
+                        target.err_context,
+                        cursors.len(),
+                        (target.to_watermark_key)(&cursors[0].key)
+                    )
+                })?;
+            let mut deleted = 0u64;
+            for row in &report {
+                let bound_key: T = row.get(target.key_col);
+                deleted += row.get::<_, i64>(TRIM_DELETED_COUNT_COL) as u64;
+                // Inclusive, so the next statement re-reads that one row:
+                // `is_image` follows `lsn` in both block PKs, so two rows can
+                // share an `lsn` and the cap can cut between them. `meta` could
+                // move past; one rule beats saving it a tombstone.
+                let watermark: i64 = row.get(TRIM_DELETED_TO_COL);
+                if let Some(&i) = slot.get(&bound_key) {
+                    cursors[i].watermark = watermark;
+                }
+                // Per statement, not once at the end: this one committed, and
+                // a later failure must not cost that. Last write per key wins.
+                trimmed_to.push(((target.to_watermark_key)(&bound_key), Lsn(watermark as u64)));
+            }
+            // Per statement: each is its own autocommit transaction, so a
+            // loop that fails on its tenth committed the nine before (#1142).
+            crate::metrics::GC_ROWS_DELETED.inc_by(deleted);
+            deleted_total += deleted;
+            if deleted < limit as u64 {
+                break;
+            }
+        }
+        // The only watermark a key that reported nothing ever gets, and the
+        // reason is tombstones. After an eviction or a restart a key is back at
+        // `0` with a trim's worth of tombstones below its old anchor and
+        // nothing live left to delete, so every statement reports it zero rows
+        // and no row at all — the push above never fires for it. It could then
+        // never advance, because advancing would require deleting something,
+        // and it would re-walk those tombstones every tick until compaction.
+        //
+        // For the keys that did report, this is also the stronger claim: the
+        // range is drained, so everything below the anchor has gone, which no
+        // single statement's `deleted_to` can say.
+        trimmed_to.extend(
+            cursors
+                .iter()
+                .map(|c| ((target.to_watermark_key)(&c.key), Lsn(c.anchor as u64))),
+        );
+        Ok(TrimOutcome::Complete(deleted_total))
     }
 
     /// Trim one fork's listed blocks: per block, keep the newest base
@@ -921,27 +1049,43 @@ impl PageStore {
     ///
     /// Watermarks in, `trimmed_to` out: each block arrives with the watermark
     /// its last successful trim left — `Lsn(0)` for one that has none, which is
-    /// the whole range — and the anchor this trim reached is appended to
-    /// `trimmed_to` as each statement commits, for the caller to store as the
-    /// next watermark. A statement that rolls back trimmed nothing, so its
-    /// blocks are absent and keep the watermark they had. A block with no
-    /// watermark gets a statement to itself — see [`split_watermarkless_bounds`].
+    /// the whole range — and leaves with the highest watermark this trim can
+    /// prove, for the caller to store. Every committed statement reports its
+    /// own, so a bucket the loop did not finish still hands back the progress
+    /// it made; a drained bucket reports its anchor, which is further than any
+    /// single statement could say. One recorded too high strands the rows below
+    /// it for good, which is why it only ever rises behind a commit.
+    ///
+    /// Every statement is capped at `rows_per_statement` rows across the whole
+    /// batch, and each round raises a block's watermark to the highest `lsn` it
+    /// deleted, until a statement comes back under its cap. So a block with no
+    /// watermark needs no special handling — it is a bound whose watermark is
+    /// 0, and its depth costs iterations rather than one unbounded statement
+    /// (#1209).
     ///
     /// TODO(gc_whole_fork_threshold): above a per-fork block count,
     /// switch to a whole-fork variant in blknum-range batches.
+    // Wide by nature: a fork identity, the blocks and their ranges, the row
+    // budget, the token, and where to report the anchors reached.
+    #[allow(clippy::too_many_arguments)]
     pub async fn gc_act_trim_blocks(
         &self,
         branch_id: BranchId,
         (spcnode, dbnode, relnode, forknum): GcForkIdent,
         block_watermarks: &[(i64, Lsn)],
         cutoff: Lsn,
+        rows_per_statement: usize,
+        cancel: &CancellationToken,
         trimmed_to: &mut Vec<(i64, Lsn)>,
-    ) -> Result<u64> {
+    ) -> Result<TrimOutcome> {
         if block_watermarks.is_empty() {
-            return Ok(0);
+            return Ok(TrimOutcome::Complete(0));
         }
-        let anchors_sql = self.gc_trim_anchors_sql();
         let delete_sql = self.gc_trim_blocks_sql();
+        // A `&str` view, because the statement closure below is `Fn` — one call
+        // per statement — and its `async move` body would move the `String` out
+        // of it on the first.
+        let delete_sql = delete_sql.as_str();
         let cutoff_i = cutoff.0 as i64;
 
         // One anchors read for the whole fork: `bucket_id` rides in parallel to
@@ -951,7 +1095,7 @@ impl PageStore {
         // mid-statement, and a watermark above the anchor a DELETE used would
         // strand the rows between them.
         // One pass, three parallel binds. Their order is the contract with
-        // `gc_trim_anchors_sql`'s unnest, so they are built together.
+        // `gc_trim_blocks_anchors_sql`'s unnest, so they are built together.
         let (all_blknums, all_buckets, all_watermarks): (Vec<i64>, Vec<i16>, Vec<i64>) =
             block_watermarks
                 .iter()
@@ -961,10 +1105,10 @@ impl PageStore {
         // Each row is one block's whole DELETE range: blknum, watermark,
         // anchor. Blocks with no base <= cutoff are absent, which is what
         // leaves them untouched.
-        let rows = self
+        let bound_rows = self
             .ysql_client
             .query(
-                &anchors_sql,
+                &self.gc_trim_blocks_anchors_sql(),
                 &[
                     &branch_id,
                     &spcnode,
@@ -980,65 +1124,73 @@ impl PageStore {
             .await
             .with_context(|| {
                 format!(
-                    "gc_trim_anchors branch={branch_id} rel={relnode} fork={forknum} blocks={}",
+                    "gc_trim_blocks_anchors branch={branch_id} rel={relnode} fork={forknum} blocks={}",
                     block_watermarks.len()
                 )
             })?;
-        // The DELETE stays per bucket: unlike the anchors lateral it is one
-        // scan of `pages`, so `bucket_id` has to be a bound value for it to
-        // prune to that bucket's tablets.
+        // The DELETE stays per bucket: `bucket_id` leads that table's key, so it
+        // has to be a bound value for the scan to prune to that bucket's
+        // tablets.
         let mut bounds_by_bucket: Vec<TrimBounds<i64>> = vec![Vec::new(); PAGE_BUCKETS as usize];
-        for r in &rows {
+        for r in &bound_rows {
             let blknum: i64 = r.get("blknum");
-            let watermark: i64 = r.get("watermark");
-            let anchor: i64 = r.get("anchor");
-            bounds_by_bucket[page_bucket_id(relnode, blknum) as usize]
-                .push((blknum, watermark, anchor));
+            bounds_by_bucket[page_bucket_id(relnode, blknum) as usize].push(TrimBound {
+                key: blknum,
+                watermark: r.get("watermark"),
+                anchor: r.get("anchor"),
+            });
         }
 
         let mut deleted = 0u64;
-        for (bucket, bounds) in batch_bounds_per_bucket(bounds_by_bucket) {
-            let (blknums, watermarks, anchors): (Vec<i64>, Vec<i64>, Vec<i64>) =
-                bounds.into_iter().multiunzip();
-            // The plan-independent floor: every block in this statement is
-            // bounded below by its own watermark, so the batch's lowest one
-            // bounds the scan whatever the planner does with the join.
-            let floor = *watermarks.iter().min().expect("non-empty");
-            self.write_gate("GC trim of amp_storage.pages");
-            deleted += self
-                .delete_rows(
-                    &delete_sql,
-                    &[
-                        &branch_id,
-                        &spcnode,
-                        &dbnode,
-                        &relnode,
-                        &forknum,
-                        &blknums,
-                        &watermarks,
-                        &anchors,
-                        &bucket,
-                        &floor,
-                        &cutoff_i,
-                    ],
+        for (bucket, bounds) in bounds_by_bucket.into_iter().enumerate() {
+            if bounds.is_empty() {
+                continue;
+            }
+            let bucket = bucket as i16;
+            match self
+                .run_trim_loop(
+                    TrimTarget {
+                        gate_label: "GC trim of amp_storage.pages",
+                        key_col: "blknum",
+                        to_watermark_key: |blk| *blk,
+                        err_context: format!(
+                            "gc_act_trim_blocks branch={branch_id} rel={relnode} \
+                             fork={forknum} bucket={bucket}"
+                        ),
+                    },
+                    bounds,
+                    rows_per_statement,
+                    cancel,
+                    trimmed_to,
+                    |blknums, watermarks, anchors, limit| async move {
+                        self.ysql_client
+                            .query(
+                                delete_sql,
+                                &[
+                                    &branch_id,
+                                    &spcnode,
+                                    &dbnode,
+                                    &relnode,
+                                    &forknum,
+                                    &blknums,
+                                    &watermarks,
+                                    &anchors,
+                                    &bucket,
+                                    &limit,
+                                ],
+                            )
+                            .await
+                    },
                 )
-                .await
-                .with_context(|| {
-                    format!(
-                        "gc_act_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
-                         bucket={bucket} blocks={} first={}",
-                        blknums.len(),
-                        blknums[0]
-                    )
-                })?;
-            trimmed_to.extend(
-                blknums
-                    .iter()
-                    .zip(&anchors)
-                    .map(|(blk, anchor)| (*blk, Lsn(*anchor as u64))),
-            );
+                .await?
+            {
+                TrimOutcome::Complete(n) => deleted += n,
+                // The remaining buckets are untouched, and every statement this
+                // one committed has already reported its own watermark.
+                TrimOutcome::Cancelled(n) => return Ok(TrimOutcome::Cancelled(deleted + n)),
+            }
         }
-        Ok(deleted)
+        Ok(TrimOutcome::Complete(deleted))
     }
 
     /// Delete every `meta` row for the listed keys with `lsn <= due_lsn`.
@@ -1317,11 +1469,12 @@ impl PageStore {
     /// Returns `ybctids.len()`, not the DELETE's count: a retried statement
     /// re-runs as a no-op and reports 0 for rows that are gone, which would
     /// under-charge the budget and let one tick sweep the whole database.
-    /// `GC_ROWS_DELETED` is charged that same figure, which is why this is the
-    /// one GC delete outside [`Self::delete_rows`] — not because the retry
-    /// under-count is special (every idempotent GC delete reports 0 on a
-    /// retry), but because this is the only one whose count feeds control
-    /// flow rather than just a report.
+    /// `GC_ROWS_DELETED` is charged that same figure, which is why this is one
+    /// of the two GC deletes outside [`Self::delete_rows`] — not because the
+    /// retry under-count is special (every idempotent GC delete reports 0 on a
+    /// retry), but because this is the only one whose count feeds control flow
+    /// rather than just a report. The trims are the other exception: their
+    /// count arrives as a projection over the ids they selected.
     async fn gc_sweep_delete_batch(&self, table: &str, ybctids: &[Vec<u8>]) -> Result<usize> {
         self.ysql_client
             .execute(&self.gc_sweep_delete_sql(table), &[&ybctids])
@@ -1375,43 +1528,60 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// Each SLRU block's anchor, on [`Self::gc_trim_anchors_sql`]'s contract.
+    /// Each SLRU block's anchor, on [`Self::gc_trim_blocks_anchors_sql`]'s contract.
     /// No `bucket_id`: `branch_id` is this table's whole hash key. The
     /// `LIMIT 1` early stop matters more here — `will_init` is sparser in clog
     /// than in `pages` (#1133).
     fn gc_trim_slru_anchors_sql(&self) -> String {
         format!(
-            "SELECT b.blknum, b.watermark, x.lsn AS anchor \
-             FROM unnest($4::bigint[], $6::bigint[]) AS b(blknum, watermark) \
-             CROSS JOIN LATERAL ( \
-                 SELECT lsn \
-                 FROM \"{schema}\".slru_pages \
-                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
-                   AND blknum = b.blknum \
-                   AND lsn <= $5 AND will_init \
-                 ORDER BY lsn DESC LIMIT 1 \
-             ) x",
+            r#"SELECT b.blknum, b.watermark, x.lsn AS anchor
+            FROM unnest($4::bigint[], $6::bigint[]) AS b(blknum, watermark)
+            CROSS JOIN LATERAL (
+                SELECT lsn
+                FROM "{schema}".slru_pages
+                WHERE branch_id=$1 AND kind=$2 AND segno=$3
+                  AND blknum = b.blknum
+                  AND lsn <= $5 AND will_init
+                ORDER BY lsn DESC LIMIT 1
+            ) x"#,
             schema = self.schema
         )
     }
 
-    /// The `slru_pages` trim statement — same shape and hint as
-    /// [`Self::gc_trim_blocks_sql`], which carries the reasoning; split out for
-    /// the same test. `$4`/`$6`/`$7` are the blknum / watermark / anchor
-    /// arrays.
+    /// The `slru_pages` trim statement, the [`Self::gc_trim_blocks_sql`] shape
+    /// over `(kind, segno, blknum)` instead of a rel fork's key. Same traps:
+    /// the lateral is what puts each block's range in the Index Cond, and
+    /// `= ANY(ARRAY(...))` is what keeps the Tid Scan at `loops=1`.
+    ///
+    /// No bucket column — `branch_id` is the whole hash key, so binding the
+    /// branch already confines the statement to one tablet.
     fn gc_trim_slru_sql(&self) -> String {
         format!(
-            "{hint} DELETE FROM \"{schema}\".slru_pages p \
-             USING unnest($4::bigint[], $6::bigint[], $7::bigint[]) \
-                 AS bound(blknum, watermark, anchor) \
-             WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
-               AND p.blknum = ANY($4) \
-               AND p.lsn >= $8 AND p.lsn <= $5 \
-               AND p.blknum = bound.blknum \
-               AND p.lsn >= bound.watermark \
-               AND p.lsn < bound.anchor",
+            r#"{hint}
+            WITH ids AS MATERIALIZED (
+                SELECT x.blknum AS blknum, x.lsn AS lsn, x.tid AS tid
+                FROM unnest($4::bigint[], $5::bigint[], $6::bigint[])
+                     AS bound(blknum, watermark, anchor)
+                CROSS JOIN LATERAL (
+                    SELECT scan.ybctid AS tid, scan.blknum AS blknum, scan.lsn AS lsn
+                    FROM "{schema}".slru_pages AS scan
+                    WHERE scan.branch_id=$1 AND scan.kind=$2 AND scan.segno=$3
+                      AND scan.blknum = bound.blknum
+                      AND scan.lsn >= bound.watermark
+                      AND scan.lsn < bound.anchor
+                    ORDER BY scan.lsn ASC
+                ) x
+                LIMIT $7
+            ), d AS (
+                DELETE FROM "{schema}".slru_pages AS del
+                WHERE del.ybctid = ANY(ARRAY(SELECT tid FROM ids))
+            )
+            SELECT blknum, count(*) AS {deleted_count}, max(lsn) AS {deleted_to}
+            FROM ids GROUP BY blknum"#,
             schema = self.schema,
-            hint = TRIM_NESTED_LOOP_HINT
+            deleted_count = TRIM_DELETED_COUNT_COL,
+            deleted_to = TRIM_DELETED_TO_COL,
+            hint = TRIM_LATERAL_HINT.replace("{index}", "slru_pages")
         )
     }
 
@@ -1422,16 +1592,20 @@ impl PageStore {
     ///
     /// The materialiser stamps SLRU images too, so the same-LSN delta at the
     /// anchor survives here as it does in `pages`.
+    // Wide by nature — see [`Self::gc_act_trim_blocks`].
+    #[allow(clippy::too_many_arguments)]
     pub async fn gc_act_trim_slru(
         &self,
         branch_id: BranchId,
         (kind, segno): GcSlruSeg,
         block_watermarks: &[(i64, Lsn)],
         cutoff: Lsn,
+        rows_per_statement: usize,
+        cancel: &CancellationToken,
         trimmed_to: &mut Vec<(i64, Lsn)>,
-    ) -> Result<u64> {
+    ) -> Result<TrimOutcome> {
         if block_watermarks.is_empty() {
-            return Ok(0);
+            return Ok(TrimOutcome::Complete(0));
         }
         let cutoff_i = cutoff.0 as i64;
         let (all_blknums, all_watermarks): (Vec<i64>, Vec<i64>) = block_watermarks
@@ -1442,7 +1616,7 @@ impl PageStore {
         // Read before the DELETE, never after: a base can appear below the
         // cutoff mid-statement, and a watermark above the anchor the DELETE
         // used would strand the rows between them.
-        let rows = self
+        let bound_rows = self
             .ysql_client
             .query(
                 &self.gc_trim_slru_anchors_sql(),
@@ -1464,55 +1638,54 @@ impl PageStore {
             })?;
         // Blocks with no base <= cutoff are absent, which is what leaves them
         // untouched.
-        let all_bounds: TrimBounds<i64> = rows
+        let bounds: TrimBounds<i64> = bound_rows
             .iter()
-            .map(|r| {
-                (
-                    r.get::<_, i64>("blknum"),
-                    r.get::<_, i64>("watermark"),
-                    r.get::<_, i64>("anchor"),
-                )
+            .map(|r| TrimBound {
+                key: r.get::<_, i64>("blknum"),
+                watermark: r.get::<_, i64>("watermark"),
+                anchor: r.get::<_, i64>("anchor"),
             })
             .collect();
 
-        let slru_sql = self.gc_trim_slru_sql();
-        let mut deleted = 0u64;
-        for bounds in batch_bounds(all_bounds) {
-            let (blknums, watermarks, anchors): (Vec<i64>, Vec<i64>, Vec<i64>) =
-                bounds.into_iter().multiunzip();
-            let floor = *watermarks.iter().min().expect("non-empty");
-            self.write_gate("GC trim of amp_storage.slru_pages");
-            deleted += self
-                .delete_rows(
-                    &slru_sql,
-                    &[
-                        &branch_id,
-                        &kind,
-                        &segno,
-                        &blknums,
-                        &cutoff_i,
-                        &watermarks,
-                        &anchors,
-                        &floor,
-                    ],
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno} \
-                         blocks={} first={}",
-                        blknums.len(),
-                        blknums[0]
-                    )
-                })?;
-            trimmed_to.extend(
-                blknums
-                    .iter()
-                    .zip(&anchors)
-                    .map(|(blk, anchor)| (*blk, Lsn(*anchor as u64))),
-            );
+        if bounds.is_empty() {
+            return Ok(TrimOutcome::Complete(0));
         }
-        Ok(deleted)
+        let slru_sql = self.gc_trim_slru_sql();
+        // A `&str` view, because the statement closure below is `Fn` — one call
+        // per statement — and its `async move` body would move the `String` out
+        // of it on the first.
+        let slru_sql = slru_sql.as_str();
+        self.run_trim_loop(
+            TrimTarget {
+                gate_label: "GC trim of amp_storage.slru_pages",
+                key_col: "blknum",
+                to_watermark_key: |blk| *blk,
+                err_context: format!(
+                    "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno}"
+                ),
+            },
+            bounds,
+            rows_per_statement,
+            cancel,
+            trimmed_to,
+            |blknums, watermarks, anchors, limit| async move {
+                self.ysql_client
+                    .query(
+                        slru_sql,
+                        &[
+                            &branch_id,
+                            &kind,
+                            &segno,
+                            &blknums,
+                            &watermarks,
+                            &anchors,
+                            &limit,
+                        ],
+                    )
+                    .await
+            },
+        )
+        .await
     }
 
     /// Drop action for a truncated SLRU segment: delete every `slru_pages`
@@ -1553,14 +1726,14 @@ impl PageStore {
     /// test (every `meta` put is a base) and no `bucket_id`.
     fn gc_trim_meta_anchors_sql(&self) -> String {
         format!(
-            "SELECT b.key, b.watermark, x.lsn AS anchor \
-             FROM unnest($2::bytea[], $4::bigint[]) AS b(key, watermark) \
-             CROSS JOIN LATERAL ( \
-                 SELECT lsn \
-                 FROM \"{schema}\".meta \
-                 WHERE branch_id=$1 AND key = b.key AND lsn <= $3 \
-                 ORDER BY lsn DESC LIMIT 1 \
-             ) x",
+            r#"SELECT b.key, b.watermark, x.lsn AS anchor
+            FROM unnest($2::bytea[], $4::bigint[]) AS b(key, watermark)
+            CROSS JOIN LATERAL (
+                SELECT lsn
+                FROM "{schema}".meta
+                WHERE branch_id=$1 AND key = b.key AND lsn <= $3
+                ORDER BY lsn DESC LIMIT 1
+            ) x"#,
             schema = self.schema
         )
     }
@@ -1575,17 +1748,31 @@ impl PageStore {
     /// value.
     fn gc_trim_meta_sql(&self) -> String {
         format!(
-            "{hint} DELETE FROM \"{schema}\".meta p \
-             USING unnest($2::bytea[], $4::bigint[], $5::bigint[]) \
-                 AS bound(key, watermark, anchor) \
-             WHERE p.branch_id=$1 \
-               AND p.key = ANY($2::bytea[]) \
-               AND p.lsn >= $6 AND p.lsn <= $3 \
-               AND p.key = bound.key \
-               AND p.lsn >= bound.watermark \
-               AND p.lsn < bound.anchor",
+            r#"{hint}
+            WITH ids AS MATERIALIZED (
+                SELECT x.key AS key, x.lsn AS lsn, x.tid AS tid
+                FROM unnest($2::bytea[], $3::bigint[], $4::bigint[])
+                     AS bound(key, watermark, anchor)
+                CROSS JOIN LATERAL (
+                    SELECT scan.ybctid AS tid, scan.key AS key, scan.lsn AS lsn
+                    FROM "{schema}".meta AS scan
+                    WHERE scan.branch_id=$1
+                      AND scan.key = bound.key
+                      AND scan.lsn >= bound.watermark
+                      AND scan.lsn < bound.anchor
+                    ORDER BY scan.lsn ASC
+                ) x
+                LIMIT $5
+            ), d AS (
+                DELETE FROM "{schema}".meta AS del
+                WHERE del.ybctid = ANY(ARRAY(SELECT tid FROM ids))
+            )
+            SELECT key, count(*) AS {deleted_count}, max(lsn) AS {deleted_to}
+            FROM ids GROUP BY key"#,
             schema = self.schema,
-            hint = TRIM_NESTED_LOOP_HINT
+            deleted_count = TRIM_DELETED_COUNT_COL,
+            deleted_to = TRIM_DELETED_TO_COL,
+            hint = TRIM_LATERAL_HINT.replace("{index}", "meta")
         )
     }
 
@@ -1601,10 +1788,12 @@ impl PageStore {
         branch_id: BranchId,
         key_watermarks: &[(Key, Lsn)],
         cutoff: Lsn,
+        rows_per_statement: usize,
+        cancel: &CancellationToken,
         trimmed_to: &mut Vec<(Key, Lsn)>,
-    ) -> Result<u64> {
+    ) -> Result<TrimOutcome> {
         if key_watermarks.is_empty() {
-            return Ok(0);
+            return Ok(TrimOutcome::Complete(0));
         }
         let cutoff_i = cutoff.0 as i64;
         let (all_key_bytes, all_watermarks): (Vec<Vec<u8>>, Vec<i64>) = key_watermarks
@@ -1612,7 +1801,7 @@ impl PageStore {
             .map(|(key, watermark)| (key_to_bytes(key), watermark.0 as i64))
             .unzip();
 
-        let rows = self
+        let bound_rows = self
             .ysql_client
             .query(
                 &self.gc_trim_meta_anchors_sql(),
@@ -1627,54 +1816,45 @@ impl PageStore {
             })?;
         // A key with no version <= cutoff is absent, which is what leaves it
         // untouched.
-        let all_bounds: TrimBounds<Vec<u8>> = rows
+        let bounds: TrimBounds<Vec<u8>> = bound_rows
             .iter()
-            .map(|r| {
-                (
-                    r.get::<_, Vec<u8>>("key"),
-                    r.get::<_, i64>("watermark"),
-                    r.get::<_, i64>("anchor"),
-                )
+            .map(|r| TrimBound {
+                key: r.get::<_, Vec<u8>>("key"),
+                watermark: r.get::<_, i64>("watermark"),
+                anchor: r.get::<_, i64>("anchor"),
             })
             .collect();
 
-        let meta_sql = self.gc_trim_meta_sql();
-        let mut deleted = 0u64;
-        for bounds in batch_bounds(all_bounds) {
-            let (key_bytes, watermarks, anchors): (Vec<Vec<u8>>, Vec<i64>, Vec<i64>) =
-                bounds.into_iter().multiunzip();
-            let floor = *watermarks.iter().min().expect("non-empty");
-            self.write_gate("GC trim of amp_storage.meta");
-            deleted += self
-                .delete_rows(
-                    &meta_sql,
-                    &[
-                        &branch_id,
-                        &key_bytes,
-                        &cutoff_i,
-                        &watermarks,
-                        &anchors,
-                        &floor,
-                    ],
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "gc_act_trim_meta branch={branch_id} keys={} first={}",
-                        key_bytes.len(),
-                        Key::from_slice(&key_bytes[0])
-                    )
-                })?;
-            trimmed_to.extend(
-                key_bytes
-                    .iter()
-                    .zip(&anchors)
-                    .map(|(key, anchor)| (Key::from_slice(key), Lsn(*anchor as u64))),
-            );
+        if bounds.is_empty() {
+            return Ok(TrimOutcome::Complete(0));
         }
-        Ok(deleted)
+        let meta_sql = self.gc_trim_meta_sql();
+        // A `&str` view, because the statement closure below is `Fn` — one call
+        // per statement — and its `async move` body would move the `String` out
+        // of it on the first.
+        let meta_sql = meta_sql.as_str();
+        self.run_trim_loop(
+            TrimTarget {
+                gate_label: "GC trim of amp_storage.meta",
+                key_col: "key",
+                to_watermark_key: |k: &Vec<u8>| Key::from_slice(k),
+                err_context: format!("gc_act_trim_meta branch={branch_id}"),
+            },
+            bounds,
+            rows_per_statement,
+            cancel,
+            trimmed_to,
+            |keys, watermarks, anchors, limit| async move {
+                self.ysql_client
+                    .query(
+                        meta_sql,
+                        &[&branch_id, &keys, &watermarks, &anchors, &limit],
+                    )
+                    .await
+            },
+        )
+        .await
     }
-
     /// Drop action for dead `meta` keys (a retired object's directory /
     /// sentinel / two-phase / DROP DATABASE keys): delete every listed
     /// key's rows `<= due_lsn`. `<= due_lsn` keeps a recreated key (written
@@ -1806,6 +1986,31 @@ mod tests {
 
     const GC_SPC: i64 = 1663;
     const GC_DB: i64 = 5;
+    /// The watermark each key ends a call with. `trimmed_to` carries a key's
+    /// progress once per committed statement — that is the point, so a failure
+    /// mid-loop keeps what went — and the caller's map keeps the last write per
+    /// key. So the last value is the contract a test should assert, not the
+    /// whole sequence.
+    fn final_watermarks<K: Clone + Eq + std::hash::Hash + Ord>(
+        trimmed: &[(K, Lsn)],
+    ) -> Vec<(K, Lsn)> {
+        let mut last: HashMap<K, Lsn> = HashMap::new();
+        for (k, lsn) in trimmed {
+            last.insert(k.clone(), *lsn);
+        }
+        let mut v: Vec<(K, Lsn)> = last.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    /// A token no test cancels — the trim tests are not about shutdown.
+    fn never_cancelled() -> CancellationToken {
+        CancellationToken::new()
+    }
+    /// `rows_per_statement` for the trim tests that are not about batching:
+    /// comfortably above the handful of versions they write, so a
+    /// watermark-less block's bounded path runs as one statement.
+    const TRIM_UNBATCHED: usize = 1_000;
 
     impl PageStore {
         /// Test-only: every stored version of one block, unfiltered —
@@ -2668,12 +2873,14 @@ mod tests {
         ];
         store.put_pages(branch, &rows).await.unwrap();
 
-        store
+        let _ = store
             .gc_act_trim_blocks(
                 branch,
                 (GC_SPC, GC_DB, rel as i64, 0),
                 &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(0))],
                 Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut Vec::new(),
             )
             .await
@@ -2751,12 +2958,14 @@ mod tests {
 
         // A drain triggered by the (oldest) candidate at due=30 still
         // trims to the cutoff's anchor at 70.
-        store
+        let _ = store
             .gc_act_trim_blocks(
                 branch,
                 (GC_SPC, GC_DB, rel as i64, 0),
                 &[(blk as i64, Lsn(0))],
                 Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut Vec::new(),
             )
             .await
@@ -2802,12 +3011,20 @@ mod tests {
 
         // Tick 1, no watermark: the whole range below the anchor at 30.
         let mut wm = Vec::new();
-        store
-            .gc_act_trim_blocks(branch, fork, &[(blk as i64, Lsn(0))], Lsn(35), &mut wm)
+        let _ = store
+            .gc_act_trim_blocks(
+                branch,
+                fork,
+                &[(blk as i64, Lsn(0))],
+                Lsn(35),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
+                &mut wm,
+            )
             .await
             .unwrap();
         assert_eq!(
-            wm,
+            final_watermarks(&wm),
             vec![(blk as i64, Lsn(30))],
             "the anchor is the watermark"
         );
@@ -2824,11 +3041,19 @@ mod tests {
         // Tick 2, bounded below by 30: deletes 30 and 40, the rows between the
         // two anchors.
         let mut wm2 = Vec::new();
-        store
-            .gc_act_trim_blocks(branch, fork, &[(blk as i64, Lsn(30))], Lsn(55), &mut wm2)
+        let _ = store
+            .gc_act_trim_blocks(
+                branch,
+                fork,
+                &[(blk as i64, Lsn(30))],
+                Lsn(55),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
+                &mut wm2,
+            )
             .await
             .unwrap();
-        assert_eq!(wm2, vec![(blk as i64, Lsn(50))]);
+        assert_eq!(final_watermarks(&wm2), vec![(blk as i64, Lsn(50))]);
         assert_eq!(
             versions().await.unwrap(),
             vec![(50, true, true), (60, false, false)],
@@ -2873,19 +3098,22 @@ mod tests {
             .unwrap();
 
         let mut wm = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_blocks(
                 branch,
                 (GC_SPC, GC_DB, rel as i64, 0),
                 &[(blk_a as i64, Lsn(20)), (blk_b as i64, Lsn(60))],
                 Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm,
             )
             .await
             .unwrap();
-
-        wm.sort_unstable();
-        assert_eq!(wm, vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]);
+        assert_eq!(
+            final_watermarks(&wm),
+            vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]
+        );
         assert_eq!(
             store
                 .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
@@ -2909,60 +3137,13 @@ mod tests {
         );
     }
 
-    /// The statement split the three trims share (#1160): watermarked bounds
-    /// stay one batch and go first, each watermark-less one gets its own
-    /// statement.
-    #[test]
-    fn batch_bounds_isolates_watermarkless() {
-        let statements = |bounds: Vec<(i64, i64, i64)>| {
-            batch_bounds(bounds)
-                .map(|s| s.into_iter().map(|(blk, _, _)| blk).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-        };
-        assert!(statements(vec![]).is_empty());
-        assert_eq!(
-            statements(vec![(1, 10, 20), (2, 30, 40)]),
-            vec![vec![1, 2]],
-            "an all-warm fork is one statement, as before #1160"
-        );
-        assert_eq!(
-            statements(vec![(1, 0, 20), (2, 0, 40)]),
-            vec![vec![1], vec![2]]
-        );
-        assert_eq!(
-            statements(vec![(1, 0, 20), (2, 30, 40), (3, 0, 60), (4, 50, 70)]),
-            vec![vec![2, 4], vec![1], vec![3]],
-            "the batch commits before a watermark-less bound can fail the call"
-        );
-    }
-
-    /// For `pages` the guarantee is fork-wide, not per bucket: a cold block in
-    /// bucket 0 must not be sequenced ahead of bucket 1's batch (#1160).
-    #[test]
-    fn batch_bounds_per_bucket_runs_every_batch_first() {
-        let ordered = batch_bounds_per_bucket(vec![
-            vec![(1, 0, 20), (2, 30, 40)],
-            vec![(3, 50, 60)],
-            vec![],
-            vec![(4, 0, 80)],
-        ]);
-        let shape: Vec<(i16, Vec<i64>)> = ordered
-            .into_iter()
-            .map(|(b, bounds)| (b, bounds.into_iter().map(|(blk, _, _)| blk).collect()))
-            .collect();
-        assert_eq!(
-            shape,
-            vec![(0, vec![2]), (1, vec![3]), (0, vec![1]), (3, vec![4])],
-            "both batches precede both isolated blocks"
-        );
-    }
-
     /// A watermark-less block and a watermarked one in the same bucket, one
-    /// call (#1160). Pins the outcome, not the split: `bound.watermark` is
-    /// per bound, so a single shared statement deletes exactly these rows too.
-    /// The split itself is pinned by the two pure tests above.
+    /// call. A watermark-less block is just a bound with `watermark = 0`, and
+    /// `bound.watermark` is per bound, so one shared statement gets both
+    /// blocks' floors right — this is why the trim needs no separate path for
+    /// the watermark-less case (#1160, #1209).
     #[tokio::test]
-    async fn gc_trim_isolates_watermarkless_block_from_its_bucket() {
+    async fn gc_trim_deletes_a_watermarkless_block_beside_a_watermarked_one() {
         let (store, _schema) = make_store("gc_trim_cold").await;
         let branch = rand_branch();
         let rel = 16460u32;
@@ -2993,19 +3174,22 @@ mod tests {
             .unwrap();
 
         let mut wm = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_blocks(
                 branch,
                 (GC_SPC, GC_DB, rel as i64, 0),
                 &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(50))],
                 Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm,
             )
             .await
             .unwrap();
-
-        wm.sort_unstable();
-        assert_eq!(wm, vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]);
+        assert_eq!(
+            final_watermarks(&wm),
+            vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]
+        );
         assert_eq!(
             store
                 .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
@@ -3026,6 +3210,125 @@ mod tests {
                 (70, false, false)
             ],
             "B keeps lsn 10 and 45: below its own watermark"
+        );
+    }
+
+    /// A watermark-less block deeper than one statement's row budget: the
+    /// bounded loop must still leave exactly the anchor and everything above
+    /// it, and must cross a same-LSN image/delta pair that a batch boundary
+    /// falls inside (#1209).
+    ///
+    /// `rows_per_statement` of 2 against 9 deletable rows, with the tie group
+    /// at lsn 20 — the second and third rows ascending, so a cap of 2 cuts
+    /// between them. A strict `lsn >` cursor would then skip the group's image
+    /// and strand it, which is what the surviving-rows assertion catches. At
+    /// lsn 30 the group would sit at positions 3-4 and be taken whole, and the
+    /// test would pass either way.
+    #[tokio::test]
+    async fn gc_trim_bounds_a_deep_watermarkless_block() {
+        let (store, _schema) = make_store("gc_trim_batched").await;
+        let branch = rand_branch();
+        let rel = 16480u32;
+        let blk = 3u32;
+        let fork = (GC_SPC, GC_DB, rel as i64, 0);
+        let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+
+        // 10, 20 (delta + the image the materialiser stamped over it), 30, 40,
+        // 50, 60, 70, 80 below the anchor; 90 is the anchor; 100 above it.
+        let mut rows = vec![page_row(key.clone(), 10, true, true, b"i10")];
+        for lsn in [20u64, 30, 40, 50, 60, 70, 80] {
+            rows.push(page_row(key.clone(), lsn, false, false, b"d"));
+        }
+        rows.push(page_row(key.clone(), 20, true, true, b"i20"));
+        rows.push(page_row(key.clone(), 90, true, true, b"i90"));
+        rows.push(page_row(key.clone(), 100, false, false, b"d100"));
+        store.put_pages(branch, &rows).await.unwrap();
+
+        let mut wm = Vec::new();
+        let _ = store
+            .gc_act_trim_blocks(
+                branch,
+                fork,
+                &[(blk as i64, Lsn(0))],
+                Lsn(95),
+                2,
+                &never_cancelled(),
+                &mut wm,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            final_watermarks(&wm),
+            vec![(blk as i64, Lsn(90))],
+            "the watermark is the anchor, however many statements it took"
+        );
+        assert_eq!(
+            store
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                .await
+                .unwrap(),
+            vec![(90, true, true), (100, false, false)],
+            "the batched path deletes the same rows the predicate DELETE would"
+        );
+    }
+
+    /// A cancelled bounded trim stops between statements and keeps what it
+    /// committed, rather than running a deep block to completion (#1209). One
+    /// row a statement against a token cancelled up front, so nothing runs.
+    #[tokio::test]
+    async fn gc_trim_bounded_stops_on_cancel() {
+        let (store, _schema) = make_store("gc_trim_cancel").await;
+        let branch = rand_branch();
+        let rel = 16490u32;
+        let blk = 4u32;
+        let fork = (GC_SPC, GC_DB, rel as i64, 0);
+        let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+
+        let mut rows = vec![page_row(key.clone(), 10, true, true, b"i10")];
+        for lsn in [20u64, 30, 40] {
+            rows.push(page_row(key.clone(), lsn, false, false, b"d"));
+        }
+        rows.push(page_row(key.clone(), 50, true, true, b"i50"));
+        store.put_pages(branch, &rows).await.unwrap();
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut wm = Vec::new();
+        let outcome = store
+            .gc_act_trim_blocks(
+                branch,
+                fork,
+                &[(blk as i64, Lsn(0))],
+                Lsn(55),
+                1,
+                &cancel,
+                &mut wm,
+            )
+            .await
+            .expect("cancellation is an outcome, not an error");
+        assert_eq!(
+            outcome,
+            TrimOutcome::Cancelled(0),
+            "a cancelled trim must say so, and report what it committed"
+        );
+        assert!(
+            wm.is_empty(),
+            "no anchor may be stored for a block the loop did not finish"
+        );
+        assert_eq!(
+            store
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                .await
+                .unwrap(),
+            vec![
+                (10, true, true),
+                (20, false, false),
+                (30, false, false),
+                (40, false, false),
+                (50, true, true)
+            ],
+            "the token was cancelled before the first statement, so nothing went"
         );
     }
 
@@ -3050,7 +3353,7 @@ mod tests {
             .map(|i| i.to_be_bytes().to_vec())
             .collect();
         for table in ["pages", "meta"] {
-            let plan = explain(&store, &store.gc_sweep_delete_sql(table), &[&ids]).await;
+            let plan = explain(&store.gc_sweep_delete_sql(table), &[&ids]).await;
             assert!(
                 plan.contains("Tid Scan"),
                 "{table}: DELETE of {} ybctids is not a Tid Scan:\n{plan}",
@@ -3059,18 +3362,53 @@ mod tests {
         }
     }
 
-    /// Capture a statement's plan as text. Shared by the plan-shape tests —
-    /// they assert on node names, so the whole plan is joined into one string.
-    async fn explain(
-        store: &PageStore,
-        sql: &str,
-        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-    ) -> String {
-        store
-            .ysql_client
-            .query(&format!("EXPLAIN {sql}"), params)
+    /// EXPLAIN `sql` on the plan tests' own connection, where pg_hint_plan
+    /// fails any statement whose hint it cannot bind. Returns the plan as one
+    /// string — the tests assert on node names.
+    ///
+    /// pg_hint_plan silently no-ops a hint it cannot bind — a stale alias, a
+    /// typo, a directive it does not understand. For these statements that is a
+    /// large regression nothing would report, and asserting the hint text is
+    /// present does not catch it, so every plan assertion is vacuous unless
+    /// `yb_bad_hint_mode` is `error` in the session that runs the EXPLAIN.
+    ///
+    /// Hence the dedicated client. `make_store` hands every test in this binary
+    /// one process-wide `PageStore` whose pool is a single connection, so
+    /// setting that GUC through it makes it global for as long as it is set —
+    /// pg_hint_plan then rejects an unrelated test's statement that carried no
+    /// hint at all, whichever test runs next. The readback stays: a reconnect
+    /// between the `SET` and the EXPLAIN would silently drop it.
+    async fn explain(sql: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> String {
+        static PLAN_CLIENT: tokio::sync::OnceCell<ysql_client::YsqlClient> =
+            tokio::sync::OnceCell::const_new();
+        let client = PLAN_CLIENT
+            .get_or_init(|| async {
+                ysql_client::YsqlClient::from_yb_config(
+                    &super::test_support::test_yb_config(),
+                    "gc_plan_test",
+                    false,
+                )
+                .await
+                .expect("open the plan tests' own connection")
+            })
+            .await;
+        client
+            .execute("SET pg_hint_plan.yb_bad_hint_mode = error", &[])
             .await
-            .unwrap()
+            .expect("set yb_bad_hint_mode");
+        let mode: String = client
+            .query("SHOW pg_hint_plan.yb_bad_hint_mode", &[])
+            .await
+            .expect("read yb_bad_hint_mode back")[0]
+            .get(0);
+        assert_eq!(
+            mode, "error",
+            "the GUC did not stick, so every hint assertion is vacuous"
+        );
+        client
+            .query(format!("EXPLAIN {sql}").as_str(), params)
+            .await
+            .unwrap_or_else(|e| panic!("EXPLAIN {sql} rejected by the server: {e}"))
             .iter()
             .map(|r| r.get::<_, String>(0))
             .collect::<Vec<_>>()
@@ -3117,12 +3455,14 @@ mod tests {
             .unwrap();
 
         let kind = SlruKind::Clog as i16;
-        store
+        let _ = store
             .gc_act_trim_slru(
                 branch,
                 (kind, seg as i64),
                 &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(0))],
                 Lsn(50),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut Vec::new(),
             )
             .await
@@ -3192,18 +3532,20 @@ mod tests {
         // Tick 1, block A only, no watermark: the whole range below its anchor
         // at 30.
         let mut wm = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_slru(
                 branch,
                 (kind, seg as i64),
                 &[(blk_a as i64, Lsn(0))],
                 Lsn(35),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm,
             )
             .await
             .unwrap();
         assert_eq!(
-            wm,
+            final_watermarks(&wm),
             vec![(blk_a as i64, Lsn(30))],
             "the anchor is the watermark"
         );
@@ -3219,18 +3561,22 @@ mod tests {
 
         // Tick 2, both blocks in one statement: A bounded below by 30, B by 50.
         let mut wm2 = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_slru(
                 branch,
                 (kind, seg as i64),
                 &[(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(50))],
                 Lsn(75),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm2,
             )
             .await
             .unwrap();
-        wm2.sort_unstable();
-        assert_eq!(wm2, vec![(blk_a as i64, Lsn(50)), (blk_b as i64, Lsn(70))]);
+        assert_eq!(
+            final_watermarks(&wm2),
+            vec![(blk_a as i64, Lsn(50)), (blk_b as i64, Lsn(70))]
+        );
         assert_eq!(
             versions(blk_a).await.unwrap(),
             vec![(50, true, true), (60, false, false)],
@@ -3243,11 +3589,11 @@ mod tests {
         );
     }
 
-    /// The SLRU half of `gc_trim_isolates_watermarkless_block_from_its_bucket`
-    /// (#1160) — outcome preservation for this table's own bind list, on the
-    /// same terms: it passes batched too.
+    /// The SLRU half of
+    /// [`gc_trim_deletes_a_watermarkless_block_beside_a_watermarked_one`], for
+    /// this table's own bind list (#1160).
     #[tokio::test]
-    async fn gc_trim_slru_isolates_watermarkless_block() {
+    async fn gc_trim_slru_deletes_a_watermarkless_block() {
         let (store, _schema) = make_store("gc_trim_slru_cold").await;
         let branch = rand_branch();
         let (seg, blk_a, blk_b) = (11u32, 1u32, 2u32);
@@ -3283,19 +3629,22 @@ mod tests {
             .unwrap();
 
         let mut wm = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_slru(
                 branch,
                 (kind, seg as i64),
                 &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(50))],
                 Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm,
             )
             .await
             .unwrap();
-
-        wm.sort_unstable();
-        assert_eq!(wm, vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]);
+        assert_eq!(
+            final_watermarks(&wm),
+            vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]
+        );
         assert_eq!(
             store
                 .test_raw_slru_versions(branch, kind, seg as i64, blk_a as i64)
@@ -3356,11 +3705,22 @@ mod tests {
 
         // Tick 1, key A only: anchor 30, so 10 goes and 30 stays.
         let mut wm = Vec::new();
-        store
-            .gc_act_trim_meta(branch, &[(key_a, Lsn(0))], Lsn(35), &mut wm)
+        let _ = store
+            .gc_act_trim_meta(
+                branch,
+                &[(key_a, Lsn(0))],
+                Lsn(35),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
+                &mut wm,
+            )
             .await
             .unwrap();
-        assert_eq!(wm, vec![(key_a, Lsn(30))], "the anchor is the watermark");
+        assert_eq!(
+            final_watermarks(&wm),
+            vec![(key_a, Lsn(30))],
+            "the anchor is the watermark"
+        );
         assert_eq!(
             store
                 .test_raw_meta_versions(branch, &bytes_a)
@@ -3372,19 +3732,20 @@ mod tests {
         // Tick 2: A's watermark row (30) is now below a newer anchor (50), so
         // it goes with 40; B is bounded by its own watermark.
         let mut wm2 = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_meta(
                 branch,
                 &[(key_a, Lsn(30)), (key_b, Lsn(50))],
                 Lsn(65),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm2,
             )
             .await
             .unwrap();
-        wm2.sort_unstable();
         let mut expected = vec![(key_a, Lsn(50)), (key_b, Lsn(60))];
         expected.sort_unstable();
-        assert_eq!(wm2, expected);
+        assert_eq!(final_watermarks(&wm2), expected);
         assert_eq!(
             store
                 .test_raw_meta_versions(branch, &bytes_a)
@@ -3403,11 +3764,11 @@ mod tests {
         );
     }
 
-    /// The `meta` half of `gc_trim_isolates_watermarkless_block_from_its_bucket`
-    /// (#1160) — outcome preservation, and it passes batched too. Half-open
-    /// range here: the anchor row itself survives.
+    /// The `meta` half of
+    /// [`gc_trim_deletes_a_watermarkless_block_beside_a_watermarked_one`]
+    /// (#1160). Half-open range here: the anchor row itself survives.
     #[tokio::test]
-    async fn gc_trim_meta_isolates_watermarkless_key() {
+    async fn gc_trim_meta_deletes_a_watermarkless_key() {
         use pageserver_api::key::twophase_file_key;
 
         let (store, _schema) = make_store("gc_trim_meta_cold").await;
@@ -3437,20 +3798,21 @@ mod tests {
             .unwrap();
 
         let mut wm = Vec::new();
-        store
+        let _ = store
             .gc_act_trim_meta(
                 branch,
                 &[(key_a, Lsn(0)), (key_b, Lsn(50))],
                 Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut wm,
             )
             .await
             .unwrap();
 
-        wm.sort_unstable();
         let mut expected = vec![(key_a, Lsn(30)), (key_b, Lsn(60))];
         expected.sort_unstable();
-        assert_eq!(wm, expected);
+        assert_eq!(final_watermarks(&wm), expected);
         assert_eq!(
             store
                 .test_raw_meta_versions(branch, &key_to_bytes(&key_a))
@@ -3502,11 +3864,13 @@ mod tests {
             .await
             .unwrap();
 
-        store
+        let _ = store
             .gc_act_trim_meta(
                 branch,
                 &[(key_a, Lsn(0)), (key_b, Lsn(0))],
                 Lsn(50),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
                 &mut Vec::new(),
             )
             .await
@@ -3530,35 +3894,47 @@ mod tests {
         );
     }
 
-    /// The three trims must never plan a merge join, and never a `Materialize`
-    /// — see [`PageStore::gc_trim_blocks_sql`] for why (#1133, #1155). The
-    /// anchors moved into their own statements, so nothing remains in these
-    /// DELETEs that a tuplestore could legitimately sit over.
+    /// Every per-key bound of all three trims has to reach the index, and the
+    /// DELETE has to consume the ids as one Tid Scan. A bound demoted to a Join
+    /// Filter, a Storage Filter or a `Materialize` leaves the DELETE correct and
+    /// the scan unbounded — it reads each key's whole chain and discards what
+    /// falls outside the range (#1133, #1155, #1153).
     ///
-    /// The hint-string assertion is the load-bearing half: an EXPLAIN against
-    /// a table this small picks a safe plan on its own, so the plan check
-    /// catches `enable_hint=off` and a malformed hint, not a deleted one. The
-    /// literal is spelled out here on purpose — asserting the constant would
-    /// pass a typo in it.
+    /// The lateral is what guarantees the first half: a lateral reference is
+    /// only definable per outer row, so a parameterised inner index scan is the
+    /// only legal plan and the join method is not the cost model's to pick.
+    /// `TidScan(del)` guarantees the second, which the planner drops for a full
+    /// scan above ~27 ids on a table nothing has ANALYZEd (#970).
+    ///
+    /// Hence the SQL-text half of each case: a directive deleted from the hint
+    /// binds nothing and so errors nothing, and an EXPLAIN of a table this small
+    /// can pick a safe plan unaided, so the text pins are what catch a hint that
+    /// quietly stopped being there.
     #[tokio::test]
-    async fn gc_trims_never_plan_a_merge_join() {
+    async fn gc_trims_keep_every_per_key_bound_in_the_index_cond() {
         let (store, _schema) = make_store("gc_trim_plan").await;
         let branch = BranchId::generate();
         let oid: i64 = 1;
         let fork: i16 = 0;
-        let blknums: Vec<i64> = vec![0, 1];
-        let lsn: i64 = 1;
         let bucket: i16 = 0;
-        let keys: Vec<Vec<u8>> = vec![vec![0u8; KEY_SIZE]];
-        let watermarks: Vec<i64> = vec![0, 0];
-        let anchors: Vec<i64> = vec![1, 1];
-        let key_watermarks: Vec<i64> = vec![0];
-        let key_anchors: Vec<i64> = vec![1];
+        // A realistic batch width. At one or two bounds the planner picks a
+        // clean plan unaided, which is what let a Join Filter hide here before
+        // (#1209); production batches are a bucket's worth of a fork's
+        // candidates, in the hundreds.
+        const BOUNDS: usize = 200;
+        let blknums: Vec<i64> = (0..BOUNDS as i64).collect();
+        let keys: Vec<Vec<u8>> = (0..BOUNDS).map(|i| vec![i as u8; KEY_SIZE]).collect();
+        let watermarks: Vec<i64> = vec![0; BOUNDS];
+        let anchors: Vec<i64> = vec![1; BOUNDS];
+        // The production default: a small cap lets the planner cost the id set
+        // as a handful of rows and pick a plan the real statement never gets.
+        let limit: i64 =
+            pageserver_api::config::tenant_conf_defaults::DEFAULT_GC_ROWS_PER_STATEMENT as i64;
 
         type Params<'a> = Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>;
-        // Per statement, the text that has to survive: its own key and lsn
-        // bounds, which the join predicate does not supply under a hash join,
-        // and the hint directives beyond the merge-join bar every case shares.
+        // Per statement: its bind list, and the text that has to survive — the
+        // lateral, the `ARRAY(subquery)` spelling, and the three per-key bounds
+        // the lateral carries into the inner scan.
         let cases: Vec<(&str, String, Params, &[&str])> = vec![
             (
                 "pages",
@@ -3573,26 +3949,9 @@ mod tests {
                     &watermarks,
                     &anchors,
                     &bucket,
-                    &lsn,
-                    &lsn,
+                    &limit,
                 ],
-                // The per-block range, plus the blknum bound that survives a
-                // plan the hint failed to bar. Losing any of them leaves the
-                // DELETE correct and the scan unbounded (#1148). This one needs
-                // a nested loop with `bound` on the outer side: its bounds are
-                // per-block, so both a hash join and a `pages`-outer nested
-                // loop drop them to a Join Filter — 107x the rows scanned
-                // either way, which is why the order half matters as much as
-                // the method half.
-                &[
-                    "p.blknum = ANY($6)",
-                    "p.lsn >= $10 AND p.lsn <= $11",
-                    "p.lsn >= bound.watermark",
-                    "p.lsn < bound.anchor",
-                    "Set(enable_hashjoin off)",
-                    "Set(enable_material off)",
-                    "Leading((bound p))",
-                ],
+                &["scan.blknum = bound.blknum"],
             ),
             (
                 "slru_pages",
@@ -3602,69 +3961,26 @@ mod tests {
                     &fork,
                     &oid,
                     &blknums,
-                    &lsn,
                     &watermarks,
                     &anchors,
-                    &lsn,
+                    &limit,
                 ],
-                // Same three per-block bounds and the same plan pins as
-                // `pages`: `slru_pages` has no bucket column, but its bounds
-                // are per-block all the same, so they reach the index scan only
-                // with `bound` on the outer side of a nested loop (#1155).
-                &[
-                    "p.blknum = ANY($4)",
-                    "p.lsn >= $8 AND p.lsn <= $5",
-                    "p.lsn >= bound.watermark",
-                    "p.lsn < bound.anchor",
-                    "Set(enable_hashjoin off)",
-                    "Set(enable_material off)",
-                    "Leading((bound p))",
-                ],
+                &["scan.blknum = bound.blknum"],
             ),
             (
                 "meta",
                 store.gc_trim_meta_sql(),
-                vec![&branch, &keys, &lsn, &key_watermarks, &key_anchors, &lsn],
-                &[
-                    "p.key = ANY($2::bytea[])",
-                    "p.lsn >= $6 AND p.lsn <= $3",
-                    "p.lsn >= bound.watermark",
-                    "p.lsn < bound.anchor",
-                    "Set(enable_hashjoin off)",
-                    "Set(enable_material off)",
-                    "Leading((bound p))",
-                ],
+                vec![&branch, &keys, &watermarks, &anchors, &limit],
+                &["scan.key = bound.key"],
             ),
         ];
-
-        // pg_hint_plan silently no-ops a hint it cannot bind — a stale alias, a
-        // typo, a directive it does not understand. For these statements that
-        // is a ~107x regression nothing would report, and asserting the hint
-        // text is present does not catch it. `error` turns an unbound hint into
-        // a failed statement, so the EXPLAINs below assert the hints actually
-        // took effect.
-        store
-            .ysql_client
-            .execute("SET pg_hint_plan.yb_bad_hint_mode = error", &[])
-            .await
-            .unwrap();
-        let mode: String = store
-            .ysql_client
-            .query("SHOW pg_hint_plan.yb_bad_hint_mode", &[])
-            .await
-            .unwrap()[0]
-            .get(0);
-        assert_eq!(
-            mode, "error",
-            "the GUC did not stick, so every hint assertion below is vacuous"
-        );
 
         // Every anchor moved out of its DELETE into its own statement, so the
         // early stop is asserted there. Nothing in the result distinguishes a
         // scan that stopped at the first base from one that read the whole
         // key, so the shape is the only thing that can be checked (#1133).
         for (label, anchors_sql) in [
-            ("pages", store.gc_trim_anchors_sql()),
+            ("pages", store.gc_trim_blocks_anchors_sql()),
             ("slru_pages", store.gc_trim_slru_anchors_sql()),
             ("meta", store.gc_trim_meta_anchors_sql()),
         ] {
@@ -3674,40 +3990,66 @@ mod tests {
                 "{label}: anchor no longer stops at the first base:\n{anchors_sql}"
             );
         }
-        for (label, sql, params, bounds) in cases {
-            assert!(
-                sql.contains("Set(enable_mergejoin off)"),
-                "{label}: trim statement lost its merge-join bar:\n{sql}"
-            );
-            assert!(
-                !sql.contains("GROUP BY"),
-                "{label}: anchor regressed to a grouped aggregate:\n{sql}"
-            );
-            for pin in bounds {
+        for (label, sql, params, key_bound) in cases {
+            // The hint directives included: `yb_bad_hint_mode = error` fails a
+            // hint it cannot bind, but a *deleted* directive binds nothing and
+            // errors nothing, so only these pins catch one going missing.
+            let hint = [
+                format!("IndexScan(scan {label}_pkey)"),
+                "TidScan(del)".into(),
+            ];
+            for pin in [
+                "CROSS JOIN LATERAL",
+                "= ANY(ARRAY(",
+                "scan.lsn >= bound.watermark",
+                "scan.lsn < bound.anchor",
+            ]
+            .iter()
+            .chain(key_bound)
+            .copied()
+            .chain(hint.iter().map(String::as_str))
+            {
                 assert!(
                     sql.contains(pin),
                     "{label}: trim statement lost `{pin}`, so its scan is no \
                      longer tight:\n{sql}"
                 );
             }
-            let plan = explain(&store, &sql, &params).await;
             assert!(
-                !plan.contains("Merge Join"),
-                "{label}: trim plans a Merge Join:\n{plan}"
+                !sql.contains(" IN ("),
+                "{label}: trim regressed to a semi-join spelling, a read \
+                 request and a flush per row:\n{sql}"
+            );
+            let plan = explain(&sql, &params).await;
+            // Backward because the statement deletes bottom-up (`ORDER BY lsn
+            // ASC`) against a `lsn DESC` primary key; the direction does not
+            // cost the per-key bounds their place in the Index Cond.
+            assert!(
+                plan.contains(&format!("Index Scan using {label}_pkey"))
+                    || plan.contains(&format!("Index Scan Backward using {label}_pkey")),
+                "{label}: the id subquery is no longer an index scan:\n{plan}"
             );
             assert!(
-                !plan.contains("Materialize"),
-                "{label}: trim materialises its scan, so the per-key range is a \
-                 Join Filter rather than an index bound:\n{plan}"
+                plan.contains("Tid Scan"),
+                "{label}: the DELETE no longer consumes the ids as a Tid \
+                 Scan:\n{plan}"
             );
-            // The range must reach the index whole. A qual the index cannot
-            // take — an `OR` over the anchor, say — becomes a Storage Filter
-            // and the scan reads rows it then discards (#1153).
-            assert!(
-                !plan.contains("Storage Filter"),
-                "{label}: a trim qual fell out of the index cond to a Storage \
-                 Filter, so the scan reads past its range:\n{plan}"
-            );
+            for node in [
+                "Seq Scan",
+                "Merge Join",
+                "Materialize",
+                "Join Filter",
+                "Storage Filter",
+                // Batches only the equality column, leaving the lsn ranges as a
+                // filter — 5x the rows on a fixture of 100 versions a block.
+                "Batched Nested Loop",
+            ] {
+                assert!(
+                    !plan.contains(node),
+                    "{label}: trim plans a {node}, so a per-key range is no \
+                     longer an index bound:\n{plan}"
+                );
+            }
         }
     }
 
@@ -4574,12 +4916,18 @@ mod tests {
             // ---- trim ----------------------------------------------
             let cutoff = Lsn(rng.random_range(0..=350u64));
             let blks: Vec<(i64, Lsn)> = (0..nblocks as i64).map(|b| (b, Lsn(0))).collect();
-            store
+            let _ = store
                 .gc_act_trim_blocks(
                     branch,
                     (GC_SPC, GC_DB, rel as i64, 0),
                     &blks,
                     cutoff,
+                    // One row a statement: every block here is watermark-less,
+                    // so this walks each history a row at a time — including
+                    // the same-LSN image pairs, where a batch boundary falls
+                    // inside an `lsn` tie group (#1209).
+                    1,
+                    &never_cancelled(),
                     &mut Vec::new(),
                 )
                 .await

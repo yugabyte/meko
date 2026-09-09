@@ -326,10 +326,12 @@ pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
 /// Rows the GC drain deleted across `amp_storage.pages`, `slru_pages` and
 /// `meta` (trim / drop / shrink).
 ///
-/// Charged as each delete commits (#1142), at two sites: `PageStore::delete_rows`
-/// for the statement's own rowcount, and `gc_sweep_delete_batch` for the
-/// `ybctid`s it deleted — a retried sweep statement reports 0 for rows already
-/// gone, so its own count is the truthful one. Forced in
+/// Charged as each delete commits (#1142), at three sites:
+/// `PageStore::delete_rows` for the statement's own rowcount;
+/// `gc_sweep_delete_batch` for the `ybctid`s it named — a retried sweep
+/// statement reports 0 for rows already gone, so its own count is the truthful
+/// one; and `run_trim_loop`, per statement, summing the per-key counts its
+/// projection returns rather than the statement's rowcount. Forced in
 /// [`preinitialize_metrics`] so an idle drain reads zero, not absent.
 pub(crate) static GC_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(

@@ -44,6 +44,30 @@ struct PendingMaterialise {
     dbs: std::collections::HashSet<(u32, u32)>,
 }
 
+/// A trim's rows, or the reason the tick cannot claim them.
+///
+/// Cancellation is shutdown, not failure: everything the trim reports is
+/// committed either way. Logged because the tick's own report is about to be
+/// abandoned while `GC_ROWS_DELETED` has already counted these rows, and the
+/// two would not reconcile otherwise.
+fn trim_rows(
+    outcome: Result<crate::page_store::TrimOutcome, anyhow::Error>,
+    what: &str,
+    target: &dyn std::fmt::Debug,
+) -> Result<u64, GcError> {
+    match outcome {
+        Ok(crate::page_store::TrimOutcome::Complete(n)) => Ok(n),
+        Ok(crate::page_store::TrimOutcome::Cancelled(n)) => {
+            tracing::info!(
+                rows = n, target = ?target,
+                "GC {what} trim cancelled between statements; rows committed"
+            );
+            Err(GcError::TimelineCancelled)
+        }
+        Err(e) => Err(GcError::Persistence(e)),
+    }
+}
+
 impl PendingMaterialise {
     fn new(objects: std::collections::HashSet<Key>) -> Self {
         // Only rel keys: an SLRU sentinel shares neither range.
@@ -306,12 +330,13 @@ impl Timeline {
             )
         };
 
-        // Cancel is checked here and again per trimmed object in `act_trims`: a
-        // mid-tick cancel just leaves candidates queued (idempotent, re-drained
-        // next tick), but a trim issues one statement per watermark-less key
-        // (#1160), so a whole tick is no longer a bounded wait. One object's own
-        // statements still run to completion — bounding that needs the token in
-        // `PageStore`, which has no cancellation plumbing today.
+        // Cancel is checked here, per trimmed object in `act_trims`, and
+        // between the statements of a bounded trim (#1209) — a deep block is
+        // thousands of them, so without that last check one object could hold
+        // shutdown for hours. A mid-tick cancel leaves candidates queued
+        // (idempotent, re-drained next tick) and keeps every committed
+        // statement. All three trims check between statements; the drops and
+        // the sweeps are one statement each, so those remain the granularity.
         if self.cancel.is_cancelled() {
             return Err(GcError::TimelineCancelled);
         }
@@ -702,6 +727,7 @@ impl Timeline {
         use crate::page_store::GcKind;
         use std::collections::HashMap;
         let branch_id = self.branch_id;
+        let rows_per_statement = self.get_gc_rows_per_statement();
 
         // Group by target table off the candidate's kind (block keys by
         // their object); keys are already deduped in partition_by_kind.
@@ -744,11 +770,13 @@ impl Timeline {
                             fork,
                             &watermarks,
                             applied_cutoff,
+                            rows_per_statement,
+                            &self.cancel,
                             &mut trimmed_to,
                         )
                         .await;
                     self.store_block_trim_watermarks(&keys[0], &trimmed_to);
-                    deleted.map_err(GcError::Persistence)
+                    trim_rows(deleted, "rel", &fork)
                 },
             )
             .await?;
@@ -769,11 +797,13 @@ impl Timeline {
                             seg,
                             &watermarks,
                             applied_cutoff,
+                            rows_per_statement,
+                            &self.cancel,
                             &mut trimmed_to,
                         )
                         .await;
                     self.store_block_trim_watermarks(&keys[0], &trimmed_to);
-                    deleted.map_err(GcError::Persistence)
+                    trim_rows(deleted, "SLRU", &seg)
                 },
             )
             .await?;
@@ -798,6 +828,8 @@ impl Timeline {
                     branch_id,
                     &key_watermarks,
                     applied_cutoff,
+                    rows_per_statement,
+                    &self.cancel,
                     &mut meta_trimmed_to,
                 )
                 .await;
@@ -807,8 +839,8 @@ impl Timeline {
                 .unwrap()
                 .store_trim_watermarks(meta_trimmed_to);
             deleted
-        }
-        .map_err(GcError::Persistence)?;
+        };
+        let meta_deleted = trim_rows(meta_deleted, "meta", &branch_id)?;
 
         Ok(rel_deleted + slru_deleted + meta_deleted)
     }
@@ -1070,6 +1102,16 @@ impl Timeline {
             .tenant_conf
             .gc_sweep_rows_per_tick
             .unwrap_or(self.conf.default_tenant_conf.gc_sweep_rows_per_tick)
+    }
+
+    /// Rows one bounded trim statement deletes before committing and
+    /// re-seeking (tenant override → default). Sole caller: `act_trims`.
+    fn get_gc_rows_per_statement(&self) -> usize {
+        let tenant_conf = self.tenant_conf.load();
+        tenant_conf
+            .tenant_conf
+            .gc_rows_per_statement
+            .unwrap_or(self.conf.default_tenant_conf.gc_rows_per_statement)
     }
 
     /// How often a tick resets the select floor to 0 (tenant override →

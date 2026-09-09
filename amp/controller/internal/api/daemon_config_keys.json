@@ -63,6 +63,7 @@
     "tenant_config.gc_horizon": "integer",
     "tenant_config.gc_period": "string",
     "tenant_config.gc_queue_floor_reset_interval": "string",
+    "tenant_config.gc_rows_per_statement": "integer",
     "tenant_config.gc_sweep_rows_per_tick": "integer",
     "tenant_config.gc_trim_watermark_cache_capacity": "integer",
     "tenant_config.lagging_wal_timeout": "string",

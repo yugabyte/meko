@@ -67,6 +67,7 @@ use pageserver_api::models::PayloadCompression;
 use pageserver_api::reltag::SlruKind;
 
 use remote_storage::{YbConnConfig, YsqlClient};
+use tokio_util::sync::CancellationToken;
 // We talk to YugabyteDB through the YB smart-driver fork of
 // tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,
 // etc.) keep working without per-callsite churn. The Neon fork of tokio-postgres survives
@@ -86,7 +87,7 @@ mod test_support;
 pub use gc::{
     GC_ACTION_PARALLELISM, GC_BUCKETS, GC_SWEEP_MAX_ROWS_PER_DELETE, GcDbIdent, GcForkIdent,
     GcKind, GcSelectedCandidates, GcSlruSeg, GcSweepProgress, GcSweepScope, PendingGcRow,
-    gc_bucket_id,
+    TrimOutcome, gc_bucket_id,
 };
 pub(crate) use gc::{
     GcCandidateId, GcSweepCandidate, materialise_object_key, rel_fork_of, slru_seg_of,
@@ -3510,8 +3511,8 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_support::*;
+    use super::*;
 
     #[test]
     fn dedup_keeps_image_on_collision_and_flags_dropped_delta() {

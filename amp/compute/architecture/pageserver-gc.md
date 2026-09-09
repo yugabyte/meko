@@ -440,60 +440,87 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    (`gc_trim_watermark_cache_capacity`). One map covers all three keyspaces —
    it is keyed by `Key`, the identity `pending_gc` already uses.
 
-   The `USING` side is a function scan over literal arrays and reads no table,
-   which is what makes the shape stable: no lateral or CTE for the planner to
-   re-associate into the join. What it needs in return is one exact plan — the
-   inner index scan rescanned per `bound` row, so the range is a scan
-   *parameter*. Anything else pushes it to a Join Filter and the scan reads the
-   key's whole history (107x the rows on amp2 for `pages`). So all three share
-   one hint (`TRIM_NESTED_LOOP_HINT`), and each of its four directives
-   removes one such plan: hash join, a table-outer nested loop
-   (`Leading((bound p))` pins the order), a merge join — which also
-   materialises the DELETE's own scan into a tuplestore — and a `Materialize`
-   under the correct join order, which runs the inner scan once,
-   unparameterised, over the whole key set. That last one is the quiet one:
-   amp2's planner picked it for all three tables, `pages` included, which is
-   why `enable_material off` joined the hint in #1155.
+   Every trim DELETE is one shape, for all three keyspaces: a `CROSS JOIN
+   LATERAL` from the bound arrays into the table, capped at
+   `gc_rows_per_statement` rows, whose ids a Tid Scan deletes. A lateral
+   reference is only definable per outer row, so a parameterised inner index
+   scan is the only legal plan — the per-key range is a scan *parameter* by
+   construction rather than something the cost model may demote to a Join
+   Filter, which is what reads the key's whole history (107x the rows on amp2
+   for `pages`). Two hint directives remain: `IndexScan(scan <table>_pkey)` pins
+   the id half, and `TidScan(del)` the delete half, which the planner otherwise
+   drops for a full scan above ~27 ids on a table nothing has ANALYZEd (#970).
+   Both aliases matter — the table appears twice in the statement.
 
-   A key with **no** watermark — after a restart, an LRU eviction, or a
-   first-ever trim — has `Lsn(0)` for its watermark and is still unbounded
-   below, so it gets a **statement of its own** (#1160). Batched, it takes the
-   whole statement past YB's history retention and the `SNAPSHOT_TOO_OLD`
-   rollback costs every key in that batch its progress, repeated every tick.
-   Each keyspace runs its watermarked keys first — for `pages`, one batch per
-   bucket — then one statement per watermark-less key, so a cold key that fails
-   cannot cost a batch the same call had already issued. It does still end the
-   tick: `act` is a phase barrier and the fork fan-out `try_collect`s, so the
-   remaining forks, the other two keyspaces and the dequeue are all abandoned.
-   Narrowing that to the failing key is #1144. A depth probe to keep the shallow
-   cold keys batched was measured and rejected: it costs more than the statement
-   it saves, and a cold key is cold once — its first successful trim gives it a
-   watermark and it rejoins the batch.
+   `= ANY(ARRAY(SELECT ...))` is the load-bearing spelling of the delete: it
+   makes one Tid Scan node holding every id (`loops=1`). `IN (subquery)` plans
+   as a semi-join with the Tid Scan as its inner side, a read request and a
+   flush *per row*, ~70x slower. The two halves also stop interleaving — the
+   ids resolve, then the writes go — where a predicate DELETE forces a flush
+   before every read continuation (975 against 326 over 1 M versions, RF-3).
 
-   **What this costs after a restart.** Every key is watermark-less then, so a
-   tick issues one statement per key it trims — up to `gc_drain_limit` (10 000),
-   where before it issued at most `PAGE_BUCKETS` per fork. `GC_ACTION_PARALLELISM`
+   **The cap is what keeps a statement inside the retention window.** A key with
+   no watermark — after a restart, an LRU eviction, or a first-ever trim — is
+   unbounded below, and a deep one took its DELETE past
+   `timestamp_history_retention_interval_sec` (900 s) and failed
+   `SNAPSHOT_TOO_OLD`: observed for 28 consecutive ticks on one deployment,
+   ~1.3 B rows deleted and discarded (#1209). Watermarked keys had the same
+   exposure in aggregate, bounded per key but not in total. A statement pins
+   exactly one read point and no GUC relaxes that, so the statement boundary is
+   the only way to get a fresh one; the loop commits and re-issues until a
+   statement deletes nothing.
+
+   **Deletion runs bottom-up** (`ORDER BY lsn ASC` within each lateral
+   iteration, an `Index Scan Backward` against the `lsn DESC` PK) so that each
+   committed statement is durable progress. Every statement reports, per key,
+   how many rows it deleted and the highest `lsn` among them; that becomes the
+   key's watermark immediately, and its next statement's floor. Top-down
+   deletion cannot do this — it leaves a hole below what it deleted, and a
+   watermark means "everything below this is gone" — so a mid-loop failure
+   would discard the tick's work for that key. Bottom-up, a key whose third
+   statement fails keeps the watermark its first two earned.
+
+   The watermark is *inclusive* of that highest `lsn`, for all three. The two
+   block trims require it: `is_image` sits after `lsn` in their PKs, so two rows
+   can share an `lsn` and the cap can cut the tie group in half — moving past
+   would strand the survivor permanently. `meta` has one row per `lsn` and could
+   move past, but all it re-reads is the tombstone its own last statement wrote,
+   and one rule across the three is worth more than that row.
+
+   The cap is also why a watermark-less key needs no path of its own: it is a
+   bound with `watermark = 0`, and its depth no longer makes the statement long
+   (#1160, #1209). A failing statement does still end the tick — `act` is a
+   phase barrier and the fork fan-out `try_collect`s, so the remaining forks,
+   the other two keyspaces and the dequeue are abandoned; narrowing that to the
+   failing key is #1144. What it no longer costs is the progress already
+   committed.
+
+   **What this costs on a cold fork.** The lateral issues one storage read per
+   key per statement, where a batched nested loop issues roughly one per
+   `yb_bnl_batch_size` keys — more round trips for exactly the rows wanted,
+   instead of fewer round trips reading each key's whole chain. A tick's trim is
+   then at least one statement per bucket per fork, plus one more per
+   `gc_rows_per_statement` rows any single key is deep. `GC_ACTION_PARALLELISM`
    is 1 and the `pageserver:gc` pool is sized to it, so they run serially on one
-   connection: a fully cold 10 000-block fork spends tens of seconds in its trim
-   phase against a `gc_period` base of 30 s. It drains once per restart and the
-   cost spreads over the ticks it takes, so the lever if it ever fails to fit is
-   the pool width, not the batching.
+   connection: a pathologically deep key can hold the trim phase for a long
+   time, and the keys behind it in the array wait. Cancellation is checked
+   between statements, so shutdown still bounds it (#1209). The levers if it
+   fails to fit are the pool width and `gc_rows_per_statement`.
 
-   Depth is why all three have one. Measured on amp2 after ~16 days without GC:
-   a single clog block held over 10 000 versions below the cutoff, and across
-   8 523 `meta` keys the average was 1 948 with a maximum of 3.77 M — a
-   `rel_size` sentinel takes a version per extension, so its depth tracks the
-   relation's block count. Neither table fans out over buckets, so within one
-   statement watermarked deep keys sum rather than splitting across statements.
+   Depth is why `slru_pages` and `meta` need the cap as much as `pages` does.
+   Measured on amp2 after ~16 days without GC: a single clog block held over
+   10 000 versions below the cutoff, and across 8 523 `meta` keys the average
+   was 1 948 with a maximum of 3.77 M — a `rel_size` sentinel takes a version
+   per extension, so its depth tracks the relation's block count. Neither table
+   fans out over buckets, so a statement's rows are the sum over every deep key
+   it names.
 
-   All three also bind their block or key set, the batch's lowest watermark and
-   the cutoff on the DELETE, not just in the anchor. The join predicate alone
-   bounds that scan only under a nested loop, and those single-table bounds are
-   what keep it tight under any join method: a merge join materialises the
-   DELETE's own scan into a tuplestore, and a hash join spills its build side,
-   both against `temp_file_limit`. Both scalars are implied by the per-key
-   ranges, so they cannot change which rows go — they only stop the scan running
-   to the ends of the key if the plan slips.
+   The DELETE binds nothing beyond the object's identity and the per-key
+   `(key, watermark, anchor)` arrays — the key-set and cutoff binds the previous
+   shape carried as a plan-independent floor are gone, because the lateral makes
+   the per-key range an Index Cond by construction rather than by costing. There
+   is no second guard if that ever stops holding, which is what the plan test is
+   for.
 
    All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue**, not from the delete.
@@ -673,8 +700,9 @@ per-branch is also per-instance today.
 | --- | --- | --- |
 | `enable_gc` | `true` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
-| `gc_trim_watermark_cache_capacity` | `100 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that key a full-range trim in a statement of its own (#1160). Read once at activation. |
-| `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Also bounds the trim **statement** count, which after a restart is one per key rather than one per bucket (#1160). Read fresh each tick. |
+| `gc_trim_watermark_cache_capacity` | `100 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that key a full-range trim, spread over as many capped statements as it is deep. Read once at activation. |
+| `gc_rows_per_statement` | `100 000` | Rows one GC delete statement names before committing and re-issuing. Every trim statement carries it, on all three keyspaces, and the prefix sweeps cap their derived batch with `GC_SWEEP_MAX_ROWS_PER_DELETE` — so the name is not trim-specific. Floored at 1 on read — a statement selecting nothing would never let its loop terminate — and not capped above, so an oversized value is the operator's to avoid. Measured on RF-3 over 1 M versions of a single block, the per-statement overhead is fully amortised by ~20 000 and flat above it (15.7 µs/row at 20 000, 16.2 at 100 000, against 26.6 at 5 000). Read fresh each tick. |
+| `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. It bounds the **keys** a trim visits, not its statement count: a key deeper than `gc_rows_per_statement` takes as many statements as its depth needs (#1209). Read fresh each tick. |
 | `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |

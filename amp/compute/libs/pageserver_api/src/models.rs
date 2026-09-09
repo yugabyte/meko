@@ -444,6 +444,8 @@ pub struct BranchConfigPatch {
     pub gc_candidate_every_n_bases: FieldPatch<u32>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_trim_watermark_cache_capacity: FieldPatch<usize>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub gc_rows_per_statement: FieldPatch<usize>,
 }
 
 /// Like [`crate::config::BranchConfigToml`], but preserves the information
@@ -516,6 +518,9 @@ pub struct BranchConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gc_trim_watermark_cache_capacity: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gc_rows_per_statement: Option<usize>,
 }
 
 impl BranchConfig {
@@ -543,6 +548,7 @@ impl BranchConfig {
             mut enable_gc,
             mut gc_candidate_every_n_bases,
             mut gc_trim_watermark_cache_capacity,
+            mut gc_rows_per_statement,
         } = self;
 
         patch.gc_horizon.apply(&mut gc_horizon);
@@ -597,6 +603,9 @@ impl BranchConfig {
         patch
             .gc_trim_watermark_cache_capacity
             .apply(&mut gc_trim_watermark_cache_capacity);
+        patch
+            .gc_rows_per_statement
+            .apply(&mut gc_rows_per_statement);
 
         Ok(Self {
             gc_horizon,
@@ -618,6 +627,7 @@ impl BranchConfig {
             enable_gc,
             gc_candidate_every_n_bases,
             gc_trim_watermark_cache_capacity,
+            gc_rows_per_statement,
         })
     }
 
@@ -670,6 +680,9 @@ impl BranchConfig {
             gc_trim_watermark_cache_capacity: self
                 .gc_trim_watermark_cache_capacity
                 .unwrap_or(global_conf.gc_trim_watermark_cache_capacity),
+            gc_rows_per_statement: self
+                .gc_rows_per_statement
+                .unwrap_or(global_conf.gc_rows_per_statement),
         }
     }
 }
