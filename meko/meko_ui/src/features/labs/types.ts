@@ -18,6 +18,8 @@ export type LabStageId =
   | "conversation"
   | "deploy-agent"
   | "share-with-agent"
+  | "review-sample-pr"
+  | "claude-reference"
   | "run-review"
   | "collaborate";
 

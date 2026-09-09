@@ -1,4 +1,4 @@
-import { PrReviewDemoApp } from "../demo-apps/PrReviewDemoApp";
+import { PrReviewDemoApp, type PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
@@ -9,11 +9,17 @@ export function RunReviewStage({
   session,
   onGoToCreateDatapack,
   onGoToDeployAgent,
+  savedRun,
+  onRunChange,
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
   onGoToCreateDatapack: () => void;
   onGoToDeployAgent: () => void;
+  /** Threaded straight through to PrReviewDemoApp -- see its own doc
+   *  comment on PrReviewRunState/savedRun for why LabStageSlot owns this. */
+  savedRun?: PrReviewRunState | null;
+  onRunChange?: (run: PrReviewRunState) => void;
 }) {
   if (!session.datapackId) {
     return <LabStageNeedsDatapack onGoToCreateDatapack={onGoToCreateDatapack} />;
@@ -26,5 +32,5 @@ export function RunReviewStage({
       />
     );
   }
-  return <PrReviewDemoApp demoApp={demoApp} session={session} />;
+  return <PrReviewDemoApp demoApp={demoApp} session={session} savedRun={savedRun} onRunChange={onRunChange} />;
 }

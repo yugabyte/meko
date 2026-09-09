@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { invokeDeployment, invokeSharedDeployment, type ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
+import { MODEL_OPTIONS } from "./ReviewAgentConfigPanel";
 import { PrReviewDemoApp } from "./PrReviewDemoApp";
 
 // The wiring contract this test locks: whatever the "Configure your
@@ -22,10 +23,18 @@ async function* fakeStream(events: ReviewStreamEvent[]) {
   for (const event of events) yield event;
 }
 
+// The initial review's content now comes from `findings`, not `review`/
+// text_delta -- review.py's response is structured JSON, never streamed
+// character-by-character (see ReviewStreamEvent's own doc comment). Tests
+// below that just need *some* review content to appear use this single
+// finding's comment text ("Looks good.") as that content.
+const DEFAULT_FINDINGS: NonNullable<Extract<ReviewStreamEvent, { type: "done" }>["findings"]> = [
+  { severity: "minor", location: "", comment: "Looks good." },
+];
+
 const DEFAULT_STREAM: ReviewStreamEvent[] = [
   { type: "meta", conversation_id: "conv-1" },
-  { type: "text_delta", text: "Looks good." },
-  { type: "done", review: "Looks good." },
+  { type: "done", review: "Looks good.", findings: DEFAULT_FINDINGS },
 ];
 
 const DEMO_APP: LabDemoAppConfig = { kind: "pr-review-chat", agentDisplayName: "AgentK" };
@@ -82,7 +91,14 @@ beforeEach(() => {
 });
 
 describe("PrReviewDemoApp guided-customization wiring", () => {
-  it("defaults both switches on and sends them with the sample diff run", async () => {
+  it("shows the config panel and Run review button immediately, before running anything", () => {
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    expect(screen.getByRole("button", { name: /run review/i })).toBeTruthy();
+    expect(mockInvokeDeployment).not.toHaveBeenCalled();
+  });
+
+  it("defaults both switches on and sends them, plus the default model, with the sample diff run", async () => {
     render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
@@ -95,16 +111,92 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(payload.focus).toBeUndefined();
     expect(payload.tone).toBeUndefined();
     expect(payload.strictness).toBeUndefined();
+    expect(payload.model).toBe(MODEL_OPTIONS[0].value);
+  });
+
+  it("shows the chosen SLM's real token usage after the review completes", async () => {
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "text_delta", text: "Looks good." },
+        { type: "done", review: "Looks good.", usage: { input_tokens: 512, output_tokens: 128 } },
+      ]),
+    );
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText(/512 in/)).toBeTruthy());
+    expect(screen.getByText(new RegExp(MODEL_OPTIONS[0].label))).toBeTruthy();
+    expect(screen.getByText(/128 out/)).toBeTruthy();
+  });
+
+  it("shows real knowledgebase_search/memory_search retrieval counts from the run", async () => {
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "text_delta", text: "Looks good." },
+        {
+          type: "done",
+          review: "Looks good.",
+          usage: { input_tokens: 512, output_tokens: 128 },
+          context_stats: {
+            kb_chunks_retrieved: 10,
+            kb_chunks_total: 70,
+            kb_tokens_estimated: 410,
+            memories_retrieved: 3,
+            memories_total: 24,
+            memory_tokens_estimated: 85,
+          },
+        },
+      ]),
+    );
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText(/10 of 70 chunks/)).toBeTruthy());
+    expect(screen.getByText(/3 of 24 memories/)).toBeTruthy();
+  });
+
+  it("shows no cost-savings line while the Claude reference has no real captured tokens yet", async () => {
+    // ANTHROPIC_REFERENCE_INPUT_TOKENS/OUTPUT_TOKENS are 0 until
+    // gen_reference_review.py's real output is pasted into the fixture --
+    // dividing by a zero reference cost must not render a bogus "Infinity%"
+    // or "NaN%" savings line.
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "text_delta", text: "Looks good." },
+        { type: "done", review: "Looks good.", usage: { input_tokens: 512, output_tokens: 128 } },
+      ]),
+    );
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText(/512 in/)).toBeTruthy());
+    expect(screen.queryByText(/less, from this run/)).toBeNull();
+  });
+
+  it("shows no usage line when the deployed image predates this feature (no usage on done)", async () => {
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText("Looks good.")).toBeTruthy());
+    expect(screen.queryByText(/in \/.*out tokens/)).toBeNull();
   });
 
   it("forwards a disabled switch and a focus note to invokeDeployment", async () => {
     render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
 
-    // First switch rendered is "Use org knowledge base" (before "Use my
-    // memories") — queried by role rather than label text since the Label
-    // wraps both a title and a description span, so its accessible name
-    // isn't just the title alone.
+    // First switch rendered is the knowledgebase_search toggle chip (before
+    // memory_search) — queried by role, not label text.
     fireEvent.click(screen.getAllByRole("switch")[0]);
+    // Focus lives behind the "+ Tone, strictness, focus" disclosure,
+    // collapsed by default.
+    fireEvent.click(screen.getByText("+ Tone, strictness, focus"));
     fireEvent.change(screen.getByPlaceholderText(/pay extra attention/i), {
       target: { value: "Check for SQL injection." },
     });
@@ -117,20 +209,90 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(payload.focus).toBe("Check for SQL injection.");
   });
 
-  it("streams the review text incrementally into the assistant bubble", async () => {
+  it("shows a loading state, then the parsed findings atomically once done", async () => {
+    // The initial review's response is structured JSON (review.py's
+    // REVIEW_SYSTEM_PROMPT) -- never streamed character-by-character, so
+    // there's nothing to render incrementally; only a loading state until
+    // the single "done" event arrives with `findings` already parsed.
     mockInvokeDeployment.mockReturnValue(
       fakeStream([
         { type: "meta", conversation_id: "conv-1" },
-        { type: "text_delta", text: "Looks " },
-        { type: "text_delta", text: "good." },
-        { type: "done", review: "Looks good." },
+        {
+          type: "done",
+          review: "**CRITICAL** — SQL injection.",
+          findings: [{ severity: "critical", location: "api/spend.py:16", comment: "SQL injection." }],
+        },
       ]),
     );
     render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
-    await waitFor(() => expect(screen.getByText("Looks good.")).toBeTruthy());
+    expect(screen.getByText(/reviewing/i)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("SQL injection.")).toBeTruthy());
+    expect(screen.getByText("api/spend.py:16")).toBeTruthy();
+    expect(screen.getByText("critical")).toBeTruthy();
+  });
+
+  it("falls back to the streamed prose when the deployed image predates structured findings", async () => {
+    // A pre-upgrade deployed image streams free-text_delta prose and never
+    // sends a "findings" key at all on "done" (not even an empty array) --
+    // this must fall back to the accumulated prose, not get stuck showing
+    // "Reviewing…" forever because reviewFindings never left its initial
+    // (pending) state. Regression test for a real bug found by hand: an
+    // actually-stale deployed AgentK returned exactly this shape live.
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "text_delta", text: "Looks " },
+        { type: "text_delta", text: "fine, no issues." },
+        { type: "done", review: "Looks fine, no issues." },
+      ]),
+    );
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText("Looks fine, no issues.")).toBeTruthy());
+    expect(screen.queryByText(/reviewing/i)).toBeNull();
+    expect(screen.queryByText(/no issues found/i)).toBeNull();
+  });
+
+  it("shows the raw response, not a false 'no issues found', when the model's output didn't parse as JSON", async () => {
+    // review.py degrades a malformed response to findings=[] rather than
+    // failing the review, but the raw text it couldn't parse is still in
+    // `review` -- an empty findings array alone can't distinguish this from
+    // a genuine "no issues" result, so the UI must show the actual text
+    // instead of confidently (and falsely) claiming "No issues found."
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "done", review: "Sure, here's my review: looks fine!", findings: [] },
+      ]),
+    );
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText("Sure, here's my review: looks fine!")).toBeTruthy());
+    expect(screen.queryByText(/no issues found/i)).toBeNull();
+  });
+
+  it("shows 'No issues found.' when the model's response is genuinely empty", async () => {
+    // Distinct from the malformed-response case above: here review.py
+    // parsed valid JSON with an empty findings array, so its rendered
+    // markdown text is the real "No issues found." message.
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "done", review: "No issues found.", findings: [] },
+      ]),
+    );
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText(/no issues found/i)).toBeTruthy());
   });
 
   it("never renders a Deploy panel, even for a deployable lab, even after a review completes", async () => {
@@ -203,5 +365,46 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     unmount();
 
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("reports the completed review's results via onRunChange", async () => {
+    const onRunChange = vi.fn();
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} onRunChange={onRunChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText("Looks good.")).toBeTruthy());
+    const lastCall = onRunChange.mock.calls.at(-1)?.[0];
+    expect(lastCall.diffContent).toBeTruthy();
+    expect(lastCall.conversationId).toBe("conv-1");
+    expect(lastCall.reviewFindings).toEqual(DEFAULT_FINDINGS);
+  });
+
+  it("restores a previously-completed review from savedRun instead of starting over", () => {
+    const savedRun = {
+      messages: [
+        { id: "user-1", role: "user" as const, content: "Review this pull request..." },
+        { id: "assistant-1", role: "assistant" as const, content: "Looks good." },
+      ],
+      diffTitle: "Add per-team spend aggregation endpoint",
+      diffContent: "diff --git a/api/spend.py b/api/spend.py\n",
+      conversationId: "conv-1",
+      reviewText: "Looks good.",
+      reviewUsage: { input_tokens: 512, output_tokens: 128 },
+      contextStats: null,
+      reviewFindings: DEFAULT_FINDINGS,
+      initialReviewMessageId: "assistant-1",
+      selectedModelId: MODEL_OPTIONS[0].value,
+      reviewPromptMessageId: "user-1",
+      sendError: null,
+    };
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
+
+    // The pre-review config panel/Run review button must NOT reappear --
+    // this is what "navigate away and back" needs to avoid, since it would
+    // otherwise look like the review never happened.
+    expect(screen.queryByRole("button", { name: /run review/i })).toBeNull();
+    expect(screen.getByText("Looks good.")).toBeTruthy();
+    expect(mockInvokeDeployment).not.toHaveBeenCalled();
   });
 });

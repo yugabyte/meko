@@ -98,4 +98,41 @@ describe("ShareWithAgentStage", () => {
     // Silent refetch after the invite, same as CollaborateStage.
     await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(2));
   });
+
+  it("disables Send invite once AgentK already has access, via Members", async () => {
+    mockListMembers.mockResolvedValue({
+      members: [
+        { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
+        {
+          user_id: "user-2",
+          is_owner: false,
+          user_name: "Agentk Admin",
+          user_email_id: "agentk-admin@example.com",
+          grant: "contributor",
+        },
+      ],
+    });
+    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
+    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
+
+    const sendButton = await screen.findByRole("button", { name: /send invite/i });
+    expect(sendButton.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/already shared with agentk/i)).toBeTruthy();
+
+    fireEvent.click(sendButton);
+    expect(mockInvite).not.toHaveBeenCalled();
+  });
+
+  it("disables Send invite when AgentK still has a pending invite", async () => {
+    mockListOutgoingShares.mockResolvedValue({
+      pending_invites: [
+        { invite_id: "inv-1", grant: "contributor", recipient_email_id: "agentk-admin@example.com" },
+      ],
+    });
+    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
+    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
+
+    const sendButton = await screen.findByRole("button", { name: /send invite/i });
+    expect(sendButton.hasAttribute("disabled")).toBe(true);
+  });
 });

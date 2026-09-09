@@ -39,6 +39,15 @@ type Props = {
   lockedEmail?: string;
   /** When set, the grant is fixed and the role picker (dropdown + tiles) is disabled. */
   lockedGrant?: DatapackShareGrant;
+  /**
+   * When set, the recipient (usually `lockedEmail`) already has access, so
+   * sending would just be a redundant duplicate invite -- disables Send
+   * invite and shows `disabledReason` in its place instead of letting the
+   * click go through.
+   */
+  disabled?: boolean;
+  /** Shown next to Send invite when `disabled` is true. */
+  disabledReason?: string;
 };
 
 export function InviteByEmailSection({
@@ -49,6 +58,8 @@ export function InviteByEmailSection({
   onInviteSent,
   lockedEmail,
   lockedGrant,
+  disabled = false,
+  disabledReason,
 }: Props) {
   const [email, setEmail] = useState(lockedEmail ?? "");
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -162,7 +173,7 @@ export function InviteByEmailSection({
           </Select>
           <Button
             type="button"
-            disabled={submitting}
+            disabled={submitting || disabled}
             className="w-full shrink-0 bg-primary text-primary-foreground sm:w-auto"
             onClick={() => void handleSend()}
           >
@@ -170,6 +181,7 @@ export function InviteByEmailSection({
           </Button>
         </div>
       </div>
+      {disabled && disabledReason && <p className="text-xs text-muted-foreground">{disabledReason}</p>}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         {SHARE_INVITE_ROLES.map((r) => {

@@ -62,10 +62,22 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
         highlights: ["One-time share", "Needed for the shared instance"],
       },
       {
+        id: "review-sample-pr",
+        title: "Review the sample PR",
+        summary: "See exactly what AgentK is about to review — a small, clearly-marked sample pull request.",
+        highlights: ["A real diff, not a description", "Marked as sample content"],
+      },
+      {
+        id: "claude-reference",
+        title: "See Claude's reference review",
+        summary: "Claude Sonnet 4.5 already reviewed this PR against your org's coding standards — see what it found first.",
+        highlights: ["Grounded in your knowledge base", "The benchmark your model is compared to"],
+      },
+      {
         id: "run-review",
-        title: "Run a review",
-        summary: "Review a real pull request, or the bundled sample diff, against your seeded context.",
-        highlights: ["Real PR or sample diff", "Tune tone & strictness"],
+        title: "Configure & run your review",
+        summary: "Pick a smaller model, tune tone & strictness, then run it against the same context Claude used.",
+        highlights: ["Choose your own model", "Tune tone & strictness"],
       },
       {
         id: "collaborate",

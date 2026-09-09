@@ -6,6 +6,14 @@
 
 export const SAMPLE_DIFF_TITLE = "Add per-team spend aggregation endpoint";
 
+// A short, PR-author-style description -- shown above the diff the same way
+// a real GitHub PR shows its own description, so "what's being reviewed"
+// reads like a real PR, not just a bare code diff.
+export const SAMPLE_DIFF_DESCRIPTION =
+  "Adds a GET /spend/summary endpoint so the billing dashboard can show token " +
+  "spend per team. Put together quickly to unblock this week's usage report -- " +
+  "flagging for a closer look at error handling and the raw SQL before merge.";
+
 export const SAMPLE_DIFF_CONTENT = `diff --git a/api/spend.py b/api/spend.py
 index 1a2b3c4..5d6e7f8 100644
 --- a/api/spend.py

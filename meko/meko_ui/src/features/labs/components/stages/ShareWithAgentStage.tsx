@@ -57,6 +57,17 @@ function ShareWithAgentStageContent({
   const sharedByRole = me ? (me.is_owner ? DATAPACK_SHARE_GRANT_OWNER : me.grant) : null;
   const priorShareCount = members.filter((m) => !m.is_owner).length + pendingInvites.length;
 
+  // AgentK typically shows up in Members immediately (api_server auto-accepts
+  // its one configured address -- see this file's header comment), but check
+  // pending invites too as a defensive fallback in case auto-accept hasn't
+  // landed yet in the deployed api_server. Either way, sending another
+  // invite to the same fixed recipient would just be a redundant duplicate.
+  const agentkEmail = AGENTK_ADMIN_EMAIL.trim().toLowerCase();
+  const alreadySharedWithAgent =
+    agentkEmail.length > 0 &&
+    (members.some((m) => m.user_email_id?.trim().toLowerCase() === agentkEmail) ||
+      pendingInvites.some((p) => p.recipient_email_id?.trim().toLowerCase() === agentkEmail));
+
   const refreshShares = () => void refetch({ silent: true });
 
   // Same gate CollaborateStage applies -- almost always true here since
@@ -84,6 +95,8 @@ function ShareWithAgentStageContent({
           onInviteSent={refreshShares}
           lockedEmail={AGENTK_ADMIN_EMAIL}
           lockedGrant={DATAPACK_SHARE_GRANT_CONTRIBUTOR}
+          disabled={alreadySharedWithAgent}
+          disabledReason="Already shared with AgentK."
         />
       )}
       <MembersSection

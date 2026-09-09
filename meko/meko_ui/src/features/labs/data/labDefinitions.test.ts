@@ -4,7 +4,7 @@ import { flattenLabStages } from "../lib/labChapters";
 import type { LabStageId } from "../types";
 import { LAB_DEFINITIONS, getLabDefinition } from "./labDefinitions";
 
-// LabStageId is a closed 9-value union LabStageSlot switches on
+// LabStageId is a closed 11-value union LabStageSlot switches on
 // exhaustively -- a lab missing one silently gets a blank pane for it.
 const FIXED_STAGE_IDS: LabStageId[] = [
   "create-datapack",
@@ -14,6 +14,8 @@ const FIXED_STAGE_IDS: LabStageId[] = [
   "conversation",
   "deploy-agent",
   "share-with-agent",
+  "review-sample-pr",
+  "claude-reference",
   "run-review",
   "collaborate",
 ];

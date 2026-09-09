@@ -21,7 +21,40 @@ const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(/
 export type ReviewStreamEvent =
   | { type: "meta"; conversation_id: string; pr_title?: string; pr_html_url?: string | null }
   | { type: "text_delta"; text: string }
-  | { type: "done"; review: string; slack_posted?: boolean; slack_error?: string | null };
+  | {
+      type: "done";
+      review: string;
+      slack_posted?: boolean;
+      slack_error?: string | null;
+      /** Structured findings (severity/location/comment) parsed from the
+       *  model's JSON response -- see review.py's REVIEW_SYSTEM_PROMPT and
+       *  _parse_findings. `review` above is a markdown-rendered fallback of
+       *  the same findings (kept for Slack-posting/CLI use, not the primary
+       *  UI). Empty if the model's response didn't parse as valid findings
+       *  JSON -- `review` still carries whatever it said. Only present on
+       *  the initial review's `done` event, not a follow-up's (a follow-up
+       *  answer stays free-text prose). */
+      findings?: { severity: "critical" | "major" | "minor"; location: string; comment: string }[];
+      /** Real Anthropic/Bedrock token counts for this turn's LLM call, from
+       *  review.py's stream.get_final_message().usage. Absent on a deployed
+       *  image published before this field shipped. */
+      usage?: { input_tokens: number; output_tokens: number };
+      /** Real knowledgebase_search/memory_search retrieval counts (from the
+       *  same call this turn made) and totals (from datapack_describe),
+       *  plus an estimated per-tool share of `usage.input_tokens` -- see
+       *  review.py's _build_context_stats for why the token split is an
+       *  estimate, not an exact count. Only present on the initial review's
+       *  `done` event (a follow-up doesn't call either tool), and only on a
+       *  deployed image built after this field shipped. */
+      context_stats?: {
+        kb_chunks_retrieved: number;
+        kb_chunks_total: number | null;
+        kb_tokens_estimated: number;
+        memories_retrieved: number;
+        memories_total: number | null;
+        memory_tokens_estimated: number;
+      };
+    };
 
 /** A stream frame carrying an error instead of an event -- either a
  *  pre-stream InvocationError or the SDK's own mid-stream error frame.

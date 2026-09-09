@@ -27,15 +27,69 @@ import type { Message } from "@/features/workbench-lm/components/workbench-lm-ch
 // lib/api/githubApi.ts's fetchPullRequestDiff/fetchPullRequestSummary/
 // parsePrRef stay in place unused here, for that future chapter to import.
 import { postToSlackChannel } from "@/lib/api/slackApi";
+import type { ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
+import {
+  ANTHROPIC_REFERENCE_INPUT_TOKENS,
+  ANTHROPIC_REFERENCE_MODEL_ID,
+  ANTHROPIC_REFERENCE_MODEL_LABEL,
+  ANTHROPIC_REFERENCE_OUTPUT_TOKENS,
+  type ReviewFinding,
+} from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
 import { SAMPLE_DIFF_CONTENT, SAMPLE_DIFF_TITLE } from "../../data/adlcReviewAgentLab/sampleDiff";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import { computeSavingsPct, estimateCost } from "../../lib/bedrockPricing";
 import type { LabDemoAppConfig } from "../../types";
+import { ContextStatsCard } from "./ContextStatsCard";
+import { CostPayoffCard } from "./CostPayoffCard";
+import { FindingsList } from "./FindingsList";
 import { PrDiffViewer } from "./PrDiffViewer";
 import {
   DEFAULT_REVIEW_AGENT_CONFIG,
+  MODEL_LABELS,
   ReviewAgentConfigPanel,
   type ReviewAgentConfig,
+  type SlmModelId,
 } from "./ReviewAgentConfigPanel";
+
+export type ContextStats = NonNullable<Extract<ReviewStreamEvent, { type: "done" }>["context_stats"]>;
+
+/**
+ * Everything needed to fully restore a completed (or in-progress) review
+ * after this component unmounts and remounts -- which happens on every
+ * stage navigation, like any other stage component (see LabStageSlot's
+ * switch). LabStageSlot owns the actual state (it's the ancestor that stays
+ * mounted for the whole lab run) and passes it back in as `savedRun`;
+ * PrReviewDemoApp just seeds its local state from it once on mount and
+ * reports changes back via `onRunChange`. Deliberately narrower than every
+ * piece of local state here -- `input` (an unsent follow-up draft) and the
+ * Slack form fields are left to reset, since losing a draft or a pasted bot
+ * token on navigation is a minor inconvenience, not "the results are gone."
+ */
+export type PrReviewRunState = {
+  messages: Message[];
+  diffTitle: string | null;
+  diffContent: string | null;
+  conversationId: string | null;
+  reviewText: string | null;
+  reviewUsage: { input_tokens: number; output_tokens: number } | null;
+  contextStats: ContextStats | null;
+  reviewFindings: ReviewFinding[] | "unstructured" | null;
+  initialReviewMessageId: string | null;
+  selectedModelId: SlmModelId | null;
+  reviewPromptMessageId: string | null;
+  sendError: string | null;
+};
+
+function toNormalizedContextStats(stats: ContextStats) {
+  return {
+    kbChunksRetrieved: stats.kb_chunks_retrieved,
+    kbChunksTotal: stats.kb_chunks_total,
+    kbTokensEstimated: stats.kb_tokens_estimated,
+    memoriesRetrieved: stats.memories_retrieved,
+    memoriesTotal: stats.memories_total,
+    memoryTokensEstimated: stats.memory_tokens_estimated,
+  };
+}
 
 function buildReviewPrompt(title: string, diff: string): string {
   return `Review this pull request:\n\nTitle: ${title}\n\n\`\`\`diff\n${diff}\n\`\`\``;
@@ -48,32 +102,92 @@ function reviewConfigPayload(config: ReviewAgentConfig) {
     focus: config.focus.trim() || undefined,
     tone: config.tone,
     strictness: config.strictness,
+    model: config.model,
   };
 }
 
 export function PrReviewDemoApp({
   demoApp,
   session,
+  savedRun,
+  onRunChange,
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  /** A previous run's results, if this component is remounting after the
+   *  user navigated away and back -- see PrReviewRunState's own comment. */
+  savedRun?: PrReviewRunState | null;
+  /** Called whenever any of PrReviewRunState's fields change, so the owner
+   *  (LabStageSlot) can hand the same state back in as `savedRun` next time
+   *  this component mounts. */
+  onRunChange?: (run: PrReviewRunState) => void;
 }) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [diffTitle, setDiffTitle] = useState<string | null>(null);
-  const [diffContent, setDiffContent] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>(() => savedRun?.messages ?? []);
+  const [diffTitle, setDiffTitle] = useState<string | null>(() => savedRun?.diffTitle ?? null);
+  const [diffContent, setDiffContent] = useState<string | null>(() => savedRun?.diffContent ?? null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(() => savedRun?.conversationId ?? null);
   // The original review's full text, captured once and reused as the
   // context anchor for every follow-up question (not replaced by later
   // follow-up answers) -- matches agentcore_entrypoint.py's follow-up
   // payload contract (prior_review_text).
-  const [reviewText, setReviewText] = useState<string | null>(null);
-  const [sendError, setSendError] = useState<string | null>(null);
+  const [reviewText, setReviewText] = useState<string | null>(() => savedRun?.reviewText ?? null);
+  // Captured once from the initial review's `done` event, same lifetime as
+  // reviewText -- a follow-up turn is a separate LLM call with its own
+  // usage, not part of the Claude-vs-SLM cost comparison this stage shows.
+  const [reviewUsage, setReviewUsage] = useState<{ input_tokens: number; output_tokens: number } | null>(
+    () => savedRun?.reviewUsage ?? null,
+  );
+  // Real knowledgebase_search/memory_search retrieval counts (+ totals, from
+  // datapack_describe) and an estimated per-tool token share for THIS run --
+  // same lifetime as reviewUsage, see review.py's _build_context_stats.
+  const [contextStats, setContextStats] = useState<ContextStats | null>(() => savedRun?.contextStats ?? null);
+  // Structured findings (severity/location/comment) parsed server-side from
+  // the initial review's response -- see review.py's REVIEW_SYSTEM_PROMPT.
+  // Three states, not two: `null` = still in flight; `"unstructured"` = done,
+  // but the deployed image predates structured findings (the "findings" key
+  // is absent from its "done" event entirely, not just empty) -- falls back
+  // to the accumulated text_delta prose already in message.content, same as
+  // before this feature shipped; an array = done, real structured findings.
+  // A follow-up answer is never structured this way (see ReviewStreamEvent's
+  // own doc comment), so this stays scoped to the one message identified by
+  // initialReviewMessageId below.
+  //
+  // An EMPTY array is deliberately rendered the same way as "unstructured"
+  // (see rendersAsFindings below), not as a confident "No issues found." --
+  // review.py's _parse_findings degrades an unparseable response to
+  // `findings=[]` too, with the model's actual raw text still in `review`.
+  // Trusting an empty array at face value would silently hide a malformed
+  // response behind a false "no issues" claim; falling back to message.content
+  // shows the real text either way (which reads "No issues found." verbatim
+  // when that's genuinely what review.py rendered for a real empty result).
+  const [reviewFindings, setReviewFindings] = useState<ReviewFinding[] | "unstructured" | null>(
+    () => savedRun?.reviewFindings ?? null,
+  );
+  // The initial review's own assistant bubble id -- rendered as FindingsList
+  // once reviewFindings arrives, unlike every later (follow-up) assistant
+  // bubble, which stays free-text prose through MarkdownMessage.
+  const [initialReviewMessageId, setInitialReviewMessageId] = useState<string | null>(
+    () => savedRun?.initialReviewMessageId ?? null,
+  );
+  // Captured at send time rather than read from reviewConfig.model later.
+  // The config panel unmounts once hasReviewed flips (it only renders in the
+  // !hasReviewed branch), so reviewConfig can't actually change after a
+  // review starts within one mount -- but this component itself unmounts and
+  // remounts on stage navigation (see savedRun above), which resets
+  // reviewConfig to its default. Without a separately-tracked
+  // selectedModelId, the post-review cost comparison would silently show
+  // whatever model a fresh reviewConfig happens to default to, not the model
+  // the restored review actually used.
+  const [selectedModelId, setSelectedModelId] = useState<SlmModelId | null>(() => savedRun?.selectedModelId ?? null);
+  const [sendError, setSendError] = useState<string | null>(() => savedRun?.sendError ?? null);
   // id of the first, diff-embedded user turn — hidden from the transcript
   // since PrDiffViewer already shows the diff. Every later message (the
   // agent's reply, and any follow-up question/answer) renders normally.
-  const [reviewPromptMessageId, setReviewPromptMessageId] = useState<string | null>(null);
+  const [reviewPromptMessageId, setReviewPromptMessageId] = useState<string | null>(
+    () => savedRun?.reviewPromptMessageId ?? null,
+  );
 
   const [slackToken, setSlackToken] = useState("");
   const [slackChannel, setSlackChannel] = useState("");
@@ -99,6 +213,43 @@ export function PrReviewDemoApp({
     return () => abortControllerRef.current?.abort();
   }, []);
 
+  // Reports the current results up to LabStageSlot on every change, so
+  // navigating away and back restores this exact view instead of starting
+  // over -- see PrReviewRunState/savedRun's own comments. `sending` isn't
+  // part of this: an in-flight request is aborted on unmount above, so
+  // there's nothing left to resume, and restoring `sending: true` would
+  // just show a permanently stuck spinner.
+  useEffect(() => {
+    onRunChange?.({
+      messages,
+      diffTitle,
+      diffContent,
+      conversationId,
+      reviewText,
+      reviewUsage,
+      contextStats,
+      reviewFindings,
+      initialReviewMessageId,
+      selectedModelId,
+      reviewPromptMessageId,
+      sendError,
+    });
+  }, [
+    messages,
+    diffTitle,
+    diffContent,
+    conversationId,
+    reviewText,
+    reviewUsage,
+    contextStats,
+    reviewFindings,
+    initialReviewMessageId,
+    selectedModelId,
+    reviewPromptMessageId,
+    sendError,
+    onRunChange,
+  ]);
+
   const send = useCallback(
     async (payload: Record<string, unknown>, userText: string, isReviewPrompt = false) => {
       if (session.deploymentMode === "dedicated" && !session.deploymentId) return;
@@ -109,6 +260,7 @@ export function PrReviewDemoApp({
       const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: userText };
       if (isReviewPrompt) setReviewPromptMessageId(userMessage.id);
       const assistantId = crypto.randomUUID();
+      if (isReviewPrompt) setInitialReviewMessageId(assistantId);
       setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "" }]);
 
       try {
@@ -132,6 +284,22 @@ export function PrReviewDemoApp({
             );
           } else if (event.type === "done") {
             fullReviewText = event.review;
+            // The initial review's response is structured findings JSON --
+            // review.py never streams it as text_delta chunks (that would
+            // show raw JSON mid-response), so this bubble's content is only
+            // ever set here, once, not built up incrementally like a
+            // follow-up's. Setting it for every "done" (not just the
+            // findings case) keeps Slack-posting/canFollowUp's own read of
+            // message.content correct either way.
+            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: event.review } : m)));
+            // "findings" in event distinguishes "the key is genuinely absent"
+            // (an old deployed image) from "present but empty" (a real "no
+            // issues found" result) -- event.findings ?? null would collapse
+            // both to the same state and get stuck showing a loading
+            // spinner forever against an old image.
+            if (isReviewPrompt) setReviewFindings("findings" in event ? (event.findings ?? []) : "unstructured");
+            if (isReviewPrompt && event.usage) setReviewUsage(event.usage);
+            if (isReviewPrompt && event.context_stats) setContextStats(event.context_stats);
             session.bumpRefreshTick();
           }
         }
@@ -155,6 +323,7 @@ export function PrReviewDemoApp({
 
     setDiffTitle(title);
     setDiffContent(diff);
+    setSelectedModelId(reviewConfig.model);
     await send(
       {
         datapack_id: session.datapackId,
@@ -211,46 +380,101 @@ export function PrReviewDemoApp({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 overflow-y-auto p-4">
         {!hasReviewed ? (
-          <div className="flex flex-col gap-4 rounded-md border border-border p-4">
+          <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
+            <p className="text-sm text-muted-foreground">
+              Every source you built in Chapter 1 is still live here — whichever model you pick
+              below reaches it the same way Claude did: by calling{" "}
+              <code className="font-mono">knowledgebase_search</code> and{" "}
+              <code className="font-mono">memory_search</code> against your datapack.
+            </p>
             <ReviewAgentConfigPanel
               value={reviewConfig}
               onChange={setReviewConfig}
               agentDisplayName={demoApp.agentDisplayName}
             />
-            <Button onClick={handleRunReview} disabled={!canReview || sending}>
+            <Button onClick={handleRunReview} disabled={!canReview || sending} className="self-start">
               {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Run review
             </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            <PrDiffViewer title={diffTitle ?? SAMPLE_DIFF_TITLE} diff={diffContent} />
+            <PrDiffViewer title={diffTitle ?? SAMPLE_DIFF_TITLE} diff={diffContent} isSample />
             {/* The diff-embedded review prompt itself is skipped — PrDiffViewer
                 already shows the diff. Every later turn (reply + any
                 follow-up) renders normally. */}
             {messages
               .filter((message) => message.id !== reviewPromptMessageId)
-              .map((message) => (
-                <div
-                  key={message.id}
-                  className={
-                    message.role === "user"
-                      ? "ml-auto max-w-[85%] rounded-md bg-primary/10 p-3 text-sm"
-                      : "rounded-md border border-border bg-card p-3 text-sm"
-                  }
-                >
-                  {message.role === "assistant" ? (
-                    message.content ? (
-                      <MarkdownMessage text={message.content} />
+              .map((message) => {
+                const isInitialReview = message.id === initialReviewMessageId;
+                const isStillReviewing = isInitialReview && reviewFindings === null;
+                // Only a NON-empty findings array gets the FindingsList
+                // treatment -- an empty array falls back to message.content
+                // below, same as "unstructured", since review.py can't tell
+                // "genuinely no issues" apart from "failed to parse" on the
+                // wire (see reviewFindings' own doc comment above).
+                const hasStructuredFindings =
+                  isInitialReview && Array.isArray(reviewFindings) && reviewFindings.length > 0;
+                const rendersAsFindings = isStillReviewing || hasStructuredFindings;
+                return (
+                  <div
+                    key={message.id}
+                    className={
+                      message.role === "user"
+                        ? "ml-auto max-w-[85%] rounded-md bg-primary/10 p-3 text-sm"
+                        : rendersAsFindings
+                          ? ""
+                          : "rounded-md border border-border bg-card p-3 text-sm"
+                    }
+                  >
+                    {message.role === "assistant" ? (
+                      isStillReviewing ? (
+                        <div className="flex items-center gap-2 rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Reviewing…
+                        </div>
+                      ) : hasStructuredFindings ? (
+                        <FindingsList findings={reviewFindings as ReviewFinding[]} />
+                      ) : message.content ? (
+                        <MarkdownMessage text={message.content} />
+                      ) : (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )
                     ) : (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    )
-                  ) : (
-                    message.content
-                  )}
-                </div>
-              ))}
+                      message.content
+                    )}
+                  </div>
+                );
+              })}
             {sendError && <p className="text-sm text-destructive">{sendError}</p>}
+
+            {reviewUsage && selectedModelId && (
+              <div className="flex flex-col gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Reviewed with {MODEL_LABELS[selectedModelId]} · {reviewUsage.input_tokens} in /{" "}
+                  {reviewUsage.output_tokens} out tokens
+                </p>
+                {contextStats && <ContextStatsCard stats={toNormalizedContextStats(contextStats)} />}
+                {(() => {
+                  const slmCost = estimateCost(selectedModelId, reviewUsage);
+                  const claudeCost = estimateCost(ANTHROPIC_REFERENCE_MODEL_ID, {
+                    input_tokens: ANTHROPIC_REFERENCE_INPUT_TOKENS,
+                    output_tokens: ANTHROPIC_REFERENCE_OUTPUT_TOKENS,
+                  });
+                  const savingsPct = computeSavingsPct(slmCost, claudeCost);
+                  if (slmCost === null || claudeCost === null || savingsPct === null) return null;
+                  return (
+                    <CostPayoffCard
+                      savingsPct={savingsPct}
+                      slmCost={slmCost}
+                      slmModelLabel={MODEL_LABELS[selectedModelId]}
+                      claudeCost={claudeCost}
+                      claudeModelLabel={ANTHROPIC_REFERENCE_MODEL_LABEL}
+                    />
+                  );
+                })()}
+              </div>
+            )}
 
             {messages.some((m) => m.role === "assistant" && m.content.trim()) && (
               <div className="flex flex-col gap-2 rounded-md border border-border p-3">
