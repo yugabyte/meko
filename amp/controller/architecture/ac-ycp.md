@@ -237,9 +237,9 @@ effect.
 An environment is registered as **`amp`** or **`meko`**. The kind is fixed at
 registration. A meko id stays a bare `slug(name)`; an amp id is prefixed **`amp-`**,
 so an amp and a meko environment of the same name never collide and the two coexist
-in one fleet. Enrollment carries the kind and YCP rejects a mismatch (409), so the
-agent cannot attach to a meko environment. An amp environment seeds **no** desired
-state at registration — an operator declares its resources afterwards through
+in one fleet. Enrollment carries the kind and YCP rejects a mismatch (409), so an
+agent configured for one kind cannot attach to the other's environment. An amp
+environment seeds **no** desired state at registration — an operator declares its resources afterwards through
 `POST /environments/{id}/desired`.
 
 ## Write-once binding
@@ -305,5 +305,7 @@ only that directive pushes the extension images.
   and issues no call — the amp `Endpoint` schema exposes no extension list to compare
   against. [#1057](https://github.com/yugabyte/meko/issues/1057).
 - Cluster facts beyond the basics in the agent's status report.
-- A meko backend for the same agent (selected by environment kind), retiring the
-  standalone meko stack agent.
+- Retiring the standalone meko stack agent. The same agent now serves
+  `ENV_KIND=meko` through `ycp/reconcile/mekobackend`, but only for the `datapack`
+  kind — the meko stack itself is still `ycp/cmd/agent`'s, and `knowledge-base` and
+  `agent` wait on their `api_server` routes moving onto the PAT-accepting group.

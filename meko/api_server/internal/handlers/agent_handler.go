@@ -33,6 +33,11 @@ func NewAgentHandler(svc *service.AgentService) *AgentHandler {
 // Strictly create-only: returns 409 Conflict when (user_id, agent_id)
 // already exists.
 //
+// Unlike the list and delete routes beside it, this one accepts an MCP PAT with
+// the write scope as well as a session JWT — the YCP reconcile-agent creates the
+// agent row it stamps its datapacks with, and a PAT can already create the
+// datapacks that reference one.
+//
 //	@Summary	Create a user-scoped agent
 //	@Tags		agents
 //	@Accept		json
@@ -41,6 +46,7 @@ func NewAgentHandler(svc *service.AgentService) *AgentHandler {
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse	"PAT without the write scope"
 //	@Failure	409		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/agents [post]

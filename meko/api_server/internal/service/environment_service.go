@@ -124,6 +124,11 @@ type BootstrapDefaults struct {
 	SecretRef       string
 }
 
+// BootstrapDefaultsEnabled reports whether registration seeds a stack at all. The
+// install hint needs it: with --no-bootstrap-defaults every meko environment has an
+// empty desired state, so emptiness no longer says which agent the environment runs.
+func (s *EnvironmentService) BootstrapDefaultsEnabled() bool { return s.bootstrap.Enabled }
+
 // mekoStackSpec mirrors the agent's kind "meko-stack" spec (ycp/cmd/agent/mekostack.go).
 // Only the fields the control plane sets are here; the agent defaults the rest, so an
 // older control plane and a newer agent still agree.

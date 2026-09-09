@@ -350,12 +350,27 @@ func (m *mekoStack) apply() error {
 		log.Printf("meko-stack %s: database: %v", m.base, dbErr)
 	}
 
-	// CREATE DATABASE, then the extensions. Both are gates on the api-server's
-	// migrations rather than on deploying it — see the file comment.
+	// CREATE DATABASE, then the extensions. This IS a gate on deploying the
+	// api-server, not only on its migrations.
+	//
+	// Deploying it anyway and letting it retry — which is right for every other
+	// component — is wrong here, because its migration does not retry. The
+	// wait-for-database init container gates on the TCP port, which yugabyted opens
+	// before this function has installed pg_dist_rag, so the data migration can reach
+	// a database without the dist_rag types it references. A migration that fails
+	// part-way leaves golang-migrate's version DIRTY, and nothing recovers from that:
+	// every later restart reads the flag and refuses, so the one component that
+	// "retries" is the one that never comes back. Waiting a tick costs nothing by
+	// comparison.
+	//
+	// The dirty latch has other ways in — anything that kills the migrator mid-run,
+	// which on an autoscaling cluster includes the database being rescheduled out
+	// from under it (meko#497). This gate closes the ordering hazard, not the latch.
 	m.schemaErr = m.applySchema()
 	if m.schemaErr != nil {
 		m.pool.logOnce("meko-stack.schema."+m.base, fmt.Sprintf(
-			"meko-stack %s: %v — the stack is deployed anyway and each component retries",
+			"meko-stack %s: %v — the rest of the stack is deployed anyway and each "+
+				"component retries; the api-server waits for the extensions",
 			m.base, m.schemaErr))
 	}
 
@@ -374,6 +389,14 @@ func (m *mekoStack) apply() error {
 		{compUI, m.applyUI},
 	} {
 		if !m.enabled(c.name) {
+			continue
+		}
+		// The api-server is the one component whose failure does not heal, so it is
+		// the one that waits. Recorded as a failed row rather than skipped silently,
+		// so the console shows a component that is 0/1 for a stated reason instead of
+		// one that has quietly vanished from the report.
+		if c.name == compAPI && m.schemaErr != nil {
+			m.fail(compAPI, fmt.Errorf("waiting for the database schema before migrating: %w", m.schemaErr))
 			continue
 		}
 		if err := c.apply(); err != nil {

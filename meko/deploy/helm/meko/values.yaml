@@ -632,6 +632,57 @@ agent:
       apiKey: meko-agent-api-key
 
 # ---------------------------------------------------------------------------
+# reconcile-agent
+#
+# The other YCP client, and the mutually exclusive one: `agent` reconciles the
+# Meko stack into k8s, this one converges the environment's datapacks over the
+# api-server's REST API. An environment has exactly one, so enabling both fails
+# the install.
+# ---------------------------------------------------------------------------
+reconcileAgent:
+  enabled: false
+  namespace: meko-system
+  # Keep this at 1, for the same reason as `agent`: replicas share one API-key
+  # identity and race on the shared reconcile-agent-state Secret.
+  replicas: 1
+  image:
+    # Quay rather than the Meko ECR — the same registry the control-plane image
+    # uses, so a cluster pulls it without ECR cross-account pull-secret setup.
+    registry: quay.io
+    repository: yugabyte/ycp-reconciler-agent
+    tag: ""                      # REQUIRED when enabled
+  # YCP control-plane base URL (outbound). Same value as agent.ycpUrl.
+  ycpUrl: ""
+  # Environment identity as registered in YCP. Empty -> the release namespace.
+  envName: ""
+  placement: cloud               # cloud | onprem
+  reconcileInterval: ""          # e.g. 30s; empty -> the agent's own default
+  # The api-server to converge against, including its /api/v1 path. Empty -> the
+  # one this release deploys.
+  mekoApiUrl: ""
+  # The agent id every datapack this reconciler creates is stamped with
+  # (created_by_agent_id), and the only ones it converges. It is the ownership
+  # boundary: datapacks a person made through the UI carry a different id and are
+  # invisible to the reconciler, which matters because a BYOC api-server runs
+  # with Cognito off and puts every request on one account. Change it only to run
+  # two reconcilers against one api-server.
+  agentId: ycp-reconcile-agent
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+  secrets:
+    existing:
+      # As agent.secrets.existing.apiKey: the YBM API key every YCP call
+      # authenticates with (key: api-key), or the dev-mode pair.
+      apiKey: meko-agent-api-key
+      # Optional Secret holding the MCP token this agent drives the api-server
+      # with (key: meko-api-token). Not needed for a BYOC data plane, whose
+      # api-server runs without Cognito and authenticates nobody; required
+      # against one with Cognito on, where the token names the account whose
+      # datapacks the reconciler creates.
+      mekoApiToken: meko-reconcile-agent-token
+
+# ---------------------------------------------------------------------------
 # inference-gateway
 # ---------------------------------------------------------------------------
 inferenceGateway:

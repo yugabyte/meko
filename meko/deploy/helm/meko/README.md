@@ -203,6 +203,35 @@ everything it tries to create. The field reference for what can be declared is
 [`ycp/DEPLOY.md`](https://github.com/yugabyte/meko/blob/main/ycp/DEPLOY.md) in the
 meko repo.
 
+#### The other agent: `reconcileAgent`
+
+An environment whose stack this chart installs — a `values-byoc.yaml` release —
+declares no stack in desired state, so there is nothing for the meko-agent to
+reconcile. It gets the **reconcile-agent** instead, which converges the datapacks
+the environment declares over the api-server's own REST API:
+
+```bash
+helm upgrade --install meko charts/meko -n meko-system \
+  -f charts/meko/values-aws.yaml -f charts/meko/values-dev.yaml \
+  -f charts/meko/values-byoc.yaml \
+  --set reconcileAgent.enabled=true \
+  --set reconcileAgent.ycpUrl=$YCP --set reconcileAgent.envName=acme-prod \
+  --set-string reconcileAgent.image.tag=$AGENT_TAG
+```
+
+The two are alternatives, and enabling both fails the install: an environment has
+one YCP client, and a pair would share an api-key identity and race on the status
+heartbeat. Its image comes from Quay rather than the Meko ECR, so no cross-account
+pull secret is needed for it.
+
+No api-server credential is needed here: a BYOC api-server runs with Cognito off and
+authenticates nobody. What keeps the reconciler off a person's datapacks is
+`reconcileAgent.agentId` — it stamps every datapack it creates with that id
+(`created_by_agent_id`) and converges no others, so anything made in the UI is
+invisible to it. Against an api-server with Cognito **on**, also supply
+`reconcileAgent.secrets.existing.mekoApiToken` (key `meko-api-token`), which decides
+the account. YCP's register response prints the whole sequence.
+
 Two Secrets must exist in the agent's namespace for a seeded stack to come up, because
 desired state references them **by name** and carries no secret material:
 

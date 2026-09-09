@@ -86,6 +86,12 @@ type state struct {
 	EnvID   string `json:"environment-id"`
 	EnvUUID string `json:"environment-uuid"`
 	EnvName string `json:"environment-name"`
+	// EnvKind is what this identity was confirmed as. Environment names are only
+	// unique within a kind — an amp environment's id is prefixed "amp-" where a
+	// meko one is a bare slug — so the name alone cannot tell a resumed identity
+	// apart from a same-named environment of the other kind. An empty value is a
+	// state written before this field existed, which is treated as a match.
+	EnvKind string `json:"environment-kind,omitempty"`
 }
 
 func (k *k8s) secretPath(name string) string {
@@ -119,6 +125,7 @@ func (k *k8s) readState(secret string) (state, error) {
 		EnvID:   dec("environment-id"),
 		EnvUUID: dec("environment-uuid"),
 		EnvName: dec("environment-name"),
+		EnvKind: dec("environment-kind"),
 	}, nil
 }
 
@@ -131,6 +138,7 @@ func (k *k8s) writeState(secret string, s state) error {
 		"environment-id":   s.EnvID,
 		"environment-uuid": s.EnvUUID,
 		"environment-name": s.EnvName,
+		"environment-kind": s.EnvKind,
 	}
 	code, _, err := k.do(http.MethodGet, k.secretPath(secret), "", nil)
 	if err != nil {

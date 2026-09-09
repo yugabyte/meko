@@ -27,6 +27,16 @@ import (
 // fresh Secret) recovers.
 var ErrUnauthorized = fmt.Errorf("ycp: unauthorized")
 
+// ErrKindMismatch is returned when the control plane refuses an enrollment because
+// the agent's kind is not the environment's (HTTP 409). Unlike a transient failure
+// it can never succeed as configured, so callers must not fall back to a persisted
+// identity: doing so converges an environment whose enrolment was refused.
+var ErrKindMismatch = fmt.Errorf("ycp: environment kind mismatch")
+
+// codeKindMismatch is the api_server error code for an enrolment whose kind is not
+// the environment's (environment_service.go).
+const codeKindMismatch = "KIND_MISMATCH"
+
 // Client talks to one YCP control plane.
 type Client struct {
 	base   string
@@ -63,12 +73,19 @@ func (c *Client) SetDevHeaders(adminSecret, apiKeyID string) {
 // nothing to persist between restarts.
 func (c *Client) Enroll(ctx context.Context, req api.EnrollRequest) (api.EnrollResponse, error) {
 	var out api.EnrollResponse
-	code, err := c.do(ctx, http.MethodPost, "/agent/enroll", req, &out)
+	code, errCode, err := c.do(ctx, http.MethodPost, "/agent/enroll", req, &out)
 	if err != nil {
 		return api.EnrollResponse{}, err
 	}
 	if code == http.StatusUnauthorized {
 		return api.EnrollResponse{}, ErrUnauthorized
+	}
+	// The CODE, not the status. A 409 is only a kind mismatch when the control
+	// plane says so: the same status can come from a proxy or from YBM's
+	// pass-through, and treating those as a mismatch would make a transient failure
+	// permanently fatal.
+	if code == http.StatusConflict && errCode == codeKindMismatch {
+		return api.EnrollResponse{}, ErrKindMismatch
 	}
 	if code != http.StatusOK {
 		return api.EnrollResponse{}, fmt.Errorf("ycp: enroll -> HTTP %d", code)
@@ -82,7 +99,7 @@ func (c *Client) Enroll(ctx context.Context, req api.EnrollRequest) (api.EnrollR
 // Desired fetches the environment's desired state. Returns ErrUnauthorized on a 401.
 func (c *Client) Desired(ctx context.Context) (api.DesiredState, error) {
 	var ds api.DesiredState
-	code, err := c.do(ctx, http.MethodGet, "/agent/desired-state", nil, &ds)
+	code, _, err := c.do(ctx, http.MethodGet, "/agent/desired-state", nil, &ds)
 	if err != nil {
 		return api.DesiredState{}, err
 	}
@@ -112,7 +129,7 @@ func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) (tasksAccep
 	var body struct {
 		TasksRecorded *bool `json:"tasks_recorded"`
 	}
-	code, err := c.do(ctx, http.MethodPost, "/agent/status", r, &body)
+	code, _, err := c.do(ctx, http.MethodPost, "/agent/status", r, &body)
 	if err != nil {
 		return false, err
 	}
@@ -128,20 +145,24 @@ func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) (tasksAccep
 	return true, nil
 }
 
-// do issues one request and decodes the {"data","error"} envelope. It returns
-// the HTTP status code so callers can branch on 401.
-func (c *Client) do(ctx context.Context, method, path string, body, out any) (int, error) {
+// do issues one request and decodes the {"data","error"} envelope. It returns the
+// status, the api_server error CODE when the response carried one
+// (empty otherwise), and a transport/decode error. The code matters because status
+// alone is ambiguous on the shared path an agent's call takes: a 409 can come from
+// the control plane's own kind check or from anything between, and only the code
+// says which.
+func (c *Client) do(ctx context.Context, method, path string, body, out any) (int, string, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return 0, fmt.Errorf("ycp: marshal request: %w", err)
+			return 0, "", fmt.Errorf("ycp: marshal request: %w", err)
 		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
 	if err != nil {
-		return 0, fmt.Errorf("ycp: build request: %w", err)
+		return 0, "", fmt.Errorf("ycp: build request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -154,19 +175,34 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (in
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("ycp: %s %s: %w", method, path, err)
+		return 0, "", fmt.Errorf("ycp: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return resp.StatusCode, nil
+		return resp.StatusCode, errorCode(raw), nil
 	}
 	if out != nil && len(raw) > 0 {
 		if err := decodeBody(raw, out); err != nil {
-			return resp.StatusCode, err
+			return resp.StatusCode, "", err
 		}
 	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, "", nil
+}
+
+// errorCode reads the api_server envelope's machine-readable error code. A body
+// that is not the envelope — a proxy's HTML, an empty response — yields "", which
+// callers must treat as "no code", never as a match.
+func errorCode(raw []byte) string {
+	var env struct {
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.Error == nil {
+		return ""
+	}
+	return env.Error.Code
 }
 
 // decodeBody unwraps the api_server {"data","error"} envelope, identified by the

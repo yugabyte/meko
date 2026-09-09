@@ -38,8 +38,9 @@ own `go.mod`. The control plane itself is `meko/api_server --control-plane-mode`
 It lives at the root rather than under `meko/` because it is shared with amp. amp's
 data plane uses the same contract through `cmd/reconcile-agent` (built on the
 backend-agnostic `reconcile` engine): instead of applying k8s directly like `cmd/agent`,
-it drives the amp controller's REST API to converge an environment to desired state. It
-is that environment's sole YCP client — see
+it drives a REST API to converge an environment to desired state, picking the backend
+from `ENV_KIND` — the amp controller, or meko's own `api_server`. It is that
+environment's sole YCP client — see
 [`amp/controller/architecture/ac-ycp.md`](amp/controller/architecture/ac-ycp.md).
 
 Its typed client for that REST API is generated from a **copy** of the controller's
@@ -68,6 +69,15 @@ api-server once it is up, and are not modelled here. See
 # READY -> restart-and-re-enroll -> command -> bootstrap -> GC. Needs kind +
 # docker or podman; no registry credentials.
 (cd ycp && ./test/e2e/run.sh)
+
+# the kind=meko reconcile loop: chart-installed stack + reconcile-agent converging
+# datapacks, asserting it leaves a hand-made datapack alone. Same kept cluster.
+(cd ycp && AWS_PROFILE=meko-dev ./test/local/meko-reconcile.sh)
+
+# the same thing on a REAL cluster, no kind: YCP in one namespace, a BYOC data plane
+# in another, registered declaring nothing so the reconcile-agent serves it.
+(cd ycp && AWS_PROFILE=meko-dev ./test/local/ycp-on-cluster.sh \
+   --context <ctx> --all --reconcile --tag <api-server tag> --agent-tag <agent tag>)
 
 # the same loop with the private meko-mcp-server image, on a cluster the e2e left up
 # (YCP_E2E_KEEP=1). Needs AWS credentials for the Meko ECR.

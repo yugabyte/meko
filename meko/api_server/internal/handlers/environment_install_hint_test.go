@@ -28,7 +28,9 @@ func hintForEnv(
 	}
 	c := echo.New().NewContext(req, httptest.NewRecorder())
 	e.AgentBaseURL = agentBaseURL
-	return installHint(c, e)
+	// nil desired: these cases assert the amp hint and the meko-agent hint, both of
+	// which render the same whatever the environment declares.
+	return installHint(c, e, nil)
 }
 
 // The hint is the only place an operator is told how to attach an agent, so it has to
@@ -250,7 +252,7 @@ func TestNamespaceFor(t *testing.T) {
 		{"amp-" + strings.Repeat("x", 60), "amp"}, // 64 chars: over the 63 limit
 		{"", "amp"},
 	} {
-		if got := namespaceFor(tc.id); got != tc.want {
+		if got := namespaceFor(tc.id, "amp"); got != tc.want {
 			t.Errorf("namespaceFor(%q) = %q, want %q", tc.id, got, tc.want)
 		}
 	}

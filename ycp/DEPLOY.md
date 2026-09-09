@@ -194,6 +194,7 @@ Spec fields, all optional unless noted. Secret fields are **names**, never value
 | `meko-stack` | `images.database` | **required** | The MAGE-enabled YugabyteDB build. No default: `mage` and `pg_dist_rag` are not in the public `yugabytedb` image, so a fallback would start cleanly and then fail every `CREATE EXTENSION`. |
 | | `images.api_server` / `.mcp_server` / `.rag_worker` / `.inference_gateway` / `.ui` | _(none)_ | Private images, no tag worth guessing. A component with no image is reported as failed and the rest of the stack still comes up. |
 | | `image_pull_secret` / `secret_ref` | _(none)_ | Secret **names** in the agent's namespace, applied to every component. `secret_ref` is mounted with `envFrom` and `optional: true`, so a Secret the operator has not created yet does not block the rollout. |
+| `datapack` | `description` | _(none)_ | Reconciled by the **reconcile-agent**, not the meko-agent: it is a resource inside a running Meko rather than a workload. The resource's `name` is the datapack's name — a rename is a different key, so it is a delete plus a create. There is no `agent_id` field; the agent stamps its own (below). |
 | | `database` | `{engine: yugabytedb}` | A full `database` spec (below). The engine defaults to `yugabytedb` here rather than `postgres`, and `master_flags`/`tserver_flags` default to `ysql_yb_enable_mage=true` on both. Declaring either flag list replaces that default rather than merging with it — a flag you cannot unset is worse than one you have to set. |
 | | `database_name` | `meko` | Created by the agent, and where the extensions go. |
 | | `extensions` | `["mage","pg_dist_rag"]` | An explicit `[]` installs none, for an external database whose owner manages its own. Names must be plain identifiers. |
@@ -252,9 +253,11 @@ The api-server itself needs no Kubernetes access: it runs with the namespace's d
 ServiceAccount and never builds an in-cluster client, so it does not need RBAC of its
 own and cannot fail to start for want of it.
 
-Datapacks are **not** modelled here. An environment is the unit YCP manages; what
-runs inside Meko — datapacks, users, tenants — is Meko's own concern, created
-through its api-server once the stack is up.
+Datapacks are modelled, by the **reconcile-agent** rather than the meko-agent — the
+two are alternatives, one per environment. An environment whose stack the chart
+installs declares no stack in desired state and runs the reconcile-agent, which
+converges `datapack` resources over the api-server's REST API. Users and tenants
+remain Meko's own concern.
 
 ## Seeing what ran in an amp environment
 
@@ -423,6 +426,11 @@ absolute form both work; the four-dot relative form is the one to avoid.
 
 ## Configuration reference
 
+Two agents, one per environment. **`meko-agent`** reconciles a declared stack into
+k8s; **`ycp-reconciler-agent`** converges datapacks over the api-server. Which one an
+environment runs follows from whether it declares a stack, and the install hint on
+`GET /environments/{id}` prints the right one.
+
 **`meko-agent`** — all environment variables; the chart's `agent.*` values set them.
 
 | Env | Default | Purpose |
@@ -431,8 +439,19 @@ absolute form both work; the four-dot relative form is the one to avoid.
 | `ENV_NAME` | `itest-mcs` | Environment name, for logs and the state Secret's re-point detection. The default is demo residue — always set it. |
 | `YCP_API_KEY` | _(unset)_ | The YBM API key every call authenticates with. Read from a Secret, never a command line. Required unless both dev-mode vars are set. |
 | `YCP_DEV_ADMIN_SECRET` / `YCP_DEV_API_KEY_ID` | _(unset)_ | Dev mode against a standalone control plane (no YBM): sent as the `X-Meko-Admin-Secret` / `X-Meko-Api-Key-ID` headers instead of the bearer. Both must be set. |
-| `ENV_PLACEMENT` | `cloud` | Reported placement. |
-| `ENV_PROVIDER` | `gke` | Reported provider; not detected. |
-| `ENV_REGION` | `us-west1` | Reported region; not detected. |
-| `AGENT_VERSION` | `v1.4.2` | Version string reported in status. Not derived from the build. |
+| `ENV_PLACEMENT` | `cloud` | Reported placement. Read by both agents. |
+| `ENV_PROVIDER` | `gke` | Reported provider; not detected. `meko-agent` only — the reconcile-agent does not read it, and setting it through `reconcileAgent.*` does nothing. |
+| `ENV_REGION` | `us-west1` | Reported region; not detected. `meko-agent` only, as above. |
+| `AGENT_VERSION` | `v1.4.2` | Version string reported in status. Not derived from the build. Read by both agents; the chart sets the reconcile-agent's from its image tag. |
+
+**`ycp-reconciler-agent`** — the `reconcileAgent.*` chart values set these. It takes
+`YCP_URL`, `ENV_NAME` and the same credential vars as above, plus:
+
+| Env | Default | Purpose |
+|-----|---------|---------|
+| `ENV_KIND` | `amp` | Which backend to run. `amp` drives the amp controller; `meko` drives meko's api-server. The enrollment carries it, and a mismatch with the environment's registered kind is fatal — it can never succeed, and resuming a persisted identity through it would converge an environment whose enrolment was refused. |
+| `MEKO_API_URL` | `http://meko-api-server-service:80/api/v1` | The api-server to converge against, **including** its API path (a `--base-path` prefix sits before `/api/v1`). The chart defaults it to the release's own api-server by FQDN. |
+| `MEKO_AGENT_ID` | `ycp-reconcile-agent` | The ownership boundary. Every datapack the agent creates is stamped with it (`created_by_agent_id`) and it converges no others, so datapacks made in the UI are invisible to it. Changing it on a running environment orphans everything already created. |
+| `MEKO_API_TOKEN` | _(unset)_ | An MCP token with the read and write scopes. Not needed against an api-server running **without** Cognito, which authenticates nobody — the BYOC shape. With Cognito on it is required, and picks the account the agent's datapacks belong to. |
+
 

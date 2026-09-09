@@ -1,8 +1,16 @@
-// Command reconcile-agent is the standalone agent that converges an amp
-// environment to YCP's desired state. It is the sole YCP client for its
-// environment: it enrolls (kind=amp) as its first check-in, pulls desired state,
-// and drives the generic reconcile engine against the amp controller's REST API
-// (the amp backend), reporting inventory back on each status heartbeat.
+// Command reconcile-agent is the standalone agent that converges an environment
+// to YCP's desired state. It is the sole YCP client for its environment: it
+// enrolls as its first check-in, pulls desired state, and drives the generic
+// reconcile engine against a backend chosen by the environment's kind,
+// reporting inventory back on each status heartbeat.
+//
+// ENV_KIND selects the backend: "amp" (the default, so an existing
+// yb-amp-controller release that sets nothing keeps working) drives the amp
+// controller's REST API; "meko" drives meko's api_server tenant API. The
+// enrollment carries the same kind and YCP refuses one that disagrees with how the
+// environment was registered; that refusal is fatal here, where a transient
+// failure falls back to the persisted identity — otherwise a flipped ENV_KIND
+// would converge an environment whose enrolment was permanently rejected.
 //
 // Every YCP call authenticates with the environment's YBM API key (YCP_API_KEY),
 // so the agent holds no earned credential: enrollment is idempotent and repeated
@@ -10,10 +18,8 @@
 // identity that check-in confirmed, so a restart that cannot reach the control
 // plane still knows which environment it is.
 //
-// The name is deliberately backend-neutral: a later phase adds a meko backend
-// selected by the environment's kind, so one binary/image serves both and the
-// standalone meko-agent retires. All traffic is outbound: agent -> k8s API,
-// agent -> YCP, agent -> amp controller (in-cluster).
+// All traffic is outbound: agent -> k8s API, agent -> YCP, agent -> the backend's
+// API (in-cluster).
 package main
 
 import (
@@ -36,6 +42,7 @@ import (
 	"meko/ycp/internal/ycpclient"
 	"meko/ycp/reconcile"
 	"meko/ycp/reconcile/ampbackend"
+	"meko/ycp/reconcile/mekobackend"
 )
 
 func env(k, def string) string {
@@ -45,11 +52,28 @@ func env(k, def string) string {
 	return def
 }
 
+// Environment kinds this agent can serve, and so the backends it can build.
+const (
+	kindAmp  = "amp"
+	kindMeko = "meko"
+)
+
 func main() {
 	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080/api/v1"), "/")
 	// AMP_CONTROLLER_URL must include the API base path (the controller mounts
 	// its REST API at /api/v1).
 	ampURL := strings.TrimRight(env("AMP_CONTROLLER_URL", "http://amp-controller:8080/api/v1"), "/")
+	// MEKO_API_URL likewise includes the base path; meko's api_server can also be
+	// mounted under a --base-path prefix, which would sit before /api/v1.
+	mekoURL := strings.TrimRight(env("MEKO_API_URL", "http://meko-api-server-service:80/api/v1"), "/")
+	// Defaulted to amp so a yb-amp-controller release that sets nothing keeps
+	// working; a meko install opts in.
+	kind := env("ENV_KIND", kindAmp)
+	// The agent id every datapack this agent creates is stamped with, and the only
+	// ones it converges. Defaulted rather than required: the default is already a
+	// name no person picks, and an install that forgot it would otherwise fail
+	// where it could simply be correct.
+	mekoAgentID := env("MEKO_AGENT_ID", "ycp-reconcile-agent")
 	envName := env("ENV_NAME", "")
 	placement := env("ENV_PLACEMENT", "cloud")
 	apiKey := os.Getenv("YCP_API_KEY")
@@ -61,7 +85,7 @@ func main() {
 		interval = d
 	}
 
-	log.Printf("reconcile-agent starting: env=%s ycp=%s amp=%s", envName, ycpURL, ampURL)
+	log.Printf("reconcile-agent starting: kind=%s env=%s ycp=%s", kind, envName, ycpURL)
 	if envName == "" {
 		log.Fatalf("ENV_NAME is required")
 	}
@@ -81,10 +105,11 @@ func main() {
 		log.Printf("WARNING could not read agent state: %v", err)
 		st = state{}
 	}
-	if st.EnvID != "" && st.EnvName != envName {
+	if st.EnvID != "" && (st.EnvName != envName || (st.EnvKind != "" && st.EnvKind != kind)) {
 		// The operator re-pointed this agent; the persisted identity is for a
 		// different environment, so it must not be resumed.
-		log.Printf("ENV_NAME changed (%q -> %q) — discarding persisted identity", st.EnvName, envName)
+		log.Printf("environment changed (%s/%s -> %s/%s) — discarding persisted identity",
+			st.EnvKind, st.EnvName, kind, envName)
 		st = state{}
 	}
 
@@ -93,18 +118,51 @@ func main() {
 		log.Printf("dev mode: authenticating with the admin secret + api key id headers")
 		ycp.SetDevHeaders(devAdminSecret, devAPIKeyID)
 	}
-	backend, err := ampbackend.New(ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), nil)
-	if err != nil {
-		log.Fatalf("amp backend: %v", err)
+	var backend reconcile.Backend
+	var tasks *ampbackend.TaskCollector
+	switch kind {
+	case kindAmp:
+		b, berr := ampbackend.New(ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), nil)
+		if berr != nil {
+			log.Fatalf("amp backend: %v", berr)
+		}
+		log.Printf("driving the amp controller at %s", ampURL)
+		backend = b
+		// The task log is the amp controller's; a meko environment has none, so the
+		// collector is built here rather than beside the agent and stays nil for
+		// every other kind.
+		tasks = ampbackend.NewTaskCollector(b, log.Printf)
+	case kindMeko:
+		// Optional, unlike amp's controller token, because an api-server running
+		// without Cognito authenticates nobody: DevAuth puts every request on one
+		// dev account with all scopes. That is the BYOC data-plane shape, and it
+		// has no token to give. A Cognito-enabled meko needs one.
+		token := os.Getenv("MEKO_API_TOKEN")
+		if token == "" {
+			log.Printf("MEKO_API_TOKEN is unset: calling %s unauthenticated, "+
+				"which works only against an api-server running without Cognito", mekoURL)
+		}
+		mb, berr := mekobackend.New(mekoURL, token, mekoAgentID, nil)
+		if berr != nil {
+			log.Fatalf("meko backend: %v", berr)
+		}
+		log.Printf("driving the meko api-server at %s as agent %q", mekoURL, mekoAgentID)
+		backend = mb
+	default:
+		// The switch is the only place the served kinds are written down, so a
+		// kind added to the constants without a case here fails at startup
+		// rather than leaving backend nil for the first tick to dereference.
+		log.Fatalf("ENV_KIND=%q is not a kind this agent serves (%s | %s)", kind, kindAmp, kindMeko)
 	}
 
 	a := &agent{
 		ycp:       ycp,
 		kc:        kc,
 		envName:   envName,
+		kind:      kind,
 		placement: placement,
 		agentVer:  agentVer,
-		tasks:     ampbackend.NewTaskCollector(backend, log.Printf),
+		tasks:     tasks,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -117,8 +175,14 @@ func main() {
 	// fixed from here — the key was revoked or never bound — so it is logged
 	// loudly on every attempt; a redeploy with a fresh key Secret recovers.
 	if err := a.enrollWithRetry(ctx, st); err != nil {
-		log.Printf("shutting down before enrolling: %v", err)
-		return
+		if ctx.Err() != nil {
+			log.Printf("shutting down before enrolling: %v", err)
+			return
+		}
+		// Not a shutdown: the control plane refused this enrolment for good. Exit
+		// non-zero so the pod crash-loops and exit-code alerting sees it — a
+		// misconfiguration that returns 0 looks like a clean stop.
+		log.Fatalf("enroll: %v", err)
 	}
 
 	// Pin the controller to this YCP environment before driving it. The binding
@@ -126,12 +190,19 @@ func main() {
 	// this controller, and we must not fight the agent that bound it. Anything
 	// else (controller not up yet on a fresh install, transient network) is
 	// retried with backoff rather than crash-looping the pod.
-	if err := bindControllerWithRetry(ctx, ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), ycpURL, a.envID, log.Printf); err != nil {
-		if ctx.Err() != nil {
-			log.Printf("shutting down before controller bound: %v", err)
-			return
+	//
+	// amp only. meko's api_server has no equivalent write-once binding, so
+	// nothing stops two control planes driving one meko — tracked as a gap in
+	// ARCHITECTURE.md rather than papered over with a check that cannot be made
+	// here.
+	if kind == kindAmp {
+		if err := bindControllerWithRetry(ctx, ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), ycpURL, a.envID, log.Printf); err != nil {
+			if ctx.Err() != nil {
+				log.Printf("shutting down before controller bound: %v", err)
+				return
+			}
+			log.Fatalf("bind controller: %v", err) // a binding conflict is fatal
 		}
-		log.Fatalf("bind controller: %v", err) // a binding conflict is fatal
 	}
 
 	eng := reconcile.New(backend, reconcile.Options{})
@@ -210,6 +281,7 @@ type agent struct {
 	ycp       *ycpclient.Client
 	kc        *k8s
 	envName   string
+	kind      string
 	placement string
 	agentVer  string
 
@@ -223,6 +295,10 @@ type agent struct {
 	// only cares about tasks it planned for a resource it is converging, while the
 	// console needs every task, including ones an operator or the amp UI planned
 	// directly.
+	//
+	// amp only, and nil for every other kind: the task log is the amp controller's,
+	// and meko's verbs are synchronous, so there is no asynchronous work for a
+	// console to watch.
 	tasks *ampbackend.TaskCollector
 }
 
@@ -235,19 +311,28 @@ func (a *agent) enrollWithRetry(ctx context.Context, st state) error {
 		resp, err := a.ycp.Enroll(ctx, api.EnrollRequest{
 			Name:      a.envName,
 			Placement: a.placement,
-			Kind:      "amp",
+			Kind:      a.kind,
 		})
 		if err == nil {
 			a.envID = resp.EnvironmentID
 			a.envUUID = resp.EnvironmentUUID
 			log.Printf("enrolled env=%s id=%s uuid=%s", a.envName, a.envID, a.envUUID)
 			if werr := a.kc.writeState(stateSecret,
-				state{EnvID: a.envID, EnvUUID: a.envUUID, EnvName: a.envName}); werr != nil {
+				state{EnvID: a.envID, EnvUUID: a.envUUID, EnvName: a.envName, EnvKind: a.kind}); werr != nil {
 				// Not fatal: the agent works for this lifetime; it just cannot
 				// resume through an outage that spans a restart.
 				log.Printf("WARNING could not persist agent state: %v", werr)
 			}
 			return nil
+		}
+		if errors.Is(err, ycpclient.ErrKindMismatch) {
+			// The environment is not this agent's kind. Resuming a persisted
+			// identity here would converge an environment whose enrolment the
+			// control plane has permanently refused — and the persisted identity is
+			// exactly what a flipped ENV_KIND leaves behind, since a state Secret
+			// written before the kind was recorded reads as a match.
+			return fmt.Errorf("enroll: ENV_KIND=%s is not the registered kind of environment %q: %w",
+				a.kind, a.envName, err)
 		}
 		if errors.Is(err, ycpclient.ErrUnauthorized) {
 			log.Printf("ENROLL REJECTED (401): the API key is revoked or bound to no environment; "+
@@ -319,9 +404,13 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 	// Task visibility is additive: a controller that will not serve its task log
 	// must not also cost us the convergence report, which is what the environment's
 	// state and every resource row ride on. So this logs and carries on.
-	tasks, commitTasks, err := a.tasks.Collect(ctx)
-	if err != nil {
-		log.Printf("collect amp tasks (reporting inventory anyway): %v", err)
+	var tasks []api.TaskStatus
+	commitTasks := func() {}
+	if a.tasks != nil {
+		var terr error
+		if tasks, commitTasks, terr = a.tasks.Collect(ctx); terr != nil {
+			log.Printf("collect amp tasks (reporting inventory anyway): %v", terr)
+		}
 	}
 	report.Tasks = tasks
 

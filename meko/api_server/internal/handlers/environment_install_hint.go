@@ -29,18 +29,49 @@ const defaultAgentNamespace = "ycp-agent"
 // substitutes the real value; an operator reading the hint raw pastes their own.
 const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder, not a credential
 
+// stackKinds are the desired-state kinds the meko-agent reconciles into k8s.
+// Their presence is what distinguishes the two meko install models: an
+// environment that declares one runs the stack from its own desired state, and
+// one that declares none has its stack installed by the chart.
+var stackKinds = map[string]bool{
+	"meko-stack": true,
+	"database":   true,
+	"mcp-server": true,
+	"rag-worker": true,
+}
+
+func declaresStack(desired []models.DesiredResource) bool {
+	for _, r := range desired {
+		if stackKinds[r.Kind] {
+			return true
+		}
+	}
+	return false
+}
+
 // installHint renders the commands that attach an agent to an environment. It is the
 // only place an operator is told how to do this, so it has to be runnable as printed,
 // not a sketch.
 //
-// The hint is kind-specific: a meko environment installs the meko-agent (a
-// component of the `meko` chart), an amp environment installs the amp controller
-// and its reconcile-agent (the yb-amp-controller chart's `agent` block) — the
-// agent is the sole YCP client and drives the controller over its REST API.
-func installHint(c echo.Context, e *models.Environment) string {
+// Three shapes, because an environment has exactly one YCP client and which one it
+// is follows from what it declares:
+//
+//   - amp — the amp controller plus the reconcile-agent that drives its REST API.
+//   - meko declaring a stack — the meko-agent, which reconciles that stack into k8s.
+//   - meko declaring none — the chart installs the stack and the reconcile-agent
+//     converges the environment's datapacks over the api-server.
+//
+// desired is the environment's current desired state. A read that failed passes
+// nil, which renders the meko-agent hint: it is the older model and the one every
+// environment registered before this had, so an unreadable desired state falls back
+// to what is far more likely to be right.
+func installHint(c echo.Context, e *models.Environment, desired []models.DesiredResource) string {
 	url := agentURL(c, e.AccountID, e.AgentBaseURL)
 	if e.Kind == "amp" {
 		return ampInstallHint(url, e.ID, e.Placement, e.AccountID)
+	}
+	if desired != nil && !declaresStack(desired) {
+		return mekoReconcileInstallHint(url, e.ID, service.DefaultDataPlaneRelease(""))
 	}
 	return mekoInstallHint(url, e.ID)
 }
@@ -81,6 +112,80 @@ func mekoInstallHint(ycpURL, envID string) string {
 	return b.String()
 }
 
+// mekoStackNamespace is where a chart-installed meko data plane goes when the
+// environment id will not serve as a namespace.
+const mekoStackNamespace = "meko"
+
+// mekoTokenSecretName is the Secret the reconcile-agent reads its api-server token
+// from. Passed to the chart explicitly so the created Secret and the Deployment's
+// secretKeyRef cannot drift, even though it is the chart's default.
+const mekoTokenSecretName = "meko-reconcile-agent-token" //nolint:gosec // a Secret NAME, not a credential
+
+// mekoReconcileInstallHint attaches a meko environment whose stack the chart
+// installs: the whole data plane plus the reconcile-agent, which converges the
+// environment's datapacks over the api-server's REST API.
+//
+// The only values it cannot know are the image tags, so they are lifted into a
+// header the operator edits once rather than left mid-command. There is no
+// api-server credential step: this preset's api-server runs without Cognito and
+// authenticates nobody, and what keeps the reconciler off a person's datapacks is
+// the agent id it stamps, not an identity.
+func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease) string {
+	ns := namespaceFor(envID, mekoStackNamespace)
+	chart := "meko/deploy/helm/meko"
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Prerequisites\n")
+	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
+	fmt.Fprintf(&b, "#   - a cluster with a default StorageClass (the bundled YugabyteDB claims it)\n")
+	fmt.Fprintf(&b, "#   - image pull access to the Meko registry\n\n")
+
+	// One tag per component, not one for the release: the pinned set in
+	// dataplane_release.go carries a different tag for each, so a single shared
+	// variable renders three image references that cannot be pulled.
+	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is. The three stack tags differ —\n")
+	fmt.Fprintf(&b, "# they are versioned per component, not per release.\n")
+	fmt.Fprintf(&b, "NS=%s\n", ns)
+	fmt.Fprintf(&b, "API_TAG=%s\n", tagOf(rel.APIServer))
+	fmt.Fprintf(&b, "MCP_TAG=%s\n", tagOf(rel.MCPServer))
+	fmt.Fprintf(&b, "UI_TAG=%s\n", tagOf(rel.UI))
+	fmt.Fprintf(&b, "AGENT_TAG=<agent image tag>     # quay.io/yugabyte/ycp-reconciler-agent\n\n")
+
+	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable\n")
+	fmt.Fprintf(&b, "#      there). This is the only credential the install needs.\n")
+	fmt.Fprintf(&b, "kubectl create namespace \"${NS}\" --dry-run=client -o yaml | kubectl apply -f -\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic meko-agent-api-key \\\n")
+	fmt.Fprintf(&b, "  --from-literal=api-key=%s \\\n", apiKeyPlaceholder)
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
+
+	fmt.Fprintf(&b, "# 2 — install the stack and the reconcile-agent, from a meko checkout. Swap\n")
+	fmt.Fprintf(&b, "#      values-aws.yaml for values-gcp.yaml, and values-dev.yaml for\n")
+	fmt.Fprintf(&b, "#      values-prod.yaml, to match the cluster. values-byoc.yaml goes LAST:\n")
+	fmt.Fprintf(&b, "#      it is what makes this one self-contained namespace.\n")
+	fmt.Fprintf(&b, "helm upgrade --install meko %s -n \"${NS}\" \\\n", chart)
+	fmt.Fprintf(&b, "  -f %s/values-aws.yaml -f %s/values-dev.yaml \\\n", chart, chart)
+	fmt.Fprintf(&b, "  -f %s/values-byoc.yaml \\\n", chart)
+	fmt.Fprintf(&b, "  --set-string apiServer.image.tag=\"${API_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string mekoMcpServer.image.tag=\"${MCP_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string mekoUi.image.tag=\"${UI_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set reconcileAgent.enabled=true \\\n")
+	fmt.Fprintf(&b, "  --set reconcileAgent.ycpUrl=%s \\\n", ycpURL)
+	fmt.Fprintf(&b, "  --set reconcileAgent.envName=%s \\\n", envID)
+	fmt.Fprintf(&b, "  --set-string reconcileAgent.image.tag=\"${AGENT_TAG}\"\n\n")
+
+	fmt.Fprintf(&b, "# The agent enrolls, then converges the datapacks this environment declares.\n")
+	fmt.Fprintf(&b, "# Declare them with POST %s/environments/%s/desired.\n", ycpURL, envID)
+	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" rollout status deploy/meko-api-server\n")
+	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs -f deploy/meko-reconcile-agent\n")
+	fmt.Fprintf(&b, "#\n")
+	fmt.Fprintf(&b, "# It converges only the datapacks it created (created_by_agent_id =\n")
+	fmt.Fprintf(&b, "# ycp-reconcile-agent), so datapacks made in the UI are never touched. On an\n")
+	fmt.Fprintf(&b, "# api-server with Cognito ON, add the account's MCP token:\n")
+	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" create secret generic %s \\\n", mekoTokenSecretName)
+	fmt.Fprintf(&b, "#     --from-literal=meko-api-token=<token>\n")
+	return b.String()
+}
+
 // ampInstallNamespace is where the amp controller install puts the controller
 // when the operator does not choose otherwise.
 const ampInstallNamespace = "amp"
@@ -111,18 +216,29 @@ func metricsIdentityArgs(envID, accountID string) []string {
 	return args
 }
 
+// tagOf is the tag half of an image reference, for a hint that prints tags an
+// operator can paste. A reference with no tag (or a digest) yields a placeholder
+// rather than something that looks pasteable and is not.
+func tagOf(image string) string {
+	i := strings.LastIndex(image, ":")
+	if i < 0 || strings.Contains(image[i+1:], "/") || strings.Contains(image, "@") {
+		return "<tag>"
+	}
+	return image[i+1:]
+}
+
 var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-// namespaceFor is the namespace the amp install defaults to: the environment id,
-// so a cluster can hold several environments without the operator having to think
-// about it (the chart installs once per namespace — its cluster-scoped RBAC names
-// are namespace-prefixed for exactly this). The id is not guaranteed to be a legal
+// namespaceFor is the namespace an install defaults to: the environment id, so a
+// cluster can hold several environments without the operator having to think about
+// it (each chart installs once per namespace — amp's cluster-scoped RBAC names are
+// namespace-prefixed for exactly this). The id is not guaranteed to be a legal
 // namespace: slug() only lowercases and maps space/underscore/slash, over a name
-// validated as 3-60 chars, so "amp-" + name can exceed 63 or carry a dot. Fall back
-// rather than print something kubectl will reject.
-func namespaceFor(envID string) string {
+// validated as 3-60 chars, so an id can exceed 63 or carry a dot. Fall back rather
+// than print something kubectl will reject.
+func namespaceFor(envID, fallback string) string {
 	if len(envID) == 0 || len(envID) > 63 || !dns1123Label.MatchString(envID) {
-		return ampInstallNamespace
+		return fallback
 	}
 	return envID
 }
@@ -140,7 +256,7 @@ func namespaceFor(envID string) string {
 // resolve to docker.io, otel remote-writes to a store that is not there, and the UI
 // and an internal LoadBalancer would both be deployed for nobody.
 func ampInstallHint(ycpURL, envID, placement, accountID string) string {
-	ns := namespaceFor(envID)
+	ns := namespaceFor(envID, ampInstallNamespace)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Prerequisites\n")

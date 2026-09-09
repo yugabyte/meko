@@ -520,10 +520,11 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 }
 
 // registerDeploymentRoutes wires the agent-deployment endpoints onto the
-// JWT-only group -- the same group /agents and /me/meko-tokens use, not
-// dpDirect (the PAT-accepting group): BYOC onboarding is an interactive
-// copy-paste flow and deployment creation triggers real AWS provisioning,
-// neither of which fits the scripted/headless use case dpDirect exists for.
+// JWT-only group -- the same group /me/meko-tokens and the agent list/delete
+// routes use, not dpDirect (the PAT-accepting group): BYOC onboarding is an
+// interactive copy-paste flow and deployment creation triggers real AWS
+// provisioning, neither of which fits the scripted/headless use case dpDirect
+// exists for.
 func registerDeploymentRoutes(g *echo.Group, reg *serviceRegistry) {
 	if reg.deploymentSvc == nil {
 		slog.Warn("deployment routes disabled (service init failed)")
@@ -854,7 +855,14 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		dpDirect.DELETE("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.DeleteCompute, write, dpOwner)
 	}
 
-	g.POST("/agents", agentH.CreateUser)
+	// Create is on the PAT-accepting group; list and delete stay JWT-only. An agent
+	// row is a name the caller's own datapacks are attributed to, not an access
+	// grant — and a write-scoped PAT can already create the datapacks that reference
+	// one, so refusing it the row is an inconsistency rather than a boundary. The
+	// YCP reconcile-agent needs exactly this call and nothing else here
+	// (ycp/reconcile/mekobackend). Deleting an agent detaches datapacks from it, so
+	// that one keeps the interactive path.
+	dpDirect.POST("/agents", agentH.CreateUser, auth.RequireScope(auth.ScopeWrite))
 	g.GET("/agents", agentH.ListUser)
 	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
 

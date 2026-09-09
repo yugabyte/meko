@@ -45,11 +45,23 @@ func scopeRow(id, accountID string) *sqlmock.Rows {
 // newScopeHandler builds the fleet handler over a mocked DB.
 func newScopeHandler(t *testing.T) (*EnvironmentHandler, sqlmock.Sqlmock, func()) {
 	t.Helper()
+	return newScopeHandlerWithBootstrap(t, service.BootstrapDefaults{})
+}
+
+// newScopeHandlerWithBootstrap is newScopeHandler for a test that needs the
+// control plane's seeding switched on: the install hint reads an empty desired
+// state as "the chart installed the stack" only when it does, since with
+// --no-bootstrap-defaults every environment is empty.
+func newScopeHandlerWithBootstrap(
+	t *testing.T, b service.BootstrapDefaults,
+) (*EnvironmentHandler, sqlmock.Sqlmock, func()) {
+	t.Helper()
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	svc := service.NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), service.BootstrapDefaults{})
+	svc := service.NewEnvironmentService(
+		repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db), b)
 	return NewEnvironmentHandler(svc), mock, func() { db.Close() }
 }
 

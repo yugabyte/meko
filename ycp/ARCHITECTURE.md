@@ -37,8 +37,9 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 | Path | Binary | Role |
 |------|--------|------|
 | `cmd/agent` | `meko-agent` | Per-environment pull agent for a **Meko** data plane. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles the environment's declared stack directly against k8s, reports status. |
-| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The same pull-agent shape for an **amp** data plane (`kind=amp`): it enrolls, reads desired state, and drives the amp controller's REST API — rather than k8s — to converge it, then reports the controller's inventory back. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
-| `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (amp's is `reconcile/ampbackend`). Level-triggered, so a missed tick self-heals. |
+| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The same pull-agent shape for an environment whose resources live behind a REST API rather than in k8s: it enrolls, reads desired state, and drives that API to converge it, then reports the inventory back. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
+| `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (`reconcile/ampbackend`, `reconcile/mekobackend`). Level-triggered, so a missed tick self-heals. |
+| `reconcile/mekobackend` | — | The `Backend` for meko's tenant API: the `datapack` kind, converged over `api_server`'s PAT-authenticated routes. Its verbs are synchronous, so unlike amp it needs no applied-generation echo. What bounds it is the agent id it stamps — see below. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
 | `test/e2e` | — | Build-and-deploy smoke test on kind against `api_server --control-plane-mode`. |
 
@@ -255,11 +256,48 @@ state — so a restart during a control-plane outage begins reconciling before i
 first request succeeds. The remaining gap — CA pinning — is tracked in
 [meko#401](https://github.com/yugabyte/meko/issues/401).
 
+### What a meko reconcile-agent owns
+
+The engine is authoritative: anything a backend lists that desired state does not
+declare is deleted. Datapacks are created by real people through the UI and through
+MCP, so a `GET /datapacks` returning all of them would put a customer's own work in
+the delete set on the first tick.
+
+So every datapack the agent creates is stamped with its own agent id
+(`created_by_agent_id`, which the api-server persists on create and returns on every
+read), and it lists only datapacks carrying it. Everything else is invisible to the
+engine: not converged, not reported, not deleted. `MEKO_AGENT_ID` sets it, defaulting
+to `ycp-reconcile-agent`; the id must name an agent row, so the backend creates it
+first and treats the api-server's 409 as success.
+
+The account cannot be that boundary, though it looks like the obvious one. A BYOC
+data plane runs with **Cognito off**, and the api-server then falls back to
+`DevAuth`: every request — the agent's and the UI's — resolves to one dev account
+with all scopes. Account scoping would put a person's datapacks and the
+reconciler's in the same set. It also means `MEKO_API_TOKEN` is optional, because
+that api-server authenticates nobody; a Cognito-enabled meko needs one, and then the
+token decides which account the agent's datapacks belong to while the agent id still
+decides which of them are its own.
+
+A meko environment therefore has two install models, and which one it is follows
+from what it declares. One that declares a stack (`meko-stack` and friends) is the
+meko-agent's; one that declares none had its stack installed by the chart and gets
+the reconcile-agent. The install hint renders whichever applies, so registering
+with `"desired": []` is what opts an environment into the second.
+
+Two gaps follow from meko's tenant API being a user API rather than a control API.
+There is no equivalent of amp's write-once `POST /ycp/binding`, so nothing stops
+two control planes driving one meko. And `knowledge-base` and `agent` cannot be
+kinds yet: their routes are on the JWT-only group in `api_server`'s router, which
+a PAT cannot reach.
+
 ## Testing
 
 ```bash
 go test ./...                 # unit tests: no database or cluster needed
 ycp/test/e2e/run.sh           # build + deploy on kind; needs docker + kind
+ycp/test/local/meko-reconcile.sh   # the kind=meko reconcile loop, on a kept e2e
+                                   # cluster; needs ECR credentials and MEKO_TAG
 ```
 
 - `cmd/agent` — decoding of both response envelopes, including the case that

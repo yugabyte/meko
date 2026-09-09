@@ -1,0 +1,96 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "reconcileAgent")) "true") }}
+{{- /* One environment, one YCP client. Both agents authenticate with the same
+       api-key identity and both POST /agent/status, so a release running both
+       has two writers racing on one environment's state — and each reports the
+       other's kinds as unconvergeable. Fail the install rather than let that
+       land looking healthy. */}}
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "agent")) "true") }}
+{{- fail "agent and reconcileAgent are both enabled: an environment has exactly one YCP client. Enable the meko-agent (it reconciles the stack into k8s) or the reconcile-agent (it converges datapacks over the api-server), not both." }}
+{{- end }}
+{{- $c := .Values.reconcileAgent }}
+{{- $ns := include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+{{- if not $c.ycpUrl }}{{ fail "reconcileAgent.ycpUrl is required when reconcileAgent.enabled=true" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-reconcile-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-reconcile-agent") | nindent 4 }}
+spec:
+  replicas: {{ $c.replicas }}
+  selector:
+    matchLabels:
+      {{- include "meko.selectorLabels" (dict "app" "meko-reconcile-agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko.selectorLabels" (dict "app" "meko-reconcile-agent") | nindent 8 }}
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      serviceAccountName: meko-reconcile-agent
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reconcile-agent
+          image: {{ include "meko.image" (dict "image" $c.image "global" $.Values.global) }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          env:
+            - name: ENV_KIND
+              value: meko
+            - name: YCP_URL
+              value: {{ $c.ycpUrl | quote }}
+            - name: MEKO_API_URL
+              value: {{ include "meko.reconcileAgentApiUrl" . | quote }}
+            - name: ENV_NAME
+              value: {{ $c.envName | default .Release.Namespace | quote }}
+            - name: ENV_PLACEMENT
+              value: {{ $c.placement | quote }}
+            - name: AGENT_VERSION
+              value: {{ $c.image.tag | quote }}
+            {{- with $c.reconcileInterval }}
+            - name: RECONCILE_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: YCP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.secrets.existing.apiKey }}
+                  key: api-key
+                  # Optional so the same Secret can instead carry the dev-mode
+                  # pair below; the agent enforces that one of the two is set.
+                  optional: true
+            - name: YCP_DEV_ADMIN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.secrets.existing.apiKey }}
+                  key: dev-admin-secret
+                  optional: true
+            - name: YCP_DEV_API_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.secrets.existing.apiKey }}
+                  key: dev-api-key-id
+                  optional: true
+            # What this agent owns: every datapack it creates is stamped with this
+            # id and it converges no others, so a person's datapacks in the same
+            # api-server are invisible to it rather than garbage.
+            - name: MEKO_AGENT_ID
+              value: {{ $c.agentId | quote }}
+            # Optional, because a BYOC api-server runs with Cognito off and
+            # authenticates nobody — there is no token to give. With Cognito on it
+            # is required and the Secret below must exist: it picks the account the
+            # agent's datapacks belong to, while MEKO_AGENT_ID still picks which of
+            # them are its own.
+            - name: MEKO_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.secrets.existing.mekoApiToken }}
+                  key: meko-api-token
+                  optional: true
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+      restartPolicy: Always
+{{- end }}

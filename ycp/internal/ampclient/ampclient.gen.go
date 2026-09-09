@@ -475,6 +475,11 @@ type CreateBranchRequest struct {
 
 // CreateClusterRequest defines model for CreateClusterRequest.
 type CreateClusterRequest struct {
+	// Connectivity Client reachability for the writer this call creates. Only meaningful
+	// alongside `with_writer`: sending it without one is a 400 rather than a
+	// silent no-op, since it asks for an exposure nothing would get.
+	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
+
 	// Engine The database engine to provision as — a named bundle of externalized
 	// extensions. `postgres` (the default) seeds none, `aidb` seeds
 	// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is

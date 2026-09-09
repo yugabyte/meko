@@ -1,0 +1,57 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "reconcileAgent")) "true") }}
+{{- $c := .Values.reconcileAgent }}
+{{- $ns := include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meko-reconcile-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-reconcile-agent") | nindent 4 }}
+---
+{{- /* A namespaced Role, where the meko-agent needs a ClusterRole: this agent
+       converges datapacks over the api-server's REST API and touches k8s for one
+       thing only — persisting the environment id its last check-in confirmed, so
+       a restart during a control-plane outage still knows which environment it
+       is. Its credentials live in operator-planted Secrets it never writes; the
+       get/create/patch below is for its own state Secret. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: meko-reconcile-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-reconcile-agent") | nindent 4 }}
+rules:
+  # Read and write ONE Secret: the agent's own state. Without resourceNames this
+  # grant reaches every Secret in the namespace, which under values-byoc.yaml's
+  # global.singleNamespace is where dataPlaneSecrets keeps the database password,
+  # the OpenAI key and the MCP internal secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["reconcile-agent-state"]
+    verbs: ["get", "patch"]
+  # create takes no resourceNames — Kubernetes matches them against an existing
+  # object, and a create has none — so this arm is namespace-wide by construction.
+  # It is what lets the agent write its state Secret the first time; every later
+  # write goes through the patch above.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: meko-reconcile-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-reconcile-agent") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: meko-reconcile-agent
+subjects:
+  - kind: ServiceAccount
+    name: meko-reconcile-agent
+    namespace: {{ $ns }}
+{{- end }}

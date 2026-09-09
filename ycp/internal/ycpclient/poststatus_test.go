@@ -2,6 +2,7 @@ package ycpclient
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -69,6 +70,38 @@ func TestPostStatusReportsWhetherTasksLanded(t *testing.T) {
 			}
 			if accepted != tc.want {
 				t.Errorf("tasksAccepted = %v, want %v — %s", accepted, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// A 409 is a kind mismatch only when the control plane says so. The status alone
+// is ambiguous on the path an agent's call takes — a proxy or YBM's pass-through
+// can answer 409 too — and the agent treats a mismatch as permanently fatal, so
+// matching on the bare status turns a transient failure into a dead pod.
+func TestEnrollTreatsOnlyTheKindMismatchCodeAsFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		wantKind bool
+	}{
+		{"the control plane's own refusal", `{"error":{"code":"KIND_MISMATCH","message":"registered as meko"}}`, true},
+		{"someone else's 409", `{"error":{"code":"CONFLICT","message":"upstream"}}`, false},
+		{"a body that is not the envelope", `<html>409</html>`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			_, err := New(srv.URL, "key", srv.Client()).Enroll(t.Context(), api.EnrollRequest{Name: "acme"})
+			if got := errors.Is(err, ErrKindMismatch); got != tc.wantKind {
+				t.Errorf("ErrKindMismatch = %v, want %v (err = %v)", got, tc.wantKind, err)
+			}
+			if err == nil {
+				t.Error("a 409 must always be an error")
 			}
 		})
 	}

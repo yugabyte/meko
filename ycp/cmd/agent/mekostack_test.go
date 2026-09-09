@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -728,5 +730,81 @@ func TestServiceExposure(t *testing.T) {
 	err := s.applyExposedService("x", nil, 80, "http", "publik")
 	if err == nil || !strings.Contains(err.Error(), "not a kind of exposure") {
 		t.Errorf("err = %v, want a refusal naming the valid values", err)
+	}
+}
+
+// fakeCluster is a k8s API server that accepts every apply and records the paths, so
+// a test can assert which workloads a tick actually deployed.
+func fakeCluster(t *testing.T) (*k8s, *[]string) {
+	t.Helper()
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	return &k8s{host: srv.URL, token: "t", http: srv.Client()}, &paths
+}
+
+func deployed(paths *[]string, name string) bool {
+	for _, p := range *paths {
+		if strings.HasSuffix(p, "/deployments/"+name) || strings.HasSuffix(p, "/statefulsets/"+name) {
+			return true
+		}
+	}
+	return false
+}
+
+// The api-server is the one component that must NOT be deployed ahead of its
+// database schema. Its wait-for-database init container gates on the TCP port, which
+// yugabyted opens well before the extensions are installed, so deploying it early lets
+// its data migration run against a database with no dist_rag types. That migration
+// fails, golang-migrate marks the version DIRTY, and nothing recovers — every later
+// restart reads the flag and refuses. Every other component genuinely does retry, so
+// they are deployed regardless, which is what makes this a gate on one component
+// rather than on the tick.
+//
+// The unreachable database here is the real first-tick state, not an injected one:
+// applyDatabase writes the StatefulSet and applySchema then cannot connect to it.
+func TestAPIServerWaitsForTheSchemaWhileTheRestDeploys(t *testing.T) {
+	kc, calls := fakeCluster(t)
+	m := mekoStackFor(t, mekoStackSpec{Images: fullRelease})
+	m.kc = kc
+	_ = m.apply()
+
+	if m.schemaErr == nil {
+		t.Fatal("the schema step should have failed against a database that is not up")
+	}
+	if deployed(calls, "meko-api-server") {
+		t.Error("the api-server must not be deployed before its schema exists")
+	}
+	// The gate is on one component, not on the tick: everything that does not need a
+	// resolved DSN still goes out. (mcp-server and rag-worker are left out of this
+	// assertion because they need a database this fake cannot resolve — on a real
+	// cluster they deploy too, logging "deploying anyway, it retries its own
+	// connection".)
+	for _, name := range []string{"meko-inference-gateway", "meko-ui"} {
+		if !deployed(calls, name) {
+			t.Errorf("%s must still be deployed — the gate is on the api-server alone", name)
+		}
+	}
+
+	// Reported, not silently omitted: a component that vanishes from the report reads
+	// as healthy, which is the failure this exists to make visible.
+	var row *component
+	for i := range m.stack.components {
+		if m.stack.components[i].name == compAPI {
+			row = &m.stack.components[i]
+		}
+	}
+	if row == nil {
+		t.Fatal("the api-server must still report a component row")
+	}
+	if row.healthy != 0 || row.err == "" {
+		t.Errorf("api-server row = %+v, want 0-healthy with a reason", *row)
+	}
+	if !strings.Contains(row.err, "waiting for the database schema") {
+		t.Errorf("the row should say what it is waiting for, got %q", row.err)
 	}
 }

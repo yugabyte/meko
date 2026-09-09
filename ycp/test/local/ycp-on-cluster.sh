@@ -25,6 +25,12 @@
 #       --tag bootstrap-7c8776b41
 #   ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --delete    # tear both down
 #
+#   --reconcile picks the reconcile-agent data plane: the chart installs the stack and
+#   the agent converges the environment's datapacks over the api-server. The default
+#   is the meko-agent, which reconciles a seeded meko-stack into k8s.
+#     ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --reconcile \
+#         --agent-tag custom-abc123
+#
 #   --storage-class is needed on any cluster without the cloud preset's default: the gcp
 #   preset asks for pd-ssd, and a GKE cluster that only has standard-rwo / premium-rwo
 #   fails the install with the class it wanted and the ones it found.
@@ -32,7 +38,7 @@
 #
 # Environment:
 #   AWS_PROFILE      profile with Meko ECR access (meko-dev here) — required.
-#   MEKO_DEVOPS      meko-devops checkout holding the chart (default ~/code/meko-devops)
+#   MEKO_CHART       the chart directory (default: this checkout's meko/deploy/helm/meko)
 #   MEKO_MCP_IMAGE   meko-mcp-server ref to seed; default = newest tag in ECR
 #   OPENAI_API_KEY   written into the data-plane Secret when set
 #
@@ -42,6 +48,25 @@ CTX=""
 YCP_NS="${YCP_NS:-ycp}"
 MEKO_NS="${MEKO_NS:-meko}"
 TAG="${TAG:-}"
+# --reconcile installs the OTHER data-plane model: the chart brings the stack up and
+# the reconcile-agent converges the environment's datapacks over the api-server,
+# instead of the meko-agent reconciling a seeded meko-stack into k8s. The two are
+# alternatives — one YCP client per environment — so this is a mode, not a flag that
+# adds something.
+RECONCILE=0
+AGENT_TAG="${AGENT_TAG:-latest}"
+# The control-plane image, when it does not live in the ECR the cloud preset points
+# at. meko/api_server publishes to Quay on demand (meko-control-plane-image.yml), and
+# nothing publishes it to ECR at all, so a control plane built from a branch is
+# normally a Quay ref — which needs the registry and repository overridden, not just
+# the tag. Empty leaves the preset's registry alone and --tag supplies the tag.
+YCP_IMAGE="${YCP_IMAGE:-}"
+# The pinned data-plane release (meko/api_server/internal/service/dataplane_release.go).
+# One tag per component: they are versioned separately, so a single shared value
+# renders references that cannot be pulled.
+MEKO_API_TAG="${MEKO_API_TAG:-console-943437724}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-2.1.0-20260731-7b3fdd3}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-1.0.0-20260729-bf56db7}"
 CLOUD="${CLOUD:-gcp}"          # which cloud preset: gcp | aws
 # Storage class for the control plane's bundled Postgres. Empty keeps the cloud
 # preset's (pd-ssd on GKE, gp2-csi on AWS); override for a cluster that has neither,
@@ -54,7 +79,10 @@ DELETE=0
 # does both because it was run is a tool that installs an agent nobody asked for.
 STAGE=""                       # ycp | agent | all, chosen explicitly
 ENV_NAME="${ENV_NAME:-}"
-MEKO_DEVOPS="${MEKO_DEVOPS:-$HOME/code/meko-devops}"
+# The chart moved into this repo (a179f8c2a1); MEKO_CHART overrides for a checkout
+# that still has it elsewhere.
+HERE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEKO_CHART="${MEKO_CHART:-$(cd "$HERE_DIR/../../.." && pwd)/meko/deploy/helm/meko}"
 ECR=161908593886.dkr.ecr.us-east-2.amazonaws.com
 ECR_REGION=us-east-2
 PULL_SECRET=ecr-registry-creds   # the name values-gcp.yaml already uses
@@ -88,6 +116,9 @@ while [ $# -gt 0 ]; do
     --ycp-only)   STAGE=ycp; shift ;;
     --agent-only) STAGE=agent; shift ;;
     --all)        STAGE=all; shift ;;
+    --reconcile)  RECONCILE=1; shift ;;
+    --agent-tag)  AGENT_TAG="$2"; shift 2 ;;
+    --ycp-image)  YCP_IMAGE="$2"; shift 2 ;;
     --admin-key)  ADMIN_KEY="$2"; shift 2 ;;
     --delete)   DELETE=1; shift ;;
     -h|--help)  sed -n '2,34p' "$0"; exit 0 ;;
@@ -112,8 +143,8 @@ $(kubectl config get-contexts -o name | sed 's/^/    /')"
 for bin in kubectl helm curl python3 aws; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin is required but not on PATH"
 done
-CHART="$MEKO_DEVOPS/charts/meko"
-[ -d "$CHART" ] || die "no chart at $CHART — set MEKO_DEVOPS to your meko-devops checkout"
+CHART="$MEKO_CHART"
+[ -d "$CHART" ] || die "no chart at $CHART — set MEKO_CHART to a meko checkout's deploy/helm/meko"
 k version >/dev/null 2>&1 ||
   die "cannot reach $CTX. For a GKE context this is usually expired auth: gcloud auth login"
 
@@ -294,11 +325,25 @@ if [ "$STAGE" = agent ]; then
 else
 log "installing the control plane into $YCP_NS"
 echo "    seeding new environments with: $MCP_IMAGE"
+# --ycp-image wins over --tag: a full ref carries its own registry, repository and
+# tag, and mixing the two would install the preset's registry with somebody else's
+# tag — an image reference that resolves to nothing, or worse, to the wrong thing.
+ycp_image_args=(--set-string "apiServer.image.tag=$TAG")
+if [ -n "$YCP_IMAGE" ]; then
+  ref="${YCP_IMAGE%:*}"; ycp_tag="${YCP_IMAGE##*:}"
+  [ "$ref" != "$YCP_IMAGE" ] || die "--ycp-image needs a tag: <registry>/<repository>:<tag>"
+  ycp_image_args=(
+    --set-string "apiServer.image.registry=${ref%%/*}"
+    --set-string "apiServer.image.repository=${ref#*/}"
+    --set-string "apiServer.image.tag=$ycp_tag"
+  )
+  echo "    control-plane image: $YCP_IMAGE"
+fi
 h upgrade --install "$YCP_NS" "$CHART" -n "$YCP_NS" \
   -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-ycp.yaml" \
   --set apiServer.namespace="$YCP_NS" \
   --set controlPlaneDb.namespace="$YCP_NS" \
-  --set-string apiServer.image.tag="$TAG" \
+  "${ycp_image_args[@]}" \
   --set controlPlaneSecrets.enabled=true \
   --set controlPlaneSecrets.dbPassword="$DB_PASSWORD" \
   --set controlPlaneSecrets.adminApiKey="$ADMIN_KEY" \
@@ -358,8 +403,13 @@ fi
 
 log "registering environment $ENV_NAME"
 API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+# "desired": [] is the whole opt-in to the chart-installed model: an environment that
+# declares nothing has no stack for the meko-agent to reconcile, and the control
+# plane's install hint prints the reconcile-agent commands for exactly that shape.
+reg_desired=""
+[ "$RECONCILE" = 1 ] && reg_desired=',"desired":[]'
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\",\"api_key_id\":\"$API_KEY_ID\"}")" ||
+  -d "{\"name\":\"$ENV_NAME\",\"kind\":\"meko\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\",\"api_key_id\":\"$API_KEY_ID\"$reg_desired}")" ||
   die "registration failed"
 ENV_ID="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["environment"]["id"])')"
 
@@ -368,6 +418,16 @@ echo "--------- the install command YCP printed ---------"
 printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["install_hint"])'
 echo "--------------------------------------------------"
 
+if [ "$RECONCILE" = 1 ]; then
+  api GET "/api/v1/environments/$ENV_ID/desired" | python3 -c '
+import json, sys
+res = json.load(sys.stdin)["data"]["resources"] or []
+if res:
+    sys.exit("    seeded %s — a reconcile-agent environment must declare nothing"
+             % [r["kind"] for r in res])
+print("    seeded nothing, as declared")
+' || die "registration seeded a stack; --reconcile registers an environment that declares none"
+else
 api GET "/api/v1/environments/$ENV_ID/desired" | python3 -c '
 import json, sys
 res = json.load(sys.stdin)["data"]["resources"]
@@ -386,6 +446,7 @@ if not stack["spec"].get("image_pull_secret"):
     sys.exit("    seeded stack names no image_pull_secret — every image in it is private, "
              "so nothing would pull")
 ' || die "registration did not seed the stack"
+fi
 
 # --------------------------------------------------------------------------- agent
 
@@ -398,17 +459,98 @@ k -n "$MEKO_NS" create secret generic meko-agent-api-key \
 # cluster, so the agent needs no external address — and the dot matters: ndots:5
 # makes the four-dot relative form walk the search list first and stall.
 YCP_URL="http://meko-api-server-service.$YCP_NS.svc.cluster.local.:80/api/v1"
-h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
-  -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-agent.yaml" \
-  --set agent.ycpUrl="$YCP_URL" \
-  --set agent.envName="$ENV_ID" \
-  --set-string agent.image.tag="$TAG" \
-  --set agent.provider="$CLOUD" \
-  --set ecrCredentialRefresh.enabled=false \
-  --wait --timeout "$TIMEOUT" >/dev/null ||
-  die "the agent install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS)"
+if [ "$RECONCILE" = 1 ]; then
+  # values-byoc.yaml LAST: it is what makes this one self-contained namespace — the
+  # stack plus its own YugabyteDB, and nothing outside it.
+  h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
+    -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
+    --set-string apiServer.image.tag="$MEKO_API_TAG" \
+    --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
+    --set-string mekoUi.image.tag="$MEKO_UI_TAG" \
+    --set reconcileAgent.enabled=true \
+    --set reconcileAgent.ycpUrl="$YCP_URL" \
+    --set reconcileAgent.envName="$ENV_ID" \
+    --set-string reconcileAgent.image.tag="$AGENT_TAG" \
+    --set ecrCredentialRefresh.enabled=false \
+    --wait --timeout "$TIMEOUT" >/dev/null ||
+    die "the data-plane install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS).
+    If the reconcile-agent image cannot be pulled, quay.io/yugabyte/ycp-reconciler-agent:$AGENT_TAG
+    may never have been pushed — the workflow skips the push without QUAY_AMP_TOKEN.
+    Build and push one with ycp/build-reconciler-agent-image.sh, then pass --agent-tag."
+else
+  h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
+    -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-agent.yaml" \
+    --set agent.ycpUrl="$YCP_URL" \
+    --set agent.envName="$ENV_ID" \
+    --set-string agent.image.tag="$TAG" \
+    --set agent.provider="$CLOUD" \
+    --set ecrCredentialRefresh.enabled=false \
+    --wait --timeout "$TIMEOUT" >/dev/null ||
+    die "the agent install failed (see: helm --kube-context $CTX -n $MEKO_NS get all $MEKO_NS)"
+fi
 
 # ------------------------------------------------------- watch it bootstrap itself
+
+if [ "$RECONCILE" = 1 ]; then
+  log "waiting for the reconcile-agent to enroll"
+  enrolled=""
+  for _ in $(seq 1 60); do
+    enrolled="$(k -n "$MEKO_NS" logs deploy/meko-reconcile-agent --tail=-1 2>/dev/null |
+                  grep "enrolled env=" | tail -1 || true)"
+    [ -n "$enrolled" ] && break
+    sleep 2
+  done
+  [ -n "$enrolled" ] ||
+    die "the reconcile-agent never enrolled — kubectl -n $MEKO_NS logs deploy/meko-reconcile-agent"
+  printf '    %s\n' "$enrolled"
+
+  log "declaring a datapack and waiting for it to converge"
+  api POST "/api/v1/environments/$ENV_ID/desired" -H 'content-type: application/json' \
+    -d '{"resources":[{"kind":"datapack","name":"smoke","spec":{"description":"declared by YCP"}}]}' \
+    >/dev/null || die "POST desired failed"
+
+  converged=""
+  for _ in $(seq 1 90); do
+    converged="$(api GET "/api/v1/environments/$ENV_ID" | python3 -c '
+import json, sys
+e = json.load(sys.stdin)["data"]
+for r in json.loads(e.get("resources") or "[]"):
+    if r.get("id", "").endswith("smoke"):
+        print(r.get("state", ""), r.get("error", ""))
+' 2>/dev/null | head -1 || true)"
+    case "$converged" in ready*) break ;; esac
+    sleep 2
+  done
+  case "$converged" in
+    ready*) echo "    datapack smoke converged" ;;
+    *) die "the datapack never converged (last reported: ${converged:-nothing}).
+    kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent" ;;
+  esac
+
+  cat <<EOF
+
+==> PASS — $ENV_ID registered in $YCP_NS declaring nothing, the chart installed the
+    stack in $MEKO_NS, and the reconcile-agent converged the datapack YCP declared.
+
+    admin secret: $ADMIN_KEY
+
+    Console:     kubectl --context $CTX -n $YCP_NS port-forward svc/meko-api-server-service 18080:80
+    Agent loop:  kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent
+    Datapacks:   kubectl --context $CTX -n $MEKO_NS port-forward svc/meko-api-server-service 18001:80
+                 curl http://127.0.0.1:18001/api/v1/datapacks
+
+    Declare more (desired state is REPLACED, so send the whole set):
+      curl -X POST http://127.0.0.1:$PORT/api/v1/environments/$ENV_ID/desired \\
+        -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \\
+        -d '{"resources":[{"kind":"datapack","name":"smoke"},{"kind":"datapack","name":"team-b"}]}'
+
+    Withdraw one and it is garbage-collected. A datapack made through the UI carries a
+    different created_by_agent_id and is never touched.
+
+    Tear down:   $0 --context $CTX --ycp-ns $YCP_NS --meko-ns $MEKO_NS --delete
+EOF
+  exit 0
+fi
 
 log "waiting for the agent to enroll"
 enrolled=""
