@@ -52,7 +52,10 @@ it is a field on the portal row, an env var with a default in `up.sh`, or a labe
    Check names carry their unit as a suffix (`_per_s`, `_ratio`, `_s`, `_bytes`,
    `_total`, `_up`) so the portal can format them.
 7. **A dashboard as a ConfigMap.** `dashboard.json` shipped as a ConfigMap
-   labelled `grafana_dashboard: "1"`. The shared Grafana's sidecar copies it in;
+   labelled `grafana_dashboard: "1"`, under a key unique to the LRU
+   (`files: [<name>-dashboard.json=dashboard.json]`): the sidecar names the file
+   on disk after the key and every LRU shares one directory, so a plain
+   `dashboard.json` has two LRUs overwriting each other once a minute. The shared Grafana's sidecar copies it in;
    no Grafana config changes. Every query is scoped with `lru="$lru"` where `$lru`
    is a hidden constant variable, so two LRUs of the same kind do not mix.
 

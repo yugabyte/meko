@@ -21,7 +21,7 @@ Namespace `amp-lru`, every object labelled `lru: small_temporal`.
 | `small-temporal-checker` (Deployment) | `checker/check.py`: 12 health rules a minute, exported with `lru="small_temporal"`. |
 | `small-temporal-endpoint` (ExternalName) | points at this LRU's `yb-ep-<id>` Service in `amp-dev`; set by `up.sh`. |
 | `small-temporal-dynamicconfig` (ConfigMap) | Temporal dynamic config the image no longer ships. Without the Nexus callback template and allowed-address rule every Nexus operation in `throughput_stress` fails. |
-| `small-temporal-dashboard` (ConfigMap) | `dashboard.json`, labelled `grafana_dashboard=1`; the shared Grafana shows it as "LRU: small_temporal". |
+| `small-temporal-dashboard` (ConfigMap) | key `small-temporal-dashboard.json` (the sidecar names the file on disk after the key, and all LRUs share one directory), labelled `grafana_dashboard=1`; the shared Grafana shows it as "LRU: small_temporal". |
 
 amp side: pool `lru-temporal`, cluster `temporal`, branch `main` (PG 18), one
 `read_write` endpoint at 2 vCPU / 16 GiB, on the shared `amp2-db` foundation.

@@ -14,7 +14,10 @@ configMapGenerator:
     files: [checker/check.py]
   # The shared Grafana's sidecar picks up any ConfigMap with this label.
   - name: small-temporal-dashboard
-    files: [dashboard.json]
+    # The sidecar names the file on disk after the ConfigMap key, and every LRU
+    # writes into one shared directory, so a plain `dashboard.json` means the
+    # LRUs silently overwrite each other's dashboard once a minute.
+    files: [small-temporal-dashboard.json=dashboard.json]
     options:
       labels:
         grafana_dashboard: "1"

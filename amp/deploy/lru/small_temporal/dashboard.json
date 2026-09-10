@@ -138,7 +138,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "lru_overall_status{lru=\"$lru\"}",
+     "expr": "max(lru_overall_status{lru=\"$lru\"})",
      "datasource": {
       "type": "prometheus",
       "uid": "lru-prom"
@@ -224,7 +224,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "lru_check_status{lru=\"$lru\"}",
+     "expr": "max by (check) (lru_check_status{lru=\"$lru\"})",
      "legendFormat": "{{check}}",
      "datasource": {
       "type": "prometheus",
@@ -257,7 +257,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "lru_check_value{lru=\"$lru\"}",
+     "expr": "max by (check) (lru_check_value{lru=\"$lru\"})",
      "format": "table",
      "instant": true,
      "datasource": {
@@ -716,7 +716,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "memory_heapinuse{lru=\"$lru\"}",
+     "expr": "max(memory_heapinuse{lru=\"$lru\"})",
      "legendFormat": "heap in use",
      "datasource": {
       "type": "prometheus",
@@ -725,7 +725,7 @@
     },
     {
      "refId": "B",
-     "expr": "process_resident_memory_bytes{job=\"omes\",lru=\"$lru\"}",
+     "expr": "max(process_resident_memory_bytes{job=\"omes\",lru=\"$lru\"})",
      "legendFormat": "omes worker RSS",
      "datasource": {
       "type": "prometheus",
@@ -1288,6 +1288,386 @@
       "type": "prometheus",
       "uid": "lru-prom"
      }
+    }
+   ]
+  },
+  {
+   "id": 26,
+   "type": "row",
+   "title": "Disk and storage (why did it stop?)",
+   "gridPos": {
+    "x": 0,
+    "y": 84,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 27,
+   "type": "timeseries",
+   "title": "Compute WAL directory vs max_wal_size",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 85,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pg_wal_size_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "pg_wal size"
+    },
+    {
+     "refId": "B",
+     "expr": "max(pg_settings_max_wal_size_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "max_wal_size"
+    }
+   ]
+  },
+  {
+   "id": 28,
+   "type": "timeseries",
+   "title": "Compute WAL directory as a fraction of max_wal_size",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 85,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pg_wal_size_bytes{endpoint=\"$endpoint\"}) / clamp_min(max(pg_settings_max_wal_size_bytes{endpoint=\"$endpoint\"}), 1)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "pg_wal / max_wal_size"
+    }
+   ]
+  },
+  {
+   "id": 29,
+   "type": "timeseries",
+   "title": "Safekeeper disk and WAL cache",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 93,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(safekeeper_disk_usage_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "safekeeper disk"
+    },
+    {
+     "refId": "B",
+     "expr": "max(safekeeper_wal_cache_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "wal cache"
+    }
+   ]
+  },
+  {
+   "id": 30,
+   "type": "timeseries",
+   "title": "Pageserver logical size, and where it lands in 7 days",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 93,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pageserver_current_logical_size{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "logical size"
+    },
+    {
+     "refId": "B",
+     "expr": "predict_linear(max(pageserver_current_logical_size{endpoint=\"$endpoint\"})[6h:], 7*86400)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "projected in 7d"
+    }
+   ]
+  },
+  {
+   "id": 31,
+   "type": "timeseries",
+   "title": "Storage stored vs logical (compression, cumulative)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 101,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(pageserver_yb_payload_stored_bytes_total{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "stored"
+    },
+    {
+     "refId": "B",
+     "expr": "sum(pageserver_yb_payload_logical_bytes_total{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "logical"
+    }
+   ]
+  },
+  {
+   "id": 32,
+   "type": "timeseries",
+   "title": "Unflushed pages and GC drain lag (storage falling behind)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 101,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pageserver_yb_pagewriter_unflushed_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "pagewriter unflushed"
+    },
+    {
+     "refId": "B",
+     "expr": "max(pageserver_yb_gc_drain_lag_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "gc drain lag"
+    }
+   ]
+  },
+  {
+   "id": 33,
+   "type": "timeseries",
+   "title": "Temp file bytes per s (queries spilling to disk)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 109,
+    "w": 24,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(pg_stat_database_temp_bytes{endpoint=\"$endpoint\",datname=~\"temporal_lru.*\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "temp bytes/s"
     }
    ]
   }
