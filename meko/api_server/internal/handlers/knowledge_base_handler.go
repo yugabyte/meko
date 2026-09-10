@@ -350,8 +350,7 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 				"incoming_bytes", req.Size,
 				"cap", limits.MaxKBStorageBytes,
 			)
-			resp := service.KBStorageLimitResponse(account.AccountType)
-			return apiError(c, http.StatusPaymentRequired, resp.Code, resp.Message)
+			return respondTierLimit(c, service.KBStorageLimitResponse(account.AccountType))
 		}
 		if remaining < signedCap {
 			signedCap = remaining
@@ -1638,8 +1637,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 					"incoming_bytes", len(data),
 					"cap", limits.MaxKBStorageBytes,
 				)
-				resp := service.KBStorageLimitResponse(acct.AccountType)
-				return apiError(c, http.StatusPaymentRequired, resp.Code, resp.Message)
+				return respondTierLimit(c, service.KBStorageLimitResponse(acct.AccountType))
 			}
 		}
 		key, err = h.s3Svc.UploadObject(ctx, dp.UserID, dp.ID, contentHashHex, filename, contentType, data)

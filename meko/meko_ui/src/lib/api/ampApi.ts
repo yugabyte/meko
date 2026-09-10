@@ -7,7 +7,7 @@
 // NOTE: response field names (cluster_id, storage_pool_id, …) mirror the AMP
 // controller payload that api_server passes through unchanged.
 
-import { request } from "@/lib/api/mekoApi";
+import { request, isMekoApiRequestError } from "@/lib/api/mekoApi";
 
 type RouteOptions = { signal?: AbortSignal };
 
@@ -37,6 +37,47 @@ export type AmpCluster = {
 
 function clusterRoute(datapackId: string, clusterId: string): string {
   return `${clustersRoute(datapackId)}/${encodeURIComponent(clusterId)}`;
+}
+
+/** The user's AMP vCPU budget across ALL their datapacks (per-tier cap).
+ *  `max_cores` is null for unlimited (pro/enterprise) tiers; `at_limit` greys
+ *  the Create-cluster button; `next_tier` fills the "Upgrade to <tier>" copy. */
+export type AmpCoreBudget = {
+  tier: string;
+  next_tier: string;
+  used_cores: number;
+  max_cores: number | null;
+  at_limit: boolean;
+};
+
+/** api_server error codes for the per-tier AMP vCPU cap (HTTP 402). The UI
+ *  detects these on a failed create/add-compute/resize to show an upgrade
+ *  deeplink instead of a raw error. Free/Standard/Pro are all capped (only
+ *  Enterprise is uncapped). */
+export const AMP_CORE_LIMIT_CODES = [
+  "FREE_TIER_CORE_LIMIT",
+  "STANDARD_TIER_CORE_LIMIT",
+  "PRO_TIER_CORE_LIMIT",
+] as const;
+
+/** If `e` is a per-tier AMP vCPU-cap rejection (402), returns its upgrade
+ *  message (which already names the tier to move to); otherwise null. Lets a
+ *  surface render an "Upgrade → settings" deeplink instead of a raw error. */
+export function ampCoreLimitMessage(e: unknown): string | null {
+  if (isMekoApiRequestError(e) && e.code && (AMP_CORE_LIMIT_CODES as readonly string[]).includes(e.code)) {
+    return e.message;
+  }
+  return null;
+}
+
+/** GET /datapacks/:id/amp/core-budget — user-scoped vCPU usage vs the tier cap. */
+export async function ampCoreBudget(datapackId: string, options: RouteOptions = {}) {
+  return request<AmpCoreBudget>(
+    `/datapacks/${encodeURIComponent(datapackId)}/amp/core-budget`,
+    "GET",
+    undefined,
+    options,
+  );
 }
 
 /** GET /datapacks/:id/amp/clusters — the datapack's AMP clusters ([] if none). */

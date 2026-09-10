@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+
+	"meko/api_server/internal/service"
 )
 
 // APIResponse is the standard envelope for all API responses. Error is omitted on
@@ -32,6 +34,15 @@ func apiError(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, APIResponse{
 		Error: &APIError{Code: code, Message: message},
 	})
+}
+
+// respondTierLimit sends the standard 402 for a tier-cap hit (datapack, KB
+// storage, AMP compute, …). The (code, message) come from the service's
+// per-tier dispatch (DatapackLimitResponse / KBStorageLimitResponse /
+// CoreLimitResponse), so every cap site returns the same shape instead of
+// re-spelling the StatusPaymentRequired call.
+func respondTierLimit(c echo.Context, resp service.TierLimitResponse) error {
+	return apiError(c, http.StatusPaymentRequired, resp.Code, resp.Message)
 }
 
 // CustomHTTPErrorHandler provides a uniform JSON error envelope for Echo

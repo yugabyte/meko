@@ -69,10 +69,12 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 
 	resp, err := h.svc.Create(req)
 	if err != nil {
-		// Free-tier cap → 402 + FREE_TIER_DATAPACK_LIMIT code.
+		// Tier datapack cap → 402. DatapackLimitResponse dispatches on the tier
+		// (Free → Standard, Standard → Pro) — the cap fires for both gated tiers
+		// (datapack_service.go), so a Standard user must not be told to upgrade
+		// to Standard.
 		if errors.Is(err, service.ErrFreeTierDatapackLimit) {
-			return apiError(c, http.StatusPaymentRequired,
-				"FREE_TIER_DATAPACK_LIMIT", service.FreeTierUpgradeMessageDatapack)
+			return respondTierLimit(c, service.DatapackLimitResponse(account.AccountType))
 		}
 		if isDatapackValidationErr(err) {
 			return apiError(c, http.StatusBadRequest,

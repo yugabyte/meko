@@ -68,6 +68,12 @@ var (
 	FreeTierMaxMemorySearch = envInt64("MEKO_FREE_TIER_MEMORY_SEARCH", 1_000)
 	FreeTierMaxKBSearch     = envInt64("MEKO_FREE_TIER_KB_SEARCH", 1_000)
 	FreeTierMaxMemoryAdd    = envInt64("MEKO_FREE_TIER_MEMORY_ADD", 10_000)
+
+	// Total AMP compute a free user may reserve across ALL their datapacks,
+	// in milli-cores (500 = 0.5 vCPU). Enforced by api_server at cluster
+	// create / add-compute / resize, summing every endpoint's CPU. Milli-cores
+	// (not fractional) so it reuses envInt64 and compares exactly.
+	FreeTierMaxMilliCores = envInt64("MEKO_FREE_TIER_MAX_MILLICORES", 500)
 )
 
 // Standard tier caps (AWS Marketplace $25/mo). Roughly 5-10× Free per
@@ -86,6 +92,10 @@ var (
 	StandardTierMaxMemorySearch = envInt64("MEKO_STANDARD_TIER_MEMORY_SEARCH", 5_000)
 	StandardTierMaxKBSearch     = envInt64("MEKO_STANDARD_TIER_KB_SEARCH", 5_000)
 	StandardTierMaxMemoryAdd    = envInt64("MEKO_STANDARD_TIER_MEMORY_ADD", 30_000)
+
+	// Total AMP compute a standard user may reserve across ALL their datapacks,
+	// in milli-cores (2000 = 2 vCPU).
+	StandardTierMaxMilliCores = envInt64("MEKO_STANDARD_TIER_MAX_MILLICORES", 2000)
 )
 
 // Pro / enterprise are uncapped on datapacks, storage, etc.; per-file upload
@@ -93,6 +103,12 @@ var (
 // larger files" stays honest while the RAG pipeline still gets bounded files.
 // Tunable via MEKO_PRO_TIER_KB_FILE_BYTES.
 var ProTierMaxKBFileBytes = envInt64("MEKO_PRO_TIER_KB_FILE_BYTES", 60*1024*1024)
+
+// Total AMP compute a Pro user may reserve across ALL their datapacks, in
+// milli-cores (5000 = 5 vCPU). Pro is the one place a top-ish tier still has a
+// compute cap (databases are expensive to keep running); only Enterprise is
+// uncapped. Tunable via MEKO_PRO_TIER_MAX_MILLICORES.
+var ProTierMaxMilliCores = envInt64("MEKO_PRO_TIER_MAX_MILLICORES", 5000)
 
 // The multipart upload route (UploadFile) reads each file fully into a Go
 // []byte before writing it to S3, so its memory use scales with concurrent
@@ -120,6 +136,10 @@ type TierLimits struct {
 	MaxKBFileBytes    int64
 	MaxConversations  int64
 	MaxTokenBurn      int64
+	// MaxMilliCores caps total AMP compute reserved across all the user's
+	// datapacks (milli-cores). api_server enforces it at cluster create /
+	// add-compute / resize.
+	MaxMilliCores int64
 	// MCP-side retrieval / write caps. api_server does not enforce
 	// these — kept on the struct so LimitsFor can hand a single
 	// per-tier bundle to the UI's usage tracker.
@@ -146,6 +166,7 @@ func LimitsFor(userType string) TierLimits {
 			MaxMemorySearch:   FreeTierMaxMemorySearch,
 			MaxKBSearch:       FreeTierMaxKBSearch,
 			MaxMemoryAdd:      FreeTierMaxMemoryAdd,
+			MaxMilliCores:     FreeTierMaxMilliCores,
 		}
 	case "standard":
 		return TierLimits{
@@ -157,12 +178,15 @@ func LimitsFor(userType string) TierLimits {
 			MaxMemorySearch:   StandardTierMaxMemorySearch,
 			MaxKBSearch:       StandardTierMaxKBSearch,
 			MaxMemoryAdd:      StandardTierMaxMemoryAdd,
+			MaxMilliCores:     StandardTierMaxMilliCores,
 		}
-	case "pro", "enterprise":
-		// Uncapped on everything except per-file upload size, which caps at
-		// 60 MB — see ProTierMaxKBFileBytes. The multipart route additionally
-		// applies MultipartMaxFileBytes as a buffering OOM guard, but that is
-		// route infrastructure, not a tier limit.
+	case "pro":
+		// Uncapped except per-file upload size (60 MB, ProTierMaxKBFileBytes)
+		// and AMP compute, which caps at ProTierMaxMilliCores (5 vCPU) across
+		// the user's datapacks — running databases are the one Pro resource
+		// still worth bounding. The multipart route additionally applies
+		// MultipartMaxFileBytes as a buffering OOM guard (route infra, not a
+		// tier limit).
 		return TierLimits{
 			MaxDatapacks:      TierUnlimited,
 			MaxKBStorageBytes: TierUnlimited,
@@ -172,6 +196,21 @@ func LimitsFor(userType string) TierLimits {
 			MaxMemorySearch:   TierUnlimited,
 			MaxKBSearch:       TierUnlimited,
 			MaxMemoryAdd:      TierUnlimited,
+			MaxMilliCores:     ProTierMaxMilliCores,
+		}
+	case "enterprise":
+		// Fully uncapped except per-file upload size (60 MB) — the only tier
+		// with no AMP compute cap.
+		return TierLimits{
+			MaxDatapacks:      TierUnlimited,
+			MaxKBStorageBytes: TierUnlimited,
+			MaxKBFileBytes:    ProTierMaxKBFileBytes,
+			MaxConversations:  TierUnlimited,
+			MaxTokenBurn:      TierUnlimited,
+			MaxMemorySearch:   TierUnlimited,
+			MaxKBSearch:       TierUnlimited,
+			MaxMemoryAdd:      TierUnlimited,
+			MaxMilliCores:     TierUnlimited,
 		}
 	default:
 		// Unknown / mis-typed tier: fail open on everything except per-file
@@ -186,6 +225,7 @@ func LimitsFor(userType string) TierLimits {
 			MaxMemorySearch:   TierUnlimited,
 			MaxKBSearch:       TierUnlimited,
 			MaxMemoryAdd:      TierUnlimited,
+			MaxMilliCores:     TierUnlimited,
 		}
 	}
 }
@@ -210,6 +250,13 @@ const (
 	FreeTierUpgradeMessageKBUpload     = "Upgrade to Standard to upload new documents."
 	StandardTierUpgradeMessageDatapack = "Upgrade to Pro to create a new datapack."
 	StandardTierUpgradeMessageKBUpload = "Upgrade to Pro to upload new documents."
+	// AMP compute (vCPU) caps across all the user's datapacks, steered one tier
+	// up via settings. Deliberately do NOT quote the numeric limit: it is read
+	// live from MEKO_{FREE,STANDARD}_TIER_MAX_MILLICORES, so a quoted "0.5 vCPU"
+	// would drift from the enforced cap the moment an env var is set.
+	FreeTierUpgradeMessageCores     = "You've reached the Free plan's compute limit across your datapacks. Upgrade to Standard to use more vCPU."
+	StandardTierUpgradeMessageCores = "You've reached the Standard plan's compute limit across your datapacks. Upgrade to Pro to use more vCPU."
+	ProTierUpgradeMessageCores      = "You've reached the Pro plan's compute limit across your datapacks. Upgrade to Enterprise to use more vCPU."
 	// Per-tier "your file is too big" copies. Free caps at 5 MB and steers to
 	// Standard; Standard caps at 50 MB and steers to Pro (which allows 60 MB).
 	// Pro / enterprise cap at 60 MB — top tier, so their copy just states the
@@ -256,6 +303,9 @@ const (
 	CodeStandardTierDatapackLimit  = "STANDARD_TIER_DATAPACK_LIMIT"
 	CodeFreeTierKBStorageLimit     = "FREE_TIER_KB_STORAGE_LIMIT"
 	CodeStandardTierKBStorageLimit = "STANDARD_TIER_KB_STORAGE_LIMIT"
+	CodeFreeTierCoreLimit          = "FREE_TIER_CORE_LIMIT"
+	CodeStandardTierCoreLimit      = "STANDARD_TIER_CORE_LIMIT"
+	CodeProTierCoreLimit           = "PRO_TIER_CORE_LIMIT"
 )
 
 // DatapackLimitResponse picks the (code, message) pair for a datapack
@@ -288,6 +338,39 @@ func KBStorageLimitResponse(userType string) TierLimitResponse {
 	return TierLimitResponse{
 		Code:    CodeFreeTierKBStorageLimit,
 		Message: FreeTierUpgradeMessageKBUpload,
+	}
+}
+
+// NextTier is the tier a user upgrades to for a bigger AMP compute cap:
+// free → standard → pro → enterprise. Enterprise (uncapped) has none. Kept here
+// next to CoreLimitResponse so the ONE upgrade chain lives in one place — the
+// core-budget endpoint reads next_tier from this, not a second copy in the
+// handler that could drift from the 402 copy.
+func NextTier(userType string) string {
+	switch normalizeTier(userType) {
+	case "free":
+		return "standard"
+	case "standard":
+		return "pro"
+	case "pro":
+		return "enterprise"
+	default:
+		return ""
+	}
+}
+
+// CoreLimitResponse is the AMP-compute counterpart: a user's requested cluster
+// compute would push their total vCPU across all datapacks over the tier cap.
+// Free → Standard, Standard → Pro, Pro → Enterprise. Unlike the datapack/KB
+// caps, Pro is gated here (it has a vCPU cap), so it gets its own dispatch arm.
+func CoreLimitResponse(userType string) TierLimitResponse {
+	switch normalizeTier(userType) {
+	case "standard":
+		return TierLimitResponse{Code: CodeStandardTierCoreLimit, Message: StandardTierUpgradeMessageCores}
+	case "pro":
+		return TierLimitResponse{Code: CodeProTierCoreLimit, Message: ProTierUpgradeMessageCores}
+	default:
+		return TierLimitResponse{Code: CodeFreeTierCoreLimit, Message: FreeTierUpgradeMessageCores}
 	}
 }
 

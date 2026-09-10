@@ -20,9 +20,17 @@ import { Label } from "@/components/ui/label";
 import { Stepper } from "@/components/ui/stepper";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
+import { ampCoreLimitMessage } from "@/lib/api/ampApi";
 import { toast } from "@/hooks/use-toast";
 import { useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
-import { DEFAULT_CPU, DEFAULT_MEMORY } from "../datapack-clusters/resize";
+import { useBudgetedCompute } from "@/features/datapacks/hooks/useBudgetedCompute";
+import { CoreLimitNotice } from "../datapack-clusters/CoreLimitNotice";
+import {
+  DEFAULT_CPU,
+  DEFAULT_MEMORY,
+  MEMORY_GIB_PER_VCPU,
+  overBudgetMessage,
+} from "../datapack-clusters/resize";
 import {
   AMP_EXTENSIONS,
   DB_ENGINES,
@@ -46,12 +54,15 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   // controller, so we track and send just the extras (keeps the picker's
   // locked-vs-toggle state unambiguous; the controller also de-dupes).
   const [extensions, setExtensions] = useState<string[]>([]);
-  const [cpu, setCpu] = useState(DEFAULT_CPU);
-  const [memory, setMemory] = useState(DEFAULT_MEMORY);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; upgrade: boolean } | null>(null);
 
   const createMut = useCreateCluster(datapackId);
   const pending = createMut.isPending;
+
+  // CPU/memory sizing + tier-budget guard, shared with the add-compute form so
+  // the prefill/validation edges live in one place (useBudgetedCompute).
+  const budget = useBudgetedCompute(datapackId, { enabled: open });
+  const { cpu, memory } = budget;
 
   useEffect(() => {
     if (open) {
@@ -59,10 +70,11 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
       setEngine("postgres");
       setName("");
       setExtensions([]);
-      setCpu(DEFAULT_CPU);
-      setMemory(DEFAULT_MEMORY);
+      budget.reset();
       setError(null);
     }
+    // Reset only when the dialog opens; budget.reset re-seeds the compute fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const fromEngine = useMemo(() => engineExtensions(engine), [engine]);
@@ -75,7 +87,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
 
   const trimmedName = name.trim();
   const stepValid =
-    step === 0 ? Boolean(trimmedName) : step === 2 ? Boolean(cpu.trim() && memory.trim()) : true;
+    step === 0 ? Boolean(trimmedName) : step === 2 ? budget.valid : true;
 
   const pickEngine = (id: string) => {
     setEngine(id);
@@ -104,7 +116,12 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
       toast({ title: `Cluster "${trimmedName}" created` });
       onOpenChange(false);
     } catch (e) {
-      setError(getApiErrorMessage(e, "Could not create the cluster."));
+      const upgradeMsg = ampCoreLimitMessage(e);
+      setError(
+        upgradeMsg
+          ? { message: upgradeMsg, upgrade: true }
+          : { message: getApiErrorMessage(e, "Could not create the cluster."), upgrade: false },
+      );
     }
   };
 
@@ -116,7 +133,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg max-h-[85vh] overflow-y-auto bg-card border-border text-foreground">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-card border-border text-foreground sm:p-8">
         <DialogHeader>
           <DialogTitle className="text-xl text-foreground">Create cluster</DialogTitle>
           <DialogDescription className="text-muted-foreground">
@@ -253,7 +270,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
                   <Input
                     id="wiz-cpu"
                     value={cpu}
-                    onChange={(e) => setCpu(e.target.value)}
+                    onChange={(e) => budget.setCpu(e.target.value)}
                     placeholder={DEFAULT_CPU}
                   />
                 </div>
@@ -262,15 +279,21 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
                   <Input
                     id="wiz-mem"
                     value={memory}
-                    onChange={(e) => setMemory(e.target.value)}
+                    onChange={(e) => budget.setMemory(e.target.value)}
                     placeholder={DEFAULT_MEMORY}
                   />
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
                 Sizes the cluster's read-write endpoint on the <code>main</code> branch. Kubernetes
-                quantities (e.g. 2 / 4Gi).
+                quantities (e.g. 2 / 4Gi); memory tracks AMP's {MEMORY_GIB_PER_VCPU} GiB-per-vCPU
+                minimum.
               </p>
+              {budget.overBudget ? (
+                <p className="text-xs text-red-700 dark:text-red-300" role="alert">
+                  {overBudgetMessage(budget.remaining)}
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -289,7 +312,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
             role="alert"
             className="mt-3 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
           >
-            {error}
+            {error.upgrade ? <CoreLimitNotice message={error.message} /> : error.message}
           </div>
         ) : null}
 
@@ -302,7 +325,14 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
           >
             {step === 0 ? "Cancel" : "Back"}
           </Button>
-          <Button type="button" onClick={next} disabled={!stepValid || pending}>
+          <Button
+            type="button"
+            onClick={next}
+            // On the final step, hold the create until the budget query resolves
+            // so an at-cap user can't slip through the loading window (remaining
+            // reads null while loading → the guard is briefly off).
+            disabled={!stepValid || pending || (step === STEPS.length - 1 && budget.isLoading)}
+          >
             {step < STEPS.length - 1 ? "Next" : pending ? "Creating…" : "Create cluster"}
           </Button>
         </DialogFooter>

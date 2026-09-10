@@ -10,6 +10,12 @@ import { ampCreateCluster } from "@/lib/api/ampApi";
 // main branch, and finishing fires ONE composite create with engine + extras.
 vi.mock("@/lib/api/ampApi", () => ({
   ampCreateCluster: vi.fn().mockResolvedValue({ id: "c1", name: "orders" }),
+  // Unlimited (Enterprise) budget → no remaining-vCPU cap, so the wizard keeps
+  // the default 0.5 vCPU / 4Gi sizing.
+  ampCoreBudget: vi
+    .fn()
+    .mockResolvedValue({ tier: "enterprise", next_tier: "", used_cores: 0, max_cores: null, at_limit: false }),
+  ampCoreLimitMessage: vi.fn().mockReturnValue(null),
 }));
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
 
@@ -38,12 +44,15 @@ describe("CreateClusterWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Cluster → Extensions
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Extensions → Compute
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Review
-    fireEvent.click(screen.getByRole("button", { name: "Create cluster" }));
+    // Create is held until the budget query resolves (loading-window guard).
+    const createBtn = screen.getByRole("button", { name: "Create cluster" }) as HTMLButtonElement;
+    await waitFor(() => expect(createBtn.disabled).toBe(false));
+    fireEvent.click(createBtn);
 
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(mockCreate).toHaveBeenCalledWith("dp", {
       name: "orders",
-      cpu: "2",
+      cpu: "0.5",
       memory: "4Gi",
       engine: "postgres",
       extensions: [],
@@ -60,12 +69,14 @@ describe("CreateClusterWizard", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /hexabridge/i }));
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Extensions → Compute
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Review
-    fireEvent.click(screen.getByRole("button", { name: "Create cluster" }));
+    const createBtn = screen.getByRole("button", { name: "Create cluster" }) as HTMLButtonElement;
+    await waitFor(() => expect(createBtn.disabled).toBe(false));
+    fireEvent.click(createBtn);
 
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(mockCreate).toHaveBeenCalledWith("dp", {
       name: "vec",
-      cpu: "2",
+      cpu: "0.5",
       memory: "4Gi",
       engine: "aidb",
       extensions: ["hexabridge"],

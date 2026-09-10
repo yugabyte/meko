@@ -847,6 +847,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		dpOwner := auth.RequireDatapackOwnership(reg.dpRepo)
 		read := auth.RequireScope(auth.ScopeRead)
 		write := auth.RequireScope(auth.ScopeWrite)
+		dpDirect.GET("/datapacks/:datapack_id/amp/core-budget", ampH.CoreBudget, read, dpAccess)
 		dpDirect.POST("/datapacks/:datapack_id/amp/clusters", ampH.CreateCluster, write, dpOwner)
 		dpDirect.GET("/datapacks/:datapack_id/amp/clusters", ampH.ListClusters, read, dpAccess)
 		dpDirect.GET("/datapacks/:datapack_id/amp/clusters/:cluster_id", ampH.GetCluster, read, dpAccess)

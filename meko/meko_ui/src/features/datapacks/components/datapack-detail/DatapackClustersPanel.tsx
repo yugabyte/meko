@@ -7,16 +7,25 @@ import { useMemo, useState } from "react";
 import { Database, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
-import { useClusters } from "@/features/datapacks/hooks/useAmpClusters";
+import { useAmpCoreBudget, useClusters } from "@/features/datapacks/hooks/useAmpClusters";
 import { CreateClusterWizard } from "./dialogs/CreateClusterWizard";
 import { ClusterRow } from "./datapack-clusters/ClusterRow";
+
+// "standard" -> "Standard"; empty next_tier -> a safe generic.
+function tierLabel(tier: string | undefined): string {
+  if (!tier) return "a higher plan";
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
 
 type Props = { datapackId: string; className?: string };
 
 export function DatapackClustersPanel({ datapackId, className }: Props) {
   const clustersQuery = useClusters(datapackId);
+  const budgetQuery = useAmpCoreBudget(datapackId);
+  const atLimit = budgetQuery.data?.at_limit ?? false;
   const clusters = clustersQuery.data ?? [];
   const loading = clustersQuery.isLoading;
   const error = clustersQuery.error ? getApiErrorMessage(clustersQuery.error, "Failed to load clusters.") : null;
@@ -43,16 +52,42 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
         {!loading && !error ? (
           <span className="text-xs text-muted-foreground">{clusters.length}</span>
         ) : null}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-auto gap-2"
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus className="h-4 w-4" aria-hidden />
-          Create cluster
-        </Button>
+        {atLimit ? (
+          // At the tier vCPU cap: grey the button (Radix tooltips don't fire on
+          // a disabled element, so the span is the hover target) and point to
+          // Settings to upgrade. The create path still enforces server-side.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="ml-auto inline-flex">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled
+                  className="cursor-not-allowed gap-2"
+                >
+                  <Plus className="h-4 w-4" aria-hidden />
+                  Create cluster
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[260px] text-center">
+              You've reached your plan's vCPU limit across your datapacks. Upgrade to{" "}
+              {tierLabel(budgetQuery.data?.next_tier)} in Settings to add more compute.
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto gap-2"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            Create cluster
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-col gap-3 px-4 py-4">

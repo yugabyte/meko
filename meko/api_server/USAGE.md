@@ -125,6 +125,19 @@ Applied only to accounts with `user_type = "free"`. Mirrored in `meko_ui/src/lib
 | `MEKO_FREE_TIER_CONVERSATIONS` | `1000` | Max conversations per free account |
 | `MEKO_FREE_TIER_TOKEN_BURN` | `10000000` | Max token burn per free account |
 
+### AMP compute (vCPU) caps
+
+Total AMP cluster compute a user may reserve across **all** their datapacks, per
+tier, in milli-cores (`500` = 0.5 vCPU). Enforced by api_server at cluster
+create / add-compute / resize — over the cap returns HTTP 402 with a
+`{FREE,STANDARD,PRO}_TIER_CORE_LIMIT` code. Only Enterprise is uncapped.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEKO_FREE_TIER_MAX_MILLICORES` | `500` (0.5 vCPU) | Max total AMP vCPU for a free account |
+| `MEKO_STANDARD_TIER_MAX_MILLICORES` | `2000` (2 vCPU) | Max total AMP vCPU for a standard account |
+| `MEKO_PRO_TIER_MAX_MILLICORES` | `5000` (5 vCPU) | Max total AMP vCPU for a pro account |
+
 ### Artifacts
 
 | Flag | Variable | Default | Description |

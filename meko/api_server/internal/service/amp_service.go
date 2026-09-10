@@ -4,12 +4,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"meko/api_server/internal/repository"
 )
+
+// ampDefaultMilliCores is AMP's default writer size (2 cores) — what an endpoint
+// with no explicit CPU reservation actually consumes, so it must count toward a
+// user's total when summing compute.
+const ampDefaultMilliCores int64 = 2000
+
+// ParseMilliCores parses a Kubernetes CPU quantity ("2", "0.5", "500m") into
+// milli-cores. Empty or unparseable falls back to AMP's 2-core default, so we
+// never under-count compute against a tier limit.
+func ParseMilliCores(cpu string) int64 {
+	cpu = strings.TrimSpace(cpu)
+	if cpu == "" {
+		return ampDefaultMilliCores
+	}
+	q, err := resource.ParseQuantity(cpu)
+	if err != nil {
+		return ampDefaultMilliCores
+	}
+	return q.MilliValue()
+}
 
 // ErrAMPNotRegistered distinguishes "no AMP controller registered" from
 // controller failures, so handlers can map it to a dedicated status/code
@@ -108,7 +131,10 @@ func (s *AMPService) CreateCluster(ctx context.Context, in CreateClusterInput) (
 	}
 	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, ampPoolName(in.DatapackName, in.DatapackID))
 	if err != nil {
-		_ = s.repo.Upsert(ctx, in.DatapackID, in.DatapackID, in.UserID, "failed")
+		// Never downgrade an already-ready pool: EnsurePool re-runs on every
+		// create, so a transient blip here must not drop a live datapack's
+		// compute out of the core-limit sum. MarkPoolFailed guards the 'ready' row.
+		_ = s.repo.MarkPoolFailed(ctx, in.DatapackID, in.DatapackID, in.UserID)
 		return AMPCluster{}, fmt.Errorf("ensure amp pool: %w", err)
 	}
 	if err := s.repo.Upsert(ctx, in.DatapackID, pool.ID, in.UserID, "ready"); err != nil {
@@ -140,7 +166,10 @@ func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClust
 	}
 	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, ampPoolName(in.DatapackName, in.DatapackID))
 	if err != nil {
-		_ = s.repo.Upsert(ctx, in.DatapackID, in.DatapackID, in.UserID, "failed")
+		// Never downgrade an already-ready pool: EnsurePool re-runs on every
+		// create, so a transient blip here must not drop a live datapack's
+		// compute out of the core-limit sum. MarkPoolFailed guards the 'ready' row.
+		_ = s.repo.MarkPoolFailed(ctx, in.DatapackID, in.DatapackID, in.UserID)
 		return AMPCluster{}, fmt.Errorf("ensure amp pool: %w", err)
 	}
 	if err := s.repo.Upsert(ctx, in.DatapackID, pool.ID, in.UserID, "ready"); err != nil {
@@ -171,6 +200,141 @@ func (s *AMPService) ListClusters(ctx context.Context, datapackID string) ([]AMP
 		return []AMPCluster{}, nil
 	}
 	return c.ListClusters(ctx, mapping.SharedPoolID)
+}
+
+// SumMilliCoresByOwner totals the AMP compute (milli-cores) a user has reserved
+// across ALL their datapacks — every endpoint on every branch of every cluster
+// in every ready pool they own. Backs the per-tier core limit and the
+// core-budget probe. Returns 0 (no error) when the user owns no pools.
+//
+// This fans out to the controller (pools × clusters × branches list calls), so
+// it runs only on the create / add-compute / resize preflight and the budget
+// endpoint — never per request.
+//
+// A pool the controller cannot list is SKIPPED (counted as 0), not fatal:
+// amp_datapack_pool.status='ready' reflects Meko's last successful EnsurePool,
+// NOT current controller reachability, so one stale/unreachable pool must never
+// block create/resize for every OTHER healthy datapack the same user owns.
+// Worst case is a transient under-count of a soft cap — availability over a hard
+// account-wide block. Only a failure to even enumerate the user's pools (the DB
+// read, or resolving the controller registration) is returned as an error.
+func (s *AMPService) SumMilliCoresByOwner(ctx context.Context, userID string) (int64, error) {
+	used, _, err := s.sumCores(ctx, userID, "")
+	return used, err
+}
+
+// sumCores totals the user's reserved compute (milli-cores) and, when
+// creditComputeID is non-empty, also returns THAT endpoint's current CPU as
+// `credit` (0 if it wasn't found — e.g. its pool was skipped). Capturing the
+// credit in the same fan-out is what lets the resize check credit the endpoint's
+// current size without a second controller round-trip that could fail open.
+//
+// A pool the controller cannot list is SKIPPED (see SumMilliCoresByOwner). The
+// credit accounting stays correct either way: if the resized endpoint's pool is
+// skipped, both `used` (its old cores) and `credit` omit it, so used − credit +
+// new still equals (other endpoints) + new — the right post-resize total.
+func (s *AMPService) sumCores(ctx context.Context, userID, creditComputeID string) (used, credit int64, err error) {
+	pools, err := s.repo.ListByOwner(ctx, userID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(pools) == 0 {
+		return 0, 0, nil
+	}
+	c, err := s.client(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, p := range pools {
+		poolUsed, poolCredit, perr := sumPoolMilliCores(ctx, c, p.SharedPoolID, creditComputeID)
+		if perr != nil {
+			slog.Warn("sum cores: skipping pool the controller could not list",
+				"pool", p.SharedPoolID, "user", userID, "error", perr)
+			continue
+		}
+		used += poolUsed
+		credit += poolCredit // at most one endpoint matches, in at most one pool
+	}
+	return used, credit, nil
+}
+
+// sumPoolMilliCores totals reserved CPU across one pool's clusters → branches →
+// endpoints, and returns creditComputeID's current CPU as `credit` if that
+// endpoint is in this pool (0 otherwise). A controller error aborts THIS pool
+// only, so its caller can skip it without losing the rest of the user's pools.
+func sumPoolMilliCores(ctx context.Context, c *AMPClient, poolID, creditComputeID string) (used, credit int64, err error) {
+	clusters, err := c.ListClusters(ctx, poolID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list clusters: %w", err)
+	}
+	for _, cl := range clusters {
+		branches, err := c.ListBranches(ctx, poolID, cl.ID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("list branches (cluster %s): %w", cl.ID, err)
+		}
+		for _, b := range branches {
+			endpoints, err := c.ListEndpoints(ctx, poolID, cl.ID, b.BranchID)
+			if err != nil {
+				return 0, 0, fmt.Errorf("list endpoints (branch %s): %w", b.BranchID, err)
+			}
+			for _, e := range endpoints {
+				cpu := ""
+				if e.Resources != nil {
+					cpu = e.Resources.CPU
+				}
+				milli := ParseMilliCores(cpu)
+				used += milli
+				if creditComputeID != "" && e.ID == creditComputeID {
+					credit = milli
+				}
+			}
+		}
+	}
+	return used, credit, nil
+}
+
+// CoreBudgetExceeded reports whether reserving addMilli more compute (a fresh
+// create / add-compute — no credit) would push the user's total vCPU across ALL
+// their datapacks over limitMilli. Unlimited tiers (limitMilli == TierUnlimited)
+// short-circuit before the controller fan-out. The resize path credits the
+// endpoint's current size instead — see ResizeCoreBudgetExceeded.
+//
+// KNOWN LIMITATION (check-then-act): the read (SumMilliCoresByOwner) and the
+// caller's create/resize are not atomic, so two of the same user's requests
+// racing (two tabs, a retry) can each observe the same `used` and both pass,
+// jointly overshooting the cap. Closing this fully would need an atomic
+// reservation counter, but that counter would be a shadow of AMP's own compute
+// state (AMP, not Meko, is the source of truth) and could drift. This is a soft
+// business cap, not a security boundary, so the small concurrent-overshoot
+// window is accepted rather than adding a drift-prone counter. Tracked as a
+// follow-up.
+func (s *AMPService) CoreBudgetExceeded(ctx context.Context, userID string, limitMilli, addMilli int64) (bool, error) {
+	if limitMilli == TierUnlimited {
+		return false, nil
+	}
+	used, err := s.SumMilliCoresByOwner(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return used+addMilli > limitMilli, nil
+}
+
+// ResizeCoreBudgetExceeded is CoreBudgetExceeded for a resize: it credits the
+// endpoint's CURRENT CPU (SumMilliCoresByOwner already counts it) and checks
+// whether swapping in newMilli would exceed limitMilli. The credit is read from
+// the SAME fan-out as the sum (sumCores captures computeID's cores), so there is
+// no separate GetCompute that could fail — and therefore no branch that quietly
+// drops enforcement for a growth. Any hard sum failure (DB / registration) is
+// returned so the caller refuses the resize (fails closed), exactly like create.
+func (s *AMPService) ResizeCoreBudgetExceeded(ctx context.Context, userID, computeID string, limitMilli, newMilli int64) (bool, error) {
+	if limitMilli == TierUnlimited {
+		return false, nil
+	}
+	used, credit, err := s.sumCores(ctx, userID, computeID)
+	if err != nil {
+		return false, err
+	}
+	return used-credit+newMilli > limitMilli, nil
 }
 
 // GetCluster reads a single cluster (database) in a datapack's AMP pool.

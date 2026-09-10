@@ -6,6 +6,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ampCoreBudget,
   ampCreateBranch,
   ampCreateCluster,
   ampCreateCompute,
@@ -18,6 +19,7 @@ import {
   type AmpBranch,
   type AmpCluster,
   type AmpCompute,
+  type AmpCoreBudget,
   type AmpResources,
 } from "@/lib/api/ampApi";
 
@@ -29,6 +31,11 @@ export const ampKeys = {
     ["amp", "branches", datapackId, clusterId] as const,
   compute: (datapackId: string, clusterId: string, branchId: string) =>
     ["amp", "compute", datapackId, clusterId, branchId] as const,
+  // The core budget is per-USER (summed across every datapack they own), not
+  // per-datapack — so it is keyed WITHOUT a datapack id. Any datapack's route
+  // serves the same value, and one cache entry is shared across datapacks, so a
+  // create in datapack A also refreshes datapack B's greyed-button state.
+  coreBudget: () => ["amp", "core-budget"] as const,
 };
 
 // A freshly created cluster/branch/compute should appear on the next nav; the
@@ -39,6 +46,21 @@ export function useClusters(datapackId: string, options?: { enabled?: boolean })
   return useQuery<AmpCluster[]>({
     queryKey: ampKeys.clusters(datapackId),
     queryFn: ({ signal }) => ampListClusters(datapackId, { signal }),
+    staleTime: STALE,
+    enabled: options?.enabled ?? true,
+  });
+}
+
+// The user's AMP vCPU budget vs their tier cap. `at_limit` greys the create
+// button; `used_cores`/`max_cores` give the compute forms their remaining-vCPU
+// default sizing (see defaultCpuForBudget). Keyed per-user (datapack id used
+// only to pick a route), so a mutation in any datapack invalidates the one
+// shared entry. Invalidated on cluster/compute mutations to reflect freshly
+// reserved cores.
+export function useAmpCoreBudget(datapackId: string, options?: { enabled?: boolean }) {
+  return useQuery<AmpCoreBudget>({
+    queryKey: ampKeys.coreBudget(),
+    queryFn: ({ signal }) => ampCoreBudget(datapackId, { signal }),
     staleTime: STALE,
     enabled: options?.enabled ?? true,
   });
@@ -57,7 +79,10 @@ export function useCreateCluster(datapackId: string) {
       engine?: string;
       extensions?: string[];
     }) => ampCreateCluster(datapackId, payload),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) });
+      qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
   });
 }
 
@@ -65,7 +90,10 @@ export function useDeleteCluster(datapackId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { clusterId: string }) => ampDeleteCluster(datapackId, vars.clusterId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) });
+      qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
   });
 }
 
@@ -106,7 +134,10 @@ export function useCreateCompute(datapackId: string, clusterId: string, branchId
   return useMutation({
     mutationFn: (vars: { role: "read_write" | "read_only"; resources?: AmpResources }) =>
       ampCreateCompute(datapackId, clusterId, branchId, vars.role, vars.resources ?? {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) });
+      qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
   });
 }
 
@@ -115,7 +146,10 @@ export function useResizeCompute(datapackId: string, clusterId: string, branchId
   return useMutation({
     mutationFn: (vars: { computeId: string; resources: AmpResources }) =>
       ampResizeCompute(datapackId, clusterId, branchId, vars.computeId, vars.resources),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) });
+      qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
   });
 }
 
@@ -124,6 +158,9 @@ export function useDeleteCompute(datapackId: string, clusterId: string, branchId
   return useMutation({
     mutationFn: (vars: { computeId: string }) =>
       ampDeleteCompute(datapackId, clusterId, branchId, vars.computeId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) });
+      qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
   });
 }

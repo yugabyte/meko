@@ -18,9 +18,11 @@ import {
 import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
+import { ampCoreLimitMessage } from "@/lib/api/ampApi";
+import { CoreLimitNotice } from "./CoreLimitNotice";
 import type { AmpCompute } from "@/lib/api/ampApi";
 import { useDeleteCompute, useResizeCompute } from "@/features/datapacks/hooks/useAmpClusters";
-import { DEFAULT_CPU, DEFAULT_MEMORY, resizeToast } from "./resize";
+import { resizeToast } from "./resize";
 
 export function ComputeInstance({
   ep,
@@ -70,7 +72,16 @@ export function ComputeInstance({
       toast(resizeToast(res.outcome, size));
       setShowResize(false);
     } catch (e) {
-      toast({ title: "Resize failed", description: getApiErrorMessage(e, "Failed to resize compute."), variant: "destructive" });
+      const upgradeMsg = ampCoreLimitMessage(e);
+      toast({
+        title: "Resize failed",
+        description: upgradeMsg ? (
+          <CoreLimitNotice message={upgradeMsg} />
+        ) : (
+          getApiErrorMessage(e, "Failed to resize compute.")
+        ),
+        variant: "destructive",
+      });
     }
   };
 
@@ -157,16 +168,16 @@ export function ComputeInstance({
             onChange={(e) => setCpu(e.target.value)}
             className="h-8 w-16 rounded-md border border-border bg-background px-2 text-xs text-foreground"
             aria-label="Resize CPU"
-            placeholder={DEFAULT_CPU}
-            title="CPU as a Kubernetes quantity (e.g. 4, 1500m)."
+            placeholder="unchanged"
+            title="CPU as a Kubernetes quantity (e.g. 4, 1500m). Blank = leave unchanged."
           />
           <input
             value={memory}
             onChange={(e) => setMemory(e.target.value)}
             className="h-8 w-20 rounded-md border border-border bg-background px-2 text-xs text-foreground"
             aria-label="Resize memory"
-            placeholder={DEFAULT_MEMORY}
-            title="Memory as a Kubernetes quantity (e.g. 8Gi, 512Mi)."
+            placeholder="unchanged"
+            title="Memory as a Kubernetes quantity (e.g. 8Gi, 512Mi). Blank = leave unchanged."
           />
           <Button
             type="button"
