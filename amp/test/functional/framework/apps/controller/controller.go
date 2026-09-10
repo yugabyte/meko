@@ -169,13 +169,14 @@ type UpdateStoragePoolRequest struct {
 
 // Branch is a PG timeline in a cluster.
 type Branch struct {
-	ClusterID      string  `json:"cluster_id"`
-	BranchID       string  `json:"branch_id"`
-	Name           string  `json:"name"`
-	PgVersion      int     `json:"pg_version"`
-	IsDefault      bool    `json:"is_default"`
-	ParentBranchID *string `json:"parent_branch_id"`
-	ForkLSN        *string `json:"fork_lsn"`
+	ClusterID          string         `json:"cluster_id"`
+	BranchID           string         `json:"branch_id"`
+	Name               string         `json:"name"`
+	PgVersion          int            `json:"pg_version"`
+	IsDefault          bool           `json:"is_default"`
+	ParentBranchID     *string        `json:"parent_branch_id"`
+	ForkLSN            *string        `json:"fork_lsn"`
+	WriteTokenSettings map[string]any `json:"write_token_settings"`
 }
 
 // CreateBranchRequest forks a branch into a new one.
@@ -211,6 +212,8 @@ type CreateClusterRequest struct {
 	// WithWriter also creates and deploys the default branch's read_write
 	// endpoint in the same task.
 	WithWriter bool `json:"with_writer,omitempty"`
+	// Resources sizes the writer WithWriter deploys.
+	Resources *EndpointResources `json:"resources,omitempty"`
 	// Connectivity is the writer's client reachability. Only meaningful with
 	// WithWriter: the controller rejects it with 400 otherwise.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
@@ -476,6 +479,9 @@ type TaskList struct {
 	Tasks []Task `json:"tasks"`
 	Total int    `json:"total"`
 	Count int    `json:"count"`
+	// OrderedBy is the ordering the controller applied: updated_at_asc when an
+	// updated_since watermark was honoured, created_at_desc or empty otherwise.
+	OrderedBy string `json:"ordered_by"`
 }
 
 // APIError is a non-2xx response decoded from the Error envelope.
@@ -826,6 +832,9 @@ type ListTasksOptions struct {
 	Status    string
 	Kind      string
 	ClusterID string
+	// UpdatedSince turns the list into the change feed: tasks touched at or after
+	// it, ordered updated_at ascending. Zero leaves the default created_at order.
+	UpdatedSince time.Time
 }
 
 // ListTasks returns one page of tasks, most recent first.
@@ -845,6 +854,9 @@ func (c *Client) ListTasks(ctx context.Context, opts ListTasksOptions) (TaskList
 	}
 	if opts.ClusterID != "" {
 		q.Set("cluster_id", opts.ClusterID)
+	}
+	if !opts.UpdatedSince.IsZero() {
+		q.Set("updated_since", opts.UpdatedSince.UTC().Format(time.RFC3339Nano))
 	}
 	u := c.apiURL + "/tasks"
 	if enc := q.Encode(); enc != "" {

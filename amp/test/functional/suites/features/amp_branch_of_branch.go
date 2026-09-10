@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -18,7 +19,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Fork a child then a grandchild off it; assert copy-on-write lineage down two levels and isolation between the levels.",
+		Description: "Fork a child then a grandchild off it; assert copy-on-write lineage down two levels and isolation between the levels; then assert deleting the child while its fork exists is refused 409 and the grandchild keeps serving.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpBranchOfBranch,
 	})
@@ -142,6 +143,19 @@ func branchOfBranchSteps(ctx context.Context, cl ampCtl, proj ampCluster, childN
 		return fmt.Errorf("check descendant writes on base: %w", err)
 	} else if n != 0 {
 		return fmt.Errorf("branch isolation broken: writes from the child or grandchild are visible on the base branch (count=%d, want 0)", n)
+	}
+
+	// The middle of the chain cannot go while its fork exists: the parent FK is
+	// RESTRICT and the API turns that into a synchronous 409, not a failed task.
+	_, _, err = cl.DeleteBranch(ctx, proj.poolID, proj.projID, childBranch.BranchID)
+	if err == nil {
+		return fmt.Errorf("deleting branch %s while its fork %s exists was accepted (202), want 409: a task that then fails or, worse, drops the grandchild's ancestor", childName, grandName)
+	}
+	if status := apiErrorStatus(err); status != http.StatusConflict {
+		return fmt.Errorf("deleting branch %s while its fork exists returned HTTP %d (%v), want 409", childName, status, err)
+	}
+	if n, err := grand.QueryInt(ctx, "SELECT count(*) FROM "+lineageTable); err != nil || n != 3 {
+		return fmt.Errorf("the grandchild serves %d rows after the refused delete of its parent, want 3 (err %v)", n, err)
 	}
 	return nil
 }

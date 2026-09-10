@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
@@ -42,7 +43,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Opt an endpoint's branch into the pgvector extension, run a vector distance query over it, and assert a fork of the branch inherits the extension.",
+		Description: "Opt an endpoint's branch into the pgvector extension, run a vector distance query over it, and assert a fork of the branch inherits the extension; the extension survives a compute restart; and a second opt-in fired while one is redeploying the branch is refused 409.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		// Two endpoint deploys (base + fork); a crash-looping fork rides the helm
 		// wait, and the test should FAIL on that create, not vanish at a deadline.
@@ -56,6 +57,7 @@ func runAmpExtensionPgvector(t *core.T) error {
 		return []phase{
 			{"extension_pgvector", a.extensionPgvector},
 			{"extension_survives_restart", a.extensionSurvivesRestart},
+			{"extension_add_concurrent_409", a.extensionAddConcurrent409},
 		}
 	})
 }
@@ -236,4 +238,41 @@ func (a *ampFeatureRun) extensionSurvivesRestart(ctx context.Context) error {
 		return fmt.Errorf("pg_extension has %d rows for %q after the compute restart, want 1", n, pgvectorSQLName)
 	}
 	return assertVectorOrder(ctx, c, "the base branch after a compute restart")
+}
+
+// extensionAddConcurrent409 fires two opt-ins for the same branch together. One
+// redeploys the compute; the other must be refused 409 by
+// tasks_one_active_ext_add_per_branch, not queued to redeploy again behind it.
+func (a *ampFeatureRun) extensionAddConcurrent409(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	proj := a.proj
+	req := controller.AddBranchExtensionsRequest{Extensions: []string{"age"}}
+	first, firstLoc, err := cl.AddBranchExtensions(ctx, proj.poolID, proj.projID, proj.branchID, req)
+	if err != nil {
+		if extensionsUnavailable(err) {
+			a.f.t.Skip("externalized extensions are not available on this control plane: " + err.Error())
+			return nil
+		}
+		return fmt.Errorf("plan the first extension add: %w", err)
+	}
+	firstID := controller.TaskRef(first, firstLoc)
+	second, secondLoc, err := cl.AddBranchExtensions(ctx, proj.poolID, proj.projID, proj.branchID, req)
+	if err == nil {
+		_, _ = cl.WaitTask(ctx, controller.TaskRef(second, secondLoc))
+		done, gerr := cl.GetTask(ctx, firstID)
+		if gerr == nil && done.Status != controller.TaskPending && done.Status != controller.TaskRunning {
+			return fmt.Errorf("the first add %s was already %s when the second was planned, so the one-add-at-a-time refusal went untested", firstID, done.Status)
+		}
+		return fmt.Errorf("a second addBranchExtensions on branch %s while %s was in flight was accepted (202), want 409: two adds would redeploy the compute twice", proj.branchID, firstID)
+	}
+	if status := apiErrorStatus(err); status != http.StatusConflict {
+		return fmt.Errorf("a second addBranchExtensions while one is in flight returned HTTP %d (%v), want 409", status, err)
+	}
+	if _, err := cl.WaitTask(ctx, firstID); err != nil {
+		return fmt.Errorf("the first extension add %s: %w", firstID, err)
+	}
+	return nil
 }

@@ -1321,6 +1321,32 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetDuration("functional.failed_create_reclaim.sweep_timeout", -1); got != 45*time.Minute {
 		t.Errorf("functional.failed_create_reclaim.sweep_timeout = %s, want 45m", got)
 	}
+	if got := cfg.GetString("functional.mcp.service", ""); got != "amp-controller-mcp" {
+		t.Errorf("functional.mcp.service = %q, want amp-controller-mcp", got)
+	}
+	if got := cfg.GetInt("functional.mcp.port", -1); got != 8000 {
+		t.Errorf("functional.mcp.port = %d, want 8000", got)
+	}
+	if got := cfg.GetString("functional.voyager.source_image", ""); got != "postgres:16-alpine" {
+		t.Errorf("functional.voyager.source_image = %q, want postgres:16-alpine", got)
+	}
+	if got := cfg.GetDuration("functional.voyager.phase_timeout", -1); got != 25*time.Minute {
+		t.Errorf("functional.voyager.phase_timeout = %s, want 25m", got)
+	}
+
+	// --- stress/backing_unreachable_api ---
+	if got := cfg.GetDuration("stress.backing_unreachable_api.fault_duration", -1); got != 90*time.Second {
+		t.Errorf("stress.backing_unreachable_api.fault_duration = %s, want 90s", got)
+	}
+	if got := cfg.GetDuration("stress.backing_unreachable_api.settle_timeout", -1); got != 10*time.Minute {
+		t.Errorf("stress.backing_unreachable_api.settle_timeout = %s, want 10m", got)
+	}
+	if got := cfg.GetDuration("stress.backing_unreachable_api.call_interval", -1); got != 2*time.Second {
+		t.Errorf("stress.backing_unreachable_api.call_interval = %s, want 2s", got)
+	}
+	if got := cfg.GetDuration("stress.backing_unreachable_api.max_call_latency", -1); got != 120*time.Second {
+		t.Errorf("stress.backing_unreachable_api.max_call_latency = %s, want 120s", got)
+	}
 
 	// --- stress/backing_maintenance ---
 	if !cfg.GetBool("stress.backing_maintenance.enabled", false) {

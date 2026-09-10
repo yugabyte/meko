@@ -1,7 +1,8 @@
 // Per-endpoint connectivity (meko#967): an endpoint created with an nlb_* mode
 // gets a second, Postgres-only Service behind the cloud's L4 load balancer, and
 // its recorded address is the load balancer's rather than a pod IP. nlb_external
-// is left alone on purpose: it puts Postgres on the internet behind a password.
+// is exercised only behind an allow-list that admits nobody: it puts Postgres on
+// the internet behind a password.
 package features
 
 import (
@@ -46,7 +47,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for.",
+		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for. An nlb_external endpoint with allowed_cidrs gets an internet-facing Service whose loadBalancerSourceRanges is exactly that list, no internal annotation, only the Postgres port, and the Service is gone once the endpoint is deleted.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		// Two load balancers, each waited out to a cloud-assigned ingress.
 		Timeout: 45 * time.Minute,
@@ -59,6 +60,7 @@ func runAmpEndpointConnectivity(t *core.T) error {
 		return []phase{
 			{"connectivity_validation", a.connectivityValidation},
 			{"nlb_internal_endpoint", a.nlbInternalEndpoint},
+			{"nlb_external_allowed_cidrs", a.nlbExternalAllowedCIDRs},
 			{"with_writer_connectivity", a.withWriterConnectivity},
 		}
 	})
@@ -458,4 +460,93 @@ func addrPortOf(address string) string {
 		return p
 	}
 	return "55433"
+}
+
+// nlbExternalNoAdmit is a /32 nobody holds, so the internet-facing load balancer
+// this phase creates admits no client while it exists.
+const nlbExternalNoAdmit = "192.0.2.1/32"
+
+// nlbExternalAllowedCIDRs is the internet-facing mode with its source
+// allow-list: the Service must carry the CIDRs as loadBalancerSourceRanges and
+// no internal annotation, publish only the Postgres port, and go away with the
+// endpoint. The allow-list is the only thing between an nlb_external endpoint
+// and the internet, and nothing had ever read it back off a real Service.
+func (a *ampFeatureRun) nlbExternalAllowedCIDRs(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	kube := a.f.ampKube()
+	if kube == nil {
+		a.f.t.Skip("the control plane is reached by a direct URL with no kube access, so the load-balancer Service cannot be inspected")
+		return nil
+	}
+	cloud, err := clusterCloud(ctx, kube)
+	if err != nil || cloud == "" {
+		a.f.t.Skip("this cluster's cloud cannot be named from a node's providerID, so an nlb_external outcome cannot be judged: " + fmt.Sprint(err))
+		return nil
+	}
+	req := controller.CreateEndpointRequest{Role: roleReadWrite, Connectivity: &controller.EndpointConnectivity{
+		Mode: controller.ConnectivityNLBExternal, AllowedCIDRs: []string{nlbExternalNoAdmit},
+	}}
+	if _, err := cl.CreateEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, req); err != nil {
+		return fmt.Errorf("create the nlb_external endpoint: %w", err)
+	}
+	ep, err := endpointWithMode(ctx, cl, a.proj, controller.ConnectivityNLBExternal)
+	if err != nil {
+		return err
+	}
+	a.f.register("delete nlb_external endpoint", func(ctx context.Context) error {
+		_, e := cl.DeleteEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID)
+		if e != nil && strings.Contains(e.Error(), "not found") {
+			return nil
+		}
+		return e
+	})
+	if ep.Connectivity == nil || len(ep.Connectivity.AllowedCIDRs) != 1 || ep.Connectivity.AllowedCIDRs[0] != nlbExternalNoAdmit {
+		return fmt.Errorf("the endpoint records connectivity %+v, want nlb_external with allowed_cidrs [%s]", ep.Connectivity, nlbExternalNoAdmit)
+	}
+	lbHost, err := waitLBIngress(ctx, kube, ep.ID, lbReadyTimeout)
+	if err != nil {
+		return err
+	}
+	svc, err := readLBService(ctx, kube, ep.ID)
+	if err != nil {
+		return err
+	}
+	ranges, err := kube.Get(ctx, "service", lbServiceName(ep.ID), `{.spec.loadBalancerSourceRanges[*]}`)
+	if err != nil {
+		return fmt.Errorf("read loadBalancerSourceRanges of %s: %w", lbServiceName(ep.ID), err)
+	}
+	if err := externalLBVerdict(svc, ranges, cloud, addrPortOf(ep.Address), nlbExternalNoAdmit); err != nil {
+		return fmt.Errorf("load-balancer Service %s: %w", lbServiceName(ep.ID), err)
+	}
+	if err := lbAddressVerdict(ep.Address, lbHost); err != nil {
+		return err
+	}
+	if _, err := cl.DeleteEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID); err != nil {
+		return fmt.Errorf("delete the nlb_external endpoint: %w", err)
+	}
+	return waitLBGone(ctx, kube, ep.ID, lbGoneTimeout)
+}
+
+// externalLBVerdict: a LoadBalancer on exactly the Postgres port, the caller's
+// allow-list applied verbatim, and none of the internal annotations (an
+// internal annotation on an nlb_external Service would make it unreachable from
+// where the user asked to reach it).
+func externalLBVerdict(svc lbService, sourceRanges, cloud, pgPort, wantCIDR string) error {
+	if svc.Type != "LoadBalancer" {
+		return fmt.Errorf("type is %q, want LoadBalancer", svc.Type)
+	}
+	if len(svc.Ports) != 1 || svc.Ports[0] != pgPort {
+		return fmt.Errorf("publishes ports %v, want exactly the Postgres port %s", svc.Ports, pgPort)
+	}
+	got := strings.Fields(sourceRanges)
+	if len(got) != 1 || got[0] != wantCIDR {
+		return fmt.Errorf("loadBalancerSourceRanges is %v, want [%s]: allowed_cidrs is the only thing between an internet-facing Postgres and the internet, and it did not reach the Service", got, wantCIDR)
+	}
+	if ann, ok := internalLBAnnotation[cloud]; ok && strings.Contains(svc.Annotations, ann.json()) {
+		return fmt.Errorf("carries the %s internal annotation %s=%s on an nlb_external endpoint", cloud, ann.key, ann.value)
+	}
+	return nil
 }

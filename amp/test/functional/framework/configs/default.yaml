@@ -363,6 +363,16 @@ functional:
   # gc-interval (5m).
   failed_create_reclaim:
     sweep_timeout: "45m"
+  # mcp: the chart's MCP Service (ac-mcp.md) the amp_mcp_tools test port-forwards.
+  mcp:
+    service: "amp-controller-mcp"
+    port: 8000
+  # voyager: the source Postgres image amp_voyager_migration stands up next to the
+  # control plane, and how long each migration phase (assess, provision, migrate)
+  # may take to reach its state.
+  voyager:
+    source_image: "postgres:16-alpine"
+    phase_timeout: "25m"
   # The extension set the release commits to shipping, pinned here rather than
   # read back from the database (a test that enumerates pg_available_extensions
   # cannot detect a missing extension).
@@ -1305,6 +1315,18 @@ stress:
     # endpoints served normally). Any 500 during the window fails outright
     # (meko#886: an unreachable store is a 503, never a 500).
     control_plane_recovery_max: "2m"
+  # backing_unreachable_api: deletes the backing's serving pods, then drives
+  # reads and cluster creates on a transport that retries nothing, so the 503 the
+  # controller sends for an unreachable store is seen rather than retried away
+  # (meko#886). max_call_latency is the hang ceiling for one call: an unreachable
+  # store is reported, not waited on.
+  backing_unreachable_api:
+    fault_duration: "90s"
+    settle_timeout: "10m"
+    call_interval: "2s"
+    # max_call_latency is the hang ceiling, not a latency bar: the slowest call is
+    # reported as a metric, and only a call that never returns inside this fails.
+    max_call_latency: "120s"
   # backing_disk_full: fills every backing data disk to within a few MiB, writes
   # through amp, and holds each statement to erroring or committing inside
   # stall_limit. A COMMIT parked forever on a full backing (meko#727 signature)
