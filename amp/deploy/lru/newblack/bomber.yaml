@@ -1,0 +1,202 @@
+# The newblack workload: the customer's anonymised checkout-process load test
+# (yugabyte/commerce-loadtest, the "bomber") replaying its captured SQL mix at a
+# paced TPS. The exporter sidecar exists because the driver has no /metrics.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: newblack-bomber-run
+  namespace: amp-lru
+  labels:
+    lru: newblack
+data:
+  PGHOST: newblack-endpoint
+  PGPORT: "55433"
+  PGUSER: cloud_admin
+  PGPASSWORD: cloud_admin
+  BOMBER_DB: newblack_lru
+  # Weighted from the customer's production execution counts; see workload/*_mix.tsv.
+  RO_WORKERS: "4"
+  RW_WORKERS: "8"
+  RO_POOL_MIN: "4"
+  RO_POOL_MAX: "4"
+  RO_MULTIPLEXING: "true"
+  RW_POOL_MIN: "8"
+  RW_POOL_MAX: "8"
+  RW_MULTIPLEXING: "false"
+  TARGET_TOTAL_TPS: "300"
+  CYCLE_DURATION_SECONDS: "3600"
+  PROGRESS_SECONDS: "10"
+  TX_RETRIES: "6"
+  COMMAND_TIMEOUT_SECONDS: "120"
+  seed.sh: |
+    #!/bin/sh
+    # Idempotent: creates the database, converts the YB dump to Postgres DDL and
+    # loads schema + seed, but only the first time. A reload would wipe the
+    # history the LRU exists to accumulate.
+    set -eu
+    export PGPASSWORD
+    psql_admin() { psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 "$@"; }
+    psql_db() { psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$BOMBER_DB" -v ON_ERROR_STOP=1 "$@"; }
+
+    for i in $(seq 1 60); do
+      psql_admin -Atqc 'select 1' >/dev/null 2>&1 && break
+      echo "waiting for $PGHOST:$PGPORT ($i)"; sleep 5
+    done
+
+    if [ -z "$(psql_admin -Atqc "select 1 from pg_database where datname = '$BOMBER_DB'")" ]; then
+      psql_admin -c "CREATE DATABASE $BOMBER_DB"
+      echo "created database $BOMBER_DB"
+    fi
+    # The dump declares tables owned by a role the customer has and amp does not.
+    psql_admin -Atqc "select 1 from pg_roles where rolname = 'admin'" | grep -q 1 \
+      || psql_admin -c "CREATE ROLE admin"
+
+    if [ -n "$(psql_db -Atqc "select 1 from information_schema.tables where table_name = 'backgroundjobs'")" ]; then
+      echo "schema already present, leaving data alone"
+      exit 0
+    fi
+
+    echo "loading schema ($(wc -l < /work/schema.pg.sql) lines)"
+    psql_db -f /work/schema.pg.sql
+    echo "loading seed"
+    psql_db -f /workload/seed_happy_path.sql
+    psql_db -f /workload/validate_seed_cutdown.sql || echo "seed validation reported problems above"
+  run.sh: |
+    #!/bin/sh
+    # Truncating the log per cycle is what the exporter reads as a cycle boundary.
+    set -eu
+    export DOTNET_CLI_HOME=/work HOME=/work NUGET_PACKAGES=/work/nuget
+    export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+    # Without this the driver prints decimals with the image's locale separator.
+    export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+
+    mkdir -p /work/src /work/layout/config /work/layout/sql/snippets
+    cp /workload/Program.cs /workload/BomberLoadTest.csproj /work/src/
+    cp /workload-queries/ro_mix.tsv /work/layout/config/ro_mix.tsv
+    cp /workload-queries/rw_mix.tsv /work/layout/config/rw_mix.tsv
+    cp /workload-queries/q*.sql /work/layout/sql/snippets/
+    cp /workload/reset_workload_tables.sql /workload/seed_happy_path.sql /work/layout/sql/
+
+    dotnet build /work/src/BomberLoadTest.csproj -c Release -o /work/bin
+
+    while true; do
+      : > /work/bomber.log
+      echo "=== cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) tps=$TARGET_TOTAL_TPS duration=${CYCLE_DURATION_SECONDS}s"
+      /work/bin/BomberLoadTest \
+        --loadtest-dir /work/layout \
+        --host "$PGHOST" --port "$PGPORT" --db "$BOMBER_DB" --user "$PGUSER" --password "$PGPASSWORD" \
+        --ro-workers "$RO_WORKERS" --rw-workers "$RW_WORKERS" \
+        --ro-min-pool "$RO_POOL_MIN" --ro-max-pool "$RO_POOL_MAX" --ro-multiplexing "$RO_MULTIPLEXING" \
+        --rw-min-pool "$RW_POOL_MIN" --rw-max-pool "$RW_POOL_MAX" --rw-multiplexing "$RW_MULTIPLEXING" \
+        --duration-seconds "$CYCLE_DURATION_SECONDS" \
+        --target-total-tps "$TARGET_TOTAL_TPS" \
+        --progress-seconds "$PROGRESS_SECONDS" \
+        --tx-retries "$TX_RETRIES" \
+        --command-timeout "$COMMAND_TIMEOUT_SECONDS" \
+        --reset-sql-file /work/layout/sql/reset_workload_tables.sql \
+        --seed-sql-file /work/layout/sql/seed_happy_path.sql \
+        2>&1 | tee -a /work/bomber.log || echo "=== cycle exited with $?" | tee -a /work/bomber.log
+      sleep 30
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: newblack-bomber
+  namespace: amp-lru
+  labels:
+    app: bomber
+    lru: newblack
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bomber
+      lru: newblack
+  template:
+    metadata:
+      labels:
+        app: bomber
+        lru: newblack
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        # The postgres image has no python, so the DDL rewrite is its own step.
+        - name: convert-ddl
+          image: python:3.12-alpine
+          command:
+            - /bin/sh
+            - -c
+            - python3 /workload/to_amp_ddl.py /workload/bomber_schema_cutdown.sql > /work/schema.pg.sql
+          volumeMounts:
+            - { name: workload, mountPath: /workload/bomber_schema_cutdown.sql, subPath: bomber_schema_cutdown.sql }
+            - { name: workload, mountPath: /workload/to_amp_ddl.py, subPath: to_amp_ddl.py }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+        - name: seed
+          image: postgres:18-alpine
+          command: ["/bin/sh", "/etc/bomber/seed.sh"]
+          envFrom:
+            - configMapRef:
+                name: newblack-bomber-run
+          volumeMounts:
+            - { name: run, mountPath: /etc/bomber }
+            - { name: workload, mountPath: /workload/bomber_schema_cutdown.sql, subPath: bomber_schema_cutdown.sql }
+            - { name: workload, mountPath: /workload/seed_happy_path.sql, subPath: seed_happy_path.sql }
+            - { name: workload, mountPath: /workload/validate_seed_cutdown.sql, subPath: validate_seed_cutdown.sql }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+      containers:
+        - name: bomber
+          image: mcr.microsoft.com/dotnet/sdk:9.0
+          command: ["/bin/sh", "/etc/bomber/run.sh"]
+          envFrom:
+            - configMapRef:
+                name: newblack-bomber-run
+          volumeMounts:
+            - { name: run, mountPath: /etc/bomber }
+            - { name: driver, mountPath: /workload/Program.cs, subPath: Program.cs }
+            - { name: driver, mountPath: /workload/BomberLoadTest.csproj, subPath: BomberLoadTest.csproj }
+            - { name: queries, mountPath: /workload-queries }
+            - { name: workload, mountPath: /workload/seed_happy_path.sql, subPath: seed_happy_path.sql }
+            - { name: workload, mountPath: /workload/reset_workload_tables.sql, subPath: reset_workload_tables.sql }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { cpu: "3", memory: 6Gi }
+        - name: exporter
+          image: python:3.12-alpine
+          command: [python3, -u, /app/exporter.py]
+          env:
+            - name: BOMBER_LOG
+              value: /work/bomber.log
+          ports:
+            - name: metrics
+              containerPort: 9095
+          volumeMounts:
+            - { name: exporter, mountPath: /app }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+      volumes:
+        - name: run
+          configMap: { name: newblack-bomber-run }
+        - name: workload
+          configMap: { name: newblack-workload-schema }
+        - name: queries
+          configMap: { name: newblack-workload-queries }
+        - name: driver
+          configMap: { name: newblack-workload-driver }
+        - name: exporter
+          configMap: { name: newblack-exporter }
+        - name: work
+          emptyDir: { sizeLimit: 10Gi }

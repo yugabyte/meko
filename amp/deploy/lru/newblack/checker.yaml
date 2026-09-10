@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: newblack-checker
+  namespace: amp-lru
+  labels:
+    app: checker
+    lru: newblack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checker
+      lru: newblack
+  template:
+    metadata:
+      labels:
+        app: checker
+        lru: newblack
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: checker
+          image: python:3.12-alpine
+          # The hourly sync reads the verdict with `kubectl exec ... -- curl`, and
+          # this image has none. Installing it here rather than pointing the sync
+          # at the driver pod keeps the verdict independent of the driver: a
+          # crashlooping workload should read not_ok, not error.
+          command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec python3 -u /app/check.py"]
+          env:
+            - name: LRU_NAME
+              value: newblack
+            # The endpoint id is resolved from the controller by pool, so a
+            # recreated endpoint needs no redeploy and no id is tracked in git.
+            - name: AMP_POOL
+              value: lru-newblack
+            # Read from the workload's own ConfigMap: the throughput rule is
+            # relative to the paced target, so the two must never drift apart.
+            - name: BOMBER_DB
+              valueFrom:
+                configMapKeyRef: { name: newblack-bomber-run, key: BOMBER_DB }
+            - name: TARGET_TOTAL_TPS
+              valueFrom:
+                configMapKeyRef: { name: newblack-bomber-run, key: TARGET_TOTAL_TPS }
+          ports:
+            - name: metrics
+              containerPort: 9100
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: app
+          configMap:
+            name: newblack-checker

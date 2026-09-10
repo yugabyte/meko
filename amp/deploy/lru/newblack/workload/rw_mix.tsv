@@ -1,0 +1,23 @@
+# qid	weight	snippet
+Q02	279760	q02_update_scheduledtasks.sql
+Q09	73178	q09_tx_insert_orderledger.sql
+Q11	31240	q11_tx_select_auditchainlocks_for_update.sql
+Q14	44641	q14_tx_upsert_auditchain_and_insert_ledger.sql
+Q17	34273	q17_tx_insert_orderlines_wide.sql
+Q18	18864	q18_tx_insert_productledger_and_upsert_stock.sql
+Q06	98725	q06_select_invoicelines_with_shipments.sql
+Q08	36682	q08_select_invoices_full_join.sql
+Q10	568019	q10_select_scheduledtasks.sql
+Q12	117744	q12_insert_wishlistproducts.sql
+Q13	39676	q13_select_orders_full_join.sql
+Q16	62299	q16_select_invoicepayments_with_pt.sql
+Q19	23520	q19_select_wishlists_union.sql
+Q20	55429	q20_select_wishlistproducts.sql
+Q22	83248	q22_select_wishlistdata.sql
+Q23	1	q23_select_usertasks.sql
+Q24	1	q24_select_apikeys.sql
+Q26	15	q26_select_financialperiods.sql
+Q27	2280	q27_reset_all.sql
+Q01	3665	q01_enum_tables_safe.sql
+Q15	2674	q15_pg_type_metadata.sql
+Q25	27	q25_select_pg_composite_fields.sql

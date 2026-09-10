@@ -1,0 +1,35 @@
+-- Reset only workload-related tables, then allow reseed script to run again.
+TRUNCATE TABLE
+  public.billingpayments,
+  public.billinglines,
+  public.billingmanualdata,
+  public.billings,
+  public.billinguserdata,
+  public.dispatchlines,
+  public.dispatches,
+  public.pricediscounts,
+  public.salesledger,
+  public.saleslines,
+  public.paymentevents,
+  public.sales,
+  public.savedlistitems,
+  public.savedlistdata,
+  public.savedlistlinks,
+  public.savedlistshares,
+  public.savedlists,
+  public.eventchainledger_1,
+  public.eventchains_1,
+  public.eventchainlocks_1,
+  public.itemledger_1,
+  public.inventory_1,
+  public.accesskeys,
+  public.accounttasks,
+  public.accountingperiods,
+  public.backgroundjobs,
+  public.accounts,
+  public.branches,
+  public.businesses,
+  public.locations
+CASCADE;
+
+TRUNCATE TABLE IF EXISTS lt.seed_control;

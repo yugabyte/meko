@@ -11,6 +11,7 @@ amp/deploy/lru/
   README.md          this file: how every LRU is built and wired
   monitoring/        shared: namespace, one Prometheus, one Grafana. Applied once.
   small_temporal/    one LRU: Temporal server + Omes load, small rate
+  newblack/          one LRU: the anonymised NewBlack checkout workload
   <next>/            the next LRU, same shape
 ```
 

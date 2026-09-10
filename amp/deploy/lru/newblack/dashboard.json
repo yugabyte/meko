@@ -1,0 +1,1404 @@
+{
+ "uid": "lru-newblack",
+ "title": "LRU: newblack",
+ "tags": [
+  "lru",
+  "amp"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "1m",
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "lru",
+    "type": "constant",
+    "hide": 2,
+    "query": "newblack",
+    "current": {
+     "text": "newblack",
+     "value": "newblack"
+    }
+   },
+   {
+    "name": "endpoint",
+    "label": "endpoint",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "lru-prom"
+    },
+    "query": "query_result(amp_endpoint_info{pool=\"lru-newblack\"})",
+    "refresh": 2,
+    "sort": 1,
+    "regex": "/endpoint=\"(?<value>[^\"]+)\"/",
+    "hide": 2
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "Status (lru-checker)",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Overall",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "OK",
+         "color": "green"
+        },
+        "0.5": {
+         "text": "WARN",
+         "color": "orange"
+        },
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "-1": {
+         "text": "ERR",
+         "color": "purple"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "purple",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 0
+       },
+       {
+        "color": "orange",
+        "value": 0.5
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(lru_overall_status{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     }
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "state-timeline",
+   "title": "Checks over time",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 1,
+    "w": 20,
+    "h": 8
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "showValue": "never"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "OK",
+         "color": "green"
+        },
+        "0.5": {
+         "text": "WARN",
+         "color": "orange"
+        },
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "-1": {
+         "text": "ERR",
+         "color": "purple"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "purple",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 0
+       },
+       {
+        "color": "orange",
+        "value": 0.5
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (check) (lru_check_status{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{check}}"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "table",
+   "title": "Check values",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 4,
+    "h": 4
+   },
+   "options": {
+    "showHeader": true
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (check) (lru_check_value{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "format": "table",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "row",
+   "title": "Application (bomber load driver)",
+   "gridPos": {
+    "x": 0,
+    "y": 9,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Operations per s by lane, vs paced target",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 10,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (lane) (rate(bomber_ops_total{lru=\"$lru\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{lane}}"
+    },
+    {
+     "refId": "B",
+     "expr": "sum(rate(bomber_ops_total{lru=\"$lru\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "total"
+    },
+    {
+     "refId": "C",
+     "expr": "max(bomber_tps{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "driver-reported tps"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Errors and transaction retries per s",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 10,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(bomber_errors_total{lru=\"$lru\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "errors"
+    },
+    {
+     "refId": "B",
+     "expr": "sum(rate(bomber_tx_retries_total{lru=\"$lru\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "tx retries"
+    }
+   ]
+  },
+  {
+   "id": 8,
+   "type": "timeseries",
+   "title": "Mean latency by lane, as the application sees it",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 18,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (lane) (bomber_mean_latency_seconds{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{lane}}"
+    }
+   ]
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Operations by query id",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 18,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "topk(12, sum by (qid) (rate(bomber_qid_ops_total{lru=\"$lru\"}[15m])))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{qid}}"
+    },
+    {
+     "refId": "B",
+     "expr": "sum by (qid) (rate(bomber_qid_errors_total{lru=\"$lru\"}[15m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "err {{qid}}"
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Cycle progress and staleness",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 26,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(bomber_cycle_elapsed_seconds{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "cycle elapsed"
+    },
+    {
+     "refId": "B",
+     "expr": "time() - max(bomber_last_progress_timestamp_seconds{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "progress age"
+    },
+    {
+     "refId": "C",
+     "expr": "max(bomber_cycles_total{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "cycles"
+    }
+   ]
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Driver process",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 26,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (component) (process_resident_memory_bytes{job=\"bomber\",lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{component}}"
+    }
+   ]
+  },
+  {
+   "id": 12,
+   "type": "row",
+   "title": "amp endpoint (pool lru-newblack)",
+   "gridPos": {
+    "x": 0,
+    "y": 34,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "Commits / rollbacks per s",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 35,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (datname) (rate(pg_stat_database_xact_commit{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "commit {{datname}}"
+    },
+    {
+     "refId": "B",
+     "expr": "sum by (datname) (rate(pg_stat_database_xact_rollback{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "rollback {{datname}}"
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "type": "timeseries",
+   "title": "Tuples per s",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 35,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (datname) (rate(pg_stat_database_tup_inserted{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "inserted"
+    },
+    {
+     "refId": "B",
+     "expr": "sum by (datname) (rate(pg_stat_database_tup_updated{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "updated"
+    },
+    {
+     "refId": "C",
+     "expr": "sum by (datname) (rate(pg_stat_database_tup_deleted{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "deleted"
+    },
+    {
+     "refId": "D",
+     "expr": "sum by (datname) (rate(pg_stat_database_tup_fetched{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "fetched"
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "type": "timeseries",
+   "title": "Backends, deadlocks and locks",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 43,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(pg_stat_database_numbackends{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "backends"
+    },
+    {
+     "refId": "B",
+     "expr": "sum(pg_stat_database_deadlocks{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "deadlocks"
+    },
+    {
+     "refId": "C",
+     "expr": "sum(pg_locks_count{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "locks"
+    }
+   ]
+  },
+  {
+   "id": 16,
+   "type": "timeseries",
+   "title": "Buffer hit ratio",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 43,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(pg_stat_database_blks_hit{endpoint=\"$endpoint\"}[5m])) / clamp_min(sum(rate(pg_stat_database_blks_hit{endpoint=\"$endpoint\"}[5m])) + sum(rate(pg_stat_database_blks_read{endpoint=\"$endpoint\"}[5m])), 1)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "hit ratio"
+    }
+   ]
+  },
+  {
+   "id": 17,
+   "type": "timeseries",
+   "title": "Pageserver storage operations per s and p99",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 51,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (operation) (rate(pageserver_storage_operations_seconds_count{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{operation}}"
+    },
+    {
+     "refId": "B",
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(pageserver_storage_operations_seconds_global_bucket{endpoint=\"$endpoint\"}[5m])))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "p99 s"
+    }
+   ]
+  },
+  {
+   "id": 18,
+   "type": "timeseries",
+   "title": "WAL written per s (safekeeper)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 51,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(safekeeper_write_wal_bytes_sum{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "wal bytes/s"
+    }
+   ]
+  },
+  {
+   "id": 19,
+   "type": "row",
+   "title": "Disk and storage (why did it stop?)",
+   "gridPos": {
+    "x": 0,
+    "y": 59,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 20,
+   "type": "timeseries",
+   "title": "Node filesystem behind the driver volume",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 60,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(bomber_work_disk_bytes{lru=\"$lru\",state=\"used\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "used"
+    },
+    {
+     "refId": "B",
+     "expr": "max(bomber_work_disk_bytes{lru=\"$lru\",state=\"total\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "total"
+    },
+    {
+     "refId": "C",
+     "expr": "max(bomber_work_disk_bytes{lru=\"$lru\",state=\"free\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "free"
+    }
+   ]
+  },
+  {
+   "id": 21,
+   "type": "timeseries",
+   "title": "Node filesystem used ratio (eviction risk)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 60,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     },
+     "max": 1,
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(bomber_work_disk_used_ratio{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "used ratio"
+    }
+   ]
+  },
+  {
+   "id": 22,
+   "type": "timeseries",
+   "title": "Compute WAL directory vs max_wal_size",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 68,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pg_wal_size_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "pg_wal size"
+    },
+    {
+     "refId": "B",
+     "expr": "max(pg_settings_max_wal_size_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "max_wal_size"
+    }
+   ]
+  },
+  {
+   "id": 23,
+   "type": "timeseries",
+   "title": "Safekeeper disk and WAL cache",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 68,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(safekeeper_disk_usage_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "safekeeper disk"
+    },
+    {
+     "refId": "B",
+     "expr": "max(safekeeper_wal_cache_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "wal cache"
+    }
+   ]
+  },
+  {
+   "id": 24,
+   "type": "timeseries",
+   "title": "Pageserver logical size, and where it lands in 7 days",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 76,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pageserver_current_logical_size{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "logical size"
+    },
+    {
+     "refId": "B",
+     "expr": "predict_linear(pageserver_current_logical_size{endpoint=\"$endpoint\"}[6h], 7*86400)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "projected in 7d"
+    }
+   ]
+  },
+  {
+   "id": 25,
+   "type": "timeseries",
+   "title": "Storage stored vs logical (compression, cumulative)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 76,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(pageserver_yb_payload_stored_bytes_total{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "stored"
+    },
+    {
+     "refId": "B",
+     "expr": "sum(pageserver_yb_payload_logical_bytes_total{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "logical"
+    }
+   ]
+  },
+  {
+   "id": 26,
+   "type": "timeseries",
+   "title": "GC drain lag and unflushed pages (storage falling behind)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 84,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pageserver_yb_gc_drain_lag_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "gc drain lag"
+    },
+    {
+     "refId": "B",
+     "expr": "max(pageserver_yb_pagewriter_unflushed_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "pagewriter unflushed"
+    }
+   ]
+  },
+  {
+   "id": 27,
+   "type": "timeseries",
+   "title": "Temp file bytes per s (queries spilling to disk)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 84,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(pg_stat_database_temp_bytes{endpoint=\"$endpoint\"}[5m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "temp bytes/s"
+    }
+   ]
+  }
+ ]
+}

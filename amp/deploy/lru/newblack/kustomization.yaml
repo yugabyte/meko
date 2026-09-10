@@ -1,0 +1,73 @@
+# One LRU: the bomber checkout workload, its health checker, its dashboard.
+# Depends on ../monitoring having been applied.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: amp-lru
+# `kubectl get all -l lru=newblack` has to return the whole LRU, generated
+# ConfigMaps included. Not a selector: it would rewrite the Deployments'.
+labels:
+  - pairs:
+      lru: newblack
+    includeSelectors: false
+resources:
+  - bomber.yaml
+  - checker.yaml
+configMapGenerator:
+  - name: newblack-checker
+    files: [checker/check.py]
+  - name: newblack-exporter
+    files: [exporter.py]
+  # Split by what mounts them, and because schema plus driver plus queries in one
+  # ConfigMap is close enough to the 1MiB object limit to be worth not testing.
+  - name: newblack-workload-schema
+    files:
+      - workload/bomber_schema_cutdown.sql
+      - workload/seed_happy_path.sql
+      - workload/validate_seed_cutdown.sql
+      - workload/reset_workload_tables.sql
+      - workload/to_amp_ddl.py
+  - name: newblack-workload-driver
+    files:
+      - workload/Program.cs
+      - workload/BomberLoadTest.csproj
+  - name: newblack-workload-queries
+    files:
+      - workload/ro_mix.tsv
+      - workload/rw_mix.tsv
+      - workload/q01_enum_tables_safe.sql
+      - workload/q02_update_scheduledtasks.sql
+      - workload/q03_ro.sql
+      - workload/q04_ro.sql
+      - workload/q05_ro.sql
+      - workload/q06_select_invoicelines_with_shipments.sql
+      - workload/q07_ro.sql
+      - workload/q08_select_invoices_full_join.sql
+      - workload/q09_tx_insert_orderledger.sql
+      - workload/q10_select_scheduledtasks.sql
+      - workload/q11_tx_select_auditchainlocks_for_update.sql
+      - workload/q12_insert_wishlistproducts.sql
+      - workload/q13_select_orders_full_join.sql
+      - workload/q14_tx_upsert_auditchain_and_insert_ledger.sql
+      - workload/q15_pg_type_metadata.sql
+      - workload/q16_select_invoicepayments_with_pt.sql
+      - workload/q17_tx_insert_orderlines_wide.sql
+      - workload/q18_tx_insert_productledger_and_upsert_stock.sql
+      - workload/q19_select_wishlists_union.sql
+      - workload/q20_select_wishlistproducts.sql
+      - workload/q22_select_wishlistdata.sql
+      - workload/q23_select_usertasks.sql
+      - workload/q24_select_apikeys.sql
+      - workload/q25_select_pg_composite_fields.sql
+      - workload/q26_select_financialperiods.sql
+      - workload/q27_reset_all.sql
+  # The shared Grafana's sidecar picks up any ConfigMap with this label. It names
+  # the file on disk after the key and every LRU shares one directory, so the key
+  # carries the LRU name or two LRUs overwrite each other once a minute.
+  - name: newblack-dashboard
+    files: [newblack-dashboard.json=dashboard.json]
+    options:
+      labels:
+        grafana_dashboard: "1"
+        lru: newblack
+generatorOptions:
+  disableNameSuffixHash: true
