@@ -381,7 +381,8 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
      so `gc_act_trim_meta` just keeps the newest version `<= cutoff` per
      key. Trims across objects run in parallel (`GC_ACTION_PARALLELISM`,
      default 1, scaled) — distinct objects are distinct keys / tablets,
-     no ordering constraint.
+     no ordering constraint. The rel trim fans out again within one fork,
+     over its buckets; `slru_pages` and `meta` have none to fan out over.
 
    Every act on `pages` must bind `bucket_id`, the leading column of that
    table's all-range key (see [`pageserver.md`](pageserver.md) "Why the
@@ -390,10 +391,30 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    `gc_act_trim_blocks` groups its candidate blknums by `page_bucket_id` and
    issues one bucket-pinned DELETE per group, while `gc_act_shrink_fork` covers
    a fork's whole truncated suffix — length unknown at that point — and so loops
-   over all `PAGE_BUCKETS`. Each returns the summed row count. A statement whose
-   scan is a per-row lateral needs no fan-out: `bucket_id` rides in parallel to
-   the blknums and is a constant within each iteration, which is how the rel
-   trim's anchors come back in one cross-bucket read.
+   over all `PAGE_BUCKETS`. Each returns the summed row count.
+
+   Those per-bucket statements run **concurrently**, at `PAGE_BUCKETS` width
+   rather than the scaled action parallelism (#1182) — the fan-out above can
+   only hand one object one worker, and candidates are emitted per block, so a
+   tick's limit is often filled by a single relation.
+
+   Two things bound what that buys, and both matter when reading the width. A
+   fork reaches more than one bucket only once it spans more than one
+   `PAGE_BUCKET_STRIDE`, because `page_bucket_id` folds `blknum / 256`: every
+   block of a sub-2MB fork is one bucket, and the fan-out runs a single future
+   for it. And the realised concurrency is `min(pool size, PAGE_BUCKETS)`, not
+   six: `YsqlClient` clones its `Arc<Client>` out and releases the slot before
+   awaiting, so the pool gates no statement — it picks which backend runs one,
+   and a backend runs its statements serially. Six loops on a one-connection
+   pool pipeline onto one backend.
+
+   A statement whose scan is a per-row lateral needs no fan-out: `bucket_id`
+   rides in parallel to the blknums and is a constant within each iteration,
+   which is how the rel trim's anchors come back in one cross-bucket read.
+
+   The prefix sweep keeps its round-robin: its passes share a running counter
+   against `gc_sweep_rows_per_tick`, so its fan-out waits on that budget
+   becoming a per-statement cap (#1224).
 
    `slru_pages` and `meta` need no fan-out: `branch_id` is their whole hash
    key, so binding the branch (which every act does) already bounds the
@@ -500,12 +521,16 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    `yb_bnl_batch_size` keys — more round trips for exactly the rows wanted,
    instead of fewer round trips reading each key's whole chain. A tick's trim is
    then at least one statement per bucket per fork, plus one more per
-   `gc_rows_per_statement` rows any single key is deep. `GC_ACTION_PARALLELISM`
-   is 1 and the `pageserver:gc` pool is sized to it, so they run serially on one
-   connection: a pathologically deep key can hold the trim phase for a long
-   time, and the keys behind it in the array wait. Cancellation is checked
-   between statements, so shutdown still bounds it (#1209). The levers if it
-   fails to fit are the pool width and `gc_rows_per_statement`.
+   `gc_rows_per_statement` rows any single key is deep. The buckets run
+   concurrently, so a pathologically deep key no longer makes its fork's other
+   five buckets queue behind it — but `gc_act_trim_blocks` collects, so the deep
+   key still holds the trim phase for its whole duration, and at
+   `GC_ACTION_PARALLELISM` = 1 no other fork proceeds alongside it.
+   Cancellation is checked between statements, but the bound is now looser on a
+   pool narrower than six: those loops share a backend that runs their
+   statements one at a time, so the last bucket's check is reached only after up
+   to `PAGE_BUCKETS` statements. The levers if it fails to fit are the pool
+   width and `gc_rows_per_statement`.
 
    Depth is why `slru_pages` and `meta` need the cap as much as `pages` does.
    Measured on amp2 after ~16 days without GC: a single clog block held over
@@ -641,9 +666,11 @@ object's keys are never named by a future record, so nothing would ever emit a
 candidate for them again.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
-**`pageserver:gc` connection pool** sized to the action width, so a
-backlogged drain never contends with the ingest/materialiser lanes or
-compute reads. Candidate *inserts* ride the direct-RPC lane alongside the
+**`pageserver:gc` connection pool** sized to the *object* fan-out
+(`GC_ACTION_PARALLELISM`, scaled), so a backlogged drain never contends with the
+ingest/materialiser lanes or compute reads. It is not the statement count: each
+`pages` act fans out again over its buckets, so the pool bounds how many
+backends serve those statements rather than how many are issued (#1182). Candidate *inserts* ride the direct-RPC lane alongside the
 page writes they trail, as PGSQL_UPSERT batches
 (`gc_enqueue_candidates_thin`); their volume is a rounding error next to
 the page writes. The drain itself has no thin lane — select, actions and

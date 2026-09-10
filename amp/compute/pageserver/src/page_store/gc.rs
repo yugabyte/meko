@@ -20,8 +20,10 @@ use crate::page_store::tokio_postgres::types::FromSql;
 /// the drain's per-bucket fan-out.
 pub const GC_BUCKETS: i32 = 3;
 
-/// Concurrent GC action DELETEs per drain tick (scaled); the dedicated
-/// `pageserver:gc` pool is sized to this.
+/// Objects a drain tick acts on at once (scaled); the dedicated
+/// `pageserver:gc` pool is sized to this. Not the statement count: a `pages` act
+/// fans out again over `PAGE_BUCKETS` (#1182), and the pool bounds how many
+/// backends serve those, not how many are issued.
 pub const GC_ACTION_PARALLELISM: usize = 1;
 
 pub use pageserver_api::config::GC_SWEEP_MAX_ROWS_PER_DELETE;
@@ -1141,56 +1143,102 @@ impl PageStore {
             });
         }
 
+        // One loop per bucket, concurrently, where the per-object fan-out above
+        // can only hand a fork one worker (#1182). Two traps in reading that
+        // width: `page_bucket_id` folds `blknum / PAGE_BUCKET_STRIDE`, so a
+        // sub-2MB fork is one bucket and this runs a single future; and
+        // `YsqlClient` releases its pool slot before awaiting, so the pool gates
+        // no statement, it picks the backend — making the realised concurrency
+        // `min(pool size, PAGE_BUCKETS)`, i.e. 1 at `scale_factor = 1.0`.
+        let bucket_loops = bounds_by_bucket
+            .into_iter()
+            .enumerate()
+            .filter(|(_, bounds)| !bounds.is_empty())
+            .map(|(bucket, bounds)| {
+                let bucket = bucket as i16;
+                async move {
+                    let mut bucket_marks = Vec::new();
+                    let outcome = self
+                        .run_trim_loop(
+                            TrimTarget {
+                                gate_label: "GC trim of amp_storage.pages",
+                                key_col: "blknum",
+                                to_watermark_key: |blk| *blk,
+                                err_context: format!(
+                                    "gc_act_trim_blocks branch={branch_id} rel={relnode} \
+                                     fork={forknum} bucket={bucket}"
+                                ),
+                            },
+                            bounds,
+                            rows_per_statement,
+                            cancel,
+                            &mut bucket_marks,
+                            |blknums, watermarks, anchors, limit| async move {
+                                self.ysql_client
+                                    .query(
+                                        delete_sql,
+                                        &[
+                                            &branch_id,
+                                            &spcnode,
+                                            &dbnode,
+                                            &relnode,
+                                            &forknum,
+                                            &blknums,
+                                            &watermarks,
+                                            &anchors,
+                                            &bucket,
+                                            &limit,
+                                        ],
+                                    )
+                                    .await
+                            },
+                        )
+                        .await;
+                    (bucket_marks, outcome)
+                }
+            });
+        // `collect`, not `try_collect`: a dropped sibling loses the watermarks
+        // it committed, and its rows go uncounted (#1142, #1209).
+        let outcomes = futures::stream::iter(bucket_loops)
+            .buffer_unordered(PAGE_BUCKETS as usize)
+            .collect::<Vec<_>>()
+            .await;
+
         let mut deleted = 0u64;
-        for (bucket, bounds) in bounds_by_bucket.into_iter().enumerate() {
-            if bounds.is_empty() {
-                continue;
-            }
-            let bucket = bucket as i16;
-            match self
-                .run_trim_loop(
-                    TrimTarget {
-                        gate_label: "GC trim of amp_storage.pages",
-                        key_col: "blknum",
-                        to_watermark_key: |blk| *blk,
-                        err_context: format!(
-                            "gc_act_trim_blocks branch={branch_id} rel={relnode} \
-                             fork={forknum} bucket={bucket}"
-                        ),
-                    },
-                    bounds,
-                    rows_per_statement,
-                    cancel,
-                    trimmed_to,
-                    |blknums, watermarks, anchors, limit| async move {
-                        self.ysql_client
-                            .query(
-                                delete_sql,
-                                &[
-                                    &branch_id,
-                                    &spcnode,
-                                    &dbnode,
-                                    &relnode,
-                                    &forknum,
-                                    &blknums,
-                                    &watermarks,
-                                    &anchors,
-                                    &bucket,
-                                    &limit,
-                                ],
-                            )
-                            .await
-                    },
-                )
-                .await?
-            {
-                TrimOutcome::Complete(n) => deleted += n,
-                // The remaining buckets are untouched, and every statement this
-                // one committed has already reported its own watermark.
-                TrimOutcome::Cancelled(n) => return Ok(TrimOutcome::Cancelled(deleted + n)),
+        let mut cancelled = false;
+        let mut failed = None;
+        for (bucket_marks, outcome) in outcomes {
+            trimmed_to.extend(bucket_marks);
+            match outcome {
+                Ok(TrimOutcome::Complete(n)) => deleted += n,
+                Ok(TrimOutcome::Cancelled(n)) => {
+                    deleted += n;
+                    cancelled = true;
+                }
+                // Completion order, so which error is kept is arbitrary — log
+                // each one, or the others vanish.
+                Err(e) => {
+                    tracing::warn!(err = ?e, rel = relnode, fork = forknum, "GC trim bucket failed");
+                    failed = failed.or(Some(e));
+                }
             }
         }
-        Ok(TrimOutcome::Complete(deleted))
+        match failed {
+            // A sibling failing as the runtime tears down must not turn a
+            // clean shutdown into a GC failure tick. Only the error path
+            // consults the token: whether the ranges drained is the loops'
+            // answer, and a token set after they all finished means Complete.
+            Some(e) if cancel.is_cancelled() => {
+                tracing::info!(
+                    err = ?e, rows = deleted, rel = relnode, fork = forknum,
+                    "GC trim bucket failed during shutdown; reporting cancel"
+                );
+                Ok(TrimOutcome::Cancelled(deleted))
+            }
+            Some(e) => Err(e),
+            None if cancelled => Ok(TrimOutcome::Cancelled(deleted)),
+            None => Ok(TrimOutcome::Complete(deleted)),
+        }
     }
 
     /// Delete every `meta` row for the listed keys with `lsn <= due_lsn`.
@@ -1235,6 +1283,10 @@ impl PageStore {
     /// at one Raft group — one that live ingest is writing to — while the
     /// other five idle. Passes repeat until the budget is spent, so a database
     /// whose rows all land in one bucket still spends it all.
+    ///
+    /// TODO(#1224): fan the buckets out concurrently, as `gc_act_trim_blocks`
+    /// does. Blocked on the per-tick row budget becoming a per-statement cap —
+    /// the passes above share a running counter against it.
     ///
     /// Why a range works at all, and the alternatives discarded on the way:
     /// `compute/architecture/pageserver-gc.md`.
@@ -1506,26 +1558,46 @@ impl PageStore {
         );
         // `blknum >= relsize` has no upper bound — the fork's old length is
         // unknown here — so every bucket can hold matching blocks. Fan out
-        // over all of them rather than dropping the leading-column bound.
+        // over all of them rather than dropping the leading-column bound, and
+        // concurrently — distinct buckets are distinct tablets (#1182).
         let due = due_lsn.0 as i64;
-        let mut deleted = 0u64;
-        for bucket in 0..PAGE_BUCKETS as i16 {
-            deleted += self
-                .delete_rows(
-                    &sql,
-                    &[
-                        &branch_id, &spcnode, &dbnode, &relnode, &forknum, &relsize, &due, &bucket,
-                    ],
+        let sql = sql.as_str();
+        // `collect`, not `try_collect`: a dropped sibling's DELETE still commits
+        // but skips the `GC_ROWS_DELETED` charge `delete_rows` makes after it.
+        let outcomes = futures::stream::iter((0..PAGE_BUCKETS as i16).map(|bucket| async move {
+            self.delete_rows(
+                sql,
+                &[
+                    &branch_id, &spcnode, &dbnode, &relnode, &forknum, &relsize, &due, &bucket,
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "gc_act_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
+                     relsize={relsize} due_lsn={due_lsn} bucket={bucket}"
                 )
-                .await
-                .with_context(|| {
-                    format!(
-                        "gc_act_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
-                         relsize={relsize} due_lsn={due_lsn} bucket={bucket}"
-                    )
-                })?;
+            })
+        }))
+        .buffer_unordered(PAGE_BUCKETS as usize)
+        .collect::<Vec<_>>()
+        .await;
+
+        let mut deleted = 0u64;
+        let mut failed = None;
+        for outcome in outcomes {
+            match outcome {
+                Ok(n) => deleted += n,
+                Err(e) => {
+                    tracing::warn!(err = ?e, rel = relnode, fork = forknum, "GC shrink bucket failed");
+                    failed = failed.or(Some(e));
+                }
+            }
         }
-        Ok(deleted)
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(deleted),
+        }
     }
 
     /// Each SLRU block's anchor, on [`Self::gc_trim_blocks_anchors_sql`]'s contract.
@@ -2910,6 +2982,80 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(c.len(), 2, "unlisted block must be untouched");
+    }
+
+    /// Scenario: a fork whose blocks straddle every bucket, so the fan-out runs
+    /// wide — every other trim test here uses single-digit blknums, which
+    /// `page_bucket_id` puts in one bucket, so they exercise it at width 1.
+    #[tokio::test]
+    async fn gc_trim_blocks_spans_every_bucket() {
+        let (store, _schema) = make_store("gc_trim_buckets").await;
+        let branch = rand_branch();
+        let rel = 16460u32;
+        // One block per stretch: the relnode salt is constant, so `blknum /
+        // stride` walking 0..6 is what spreads them.
+        let blks: Vec<u32> = (0..PAGE_BUCKETS as u32)
+            .map(|stretch| stretch * PAGE_BUCKET_STRIDE as u32 + 3)
+            .collect();
+        let buckets: std::collections::BTreeSet<i16> = blks
+            .iter()
+            .map(|b| page_bucket_id(rel as i64, *b as i64))
+            .collect();
+        assert_eq!(
+            buckets.len(),
+            PAGE_BUCKETS as usize,
+            "fixture must straddle every bucket or it tests nothing"
+        );
+
+        let mut rows = Vec::new();
+        for blk in &blks {
+            let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, *blk);
+            rows.push(page_row(key.clone(), 10, false, false, b"d10"));
+            rows.push(page_row(key.clone(), 30, true, true, b"i30"));
+            rows.push(page_row(key, 50, false, false, b"d50"));
+        }
+        store.put_pages(branch, &rows).await.unwrap();
+
+        let watermarks: Vec<(i64, Lsn)> = blks.iter().map(|b| (*b as i64, Lsn(0))).collect();
+        let mut trimmed_to = Vec::new();
+        let deleted = store
+            .gc_act_trim_blocks(
+                branch,
+                (GC_SPC, GC_DB, rel as i64, 0),
+                &watermarks,
+                Lsn(100),
+                TRIM_UNBATCHED,
+                &never_cancelled(),
+                &mut trimmed_to,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            deleted,
+            TrimOutcome::Complete(PAGE_BUCKETS as u64),
+            "one sub-anchor row per block, summed across buckets"
+        );
+
+        let final_marks = final_watermarks(&trimmed_to);
+        assert_eq!(
+            final_marks,
+            blks.iter()
+                .map(|b| (*b as i64, Lsn(30)))
+                .collect::<Vec<_>>(),
+            "each block's watermark must come back at its anchor"
+        );
+
+        for blk in &blks {
+            let versions = store
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, *blk as i64)
+                .await
+                .unwrap();
+            assert_eq!(
+                versions,
+                vec![(30, true, true), (50, false, false)],
+                "block {blk} keeps its anchor and everything above it"
+            );
+        }
     }
 
     /// Scenario: greed. The trim boundary is the CUTOFF's anchor, not

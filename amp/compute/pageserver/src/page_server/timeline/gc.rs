@@ -519,18 +519,43 @@ impl Timeline {
     where
         Fut: std::future::Future<Output = Result<u64, GcError>>,
     {
-        use futures::{StreamExt as _, TryStreamExt as _};
+        use futures::StreamExt as _;
         // Fan-out width: GC_ACTION_PARALLELISM scaled by the tenant
         // scale_factor (cheap; recomputed per fan-out).
         let parallelism = pageserver_api::config::scale_count(
             crate::page_store::GC_ACTION_PARALLELISM,
             self.conf.scale_factor,
         );
-        let deleted: Vec<u64> = futures::stream::iter(items.map(|item| f(store.clone(), item)))
-            .buffer_unordered(parallelism)
-            .try_collect()
-            .await?;
-        Ok(deleted.into_iter().sum())
+        // `collect`, not `try_collect`: dropping a sibling mid-statement loses
+        // the rows it committed from `GC_ROWS_DELETED`, which each act charges
+        // only once its statement returns (#1142). Completion order, so which
+        // error is kept is arbitrary — log the real ones.
+        let outcomes: Vec<Result<u64, GcError>> =
+            futures::stream::iter(items.map(|item| f(store.clone(), item)))
+                .buffer_unordered(parallelism)
+                .collect()
+                .await;
+        let mut deleted = 0u64;
+        let mut failed = None;
+        for outcome in outcomes {
+            match outcome {
+                Ok(n) => deleted += n,
+                Err(e) => {
+                    // `act_trims`' items return TimelineCancelled from their
+                    // own cancel check, so a clean shutdown reaches here once
+                    // per queued item — `tasks.rs` treats both variants as a
+                    // clean return, not a failure.
+                    if !matches!(e, GcError::TenantCancelled | GcError::TimelineCancelled) {
+                        tracing::warn!(err = ?e, "GC action failed");
+                    }
+                    failed = failed.or(Some(e));
+                }
+            }
+        }
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(deleted),
+        }
     }
 
     /// Drop actions, reclaiming each object's rows `<= due_lsn`
