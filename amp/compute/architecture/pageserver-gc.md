@@ -560,11 +560,39 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
      so every candidate `<= cutoff` there is handled — the sweep coalesces
      a hot block's duplicate candidates into one delete. (The insert clamp
      keeps a base landing after the anchor above the cutoff, out of range.)
+     Hinted to a one-pass batched nested loop — `YbBatchedNL` with
+     `yb_bnl_batch_size` sized to the pair count — which puts the pair list in
+     the PK index condition; unhinted it hashes, and the whole due window ships
+     to Postgres for the probe (995 k rows against 11.6 M on amp2). A batch
+     below the pair count rescans the window once per batch: 2.4x at three
+     passes, and **invisible in the storage counters** — rows scanned and read
+     requests are identical, only wall clock moves, so the drain warns when it
+     happens. It happens by design past `DEQUEUE_BNL_MAX_BATCH`: the outer
+     array costs ~1.8 KB a slot in a YB backend and the cluster is shared
+     across endpoints, each holding `GC_BUCKETS` of them at once, so a raised
+     `gc_drain_limit` buys passes rather than memory (#1239).
+     One statement per bucket, **run concurrently**, each scanning its own
+     bucket's whole due window. Measured on amp2, per-bucket time is unchanged
+     when all three run at once, so a tick pays its slowest bucket rather than
+     their sum (19 s against 47 s); the buckets are separate hash ranges of
+     `(branch_id, bucket_id)` over a six-tablet table, which usually but does
+     not provably put them on different tablets. **That win needs a GC pool
+     wider than one.** `YsqlClient` releases its slot before awaiting, so the
+     pool picks the backend rather than gating the statement, making the
+     realised width `min(GC pool, GC_BUCKETS)` — and the pool is
+     `scale_count(GC_ACTION_PARALLELISM, scale_factor)`, i.e. a single
+     connection at `scale_factor = 1.0`, where all three statements queue on
+     one backend and the tick still pays the sum.
    - **drop / shrink** (`gc_dequeue_drop_shrink_candidates`): delete by exact
      `(ident, due_lsn)` — one row per acted candidate, no window. They act
      per-candidate at `<= due_lsn`, so only the acted candidate may clear;
      an un-acted sibling (e.g. a capped-out later re-drop) keeps its
-     distinct `due_lsn` and stays queued for its own tick.
+     distinct `due_lsn` and stays queued for its own tick. Also hinted and
+     also per-bucket concurrent, but as a guard rather than a tuning: every PK
+     column is bound, so the join method only sets the round-trip count (2
+     storage requests against 2 000 un-batched), while a merge or hash semi
+     join — both reachable — indexes on `(branch_id, bucket_id)` alone and
+     streams the whole bucket to match.
    - **busy-object drops** (a rel fork or SLRU segment with a materialise
      job in flight; for a `DropDb`, *any* fork of the database): *not*
      passed to the dequeue. The drop's rows are

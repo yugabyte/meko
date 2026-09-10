@@ -71,6 +71,19 @@ const TRIM_DELETED_TO_COL: &str = "deleted_to";
 /// subquery, which is exactly where the index scan is wanted.
 const TRIM_LATERAL_HINT: &str = "/*+ IndexScan(scan {index}_pkey) TidScan(del) */";
 
+/// Binds a dequeue's key list into the `pending_gc` PK index condition by
+/// making `unnest` the batched nested loop's outer side. Without it the
+/// planner is free to hash or merge instead, and both index on
+/// `(branch_id, bucket_id)` alone — they stream the bucket to match (#1239).
+const DEQUEUE_BNL_HINT: &str = "YbBatchedNL(pending_gc unnest) Leading((unnest pending_gc))";
+
+/// The `(key, gc_kind, due_lsn)` arrays a drop/shrink dequeue statement binds.
+type DropShrinkBinds = (Vec<Vec<u8>>, Vec<i16>, Vec<i64>);
+
+/// Ceiling on the dequeue's `yb_bnl_batch_size`. One power of two above what
+/// the default `gc_drain_limit` needs, so only a raised limit reaches it.
+const DEQUEUE_BNL_MAX_BATCH: usize = 8192;
+
 /// What one trim runs against: which table, how its keys arrive and how they
 /// are named once deleted. Everything else about the loop is shared and lives
 /// in [`PageStore::run_trim_loop`].
@@ -134,6 +147,27 @@ fn key_hash(key: &Key) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
+}
+
+/// Await one dequeue statement per bucket, `GC_BUCKETS` at a time, and total
+/// the candidates they removed.
+///
+/// `collect`, not `try_collect`: a sibling dropped on another's error may
+/// still commit server-side, and its rows reach `GC_CANDIDATES_DEQUEUED` only
+/// once its own await returns (#1142). Completion order then makes which error
+/// `sum` keeps arbitrary, so each is logged first or the rest vanish.
+async fn sum_bucket_dequeues(
+    dequeues: impl Iterator<Item = impl Future<Output = Result<u64>>>,
+    what: &str,
+) -> Result<u64> {
+    let outcomes = futures::stream::iter(dequeues)
+        .buffer_unordered(GC_BUCKETS as usize)
+        .collect::<Vec<_>>()
+        .await;
+    for e in outcomes.iter().filter_map(|r| r.as_ref().err()) {
+        tracing::warn!(err = ?e, kind = what, "GC dequeue bucket failed");
+    }
+    outcomes.into_iter().sum()
 }
 
 /// Placement bucket for a candidate.
@@ -730,6 +764,37 @@ impl PageStore {
         Ok(removed)
     }
 
+    /// The trim dequeue statement, split out so a test can EXPLAIN it.
+    /// `batch` must cover every row `unnest` emits — see [`bnl_batch_for`].
+    fn gc_dequeue_trim_sql(&self, batch: usize) -> String {
+        format!(
+            "DELETE /*+ Set(yb_bnl_batch_size {batch}) {DEQUEUE_BNL_HINT} */ \
+             FROM \"{schema}\".pending_gc \
+             WHERE branch_id = $1 AND bucket_id = $2 \
+               AND due_lsn > $3 AND due_lsn <= $4 \
+               AND (key, gc_kind) IN (SELECT * FROM unnest($5::bytea[], $6::smallint[]))",
+            schema = self.schema
+        )
+    }
+
+    /// `yb_bnl_batch_size` for a dequeue's batched nested loop, whose outer side
+    /// emits `outer_rows` rows.
+    ///
+    /// Never below `outer_rows` until the ceiling: the join rescans its inner side
+    /// once per batch, and that shows up in nothing but wall clock — rows
+    /// scanned and read requests are identical either way, which is why the
+    /// caller warns when the ceiling binds. There is a ceiling because the
+    /// outer array costs ~1.8 KB a slot in a YB backend, the cluster is shared
+    /// across endpoints, and each one's drain holds `GC_BUCKETS` of them at
+    /// once; past it the statement pays passes rather than memory. Floored at
+    /// YB's own default so a tick's statements share a handful of texts in
+    /// `YsqlClient`'s per-connection cache.
+    fn dequeue_bnl_batch(outer_rows: usize) -> usize {
+        outer_rows
+            .next_power_of_two()
+            .clamp(1024, DEQUEUE_BNL_MAX_BATCH)
+    }
+
     /// Dequeue the visited trim candidates: a bucket-grouped range delete
     /// over `(floor, cutoff]`, matching each `(key, gc_kind)` pair. Same
     /// window as the select, so an object's duplicate/straggler candidates
@@ -768,27 +833,49 @@ impl PageStore {
             keyb.push(key_to_bytes(k));
             kinds.push(kind.to_i16());
         }
-        let sql = format!(
-            "DELETE FROM \"{}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 \
-               AND due_lsn > $3 AND due_lsn <= $4 \
-               AND (key, gc_kind) IN (SELECT * FROM unnest($5::bytea[], $6::smallint[]))",
-            self.schema
-        );
-        let mut removed = 0u64;
-        for (bucket, (keyb, kinds)) in by_bucket {
-            let n = keyb.len();
-            removed += self
-                .dequeue_candidates(
+        // One statement per bucket, concurrently: each scans its own bucket's
+        // whole due window, so a tick pays its slowest bucket, not their sum.
+        let bucket_dequeues = by_bucket.into_iter().map(|(bucket, (keyb, kinds))| {
+            let candidates = keyb.len();
+            let batch = Self::dequeue_bnl_batch(candidates);
+            if batch < candidates {
+                tracing::warn!(
+                    candidates,
+                    batch,
+                    "gc dequeue batch hit its ceiling; the delete re-walks its \
+                     window once per batch — lower gc_drain_limit"
+                );
+            }
+            let sql = self.gc_dequeue_trim_sql(batch);
+            async move {
+                self.dequeue_candidates(
                     &sql,
                     &[&branch_id, &bucket, &floor_i, &cutoff_i, &keyb, &kinds],
                 )
                 .await
                 .with_context(|| {
-                    format!("gc_dequeue_trim_candidates branch={branch_id} bucket={bucket} n={n}")
-                })?;
-        }
-        Ok(removed)
+                    format!("gc_dequeue_trim_candidates branch={branch_id} bucket={bucket} candidates={candidates}")
+                })
+            }
+        });
+        sum_bucket_dequeues(bucket_dequeues, "trim").await
+    }
+
+    /// The drop/shrink dequeue statement, split out so a test can EXPLAIN it.
+    ///
+    /// Deliberately takes YB's default `yb_bnl_batch_size` where the trim
+    /// dequeue pins one: every PK column is bound here, so a second batch
+    /// re-seeks the leftover keys instead of re-walking a window, and the
+    /// batch only sets how many round trips that costs.
+    fn gc_dequeue_drop_shrink_sql(&self) -> String {
+        format!(
+            "DELETE /*+ {DEQUEUE_BNL_HINT} */ \
+             FROM \"{schema}\".pending_gc \
+             WHERE branch_id = $1 AND bucket_id = $2 \
+               AND (key, gc_kind, due_lsn) IN ( \
+                   SELECT * FROM unnest($3::bytea[], $4::smallint[], $5::bigint[]))",
+            schema = self.schema
+        )
     }
 
     /// Dequeue the given drop/shrink candidates by their PK
@@ -801,39 +888,34 @@ impl PageStore {
         if candidates.is_empty() {
             return Ok(0);
         }
-        let mut by_bucket: std::collections::HashMap<i32, Vec<&GcCandidateId>> =
+        // Bucket straight into the three parallel arrays the statement binds.
+        let mut by_bucket: std::collections::HashMap<i32, DropShrinkBinds> =
             std::collections::HashMap::new();
         for c in candidates {
-            by_bucket.entry(gc_bucket_id(&c.0)).or_default().push(c);
+            let (keyb, kinds, due) = by_bucket.entry(gc_bucket_id(&c.0)).or_default();
+            keyb.push(key_to_bytes(&c.0));
+            kinds.push(c.1.to_i16());
+            due.push(c.2.0 as i64);
         }
-        let sql = format!(
-            "DELETE FROM \"{}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 \
-               AND (key, gc_kind, due_lsn) IN ( \
-                   SELECT * FROM unnest($3::bytea[], $4::smallint[], $5::bigint[]))",
-            self.schema
-        );
-        let mut removed = 0u64;
-        for (bucket, cs) in by_bucket {
-            let mut keyb = Vec::with_capacity(cs.len());
-            let mut kinds = Vec::with_capacity(cs.len());
-            let mut due = Vec::with_capacity(cs.len());
-            for c in &cs {
-                keyb.push(key_to_bytes(&c.0));
-                kinds.push(c.1.to_i16());
-                due.push(c.2.0 as i64);
+        let sql = self.gc_dequeue_drop_shrink_sql();
+        // A `&str` view: the statement is the same for every bucket, so the
+        // closure borrows one text rather than moving a `String` per bucket.
+        let sql = sql.as_str();
+        // Concurrently, per bucket, as the trim dequeue is.
+        let bucket_dequeues = by_bucket.into_iter().map(|(bucket, (keyb, kinds, due))| {
+            let candidates = keyb.len();
+            async move {
+                self.dequeue_candidates(sql, &[&branch_id, &bucket, &keyb, &kinds, &due])
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "gc_dequeue_drop_shrink_candidates branch={branch_id} \
+                             bucket={bucket} candidates={candidates}"
+                        )
+                    })
             }
-            let n = cs.len();
-            removed += self
-                .dequeue_candidates(&sql, &[&branch_id, &bucket, &keyb, &kinds, &due])
-                .await
-                .with_context(|| {
-                    format!(
-                        "gc_dequeue_drop_shrink_candidates branch={branch_id} bucket={bucket} n={n}"
-                    )
-                })?;
-        }
-        Ok(removed)
+        });
+        sum_bucket_dequeues(bucket_dequeues, "drop/shrink").await
     }
 
     /// Each block's anchor: the newest base `<= $7`. The trim's only anchor
@@ -4194,6 +4276,112 @@ mod tests {
                     !plan.contains(node),
                     "{label}: trim plans a {node}, so a per-key range is no \
                      longer an index bound:\n{plan}"
+                );
+            }
+        }
+    }
+
+    /// A batch below the outer row count rescans the window once per batch,
+    /// and nothing but wall clock reports it — rows scanned and read requests
+    /// are identical either way. So it covers every outer row until the
+    /// ceiling, which trades those passes for a bound on shared-backend memory.
+    #[test]
+    fn bnl_batch_covers_every_outer_row_up_to_the_ceiling() {
+        for outer_rows in [1, 1023, 1024, 1025, 2201, 3333, DEQUEUE_BNL_MAX_BATCH] {
+            assert!(
+                PageStore::dequeue_bnl_batch(outer_rows) >= outer_rows,
+                "outer_rows={outer_rows}"
+            );
+        }
+        assert_eq!(
+            PageStore::dequeue_bnl_batch(DEQUEUE_BNL_MAX_BATCH * 4),
+            DEQUEUE_BNL_MAX_BATCH
+        );
+    }
+
+    /// Both dequeues have to bind their key list into the PK index condition.
+    /// The plans they must not reach index on `(branch_id, bucket_id)` alone
+    /// and stream every row in the bucket (#1239). The hint text is pinned as
+    /// well as the plan, because `yb_bad_hint_mode = error` catches a
+    /// directive that fails to bind but not one that was deleted.
+    #[tokio::test]
+    async fn gc_dequeues_pin_their_key_list_to_the_index_cond() {
+        let (store, _schema) = make_store("gc_dequeue_plan").await;
+        let branch = BranchId::generate();
+        let bucket: i32 = 0;
+        // Enough keys that the planner would not pick a tight plan unaided,
+        // which would make the assertions vacuous.
+        let key_count = 2_000;
+        let blocks: Vec<Vec<u8>> = (0..key_count)
+            .map(|i| key_to_bytes(&rel_block_to_key(gc_rel(16401, 0), i as u32)))
+            .collect();
+        let trim_kinds: Vec<i16> = vec![GcKind::TrimPages.to_i16(); key_count];
+        let batch = PageStore::dequeue_bnl_batch(key_count);
+        let idents: Vec<Vec<u8>> = (0..key_count)
+            .map(|i| key_to_bytes(&rel_size_to_key(gc_rel(16401 + i as i64, 0))))
+            .collect();
+        let drop_kinds: Vec<i16> = vec![GcKind::DropRel.to_i16(); key_count];
+        let due: Vec<i64> = (0..key_count as i64).map(|i| 100 + i).collect();
+
+        type Binds<'a> = Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>;
+        // The one-pass batched nested loop is the trim's whole point; the
+        // drop/shrink side only needs its triple to stay an index cond.
+        // Per case: the directives its SQL must still carry, and the fragments
+        // its plan must show. The Index Cond fragment is the load-bearing one —
+        // a BNL that rechecks the key list on the join node instead of pushing
+        // it into the scan prints the same node names while streaming the
+        // bucket, so asserting the node alone would pass it.
+        let batch_pin = format!("Set(yb_bnl_batch_size {batch})");
+        // label, statement, binds, directives the SQL must keep, fragments the
+        // plan must show.
+        type Case<'a> = (&'a str, String, Binds<'a>, Vec<&'a str>, &'a [&'a str]);
+        let cases: Vec<Case> = vec![
+            (
+                "trim",
+                store.gc_dequeue_trim_sql(batch),
+                vec![&branch, &bucket, &0i64, &i64::MAX, &blocks, &trim_kinds],
+                vec![DEQUEUE_BNL_HINT, &batch_pin],
+                &["YB Batched Nested Loop Join", "ROW(key, gc_kind) = ANY"],
+            ),
+            (
+                "drop/shrink",
+                store.gc_dequeue_drop_shrink_sql(),
+                vec![&branch, &bucket, &idents, &drop_kinds, &due],
+                vec![DEQUEUE_BNL_HINT],
+                &["ROW(due_lsn, key, gc_kind) = ANY"],
+            ),
+        ];
+
+        for (label, sql, binds, sql_pins, plan_pins) in cases {
+            for pin in sql_pins {
+                assert!(sql.contains(pin), "{label}: lost `{pin}`:\n{sql}");
+            }
+            let plan = explain(&sql, &binds).await;
+            for node in
+                std::iter::once("Index Scan using pending_gc_pkey").chain(plan_pins.iter().copied())
+            {
+                assert!(
+                    plan.contains(node),
+                    "{label}: plan lost {node}, so the key list is no longer an \
+                     index bound:\n{plan}"
+                );
+            }
+            // `Join Filter` is deliberately absent: the correct plan prints
+            // one too, as the batched nested loop's recheck above the pushed-
+            // down Index Cond, so its presence separates nothing. The Index
+            // Cond fragments above are what catch that demotion.
+            for node in [
+                "Merge Semi Join",
+                "Hash Semi Join",
+                "Hash Join",
+                "Seq Scan",
+                "Storage Filter",
+                "Materialize",
+            ] {
+                assert!(
+                    !plan.contains(node),
+                    "{label}: plans a {node}, whose index cond is the bucket \
+                     alone — it streams every row in it:\n{plan}"
                 );
             }
         }
