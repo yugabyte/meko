@@ -1,26 +1,25 @@
-// Package admin: admin_exec_service assembles the executive dashboard payload
-// for the meko_admin console — high-level adoption + efficiency numbers a
-// VP/manager wants at a glance: total users/datapacks/conversations, the
-// account-wide contextual-search token savings, and a top-N leaderboard of the
-// users saving the most tokens (attributed to the user who ran each search).
-// Account-wide totals are read from the maintained token_savings_summary
-// counters; the per-user leaderboard from token_savings_log. The % saved and
-// dollars saved are derived UI-side, mirroring meko_ui's TOKEN BURN tile so the
-// numbers reconcile across the two consoles.
+// Package admin: admin_exec_service assembles the executive dashboard for the
+// meko_admin console. The dashboard is split across four endpoints — growth
+// (users + datapacks), engagement (conversations + promoted memories), knowledge
+// (KB docs/chunks/by-type), and savings (token burn) — so the frontend fetches
+// them in parallel and each panel renders on its own timeline instead of the
+// whole page waiting on the slowest (KB pipeline / Langfuse) query. Every count
+// is windowed to the dashboard's [start, end] range.
 package admin
 
 import (
 	"context"
 	"log/slog"
+	"time"
+
+	adminrepo "meko/api_server/internal/repository/admin"
+	"meko/api_server/internal/service"
 )
 
-// Executive leaderboard tuning: show the top 10 users, and only count users
-// with sustained adoption (>= 20 contextual-search requests) so the board
-// reflects real usage rather than one-off spikes.
-const (
-	execTopUsersLimit = 10
-	execMinRequests   = 20
-)
+// Executive leaderboard tuning: show the top 10 users by tokens saved. There is
+// deliberately no minimum-request threshold — any user who saved tokens in the
+// window is eligible.
+const execTopUsersLimit = 10
 
 // ExecUserSavings is one user's rolled-up token savings for the leaderboard,
 // attributed to the user who ran the searches. RequestCount and TokensSaved
@@ -35,9 +34,58 @@ type ExecUserSavings struct {
 	TokensSaved  int64  `json:"tokens_saved"`
 }
 
-// ExecutiveSummary is the GET /admin/token-savings payload. The account-wide
-// TotalRequests/TotalTokensSaved feed the hero band's % + dollars-saved; the
-// three headcount totals feed the top strip; TopUsers feeds the leaderboard.
+// ExecDocTypeCount is one file-type bucket for the "indexed documents by file
+// type" chart. Type is the stored MIME type; the UI maps it to a friendly label.
+type ExecDocTypeCount struct {
+	Type  string `json:"type"`
+	Count int64  `json:"count"`
+}
+
+// ExecWeekCount is one week's datapack-creation count for the week-over-week
+// chart. WeekStart is the Monday of the ISO week (YYYY-MM-DD).
+type ExecWeekCount struct {
+	WeekStart string `json:"week_start"`
+	Count     int64  `json:"count"`
+}
+
+// ExecGrowth is the GET /admin/executive/growth payload: users and datapacks
+// created in range, plus the week-over-week datapack trend. Control plane, fast.
+type ExecGrowth struct {
+	UsersCreated     int64           `json:"users_created"`
+	DatapacksCreated int64           `json:"datapacks_created"`
+	DatapacksByWeek  []ExecWeekCount `json:"datapacks_by_week"`
+}
+
+// ExecEngagement is the GET /admin/executive/engagement payload: conversations
+// (total + by agent, Langfuse) and promoted memories (data plane), in range.
+type ExecEngagement struct {
+	Conversations        int64                              `json:"conversations"`
+	ConversationsByAgent []adminrepo.AgentConversationCount `json:"conversations_by_agent"`
+	PromotedMemories     int64                              `json:"promoted_memories"`
+	LangfuseEnabled      bool                               `json:"langfuse_enabled"`
+}
+
+// ExecKnowledge is the GET /admin/executive/knowledge payload: indexed KB
+// documents + chunks, and indexed docs grouped by file type, in range.
+type ExecKnowledge struct {
+	KBDocuments       int64              `json:"kb_documents"`
+	KBChunks          int64              `json:"kb_chunks"`
+	KBDocumentsByType []ExecDocTypeCount `json:"kb_documents_by_type"`
+}
+
+// ExecSavings is the GET /admin/executive/savings payload: account-wide
+// contextual-search requests + tokens saved (feed the hero % / dollars) and the
+// top savers leaderboard, in range.
+type ExecSavings struct {
+	TotalRequests    int64             `json:"total_requests"`
+	TotalTokensSaved int64             `json:"total_tokens_saved"`
+	TopUsers         []ExecUserSavings `json:"top_users"`
+}
+
+// ExecutiveSummary is the legacy combined payload for GET /admin/token-savings,
+// kept for the meko_ui in-app admin console until it migrates to the four
+// /admin/executive/* panels (tracked as a follow-up). meko_admin uses the split
+// panels; this shim assembles the subset meko_ui renders from the same methods.
 type ExecutiveSummary struct {
 	TotalUsers         int64             `json:"total_users"`
 	TotalDatapacks     int64             `json:"total_datapacks"`
@@ -48,31 +96,107 @@ type ExecutiveSummary struct {
 	TopUsers           []ExecUserSavings `json:"top_users"`
 }
 
-// Executive gathers the executive dashboard payload. Control-plane counts
-// (users, datapacks, token savings) are required; the Langfuse conversation
-// total is best-effort (zeroed + logged on failure, like the metrics service).
-func (s *AdminMetricsService) Executive(ctx context.Context) (ExecutiveSummary, error) {
-	out := ExecutiveSummary{TopUsers: []ExecUserSavings{}}
+// Growth: users + datapacks created in [start, end], plus the weekly trend.
+// The two counts are required (control plane); the trend is best-effort.
+func (s *AdminMetricsService) Growth(ctx context.Context, start, end *time.Time) (ExecGrowth, error) {
+	out := ExecGrowth{DatapacksByWeek: []ExecWeekCount{}}
+	endExclusive := endExclusiveBound(end)
 
-	total, _, _, _, err := s.repo.CountUsersByTier(ctx, nil, nil)
+	total, _, _, _, err := s.repo.CountUsersByTier(ctx, start, endExclusive)
 	if err != nil {
 		return out, err
 	}
-	out.TotalUsers = total
+	out.UsersCreated = total
 
-	dpCount, err := s.repo.CountDatapacksAll(nil, nil)
+	dpCount, err := s.repo.CountDatapacksAll(start, endExclusive)
 	if err != nil {
 		return out, err
 	}
-	out.TotalDatapacks = dpCount
+	out.DatapacksCreated = dpCount
 
-	req, saved, err := s.repo.TotalTokenSavings()
+	if weeks, wErr := s.repo.CountDatapacksByWeek(start, endExclusive); wErr != nil {
+		slog.Error("exec growth: datapacks by week", "error", wErr)
+	} else {
+		for _, w := range weeks {
+			out.DatapacksByWeek = append(out.DatapacksByWeek, ExecWeekCount{WeekStart: w.WeekStart, Count: w.Count})
+		}
+	}
+	return out, nil
+}
+
+// Engagement: conversations (Langfuse, scoped to this deployment's users) and
+// promoted memories (data plane) in range. All best-effort — a Langfuse/data
+// outage zeroes only this panel.
+func (s *AdminMetricsService) Engagement(ctx context.Context, start, end *time.Time) (ExecEngagement, error) {
+	out := ExecEngagement{ConversationsByAgent: []adminrepo.AgentConversationCount{}}
+	endExclusive := endExclusiveBound(end)
+
+	if n, pErr := s.repo.CountAllPromoted(ctx, start, endExclusive); pErr != nil {
+		slog.Error("exec engagement: promoted memories", "error", pErr)
+	} else {
+		out.PromotedMemories = n
+	}
+
+	// Conversations: scoped to this deployment's users so the shared Langfuse DB
+	// never leaks other deployments' traces.
+	if s.repo.LangfuseConfigured() {
+		out.LangfuseEnabled = true
+		if userIDs, uErr := s.repo.ListUserIDs(ctx); uErr != nil {
+			slog.Error("exec engagement: list user ids; skipping conversations", "error", uErr)
+		} else if len(userIDs) > 0 {
+			if n, cErr := s.repo.TotalConversations(userIDs, start, endExclusive); cErr != nil {
+				slog.Warn("exec engagement: total conversations", "error", cErr)
+			} else {
+				out.Conversations = n
+			}
+			if rows, aErr := s.repo.ConversationsByAgent(userIDs, start, endExclusive); aErr != nil {
+				slog.Warn("exec engagement: conversations by agent", "error", aErr)
+			} else {
+				out.ConversationsByAgent = rows
+			}
+		}
+	}
+	return out, nil
+}
+
+// Knowledge: indexed KB documents + chunks and the by-file-type breakdown in
+// range. All best-effort (data plane).
+func (s *AdminMetricsService) Knowledge(_ context.Context, start, end *time.Time) (ExecKnowledge, error) {
+	out := ExecKnowledge{KBDocumentsByType: []ExecDocTypeCount{}}
+	endExclusive := endExclusiveBound(end)
+
+	if kb, kbErr := s.repo.CountCompletedDocsAndChunksAll(
+		service.DatapackIndexSchema, service.DatapackIndexName, start, endExclusive,
+	); kbErr != nil {
+		slog.Error("exec knowledge: kb counts", "error", kbErr)
+	} else {
+		out.KBDocuments, out.KBChunks = kb.Documents, kb.Chunks
+	}
+	if byType, tErr := s.repo.CountIndexedDocsByTypeAll(
+		service.DatapackIndexSchema, service.DatapackIndexName, start, endExclusive,
+	); tErr != nil {
+		slog.Error("exec knowledge: kb docs by type", "error", tErr)
+	} else {
+		for _, t := range byType {
+			out.KBDocumentsByType = append(out.KBDocumentsByType, ExecDocTypeCount{Type: t.DocumentType, Count: t.Count})
+		}
+	}
+	return out, nil
+}
+
+// Savings: contextual-search requests + tokens saved and the top savers in
+// range. Control plane (token_savings_log); required.
+func (s *AdminMetricsService) Savings(_ context.Context, start, end *time.Time) (ExecSavings, error) {
+	out := ExecSavings{TopUsers: []ExecUserSavings{}}
+	endExclusive := endExclusiveBound(end)
+
+	req, saved, err := s.tokenSavings(start, endExclusive)
 	if err != nil {
 		return out, err
 	}
 	out.TotalRequests, out.TotalTokensSaved = req, saved
 
-	rows, err := s.repo.TopUserTokenSavings(execMinRequests, execTopUsersLimit)
+	rows, err := s.repo.TopUserTokenSavings(start, endExclusive, execTopUsersLimit)
 	if err != nil {
 		return out, err
 	}
@@ -86,22 +210,61 @@ func (s *AdminMetricsService) Executive(ctx context.Context) (ExecutiveSummary, 
 			TokensSaved:  r.TokensSaved,
 		})
 	}
+	return out, nil
+}
 
-	// Total conversations: best-effort, scoped to this deployment's users so
-	// the shared Langfuse DB never leaks other deployments' traces. Any failure
-	// leaves it at zero rather than failing the whole dashboard.
+// tokenSavings reads the cheaper maintained summary counters for the all-time
+// (unbounded) case, and aggregates the append-only log when a range is set.
+func (s *AdminMetricsService) tokenSavings(start, endExclusive *time.Time) (requests, tokensSaved int64, err error) {
+	if start == nil && endExclusive == nil {
+		return s.repo.TotalTokenSavings()
+	}
+	return s.repo.TotalTokenSavingsInRange(start, endExclusive)
+}
+
+// Executive is the legacy combined rollup behind GET /admin/token-savings, kept
+// for the meko_ui in-app admin console (see ExecutiveSummary). It fetches ONLY
+// the fields ExecutiveSummary exposes — the user + datapack totals directly (not
+// the full Growth panel, which also runs the week-over-week CountDatapacksByWeek
+// aggregate ExecutiveSummary has no field for), the Savings panel, and the
+// conversation total + langfuse flag. It skips the Engagement panel entirely
+// (CountAllPromoted / ConversationsByAgent), so no wasted data-plane or Langfuse
+// hit fires on every meko_ui load.
+func (s *AdminMetricsService) Executive(ctx context.Context, start, end *time.Time) (ExecutiveSummary, error) {
+	out := ExecutiveSummary{TopUsers: []ExecUserSavings{}}
+
+	endExclusive := endExclusiveBound(end)
+	users, _, _, _, err := s.repo.CountUsersByTier(ctx, start, endExclusive)
+	if err != nil {
+		return out, err
+	}
+	dpCount, err := s.repo.CountDatapacksAll(start, endExclusive)
+	if err != nil {
+		return out, err
+	}
+	savings, err := s.Savings(ctx, start, end)
+	if err != nil {
+		return out, err
+	}
+
+	out.TotalUsers = users
+	out.TotalDatapacks = dpCount
+	out.TotalRequests = savings.TotalRequests
+	out.TotalTokensSaved = savings.TotalTokensSaved
+	out.TopUsers = savings.TopUsers
+
+	// Conversation total only (best-effort), scoped to this deployment's users.
 	if s.repo.LangfuseConfigured() {
 		out.LangfuseEnabled = true
 		if userIDs, uErr := s.repo.ListUserIDs(ctx); uErr != nil {
-			slog.Error("exec metrics: list user ids; skipping conversations", "error", uErr)
+			slog.Error("exec (legacy): list user ids; skipping conversations", "error", uErr)
 		} else if len(userIDs) > 0 {
-			if n, cErr := s.repo.TotalConversations(userIDs, nil, nil); cErr != nil {
-				slog.Warn("exec metrics: total conversations", "error", cErr)
+			if n, cErr := s.repo.TotalConversations(userIDs, start, endExclusiveBound(end)); cErr != nil {
+				slog.Warn("exec (legacy): total conversations", "error", cErr)
 			} else {
 				out.TotalConversations = n
 			}
 		}
 	}
-
 	return out, nil
 }

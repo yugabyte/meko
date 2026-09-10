@@ -115,19 +115,137 @@ func (h *AdminHandler) Metrics(c echo.Context) error {
 	return ok(c, http.StatusOK, metrics)
 }
 
-// Executive handles GET /api/v1/admin/token-savings — the executive
-// dashboard payload: headcount totals, account-wide contextual-search token
-// savings, and the top datapack owners by tokens saved.
+// execDateRange parses the shared start/end query params used by every
+// executive endpoint. Blank params are nil (all-time); a malformed value is an
+// error the caller maps to 400.
+func execDateRange(c echo.Context) (start, end *time.Time, err error) {
+	if start, err = parseDateParam(c.QueryParam("start")); err != nil {
+		return nil, nil, err
+	}
+	end, err = parseDateParam(c.QueryParam("end"))
+	return start, end, err
+}
+
+// ExecGrowth handles GET /api/v1/admin/executive/growth — users + datapacks
+// created in range, plus the week-over-week datapack trend.
 //
-//	@Summary	Executive dashboard summary (admin)
-//	@Description	Account-wide adoption + token-savings rollup: total users/datapacks/conversations, total contextual-search requests and tokens saved, and a top-10 leaderboard of datapack owners by tokens saved (min 20 requests). Backed by the maintained token_savings_summary counters, attributed by datapack owner.
+//	@Summary	Executive: growth (admin)
+//	@Description	Users and datapacks created in the date range, plus week-over-week datapack creation.
 //	@Tags		admin
 //	@Produce	json
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
 //	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/executive/growth [get]
+func (h *AdminHandler) ExecGrowth(c echo.Context) error {
+	start, end, err := execDateRange(c)
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "start/end must be YYYY-MM-DD")
+	}
+	out, err := h.svc.Growth(c.Request().Context(), start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// ExecEngagement handles GET /api/v1/admin/executive/engagement — conversations
+// (total + by agent) and promoted memories in range.
+//
+//	@Summary	Executive: engagement (admin)
+//	@Description	Conversations (total and by agent, Langfuse) and promoted memories created in the date range.
+//	@Tags		admin
+//	@Produce	json
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/executive/engagement [get]
+func (h *AdminHandler) ExecEngagement(c echo.Context) error {
+	start, end, err := execDateRange(c)
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "start/end must be YYYY-MM-DD")
+	}
+	out, err := h.svc.Engagement(c.Request().Context(), start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// ExecKnowledge handles GET /api/v1/admin/executive/knowledge — indexed KB
+// documents + chunks and the by-file-type breakdown in range.
+//
+//	@Summary	Executive: knowledge (admin)
+//	@Description	Indexed (RAG'd) KB documents and chunks created in the date range, plus indexed documents grouped by file type.
+//	@Tags		admin
+//	@Produce	json
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/executive/knowledge [get]
+func (h *AdminHandler) ExecKnowledge(c echo.Context) error {
+	start, end, err := execDateRange(c)
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "start/end must be YYYY-MM-DD")
+	}
+	out, err := h.svc.Knowledge(c.Request().Context(), start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// ExecSavings handles GET /api/v1/admin/executive/savings — contextual-search
+// requests + tokens saved and the top savers leaderboard in range.
+//
+//	@Summary	Executive: token savings (admin)
+//	@Description	Contextual-search requests and tokens saved in the date range, plus a top-10 leaderboard of users by tokens saved.
+//	@Tags		admin
+//	@Produce	json
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/executive/savings [get]
+func (h *AdminHandler) ExecSavings(c echo.Context) error {
+	start, end, err := execDateRange(c)
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "start/end must be YYYY-MM-DD")
+	}
+	out, err := h.svc.Savings(c.Request().Context(), start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// Executive handles GET /api/v1/admin/token-savings — the legacy combined
+// executive rollup kept for the meko_ui in-app admin console until it migrates
+// to the /admin/executive/* panels. New consumers use those panels.
+//
+//	@Summary	Executive dashboard summary (admin, legacy combined)
+//	@Description	Legacy combined executive rollup (users, datapacks, conversations, token savings, top savers) for the meko_ui in-app admin console. New consumers use the /admin/executive/* panels.
+//	@Tags		admin
+//	@Produce	json
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
 //	@Failure	500	{object}	APIResponse
 //	@Router		/admin/token-savings [get]
 func (h *AdminHandler) Executive(c echo.Context) error {
-	summary, err := h.svc.Executive(c.Request().Context())
+	start, end, err := execDateRange(c)
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "start/end must be YYYY-MM-DD")
+	}
+	summary, err := h.svc.Executive(c.Request().Context(), start, end)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}

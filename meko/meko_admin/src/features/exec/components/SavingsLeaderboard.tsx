@@ -36,9 +36,7 @@ export function SavingsLeaderboard({ users, isLoading }: Props) {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Top savers</CardTitle>
-        <CardDescription>
-          Datapack owners with the most tokens saved (min 20 contextual searches).
-        </CardDescription>
+        <CardDescription>Users with the most tokens saved in the selected range.</CardDescription>
       </CardHeader>
       <CardContent>
         <Table>
@@ -62,7 +60,7 @@ export function SavingsLeaderboard({ users, isLoading }: Props) {
             ) : !users || users.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
-                  No users have reached 20 contextual searches yet.
+                  No token savings recorded in this range yet.
                 </TableCell>
               </TableRow>
             ) : (

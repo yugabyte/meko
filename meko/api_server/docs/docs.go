@@ -41,6 +41,190 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/executive/engagement": {
+            "get": {
+                "description": "Conversations (total and by agent, Langfuse) and promoted memories created in the date range.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Executive: engagement (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Range start (inclusive), YYYY-MM-DD",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range end (inclusive), YYYY-MM-DD",
+                        "name": "end",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/executive/growth": {
+            "get": {
+                "description": "Users and datapacks created in the date range, plus week-over-week datapack creation.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Executive: growth (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Range start (inclusive), YYYY-MM-DD",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range end (inclusive), YYYY-MM-DD",
+                        "name": "end",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/executive/knowledge": {
+            "get": {
+                "description": "Indexed (RAG'd) KB documents and chunks created in the date range, plus indexed documents grouped by file type.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Executive: knowledge (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Range start (inclusive), YYYY-MM-DD",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range end (inclusive), YYYY-MM-DD",
+                        "name": "end",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/executive/savings": {
+            "get": {
+                "description": "Contextual-search requests and tokens saved in the date range, plus a top-10 leaderboard of users by tokens saved.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Executive: token savings (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Range start (inclusive), YYYY-MM-DD",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range end (inclusive), YYYY-MM-DD",
+                        "name": "end",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/feedback": {
             "get": {
                 "produces": [
@@ -125,17 +309,37 @@ const docTemplate = `{
         },
         "/admin/token-savings": {
             "get": {
-                "description": "Account-wide adoption + token-savings rollup: total users/datapacks/conversations, total contextual-search requests and tokens saved, and a top-10 leaderboard of datapack owners by tokens saved (min 20 requests). Backed by the maintained token_savings_summary counters, attributed by datapack owner.",
+                "description": "Legacy combined executive rollup (users, datapacks, conversations, token savings, top savers) for the meko_ui in-app admin console. New consumers use the /admin/executive/* panels.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "admin"
                 ],
-                "summary": "Executive dashboard summary (admin)",
+                "summary": "Executive dashboard summary (admin, legacy combined)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Range start (inclusive), YYYY-MM-DD",
+                        "name": "start",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Range end (inclusive), YYYY-MM-DD",
+                        "name": "end",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }

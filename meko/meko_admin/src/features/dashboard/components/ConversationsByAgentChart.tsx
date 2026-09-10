@@ -2,6 +2,7 @@ import {
   BarChart,
   Bar,
   Cell,
+  LabelList,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -11,25 +12,13 @@ import {
 import { MessageSquare } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BAR_COLORS } from "./chartColors";
 
 type Props = {
   data: { agent: string; conversations: number }[] | undefined;
   enabled: boolean | undefined;
   isLoading: boolean;
 };
-
-// Cycled per-bar palette so the chart reads as multi-color, echoing the metric
-// tile accents (blue/orange/violet/emerald/pink/cyan/amber/sky).
-const BAR_COLORS = [
-  "hsl(217 91% 60%)",
-  "hsl(25 95% 53%)",
-  "hsl(258 90% 66%)",
-  "hsl(160 84% 39%)",
-  "hsl(330 81% 60%)",
-  "hsl(189 94% 43%)",
-  "hsl(43 96% 56%)",
-  "hsl(199 89% 48%)",
-];
 
 // Conversations grouped by agent (Langfuse). Horizontal bars so agent names
 // stay readable regardless of count.
@@ -55,7 +44,7 @@ export function ConversationsByAgentChart({ data, enabled, isLoading }: Props) {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(200, rows.length * 40)}>
-            <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
+            <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 40, left: 8, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
               <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} className="text-muted-foreground" />
               <YAxis
@@ -78,6 +67,12 @@ export function ConversationsByAgentChart({ data, enabled, isLoading }: Props) {
                 {rows.map((_, i) => (
                   <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} />
                 ))}
+                <LabelList
+                  dataKey="conversations"
+                  position="right"
+                  className="fill-foreground"
+                  fontSize={11}
+                />
               </Bar>
             </BarChart>
           </ResponsiveContainer>

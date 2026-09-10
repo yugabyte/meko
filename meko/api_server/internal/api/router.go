@@ -400,6 +400,14 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc, reg.adminDataPlaneSvc, reg.adminFeedbackSvc)
 	adminGroup.GET("/users", adminH.Users)
 	adminGroup.GET("/metrics", adminH.Metrics)
+	// Executive dashboard, split into four parallel-fetched panels so the page
+	// never waits on the slowest (KB pipeline / Langfuse) query.
+	adminGroup.GET("/executive/growth", adminH.ExecGrowth)
+	adminGroup.GET("/executive/engagement", adminH.ExecEngagement)
+	adminGroup.GET("/executive/knowledge", adminH.ExecKnowledge)
+	adminGroup.GET("/executive/savings", adminH.ExecSavings)
+	// Legacy combined rollup, kept for the meko_ui in-app admin console until it
+	// migrates to the panels above (follow-up).
 	adminGroup.GET("/token-savings", adminH.Executive)
 	adminGroup.GET("/dataplane", adminH.DataPlane)
 	adminGroup.PATCH("/users/:id/tier", adminH.UpdateUserTier)

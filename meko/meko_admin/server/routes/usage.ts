@@ -1,6 +1,14 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { apiServerGet, apiServerSend } from "../apiServerClient";
 import { type AuthenticatedRequest } from "../middleware/requireAdminAuth";
+
+// Forward the shared start/end range params (only when present) to api_server.
+function rangeQuery(req: Request): Record<string, string> {
+  const query: Record<string, string> = {};
+  if (typeof req.query.start === "string") query.start = req.query.start;
+  if (typeof req.query.end === "string") query.end = req.query.end;
+  return query;
+}
 
 // One tier-change audit event (who changed a user's tier, old→new, when).
 type TierAuditEntry = {
@@ -51,16 +59,22 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-/** GET /api/admin/usage/token-savings — executive dashboard summary
- *  (headcount totals + account-wide token savings + top-owner leaderboard). */
-router.get("/token-savings", async (_req, res, next) => {
-  try {
-    const data = await apiServerGet<Record<string, unknown>>("/token-savings");
-    res.json(data);
-  } catch (e) {
-    next(e);
-  }
-});
+/** GET /api/admin/usage/executive/:panel — executive dashboard, split into four
+ *  panels (growth, engagement, knowledge, savings) the client fetches in
+ *  parallel. Each forwards the start/end range to the matching api_server route. */
+for (const panel of ["growth", "engagement", "knowledge", "savings"] as const) {
+  router.get(`/executive/${panel}`, async (req, res, next) => {
+    try {
+      const data = await apiServerGet<Record<string, unknown>>(
+        `/executive/${panel}`,
+        rangeQuery(req),
+      );
+      res.json(data);
+    } catch (e) {
+      next(e);
+    }
+  });
+}
 
 /** GET /api/admin/usage/dataplane — live YBA universe config + utilization. */
 router.get("/dataplane", async (_req, res, next) => {

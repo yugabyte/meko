@@ -167,22 +167,71 @@ export type ExecUserSavings = {
   tokens_saved: number;
 };
 
-export type ExecutiveSummary = {
-  total_users: number;
-  total_datapacks: number;
-  total_conversations: number;
+/** One file-type bucket for the "indexed documents by file type" chart. `type`
+ *  is the stored MIME type (e.g. application/pdf); the UI maps it to a label. */
+export type ExecDocTypeCount = {
+  type: string;
+  count: number;
+};
+
+/** One week's datapack-creation count for the week-over-week chart.
+ *  `week_start` is the Monday of the ISO week (YYYY-MM-DD). */
+export type ExecWeekCount = {
+  week_start: string;
+  count: number;
+};
+
+/** One agent's conversation count for the conversations-by-agent chart. */
+export type AgentConversationCount = { agent: string; conversations: number };
+
+// The executive dashboard is split into four panels the page fetches in
+// parallel; every count is windowed to the selected date range.
+
+/** Growth panel: users + datapacks created in range, plus the weekly trend. */
+export type ExecGrowth = {
+  users_created: number;
+  datapacks_created: number;
+  datapacks_by_week: ExecWeekCount[];
+};
+
+/** Engagement panel: conversations (total + by agent) and promoted memories. */
+export type ExecEngagement = {
+  conversations: number;
+  conversations_by_agent: AgentConversationCount[];
+  promoted_memories: number;
   langfuse_enabled: boolean;
+};
+
+/** Knowledge panel: indexed KB docs + chunks and the by-file-type breakdown. */
+export type ExecKnowledge = {
+  kb_documents: number;
+  kb_chunks: number;
+  kb_documents_by_type: ExecDocTypeCount[];
+};
+
+/** Savings panel: contextual-search requests + tokens saved and top savers. */
+export type ExecSavings = {
   total_requests: number;
   total_tokens_saved: number;
   top_users: ExecUserSavings[];
 };
 
-/** Executive dashboard rollup: headcount totals, account-wide contextual-search
- *  token savings, and the top datapack owners by tokens saved. */
-export async function fetchExecutiveSummary(): Promise<ExecutiveSummary> {
-  const { data } = await http.get<ExecutiveSummary>("/usage/token-savings");
+async function fetchExecPanel<T>(panel: string, start?: string, end?: string): Promise<T> {
+  const params: Record<string, string> = {};
+  if (start) params.start = start;
+  if (end) params.end = end;
+  const { data } = await http.get<T>(`/usage/executive/${panel}`, { params });
   return data;
 }
+
+export const fetchExecGrowth = (start?: string, end?: string) =>
+  fetchExecPanel<ExecGrowth>("growth", start, end);
+export const fetchExecEngagement = (start?: string, end?: string) =>
+  fetchExecPanel<ExecEngagement>("engagement", start, end);
+export const fetchExecKnowledge = (start?: string, end?: string) =>
+  fetchExecPanel<ExecKnowledge>("knowledge", start, end);
+export const fetchExecSavings = (start?: string, end?: string) =>
+  fetchExecPanel<ExecSavings>("savings", start, end);
 
 /** Override a single user's tier (Free <-> Pro). */
 export async function updateUserTier(
