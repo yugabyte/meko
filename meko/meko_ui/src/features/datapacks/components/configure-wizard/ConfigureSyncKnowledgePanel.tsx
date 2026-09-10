@@ -172,7 +172,7 @@ export function ConfigureSyncKnowledgePanel({
                       const s = it.uploadStatus;
                       if (!s || s === KNOWLEDGE_UPLOAD_STATUS.PENDING) return "Not uploaded";
                       if (s === KNOWLEDGE_UPLOAD_STATUS.UPLOADING)
-                        return `Uploading${it.uploadProgress != null ? ` ${it.uploadProgress}%` : "…"}`;
+                        return `Uploading${it.uploadProgress != null ? ` ${it.uploadProgress.toFixed(1)}%` : "…"}`;
                       if (s === KNOWLEDGE_UPLOAD_STATUS.DONE) return it.uploadNote ?? "Uploaded";
                       if (s === KNOWLEDGE_UPLOAD_STATUS.SKIPPED) return it.uploadNote ?? "Skipped";
                       if (s === KNOWLEDGE_UPLOAD_STATUS.ERROR) return "Upload failed";

@@ -23,10 +23,16 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { sanitizeFilenameForMatch } from "@/lib/knowledgeFileUploadRules";
 import { getApiErrorMessage, getKnowledgeBaseDocuments } from "@/lib/api/mekoApi";
 import { documentFileExtension, documentNameLastSegment } from "./knowledgeDocumentName";
+import { isKbDocumentInFlight } from "./knowledgeDocumentStatus";
 import { type FileTypeFilter, type StatusFilter } from "./KnowledgeFilesTable";
 import { kbFilesKeys } from "@/features/datapacks/lib/knowledgeQueryKeys";
 
 export { kbFilesKeys };
+
+/** Poll cadence while the pipeline still owns a document. Fast enough that a
+ *  status change reads as immediate; react-query holds the timer only while
+ *  the window is focused. */
+const DOCUMENTS_POLL_MS = 3000;
 
 type UseKnowledgeFilesTableArgs = {
   datapackId: string;
@@ -142,7 +148,17 @@ export function useKnowledgeFilesTable({
   }
 
   const hasPendingPlaceholders = queuedPlaceholders.size > 0;
-  const shouldPollDocuments = hasPendingPlaceholders || uploadProcessingActive;
+  const uploadInFlight = hasPendingPlaceholders || uploadProcessingActive;
+
+  // Whether any document the table knows about is still owned by the
+  // pipeline. Set after the queries below, and read back through a ref by
+  // their `refetchInterval` callbacks, which run long after this render.
+  const unsettledRef = useRef(false);
+  // Used to be armed by this session's own upload alone, so a table watching
+  // someone else's upload froze on its last-fetched status -- under the
+  // Queued filter, a row stuck in a queue it already left.
+  const pollWhileUnsettled = () =>
+    uploadInFlight || unsettledRef.current ? DOCUMENTS_POLL_MS : false;
 
   const documentsQuery = useQuery({
     queryKey: kbFilesKeys.documents(datapackId, page, pageSize, q, typeFilter, statusFilter),
@@ -161,10 +177,12 @@ export function useKnowledgeFilesTable({
     // spinner-every-time or a cache that never double-checks itself.
     staleTime: 10_000,
     placeholderData: keepPreviousData,
-    // Only while something's genuinely in flight (a fresh upload still
-    // discovering/indexing) -- otherwise an already-settled KB sits idle,
-    // exactly like the previous hand-rolled setInterval version.
-    refetchInterval: shouldPollDocuments ? 3000 : false,
+    // Only while something's genuinely in flight -- an already-settled KB
+    // sits idle. Caveat: a legacy row permanently stuck in one of
+    // isKbDocumentInFlight's statuses (e.g. an extension nothing could
+    // index) never settles, so this polls for as long as the tab is open,
+    // not only while a real upload is resolving.
+    refetchInterval: pollWhileUnsettled,
   });
   const documents = documentsQuery.data?.items ?? [];
   const total = documentsQuery.data?.total ?? 0;
@@ -176,6 +194,34 @@ export function useKnowledgeFilesTable({
   const error = documentsQuery.isError
     ? getApiErrorMessage(documentsQuery.error, "Could not load knowledge documents.")
     : null;
+
+  // A status filter (e.g. QUEUED) can empty out as polling moves rows away,
+  // leaving the table blank with no path back but clearing it manually.
+  // Rebaselined on filter change (below), so an already-empty filter is left
+  // alone -- only one that had matches and lost them all gets reset.
+  const lastNonZeroTotalRef = useRef(0);
+  const lastStatusFilterRef = useRef(statusFilter);
+  useEffect(() => {
+    // A failed fetch reports total 0 with loading false (isLoading and
+    // isPlaceholderData are both false once a query settles into error), so
+    // it must be excluded here too -- otherwise an error on screen gets
+    // read as "the filter's rows all moved elsewhere" and silently reset.
+    if (loading || documentsQuery.isError) return;
+    if (lastStatusFilterRef.current !== statusFilter) {
+      // The filter itself just changed -- start tracking fresh rather than
+      // judging the new filter by the old one's history, or switching to an
+      // already-empty filter would immediately bounce back to "all".
+      lastStatusFilterRef.current = statusFilter;
+      lastNonZeroTotalRef.current = total;
+      return;
+    }
+    if (statusFilter !== "all" && total === 0 && lastNonZeroTotalRef.current > 0) {
+      setStatusFilter("all");
+      setPage(1);
+      return;
+    }
+    lastNonZeroTotalRef.current = total;
+  }, [statusFilter, total, loading, documentsQuery.isError]);
 
   // Deep-link page locator: if `highlightDocumentId` isn't on the
   // currently-loaded page, find which page it's actually on (ignoring
@@ -282,31 +328,55 @@ export function useKnowledgeFilesTable({
     setPage(targetPage);
   }, [locateQuery.data, pageSize]);
 
-  // Which file-type / status chips are worth showing at all -- e.g. no
-  // point offering a ".json" chip in a datapack that has never had one.
-  // Sampled from up to 200 documents (the API's page cap) ignoring the
-  // current type/status filter (but honoring search) so switching a
-  // filter doesn't itself shrink the chip list out from under the user.
-  // A best-effort sample, not an exact distinct-values query -- fine for
-  // deciding which chips are worth a click, over-provisioning past 200
-  // uploaded files just means an extra chip or two might show.
-  const availableFiltersQuery = useQuery({
+  // An *unfiltered* view (up to 200, the API's page cap), honoring only the
+  // search box -- needed because the type/status filter can hide the rows
+  // that (1) decide which file-type chips to offer and (2) retire
+  // placeholder rows below. Statuses are NOT derived from this: they change
+  // within seconds, so the dropdown offers the full fixed list (FilterRow).
+  const unfilteredQuery = useQuery({
     queryKey: kbFilesKeys.availableFilters(datapackId, q),
     queryFn: ({ signal }) =>
       getKnowledgeBaseDocuments(datapackId, { page: 1, page_size: 200, q: q || undefined, signal }),
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: pollWhileUnsettled,
     // Sampling failure just means chips fall back to "show everything"
     // (see FilterRow) -- not worth surfacing an error for, so no `error`
     // is read out of this query at all.
   });
-  // Unioned with whatever is on the current page, because the sample is a
-  // separate cache entry with its own staleTime and no refetchInterval: while
-  // `documentsQuery` polls an in-flight upload, the sample stays frozen on the
-  // pre-upload picture, so a file that just went PROCESSING renders that badge
-  // in its row while the dropdown still offers only "Indexed" until a reload.
-  // Rows in `documents` are real server rows, so a status/type taken from one
-  // is guaranteed to match at least that row when picked.
-  const sampledAndVisible = [...(availableFiltersQuery.data?.items ?? []), ...documents];
+  const unfilteredDocuments = unfilteredQuery.data?.items ?? [];
+
+  // Both lists: the page can hold a row the sample missed, and the sample
+  // holds rows a status filter hid from the page -- including the file that
+  // just left the queue, why the poll must keep running after the page empties.
+  const unsettledDocuments =
+    documents.some((d) => isKbDocumentInFlight(d.status)) ||
+    unfilteredDocuments.some((d) => isKbDocumentInFlight(d.status));
+  unsettledRef.current = unsettledDocuments;
+  const shouldPollDocuments = uploadInFlight || unsettledDocuments;
+
+  // Placeholder rows for files uploaded but not yet listed by
+  // ListDistRagDocuments. Dropped once the real document exists, matched
+  // the same way FileUpload matches uploads against pipelineDetails.
+  // Matched against the *unfiltered* list, not the current page: under a
+  // status filter the page can't contain the row, and keying off it would
+  // strand the placeholder on its last known status forever.
+  const knownKeys = new Set(
+    [...documents, ...unfilteredDocuments].map((d) =>
+      sanitizeFilenameForMatch(documentNameLastSegment(d.document_name).replace(/^\d+_/, "")),
+    ),
+  );
+  const unfilteredPlaceholders = Array.from(queuedPlaceholders.entries())
+    .filter(([key]) => !knownKeys.has(key))
+    .map(([, { displayName, status }]) => ({ name: displayName, status }));
+  // The server applies type_filter/status_filter to `documents`; placeholders
+  // never went through it, so they have to be filtered here or a QUEUED
+  // upload keeps showing under "Indexed".
+  const pendingPlaceholders = unfilteredPlaceholders.filter(
+    ({ name, status }) =>
+      (statusFilter === "all" || status === statusFilter) &&
+      (typeFilter === "all" || documentFileExtension(name) === typeFilter),
+  );
+
   const availableTypeFilters = Array.from(
     new Set(
       // `document_type` on a document row is the S3 object's MIME
@@ -314,12 +384,19 @@ export function useKnowledgeFilesTable({
       // filter itself matches a file-extension suffix on the name
       // server-side, so the available-chips sample has to key off the
       // same thing or every chip would filter out every document (see
-      // documentFileExtension's doc comment).
-      sampledAndVisible.map((d) => documentFileExtension(d.document_name)).filter(Boolean),
+      // documentFileExtension's doc comment). Unioned with `documents`
+      // (the current page) for the same reason as unsettledDocuments above:
+      // the current page can hold a row the 200-document sample missed, so
+      // a type present only on that row would otherwise offer no chip.
+      [
+        ...documents.map((d) => documentFileExtension(d.document_name)),
+        ...unfilteredDocuments.map((d) => documentFileExtension(d.document_name)),
+        // Placeholders too: a file uploaded seconds ago has no document row
+        // to sample yet, and its extension is exactly the one just added.
+        ...unfilteredPlaceholders.map((p) => documentFileExtension(p.name)),
+      ].filter(Boolean),
     ),
   );
-  const availableStatusFilters = Array.from(new Set(sampledAndVisible.map((d) => d.status)));
-
   // Bridge the caller's external `refreshKey` (bumped after a delete or
   // KB-create elsewhere) into a cache invalidation -- react-query then
   // refetches every cached page/filter combo for this datapack, keeping
@@ -386,19 +463,13 @@ export function useKnowledgeFilesTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- page/pageSize/q/typeFilter/statusFilter are only read to build selfKey (which excludes this exact query, not to scope what changed); including them would re-run this effect on every filter change for no benefit beyond what dataUpdatedAt already captures.
   }, [documentsQuery.dataUpdatedAt, shouldPollDocuments, qc, datapackId]);
 
-  // Prune graduated names out of the stored map (not just the rendered
-  // list below) once `documents` confirms them -- otherwise the map only
-  // ever grows, which would leave hasPendingPlaceholders (and its poll)
-  // running forever after the very first queued upload. `document_name`
-  // is already the sanitized S3-key basename, matching the sanitized keys
-  // the map is stored under (see queuedPlaceholders above).
+  // Prune graduated names out of the stored map, not just the rendered list
+  // -- otherwise it only grows, leaving hasPendingPlaceholders' poll running
+  // forever. Uses the same filter-blind `knownKeys` so a status filter can't
+  // keep a name in the map by hiding its row.
   useEffect(() => {
     if (queuedPlaceholders.size === 0) return;
-    const known = new Set(
-      documents.map((d) =>
-        sanitizeFilenameForMatch(documentNameLastSegment(d.document_name).replace(/^\d+_/, "")),
-      ),
-    );
+    const known = knownKeys;
     setQueuedPlaceholders((prev) => {
       let changed = false;
       const next = new Map(prev);
@@ -410,8 +481,8 @@ export function useKnowledgeFilesTable({
       });
       return changed ? next : prev;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `documents` (derived from documentsQuery.data) is a new array each fetch; keying on it directly would re-run every poll for no reason beyond what dataUpdatedAt already captures.
-  }, [documentsQuery.dataUpdatedAt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `knownKeys` is a new Set every render; the two dataUpdatedAt stamps are the only things that change what's in it, so keying on them runs this exactly once per fetch instead of once per render.
+  }, [documentsQuery.dataUpdatedAt, unfilteredQuery.dataUpdatedAt]);
 
   // Reset to page 1 when type or status filter changes. Called directly
   // in the event handler so React 18 batches both state updates into one
@@ -427,20 +498,6 @@ export function useKnowledgeFilesTable({
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const hasActiveFilter = q !== "" || typeFilter !== "all" || statusFilter !== "all";
-
-  // Drop a placeholder the moment the real row shows up in `documents`
-  // (matched the same way FileUpload matches uploads against pipelineDetails
-  // -- last path segment, numeric-id prefix stripped, sanitized -- so the
-  // two never show the same file twice regardless of whether the
-  // placeholder's key came from a raw or already-sanitized name).
-  const knownKeys = new Set(
-    documents.map((d) =>
-      sanitizeFilenameForMatch(documentNameLastSegment(d.document_name).replace(/^\d+_/, "")),
-    ),
-  );
-  const pendingPlaceholders = Array.from(queuedPlaceholders.entries())
-    .filter(([key]) => !knownKeys.has(key))
-    .map(([, { displayName, status }]) => ({ name: displayName, status }));
 
   return {
     typeFilter,
@@ -465,7 +522,6 @@ export function useKnowledgeFilesTable({
     pendingPlaceholders,
     hasActiveFilter,
     availableTypeFilters,
-    availableStatusFilters,
     pollTick,
     /** Wire directly to `<FileUpload onQueuedDocsChange={...} />`. */
     handleQueuedDocsChange,

@@ -45,10 +45,12 @@ import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   dedupNote,
   filterFilesForKnowledgeUploadBatch,
+  unsupportedKnowledgeFileMessage,
 } from "@/lib/knowledgeFileUploadRules";
 import { useKnowledgeUploadMaxFileSizeMB } from "@/hooks/useKnowledgeUploadMaxFileSizeMB";
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
+import { verifyFileContent } from "@/lib/sniffFileType";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 import { validateDatapackName } from "@/lib/datapackNameValidation";
 import { toast } from "@/hooks/use-toast";
@@ -294,6 +296,41 @@ export default function DatapackConfigureWizardPage({
       );
       for (const item of pending) {
         const file = item.file!;
+        // Decided from the filename, so it costs nothing: refuse before the
+        // hash and the presign, neither of which an unsupported type can use.
+        const unsupported = unsupportedKnowledgeFileMessage(file.name);
+        if (unsupported) {
+          setKnowledgeItems((prev) =>
+            prev.map((x) =>
+              x.id === item.id
+                ? {
+                    ...x,
+                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                    uploadProgress: 0,
+                    uploadError: unsupported,
+                  }
+                : x,
+            ),
+          );
+          continue;
+        }
+
+        // Reads only 3 KB, far cheaper than hashing the whole file, so a
+        // spoofed file fails before the hash and the presign, not after.
+        // uploadFileToS3 re-checks right before the transfer too, since the
+        // file can still change between now and then.
+        const contentIssue = await verifyFileContent(file);
+        if (contentIssue) {
+          setKnowledgeItems((prev) =>
+            prev.map((x) =>
+              x.id === item.id
+                ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR, uploadProgress: 0, uploadError: contentIssue }
+                : x,
+            ),
+          );
+          continue;
+        }
+
         setKnowledgeItems((prev) =>
           prev.map((x) =>
             x.id === item.id
@@ -303,10 +340,9 @@ export default function DatapackConfigureWizardPage({
         );
         try {
           const contentHash = await sha256Hex(file);
-          const { url, key, already_uploaded, existing_filename } = await requestUploadURL(
+          const { url, fields, key, already_uploaded, existing_filename } = await requestUploadURL(
             pack,
             file.name,
-            file.type || "application/octet-stream",
             file.size,
             contentHash,
           );
@@ -325,7 +361,7 @@ export default function DatapackConfigureWizardPage({
             continue;
           }
 
-          await uploadFileToS3(url, file, (pct) => {
+          await uploadFileToS3(url, fields ?? {}, file, (pct) => {
             setKnowledgeItems((prev) =>
               prev.map((x) => (x.id === item.id ? { ...x, uploadProgress: pct } : x)),
             );

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -29,6 +30,22 @@ func NewKnowledgeBaseService(
 	bucket string,
 ) *KnowledgeBaseService {
 	return &KnowledgeBaseService{repo: repo, bucket: bucket}
+}
+
+// S3KeyIsSafeToDelete reports whether a key is not still referenced by a
+// dist_rag document (DocumentExistsForURI, spanning every source_id, unlike
+// a single source's existingURIs). Artifacts no longer need checking here —
+// UploadArtifactObject's "artifacts/" prefix is disjoint from this space —
+// assuming meko/scripts/migrate_artifacts_prefix.py has already run.
+// Errors count as "not safe": this guards an unrecoverable DELETE.
+func (s *KnowledgeBaseService) S3KeyIsSafeToDelete(dp *models.Datapack, key string) (bool, error) {
+	docURI := fmt.Sprintf("s3://%s/%s", s.bucket, key)
+	if tracked, err := s.DocumentExistsForURI(dp, docURI); err != nil {
+		return false, fmt.Errorf("check document registration: %w", err)
+	} else if tracked {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Bucket returns the configured S3 bucket name.
@@ -170,6 +187,44 @@ func (s *KnowledgeBaseService) DeleteDocument(
 	return s.repo.DeleteDocument(dp.ID, documentID)
 }
 
+// ErrDocumentInFlight means DeleteDocumentByURI found a document row but its
+// pipeline hasn't reached a terminal status yet, so the delete was refused.
+var ErrDocumentInFlight = errors.New("document is still being processed")
+
+// DeleteDocumentByURI removes a document's chunks + dist_rag rows by its S3
+// URI, for callers that only have the URI. Returns found=false, no error,
+// if no row exists there. Returns ErrDocumentInFlight for the same reason
+// DeleteDocument's handler-level guard exists: a mid-chunking delete
+// orphans what the rag_agent worker writes next.
+func (s *KnowledgeBaseService) DeleteDocumentByURI(
+	dp *models.Datapack, documentURI string,
+) (found bool, err error) {
+	if dp == nil {
+		return false, fmt.Errorf("datapack is required")
+	}
+	documentID, ok, err := s.repo.GetDocumentIDForURI(dp.ID, documentURI)
+	if err != nil {
+		return false, fmt.Errorf("resolve document id for uri: %w", err)
+	}
+	if !ok {
+		return false, nil
+	}
+	ref, err := s.repo.GetDocumentRef(dp.ID, documentID, DatapackIndexSchema, DatapackIndexName)
+	if err != nil {
+		return false, fmt.Errorf("get document ref %s: %w", documentID, err)
+	}
+	// Same allow-list as DeleteDocument's handler-level guard — see its
+	// comment for why only COMPLETED/FAILED are treated as terminal.
+	switch strings.ToUpper(ref.Status) {
+	case "NOT_STARTED", "QUEUED", "PROCESSING", "RETRY":
+		return false, ErrDocumentInFlight
+	}
+	if _, err := s.repo.DeleteDocument(dp.ID, documentID); err != nil {
+		return false, fmt.Errorf("delete document %s: %w", documentID, err)
+	}
+	return true, nil
+}
+
 // Upsert inserts or updates a knowledge_base row keyed by
 // (datapack_id, rag_source_id). Used by the CreateKB flow which
 // needs idempotency on retried calls.
@@ -187,6 +242,17 @@ func (s *KnowledgeBaseService) GetSourceIDs(
 		return nil, fmt.Errorf("datapack is required")
 	}
 	return s.repo.GetSourceIDs(dp.ID)
+}
+
+// DocumentExistsForURI reports whether the datapack already has a document
+// registered for an S3 URI, under any of its sources.
+func (s *KnowledgeBaseService) DocumentExistsForURI(
+	dp *models.Datapack, documentURI string,
+) (bool, error) {
+	if dp == nil {
+		return false, fmt.Errorf("datapack is required")
+	}
+	return s.repo.DocumentExistsForURI(dp.ID, documentURI)
 }
 
 // GetSourceURIs returns the knowledge_base_url values for a datapack.

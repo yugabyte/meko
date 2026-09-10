@@ -21,7 +21,7 @@ All of this happens within your datapack's database; there's no separate vector 
 
 ## Supported document formats
 
-Currently, Meko accepts PDF, TXT, MD, JSON, CSV, and HTML files up to 10 per batch. The per-file size cap depends on your plan: 5 MB on Free, 50 MB on Standard.
+Currently, Meko accepts PDF, TXT, TEXT, MD, CSV, JSON, XML, HTML, and HTM files up to 10 per batch. The per-file size cap depends on your plan: 5 MB on Free, 50 MB on Standard.
 
 > [!NOTE] Free tier
 >

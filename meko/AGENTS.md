@@ -95,6 +95,7 @@ Per-component dev loops:
 
 ```bash
 # api_server — unit tests are mocked; integration tests need YugabyteDB on localhost:5433
+# See the destructive-tests warning below before running the whole tree.
 (cd api_server && go test ./... -v)
 (cd api_server && go test ./internal/auth/ -run TestValidateAccessToken_Valid -v)   # single test
 (cd api_server && go test ./... -v -count=1)                                          # bypass cache
@@ -115,6 +116,29 @@ Per-component dev loops:
 # (helm plugin install https://github.com/helm-unittest/helm-unittest)
 helm unittest deploy/helm/meko
 ```
+
+### `api_server/internal/handlers` tests delete your local data
+
+`go test ./internal/handlers/` (and therefore `go test ./...` in `api_server`)
+**empties meko_system tables in whatever database is listening on
+localhost:5433** — `datapacks`, `knowledge_bases`, `agents`, `agent_access`,
+`agent_access_permissions`, `datapack_invites` and the langfuse mappings. Every
+test calls `setupTestServer` → `cleanupDatapacks`, which runs unconditional
+`DELETE`s, and the connection string is a hardcoded constant (`testConnStr` in
+`health_handler_test.go`), so pointing the suite elsewhere means editing the
+source. There is no prompt and no dry run.
+
+If your local stack is up, that database *is* your dev data. Stop it, or accept
+losing every datapack, before running the suite. S3 objects and the `dist_rag`
+schema are untouched, so uploaded files and their chunks survive — but the
+datapack rows that reference them do not, and the `agents` rows are gone with
+no way to reconstruct them.
+
+Recovering means re-inserting datapack rows with their **original** UUIDs, which
+can be read back out of `dist_rag.sources` (each `source_uri` is
+`s3://<bucket>/<user_id>/<datapack_id>/`). Same id, same S3 prefix, and
+`CreateKB` re-adopts the orphaned dist_rag source by URI. Datapack *names* are
+not recoverable.
 
 **Linting the chart needs a values preset.** It is preset-driven, so bare
 defaults trip an install-time guard (`ingress.tls.acmCertArn required for

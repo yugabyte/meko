@@ -462,6 +462,66 @@ func (r *KnowledgeBaseRepo) GetDocumentRef(
 	return out, nil
 }
 
+// DocumentExistsForURI reports whether any of a datapack's dist_rag sources
+// already holds a document row for an S3 URI. Two-step for the same reason as
+// GetDocumentRef: the source_id filter lives in meko_system and the documents
+// in dist_rag, now separate physical databases, so it can't be one query.
+func (r *KnowledgeBaseRepo) DocumentExistsForURI(
+	datapackID, documentURI string,
+) (bool, error) {
+	sourceIDs, err := r.GetSourceIDs(datapackID)
+	if err != nil {
+		return false, fmt.Errorf("document exists for uri: source ids for datapack %s: %w", datapackID, err)
+	}
+	if len(sourceIDs) == 0 {
+		return false, nil
+	}
+	var exists bool
+	if err := r.dataDB.QueryRow(
+		`SELECT EXISTS (
+		     SELECT 1
+		     FROM   dist_rag.documents
+		     WHERE  source_id = ANY($1::uuid[])
+		       AND  document_uri = $2
+		 )`,
+		pq.Array(sourceIDs), documentURI,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("document exists for uri: %w", err)
+	}
+	return exists, nil
+}
+
+// GetDocumentIDForURI returns the dist_rag document_id for a datapack's
+// document at documentURI, or ok=false if no such row exists. Same two-step
+// shape as DocumentExistsForURI, but returns the id so a caller can follow up
+// with DeleteDocument, which is keyed by id, not URI.
+func (r *KnowledgeBaseRepo) GetDocumentIDForURI(
+	datapackID, documentURI string,
+) (documentID string, ok bool, err error) {
+	sourceIDs, err := r.GetSourceIDs(datapackID)
+	if err != nil {
+		return "", false, fmt.Errorf("get document id for uri: source ids for datapack %s: %w", datapackID, err)
+	}
+	if len(sourceIDs) == 0 {
+		return "", false, nil
+	}
+	err = r.dataDB.QueryRow(
+		`SELECT document_id
+		 FROM   dist_rag.documents
+		 WHERE  source_id = ANY($1::uuid[])
+		   AND  document_uri = $2
+		 LIMIT  1`,
+		pq.Array(sourceIDs), documentURI,
+	).Scan(&documentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get document id for uri: %w", err)
+	}
+	return documentID, true, nil
+}
+
 // DeleteDocument removes one file's chunks from the chunk store
 // (datapacks.knowledge_bases) AND the document + pipeline rows from
 // dist_rag. The S3 object is deleted by the handler, not here.

@@ -3,12 +3,28 @@
  * Keep in sync with backend upload constraints.
  */
 
+import { MB } from "@/lib/fileSize";
+import { FREE_TIER_LIMITS } from "@/lib/freeTier";
+
 /**
- * Single source of truth: accepted upload extensions (lowercase, dot-prefixed).
- * The `accept` string and the human-readable hint below are both derived from
- * this, so adding/removing a type only needs an edit here.
+ * Single source of truth: accepted extension → MIME type. Mirrors
+ * api_server's uploadMimeByExt (SUPPORTED_DOCUMENT_TYPES); an extension
+ * missing there uploads cleanly and sits QUEUED unindexed. The `accept`
+ * attribute, hint text, and sniffer all derive from this. Most common first.
  */
-const ACCEPTED_EXTENSION_LIST = [".pdf", ".txt", ".md", ".json", ".csv", ".html", ".htm"];
+export const KNOWLEDGE_UPLOAD_MIME_BY_EXT: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".text": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".xml": "text/xml",
+  ".html": "text/html",
+  ".htm": "text/html",
+};
+
+const ACCEPTED_EXTENSION_LIST = Object.keys(KNOWLEDGE_UPLOAD_MIME_BY_EXT);
 
 /** Raw list export so callers (e.g. the Files table's type-filter chips)
  *  stay in sync with upload's allow-list without duplicating it. */
@@ -17,17 +33,13 @@ export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSION_LIST = ACCEPTED_EXTENSION_LIST;
 /** Comma-joined form for a file input's `accept` attribute. */
 export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ACCEPTED_EXTENSION_LIST.join(",");
 
-/**
- * Legacy / conservative per-file cap. The REAL cap is per-tier
- * (`limitsFor(user_type).kbFileBytes` — 5 MB free, 50 MB standard,
- * 60 MB pro; mirrors api_server's LimitsFor().MaxKBFileBytes).
- * This constant is only the fallback while the caller's identity is
- * still loading — see useKnowledgeUploadMaxFileSizeMB.
- */
-export const KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB = 5;
+/** Fallback per-file cap before /auth/me lands (see
+ *  useKnowledgeUploadMaxFileSizeMB for the real per-tier cap). Free tier,
+ *  the lowest, so a MEKO_FREE_TIER_KB_FILE_BYTES override applies here too. */
+export const KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB = FREE_TIER_LIMITS.kbFileBytes / MB(1);
 export const KNOWLEDGE_UPLOAD_MAX_BATCH = 10;
 
-/** Human-readable list for UI, e.g. "pdf, txt, md, json, html, htm". */
+/** Human-readable list for UI, e.g. "pdf, txt, text, md, csv, json, xml, html, htm". */
 export const KNOWLEDGE_UPLOAD_EXTENSIONS_HINT = ACCEPTED_EXTENSION_LIST.map((e) =>
   e.startsWith(".") ? e.slice(1) : e,
 ).join(", ");
@@ -76,6 +88,20 @@ export function dedupNote(
 
 export function isAcceptedKnowledgeFile(filename: string): boolean {
   return ACCEPTED_EXTENSION_LIST.includes(knowledgeFileExtension(filename));
+}
+
+/**
+ * Rejection message for an unsupported extension, or null when acceptable.
+ * Decided from the filename alone, so callers can refuse a file before
+ * spending a content hash or a presign round trip on it.
+ */
+export function unsupportedKnowledgeFileMessage(filename: string): string | null {
+  if (isAcceptedKnowledgeFile(filename)) return null;
+  const ext = knowledgeFileExtension(filename);
+  const subject = ext
+    ? `${ext} files aren't supported`
+    : "Files without an extension aren't supported";
+  return `${subject}. Allowed types: ${KNOWLEDGE_UPLOAD_EXTENSIONS_HINT}.`;
 }
 
 export type KnowledgeBatchFilterResult = {

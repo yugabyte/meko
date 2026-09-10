@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, Clock } from "lucide-react";
+import { Upload, X, CheckCircle2, AlertCircle, Info, Loader2, Clock } from "lucide-react";
+import { fileTypeVisual } from "@/features/datapacks/components/knowledge-documents/fileTypeIcons";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
@@ -26,12 +27,15 @@ import {
   KNOWLEDGE_UPLOAD_MAX_BATCH,
   dedupNote,
   filterFilesForKnowledgeUploadBatch,
+  knowledgeFileExtension,
   sanitizeFilenameForMatch,
+  unsupportedKnowledgeFileMessage,
 } from "@/lib/knowledgeFileUploadRules";
 import { useKnowledgeUploadMaxFileSizeMB } from "@/hooks/useKnowledgeUploadMaxFileSizeMB";
 import { formatFileSize } from "@/lib/fileSize";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
+import { verifyFileContent } from "@/lib/sniffFileType";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 import { KB_DOCUMENT_STATUS } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";
 import { queryClient } from "@/lib/queryClient";
@@ -377,6 +381,11 @@ export default function FileUpload({
     setFiles((prev) => prev.filter((f) => f.id !== id));
   }, []);
 
+  // Countdown expiry (or its own manual X) removes the card outright --
+  // doneCount/errorCount are derived live from `files`, so a dismissed
+  // entry drops out of the "N failed" tally along with its row.
+  const dismissNotice = removeFile;
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -388,8 +397,13 @@ export default function FileUpload({
     [addFiles],
   );
 
-  const uploadFile = (url: string, file: File, id: string): Promise<void> =>
-    uploadFileToS3(url, file, (pct) =>
+  const uploadFile = (
+    url: string,
+    fields: Record<string, string>,
+    file: File,
+    id: string,
+  ): Promise<void> =>
+    uploadFileToS3(url, fields, file, (pct) =>
       setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: pct } : f))),
     );
 
@@ -482,16 +496,50 @@ export default function FileUpload({
       const entry = filesRef.current.find((f) => f.id === id);
       if (!entry || entry.status !== KNOWLEDGE_UPLOAD_STATUS.PENDING) continue;
 
+      // Mark UPLOADING before any async step, no await in between: otherwise
+      // the gap while a file is mid-sniff/mid-hash leaves the upload button
+      // clickable and a second click re-enters this loop over the same
+      // still-PENDING ids (filesRef.current not yet updated) and double-uploads.
       setFiles((prev) =>
         prev.map((f) => (f.id === id ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, progress: 0 } : f)),
       );
 
+      // Decided from the filename, so it costs nothing: refuse before the hash
+      // and the presign, neither of which an unsupported type can ever use.
+      const unsupported = unsupportedKnowledgeFileMessage(entry.file.name);
+      if (unsupported) {
+        // No banner: the card below says this, and says which file it is.
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === id
+              ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.ERROR, progress: 0, error: unsupported }
+              : f,
+          ),
+        );
+        continue;
+      }
+
+      // Reads only 3 KB, far cheaper than hashing the whole file, so a
+      // spoofed file fails before the hash and the presign, not after.
+      // uploadFileToS3 re-checks right before the transfer too, since the
+      // file can still change between now and then.
+      const contentIssue = await verifyFileContent(entry.file);
+      if (contentIssue) {
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === id
+              ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.ERROR, progress: 0, error: contentIssue }
+              : f,
+          ),
+        );
+        continue;
+      }
+
       try {
         const contentHash = await sha256Hex(entry.file);
-        const { url, key, already_uploaded, existing_filename } = await requestUploadURL(
+        const { url, fields, key, already_uploaded, existing_filename } = await requestUploadURL(
           datapackId,
           entry.file.name,
-          entry.file.type || "application/octet-stream",
           entry.file.size,
           contentHash,
         );
@@ -504,7 +552,6 @@ export default function FileUpload({
           );
           if (awaitingProcessing) matchedOrphan = true;
           const note = dedupNote(entry.file.name, existing_filename, awaitingProcessing);
-          showWarning(note);
           setFiles((prev) =>
             prev.map((f) =>
               f.id === id ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.SKIPPED, progress: 0, note } : f,
@@ -513,7 +560,7 @@ export default function FileUpload({
           continue;
         }
 
-        await uploadFile(url, entry.file, id);
+        await uploadFile(url, fields ?? {}, entry.file, id);
         await confirmUpload(datapackId, key, entry.file.name, entry.file.size);
         // Post-confirm, since confirm is what marks the bytes as "yours".
         void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
@@ -828,6 +875,14 @@ export default function FileUpload({
   const doneCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE).length;
   const errorCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.ERROR).length;
 
+  // Files that have something to say go first, then the rest newest-first
+  // (`files` is append-only, so reversing gives that). Drop a batch where only
+  // a few are bad and the bad ones would otherwise be scattered through a
+  // scrolling list, each on a countdown the user can't see to stop.
+  const attentionFirstFiles = [...files]
+    .reverse()
+    .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+
   return (
     <div className="space-y-6">
       {/* Upload section */}
@@ -850,8 +905,16 @@ export default function FileUpload({
                   ? ` — up to ${maxFileSizeMB >= 1024 ? `${(maxFileSizeMB / 1024).toFixed(maxFileSizeMB % 1024 === 0 ? 0 : 1)}GB` : `${maxFileSizeMB}MB`} each,`
                   : " —"}{" "}
                 {KNOWLEDGE_UPLOAD_MAX_BATCH} in progress at a time.
-                {totalUploaded > 0 && ` ${totalUploaded} uploaded so far.`}
               </p>
+              {/* Its own line, and "in this session" spelled out: next to the
+                  batch cap this tally read as a fraction of it -- "3 uploaded"
+                  after "10 at a time" looks like 3 of 10 rather than a count
+                  of what has finished since the page opened. */}
+              {totalUploaded > 0 && (
+                <p className="text-xs text-muted-foreground/70 mt-0.5">
+                  {totalUploaded} file{totalUploaded === 1 ? "" : "s"} uploaded in this session.
+                </p>
+              )}
             </div>
           </div>
           {pendingCount > 0 && (
@@ -938,23 +1001,52 @@ export default function FileUpload({
           </div>
         )}
 
-        {/* File list -- auto-fill grid, capped height so a large batch scrolls. */}
+        {/* File list -- auto-fill grid, capped height so a large batch scrolls.
+            The cap fits roughly two cards carrying a message; shorter and a
+            rejected file's explanation is cut off by the scroll edge. */}
         {files.length > 0 && (
           <ul
-            className="grid max-h-48 gap-2 overflow-y-auto pr-1"
+            className="grid max-h-80 gap-2 overflow-y-auto pr-1"
             style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
           >
-            {/* `files` is append-only, so reversing gives newest-first. */}
-            {[...files].reverse().map((entry) => (
+            {attentionFirstFiles.map((entry) => {
+              const { Icon: FileTypeIcon, toneClass } = fileTypeVisual(
+                knowledgeFileExtension(entry.file.name),
+              );
+              return (
               <li
                 key={entry.id}
-                className="rounded-lg border border-border bg-card px-4 py-2.5 space-y-1.5"
+                className={cn(
+                  "rounded-xl border px-4 py-2.5 space-y-1.5 transition-colors",
+                  // Tints the whole card, not just the message, so the eye
+                  // finds the odd one out in a grid. Amber for skipped since
+                  // a duplicate is a no-op, not the failure red claims.
+                  entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR
+                    ? "border-red-500/40 bg-red-500/[0.07] dark:border-red-400/30 dark:bg-red-500/10"
+                    : entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED
+                      ? "border-amber-500/40 bg-amber-500/[0.07] dark:border-amber-400/30 dark:bg-amber-500/10"
+                      : "border-border bg-card",
+                )}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
-                    <span className="text-sm text-foreground truncate">{entry.file.name}</span>
-                    <span className="text-xs text-muted-foreground shrink-0">
+                    <FileTypeIcon
+                      className={cn(
+                        "w-4 h-4 shrink-0",
+                        // A file that didn't make it drops its type color: the
+                        // card already carries the state, and a green CSV
+                        // glyph inside a red one reads as a mixed signal.
+                        entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR
+                          ? "text-red-600 dark:text-red-400"
+                          : entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED
+                            ? "text-amber-600 dark:text-amber-400"
+                            : toneClass,
+                      )}
+                    />
+                    <span className="text-sm font-medium text-foreground truncate">
+                      {entry.file.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
                       {formatFileSize(entry.file.size)}
                     </span>
                   </div>
@@ -962,7 +1054,7 @@ export default function FileUpload({
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING &&
                       (entry.progress > 0 ? (
                         <span className="text-xs text-emerald-700 dark:text-emerald-300 tabular-nums">
-                          {entry.progress}%
+                          {entry.progress.toFixed(1)}%
                         </span>
                       ) : (
                         // 0% while hashing/presigning, before S3 reports bytes.
@@ -981,10 +1073,13 @@ export default function FileUpload({
                       <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
                     )}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && (
-                      <span className="text-xs font-medium text-muted-foreground">Skipped</span>
+                      <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                        Skipped
+                      </span>
                     )}
-                    {/* Status-only indicator; error text moves to its own line below. */}
-                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && (
+                    {/* Only when there's no message panel below to carry its own
+                        icon -- two red circles in one small card is noise. */}
+                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && !entry.error && (
                       <AlertCircle
                         className="w-4 h-4 text-red-600 dark:text-red-400"
                         aria-label="Upload failed"
@@ -1006,17 +1101,23 @@ export default function FileUpload({
                   </div>
                 </div>
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && entry.error ? (
-                  <p className="mt-1.5 break-words text-xs text-red-700 dark:text-red-400">
-                    {entry.error}
-                  </p>
+                  <TimedNotice
+                    tone="error"
+                    message={entry.error}
+                    onDismiss={() => dismissNotice(entry.id)}
+                  />
                 ) : null}
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && entry.note ? (
-                  <p className="mt-1.5 break-words text-xs text-emerald-700 dark:text-emerald-300">
-                    {entry.note}
-                  </p>
+                  <TimedNotice
+                    tone="skipped"
+                    message={entry.note}
+                    onDismiss={() => dismissNotice(entry.id)}
+                  />
                 ) : null}
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
-                  <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                  // `bg-white/10` was invisible on a light card -- the track has
+                  // to come from a token that inverts with the theme.
+                  <div className="h-1.5 w-full rounded-full bg-foreground/10 overflow-hidden">
                     <div
                       className={cn(
                         "h-full rounded-full bg-emerald-500 transition-all duration-200",
@@ -1028,7 +1129,8 @@ export default function FileUpload({
                   </div>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
 
@@ -1041,6 +1143,9 @@ export default function FileUpload({
           >
             {orphansAwaitingPipeline.map((o) => {
               const isDeleting = deletingOrphanKeys.has(o.key);
+              const { Icon: FileTypeIcon, toneClass } = fileTypeVisual(
+                knowledgeFileExtension(o.filename),
+              );
               return (
                 <li
                   key={o.key}
@@ -1052,7 +1157,7 @@ export default function FileUpload({
                   {/* Two-row layout: filename+X on top, size+time below. */}
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
-                      <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+                      <FileTypeIcon className={cn("w-4 h-4 shrink-0", toneClass)} />
                       <span className="text-sm text-foreground truncate">{o.filename}</span>
                     </div>
                     <button
@@ -1084,6 +1189,133 @@ export default function FileUpload({
             })}
           </ul>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** A file that uploaded nothing and is explaining why, on a countdown. */
+function needsAttention(f: FileEntry): boolean {
+  return (
+    (f.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && !!f.error) ||
+    (f.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && !!f.note)
+  );
+}
+
+/**
+ * Scales with how much there is to read (50ms/char, ~250-300 wpm), clamped
+ * to 6-10s: 6 covers slow/non-native readers past the 2-4s an average reader
+ * needs, 10 caps it before an already-read card is just clutter.
+ */
+function autoDismissMs(message: string): number {
+  return Math.min(10_000, Math.max(6_000, 50 * message.length));
+}
+
+const NOTICE_TONES = {
+  error: {
+    Icon: AlertCircle,
+    panel: "border-red-500/25 bg-red-500/10 dark:border-red-400/25",
+    text: "text-red-800 dark:text-red-200",
+    track: "bg-red-500/15 dark:bg-red-400/20",
+    bar: "bg-red-500/70 dark:bg-red-400/70",
+  },
+  skipped: {
+    Icon: Info,
+    panel: "border-amber-500/25 bg-amber-500/10 dark:border-amber-400/25",
+    text: "text-amber-800 dark:text-amber-200",
+    track: "bg-amber-500/15 dark:bg-amber-400/20",
+    bar: "bg-amber-500/70 dark:bg-amber-400/70",
+  },
+} as const;
+
+/**
+ * The explanation for a rejected/skipped-duplicate file, on a countdown --
+ * the whole card is gone once it ends (onDismiss removes the entry). Not a
+ * trap: the bar shows the deadline, hover/focus pauses it (WCAG 2.2.1), and
+ * it doesn't start until on screen, so below-the-fold entries wait their turn.
+ */
+function TimedNotice({
+  tone,
+  message,
+  onDismiss,
+}: {
+  tone: keyof typeof NOTICE_TONES;
+  message: string;
+  onDismiss: () => void;
+}) {
+  const { Icon, panel, text, track, bar } = NOTICE_TONES[tone];
+  const totalMs = useMemo(() => autoDismissMs(message), [message]);
+  const [remainingMs, setRemainingMs] = useState(totalMs);
+  // Pointer over it, or keyboard focus on it -- either says the user is
+  // reading, so the countdown waits.
+  const [held, setHeld] = useState(false);
+  const [onScreen, setOnScreen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Ref so a caller passing a fresh closure each render can't restart the
+  // countdown, which would leave the card up forever.
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    // Half of it visible, so a notice peeking in at the edge of the scroll
+    // container doesn't count as read.
+    const observer = new IntersectionObserver(([e]) => setOnScreen(e.isIntersecting), {
+      threshold: 0.5,
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const paused = held || !onScreen;
+
+  useEffect(() => {
+    if (paused) return;
+    const TICK_MS = 100;
+    const id = setInterval(() => setRemainingMs((ms) => Math.max(0, ms - TICK_MS)), TICK_MS);
+    return () => clearInterval(id);
+  }, [paused]);
+
+  // Dismissing from the tick itself would fire a parent state update from
+  // inside a state updater.
+  useEffect(() => {
+    if (remainingMs === 0) onDismissRef.current();
+  }, [remainingMs]);
+
+  return (
+    <div
+      ref={panelRef}
+      role={tone === "error" ? "alert" : "status"}
+      // Focusable, or the focus half of the pause never fires: onFocus is
+      // focusin, and nothing inside here can take focus. Without the tab stop
+      // a keyboard user has no way to hold the message open, which is the
+      // mechanism WCAG 2.2.1 asks for.
+      tabIndex={0}
+      onMouseEnter={() => setHeld(true)}
+      onMouseLeave={() => setHeld(false)}
+      onFocus={() => setHeld(true)}
+      onBlur={() => setHeld(false)}
+      className={cn(
+        "mt-2 space-y-2 rounded-lg border px-2.5 py-2",
+        "outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        panel,
+      )}
+    >
+      <p className={cn("flex items-start gap-2 text-xs leading-relaxed", text)}>
+        <Icon className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span className="min-w-0 break-words">{message}</span>
+      </p>
+      <div aria-hidden className={cn("h-0.5 w-full overflow-hidden rounded-full", track)}>
+        <div
+          // Fills left to right as the countdown runs, matching the upload
+          // bar above it: in this card a growing bar reads as "time spent",
+          // and both bars ending full keeps the two from meaning opposite
+          // things on the same surface.
+          className={cn("h-full rounded-full transition-[width] duration-100 ease-linear", bar)}
+          style={{ width: `${((totalMs - remainingMs) / totalMs) * 100}%` }}
+        />
       </div>
     </div>
   );

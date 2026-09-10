@@ -5,6 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import { Upload } from "lucide-react";
 import type { RefObject } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { KNOWLEDGE_UPLOAD_EXTENSIONS_HINT } from "@/lib/knowledgeFileUploadRules";
 import { cn } from "@/lib/utils";
 import { ConfigureSyncKnowledgePanel } from "./ConfigureSyncKnowledgePanel";
 import type { ListedSource, SyncSectionId } from "./types";
@@ -135,7 +136,7 @@ export function ConfigureSyncTile({
   items,
   fileInputRef,
   accept,
-  knowledgeExtensionsHint = "pdf, txt, md, json, csv, html",
+  knowledgeExtensionsHint = KNOWLEDGE_UPLOAD_EXTENSIONS_HINT,
   onPickFiles,
   onRemove,
   knowledgeUploading = false,

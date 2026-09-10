@@ -32,7 +32,7 @@ type ArtifactRepo interface {
 // without proxying bytes through api_server.
 type ArtifactS3 interface {
 	Enabled() bool
-	UploadObject(ctx context.Context, userID, datapackID, hash, filename, contentType string, data []byte) (string, error)
+	UploadArtifactObject(ctx context.Context, userID, datapackID, hash, filename, contentType string, data []byte) (string, error)
 	DownloadObject(ctx context.Context, key string) ([]byte, error)
 	GenerateDownloadURL(ctx context.Context, key string) (*PresignedDownload, error)
 }
@@ -113,7 +113,7 @@ func (s *ArtifactService) Put(ctx context.Context, req ArtifactPutRequest) (*mod
 		if s.s3Svc == nil || !s.s3Svc.Enabled() { //nolint:staticcheck
 			return nil, fmt.Errorf("S3 not configured; cannot store artifact of size %d bytes", len(req.Data))
 		}
-		key, err := s.s3Svc.UploadObject(ctx, req.UserID, req.DatapackID, contentHash, req.Filename, req.ContentType, req.Data)
+		key, err := s.s3Svc.UploadArtifactObject(ctx, req.UserID, req.DatapackID, contentHash, req.Filename, req.ContentType, req.Data)
 		if err != nil {
 			return nil, fmt.Errorf("upload artifact to S3: %w", err)
 		}

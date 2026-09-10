@@ -1410,23 +1410,25 @@ export async function getDatapackProvisionStatus(
 
 export { sha256Hex, canUseWebCryptoSha256, isNonSecureHttpOrigin } from "../sha256File";
 
+/** Authorizes a direct upload to S3: `url` plus the `fields` to send as
+ *  multipart form data (see uploadFileToS3). Absent when already_uploaded. */
 export async function requestUploadURL(
   datapackId: string,
   filename: string,
-  contentType: string,
   size: number,
   contentHash: string,
   options: DatapackRouteOptions = {},
 ) {
   return request<{
     url: string;
+    fields?: Record<string, string>;
     key: string;
     already_uploaded: boolean;
     existing_filename?: string;
   }>(
     `${datapackRoute(datapackId)}/knowledge-bases/upload-url`,
     "POST",
-    { filename, content_type: contentType, size, content_hash: contentHash },
+    { filename, size, content_hash: contentHash },
     options,
   );
 }

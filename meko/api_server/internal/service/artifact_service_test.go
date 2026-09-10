@@ -70,8 +70,8 @@ func newStubS3() *stubS3 { return &stubS3{uploaded: map[string][]byte{}} }
 
 func (s *stubS3) Enabled() bool { return true }
 
-func (s *stubS3) UploadObject(_ context.Context, userID, datapackID, hash, filename, _ string, data []byte) (string, error) {
-	key := userID + "/" + datapackID + "/" + hash + "/" + filename
+func (s *stubS3) UploadArtifactObject(_ context.Context, userID, datapackID, hash, filename, _ string, data []byte) (string, error) {
+	key := "artifacts/" + userID + "/" + datapackID + "/" + hash + "/" + filename
 	s.uploaded[key] = data
 	return key, nil
 }
@@ -236,6 +236,23 @@ func TestArtifactService_Put_S3Key_ContainsHashAndFilename(t *testing.T) {
 	}
 	if !strings.Contains(a.S3Key, "report.pdf") {
 		t.Errorf("S3Key should contain filename; got %s", a.S3Key)
+	}
+}
+
+// The artifacts/ prefix is what keeps an artifact object out of every KB
+// path's "<userID>/<datapackID>/" walk (CreateKB's sweep, ConfirmUpload,
+// DeletePendingUpload) — see S3Service.UploadArtifactObject.
+func TestArtifactService_Put_S3Key_HasArtifactsPrefix(t *testing.T) {
+	data := []byte(strings.Repeat("z", models.MaxInlineBytes+1))
+	a, err := newSvc(newStubRepo(), newStubS3()).Put(context.Background(), service.ArtifactPutRequest{
+		UserID: "uid", DatapackID: "dpid", Filename: "report.pdf",
+		ContentType: "application/pdf", Data: data,
+	})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if !strings.HasPrefix(a.S3Key, "artifacts/") {
+		t.Errorf("S3Key should start with artifacts/; got %s", a.S3Key)
 	}
 }
 

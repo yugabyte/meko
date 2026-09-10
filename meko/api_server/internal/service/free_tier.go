@@ -94,12 +94,22 @@ var (
 // Tunable via MEKO_PRO_TIER_KB_FILE_BYTES.
 var ProTierMaxKBFileBytes = envInt64("MEKO_PRO_TIER_KB_FILE_BYTES", 60*1024*1024)
 
-// The multipart upload route (UploadFile) buffers each file fully in memory
-// before writing to S3, so an unbounded per-file size is an OOM vector even
-// for paying top tiers. This ceiling is an infrastructure guard local to
-// that route — NOT a tier limit; the presigned-S3 flow streams directly to
-// S3 and is bounded only by the tier cap.
+// The multipart upload route (UploadFile) reads each file fully into a Go
+// []byte before writing it to S3, so its memory use scales with concurrent
+// uploads x file size — an unbounded per-file size is an OOM vector even for
+// paying top tiers. This ceiling exists to bound that memory use; it is an
+// infrastructure guard local to this route, NOT a tier limit. It is lower
+// than maxUploadFileBytes (512 MB) below because that ceiling guards a
+// different, memory-safe route: the presigned-S3 flow streams bytes straight
+// to S3 and never holds them in api_server's memory at all.
 var MultipartMaxFileBytes = envInt64("MEKO_MULTIPART_MAX_FILE_BYTES", 50*1024*1024)
+
+// maxUploadFileBytes is the presigned-upload counterpart of
+// MultipartMaxFileBytes above — also not a tier limit, just meko's own
+// ceiling well below S3's 5 GB single-POST limit, since dist_rag never
+// processes anything near that size. A per-tier cap that's missing (<= 0)
+// or above this value is replaced by this ceiling.
+const maxUploadFileBytes int64 = 512 * 1024 * 1024 // 512 MB
 
 // TierLimits is the per-tier cap set. `Unlimited` for pro / enterprise
 // (a sentinel > any realistic counter) so the same `n >= limit.X` check

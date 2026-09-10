@@ -29,15 +29,15 @@ import (
 	"meko/api_server/internal/service"
 )
 
-// buildMekoDocDetails returns the JSON written to dist_rag.documents.document_details.
+// documentDetailsJSON returns the JSON written to dist_rag.documents.document_details.
 //
 // Shape:
 //
 //		{"meko": {"user_id": "<uploader>", "size": <bytes>, "uploaded_at": "<RFC3339>"}}
 //
 //	  - user_id      authenticated uploader (NOT the datapack owner — multiple
-//	    collaborators can upload to the same shared datapack, and we
-//	    want per-file uploader provenance).
+//	    collaborators can upload to the same shared datapack, so each
+//	    file has to record who actually sent it).
 //	  - size         bytes from S3 Contents.Size; 0 means "unknown" rather
 //	    than "empty file" (S3 occasionally omits Size on certain
 //	    listing edge cases).
@@ -49,23 +49,25 @@ import (
 // Output is wire-ready JSONB. Returns nil only on json.Marshal failure
 // — caller logs + falls back to "{}" so the upsert never fails because
 // of details encoding.
-func buildMekoDocDetails(uploaderUserID string, size int64, uploadedAt time.Time) []byte {
-	meko := map[string]any{
+func documentDetailsJSON(uploaderUserID string, size int64, uploadedAt time.Time) []byte {
+	uploadInfo := map[string]any{
 		"user_id": uploaderUserID,
 		"size":    size,
 	}
 	if !uploadedAt.IsZero() {
-		meko["uploaded_at"] = uploadedAt.UTC().Format(time.RFC3339)
+		uploadInfo["uploaded_at"] = uploadedAt.UTC().Format(time.RFC3339)
 	}
+	// Namespaced under "meko" because the column belongs to dist_rag, which
+	// is free to write its own keys alongside ours.
 	payload := map[string]any{
-		"meko": meko,
+		"meko": uploadInfo,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		// Shouldn't happen for this fixed shape; log + fall through so
 		// the document is still inserted with empty details rather
 		// than the whole upload failing.
-		slog.Warn("buildMekoDocDetails: marshal failed", "error", err)
+		slog.Warn("documentDetailsJSON: marshal failed", "error", err)
 		return nil
 	}
 	return b
@@ -204,9 +206,12 @@ func (h *KnowledgeBaseHandler) Delete(c echo.Context) error {
 }
 
 type uploadURLRequest struct {
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type"`
-	Size        int64  `json:"size"`
+	Filename string `json:"filename"`
+	// Size is the client's *declared* size — only a UX-nicety early
+	// rejection. The actual cap signed into the policy (see RequestUploadURL's
+	// signedCap) is derived entirely from server-side state, so a lied-about
+	// Size can't get more past S3 than an honest one could.
+	Size int64 `json:"size"`
 	// ContentHash is the hex-encoded SHA-256 of the file bytes, computed by
 	// the client before requesting the presigned URL. It is used as the S3
 	// sub-directory so that (a) the same filename with different content gets
@@ -234,7 +239,13 @@ const maxFileSizeBytes = 5 * 1024 * 1024 // 5 MB
 
 // RequestUploadURL handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload-url.
 //
-//	@Summary	Generate a presigned S3 upload URL
+// Returns a presigned **POST** authorization: `url` plus the `fields` the
+// client sends as multipart form data ahead of the file part. Both the
+// per-file cap and the tier's remaining storage quota are baked into the
+// signed policy (whichever is lower), so S3 rejects an over-cap body with
+// 400 EntityTooLarge — the declared `size` below is only an early UX check.
+//
+//	@Summary	Generate a presigned S3 upload authorization (POST + policy)
 //	@Tags		knowledge-bases
 //	@Accept		json
 //	@Produce	json
@@ -282,8 +293,7 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 	ext := strings.ToLower(filepath.Ext(req.Filename))
 	if uploadMimeByExt[ext] == "" {
 		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR",
-			"unsupported file type: "+ext+"; allowed: "+allowedExtensionsMsg)
+			"VALIDATION_ERROR", unsupportedTypeMessage(ext))
 	}
 	// `size <= 0` is rejected explicitly: otherwise a negative payload
 	// could wrap the int64 free-tier-cap arithmetic below and let an
@@ -292,10 +302,6 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "size must be greater than 0")
 	}
-	if req.ContentType == "" {
-		req.ContentType = "application/octet-stream"
-	}
-
 	// Per-file size cap + total-storage cap. Both derived from
 	// LimitsFor(user_type):
 	//   free      -> 5 MB   / 100 MB total
@@ -321,14 +327,22 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 			"VALIDATION_ERROR", service.UpgradeMessageFileSize(userType))
 	}
 
+	// signedCap goes into the presigned policy, so S3 enforces it on the
+	// body it actually receives; req.Size above is only a UX-nicety early
+	// rejection, not a security boundary, since signedCap is derived
+	// entirely from server-side state, never from the request.
+	signedCap := perFileCap
 	if account != nil && service.IsGatedUserType(account.AccountType) {
 		limits := service.LimitsFor(account.AccountType)
-		if currentBytes, err := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID); err != nil {
+		currentBytes, err := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID)
+		if err != nil {
 			slog.Error("kb upload cap: sum sizes",
 				"user_id", dp.UserID, "datapack_id", dp.ID, "error", err)
 			return apiError(c, http.StatusInternalServerError,
 				"INTERNAL_ERROR", "failed to read tier storage usage")
-		} else if currentBytes+req.Size > limits.MaxKBStorageBytes {
+		}
+		remaining := limits.MaxKBStorageBytes - currentBytes
+		if remaining <= 0 || req.Size > remaining {
 			slog.Info("kb upload blocked by tier cap",
 				"user_id", dp.UserID,
 				"user_type", account.AccountType,
@@ -339,6 +353,9 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 			resp := service.KBStorageLimitResponse(account.AccountType)
 			return apiError(c, http.StatusPaymentRequired, resp.Code, resp.Message)
 		}
+		if remaining < signedCap {
+			signedCap = remaining
+		}
 	}
 
 	result, err := h.s3Svc.GenerateUploadURL(
@@ -346,8 +363,8 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 		dp.UserID,
 		dp.ID,
 		req.Filename,
-		req.ContentType,
 		req.ContentHash,
+		signedCap,
 	)
 	if err != nil {
 		slog.Error("failed to generate presigned upload URL",
@@ -586,6 +603,7 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 	}
 
 	// Step 4: DB cleanup (chunks + dist_rag) in a single transaction.
+	slog.Info("deleting document", "datapack_id", dp.ID, "document_id", documentID)
 	chunksDeleted, err := h.knowledgeBaseSvc.DeleteDocument(dp, documentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrDocumentNotFound) {
@@ -607,6 +625,8 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 		bucketPrefix := "s3://" + h.s3Svc.Bucket() + "/"
 		if strings.HasPrefix(*ref.DocumentURI, bucketPrefix) {
 			key := strings.TrimPrefix(*ref.DocumentURI, bucketPrefix)
+			slog.Info("deleting document object",
+				"datapack_id", dp.ID, "document_id", documentID, "key", key, "filename", path.Base(key))
 			if delErr := h.s3Svc.DeleteObject(c.Request().Context(), key); delErr != nil {
 				slog.Warn("S3 delete failed; DB rows already removed (orphan tolerated)",
 					"datapack_id", dp.ID, "document_id", documentID,
@@ -634,9 +654,11 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 
 // ConfirmUpload handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload-complete.
 //
-// This endpoint is currently advisory: the actual KB row is created by
-// the subsequent /knowledge-bases/create call which lists the S3 prefix
-// and registers all uploaded files with dist_rag.
+// The KB row itself is created by the subsequent /knowledge-bases/create call.
+// This endpoint owns content verification: the first moment api_server can
+// look at bytes that went straight to the bucket, so a mismatch is rejected
+// and deleted here while the caller is still around to be told why. /create
+// verifies too, for callers that never come back to this endpoint.
 //
 //	@Summary	Confirm a completed file upload
 //	@Tags		knowledge-bases
@@ -647,6 +669,8 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks/{datapack_id}/knowledge-bases/upload-complete [post]
 func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
@@ -664,6 +688,42 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 	if req.Key == "" || req.Filename == "" {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "key and filename are required")
+	}
+	// The key is caller-supplied and this handler deletes on rejection, so it
+	// has to be confined to this datapack's prefix first — otherwise a request
+	// naming someone else's object would have us delete their file.
+	if !strings.HasPrefix(req.Key, fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)) {
+		return apiError(c, http.StatusForbidden,
+			"FORBIDDEN", "key does not belong to this datapack")
+	}
+
+	if h.s3Svc != nil && h.s3Svc.Enabled() {
+		ctx := c.Request().Context()
+		if _, verr := h.verifyObjectContent(ctx, req.Key); verr != nil {
+			var rejected *contentRejected
+			if !errors.As(verr, &rejected) {
+				// Couldn't read it. Leave the object alone and fail loudly:
+				// reporting success here would hand the caller a file that
+				// /create is going to refuse anyway.
+				slog.Error("upload verification failed to read object",
+					"datapack_id", dp.ID, "key", req.Key, "error", verr)
+				return apiError(c, http.StatusInternalServerError,
+					"S3_ERROR", "failed to verify uploaded file")
+			}
+			// Spoofed content: delete rather than leave it orphaned in the
+			// bucket, unless the caller-chosen key is still spoken for by a
+			// document (deleteObjectUnlessReferenced checks). Checked only
+			// on this rare path, so a clean upload still costs no query.
+			h.deleteObjectUnlessReferenced(ctx, dp, req.Key, "upload", "key")
+			slog.Warn("upload rejected: content does not match extension",
+				"datapack_id", dp.ID,
+				"key", req.Key,
+				"filename", req.Filename,
+				"reason", rejected.Error(),
+			)
+			return apiError(c, http.StatusBadRequest,
+				"VALIDATION_ERROR", rejected.Error())
+		}
 	}
 
 	slog.Info("file upload confirmed",
@@ -746,6 +806,15 @@ func (h *KnowledgeBaseHandler) resolveOrCreateSource(
 	return sourceID, true, nil
 }
 
+// rejectedDocument names one document CreateKB refused to register, returned
+// in its response so a calling agent/harness can act on it (retry a specific
+// file, surface it to the user) instead of only learning that some
+// unspecified number of files failed.
+type rejectedDocument struct {
+	Filename string `json:"filename"`
+	Reason   string `json:"reason"`
+}
+
 // CreateKB handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/create.
 //
 // Workflow:
@@ -824,7 +893,7 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	// synced/populated below. This is the best approximation available
 	// at sync time: ListObjects doesn't return per-object uploader
 	// identity, and ConfirmUpload (which DOES know the per-file uploader)
-	// is currently advisory.
+	// doesn't persist it anywhere this sweep can read.
 	// TODO(uploader-precision): persist (s3_key -> uploader_user_id) from
 	// ConfirmUpload into a small meko_system table so this can attribute
 	// each file to its actual uploader instead of the CreateKB caller.
@@ -837,7 +906,18 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 
 	newDocs := 0
 	skippedDocs := 0
+	rejectedDocs := 0
+	// rejectedDetails names each rejection so a calling agent/harness can act
+	// on it (retry a specific file, surface it to the user) instead of only
+	// learning that some unspecified number of files failed.
+	rejectedDetails := []rejectedDocument{}
 	shouldSkipAPIDocumentSync := isNewSource
+	// existingSourceStillProcessing tracks the one shouldSkipAPIDocumentSync
+	// case that isn't isNewSource, so Step 4 below can schedule
+	// waitBuildAndPopulateDetails for it too -- otherwise objects uploaded
+	// in this window are never verified by anything (see that function's
+	// doc comment).
+	var existingSourceStillProcessing bool
 	if !shouldSkipAPIDocumentSync {
 		sourceStatus, statusErr := h.ragSvc.GetSourceStatus(sourceID)
 		if statusErr != nil {
@@ -850,6 +930,7 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 			switch sourceStatus {
 			case service.SourceStatusQueued, service.SourceStatusInProgress:
 				shouldSkipAPIDocumentSync = true
+				existingSourceStillProcessing = true
 				slog.Info("CreateKB: source is still being discovered/processed by dist_rag, skipping API-side document sync",
 					"datapack_id", dp.ID,
 					"source_id", sourceID,
@@ -884,13 +965,38 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 				"RAG_ERROR", "failed to check existing documents")
 		}
 
+		ctx := c.Request().Context()
 		for _, obj := range objects {
 			docURI := h.documentURI(obj.Key)
 			if existingURIs[docURI] {
 				skippedDocs++
 				continue
 			}
-			if err := h.upsertDocumentDetails(sourceID, uploaderUserID, obj); err != nil {
+			// One ranged GET of sniffLen bytes. ConfirmUpload has usually
+			// checked this already, but it is a call the client can skip,
+			// and this loop registers whatever is under the prefix — so
+			// anything that reached the bucket unchecked is caught here.
+			contentType, verr := h.verifyObjectContent(ctx, obj.Key)
+			if verr != nil {
+				rejectedDocs++
+				rejectedDetails = append(rejectedDetails, rejectedDocument{
+					Filename: path.Base(obj.Key),
+					Reason:   verr.Error(),
+				})
+				slog.Warn("document rejected: content verification failed",
+					"datapack_id", dp.ID, "document", obj.Key, "error", verr)
+				// Delete only what was positively identified as not being what
+				// it claims — a transport failure is retried next time, not
+				// destroyed. existingURIs only covers THIS source, so
+				// deleteObjectUnlessReferenced re-checks DocumentExistsForURI
+				// (spans every source_id) before anything is removed.
+				var rejected *contentRejected
+				if errors.As(verr, &rejected) {
+					h.deleteObjectUnlessReferenced(ctx, dp, obj.Key, "document", "document")
+				}
+				continue
+			}
+			if err := h.upsertDocumentDetails(sourceID, uploaderUserID, contentType, obj); err != nil {
 				slog.Warn("failed to insert document",
 					"document", obj.Key, "document_uri", docURI,
 					"error", err)
@@ -904,15 +1010,18 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 			"total_s3_objects", len(objects),
 			"already_tracked", len(existingURIs),
 			"skipped_documents", skippedDocs,
+			"rejected_documents", rejectedDocs,
 			"new_documents", newDocs)
 	}
 
 	// Step 4: trigger index build.
 	switch {
-	case isNewSource:
-		slog.Info("CreateKB: new source path, scheduling WaitAndBuild",
+	case isNewSource || existingSourceStillProcessing:
+		slog.Info("CreateKB: scheduling WaitAndBuild",
 			"datapack_id", dp.ID,
 			"source_id", sourceID,
+			"is_new_source", isNewSource,
+			"existing_source_still_processing", existingSourceStillProcessing,
 		)
 		go h.waitBuildAndPopulateDetails(dp.ID, s3Prefix, sourceID, uploaderUserID)
 	case newDocs > 0:
@@ -942,12 +1051,13 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		"index_name", h.ragSvc.FullIndexName(),
 	)
 
-	return ok(c, http.StatusCreated, map[string]string{
-		"datapack_id":   dp.ID,
-		"rag_source_id": sourceID,
-		"index_name":    h.ragSvc.FullIndexName(),
-		"source_uri":    sourceURI,
-		"status":        "build_triggered",
+	return ok(c, http.StatusCreated, map[string]any{
+		"datapack_id":        dp.ID,
+		"rag_source_id":      sourceID,
+		"index_name":         h.ragSvc.FullIndexName(),
+		"source_uri":         sourceURI,
+		"status":             "build_triggered",
+		"rejected_documents": rejectedDetails,
 	})
 }
 
@@ -985,7 +1095,7 @@ func lockForUploadUser(userID string) *sync.Mutex {
 
 // uploadFormSourceField is the multipart/form-data field name that selects
 // where the file's bytes come from. It's a forward-looking discriminator:
-// today only "local" (client-pushed multipart bytes) is supported, but the
+// today only "local_filesystem" (client-pushed multipart bytes) is supported, but the
 // contract is stable so we can later add out-of-band fetch modes ("url",
 // "gdrive", …) without changing the endpoint shape. Keeping fetch modes
 // behind an explicit value also isolates them as a distinct security surface
@@ -1000,7 +1110,7 @@ type UploadSource string
 // multipart request (local filesystem, generated artifact, etc.). It is the
 // only supported source today, and the default when `source` is omitted.
 // In the future, we can add support for fetching files from URLs.
-const UploadSourceLocal UploadSource = "local"
+const UploadSourceLocal UploadSource = "local_filesystem"
 
 // multipartOverheadBytes is slack added over the raw file-size cap when
 // bounding the multipart request body, to cover the boundary markers and
@@ -1024,6 +1134,41 @@ var uploadMimeByExt = map[string]string{
 	".htm":  "text/html",
 }
 
+// uploadTypeName names a MIME type the way a user would ("a web page", not
+// "text/html; charset=utf-8"). Parameters are stripped since they never carry
+// meaning here; an unrecognized type falls back to the raw value, the only
+// clue support has once it's a file we don't accept at all.
+func uploadTypeName(mime string) string {
+	switch strings.TrimSpace(strings.Split(mime, ";")[0]) {
+	case "application/pdf":
+		return "a PDF"
+	case "text/html", "application/xhtml+xml":
+		return "a web page"
+	case "text/xml", "application/xml":
+		return "an XML file"
+	case "application/json":
+		return "a JSON file"
+	case "text/csv":
+		return "a CSV spreadsheet"
+	case "text/markdown":
+		return "Markdown"
+	case "text/plain":
+		return "plain text"
+	default:
+		return mime
+	}
+}
+
+// uploadMismatchMessage explains a file whose contents disagree with its name.
+// Both upload routes (presigned and direct) share it so the same file gets the
+// same explanation whichever way it arrived.
+func uploadMismatchMessage(ext, detected string) string {
+	return fmt.Sprintf(
+		"This %s file doesn't look like %s inside — it looks like %s. "+
+			"Rename it with the matching extension, or upload the original file.",
+		ext, uploadTypeName(uploadMimeByExt[ext]), uploadTypeName(detected))
+}
+
 // allowedExtensionsMsg is the sorted, comma-joined accept-list shown in
 // "unsupported file" errors.
 var allowedExtensionsMsg = func() string {
@@ -1034,6 +1179,19 @@ var allowedExtensionsMsg = func() string {
 	sort.Strings(exts)
 	return strings.Join(exts, ", ")
 }()
+
+// unsupportedTypeMessage is shown when the file's extension is one the indexing
+// pipeline can't read. A file with no extension at all reaches this too, so it
+// gets its own wording rather than a sentence with a blank in it.
+func unsupportedTypeMessage(ext string) string {
+	if ext == "" {
+		return fmt.Sprintf(
+			"This file has no extension, so we can't tell what's in it. Supported types: %s.",
+			allowedExtensionsMsg)
+	}
+	return fmt.Sprintf("%s files can't be added to a knowledge base. Supported types: %s.",
+		ext, allowedExtensionsMsg)
+}
 
 // resolveUploadMIME verifies the file's bytes match its (already-accepted)
 // extension and returns the MIME type to store, or ok=false to reject a renamed
@@ -1070,12 +1228,18 @@ func resolveUploadMIME(mtype *mimetype.MIME, ext string) (contentType, detected 
 		return "", detected, false
 	}
 	if identifiedType, identified := distinctiveMIME(mtype); identified {
-		if identifiedType != expected {
+		if identifiedType != expected && !markupEquivalent(mtype, expected) {
 			return "", detected, false
 		}
 		return expected, detected, true
 	}
-	if expected != "text/plain" && expected != "text/markdown" && expected != "text/csv" {
+	// text/xml joins the textual fallback alongside text/plain/markdown/csv:
+	// mimetype's XML detector requires a leading `<?xml` declaration, which
+	// is optional in the spec — `<root/>` is valid XML with no signature to
+	// match, so undeclared XML must be corroborated as text instead, same as
+	// the client-side sniffer already does (see sniffFileType.ts).
+	if expected != "text/plain" && expected != "text/markdown" &&
+		expected != "text/csv" && expected != "text/xml" {
 		return "", detected, false
 	}
 	if !mimeIsTextual(mtype) {
@@ -1092,29 +1256,125 @@ func resolveUploadMIME(mtype *mimetype.MIME, ext string) (contentType, detected 
 // ordinary prose (see resolveUploadMIME) — none of the three can be verified
 // against the extension this strictly, so they fall through to the textual
 // check instead.
+// Each case tests the whole ancestry, not just the detected node: mimetype
+// reports the most specific type it can (an RSS feed comes back as
+// application/rss+xml, a child of text/xml), so comparing only the node
+// would call every specific subtype a spoofed .xml.
 func distinctiveMIME(m *mimetype.MIME) (string, bool) {
 	switch {
-	case m.Is("application/pdf"):
+	case mimeDescendsFrom(m, "application/pdf"):
 		return "application/pdf", true
-	case m.Is("text/html"):
+	case mimeDescendsFrom(m, "text/html"):
 		return "text/html", true
-	case m.Is("text/xml"):
+	case mimeDescendsFrom(m, "text/xml"):
 		return "text/xml", true
-	case m.Is("application/json"):
+	case mimeDescendsFrom(m, "application/json"):
 		return "application/json", true
 	}
 	return "", false
 }
 
-// mimeIsTextual reports whether m sits under text/plain in mimetype's type
-// hierarchy (i.e. the content is genuinely text, not binary).
-func mimeIsTextual(m *mimetype.MIME) bool {
+// markupEquivalent reports whether content already identified as one markup
+// type legitimately answers to the extension's type too. XHTML is the case
+// that needs it: valid as both HTML and XML, but mimetype files it under
+// text/xml, so without this it would fail .html though the name is correct.
+func markupEquivalent(m *mimetype.MIME, expected string) bool {
+	if !m.Is("application/xhtml+xml") {
+		return false
+	}
+	return expected == "text/html" || expected == "text/xml"
+}
+
+// mimeDescendsFrom reports whether m is t, or any descendant of t, in
+// mimetype's type hierarchy.
+//
+// Time: O(depth) parent hops, each doing an O(1) Is() check — depth is a
+// tiny constant (mimetype's tree is shallow). Space: O(1), iterative with
+// no extra allocation. No file bytes are re-read here, so neither scales
+// with upload size.
+func mimeDescendsFrom(m *mimetype.MIME, t string) bool {
 	for ; m != nil; m = m.Parent() {
-		if m.Is("text/plain") {
+		if m.Is(t) {
 			return true
 		}
 	}
 	return false
+}
+
+// mimeIsTextual reports whether the content is genuinely text rather than
+// binary — everything textual sits under text/plain.
+func mimeIsTextual(m *mimetype.MIME) bool {
+	return mimeDescendsFrom(m, "text/plain")
+}
+
+// sniffLen is how many leading bytes identify a file. Matches mimetype's own
+// default read limit, so asking S3 for more would fetch bytes the detector
+// discards.
+const sniffLen = 3072
+
+// contentRejected marks a rejection caused by the file itself (400), as
+// distinct from a failure to fetch it (500) — collapsing the two would
+// report a transient S3 blip as a spoofed file.
+type contentRejected struct{ msg string }
+
+func (e *contentRejected) Error() string { return e.msg }
+
+// verifyUploadedBytes checks an object's leading bytes against the type its
+// extension claims, returning the MIME type to store — the only enforcement
+// point on the presigned path (meko_ui's sniff is a courtesy curl can skip).
+// Shares resolveUploadMIME with the direct-upload handler for one verdict.
+func verifyUploadedBytes(key string, head []byte) (contentType string, err error) {
+	ext := strings.ToLower(path.Ext(key))
+	if _, accepted := uploadMimeByExt[ext]; !accepted {
+		return "", &contentRejected{unsupportedTypeMessage(ext)}
+	}
+	if len(head) == 0 {
+		return "", &contentRejected{"This file is empty, so there's nothing to index."}
+	}
+
+	contentType, detected, ok := resolveUploadMIME(mimetype.Detect(head), ext)
+	if !ok {
+		return "", &contentRejected{uploadMismatchMessage(ext, detected)}
+	}
+	return contentType, nil
+}
+
+// verifyObjectContent reads the head of an already-uploaded object and
+// verifies it. The read is a ranged GET, so cost is bounded by sniffLen rather
+// than by the size of the file.
+func (h *KnowledgeBaseHandler) verifyObjectContent(
+	ctx context.Context, key string,
+) (contentType string, err error) {
+	head, err := h.s3Svc.ReadObjectHead(ctx, key, sniffLen)
+	if err != nil {
+		return "", fmt.Errorf("read head of %s: %w", key, err)
+	}
+	return verifyUploadedBytes(key, head)
+}
+
+// deleteObjectUnlessReferenced deletes key after a content-verification
+// rejection, unless a live document still references it. Shared by
+// ConfirmUpload, CreateKB's sweep, and waitBuildAndPopulateDetails, which
+// otherwise ran the same check independently. noun/logField preserve each
+// caller's own log wording ("upload"/"key" vs "document"/"document").
+func (h *KnowledgeBaseHandler) deleteObjectUnlessReferenced(
+	ctx context.Context, dp *models.Datapack, key, noun, logField string,
+) {
+	switch safe, serr := h.knowledgeBaseSvc.S3KeyIsSafeToDelete(dp, key); {
+	case serr != nil:
+		slog.Error("cannot tell whether rejected "+noun+" is still referenced; keeping object",
+			"datapack_id", dp.ID, logField, key, "error", serr)
+	case !safe:
+		slog.Warn("rejected "+noun+" is still referenced by a document; keeping object",
+			"datapack_id", dp.ID, logField, key)
+	default:
+		slog.Warn("deleting rejected "+noun+" object",
+			"datapack_id", dp.ID, logField, key)
+		if derr := h.s3Svc.DeleteObject(ctx, key); derr != nil {
+			slog.Error("failed to delete rejected "+noun,
+				"datapack_id", dp.ID, logField, key, "error", derr)
+		}
+	}
 }
 
 // UploadFile handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload.
@@ -1130,7 +1390,7 @@ func mimeIsTextual(m *mimetype.MIME) bool {
 // Anthropic's `POST /v1/files` (`-F file=@...`).
 //
 // The optional `source` form field selects where the bytes come from:
-// "local" (default) is a client-pushed multipart file. It's a forward-looking
+// "local_filesystem" (default) is a client-pushed multipart file. It's a forward-looking
 // discriminator — future values like "url" will let the server fetch from a
 // public link (Google Drive, HTTPS, …) without changing the endpoint shape.
 //
@@ -1139,8 +1399,8 @@ func mimeIsTextual(m *mimetype.MIME) bool {
 //	@Accept		multipart/form-data
 //	@Produce	json
 //	@Param		datapack_id	path		string	true	"Datapack ID"
-//	@Param		source		formData	string	false	"Byte source: 'local' (default). Reserved: 'url'."
-//	@Param		file		formData	file	true	"File to upload (pdf, txt, md, json, csv, xml, html) — required when source=local"
+//	@Param		source		formData	string	false	"Byte source: 'local_filesystem' (default). Reserved: 'url'."
+//	@Param		file		formData	file	true	"File to upload (pdf, txt, md, json, csv, xml, html)"
 //	@Success	202		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
@@ -1208,9 +1468,9 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 		c.Response().Writer, c.Request().Body, bodyCap,
 	)
 
-	// Resolve the byte source up front. Empty defaults to "local"; anything
-	// other than "local" is rejected. Future fetch modes ("url", …) will add
-	// their own cases here without changing the endpoint shape.
+	// Resolve the byte source up front. Empty defaults to "local_filesystem";
+	// anything else is rejected. Future fetch modes ("url", …) will add their
+	// own cases here without changing the endpoint shape.
 	source := UploadSource(strings.ToLower(strings.TrimSpace(c.FormValue(uploadFormSourceField))))
 	if source == "" {
 		source = UploadSourceLocal
@@ -1218,7 +1478,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	if source != UploadSourceLocal {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR",
-			`unsupported source: "`+string(source)+`"; allowed: local`)
+			`unsupported source: "`+string(source)+`"; allowed: local_filesystem`)
 	}
 
 	dp, err := auth.GetDatapack(c)
@@ -1251,8 +1511,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	ext := strings.ToLower(filepath.Ext(filename))
 	if uploadMimeByExt[ext] == "" {
 		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR",
-			"unsupported file type: "+ext+"; allowed: "+allowedExtensionsMsg)
+			"VALIDATION_ERROR", unsupportedTypeMessage(ext))
 	}
 	// Reject on the declared part size before reading any bytes; the decoded
 	// length is re-checked below in case the header under-reports.
@@ -1282,7 +1541,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	}
 	if header.Len() == 0 {
 		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "uploaded file is empty")
+			"VALIDATION_ERROR", "This file is empty, so there's nothing to index.")
 	}
 
 	// The extension is already accepted (gated above); the bytes must
@@ -1290,10 +1549,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	contentType, detected, supported := resolveUploadMIME(mtype, ext)
 	if !supported {
 		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR",
-			fmt.Sprintf("file content does not match its %s extension: "+
-				"expected %s but the content is actually %s",
-				ext, uploadMimeByExt[ext], detected))
+			"VALIDATION_ERROR", uploadMismatchMessage(ext, detected))
 	}
 
 	// Read one byte past the cap so a header that under-reports Size can't
@@ -1412,7 +1668,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	}
 
 	docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), key)
-	details := buildMekoDocDetails(acct.ID, int64(len(data)), time.Now())
+	details := documentDetailsJSON(acct.ID, int64(len(data)), time.Now())
 	if err := h.ragSvc.InsertDocument(
 		sourceID, key, docURI, contentHashHex, contentType, details,
 	); err != nil {
@@ -1463,25 +1719,19 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	})
 }
 
-// waitBuildAndPopulateDetails is the isNewSource background step: wait for
-// dist_rag's CREATE_SOURCE worker to finish discovering + indexing, then
-// populate document_details onto the rows it created.
+// waitBuildAndPopulateDetails is the background step for both
+// shouldSkipAPIDocumentSync cases (isNewSource, and an existing source still
+// QUEUED/PROCESSING): wait for CREATE_SOURCE, then verify and populate
+// document_details onto the empty, content-gate-free rows it inserted.
+// Walks every object unconditionally, safe to re-run (upsertDocumentDetails
+// is an upsert, DeleteDocumentByURI is guarded against an in-flight row).
+// Run via `go`; logs and returns on error since the response is already sent.
 //
-// On the isNewSource path, CreateKB deliberately skips inserting document
-// rows itself (see shouldSkipAPIDocumentSync above) so it doesn't race that
-// worker. The worker inserts rows with empty document_details, so a
-// datapack's very first KB upload always landed with no Size/By in the UI —
-// every upload after that goes through the normal sync loop in CreateKB,
-// which does set the details. Meant to be run via `go`; logs and returns on
-// any error rather than propagating, since the HTTP response has already
-// been sent by the time this runs.
-//
-// Only populates once WaitAndBuild reports the source actually reached
-// SourceStatusCompleted. On a transient status-check error, a failed
-// source, or the 5-minute discovery timeout, dist_rag's CREATE_SOURCE
-// worker may still be running and inserting its own document rows for the
-// same S3 keys — upserting here concurrently would reintroduce the exact
-// duplicate-row race shouldSkipAPIDocumentSync exists to prevent.
+// Only populates once WaitAndBuild reports SourceStatusCompleted — on a
+// transient error, a failed source, or the 5-minute timeout, CREATE_SOURCE
+// may still be inserting rows for the same keys, and upserting concurrently
+// would reintroduce the duplicate-row race shouldSkipAPIDocumentSync exists
+// to prevent.
 func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix, sourceID, uploaderUserID string) {
 	if !h.ragSvc.WaitAndBuild(sourceID) {
 		slog.Warn("waitBuildAndPopulateDetails: source did not complete; skipping document_details populate to avoid racing the CREATE_SOURCE worker",
@@ -1495,9 +1745,68 @@ func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix,
 			"datapack_id", datapackID, "source_id", sourceID, "error", err)
 		return
 	}
+	ctx := context.Background()
+	dp := &models.Datapack{ID: datapackID}
 	updated := 0
 	for _, obj := range objects {
-		if err := h.upsertDocumentDetails(sourceID, uploaderUserID, obj); err != nil {
+		// Sniffed here too: this function covers both cases the sweep is
+		// skipped for, so it's the only thing standing between a spoofed
+		// object and a document_type taken from what the uploader claimed.
+		// Writing the declared type would let this overwrite a type the
+		// sweep sniffed, since InsertDocument's ON CONFLICT updates it.
+		contentType, verr := h.verifyObjectContent(ctx, obj.Key)
+		if verr != nil {
+			// A transport/read error says nothing about the object itself. The
+			// sweep just skips it (nothing to update yet); this path always has
+			// a row from CREATE_SOURCE, so "skip" would leave it permanently
+			// empty instead of temporarily wrong — fall back to the declared
+			// type and still record who uploaded it.
+			var rejected *contentRejected
+			if !errors.As(verr, &rejected) {
+				slog.Warn("waitBuildAndPopulateDetails: content verification unavailable; using declared type",
+					"datapack_id", datapackID, "source_id", sourceID,
+					"document", obj.Key, "error", verr)
+				contentType = obj.ContentType
+				if err := h.upsertDocumentDetails(sourceID, uploaderUserID, contentType, obj); err != nil {
+					slog.Warn("waitBuildAndPopulateDetails: failed to upsert document details",
+						"datapack_id", datapackID, "source_id", sourceID,
+						"document", obj.Key, "error", err)
+					continue
+				}
+				updated++
+				continue
+			}
+			// Positively spoofed content. The dist_rag row already exists —
+			// CREATE_SOURCE inserted it with no content gate of its own — so
+			// this is the only place left that ever rejects it.
+			// DeleteDocumentByURI refuses an in-flight row (ErrDocumentInFlight)
+			// rather than drop it out from under a still-chunking worker.
+			// Otherwise row before object: reversed, a crash in the gap would
+			// strand a document row on bytes that no longer exist.
+			docURI := h.documentURI(obj.Key)
+			slog.Warn("waitBuildAndPopulateDetails: content rejected; deleting document row",
+				"datapack_id", datapackID, "source_id", sourceID,
+				"document", obj.Key, "error", verr)
+			if _, derr := h.knowledgeBaseSvc.DeleteDocumentByURI(dp, docURI); derr != nil {
+				if errors.Is(derr, service.ErrDocumentInFlight) {
+					// Not an error: the row can't be dropped mid-chunking
+					// without orphaning what the worker writes next. Leave it
+					// for now -- a later pass (another /create, or this same
+					// background step re-running) catches it once the
+					// pipeline reaches a terminal status.
+					slog.Warn("waitBuildAndPopulateDetails: document still in flight; leaving row and object",
+						"datapack_id", datapackID, "source_id", sourceID, "document", obj.Key)
+					continue
+				}
+				slog.Error("waitBuildAndPopulateDetails: content rejected but failed to remove document row; leaving as-is",
+					"datapack_id", datapackID, "source_id", sourceID,
+					"document", obj.Key, "error", derr)
+				continue
+			}
+			h.deleteObjectUnlessReferenced(ctx, dp, obj.Key, "document", "document")
+			continue
+		}
+		if err := h.upsertDocumentDetails(sourceID, uploaderUserID, contentType, obj); err != nil {
 			slog.Warn("waitBuildAndPopulateDetails: failed to upsert document details",
 				"datapack_id", datapackID, "source_id", sourceID,
 				"document", obj.Key, "error", err)
@@ -1518,14 +1827,20 @@ func (h *KnowledgeBaseHandler) documentURI(key string) string {
 }
 
 // upsertDocumentDetails builds document_details for a single S3 object
-// (uploader + size + uploaded-at, see buildMekoDocDetails) and upserts it
+// (uploader + size + uploaded-at, see documentDetailsJSON) and upserts it
 // into dist_rag.documents via InsertDocument's ON CONFLICT(source_id,
 // document_uri) path. Shared by the normal CreateKB sync loop and
 // populateDocumentDetails so both write the exact same shape.
-func (h *KnowledgeBaseHandler) upsertDocumentDetails(sourceID, uploaderUserID string, obj service.S3Object) error {
+//
+// contentType is passed in because both callers already have it from their
+// own verifyObjectContent call — not because it differs from
+// obj.ContentType, which derives from the same uploadMimeByExt[ext] lookup.
+func (h *KnowledgeBaseHandler) upsertDocumentDetails(
+	sourceID, uploaderUserID, contentType string, obj service.S3Object,
+) error {
 	docURI := h.documentURI(obj.Key)
-	details := buildMekoDocDetails(uploaderUserID, obj.Size, obj.UploadedAt)
-	return h.ragSvc.InsertDocument(sourceID, obj.Key, docURI, obj.ETag, obj.ContentType, details)
+	details := documentDetailsJSON(uploaderUserID, obj.Size, obj.UploadedAt)
+	return h.ragSvc.InsertDocument(sourceID, obj.Key, docURI, obj.ETag, contentType, details)
 }
 
 // KBStatus handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/status.
@@ -1941,10 +2256,11 @@ func (h *KnowledgeBaseHandler) PendingUploads(c echo.Context) error {
 
 // DeletePendingUpload handles DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/pending-uploads?key=<encoded>.
 //
-// Removes a single S3 orphan — nothing else exists for it (no dist_rag
-// row, no chunks), so this is an S3 DeleteObject and nothing more. The
-// prefix check is the only real safety bit: it stops a caller from
-// reaching outside their own datapack's key space.
+// Removes a single S3 orphan — nothing else exists for it, so this is an S3
+// DeleteObject and nothing more. Two checks establish that: the prefix,
+// which stops a caller reaching outside their own datapack's key space, and
+// S3KeyIsSafeToDelete, because the orphan list the caller is acting on is a
+// snapshot.
 func (h *KnowledgeBaseHandler) DeletePendingUpload(c echo.Context) error {
 	if h.s3Svc == nil || !h.s3Svc.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,
@@ -1962,7 +2278,22 @@ func (h *KnowledgeBaseHandler) DeletePendingUpload(c echo.Context) error {
 	if !strings.HasPrefix(key, fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)) {
 		return apiError(c, http.StatusForbidden, "FORBIDDEN", "key does not belong to this datapack")
 	}
-	if err := h.s3Svc.DeleteObject(c.Request().Context(), key); err != nil {
+	// A /create can register the file between listing orphans and clicking
+	// delete, so hand a registered key to the per-file DELETE instead, which
+	// cleans up the document row and chunks too.
+	ctx := c.Request().Context()
+	switch safe, serr := h.knowledgeBaseSvc.S3KeyIsSafeToDelete(dp, key); {
+	case serr != nil:
+		slog.Error("pending upload delete: registration check failed",
+			"datapack_id", dp.ID, "key", key, "error", serr)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to check whether the file is already indexed")
+	case !safe:
+		return apiError(c, http.StatusConflict, "OBJECT_REFERENCED",
+			"this file is already part of the knowledge base — remove it from the files list instead")
+	}
+	slog.Info("pending upload delete: deleting object", "datapack_id", dp.ID, "key", key)
+	if err := h.s3Svc.DeleteObject(ctx, key); err != nil {
 		slog.Error("pending upload delete: S3 failed",
 			"datapack_id", dp.ID, "key", key, "error", err)
 		return apiError(c, http.StatusInternalServerError, "S3_ERROR", "failed to delete file")

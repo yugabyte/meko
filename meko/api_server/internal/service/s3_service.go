@@ -146,12 +146,22 @@ func (s *S3Service) Bucket() string {
 	return s.bucket
 }
 
+// UploadURLTTL is how long an issued upload authorization stays valid.
+// It bounds when the POST may *start*; a transfer already underway when it
+// lapses is not cut off, so anything deriving a "the bytes can never arrive
+// now" deadline must add its own slack on top of this.
+const UploadURLTTL = 5 * time.Minute
+
 type PresignedUpload struct {
 	URL string `json:"url"`
-	Key string `json:"key"`
+	// Fields are the multipart form fields the POST must carry, verbatim and
+	// before the file part: the signed policy, the signature, the credential
+	// scope and the key. Empty when AlreadyUploaded.
+	Fields map[string]string `json:"fields,omitempty"`
+	Key    string            `json:"key"`
 	// AlreadyUploaded is true when identical content already exists in this
 	// datapack (matched by content hash, regardless of filename). The
-	// presigned URL is empty in that case — the client should skip the PUT
+	// presigned URL is empty in that case — the client should skip the upload
 	// and proceed directly to ConfirmUpload so the document gets indexed.
 	AlreadyUploaded bool `json:"already_uploaded"`
 	// ExistingFilename is the name the deduplicated content was first stored
@@ -160,23 +170,29 @@ type PresignedUpload struct {
 	ExistingFilename string `json:"existing_filename,omitempty"`
 }
 
-// GenerateUploadURL builds a presigned PUT URL for uploading a file to
-// the per-user, per-datapack S3 prefix. The resulting key is
-// "<userID>/<datapackID>/<sha256>/<filename>" where sha256 is the
-// hex-encoded SHA-256 of the file bytes supplied by the client.
+// GenerateUploadURL authorizes a direct browser/agent upload to
+// "<userID>/<datapackID>/<sha256>/<filename>". Dedup matches on the
+// "<sha256>/" prefix, not the full key, so identical content under any
+// filename reports AlreadyUploaded=true instead of uploading again.
 //
-// The content hash is the file's identity; the filename is metadata.
-// Deduplication therefore matches on the "<userID>/<datapackID>/<sha256>/"
-// prefix, NOT the full hash+filename key:
-//   - Same content under any filename → an object already exists under the
-//     hash prefix → AlreadyUploaded=true, pointing at the first-stored key,
-//     and the client skips the redundant PUT.
-//   - Different content → different hash → different prefix → uploads
-//     independently.
+// A presigned **POST**, not a PUT: a PUT can only pin an exact
+// Content-Length, never a ceiling, so maxSizeBytes had to be trusted from
+// the client. The POST policy's content-length-range makes S3 itself reject
+// an over-cap body with 400 EntityTooLarge before the object is created.
+//
+// Content-Type is deliberately unconstrained — S3 never inspects the bytes,
+// so a condition on it would only restrict what the client claims, for no
+// gain. The extension is what's pinned, and S3Object.ContentType derives
+// from it via mimeTypeFromKey, never read back from the stored object.
 func (s *S3Service) GenerateUploadURL(
 	ctx context.Context,
-	userID, datapackID, filename, contentType, contentHash string,
+	userID, datapackID, filename, contentHash string,
+	maxSizeBytes int64,
 ) (*PresignedUpload, error) {
+	if maxSizeBytes <= 0 || maxSizeBytes > maxUploadFileBytes {
+		maxSizeBytes = maxUploadFileBytes
+	}
+
 	hashPrefix := fmt.Sprintf("%s/%s/%s/", userID, datapackID, contentHash)
 
 	existingKey, err := s.firstObjectKeyUnderPrefix(ctx, hashPrefix)
@@ -194,22 +210,25 @@ func (s *S3Service) GenerateUploadURL(
 
 	key := hashPrefix + sanitizeFilename(filename)
 
-	input := &s3.PutObjectInput{
-		Bucket:      aws.String(s.bucket),
-		Key:         aws.String(key),
-		ContentType: aws.String(contentType),
-	}
-
-	presigned, err := s.presignClient.PresignPutObject(ctx, input,
-		s3.WithPresignExpires(5*time.Minute),
-	)
+	presignedPostURL, err := s.presignClient.PresignPostObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}, func(o *s3.PresignPostOptions) {
+		o.Expires = UploadURLTTL
+		// Lower bound 1, not 0: a zero-byte file has nothing to index, and
+		// the handler already rejects size <= 0 on the declared value.
+		o.Conditions = []any{
+			[]any{"content-length-range", 1, maxSizeBytes},
+		}
+	})
 	if err != nil {
-		return nil, fmt.Errorf("presign put: %w", err)
+		return nil, fmt.Errorf("presign post: %w", err)
 	}
 
 	return &PresignedUpload{
-		URL: presigned.URL,
-		Key: key,
+		URL:    presignedPostURL.URL,
+		Fields: presignedPostURL.Values,
+		Key:    key,
 	}, nil
 }
 
@@ -401,15 +420,35 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 	return objects, nil
 }
 
-// UploadObject writes data directly to S3 under the artifact key path
-// "<userID>/<datapackID>/<contentHash>/<filename>". Used by the artifact
-// service for server-side uploads (caller has already computed the hash).
+// UploadObject writes data directly to S3 under the KB upload key path
+// "<userID>/<datapackID>/<contentHash>/<filename>" — the same space
+// GenerateUploadURL signs. Used by UploadFile's server-side write for a
+// direct (non-presigned) upload, where the caller has already computed the
+// hash.
 func (s *S3Service) UploadObject(
 	ctx context.Context,
 	userID, datapackID, contentHash, filename, contentType string,
 	data []byte,
 ) (string, error) {
 	key := fmt.Sprintf("%s/%s/%s/%s", userID, datapackID, contentHash, sanitizeFilename(filename))
+	return key, s.putObject(ctx, key, contentType, data)
+}
+
+// UploadArtifactObject writes under the "artifacts/" prefix — disjoint from
+// UploadObject's KB key space, so nothing that walks or dedups on
+// "<userID>/<datapackID>/" ever reaches an artifact. Artifacts stored
+// before this method existed still live at the old, shared-prefix key until
+// migrated — see meko/scripts/migrate_artifacts_prefix.py.
+func (s *S3Service) UploadArtifactObject(
+	ctx context.Context,
+	userID, datapackID, contentHash, filename, contentType string,
+	data []byte,
+) (string, error) {
+	key := fmt.Sprintf("artifacts/%s/%s/%s/%s", userID, datapackID, contentHash, sanitizeFilename(filename))
+	return key, s.putObject(ctx, key, contentType, data)
+}
+
+func (s *S3Service) putObject(ctx context.Context, key, contentType string, data []byte) error {
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
@@ -417,9 +456,9 @@ func (s *S3Service) UploadObject(
 		Body:        bytes.NewReader(data),
 	})
 	if err != nil {
-		return "", fmt.Errorf("put object %s: %w", key, err)
+		return fmt.Errorf("put object %s: %w", key, err)
 	}
-	return key, nil
+	return nil
 }
 
 // DownloadObject fetches the bytes for key from S3 and returns them.
@@ -437,6 +476,51 @@ func (s *S3Service) DownloadObject(ctx context.Context, key string) ([]byte, err
 		return nil, fmt.Errorf("read object %s: %w", key, err)
 	}
 	return data, nil
+}
+
+// apiErrorCoder matches the ErrorCode() method every AWS SDK v2 API error
+// implements, without importing smithy-go directly: errors.As matches an
+// interface target structurally, so this local interface is enough to pull
+// the code out of whatever concrete error type the SDK returns.
+type apiErrorCoder interface {
+	ErrorCode() string
+}
+
+// ReadObjectHead fetches at most n leading bytes via a ranged GET, so
+// content can be verified on the presigned path without pulling a whole
+// file into memory. S3 clamps an overshooting range, except at zero, where
+// S3/MinIO answer 416 — reported here as a nil, nil empty read so a
+// zero-byte object reaches verifyUploadedBytes' own "empty" check.
+func (s *S3Service) ReadObjectHead(
+	ctx context.Context, key string, n int64,
+) ([]byte, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("read head %s: n must be positive", key)
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(fmt.Sprintf("bytes=0-%d", n-1)),
+	})
+	if err != nil {
+		// InvalidRange isn't a typed error like types.NotFound above — it's
+		// a generic validation error, so apiErrorCoder is what catches it.
+		var apiErr apiErrorCoder
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidRange" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("range get %s: %w", key, err)
+	}
+	defer out.Body.Close()
+
+	// LimitReader as well as the Range header: the range is what keeps the
+	// transfer small, this is the guarantee that a server ignoring it can't
+	// hand us an unbounded body.
+	head, err := io.ReadAll(io.LimitReader(out.Body, n))
+	if err != nil {
+		return nil, fmt.Errorf("read head %s: %w", key, err)
+	}
+	return head, nil
 }
 
 // sanitizeFilename replaces invalid characters in a filename with underscores which is accepted by S3.

@@ -10,9 +10,7 @@
 import {
   Children,
   memo,
-  type ComponentType,
   type ReactNode,
-  type SVGProps,
   useCallback,
   useEffect,
   useRef,
@@ -32,19 +30,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  File as FileIcon,
   Loader2,
   Sparkles,
   Trash2,
 } from "lucide-react";
-import {
-  FileTypeCsvIcon,
-  FileTypeHtmlIcon,
-  FileTypeJsonIcon,
-  FileTypeMarkdownIcon,
-  FileTypePdfIcon,
-  FileTypeTxtIcon,
-} from "./fileTypeIcons";
+import { fileTypeVisual } from "./fileTypeIcons";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -96,41 +86,6 @@ function canDeleteKBDocumentClient(
   return callerUserId === fileUploaderUserId;
 }
 
-/** Per-extension glyph for the file row. PDF/JSON/HTML use the
- *  vscode-icons "badge" artwork (see fileTypeIcons.tsx) -- full-color
- *  pictograms with every fill baked in, so no tone class is needed (or
- *  wanted; `text-*` wouldn't touch a hardcoded `fill`). TXT/CSV/Markdown
- *  instead use the outline-style, `currentColor` Tabler glyphs (the
- *  vscode-icons badges for those three read as too flat/plain at this
- *  size), which do need a tone class for their color. Unknown / unset
- *  types fall through to a plain document glyph in the section's
- *  emerald accent.
- *  Takes a file *extension* (".pdf", ".md", …), not `document_type` --
- *  that field is the S3 object's MIME content-type (e.g. "text/csv"),
- *  which never matches these cases; callers should extract the
- *  extension from the document name via `documentFileExtension` first. */
-function fileTypeVisual(
-  extension?: string | null,
-): { Icon: ComponentType<SVGProps<SVGSVGElement>>; toneClass: string } {
-  switch ((extension || "").toLowerCase()) {
-    case ".pdf":
-      return { Icon: FileTypePdfIcon, toneClass: "text-red-700 dark:text-red-400" };
-    case ".md":
-      return { Icon: FileTypeMarkdownIcon, toneClass: "text-blue-700 dark:text-blue-300" };
-    case ".txt":
-      return { Icon: FileTypeTxtIcon, toneClass: "text-sky-700 dark:text-sky-300" };
-    case ".json":
-      return { Icon: FileTypeJsonIcon, toneClass: "" };
-    case ".csv":
-      return { Icon: FileTypeCsvIcon, toneClass: "text-emerald-700 dark:text-emerald-300" };
-    case ".html":
-    case ".htm":
-      return { Icon: FileTypeHtmlIcon, toneClass: "" };
-    default:
-      return { Icon: FileIcon, toneClass: "text-emerald-700 dark:text-emerald-300" };
-  }
-}
-
 /** File-type chip values. "all" is the default (no filter); the rest
  *  mirror the upload allow-list so a file type can't be filterable here
  *  without also being uploadable (and vice versa). */
@@ -142,14 +97,15 @@ export type FileTypeFilter = (typeof FILE_TYPE_FILTERS)[number]["id"];
 
 /** Status chip values for the filter row, alongside the file-type chips.
  *  "all" means no status restriction; the rest are exact matches against
- *  {@link KB_DOCUMENT_STATUS}. FAILED is deliberately omitted from the UI
- *  today -- there's no dedicated "Failed" affordance elsewhere yet, and
- *  adding the filter alone wouldn't be actionable. */
+ *  {@link KB_DOCUMENT_STATUS} — the server's `status_filter` takes one
+ *  status, not a set, so NOT_STARTED and RETRY rows (rendered as "Queued"
+ *  and "Retrying") aren't reachable from here. Lifecycle order. */
 export const STATUS_FILTERS = [
   { id: "all" as const, label: "All statuses" },
-  { id: KB_DOCUMENT_STATUS.COMPLETED, label: "Indexed" },
   { id: KB_DOCUMENT_STATUS.QUEUED, label: "Queued" },
   { id: KB_DOCUMENT_STATUS.PROCESSING, label: "Processing" },
+  { id: KB_DOCUMENT_STATUS.COMPLETED, label: "Indexed" },
+  { id: KB_DOCUMENT_STATUS.FAILED, label: "Failed" },
 ] as const;
 export type StatusFilter = (typeof STATUS_FILTERS)[number]["id"];
 
@@ -225,40 +181,36 @@ function StatusBadge({ status }: { status: string }) {
  *  row stays a single line regardless of how many file types/statuses
  *  exist.
  *
- *  `availableTypes`/`availableStatuses` (raw values sampled from this
- *  datapack's actual documents -- see useKnowledgeFilesTable's
- *  `availableTypeFilters`/`availableStatusFilters`) restrict each
- *  dropdown's options to ones that would actually match something, e.g.
- *  no point offering ".json" when nothing of that type has been
- *  uploaded. Omit either list (or leave it empty, e.g. before the first
- *  fetch resolves) to fall back to showing every possible option. */
+ *  Status dropdown always offers the full {@link STATUS_FILTERS} list --
+ *  narrowing it to what's present made options appear/vanish under the
+ *  cursor as files moved QUEUED -> PROCESSING -> indexed. `availableTypes`
+ *  still restricts the type dropdown, since an extension never changes. */
 export function FilterRow({
   typeFilter,
   onTypeFilterChange,
   statusFilter,
   onStatusFilterChange,
   availableTypes,
-  availableStatuses,
 }: {
   typeFilter: FileTypeFilter;
   onTypeFilterChange: (next: FileTypeFilter) => void;
   statusFilter: StatusFilter;
   onStatusFilterChange: (next: StatusFilter) => void;
   availableTypes?: string[];
-  availableStatuses?: string[];
 }) {
+  // The selected type stays in its list even if the sample stops reporting
+  // it (its last file deleted mid-session): dropping the selected option
+  // leaves Radix rendering a trigger with no label, and no way back to "All".
   const typeOptions = FILE_TYPE_FILTERS.filter(
-    (f) => f.id === "all" || !availableTypes?.length || availableTypes.includes(f.id),
+    (f) =>
+      f.id === "all" ||
+      f.id === typeFilter ||
+      !availableTypes?.length ||
+      availableTypes.includes(f.id),
   );
-  const statusOptions = STATUS_FILTERS.filter(
-    (f) => f.id === "all" || !availableStatuses?.length || availableStatuses.includes(f.id),
-  );
-  // Nothing beyond "All types"/"All statuses" to pick from -- an empty
-  // datapack, or one where every document shares the same type/status.
-  // A lone dropdown that can't actually filter anything is just noise.
+  // Only "All types" to pick from -- an empty datapack, or one where every
+  // document shares an extension. A dropdown that can't filter is noise.
   const showType = typeOptions.length > 1;
-  const showStatus = statusOptions.length > 1;
-  if (!showType && !showStatus) return null;
 
   const triggerClass =
     "h-9 w-auto gap-2 rounded-lg border-border/80 bg-background px-3 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-accent/50 hover:border-border focus:ring-2 focus:ring-ring/40 data-[state=open]:border-ring/60 data-[state=open]:ring-2 data-[state=open]:ring-ring/40 [&>span]:line-clamp-1 [&>span]:flex [&>span]:items-center [&>span]:gap-2 [&_svg]:h-4 [&_svg]:w-4 [&_svg]:shrink-0";
@@ -295,33 +247,31 @@ export function FilterRow({
           </SelectContent>
         </Select>
       ) : null}
-      {showStatus ? (
-        <Select value={statusFilter} onValueChange={(v) => onStatusFilterChange(v as StatusFilter)}>
-          <SelectTrigger className={triggerClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className={contentClass}>
-            {statusOptions.map((f) => {
-              if (f.id === "all") {
-                return (
-                  <SelectItem key={f.id} value={f.id} className={itemClass}>
-                    {f.label}
-                  </SelectItem>
-                );
-              }
-              const dot = STATUS_DOT[kbDocumentStatusTone(f.id)] ?? STATUS_DOT.muted;
+      <Select value={statusFilter} onValueChange={(v) => onStatusFilterChange(v as StatusFilter)}>
+        <SelectTrigger className={triggerClass}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className={contentClass}>
+          {STATUS_FILTERS.map((f) => {
+            if (f.id === "all") {
               return (
                 <SelectItem key={f.id} value={f.id} className={itemClass}>
-                  <span className="flex items-center gap-2">
-                    <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} aria-hidden />
-                    <span>{f.label}</span>
-                  </span>
+                  {f.label}
                 </SelectItem>
               );
-            })}
-          </SelectContent>
-        </Select>
-      ) : null}
+            }
+            const dot = STATUS_DOT[kbDocumentStatusTone(f.id)] ?? STATUS_DOT.muted;
+            return (
+              <SelectItem key={f.id} value={f.id} className={itemClass}>
+                <span className="flex items-center gap-2">
+                  <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} aria-hidden />
+                  <span>{f.label}</span>
+                </span>
+              </SelectItem>
+            );
+          })}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

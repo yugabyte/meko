@@ -361,6 +361,117 @@ func TestKnowledgeBaseRepo_GetSourceIDs(t *testing.T) {
 	}
 }
 
+func TestKnowledgeBaseRepo_DocumentExistsForURI(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT rag_source_id\s+FROM meko_system\.knowledge_bases`).
+		WithArgs("dp-1").
+		WillReturnRows(sqlmock.NewRows([]string{"rag_source_id"}).
+			AddRow("rag-1").
+			AddRow("rag-2"))
+	// Both sources are searched in one query, so a document registered under
+	// the older one still counts as tracked.
+	mock.ExpectQuery(`SELECT EXISTS \(\s+SELECT 1\s+FROM\s+dist_rag\.documents`).
+		WithArgs(sqlmock.AnyArg(), "s3://bucket/dp-1/file.pdf").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	repo := NewKnowledgeBaseRepo(db, db)
+	exists, err := repo.DocumentExistsForURI("dp-1", "s3://bucket/dp-1/file.pdf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("expected the document to be reported as registered")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// A datapack with no sources can hold no documents, so the dist_rag query is
+// skipped entirely -- sqlmock fails the test if it is issued.
+func TestKnowledgeBaseRepo_DocumentExistsForURI_NoSources(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT rag_source_id\s+FROM meko_system\.knowledge_bases`).
+		WithArgs("dp-1").
+		WillReturnRows(sqlmock.NewRows([]string{"rag_source_id"}))
+
+	repo := NewKnowledgeBaseRepo(db, db)
+	exists, err := repo.DocumentExistsForURI("dp-1", "s3://bucket/dp-1/file.pdf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("expected no document for a datapack with no sources")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestKnowledgeBaseRepo_GetDocumentIDForURI_Found(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT rag_source_id\s+FROM meko_system\.knowledge_bases`).
+		WithArgs("dp-1").
+		WillReturnRows(sqlmock.NewRows([]string{"rag_source_id"}).AddRow("rag-1"))
+	mock.ExpectQuery(`SELECT document_id\s+FROM\s+dist_rag\.documents`).
+		WithArgs(sqlmock.AnyArg(), "s3://bucket/dp-1/file.pdf").
+		WillReturnRows(sqlmock.NewRows([]string{"document_id"}).AddRow("doc-1"))
+
+	repo := NewKnowledgeBaseRepo(db, db)
+	id, ok, err := repo.GetDocumentIDForURI("dp-1", "s3://bucket/dp-1/file.pdf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || id != "doc-1" {
+		t.Errorf("expected (doc-1, true), got (%q, %v)", id, ok)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestKnowledgeBaseRepo_GetDocumentIDForURI_NotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT rag_source_id\s+FROM meko_system\.knowledge_bases`).
+		WithArgs("dp-1").
+		WillReturnRows(sqlmock.NewRows([]string{"rag_source_id"}).AddRow("rag-1"))
+	mock.ExpectQuery(`SELECT document_id\s+FROM\s+dist_rag\.documents`).
+		WithArgs(sqlmock.AnyArg(), "s3://bucket/dp-1/missing.pdf").
+		WillReturnRows(sqlmock.NewRows([]string{"document_id"}))
+
+	repo := NewKnowledgeBaseRepo(db, db)
+	id, ok, err := repo.GetDocumentIDForURI("dp-1", "s3://bucket/dp-1/missing.pdf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok || id != "" {
+		t.Errorf("expected (\"\", false), got (%q, %v)", id, ok)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestKnowledgeBaseRepo_GetSourceURIs(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

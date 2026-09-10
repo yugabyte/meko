@@ -113,7 +113,6 @@ export function KnowledgeFilesTab({
     pendingPlaceholders,
     hasActiveFilter,
     availableTypeFilters,
-    availableStatusFilters,
     pollTick,
     handleQueuedDocsChange,
     setUploadProcessingActive,
@@ -204,7 +203,6 @@ export function KnowledgeFilesTab({
           statusFilter={statusFilter}
           onStatusFilterChange={handleStatusFilterChange}
           availableTypes={availableTypeFilters}
-          availableStatuses={availableStatusFilters}
         />
 
         <FilesTable

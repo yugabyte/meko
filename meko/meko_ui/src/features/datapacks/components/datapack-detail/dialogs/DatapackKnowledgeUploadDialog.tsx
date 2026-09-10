@@ -71,7 +71,6 @@ export function DatapackKnowledgeUploadDialog({
     pendingPlaceholders,
     hasActiveFilter,
     availableTypeFilters,
-    availableStatusFilters,
     pollTick,
     handleQueuedDocsChange,
     setUploadProcessingActive,
@@ -150,7 +149,6 @@ export function DatapackKnowledgeUploadDialog({
               statusFilter={statusFilter}
               onStatusFilterChange={handleStatusFilterChange}
               availableTypes={availableTypeFilters}
-              availableStatuses={availableStatusFilters}
             />
 
             <FilesTable

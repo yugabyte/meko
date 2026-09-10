@@ -1,5 +1,6 @@
-// Per-file-type icons for the Files table (see `fileTypeVisual` in
-// KnowledgeFilesTable.tsx).
+// Per-file-type icons, and the `fileTypeVisual` lookup that picks one. Shared
+// by the Files table and the uploader so the same file wears the same glyph
+// from the moment it is picked to long after it is indexed.
 //
 // HTML/JSON use the "badge" artwork from the `vscode-icons` project
 // (https://github.com/vscode-icons/vscode-icons), downloaded individually
@@ -36,7 +37,8 @@
 // Sources (icons/outline/*.svg on tabler/tabler-icons @ main):
 //   file-type-pdf.svg, file-type-txt.svg, file-type-csv.svg, markdown.svg
 
-import type { SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
+import { File as FileIcon } from "lucide-react";
 
 type IconProps = SVGProps<SVGSVGElement>;
 
@@ -170,4 +172,30 @@ export function FileTypeCsvIcon(props: IconProps) {
       <path d="M16 15l2 6l2 -6" />
     </TablerIcon>
   );
+}
+
+/** Per-extension glyph. PDF/JSON/HTML use vscode-icons' full-color badges;
+ *  TXT/CSV/Markdown use outline `currentColor` Tabler glyphs instead, since
+ *  those badges read too flat at this size. Takes a file *extension*, not
+ *  `document_type` -- extract it via `documentFileExtension` first. */
+export function fileTypeVisual(
+  extension?: string | null,
+): { Icon: ComponentType<SVGProps<SVGSVGElement>>; toneClass: string } {
+  switch ((extension || "").toLowerCase()) {
+    case ".pdf":
+      return { Icon: FileTypePdfIcon, toneClass: "text-red-700 dark:text-red-400" };
+    case ".md":
+      return { Icon: FileTypeMarkdownIcon, toneClass: "text-blue-700 dark:text-blue-300" };
+    case ".txt":
+      return { Icon: FileTypeTxtIcon, toneClass: "text-sky-700 dark:text-sky-300" };
+    case ".json":
+      return { Icon: FileTypeJsonIcon, toneClass: "" };
+    case ".csv":
+      return { Icon: FileTypeCsvIcon, toneClass: "text-emerald-700 dark:text-emerald-300" };
+    case ".html":
+    case ".htm":
+      return { Icon: FileTypeHtmlIcon, toneClass: "" };
+    default:
+      return { Icon: FileIcon, toneClass: "text-emerald-700 dark:text-emerald-300" };
+  }
 }

@@ -217,8 +217,10 @@ export function isNonSecureHttpOrigin(): boolean {
   return typeof window !== "undefined" && !window.isSecureContext;
 }
 
-async function sha256HexWebCrypto(bytes: Uint8Array): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+/** Takes the ArrayBuffer, not a Uint8Array view: `digest`'s BufferSource
+ *  excludes a bare Uint8Array under TS 5.7+, which this project doesn't build on yet. */
+async function sha256HexWebCrypto(data: ArrayBuffer): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hashBuffer))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -229,17 +231,47 @@ function sha256HexFallback(bytes: Uint8Array): string {
   return Sha256.hashBytes(bytes);
 }
 
-/** Returns a 64-character lowercase hex SHA-256 of the file bytes. */
+/** Shown when a file's bytes shift while reading. Can't be allowed through:
+ *  the SHA-256 sent to /upload-url is frozen before the transfer. */
+export const FILE_CHANGED_WHILE_READING =
+  "This file changed while it was being read — something still seems to be writing to it. " +
+  "Wait for it to finish, then try again, or upload a copy.";
+
+/** Recognises the DOMException a browser raises once a File's on-select
+ *  snapshot no longer matches disk — the file moved under us. */
+export function isFileSnapshotError(err: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    err instanceof DOMException &&
+    err.name === "NotReadableError"
+  );
+}
+
+/** Returns a 64-char lowercase hex SHA-256. Throws FILE_CHANGED_WHILE_READING
+ *  for a file that isn't holding still — caught here, before /upload-url. */
 export async function sha256Hex(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await file.arrayBuffer();
+  } catch (err) {
+    if (isFileSnapshotError(err)) throw new Error(FILE_CHANGED_WHILE_READING);
+    throw err;
+  }
+
+  // Checked separately from the error above: Chrome re-snapshots and serves
+  // new bytes instead of failing the read, so a length mismatch against the
+  // selection-time `file.size` is the only evidence the file moved.
+  if (buffer.byteLength !== file.size) {
+    throw new Error(FILE_CHANGED_WHILE_READING);
+  }
 
   if (canUseWebCryptoSha256()) {
     try {
-      return await sha256HexWebCrypto(bytes);
+      return await sha256HexWebCrypto(buffer);
     } catch {
       // `subtle` present but digest failed — fall through to JS implementation
     }
   }
 
-  return sha256HexFallback(bytes);
+  return sha256HexFallback(new Uint8Array(buffer));
 }
