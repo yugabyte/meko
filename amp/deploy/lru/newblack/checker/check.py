@@ -182,9 +182,13 @@ def check_all():
     v = q(f"max(safekeeper_disk_usage_bytes{{{ep}}})")
     rules["safekeeper_disk_bytes"] = (v, band(v, 20e9, 50e9))
 
-    # GC falling behind is how storage grows without the database growing.
+    # GC falling behind is how storage grows without the database growing. Not
+    # every endpoint publishes this series, and one that never appears is not
+    # evidence of a problem, so an absent metric drops the rule rather than
+    # holding the whole verdict at unreadable forever.
     v = q(f"max(pageserver_yb_gc_drain_lag_bytes{{{ep}}})")
-    rules["pageserver_gc_drain_lag_bytes"] = (v, band(v, 1e9, 10e9))
+    if v is not None:
+        rules["pageserver_gc_drain_lag_bytes"] = (v, band(v, 1e9, 10e9))
     return rules
 
 

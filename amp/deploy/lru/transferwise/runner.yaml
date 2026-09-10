@@ -1,0 +1,193 @@
+# The transferwise workload: the customer's anonymised ledger payment
+# transaction (yugabyte/ledger_bench) run in cycles that never end.
+#
+# Two things shape this pod. The driver prints only an end-of-run summary, so the
+# cycle is short enough that app-side metrics move often. And its -init drops and
+# recreates the workload tables, so it runs exactly once, gated on the schema
+# being absent rather than on a flag someone has to remember.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transferwise-runner
+  namespace: amp-lru
+  labels:
+    lru: transferwise
+data:
+  PGHOST: transferwise-endpoint
+  PGPORT: "55433"
+  PGUSER: cloud_admin
+  PGPASSWORD: cloud_admin
+  LEDGER_DB: transferwise_lru
+  # The driver's own name for its Postgres schema inside that database.
+  LEDGER_SCHEMA: ledger_bench
+  # A write workflow is one transaction that records a job, a transaction,
+  # idempotence rows, financial steps, balance changes, six ledger legs, an audit
+  # event, a snapshot and an outgoing message. Four threads is plenty to start:
+  # six on a laptop container already did 14k statements a second.
+  THREADS: "4"
+  POOL_MIN: "4"
+  POOL_MAX: "4"
+  NON_TX_READERS: "2"
+  ACCOUNTS: "20000"
+  SETTLEMENT_ACCOUNTS: "1000"
+  WRITE_LOCK_MODE: for-update
+  # Short, because the summary at the end of a cycle is the only app-side
+  # measurement we get. It also means an ANALYZE pass per cycle, which is the
+  # first thing to lengthen if it starts costing real time.
+  CYCLE_DURATION: 15m
+  seed.sh: |
+    #!/bin/sh
+    # Decides whether the driver's -init may run. -init drops and recreates the
+    # workload tables, so it must happen once in the life of this LRU and never
+    # on a pod restart, which would throw away the history it exists to build.
+    set -eu
+    export PGPASSWORD
+    admin() { psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 "$@"; }
+    db() { psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$LEDGER_DB" -v ON_ERROR_STOP=1 "$@"; }
+
+    for i in $(seq 1 60); do
+      admin -Atqc 'select 1' >/dev/null 2>&1 && break
+      echo "waiting for $PGHOST:$PGPORT ($i)"; sleep 5
+    done
+
+    if [ -z "$(admin -Atqc "select 1 from pg_database where datname = '$LEDGER_DB'")" ]; then
+      admin -c "CREATE DATABASE $LEDGER_DB"
+      echo "created database $LEDGER_DB"
+    fi
+
+    rm -f /work/needs-init
+    if [ -z "$(db -Atqc "select 1 from information_schema.tables where table_schema = '$LEDGER_SCHEMA' and table_name = 'core_account'")" ]; then
+      touch /work/needs-init
+      echo "no schema yet: the driver will initialise and seed once"
+    else
+      echo "schema already present, leaving data alone"
+    fi
+  run.sh: |
+    #!/bin/sh
+    # Truncating the log per cycle is what the exporter reads as a cycle boundary.
+    set -eu
+    export HOME=/work GOPATH=/work/go GOCACHE=/work/gocache GOFLAGS=-mod=mod
+    export LEDGER_BENCH_DSN="host=$PGHOST port=$PGPORT user=$PGUSER dbname=$LEDGER_DB sslmode=disable connect_timeout=10"
+
+    mkdir -p /work/src
+    # The schema lives in Go string literals rather than a .sql file, so the
+    # YB-to-Postgres rewrite runs over main.go itself. The converted copy still
+    # compiles; keeping the vendored original untouched is what makes a refresh
+    # from upstream a plain cp.
+    cp /workload/go.mod /workload/go.sum /work/src/
+    cp /work/main.pg.go /work/src/main.go
+    cd /work/src && go build -trimpath -o /work/bin/ledger_bench .
+
+    SEED_FLAGS="-accounts $ACCOUNTS -settlement-accounts $SETTLEMENT_ACCOUNTS"
+    if [ -f /work/needs-init ]; then
+      echo "=== one-time init and seed"
+      /work/bin/ledger_bench -schema "$LEDGER_SCHEMA" -init -run=false $SEED_FLAGS
+      rm -f /work/needs-init
+    fi
+
+    while true; do
+      : > /work/ledger.log
+      echo "=== cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) threads=$THREADS duration=$CYCLE_DURATION" | tee -a /work/ledger.log
+      /work/bin/ledger_bench \
+        -schema "$LEDGER_SCHEMA" \
+        -duration "$CYCLE_DURATION" \
+        -threads "$THREADS" \
+        -pool-min-conns "$POOL_MIN" \
+        -pool-max-conns "$POOL_MAX" \
+        -non-tx-readers "$NON_TX_READERS" \
+        -write-lock-mode "$WRITE_LOCK_MODE" \
+        $SEED_FLAGS \
+        2>&1 | tee -a /work/ledger.log || echo "=== cycle exited with $?" | tee -a /work/ledger.log
+      sleep 30
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transferwise-runner
+  namespace: amp-lru
+  labels:
+    app: ledger
+    lru: transferwise
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ledger
+      lru: transferwise
+  template:
+    metadata:
+      labels:
+        app: ledger
+        lru: transferwise
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: convert-ddl
+          image: python:3.12-alpine
+          command:
+            - /bin/sh
+            - -c
+            - python3 /workload/to_amp_ddl.py /workload/main.go > /work/main.pg.go
+          volumeMounts:
+            - { name: driver, mountPath: /workload/main.go, subPath: main.go }
+            - { name: driver, mountPath: /workload/to_amp_ddl.py, subPath: to_amp_ddl.py }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+        - name: seed-gate
+          image: postgres:18-alpine
+          command: ["/bin/sh", "/etc/ledger/seed.sh"]
+          envFrom:
+            - configMapRef:
+                name: transferwise-runner
+          volumeMounts:
+            - { name: run, mountPath: /etc/ledger }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+      containers:
+        - name: ledger
+          image: golang:1.26
+          command: ["/bin/sh", "/etc/ledger/run.sh"]
+          envFrom:
+            - configMapRef:
+                name: transferwise-runner
+          volumeMounts:
+            - { name: run, mountPath: /etc/ledger }
+            - { name: driver, mountPath: /workload/go.mod, subPath: go.mod }
+            - { name: driver, mountPath: /workload/go.sum, subPath: go.sum }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "2", memory: 4Gi }
+        - name: exporter
+          image: python:3.12-alpine
+          command: [python3, -u, /app/exporter.py]
+          env:
+            - name: LEDGER_LOG
+              value: /work/ledger.log
+          ports:
+            - name: metrics
+              containerPort: 9095
+          volumeMounts:
+            - { name: exporter, mountPath: /app }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+      volumes:
+        - name: run
+          configMap: { name: transferwise-runner }
+        - name: driver
+          configMap: { name: transferwise-driver }
+        - name: exporter
+          configMap: { name: transferwise-exporter }
+        - name: work
+          emptyDir: { sizeLimit: 10Gi }

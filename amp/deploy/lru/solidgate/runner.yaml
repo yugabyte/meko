@@ -1,0 +1,205 @@
+# The solidgate workload: the customer's anonymised card-payment transaction
+# (yugabyte/update-heavy-anon-card-workload) run in cycles that never end.
+# The exporter sidecar turns the driver's CSV interval rows into metrics.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: solidgate-runner
+  namespace: amp-lru
+  labels:
+    lru: solidgate
+data:
+  PGHOST: solidgate-endpoint
+  PGPORT: "55433"
+  PGUSER: cloud_admin
+  PGPASSWORD: cloud_admin
+  CARD_DB: solidgate_lru
+  # Roughly 39% reads, 18% inserts, 43% updates over 8 statements a transaction:
+  # the mix is the driver's, not ours. Concurrency is ours, and two is measured
+  # rather than guessed. On a 2 vCPU endpoint: eight workers and four both pin it
+  # at ~100% CPU for the same ~4.6k statements a second, so four is already past
+  # the knee; two holds ~2.7k at 61% CPU with 5.9ms transactions. An LRU parked at
+  # its ceiling cannot tell a regression from saturation, so it runs below it.
+  CONCURRENCY: "2"
+  MINPOOL: "2"
+  MAXPOOL: "2"
+  STMTS_PER_TXN: "8"
+  TXN_RETRIES: "4"
+  REPORT_EVERY: 30s
+  CYCLE_DURATION: 60m
+  # Seed cardinality. The driver's README says keep these together with the seed
+  # file, so they are here rather than invented per run.
+  SEED_ORDERS: "1200"
+  SEED_SHOPS: "40"
+  SEED_TOKENS: "800"
+  seed.sh: |
+    #!/bin/sh
+    # Idempotent, unlike the upstream setup_workload_db.sh, which drops the whole
+    # database. An LRU exists to accumulate history; dropping it on every pod
+    # restart would leave nothing to look at.
+    set -eu
+    export PGPASSWORD
+    admin() { psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 "$@"; }
+    db() { psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$CARD_DB" -v ON_ERROR_STOP=1 "$@"; }
+
+    for i in $(seq 1 60); do
+      admin -Atqc 'select 1' >/dev/null 2>&1 && break
+      echo "waiting for $PGHOST:$PGPORT ($i)"; sleep 5
+    done
+
+    if [ -z "$(admin -Atqc "select 1 from pg_database where datname = '$CARD_DB'")" ]; then
+      admin -c "CREATE DATABASE $CARD_DB"
+      echo "created database $CARD_DB"
+    fi
+
+    # `orders` is the workload's core table and the first thing the seed fills.
+    # Naming a table the schema does not actually have would make this guard
+    # always miss, and the reload would then fail on the first table that does
+    # exist - which is exactly what happened with a guess taken from the README.
+    if [ -n "$(db -Atqc "select 1 from information_schema.tables where table_name = 'orders'")" ]; then
+      echo "schema already present, leaving data alone"
+      exit 0
+    fi
+
+    # --single-transaction, because the schema opens with
+    # `DROP TYPE ... CASCADE`. Run against a populated database that statement
+    # strips every column of that type before anything else fails, and the
+    # failure leaves the damage behind. In one transaction it rolls back
+    # instead. The guard above should mean this never runs twice; this is what
+    # makes a mistake in the guard survivable.
+    echo "loading schema ($(wc -l < /work/schema.pg.sql) lines)"
+    db --single-transaction -f /work/schema.pg.sql
+    echo "loading seed"
+    db --single-transaction -f /work/seed.pg.sql
+  run.sh: |
+    #!/bin/sh
+    # The driver exits when its -duration expires; this restarts it forever.
+    # Truncating the log per cycle is what the exporter reads as a cycle boundary.
+    set -eu
+    export HOME=/work GOPATH=/work/go GOCACHE=/work/gocache GOFLAGS=-mod=mod
+
+    mkdir -p /work/src
+    cp /workload/workload.go /workload/go.mod /workload/go.sum /work/src/
+    cd /work/src && go build -trimpath -o /work/bin/card ./workload.go
+
+    DSN="host=$PGHOST port=$PGPORT dbname=$CARD_DB user=$PGUSER sslmode=disable"
+    while true; do
+      : > /work/card.log
+      echo "=== cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) concurrency=$CONCURRENCY duration=$CYCLE_DURATION"
+      PGPASSWORD="$PGPASSWORD" /work/bin/card \
+        -dsn "$DSN" \
+        -concurrency "$CONCURRENCY" \
+        -duration "$CYCLE_DURATION" \
+        -report-every "$REPORT_EVERY" \
+        -minpool "$MINPOOL" \
+        -maxpool "$MAXPOOL" \
+        -stmts-per-txn "$STMTS_PER_TXN" \
+        -txn-retries "$TXN_RETRIES" \
+        -txn-cte=false \
+        -txn-cte-fixed-shape=false \
+        -direct-even=false \
+        -seed-orders "$SEED_ORDERS" \
+        -seed-shops "$SEED_SHOPS" \
+        -seed-tokens "$SEED_TOKENS" \
+        2>&1 | tee -a /work/card.log || echo "=== cycle exited with $?" | tee -a /work/card.log
+      sleep 30
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solidgate-runner
+  namespace: amp-lru
+  labels:
+    app: card
+    lru: solidgate
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: card
+      lru: solidgate
+  template:
+    metadata:
+      labels:
+        app: card
+        lru: solidgate
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        # The postgres image has no python, so the DDL rewrite is its own step.
+        - name: convert-ddl
+          image: python:3.12-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              python3 /workload/to_amp_ddl.py /workload/workload_schema.sql > /work/schema.pg.sql
+              python3 /workload/to_amp_ddl.py /workload/seed_full.sql > /work/seed.pg.sql
+          volumeMounts:
+            - { name: schema, mountPath: /workload/workload_schema.sql, subPath: workload_schema.sql }
+            - { name: schema, mountPath: /workload/seed_full.sql, subPath: seed_full.sql }
+            - { name: schema, mountPath: /workload/to_amp_ddl.py, subPath: to_amp_ddl.py }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+        - name: seed
+          image: postgres:18-alpine
+          command: ["/bin/sh", "/etc/card/seed.sh"]
+          envFrom:
+            - configMapRef:
+                name: solidgate-runner
+          volumeMounts:
+            - { name: run, mountPath: /etc/card }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+      containers:
+        - name: card
+          image: golang:1.26
+          command: ["/bin/sh", "/etc/card/run.sh"]
+          envFrom:
+            - configMapRef:
+                name: solidgate-runner
+          volumeMounts:
+            - { name: run, mountPath: /etc/card }
+            - { name: driver, mountPath: /workload/workload.go, subPath: workload.go }
+            - { name: driver, mountPath: /workload/go.mod, subPath: go.mod }
+            - { name: driver, mountPath: /workload/go.sum, subPath: go.sum }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "2", memory: 4Gi }
+        - name: exporter
+          image: python:3.12-alpine
+          command: [python3, -u, /app/exporter.py]
+          env:
+            - name: CARD_LOG
+              value: /work/card.log
+          ports:
+            - name: metrics
+              containerPort: 9095
+          volumeMounts:
+            - { name: exporter, mountPath: /app }
+            - { name: work, mountPath: /work }
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+      volumes:
+        - name: run
+          configMap: { name: solidgate-runner }
+        - name: schema
+          configMap: { name: solidgate-schema }
+        - name: driver
+          configMap: { name: solidgate-driver }
+        - name: exporter
+          configMap: { name: solidgate-exporter }
+        - name: work
+          emptyDir: { sizeLimit: 10Gi }

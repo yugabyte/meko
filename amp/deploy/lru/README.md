@@ -12,6 +12,8 @@ amp/deploy/lru/
   monitoring/        shared: namespace, one Prometheus, one Grafana. Applied once.
   small_temporal/    one LRU: Temporal server + Omes load, small rate
   newblack/          one LRU: the anonymised NewBlack checkout workload
+  transferwise/      one LRU: the anonymised TransferWise ledger payment
+  solidgate/         one LRU: the anonymised Solidgate card payment
   <next>/            the next LRU, same shape
 ```
 

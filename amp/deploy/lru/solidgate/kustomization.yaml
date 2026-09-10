@@ -1,0 +1,40 @@
+# One LRU: the anonymised card-payment workload, its health checker, its
+# dashboard. Depends on ../monitoring having been applied.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: amp-lru
+# `kubectl get all -l lru=solidgate` has to return the whole LRU, generated
+# ConfigMaps included. Not a selector: it would rewrite the Deployments'.
+labels:
+  - pairs:
+      lru: solidgate
+    includeSelectors: false
+resources:
+  - runner.yaml
+  - checker.yaml
+configMapGenerator:
+  - name: solidgate-checker
+    files: [checker/check.py]
+  - name: solidgate-exporter
+    files: [exporter.py]
+  - name: solidgate-schema
+    files:
+      - workload/workload_schema.sql
+      - workload/seed_full.sql
+      - workload/to_amp_ddl.py
+  - name: solidgate-driver
+    files:
+      - workload/workload.go
+      - workload/go.mod
+      - workload/go.sum
+  # The shared Grafana's sidecar names the file on disk after the key and every
+  # LRU shares one directory, so the key carries the LRU name or two LRUs
+  # overwrite each other once a minute.
+  - name: solidgate-dashboard
+    files: [solidgate-dashboard.json=dashboard.json]
+    options:
+      labels:
+        grafana_dashboard: "1"
+        lru: solidgate
+generatorOptions:
+  disableNameSuffixHash: true
