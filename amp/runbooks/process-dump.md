@@ -82,15 +82,20 @@ Failed to establish control connection to available servers
 That is a connection outliving the tservers it discovered — the StatefulSet
 was replaced and the per-pod DNS names went with it. Confirm from inside the
 pod: `getent hosts <cached name>` returns nothing while `getent hosts
-<host_ports name>` resolves. `connection_lifetime_ms` (default 15 min) ages
-these connections out — but on the **YSQL** lane the smart driver's discovered
-host list is process-global, so a recycled connection can be handed the same
-stale topology and this may not clear on its own (see
-`compute/architecture/yugabyte.md` → "Bounding a connection's life"). Check
-`yb_client_connection_recycles_total{outcome="failed"}` on `/metrics` to tell
-that apart from a cluster that is simply unreachable. Recovery is a pod restart,
-and it is lossless — the WAL is durable in the safekeeper and
-`amp_storage.wals`; the pageserver is a materialization that fell behind (#811).
+<host_ports name>` resolves. This clears on its own: on the **YSQL** lane the
+smart driver refreshes its host list through the configured `host_ports` every
+`yb_servers_refresh_interval` (300s by default) and falls back to a plain
+connect against them when that refresh fails, so the next reconnect after the
+interval lands — look for `Control connection created to one of the configured
+host(s)` in the log; on the thin-client lane `connection_lifetime_ms` (default
+15 min) re-resolves `tserver_rpc_addrs` (see
+`compute/architecture/yugabyte.md` → "Bounding a connection's life"). A wedge
+that outlasts both is not this failure: check
+`yb_client_connection_recycles_total{outcome="failed"}` on `/metrics` and
+`getent hosts <host_ports name>` from the pod to tell a stale cache apart from a
+cluster that is simply unreachable. If a restart is needed anyway it is
+lossless — the WAL is durable in the safekeeper and `amp_storage.wals`; the
+pageserver is a materialization that fell behind (#811).
 
 ### getpage / wait_lsn stall
 Symptom: `compute_request` tasks all parked in `Timeline::wait_lsn`

@@ -20,8 +20,8 @@
 //!   1. Checks `is_closed()`; reconnects first if the previous client is
 //!      dead. A connection that is alive but has outlived
 //!      [`YbConnConfig::connection_lifetime_ms`] is recycled here too, so
-//!      the smart driver's once-per-connection topology discovery cannot
-//!      outlive the topology (#811).
+//!      no connection outlives the topology it was opened against by more
+//!      than that bound (#811).
 //!   2. Looks up the SQL string in a per-connection prepared-statement
 //!      cache. On miss, `tokio_postgres::Client::prepare()` is invoked
 //!      once and the resulting `Statement` is cached. On hit, the
@@ -248,15 +248,20 @@ pub struct YbConnConfig {
     /// in milliseconds. Defaults to [`DEFAULT_CONNECTION_LIFETIME_MS`]; `0`
     /// is no bound.
     ///
-    /// The bound exists because the smart driver's topology is discovered
-    /// ONCE per connection: the driver runs `yb_servers()` over a control
-    /// connection and from then on addresses tservers by the per-pod
+    /// The smart driver discovers topology by running `yb_servers()` over a
+    /// control connection and then addresses tservers by the per-pod
     /// hostnames it learned. Replace the tserver StatefulSet — as a K8s
     /// rollout that renames the pods does — and every cached hostname becomes
-    /// NXDOMAIN while the configured bootstrap host
-    /// (a headless service) still resolves. Nothing in the driver forces
-    /// rediscovery, so a connection that opened before the swap keeps dialing
-    /// names that no longer exist.
+    /// NXDOMAIN while the configured bootstrap host (a headless service) still
+    /// resolves. The driver refreshes its cache through the configured hosts
+    /// (every `yb_servers_refresh_interval`, 300s by default) and falls back
+    /// to a plain connect against them when that refresh fails, so a wedged
+    /// process recovers on its own within one refresh interval. A recycle
+    /// reopens through that same driver path, so the bound does not fix
+    /// staleness independently of it; it exists to keep this lane in step with
+    /// `yb_thin_client`, whose session pool resolves its addresses exactly
+    /// once and has no refresh of its own, and to give every connection a
+    /// bounded life regardless of lane.
     ///
     /// Recycling is best-effort and checked lazily, on the next use of the
     /// slot: an expired connection is replaced before the call runs, and if
@@ -303,7 +308,7 @@ pub const DEFAULT_STATEMENT_TIMEOUT_MS: u64 = 0;
 /// does — one reopen per slot per quarter hour, each paying a TCP+TLS
 /// handshake and re-priming that slot's prepared-statement cache — and short
 /// enough to bound how long a stale topology can be believed. The failure it
-/// exists for is measured in days (#811), so minutes is the right order of
+/// guards against is measured in days (#811), so minutes is the right order of
 /// magnitude; there is nothing to gain from being tighter.
 pub const DEFAULT_CONNECTION_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 
@@ -592,6 +597,10 @@ impl YbConnArgs {
             // an incident and do the long scans the daemons never issue —
             // reset-consistent-lsn replays the WAL decoder over
             // `amp_storage.wals` — so the operator watching it is the timeout.
+            // The smart driver still bounds its own control connection (15s
+            // per configured host, see `build_pg_config`); a cluster that
+            // never answers costs that much before the plain connect it falls
+            // back to hangs as before.
             connect_timeout_ms: 0,
             statement_timeout_ms: 0,
             tcp_user_timeout_ms: 0,
@@ -1870,10 +1879,13 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
         .application_name(application_name);
     // Smart-driver load balancing: the driver opens an internal control
     // connection to run `yb_servers()` for topology discovery and spreads
-    // connections across tservers. This was disabled while
-    // yb-tokio-postgres <= 0.7.10-yb-1-beta.3 failed every connect with
-    // "could not create control connection" (the control connection's TLS
-    // path was broken); 0.7.10-yb-1-beta.4 fixes it, so re-enable it.
+    // connections across tservers. It dials the configured hosts first on
+    // every refresh, bounds the control connection (10s connect / 15s login /
+    // 10s `yb_servers()`), and falls back to a plain connect against the
+    // configured hosts when the refresh fails outright. That is the only
+    // fallback: when the refresh succeeds but `only-primary` filters every
+    // discovered server out, the driver returns the error rather than hand us
+    // a node of the kind we ruled out, which is what we want.
     pg_config.load_balance("only-primary");
     if let Some(env_name) = &cfg.password_env {
         let password = std::env::var(env_name)

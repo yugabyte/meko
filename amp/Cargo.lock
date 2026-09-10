@@ -6685,9 +6685,9 @@ dependencies = [
 
 [[package]]
 name = "yb-tokio-postgres"
-version = "0.7.10-yb-1-beta.4"
+version = "0.7.10-yb-1-beta.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e25bce1f8954a0e50eb4c311c1f287b5ab174d02e4045104a5024ecedc7749a"
+checksum = "ad9b850185591d60af97485425aee2bb79a442a144ab0e82d343f043ca3a77c6"
 dependencies = [
  "async-trait",
  "byteorder",

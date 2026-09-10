@@ -209,15 +209,22 @@ yb_storage_conn = { host_ports = "...", connection_lifetime_ms = 900000 }
 Each slot's lifetime carries 0–25% jitter so a pool, and a fleet deployed
 together, do not recycle in lockstep.
 
-**Why a connection needs an expiry date.** Both transports discover where
-the tservers are exactly once. The smart driver runs `yb_servers()` over a
-control connection and from then on addresses tservers by the per-pod
-hostnames it learned; the shim resolves `tserver_rpc_addrs` when it builds
-its session pool. Neither revisits that answer. Replace the tserver
-StatefulSet — a rollout that renames the pods, `…-tserver-0` becoming
-`…-tserver-1-0` — and every discovered name is NXDOMAIN while the configured
-bootstrap endpoint (the headless service) resolves correctly the whole time.
-Nothing forces rediscovery, so the staleness has no end.
+**Why a connection needs an expiry date.** Both transports learn where the
+tservers are by address. The smart driver runs `yb_servers()` over a control
+connection and from then on addresses tservers by the per-pod hostnames it
+learned; the shim resolves `tserver_rpc_addrs` when it builds its session
+pool and never revisits that answer. Replace the tserver StatefulSet — a
+rollout that renames the pods, `…-tserver-0` becoming `…-tserver-1-0` — and
+every discovered name is NXDOMAIN while the configured bootstrap endpoint
+(the headless service) resolves correctly the whole time. For the shim that
+staleness has no end. The smart driver refreshes its cache through the
+configured hosts (every `yb_servers_refresh_interval`, 300s by default) and
+falls back to a plain connect against them when that refresh fails, so it
+recovers on its own within one refresh interval — the fallback is not taken
+when a refresh succeeds and `only-primary` filters every discovered server
+out. A recycle reopens through that same driver path, so on this lane the
+lifetime bound does not fix staleness by itself; it stays to keep the two
+transports' behaviour aligned and to give every connection a bounded life.
 
 Recycling is **best-effort and cannot cost availability**: a reopen that
 fails leaves the existing connection serving and is retried no more than
