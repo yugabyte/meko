@@ -124,12 +124,21 @@ export function useLabRunnerSession(lab: LabDefinition) {
       try {
         const created = await createDatapack({ name, user_id: userId });
         notifyDatapacksListChanged(`create:${created.name}`);
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] }),
-          // Bumps datapack_count -- recompute free-tier gates immediately,
-          // same as the canonical create-wizard call site.
-          queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] }),
-        ]);
+        // Neither invalidation is awaited -- both back active queries on
+        // this same page (useDatapacks/useAccountUsage above), so awaiting
+        // either blocks this function on however long that refetch takes.
+        // Selection doesn't actually depend on the list being fresh first:
+        // justCreatedDatapackIdRef (below) exists precisely so the eviction
+        // effect leaves this datapack alone even if its refetch is slow,
+        // fails, or races a cached page. Account usage backs
+        // hasHitDatapackCount (used above, and by CreateDatapackStage's
+        // create button) but doesn't need to be fresh *this* instant either:
+        // the BE re-enforces the cap on the next create attempt regardless
+        // (see the comment on that check above) -- and it's known to be slow
+        // (an unindexed full-scan, see langfuse_repo.go:655-657), which is
+        // exactly what caused this function to hang before this fix.
+        void queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] });
+        void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
         justCreatedDatapackIdRef.current = created.datapack_id;
         selectDatapack(created.datapack_id);
       } finally {

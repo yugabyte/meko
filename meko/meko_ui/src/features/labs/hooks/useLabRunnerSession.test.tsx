@@ -98,7 +98,9 @@ describe("useLabRunnerSession", () => {
     });
 
     // The list refetch after create hasn't (yet) surfaced the new
-    // datapack -- it must not be evicted for that.
+    // datapack -- it must not be evicted for that. createAndSelectDatapack
+    // doesn't await that refetch (see the regression test below), so this
+    // is the normal case, not just a narrow race window.
     expect(mockDatapacks.some((dp) => dp.datapack_id === "new-dp")).toBe(false);
     act(() => rerender());
     expect(result.current.datapackId).toBe("new-dp");
@@ -112,6 +114,92 @@ describe("useLabRunnerSession", () => {
     mockDatapacks = [];
     act(() => rerender());
     await waitFor(() => expect(result.current.datapackId).toBeNull());
+  });
+
+  // Instruments `qc` so `invalidateQueries({queryKey: [queryKeyToHang]})`
+  // hangs until the returned `resolve()` is called, while every other key
+  // invalidates normally -- lets a test prove createAndSelectDatapack
+  // doesn't await one specific refetch, without hanging the whole test.
+  function hangInvalidationFor(qc: QueryClient, queryKeyToHang: string) {
+    let resolve: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      resolve = r;
+    });
+    const realInvalidateQueries = qc.invalidateQueries.bind(qc);
+    vi.spyOn(qc, "invalidateQueries").mockImplementation((filters, ...rest) => {
+      const key = (filters as { queryKey?: unknown[] } | undefined)?.queryKey;
+      if (Array.isArray(key) && key[0] === queryKeyToHang) {
+        return gate.then(() => realInvalidateQueries(filters, ...rest));
+      }
+      return realInvalidateQueries(filters, ...rest);
+    });
+    return { resolve };
+  }
+
+  it("resolves createAndSelectDatapack even if the account-usage refetch hangs", async () => {
+    // Regression test: account usage aggregates a known-slow Langfuse query
+    // (see langfuse_repo.go:655-657's own TODO on the missing indexes) and
+    // has been observed to 504 in production. hasHitDatapackCount is real
+    // (gates this same function above, and CreateDatapackStage's create
+    // button) but doesn't need to be refreshed *this instant* -- the BE
+    // re-enforces the cap on the next attempt regardless -- so datapack
+    // creation must never block on this refetch. See the test below for the
+    // matching case on the datapacks-list invalidation.
+    mockCreateDatapack.mockResolvedValue({ datapack_id: "new-dp", name: "New Datapack" });
+    mockGetDatapackProvisionStatus.mockResolvedValue({ mcp_api_key: "token" });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { resolve: resolveUsageInvalidate } = hangInvalidationFor(qc, "account-usage");
+
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), {
+      wrapper: ({ children }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>,
+    });
+
+    let createSettled = false;
+    await act(async () => {
+      const createPromise = result.current.createAndSelectDatapack("New Datapack").then(() => {
+        createSettled = true;
+      });
+      // createAndSelectDatapack must settle here -- the account-usage
+      // invalidation is deliberately still hanging (resolveUsageInvalidate
+      // hasn't been called yet).
+      await waitFor(() => expect(createSettled).toBe(true));
+      resolveUsageInvalidate();
+      await createPromise;
+    });
+
+    expect(result.current.datapackId).toBe("new-dp");
+  });
+
+  it("resolves createAndSelectDatapack even if the datapacks-list refetch hangs", async () => {
+    // Same shape as the account-usage test above, for the other
+    // invalidation: justCreatedDatapackIdRef sets datapackId optimistically
+    // from the create response specifically so a slow, failed, or racing
+    // list refetch can't block (or evict) the new selection -- useDatapacks
+    // is an active query on this same page too, so awaiting this
+    // invalidation would reintroduce the exact bug the account-usage fix
+    // addressed, just on the other query.
+    mockCreateDatapack.mockResolvedValue({ datapack_id: "new-dp", name: "New Datapack" });
+    mockGetDatapackProvisionStatus.mockResolvedValue({ mcp_api_key: "token" });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { resolve: resolveListInvalidate } = hangInvalidationFor(qc, "datapacks");
+
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), {
+      wrapper: ({ children }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>,
+    });
+
+    let createSettled = false;
+    await act(async () => {
+      const createPromise = result.current.createAndSelectDatapack("New Datapack").then(() => {
+        createSettled = true;
+      });
+      await waitFor(() => expect(createSettled).toBe(true));
+      resolveListInvalidate();
+      await createPromise;
+    });
+
+    expect(result.current.datapackId).toBe("new-dp");
   });
 
   it("starts with no lesson trace, and recordLessonTrace sets it for X-Ray to read", () => {
