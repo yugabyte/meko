@@ -88,8 +88,18 @@ func TestBulkLoadKillRequiresAKillInFlight(t *testing.T) {
 	// backing pod and amp caching a tserver hostname that no longer resolves
 	// (amp#811). Only the pod's identity separates them, so the classification
 	// must consult it — calling every instance environmental would mask that bug.
-	if !strings.Contains(body, "backingReplaced(t, backingUID, logf)") {
+	if !strings.Contains(body, "backingReplaced(t, backingWas, logf)") {
 		t.Error("bulk_load_kill no longer distinguishes a replaced backing pod from amp losing track of one that never moved")
+	}
+	// One tserver's uid answers "same pod" for the two it never looked at.
+	if !strings.Contains(body, "func backingPodUIDs(") {
+		t.Error("bulk_load_kill identifies fewer than all of the backing pods, so a replaced one can pass as unchanged")
+	}
+	// The thin-client lanes resolve the tservers themselves, so the DNS failures count too.
+	for _, sig := range []string{"Host not found (authoritative)", "Resolve failed"} {
+		if !strings.Contains(body, sig) {
+			t.Errorf("bulk_load_kill no longer recognises %q as the compute failing to reach the backing", sig)
+		}
 	}
 	// A client with no reply yet is not the same as an open transaction: a commit
 	// whose acknowledgement is still on the wire looks identical from the client,
@@ -100,5 +110,24 @@ func TestBulkLoadKillRequiresAKillInFlight(t *testing.T) {
 	}
 	if !strings.Contains(body, "observed == 0") {
 		t.Error("bulk_load_kill no longer requires any round to have observed an open transaction at the kill")
+	}
+}
+
+// Teardown deletes the tenants' endpoint pods, so a burst that acked nothing has to take their logs and the writers' error text with it (1275e33d was triaged blind without them).
+func TestWalTailNemesisKeepsTheEvidenceOfARefusedWrite(t *testing.T) {
+	b, err := os.ReadFile("wal_tail_nemesis.go")
+	if err != nil {
+		t.Fatalf("read wal_tail_nemesis.go: %v", err)
+	}
+	body := string(b)
+	if !strings.Contains(body, "attachEndpointDiagnostics(t, kube, ten,") {
+		t.Error("wal_tail_nemesis no longer attaches the tenants' endpoint logs when a burst acks nothing: teardown deletes those pods before the run collects anything")
+	}
+	if !strings.Contains(body, "journals[i].LastErr()") {
+		t.Error("wal_tail_nemesis no longer reports why the writes failed: every failure is recorded as an unknown outcome, so a hung COMMIT and a refused connection are the same journal")
+	}
+	// Round 1 has written nothing yet; from round 2 the previous round recovered and verified.
+	if !strings.Contains(body, "no COMMIT completes (cf. meko#727): %s") {
+		t.Error("wal_tail_nemesis reports a post-recovery burst that acked nothing as a missing precondition rather than as a product failure")
 	}
 }

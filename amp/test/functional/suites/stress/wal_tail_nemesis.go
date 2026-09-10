@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 func init() {
@@ -105,7 +107,14 @@ func runWalTailNemesis(t *core.T) error {
 			delta := totalAcked(journals) - before
 			s.Set("acked", delta)
 			if delta == 0 {
-				return fmt.Errorf("no tenant was acknowledged for a single write in %s, so there is nothing at the WAL tail for the fault to threaten", params.BurstDuration)
+				why := walTailWriteFailure(t, kube, s, fmt.Sprintf("fresh_wal_tail_%d", r), fleet.Tenants, journals, logf)
+				if r == 1 {
+					return fmt.Errorf("no tenant was acknowledged for a single write in %s, so there is nothing at the WAL tail for the fault to threaten: %s",
+						params.BurstDuration, why)
+				}
+				// Not a precondition from round 2 on: the round before it recovered and read the acked set back.
+				return fmt.Errorf("no tenant was acknowledged for a single write in %s after round %d recovered and every endpoint answered SQL: the endpoints serve reads but no COMMIT completes (cf. meko#727): %s",
+					params.BurstDuration, r-1, why)
 			}
 			return nil
 		}); err != nil {
@@ -202,9 +211,32 @@ func runWalTailNemesis(t *core.T) error {
 		delta := totalAcked(journals) - before
 		s.Set("acked_after_recovery", delta)
 		if delta == 0 {
-			return fmt.Errorf("no tenant was acknowledged for a single write in %s after the backing recovered and every endpoint answered SQL: the endpoints serve reads but no COMMIT completes (cf. meko#727)",
-				params.ResumeDuration)
+			return fmt.Errorf("no tenant was acknowledged for a single write in %s after the backing recovered and every endpoint answered SQL: the endpoints serve reads but no COMMIT completes (cf. meko#727): %s",
+				params.ResumeDuration, walTailWriteFailure(t, kube, s, "writes_flow_again", fleet.Tenants, journals, logf))
 		}
 		return verifyExactSets(t, s, env, fleet.Tenants, journals, params.PayloadBytes)
 	})
+}
+
+// walTailWriteFailure collects why a burst acked nothing while the evidence still exists: teardown deletes the tenants' endpoint pods before the run collects anything.
+func walTailWriteFailure(t *core.T, kube *k8s.Kubectl, s *core.StepHandle, step string,
+	tenants []tenant, journals []*AckJournal, logf func(string, ...any)) string {
+	var per []string
+	for i := range tenants {
+		ten := &tenants[i]
+		attempted := atomic.LoadInt64(&ten.Attempted)
+		errs := atomic.LoadInt64(&ten.WriteErrors)
+		reconnects := atomic.LoadInt64(&ten.Reconnects)
+		s.Set(fmt.Sprintf("tenant_%d_attempted", i), attempted)
+		s.Set(fmt.Sprintf("tenant_%d_write_errors", i), errs)
+		s.Set(fmt.Sprintf("tenant_%d_reconnects", i), reconnects)
+		last := journals[i].LastErr()
+		if last == "" {
+			last = "no failure recorded"
+		}
+		per = append(per, fmt.Sprintf("%s attempted %d, %d errors, %d reconnects, last: %s",
+			ten.Name, attempted, errs, reconnects, last))
+		attachEndpointDiagnostics(t, kube, ten, fmt.Sprintf("%s-%s", step, ten.Name), logf)
+	}
+	return strings.Join(per, "; ")
 }

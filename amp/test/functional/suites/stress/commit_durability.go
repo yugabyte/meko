@@ -485,10 +485,13 @@ func journaledWriteFor(ctx context.Context, env ampTenantEnv, ten *tenant, j *Ac
 		}
 		if ctx.Err() != nil {
 			// The phase ended around this id, so its fate is genuinely unknown.
+			// Still the journal's last error: ending here is a hang, not a refusal.
 			j.RecordUnknown(id, value)
+			j.RecordErr(fmt.Errorf("window closed with id %d still in flight: %w", id, err))
 			return
 		}
 		j.RecordUnknown(id, value)
+		j.RecordErr(err)
 		ten.WriteErrors++
 		consecutive++
 		if consecutive < reconnectAfterErrors {
@@ -496,6 +499,7 @@ func journaledWriteFor(ctx context.Context, env ampTenantEnv, ten *tenant, j *Ac
 		}
 		conn, rerr := env.ConnectEndpoint(ctx, ten.Endpoint)
 		if rerr != nil {
+			j.RecordErr(rerr)
 			select {
 			case <-ctx.Done():
 				return

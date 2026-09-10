@@ -241,7 +241,7 @@ func runBulkLoadKill(t *core.T) error {
 	// can be told apart from a compute that lost track of one that never moved.
 	// Those are an environment event and a product bug respectively, and they
 	// print the same error (amp#811 was exactly the second kind).
-	backingUID := backingPodUID(t, logf)
+	backingWas := backingPodUIDs(t, logf)
 
 	// One tenant: the interesting axis here is the size of a single write and
 	// the pod under it, not the number of neighbours. Splitting the same rows
@@ -266,17 +266,17 @@ func runBulkLoadKill(t *core.T) error {
 		}
 		diag := attachEndpointDiagnostics(t, kube, ten, name, logf)
 		switch {
-		case diag.backingUnreachable && backingReplaced(t, backingUID, logf):
+		case diag.backingUnreachable && backingReplaced(t, backingWas, logf):
 			// The compute could not reach the backing AND the backing is not the pod
 			// it was: it was rescheduled under the run, so the compute had nothing to
 			// talk to. Had the backing been the same pod all along, this would be the
 			// compute losing track of a backing that never moved — a product bug, and
 			// the branch below reports it as one.
 			return core.AsEnvFailure(fmt.Errorf("the backing YugabyteDB pod was replaced during %s, so the compute lost its storage backend (%q in its log): this is the cluster moving the backing, not amp. Step error: %v. Compute: %s",
-				name, backingUnreachableSignature, err, why))
+				name, diag.backingUnreachableSig, err, why))
 		case diag.backingUnreachable:
 			return fmt.Errorf("the compute could not reach the backing during %s (%q in its log) though the backing is the same pod it has always been: amp lost track of a backing that never moved. Step error: %w. Compute: %s",
-				name, backingUnreachableSignature, err, why)
+				name, diag.backingUnreachableSig, err, why)
 		case diag.outOfDisk:
 			// Env, not product: every write the compute attempted was rejected by
 			// the backing, so nothing this step saw says anything about amp.
@@ -1009,6 +1009,8 @@ type endpointDiagnosis struct {
 	outOfDisk bool
 	// backingUnreachable: the compute could not connect to the backing at all.
 	backingUnreachable bool
+	// backingUnreachableSig is which signature said so; they lead somewhere different.
+	backingUnreachableSig string
 }
 
 func attachEndpointDiagnostics(t *core.T, kube *k8s.Kubectl, ten *tenant, round string,
@@ -1031,7 +1033,8 @@ func attachEndpointDiagnostics(t *core.T, kube *k8s.Kubectl, ten *tenant, round 
 		// the difference between a sized-up rerun and a hunt for a product bug
 		// that is not there.
 		diag.outOfDisk = strings.Contains(signals, backingDiskFullSignature)
-		diag.backingUnreachable = strings.Contains(signals, backingUnreachableSignature)
+		diag.backingUnreachableSig = backingUnreachableSignature(signals)
+		diag.backingUnreachable = diag.backingUnreachableSig != ""
 	}
 
 	for _, item := range []struct {
@@ -1064,40 +1067,67 @@ func attachEndpointDiagnostics(t *core.T, kube *k8s.Kubectl, ten *tenant, round 
 // accepting writes for want of space (yb/tserver/tablet_service.cc).
 const backingDiskFullSignature = "insufficient disk space"
 
-// backingUnreachableSignature is the smart driver finding no tserver to talk to.
-const backingUnreachableSignature = "could not find a server to connect to"
+// Each entry must be fatal on its own: a retried RPC timeout would only mislabel whatever else failed.
+var backingUnreachableSignatures = []string{
+	"could not find a server to connect to",
+	"Host not found (authoritative)",
+	"Resolve failed",
+}
 
-// backingPodUID is the backing's pod uid at the start of the run, or "" when the
-// env exposes no handle to its namespace. Best effort: without it the compute
-// losing the backing cannot be attributed either way, and the failure is
-// reported as a product one, which is the safe direction.
-func backingPodUID(t *core.T, logf func(string, ...any)) string {
+// backingUnreachableSignature is the first signature present, or "" when none is.
+func backingUnreachableSignature(signals string) string {
+	for _, sig := range backingUnreachableSignatures {
+		if strings.Contains(signals, sig) {
+			return sig
+		}
+	}
+	return ""
+}
+
+// backingPodUIDs is every backing pod's uid at the start of the run, keyed by name: a snapshot of one tserver answers "same pod" for the two it never looked at.
+func backingPodUIDs(t *core.T, logf func(string, ...any)) map[string]string {
 	envB, ok := t.Env.(backingKubeEnv)
 	if !ok || envB.BackingKube() == nil {
-		return ""
+		return nil
 	}
 	kube := envB.BackingKube()
 	pods, err := backingPods(t, kube)
 	if err != nil || len(pods) == 0 {
 		logf("bulk_load_kill: no backing pod to identify: %v", err)
-		return ""
+		return nil
 	}
-	uid, err := kube.Get(t.Context, "pod", pods[0], "{.metadata.uid}")
-	if err != nil {
-		return ""
+	was := make(map[string]string, len(pods))
+	for _, pod := range pods {
+		uid, err := kube.Get(t.Context, "pod", pod, "{.metadata.uid}")
+		if err != nil {
+			continue
+		}
+		if uid = strings.TrimSpace(uid); uid != "" {
+			was[pod] = uid
+		}
 	}
-	return strings.TrimSpace(uid)
+	if len(was) == 0 {
+		return nil
+	}
+	return was
 }
 
-// backingReplaced says whether the backing is a DIFFERENT pod than the one the
-// run started against. Unknown counts as not replaced: blaming the cluster
-// without evidence is how a real bug gets filed as flakiness.
-func backingReplaced(t *core.T, was string, logf func(string, ...any)) bool {
-	if was == "" {
+// backingReplaced says whether any backing pod is no longer the one the run started against; a pod that has GONE counts, an empty snapshot does not.
+func backingReplaced(t *core.T, was map[string]string, logf func(string, ...any)) bool {
+	if len(was) == 0 {
 		return false
 	}
-	now := backingPodUID(t, logf)
-	return now != "" && now != was
+	now := backingPodUIDs(t, logf)
+	if len(now) == 0 {
+		return false
+	}
+	for pod, uid := range was {
+		if now[pod] != uid {
+			logf("bulk_load_kill: backing pod %s is %s, was %s", pod, describeUID(now[pod]), describeUID(uid))
+			return true
+		}
+	}
+	return false
 }
 
 // bulkLogSignals are the lines worth reading out of a log the pageserver's

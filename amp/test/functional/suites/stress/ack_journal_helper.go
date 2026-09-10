@@ -86,6 +86,7 @@ type AckJournal struct {
 	mu      sync.Mutex
 	entries map[int64]ackEntry
 	order   []int64
+	lastErr string
 }
 
 type ackEntry struct {
@@ -105,6 +106,23 @@ func (j *AckJournal) RecordUnknown(id, value int64) { j.record(id, value, Outcom
 
 // RecordCancelled marks id as cancelled in flight.
 func (j *AckJournal) RecordCancelled(id, value int64) { j.record(id, value, OutcomeCancelled) }
+
+// RecordErr keeps why the inserts came back unknown: a hung COMMIT and a refused connection are otherwise the same journal.
+func (j *AckJournal) RecordErr(err error) {
+	if err == nil {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.lastErr = err.Error()
+}
+
+// LastErr is the most recent failure recorded, or "" when nothing failed.
+func (j *AckJournal) LastErr() string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.lastErr
+}
 
 // record applies the promotion rule: an ack cannot be retracted by a later
 // record of the same id, because the promise was already made to the client.
