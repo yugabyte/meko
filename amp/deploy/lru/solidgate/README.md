@@ -7,7 +7,7 @@ across orders, payment methods and payment events.
 
 ```
 solidgate/
-  workload/    the load test, copied verbatim from
+  workload/    the load test, forked from
                yugabyte/update-heavy-anon-card-workload, plus to_amp_ddl.py
   runner.yaml  the driver pod: convert + seed init containers, driver, exporter
   checker.yaml the verdict pod
@@ -30,14 +30,14 @@ The upstream `setup_workload_db.sh` drops the whole database, so it is not used
 here: `seed.sh` creates and seeds only when the schema is absent. An LRU exists
 to accumulate history, and a pod restart must not throw it away.
 
-## Refreshing the workload from source
+## The workload is ours
 
-`workload/` is byte-for-byte, so a refresh is a `cp` from a fresh clone. Do not
-fix the copy in place: fix it upstream and copy again, or the LRU stops testing
-what QA runs elsewhere. The shell wrappers are deliberately not copied, because
-`run.sh` calls the binary directly. Note that upstream's environment variables
-(`CONCURRENCY`, `MINPOOL`, …) are read by those wrappers, not by the binary,
-which takes flags.
+`workload/` started as a copy of yugabyte/update-heavy-anon-card-workload and
+has diverged: the LRU owns these files and fixes land here. `FINDINGS.md`
+records each deviation from the source with its reason, so a reader can still
+tell the customer's shape from ours. The shell wrappers were never copied,
+because `run.sh` calls the binary directly and the wrappers' environment
+variables (`CONCURRENCY`, `MINPOOL`, …) are only read by them.
 
 `to_amp_ddl.py` is the one deviation, shared in shape with the other LRUs. The
 schema is dumped from YugabyteDB and carries `SPLIT INTO n TABLETS`, HASH keys
@@ -69,9 +69,8 @@ arrive as per-interval deltas.
 
 The checker's rules are app-side first: statement QPS, transactions per second,
 error rate and per-kind latency, before anything about the endpoint. Its
-throughput floors are absolute, because this driver runs unpaced and there is no
-target to measure against. They start deliberately low and should be tightened
-from the first days recorded in `FINDINGS.md`.
+throughput floors are absolute and sit under the paced rate, so a driver that
+cannot hold its own pace shows up as a change.
 
 Four more rules cover disk, because a workload that stops because something
 filled up looks identical to one that stopped for an interesting reason.
@@ -79,5 +78,10 @@ filled up looks identical to one that stopped for an interesting reason.
 ## Tuning the load
 
 Everything is in the `solidgate-runner` ConfigMap: `CONCURRENCY`, the pool
-bounds, `STMTS_PER_TXN`, `CYCLE_DURATION`. The checker reads `CONCURRENCY` from
-that same ConfigMap so the two cannot drift.
+bounds, `STMTS_PER_TXN`, `CYCLE_DURATION`, and `TARGET_TPS`, the committed
+transactions a second the driver paces all workers to. The checker reads
+`CONCURRENCY` from that same ConfigMap so the two cannot drift.
+
+The data grows forever by design and nothing deletes it: the customer does not
+archive yet, and the point is to see what gives first. The reads must therefore
+stay bounded whatever the size, and `FINDINGS.md` records the one that was not.

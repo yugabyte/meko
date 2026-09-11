@@ -3,6 +3,32 @@
 What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
+## 2026-09-11 — one read grew with the data, and the wire with it
+
+Twenty-two hours in, network out of the endpoint had climbed steadily while
+commits fell from 288/s to 178/s and average read latency went from 0.7ms to
+2.2ms. `pg_stat_database` showed 272k tuples fetched a second against 178
+commits, about 1,500 rows per transaction.
+
+`pg_stat_user_indexes` named it: `order_events_pay_profile_id_pay_profile_scope_idx`
+had read 10.0 billion tuples over 22.2 million scans, 453 a scan and rising.
+That is `r_profile_by_event`, which joined `order_events` a second time on
+`pay_profile_id` alone and so returned every event a profile ever had. Every
+inserted event landed on one of the 1,200 seeded profiles (`i_order_event` used
+a seeded order id where its siblings use the new synthetic one), so each key
+held 4,542 rows: one execution returned 2.0 MB, at ~46 executions a second,
+about 90 MB/s of result traffic from one read. Not an amp fault: `blks_read`
+stayed near zero, WAL flat at 1 MB/s, and the plan was already an index-only
+scan on the right index. The result set was the problem.
+
+Fixed in the driver, which the LRU owns from here: the second join now takes
+the 20 latest events of the profile through a `created_at DESC` index (34
+buffers and 0.56ms on the same key, against 4,464 and 46ms), `i_order_event`
+references its own order, and a `-target-tps` flag paces the workers. The index
+was built online on the live database and nothing was dropped or reseeded: the
+data is the point of this LRU. It now runs at `TARGET_TPS=50`, ~3 GB a day, and
+keeps growing until something gives.
+
 ## 2026-09-10 — first run on meko_dev_eks
 
 Deployed against pool `lru-solidgate`, one 2 vCPU / 16Gi endpoint. 13 tables and

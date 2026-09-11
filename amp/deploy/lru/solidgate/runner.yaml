@@ -25,6 +25,9 @@ data:
   MAXPOOL: "2"
   STMTS_PER_TXN: "8"
   TXN_RETRIES: "4"
+  # Unpaced, two workers push ~180-290 txn/s and grow the four append-only tables
+  # ~10 GB a day, and nothing is ever deleted. 50 txn/s is ~90 inserts/s, ~3 GB a day.
+  TARGET_TPS: "50"
   REPORT_EVERY: 30s
   CYCLE_DURATION: 60m
   # Seed cardinality. The driver's README says keep these together with the seed
@@ -95,6 +98,7 @@ data:
         -maxpool "$MAXPOOL" \
         -stmts-per-txn "$STMTS_PER_TXN" \
         -txn-retries "$TXN_RETRIES" \
+        -target-tps "$TARGET_TPS" \
         -txn-cte=false \
         -txn-cte-fixed-shape=false \
         -direct-even=false \

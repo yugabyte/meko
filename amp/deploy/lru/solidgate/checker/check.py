@@ -30,9 +30,9 @@ LRU = os.environ.get("LRU_NAME", "unknown")
 # into a manifest would be both stale and dirty in git.
 AMP_POOL = os.environ.get("AMP_POOL", "")
 WORKLOAD_DB = os.environ.get("WORKLOAD_DB", "solidgate_lru")
-# How many workers the driver was told to run. The floors below are absolute
-# because this driver runs unpaced - there is no target to measure against - so
-# they start deliberately low and get tightened from the first days of FINDINGS.
+# How many workers the driver was told to run. The floors below are absolute and
+# sit under the paced rate (TARGET_TPS in the runner ConfigMap), so a driver that
+# falls behind its own pace shows up here.
 WORKERS = float(os.environ.get("WORKERS", "8"))
 INTERVAL = int(os.environ.get("INTERVAL_SEC", "60"))
 AMP_API = os.environ.get(

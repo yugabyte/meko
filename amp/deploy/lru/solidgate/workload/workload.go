@@ -23,6 +23,9 @@ const (
 	writeToReadRatio  = 1.574
 	insertToUpdateRat = 0.412
 	scopeDefault      = "default"
+	// Bounds r_profile_by_event: a profile accumulates events for as long as the
+	// workload runs, and the unbounded self-join grew with the table.
+	profileEventsLimit = 20
 )
 
 var syntheticInsertID uint64
@@ -87,6 +90,7 @@ type cfg struct {
 	seedShops        int
 	seedTokens       int
 	stmtsPerTxn      int
+	targetTPS        float64
 	txnCTE           bool
 	txnCTEFixedShape bool
 	fixedOps         []txnOp
@@ -253,6 +257,7 @@ func main() {
 	txnCTE := flag.Bool("txn-cte", false, "execute each txn as a single CTE statement")
 	txnCTEFixedShape := flag.Bool("txn-cte-fixed-shape", false, "use a fixed CTE op shape so PGSS aggregates into stable query texts")
 	txnRetries := flag.Int("txn-retries", 4, "retries for retryable transaction failures")
+	targetTPS := flag.Float64("target-tps", 0, "committed transactions per second to pace all workers to (0 = unpaced)")
 	errorLogLimit := flag.Int("error-log-limit", 20, "max distinct errors to sample to stderr")
 	seedOrders := flag.Int("seed-orders", 1200, "seeded orders cardinality")
 	seedShops := flag.Int("seed-shops", 40, "seeded shops cardinality")
@@ -276,6 +281,7 @@ func main() {
 		seedShops:        *seedShops,
 		seedTokens:       *seedTokens,
 		stmtsPerTxn:      *stmtsPerTxn,
+		targetTPS:        *targetTPS,
 		txnCTE:           *txnCTE,
 		txnCTEFixedShape: *txnCTE && *txnCTEFixedShape,
 		workers:          *concurrency,
@@ -321,8 +327,8 @@ func main() {
 
 	fmt.Fprintf(
 		os.Stderr,
-		"config: readProb=%.6f insertProb=%.6f updateProb=%.6f txnCTE=%t txnCTEFixedShape=%t\n",
-		readProb, insertProb, updateProb, cfg.txnCTE, cfg.txnCTEFixedShape,
+		"config: readProb=%.6f insertProb=%.6f updateProb=%.6f txnCTE=%t txnCTEFixedShape=%t targetTPS=%.2f\n",
+		readProb, insertProb, updateProb, cfg.txnCTE, cfg.txnCTEFixedShape, cfg.targetTPS,
 	)
 	fmt.Printf("timestamp_utc,event,concurrency,stmts_per_txn,total_qps,txns_per_s,read_qps,insert_qps,update_qps,read_avg_ms,insert_avg_ms,update_avg_ms,txn_avg_ms,read_errs,insert_errs,update_errs,txn_errs,open,in_use,idle\n")
 
@@ -584,11 +590,31 @@ func worker(ctx context.Context, db *sql.DB, workerID int, cfg cfg, readSet, ins
 	defer wg.Done()
 	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID*1013)))
 
+	var paceEvery time.Duration
+	if cfg.targetTPS > 0 && cfg.workers > 0 {
+		paceEvery = time.Duration(float64(time.Second) * float64(cfg.workers) / cfg.targetTPS)
+	}
+	nextTxnAt := time.Now()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		if paceEvery > 0 {
+			if wait := time.Until(nextTxnAt); wait > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			} else if wait < -paceEvery {
+				// Fell behind (slow endpoint, retries): do not burst to catch up.
+				nextTxnAt = time.Now()
+			}
+			nextTxnAt = nextTxnAt.Add(paceEvery)
 		}
 
 		userTxnStart := time.Now()
@@ -900,9 +926,15 @@ where (sl.gateway_event_id, sl.gateway_event_scope) in (($1,$2))`,
 		return sqlSpec{stmt: `select *
 from payment_profiles pp
 left join order_events oe1 on (oe1.pay_profile_id, oe1.pay_profile_scope) = (pp.id, pp.scope)
-left join order_events oe2 on oe2.pay_profile_id = pp.id and oe2.pay_profile_scope = pp.scope
+left join lateral (
+  select *
+  from order_events oe
+  where oe.pay_profile_id = pp.id and oe.pay_profile_scope = pp.scope
+  order by oe.created_at desc
+  limit $3
+) oe2 on true
 where (oe1.id, oe1.scope) = ($1,$2)`,
-			args: []any{orderID, scopeDefault}}, nil
+			args: []any{orderID, scopeDefault, profileEventsLimit}}, nil
 	case "r_gateway_order_by_event":
 		return sqlSpec{stmt: `select *
 from gateway_orders go
@@ -1030,6 +1062,7 @@ func buildInsertSpec(name string, r *rand.Rand, cfg cfg) (sqlSpec, error) {
 		}, nil
 	case "i_order_event":
 		id := nextSyntheticInsertID()
+		ordRef = int(id)
 		return sqlSpec{
 			stmt: `insert into order_events
 			(action,amount,code,created_at,order_id,order_scope,pay_profile_id,pay_profile_scope,shop_notified_at,status,type,updated_at,id,scope)

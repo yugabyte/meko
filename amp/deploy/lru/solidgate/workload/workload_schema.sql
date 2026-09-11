@@ -237,7 +237,7 @@ CREATE INDEX NONCONCURRENTLY ON public.order_meta USING btree (order_ref_id HASH
 CREATE INDEX NONCONCURRENTLY ON public.devices USING btree (order_ref_id HASH, order_ref_scope ASC) SPLIT INTO 3 TABLETS;
 
 CREATE INDEX NONCONCURRENTLY ON public.order_events USING btree (order_id HASH, order_scope ASC) SPLIT INTO 3 TABLETS;
-CREATE INDEX NONCONCURRENTLY ON public.order_events USING btree (pay_profile_id HASH, pay_profile_scope ASC) SPLIT INTO 3 TABLETS;
+CREATE INDEX NONCONCURRENTLY ON public.order_events USING btree (pay_profile_id HASH, pay_profile_scope ASC, created_at DESC) SPLIT INTO 3 TABLETS;
 
 CREATE INDEX NONCONCURRENTLY ON public.gateway_orders USING btree (event_ref_id HASH, event_ref_scope ASC) SPLIT INTO 3 TABLETS;
 CREATE INDEX NONCONCURRENTLY ON public.gateway_orders USING btree (gateway_order_id HASH, status ASC, deleted_at ASC, synced_at ASC) SPLIT INTO 3 TABLETS;

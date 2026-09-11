@@ -6,7 +6,13 @@ updates across orders, payment methods, and payment events.
 The default transaction contains 8 independently selected statements, with an
 approximate mix of 39% reads, 18% inserts, and 43% updates. CTE mode defaults to off.
 Updates target seeded IDs, partitioned between workers. Application reads use
-`SELECT *`, including joins across related tables.
+`SELECT *`, including joins across related tables, and every read is bounded:
+the profile read takes at most the 20 latest events of a profile, so read cost
+does not grow with the data the inserts keep adding.
+
+The driver runs unpaced by default. `TARGET_TPS` paces all workers to a total
+committed-transaction rate, for long runs where the insert growth should look
+like a business rather than a benchmark.
 
 ## Requirements
 
@@ -15,8 +21,9 @@ Updates target seeded IDs, partitioned between workers. Application reads use
 - Database credentials supplied at runtime through environment variables.
 
 The schema uses YugabyteDB-specific HASH keys and tablet split clauses.
-All 13 base tables and hash indexes start with 3 tablets. Every timestamp index
-key explicitly uses `ASC`; indexes led by a timestamp start with 1 tablet.
+All 13 base tables and hash indexes start with 3 tablets. Every index led by a
+timestamp uses `ASC` and starts with 1 tablet; the one per-profile event index
+ends in `created_at DESC` so the profile read can take the latest few events.
 There are no triggers, partial indexes, or seed truncation statements.
 
 ## Initialize or Reseed
@@ -72,6 +79,7 @@ MAXPOOL=12 \
 DURATION=10m \
 REPORT_EVERY=30s \
 STMTS_PER_TXN=8 \
+TARGET_TPS=0 \
 CTE=false \
 CTE_FIXED_SHAPE=false \
 ./run_workload.sh | tee run_latest.csv
