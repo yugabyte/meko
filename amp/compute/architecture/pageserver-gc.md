@@ -158,12 +158,10 @@ greedy to the cutoff regardless). The flush reads the cutoff without
 locking it across the INSERT, so a concurrent tick can advance the
 cutoff past the clamped value and skip that one row; it waits for the
 periodic floor reset (or a restart), and the block's next base
-re-covers the garbage. This invariant is also what lets the dequeue
-sweep by block-range instead of naming exact PKs (see the dequeue step): a
-base landing after a tick's trim anchor is clamped above the cutoff, so
-the `<= cutoff` sweep only removes a candidate whose garbage the trim
-didn't collect in the rare clamp race (above), where the block's next
-base re-covers it.
+re-covers the garbage. The dequeue names exact PKs, so a candidate can
+no longer be cleared unacted by a range delete overshooting it — the
+clamp only has to keep the *select* honest, and the straggler waits for
+the floor reset like any other.
 
 ## Drain
 
@@ -249,10 +247,10 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    (an unknown kind, a malformed key) — so the scan seeks past those rows' YB delete
    tombstones instead of re-skimming them from the queue head every tick.
    It is in-memory only — 0 after a restart, so the first tick scans
-   from the head. Both the select and the dequeue use it as the lower
-   bound of the tick's `(floor, cutoff]` window, but it isn't a
-   correctness bound: too low costs a redundant scan, too high defers
-   rows to a later tick or the floor reset.
+   from the head. The **select** uses it as the lower bound of its
+   `(floor, cutoff]` window; the dequeue has no window, it names PKs. It
+   isn't a correctness bound: too low costs a redundant scan, too high
+   defers rows to a later tick or the floor reset.
 
    **Periodic floor reset.** Every `gc_queue_floor_reset_interval`
    (default 2 h) a tick forces the select floor to 0, so the scan starts
@@ -323,7 +321,14 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    (`GcSelectedCandidates`), so one corrupt row can't strand the rows above it.
 5. **Act**, ordered **drop → shrink → trim** (coarser first — a dropped
    object moots its own shrink/trim candidates), each dispatched by its
-   `gc_kind` to the matching act function:
+   `gc_kind` to the matching act function.
+
+   A trim candidate is first tested against its key's watermark: a trim is
+   greedy to the cutoff, so acting on one of a key's candidates subsumes
+   every other below it, and one arriving with `due_lsn <=` the watermark
+   has nothing left to delete. Those are dequeued without a statement and
+   counted as `already_acted`; the rest dedup by key, one act each. A cache
+   miss reads `Lsn(0)`, so the test can only ever fail towards acting.
    - **drop** — delete the object's rows `<= due_lsn` (bounded by the drop
      LSN, so a later reuse — wrapped-around segno, recreated relfilenode or
      database — keeps its newer rows): an SLRU segment (`gc_act_drop_slru`:
@@ -456,10 +461,19 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    gone, so a key trimmed once walks a tick's worth of LSNs rather than its
    whole history (#1148, #1155). Two rules keep it sound, both argued at
    `gc_act_trim_blocks`: it advances only after the DELETE commits, and it is
-   the anchor read *before* it, never after. Being wrong low only costs a
-   re-scan, which is why the map can be in-memory and a bounded LRU
-   (`gc_trim_watermark_cache_capacity`). One map covers all three keyspaces —
-   it is keyed by `Key`, the identity `pending_gc` already uses.
+   the anchor read *before* it, never after. One map covers all three
+   keyspaces — it is keyed by `Key`, the identity `pending_gc` already uses.
+
+   Being wrong low now costs more than a re-scan: the drain also uses the
+   watermark to recognise a candidate whose work is done (see the dequeue
+   step), so a missing entry means an act that wasn't needed as well as a
+   full-depth one. It stays in-memory and LRU-bounded
+   (`gc_trim_watermark_cache_capacity`) because that cost is bounded at **one
+   redundant act per key per eviction or restart** — a tick dedups its trims
+   by key regardless of the watermark, and the first committed act stores one.
+   Keys with duplicates spanning ticks are the hot ones, which is what an LRU
+   keeps. `pageserver_yb_gc_trim_watermark_{hits,misses}` is the signal for
+   sizing it.
 
    Every trim DELETE is one shape, for all three keyspaces: a `CROSS JOIN
    LATERAL` from the bound arrays into the table, capped at
@@ -554,47 +568,35 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
 6. **Dequeue**, strictly after the actions succeed: a candidate leaves
    the queue only once its garbage is gone, and idempotent actions make
    action-before-dequeue crash-safe (a crash in between re-runs the tick
-   into a no-op). Two paths, each matching its kind's delete bound:
-   - **trim** (`gc_dequeue_trim_candidates`): a block-scoped range delete over
-     `(floor, cutoff]`. The tick acted each visited block *to the cutoff*,
-     so every candidate `<= cutoff` there is handled — the sweep coalesces
-     a hot block's duplicate candidates into one delete. (The insert clamp
-     keeps a base landing after the anchor above the cutoff, out of range.)
-     Hinted to a one-pass batched nested loop — `YbBatchedNL` with
-     `yb_bnl_batch_size` sized to the pair count — which puts the pair list in
-     the PK index condition; unhinted it hashes, and the whole due window ships
-     to Postgres for the probe (995 k rows against 11.6 M on amp2). A batch
-     below the pair count rescans the window once per batch: 2.4x at three
-     passes, and **invisible in the storage counters** — rows scanned and read
-     requests are identical, only wall clock moves, so the drain warns when it
-     happens. It happens by design past `DEQUEUE_BNL_MAX_BATCH`: the outer
-     array costs ~1.8 KB a slot in a YB backend and the cluster is shared
-     across endpoints, each holding `GC_BUCKETS` of them at once, so a raised
-     `gc_drain_limit` buys passes rather than memory (#1239).
-     One statement per bucket, **run concurrently**, each scanning its own
-     bucket's whole due window. Measured on amp2, per-bucket time is unchanged
-     when all three run at once, so a tick pays its slowest bucket rather than
-     their sum (19 s against 47 s); the buckets are separate hash ranges of
-     `(branch_id, bucket_id)` over a six-tablet table, which usually but does
-     not provably put them on different tablets. **That win needs a GC pool
-     wider than one.** `YsqlClient` releases its slot before awaiting, so the
-     pool picks the backend rather than gating the statement, making the
-     realised width `min(GC pool, GC_BUCKETS)` — and the pool is
-     `scale_count(GC_ACTION_PARALLELISM, scale_factor)`, i.e. a single
-     connection at `scale_factor = 1.0`, where all three statements queue on
-     one backend and the tick still pays the sum.
-   - **drop / shrink** (`gc_dequeue_drop_shrink_candidates`): delete by exact
-     `(ident, due_lsn)` — one row per acted candidate, no window. They act
-     per-candidate at `<= due_lsn`, so only the acted candidate may clear;
-     an un-acted sibling (e.g. a capped-out later re-drop) keeps its
-     distinct `due_lsn` and stays queued for its own tick. Also hinted and
-     also per-bucket concurrent, but as a guard rather than a tuning: every PK
-     column is bound, so the join method only sets the round-trip count (2
-     storage requests against 2 000 un-batched), while a merge or hash semi
-     join — both reachable — indexes on `(branch_id, bucket_id)` alone and
-     streams the whole bucket to match.
-   - **busy-object drops** (a rel fork or SLRU segment with a materialise
-     job in flight; for a `DropDb`, *any* fork of the database): *not*
+   into a no-op).
+
+   One statement shape for every kind: `gc_dequeue_candidates` deletes by
+   exact PK `(key, gc_kind, due_lsn)`, clearing what the tick selected and
+   nothing else. A trim's duplicates therefore stay queued — the greedy act
+   subsumed their work but not their rows — and are recognised on a later
+   tick by the watermark rather than pre-empted by a sweep.
+
+   Hinted as a guard, not a tuning: every PK column is bound, so the join
+   method only sets the round-trip count (2 storage requests against 2 000
+   un-batched), but a merge or hash semi join — both reachable on a table
+   nothing has ANALYZEd — indexes on `(branch_id, bucket_id)` alone and
+   streams the whole bucket to match, 12.2 M rows for 2 000 candidates on
+   amp2. `pg_hint_plan` ignores a directive it cannot bind, silently, so the
+   plan test asserts the node shape under `yb_bad_hint_mode = error` (#1239).
+
+   One statement per bucket, **run concurrently**, though that win needs a GC
+   pool wider than one: `YsqlClient` releases its slot before awaiting, so the
+   pool picks the backend rather than gating the statement, making the
+   realised width `min(GC pool, GC_BUCKETS)` — and the pool is
+   `scale_count(GC_ACTION_PARALLELISM, scale_factor)`, a single connection at
+   `scale_factor = 1.0`.
+
+   A drop or shrink acts per-candidate at `<= due_lsn`, so only the acted
+   candidate may clear; an un-acted sibling (e.g. a capped-out later re-drop)
+   keeps its distinct `due_lsn` and stays queued for its own tick.
+
+   **Busy-object drops** (a rel fork or SLRU segment with a materialise
+   job in flight; for a `DropDb`, *any* fork of the database) are *not*
      passed to the dequeue. The drop's rows are
      already deleted; leaving the row queued lets a later tick re-act
      it and sweep any image a straggling materialise job inserts (at a
@@ -740,10 +742,18 @@ backoff state lives in the loop and the first tick still jitters
 selects on the shared `pending_gc` tablets.
 
 A candidate that comes due inside a backed-off window waits up to the ceiling
-before it is reclaimed — GC is throughput-bound, not latency-bound. The other
-end of that trade: the drain's sustained ceiling is `gc_drain_limit` (or
-`gc_sweep_rows_per_tick`) per *floor*, so a backlog drains 6x faster than the
-base cadence suggests.
+before it is reclaimed — GC is throughput-bound, not latency-bound.
+
+The other end of that trade is a hard ceiling on the queue: a backlogged tick
+clears `gc_drain_limit` candidates (and `gc_sweep_rows_per_tick` sweep rows) and
+then sleeps the floor, so the drain tops out at **`gc_drain_limit` per floor
+sleep** — 2 000 candidates/s at the defaults, however fast the tick itself ran.
+The floor is sized for a dequeue that took tens of seconds, and an exact-PK one
+returns in tens of milliseconds, so nearly all of that ceiling is now sleep.
+Emission above it grows `pending_gc` without bound; the pair to watch is
+`rate(pageserver_yb_gc_candidates_emitted_total)` against
+`rate(pageserver_yb_gc_candidates_dequeued_total)`; raising `gc_drain_limit` is
+the lever until the cadence itself tracks how long a tick took.
 
 ## Config
 
@@ -755,9 +765,9 @@ per-branch is also per-instance today.
 | --- | --- | --- |
 | `enable_gc` | `true` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
-| `gc_trim_watermark_cache_capacity` | `100 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~100 B, so the default is ~10 MB a timeline once full; evicting one costs that key a full-range trim, spread over as many capped statements as it is deep. Read once at activation. |
+| `gc_trim_watermark_cache_capacity` | `200 000` | Per-key trim watermarks held in memory, **per timeline** — one map over rel blocks, SLRU blocks and `meta` keys. Nothing else reclaims them, so this is what bounds the map. An entry costs ~60 B, so the default is ~12 MB a timeline once full. Evicting one costs that key a full-range trim spread over as many capped statements as it is deep, **and** an act it did not need, since the drain also reads the watermark to tell a candidate whose work is done — bounded at one such act per key per eviction. Size it from `pageserver_yb_gc_trim_watermark_{hits,misses}`. Read once at activation. |
 | `gc_rows_per_statement` | `100 000` | Rows one GC delete statement names before committing and re-issuing. Every trim statement carries it, on all three keyspaces, and the prefix sweeps cap their derived batch with `GC_SWEEP_MAX_ROWS_PER_DELETE` — so the name is not trim-specific. Floored at 1 on read — a statement selecting nothing would never let its loop terminate — and not capped above, so an oversized value is the operator's to avoid. Measured on RF-3 over 1 M versions of a single block, the per-statement overhead is fully amortised by ~20 000 and flat above it (15.7 µs/row at 20 000, 16.2 at 100 000, against 26.6 at 5 000). Read fresh each tick. |
-| `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. It bounds the **keys** a trim visits, not its statement count: a key deeper than `gc_rows_per_statement` takes as many statements as its depth needs (#1209). Read fresh each tick. |
+| `gc_drain_limit` | `10 000` | Max candidates a tick selects and dequeues (it acts on the subset whose watermark does not already cover them); bounds per-tick memory and delete burst. Since the dequeue no longer collapses a hot key's duplicates, this is also the queue's drain **rate** — `gc_drain_limit` rows per tick, at the cadence below. It bounds the **keys** a trim visits, not its statement count: a key deeper than `gc_rows_per_statement` takes as many statements as its depth needs (#1209). Read fresh each tick. |
 | `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
@@ -774,7 +784,9 @@ one doc.)
 | `pageserver_yb_gc_applied_cutoff_lsn` | UIntGauge | — | Current GC cutoff (`applied_gc_cutoff_lsn`), per tick. `pageserver_last_record_lsn − this` = retained-history window. Frozen while the queue grows ⇒ cutoff pinned (lease/child/`consistent_lsn`), not a slow drain. |
 | `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted, by producer path. For trim this counts sampler firings: one per `gc_candidate_every_n_bases` bases per key — but if a key fires more than once within one emitter flush window, those firings fold into a single `pending_gc` row, so inserted rows ≤ emitted. Drop/shrink events unsampled, one row each. `rate()` = emission rate, an upper bound on the insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
-| `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: trim range-sweeps a visited key's whole `(floor, cutoff]` set (collapses duplicates), drop/shrink clear exactly the acted candidates. ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
+| `pageserver_yb_gc_trim_candidates_already_acted_total` | IntCounter | — | Trim candidates dequeued without a statement, an earlier greedy trim having subsumed them. `read − already_acted` is the work a tick had to do; a high ratio is queue duplication, not a fault. |
+| `pageserver_yb_gc_trim_watermark_hits` / `_misses` | IntCounter | — | Trim-watermark cache lookups. A miss costs a full-depth trim **and** an act that was not needed, so it sizes `gc_trim_watermark_cache_capacity`. Read as a floor: an acted key is looked up twice a tick, an already-acted one once and always a hit. |
+| `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: exactly the candidates the tick selected, by PK. `== read` less the busy-object drops and capped sweeps left queued. `rate(emitted) − rate(dequeued)` = queue growth. |
 | `pageserver_yb_gc_rows_deleted_total` | IntCounter | — | Rows deleted by the drain across `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink). `rate()` = reclamation throughput. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence — which is adaptive, so a low rate is idle backoff, not necessarily a stall. |
 

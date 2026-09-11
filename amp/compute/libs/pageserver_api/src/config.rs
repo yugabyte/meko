@@ -1034,10 +1034,14 @@ pub struct BranchConfigToml {
     /// Per-key trim watermarks the GC drain keeps in memory, per timeline —
     /// one map over rel blocks, SLRU blocks and `meta` keys alike. Nothing
     /// else reclaims them — unlike a sweep cursor a watermark has no dequeue —
-    /// so this is what bounds the map. An entry costs ~100 B, so the default
-    /// is ~10 MB a timeline once full; evicting one costs that key one
-    /// full-range trim, and 0 turns them off. Read once at `Timeline::new`
-    /// (see `enable_gc`).
+    /// so this is what bounds the map. An entry costs ~60 B, so the default
+    /// is ~12 MB a timeline once full; 0 turns them off. Read once at
+    /// `Timeline::new` (see `enable_gc`).
+    ///
+    /// Evicting an entry costs that key both a full-range trim and, because
+    /// the drain skips a candidate only when it can see a watermark above it,
+    /// an act it did not need. `pageserver_yb_gc_trim_watermark_{hits,misses}`
+    /// is the hit rate to size this from.
     pub gc_trim_watermark_cache_capacity: usize,
 }
 
@@ -1063,7 +1067,7 @@ pub mod tenant_conf_defaults {
     /// Sized for the deep, hot blocks a workload rewrites — a few hundred per
     /// relation — which is where the benefit is. A wide shallow relation's
     /// millions of blocks are one candidate each and lose nothing to eviction.
-    pub const DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY: usize = 100_000;
+    pub const DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY: usize = 200_000;
     /// Where the per-statement overhead is fully amortised: measured on RF-3
     /// over 1 M versions of one block, 15.7 us/row at 20 000 and 16.2 at
     /// 100 000, against 26.6 at 5 000. The higher end of the flat stretch, so

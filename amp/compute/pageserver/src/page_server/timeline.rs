@@ -318,7 +318,7 @@ pub(crate) struct GcDrainProgress {
     /// Select floor high-water mark: everything at `due_lsn <= floor`
     /// has been handled — dequeued, acted-but-requeued (a busy-object drop),
     /// or parked (a row `classify_candidate` refused, a malformed key) — so
-    /// the tick scans `(floor, cutoff]` for both the select and the dequeue.
+    /// the tick's select scans `(floor, cutoff]`.
     /// Not a correctness bound — too low re-scans, too high defers rows to a
     /// later tick or the floor reset. 0 on restart.
     pub(crate) floor: Lsn,
@@ -359,11 +359,28 @@ impl GcDrainProgress {
     }
 
     /// The watermarks these keys carry, in order. `Lsn(0)` for one that has
-    /// none — the bottom [`Self::floor`] also starts at.
+    /// none — the bottom [`Self::floor`] also starts at, which is why a miss
+    /// only ever widens a trim's range and never lets the drain skip a
+    /// candidate it should act on.
+    ///
+    /// That same collapse is why the hit/miss counter is here and not at the
+    /// call sites: `Lsn(0)` back from this is either a real watermark or an
+    /// absent one, and nothing downstream can tell them apart.
     pub(crate) fn trim_watermarks_of(&mut self, keys: &[Key]) -> Vec<Lsn> {
-        keys.iter()
-            .map(|k| self.trim_watermarks.get(k).copied().unwrap_or_default())
-            .collect()
+        let mut hits = 0u64;
+        let out: Vec<Lsn> = keys
+            .iter()
+            .map(|k| match self.trim_watermarks.get(k) {
+                Some(lsn) => {
+                    hits += 1;
+                    *lsn
+                }
+                None => Lsn::default(),
+            })
+            .collect();
+        crate::metrics::GC_TRIM_WATERMARK_HITS.inc_by(hits);
+        crate::metrics::GC_TRIM_WATERMARK_MISSES.inc_by(keys.len() as u64 - hits);
+        out
     }
 
     /// Record the anchors a committed trim reached.

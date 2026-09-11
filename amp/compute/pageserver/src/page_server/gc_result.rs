@@ -37,6 +37,23 @@ impl GcTickOutcome {
         }
     }
 
+    /// Which of these two a drain tick ended in. Never `NothingDue` — that
+    /// is decided before the tick does any work, by an empty select.
+    ///
+    /// Deliberately blind to how much of the tick was *actionable*: a tick
+    /// that acts on nothing is ordinary once the drain recognises candidates
+    /// their watermark already covers, and only the select knows whether more is
+    /// due. Reading "nothing to act on" as caught-up would drop the cadence
+    /// from `period / GC_SLEEP_FLOOR_DIVISOR` to `period` with the backlog
+    /// untouched.
+    pub(crate) fn caught_up_or_backlogged(all_due_visited: bool, sweeps_finished: bool) -> Self {
+        if all_due_visited && sweeps_finished {
+            GcTickOutcome::CaughtUp
+        } else {
+            GcTickOutcome::BacklogRemains
+        }
+    }
+
     /// How long the drain loop (`page_server::tasks::gc_loop`) sleeps after
     /// this tick, from `period` as the base. `last_idle` is the sleep the
     /// previous `NothingDue` tick picked, `None` once any tick did work — so an
@@ -61,9 +78,8 @@ impl GcTickOutcome {
 ///
 #[derive(Default, Serialize, Debug)]
 pub struct GcResult {
-    /// Candidate rows dequeued from `pending_gc` this iteration. Can exceed
-    /// the acted candidates — the block-range delete also clears a visited
-    /// block's duplicate/straggler rows.
+    /// Candidate rows dequeued from `pending_gc` this iteration: exactly the
+    /// ones the select returned, acted or already covered.
     pub candidates_dequeued: u64,
     /// Rows deleted by the drain across `amp_storage.pages`, `slru_pages`,
     /// and `meta` (trim / drop / shrink).
@@ -87,6 +103,27 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// A capped tick stays `BacklogRemains` however little of it was
+    /// actionable — the outcome is the select's property. Getting this wrong
+    /// drops the loop to the caught-up cadence with the backlog untouched,
+    /// and once the drain skips watermark-covered candidates a tick that acts
+    /// on nothing is the ordinary tick.
+    #[test]
+    fn outcome_follows_the_select_not_the_act() {
+        assert_eq!(
+            GcTickOutcome::caught_up_or_backlogged(true, true),
+            GcTickOutcome::CaughtUp
+        );
+        assert_eq!(
+            GcTickOutcome::caught_up_or_backlogged(false, true),
+            GcTickOutcome::BacklogRemains
+        );
+        assert_eq!(
+            GcTickOutcome::caught_up_or_backlogged(true, false),
+            GcTickOutcome::BacklogRemains
+        );
+    }
+
     use super::*;
 
     #[test]

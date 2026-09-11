@@ -80,10 +80,6 @@ const DEQUEUE_BNL_HINT: &str = "YbBatchedNL(pending_gc unnest) Leading((unnest p
 /// The `(key, gc_kind, due_lsn)` arrays a drop/shrink dequeue statement binds.
 type DropShrinkBinds = (Vec<Vec<u8>>, Vec<i16>, Vec<i64>);
 
-/// Ceiling on the dequeue's `yb_bnl_batch_size`. One power of two above what
-/// the default `gc_drain_limit` needs, so only a raised limit reaches it.
-const DEQUEUE_BNL_MAX_BATCH: usize = 8192;
-
 /// What one trim runs against: which table, how its keys arrive and how they
 /// are named once deleted. Everything else about the loop is shared and lives
 /// in [`PageStore::run_trim_loop`].
@@ -158,14 +154,13 @@ fn key_hash(key: &Key) -> u64 {
 /// `sum` keeps arbitrary, so each is logged first or the rest vanish.
 async fn sum_bucket_dequeues(
     dequeues: impl Iterator<Item = impl Future<Output = Result<u64>>>,
-    what: &str,
 ) -> Result<u64> {
     let outcomes = futures::stream::iter(dequeues)
         .buffer_unordered(GC_BUCKETS as usize)
         .collect::<Vec<_>>()
         .await;
     for e in outcomes.iter().filter_map(|r| r.as_ref().err()) {
-        tracing::warn!(err = ?e, kind = what, "GC dequeue bucket failed");
+        tracing::warn!(err = ?e, "GC dequeue bucket failed");
     }
     outcomes.into_iter().sum()
 }
@@ -249,9 +244,8 @@ pub type GcSlruSeg = (i16, i64);
 pub type GcDbIdent = (i64, i64);
 
 /// One candidate's full identity: `key`, `gc_kind` and `due_lsn`, which
-/// within a branch is `pending_gc`'s whole primary key. Any kind can be
-/// named this way; only drop/shrink candidates are *dequeued* by it (a trim
-/// dequeues by a range sweep over `(key, gc_kind)` instead).
+/// within a branch is `pending_gc`'s whole primary key — and, whatever the
+/// kind, what the dequeue names a row by.
 pub(crate) type GcCandidateId = (Key, GcKind, Lsn);
 
 /// One GC candidate: "reclaim the garbage named by `key` once the cutoff
@@ -266,6 +260,13 @@ pub struct PendingGcRow {
     pub gc_kind: GcKind,
     pub due_lsn: Lsn,
     pub relsize: Option<i64>,
+}
+
+impl PendingGcRow {
+    /// This row's PK — what the dequeue names it by.
+    pub fn id(&self) -> GcCandidateId {
+        (self.key, self.gc_kind, self.due_lsn)
+    }
 }
 
 /// What one prefix sweep reclaims: a whole dropped database, or one dropped
@@ -764,110 +765,12 @@ impl PageStore {
         Ok(removed)
     }
 
-    /// The trim dequeue statement, split out so a test can EXPLAIN it.
-    /// `batch` must cover every row `unnest` emits — see [`bnl_batch_for`].
-    fn gc_dequeue_trim_sql(&self, batch: usize) -> String {
-        format!(
-            "DELETE /*+ Set(yb_bnl_batch_size {batch}) {DEQUEUE_BNL_HINT} */ \
-             FROM \"{schema}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 \
-               AND due_lsn > $3 AND due_lsn <= $4 \
-               AND (key, gc_kind) IN (SELECT * FROM unnest($5::bytea[], $6::smallint[]))",
-            schema = self.schema
-        )
-    }
-
-    /// `yb_bnl_batch_size` for a dequeue's batched nested loop, whose outer side
-    /// emits `outer_rows` rows.
+    /// The dequeue statement, split out so a test can EXPLAIN it.
     ///
-    /// Never below `outer_rows` until the ceiling: the join rescans its inner side
-    /// once per batch, and that shows up in nothing but wall clock — rows
-    /// scanned and read requests are identical either way, which is why the
-    /// caller warns when the ceiling binds. There is a ceiling because the
-    /// outer array costs ~1.8 KB a slot in a YB backend, the cluster is shared
-    /// across endpoints, and each one's drain holds `GC_BUCKETS` of them at
-    /// once; past it the statement pays passes rather than memory. Floored at
-    /// YB's own default so a tick's statements share a handful of texts in
-    /// `YsqlClient`'s per-connection cache.
-    fn dequeue_bnl_batch(outer_rows: usize) -> usize {
-        outer_rows
-            .next_power_of_two()
-            .clamp(1024, DEQUEUE_BNL_MAX_BATCH)
-    }
-
-    /// Dequeue the visited trim candidates: a bucket-grouped range delete
-    /// over `(floor, cutoff]`, matching each `(key, gc_kind)` pair. Same
-    /// window as the select, so an object's duplicate/straggler candidates
-    /// all go, not just acted ones — safe because the caller acted each to
-    /// the cutoff and the materialiser clamps a late base above it (see
-    /// `PendingGcBuffer`). Matching each `(key, gc_kind)` pair confines the
-    /// sweep to the object's own kind: a same-`key` drop/shrink row
-    /// (`rel_size_to_key` carries DropRel / ShrinkPages *and* TrimMeta)
-    /// isn't matched — its pair was never passed. A busy-fork drop isn't
-    /// passed here (acted, left queued). Returns rows removed.
-    ///
-    /// Corner: the materialiser's due_lsn clamp only holds against the
-    /// cutoff as the flush read it: a flush that read it before this tick
-    /// raised it can insert a block's image just after the trim acted,
-    /// clamped below the now higher cutoff, so the dequeue clears that
-    /// candidate unacted. Vanishingly rare, and the block's next base
-    /// re-covers the garbage.
-    pub async fn gc_dequeue_trim_candidates(
-        &self,
-        branch_id: BranchId,
-        trims: &[(Key, GcKind)],
-        floor: Lsn,
-        cutoff: Lsn,
-    ) -> Result<u64> {
-        if trims.is_empty() {
-            return Ok(0);
-        }
-        let floor_i = floor.0 as i64;
-        let cutoff_i = cutoff.0 as i64;
-        // Bucket by key (bucket_id is the hash of the key); within a bucket,
-        // carry the parallel (key, gc_kind) arrays the `IN unnest(...)` zips.
-        let mut by_bucket: std::collections::HashMap<i32, (Vec<Vec<u8>>, Vec<i16>)> =
-            std::collections::HashMap::new();
-        for (k, kind) in trims {
-            let (keyb, kinds) = by_bucket.entry(gc_bucket_id(k)).or_default();
-            keyb.push(key_to_bytes(k));
-            kinds.push(kind.to_i16());
-        }
-        // One statement per bucket, concurrently: each scans its own bucket's
-        // whole due window, so a tick pays its slowest bucket, not their sum.
-        let bucket_dequeues = by_bucket.into_iter().map(|(bucket, (keyb, kinds))| {
-            let candidates = keyb.len();
-            let batch = Self::dequeue_bnl_batch(candidates);
-            if batch < candidates {
-                tracing::warn!(
-                    candidates,
-                    batch,
-                    "gc dequeue batch hit its ceiling; the delete re-walks its \
-                     window once per batch — lower gc_drain_limit"
-                );
-            }
-            let sql = self.gc_dequeue_trim_sql(batch);
-            async move {
-                self.dequeue_candidates(
-                    &sql,
-                    &[&branch_id, &bucket, &floor_i, &cutoff_i, &keyb, &kinds],
-                )
-                .await
-                .with_context(|| {
-                    format!("gc_dequeue_trim_candidates branch={branch_id} bucket={bucket} candidates={candidates}")
-                })
-            }
-        });
-        sum_bucket_dequeues(bucket_dequeues, "trim").await
-    }
-
-    /// The drop/shrink dequeue statement, split out so a test can EXPLAIN it.
-    ///
-    /// Deliberately takes YB's default `yb_bnl_batch_size` where the trim
-    /// dequeue pins one: every PK column is bound here, so a second batch
-    /// re-seeks the leftover keys instead of re-walking a window, and the
+    /// No batch size is pinned: every PK column is bound, so a second batch
+    /// re-seeks the leftover keys instead of re-walking anything, and the
     /// batch only sets how many round trips that costs.
-    fn gc_dequeue_drop_shrink_sql(&self) -> String {
+    fn gc_dequeue_sql(&self) -> String {
         format!(
             "DELETE /*+ {DEQUEUE_BNL_HINT} */ \
              FROM \"{schema}\".pending_gc \
@@ -878,9 +781,12 @@ impl PageStore {
         )
     }
 
-    /// Dequeue the given drop/shrink candidates by their PK
-    /// `(key, gc_kind, due_lsn)`. Returns rows removed.
-    pub async fn gc_dequeue_drop_shrink_candidates(
+    /// Dequeue the given candidates by their PK `(key, gc_kind, due_lsn)` —
+    /// trims, drops and shrinks alike. Returns rows removed.
+    ///
+    /// A trim's duplicates therefore stay queued; `Timeline::actionable_trims`
+    /// is what makes them cheap when they come back.
+    pub async fn gc_dequeue_candidates(
         &self,
         branch_id: BranchId,
         candidates: &[GcCandidateId],
@@ -897,7 +803,7 @@ impl PageStore {
             kinds.push(c.1.to_i16());
             due.push(c.2.0 as i64);
         }
-        let sql = self.gc_dequeue_drop_shrink_sql();
+        let sql = self.gc_dequeue_sql();
         // A `&str` view: the statement is the same for every bucket, so the
         // closure borrows one text rather than moving a `String` per bucket.
         let sql = sql.as_str();
@@ -909,13 +815,13 @@ impl PageStore {
                     .await
                     .with_context(|| {
                         format!(
-                            "gc_dequeue_drop_shrink_candidates branch={branch_id} \
+                            "gc_dequeue_candidates branch={branch_id} \
                              bucket={bucket} candidates={candidates}"
                         )
                     })
             }
         });
-        sum_bucket_dequeues(bucket_dequeues, "drop/shrink").await
+        sum_bucket_dequeues(bucket_dequeues).await
     }
 
     /// Each block's anchor: the newest base `<= $7`. The trim's only anchor
@@ -2359,26 +2265,10 @@ mod tests {
         }
     }
 
-    /// The trim candidates' keys in a selected batch — what the drain
-    /// feeds [`PageStore::gc_dequeue_trim_candidates`].
-    fn blocks_of(rows: &[PendingGcRow]) -> Vec<(Key, GcKind)> {
-        rows.iter()
-            .filter(|r| is_trim_kind(r.gc_kind))
-            .map(|r| (r.key, r.gc_kind))
-            .collect()
-    }
-
-    /// The drop/shrink candidates' exact PKs in a selected batch — what the
-    /// drain feeds [`PageStore::gc_dequeue_drop_shrink_candidates`].
-    fn drop_shrink_ids(rows: &[PendingGcRow]) -> Vec<(Key, GcKind, Lsn)> {
-        rows.iter()
-            .filter(|r| !is_trim_kind(r.gc_kind))
-            .map(|r| (r.key, r.gc_kind, r.due_lsn))
-            .collect()
-    }
-
-    fn is_trim_kind(k: GcKind) -> bool {
-        matches!(k, GcKind::TrimPages | GcKind::TrimSlru | GcKind::TrimMeta)
+    /// Every candidate's exact PK — what the drain feeds
+    /// [`PageStore::gc_dequeue_candidates`], whatever its kind.
+    fn cand_ids(rows: &[PendingGcRow]) -> Vec<GcCandidateId> {
+        rows.iter().map(PendingGcRow::id).collect()
     }
 
     /// A candidate's block number (trim) or a signed kind marker
@@ -2613,7 +2503,7 @@ mod tests {
         assert_eq!(due.len(), 2);
         assert_eq!(due.last().unwrap().due_lsn, Lsn(10));
         store
-            .gc_dequeue_trim_candidates(branch, &blocks_of(&due), Lsn(0), Lsn(20))
+            .gc_dequeue_candidates(branch, &cand_ids(&due))
             .await
             .unwrap();
 
@@ -2656,7 +2546,7 @@ mod tests {
             .rows;
         assert_eq!(drained.len(), 3);
         store
-            .gc_dequeue_trim_candidates(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
+            .gc_dequeue_candidates(branch, &cand_ids(&drained))
             .await
             .unwrap();
 
@@ -2668,93 +2558,12 @@ mod tests {
         assert_eq!(left, vec![40, 50, 60], "exactly the due rows must go");
     }
 
-    /// Scenario: the block-range dequeue sweeps ALL of a visited block's
-    /// candidates at/under the cutoff — duplicates and stragglers, not
-    /// just named PKs — while leaving that block's above-cutoff
-    /// candidate, other blocks, and a same-fork drop sentinel (keyed on
-    /// exact block identity, so blknum -2 is never matched).
+    /// Scenario: a hot block's duplicate candidates survive the dequeue and
+    /// re-select on the next tick, where the block's watermark is what makes
+    /// them cheap. This pins the store half — nothing but the named PK leaves
+    /// the queue; `Timeline::actionable_trims` is the drain half.
     #[tokio::test]
-    async fn pending_gc_dequeue_sweeps_the_visited_block() {
-        let (store, _schema) = make_store("gc_trim_sweep").await;
-        let branch = rand_branch();
-
-        let batch = vec![
-            gc_cand(16401, 0, 7, 10),
-            gc_cand(16401, 0, 7, 20),
-            gc_cand(16401, 0, 7, 30),
-            gc_cand(16401, 0, 7, 200), // above cutoff
-            gc_cand(16401, 0, 8, 25),  // other block
-            gc_cand(16401, 0, -2, 40), // drop sentinel, same fork
-        ];
-        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
-
-        let block_a: Key = rel_block_to_key(gc_rel(16401, 0), 7);
-        store
-            .gc_dequeue_trim_candidates(branch, &[(block_a, GcKind::TrimPages)], Lsn(0), Lsn(100))
-            .await
-            .unwrap();
-
-        let mut left: Vec<(i64, u64)> = all_pending(&store, branch)
-            .await
-            .iter()
-            .map(|r| (blk_marker(r), r.due_lsn.0))
-            .collect();
-        left.sort();
-        assert_eq!(
-            left,
-            vec![(-2, 40), (7, 200), (8, 25)],
-            "block 7's <= cutoff candidates swept; its above-cutoff one, block 8, and the drop survive"
-        );
-    }
-
-    /// Scenario: the dequeue window is `(floor, cutoff]`, matching the
-    /// select — a visited block's below-floor candidate is left untouched
-    /// (already handled under an earlier floor), so the delete never
-    /// reaches rows outside the tick's own span.
-    #[tokio::test]
-    async fn pending_gc_dequeue_respects_floor() {
-        let (store, _schema) = make_store("gc_floor").await;
-        let branch = rand_branch();
-
-        store
-            .gc_enqueue_candidates(
-                branch,
-                &[
-                    gc_cand(16401, 0, 7, 10), // below floor — survives
-                    gc_cand(16401, 0, 7, 40), // in (floor, cutoff] — swept
-                    gc_cand(16401, 0, 7, 60), // in (floor, cutoff] — swept
-                ],
-            )
-            .await
-            .unwrap();
-
-        let block_a: Key = rel_block_to_key(gc_rel(16401, 0), 7);
-        store
-            .gc_dequeue_trim_candidates(branch, &[(block_a, GcKind::TrimPages)], Lsn(20), Lsn(100))
-            .await
-            .unwrap();
-
-        let left: Vec<u64> = all_pending(&store, branch)
-            .await
-            .iter()
-            .map(|r| r.due_lsn.0)
-            .collect();
-        assert_eq!(
-            left,
-            vec![10],
-            "the below-floor candidate survives; (floor, cutoff] swept"
-        );
-    }
-
-    /// Scenario: a budget-capped drain visits a block through ONE of
-    /// its queued candidates, but the range dequeue collapses the whole
-    /// block: acting the block trimmed it to the cutoff, so every
-    /// candidate `<= cutoff` there is moot and swept in one delete — no
-    /// straggler duplicates to re-select on later ticks. The block's
-    /// above-cutoff candidate and an unvisited block's due candidate
-    /// survive.
-    #[tokio::test]
-    async fn pending_gc_dequeue_collapses_visited_block_duplicates() {
+    async fn pending_gc_dequeue_leaves_duplicates_for_a_later_tick() {
         let (store, _schema) = make_store("gc_collapse").await;
         let branch = rand_branch();
 
@@ -2762,11 +2571,11 @@ mod tests {
             .gc_enqueue_candidates(
                 branch,
                 &[
-                    gc_cand(16401, 0, 7, 5),  // visited (selected)
-                    gc_cand(16401, 0, 7, 15), // duplicate, due — swept too
-                    gc_cand(16401, 0, 7, 25), // duplicate, due — swept too
-                    gc_cand(16401, 0, 7, 45), // above cutoff — survives
-                    gc_cand(16401, 0, 8, 12), // other block, due, NOT visited
+                    gc_cand(16401, 0, 7, 5),  // selected
+                    gc_cand(16401, 0, 7, 15), // duplicate, due
+                    gc_cand(16401, 0, 7, 25), // duplicate, due
+                    gc_cand(16401, 0, 7, 45), // above cutoff
+                    gc_cand(16401, 0, 8, 12), // other block, due
                 ],
             )
             .await
@@ -2781,27 +2590,32 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!((blk_marker(&drained[0]), drained[0].due_lsn.0), (7, 5));
         store
-            .gc_dequeue_trim_candidates(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
+            .gc_dequeue_candidates(branch, &cand_ids(&drained))
             .await
             .unwrap();
 
-        let left: Vec<(i64, u64)> = all_pending(&store, branch)
+        let mut left: Vec<(i64, u64)> = all_pending(&store, branch)
             .await
             .iter()
             .map(|r| (blk_marker(r), r.due_lsn.0))
             .collect();
+        left.sort();
         assert_eq!(
             left,
-            vec![(8, 12), (7, 45)],
-            "block 7's <= cutoff duplicates collapse; its above-cutoff one and block 8 survive"
+            vec![(7, 15), (7, 25), (7, 45), (8, 12)],
+            "only the selected candidate went; block 7's duplicates remain queued"
         );
-        // Only the unvisited block re-selects; block 7 is fully drained.
+        // And they come back — three due rows now, not one.
         let next = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1000)
             .await
             .unwrap()
             .rows;
-        assert_eq!(next.len(), 1, "only the unvisited block remains due");
+        assert_eq!(
+            next.len(),
+            3,
+            "both duplicates re-select alongside the unvisited block"
+        );
     }
 
     /// Scenario: a tie group wider than the select cap — a DROP
@@ -2834,7 +2648,7 @@ mod tests {
             assert!(batch.len() <= 2, "select respects the cap");
             ticks_used += 1;
             store
-                .gc_dequeue_drop_shrink_candidates(branch, &drop_shrink_ids(&batch))
+                .gc_dequeue_candidates(branch, &cand_ids(&batch))
                 .await
                 .unwrap();
         }
@@ -2846,16 +2660,12 @@ mod tests {
         );
     }
 
-    /// Scenario: drop/shrink dequeue by exact `(ident, due_lsn)`; trim by
-    /// range-sweep. A fork has an acted drop (due 10) and shrink (due 20),
-    /// plus a SECOND drop for the same fork at due 300 that is due
-    /// (`<= cutoff`) but NOT acted this tick (a drain-limit split). Exact-PK
-    /// dequeue clears only the two acted candidates and leaves drop@300
-    /// queued for its own tick — the old range-sweep would have clobbered
-    /// it (same fork ident, inside the window) and leaked its rows. The
-    /// trim row (block 7) dequeues via the range-sweep.
+    /// Scenario: every kind clears by exact PK, so a candidate the tick did
+    /// not act on survives whatever else shares its key. The same-fork drop at
+    /// 300 is the case that matters: it sits under the same rel-size ident as
+    /// the two acted candidates and inside the same LSN span as the trim.
     #[tokio::test]
-    async fn pending_gc_dequeue_drop_shrink_exact_vs_trim_sweep() {
+    async fn pending_gc_dequeue_spares_the_unacted_sibling() {
         let (store, _schema) = make_store("gc_dequeue_exact").await;
         let branch = rand_branch();
 
@@ -2866,15 +2676,14 @@ mod tests {
                     gc_cand(16401, 0, -2, 10),  // acted
                     gc_cand(16401, 0, -1, 20),  // acted
                     gc_cand(16401, 0, -2, 300), // due, NOT acted — must survive
-                    gc_cand(16401, 0, 7, 15),   // trim, acted (range-swept)
+                    gc_cand(16401, 0, 7, 15),   // trim, acted
                 ],
             )
             .await
             .unwrap();
 
-        // Drop/shrink: dequeue only the two acted candidates, by exact PK.
         store
-            .gc_dequeue_drop_shrink_candidates(
+            .gc_dequeue_candidates(
                 branch,
                 &[
                     (rel_size_to_key(gc_rel(16401, 0)), GcKind::DropRel, Lsn(10)),
@@ -2883,17 +2692,12 @@ mod tests {
                         GcKind::ShrinkPages,
                         Lsn(20),
                     ),
+                    (
+                        rel_block_to_key(gc_rel(16401, 0), 7),
+                        GcKind::TrimPages,
+                        Lsn(15),
+                    ),
                 ],
-            )
-            .await
-            .unwrap();
-        // Trim: range-sweep block 7's candidates in (0, 100].
-        store
-            .gc_dequeue_trim_candidates(
-                branch,
-                &[(rel_block_to_key(gc_rel(16401, 0), 7), GcKind::TrimPages)],
-                Lsn(0),
-                Lsn(100),
             )
             .await
             .unwrap();
@@ -2906,7 +2710,7 @@ mod tests {
         assert_eq!(
             left,
             vec![(-2, 300)],
-            "the un-acted same-fork drop@300 survives exact-PK dequeue"
+            "the un-acted same-fork drop@300 survives an exact-PK dequeue"
         );
     }
 
@@ -4281,109 +4085,58 @@ mod tests {
         }
     }
 
-    /// A batch below the outer row count rescans the window once per batch,
-    /// and nothing but wall clock reports it — rows scanned and read requests
-    /// are identical either way. So it covers every outer row until the
-    /// ceiling, which trades those passes for a bound on shared-backend memory.
-    #[test]
-    fn bnl_batch_covers_every_outer_row_up_to_the_ceiling() {
-        for outer_rows in [1, 1023, 1024, 1025, 2201, 3333, DEQUEUE_BNL_MAX_BATCH] {
-            assert!(
-                PageStore::dequeue_bnl_batch(outer_rows) >= outer_rows,
-                "outer_rows={outer_rows}"
-            );
-        }
-        assert_eq!(
-            PageStore::dequeue_bnl_batch(DEQUEUE_BNL_MAX_BATCH * 4),
-            DEQUEUE_BNL_MAX_BATCH
-        );
-    }
-
-    /// Both dequeues have to bind their key list into the PK index condition.
-    /// The plans they must not reach index on `(branch_id, bucket_id)` alone
-    /// and stream every row in the bucket (#1239). The hint text is pinned as
-    /// well as the plan, because `yb_bad_hint_mode = error` catches a
-    /// directive that fails to bind but not one that was deleted.
+    /// The dequeue has to bind its candidate list into the PK index condition.
+    /// The plans it must not reach index on `(branch_id, bucket_id)` alone and
+    /// stream every row in the bucket — both a merge and a hash semi join do,
+    /// and both are reachable (#1239). The hint text is pinned as well as the
+    /// plan, because `yb_bad_hint_mode = error` catches a directive that fails
+    /// to bind but not one that was deleted.
     #[tokio::test]
-    async fn gc_dequeues_pin_their_key_list_to_the_index_cond() {
+    async fn gc_dequeue_pins_its_candidates_to_the_index_cond() {
         let (store, _schema) = make_store("gc_dequeue_plan").await;
         let branch = BranchId::generate();
         let bucket: i32 = 0;
         // Enough keys that the planner would not pick a tight plan unaided,
         // which would make the assertions vacuous.
         let key_count = 2_000;
-        let blocks: Vec<Vec<u8>> = (0..key_count)
-            .map(|i| key_to_bytes(&rel_block_to_key(gc_rel(16401, 0), i as u32)))
-            .collect();
-        let trim_kinds: Vec<i16> = vec![GcKind::TrimPages.to_i16(); key_count];
-        let batch = PageStore::dequeue_bnl_batch(key_count);
         let idents: Vec<Vec<u8>> = (0..key_count)
             .map(|i| key_to_bytes(&rel_size_to_key(gc_rel(16401 + i as i64, 0))))
             .collect();
-        let drop_kinds: Vec<i16> = vec![GcKind::DropRel.to_i16(); key_count];
+        let kinds: Vec<i16> = vec![GcKind::DropRel.to_i16(); key_count];
         let due: Vec<i64> = (0..key_count as i64).map(|i| 100 + i).collect();
+        let sql = store.gc_dequeue_sql();
 
-        type Binds<'a> = Vec<&'a (dyn tokio_postgres::types::ToSql + Sync)>;
-        // The one-pass batched nested loop is the trim's whole point; the
-        // drop/shrink side only needs its triple to stay an index cond.
-        // Per case: the directives its SQL must still carry, and the fragments
-        // its plan must show. The Index Cond fragment is the load-bearing one —
-        // a BNL that rechecks the key list on the join node instead of pushing
-        // it into the scan prints the same node names while streaming the
-        // bucket, so asserting the node alone would pass it.
-        let batch_pin = format!("Set(yb_bnl_batch_size {batch})");
-        // label, statement, binds, directives the SQL must keep, fragments the
-        // plan must show.
-        type Case<'a> = (&'a str, String, Binds<'a>, Vec<&'a str>, &'a [&'a str]);
-        let cases: Vec<Case> = vec![
-            (
-                "trim",
-                store.gc_dequeue_trim_sql(batch),
-                vec![&branch, &bucket, &0i64, &i64::MAX, &blocks, &trim_kinds],
-                vec![DEQUEUE_BNL_HINT, &batch_pin],
-                &["YB Batched Nested Loop Join", "ROW(key, gc_kind) = ANY"],
-            ),
-            (
-                "drop/shrink",
-                store.gc_dequeue_drop_shrink_sql(),
-                vec![&branch, &bucket, &idents, &drop_kinds, &due],
-                vec![DEQUEUE_BNL_HINT],
-                &["ROW(due_lsn, key, gc_kind) = ANY"],
-            ),
-        ];
-
-        for (label, sql, binds, sql_pins, plan_pins) in cases {
-            for pin in sql_pins {
-                assert!(sql.contains(pin), "{label}: lost `{pin}`:\n{sql}");
-            }
-            let plan = explain(&sql, &binds).await;
-            for node in
-                std::iter::once("Index Scan using pending_gc_pkey").chain(plan_pins.iter().copied())
-            {
-                assert!(
-                    plan.contains(node),
-                    "{label}: plan lost {node}, so the key list is no longer an \
-                     index bound:\n{plan}"
-                );
-            }
-            // `Join Filter` is deliberately absent: the correct plan prints
-            // one too, as the batched nested loop's recheck above the pushed-
-            // down Index Cond, so its presence separates nothing. The Index
-            // Cond fragments above are what catch that demotion.
-            for node in [
-                "Merge Semi Join",
-                "Hash Semi Join",
-                "Hash Join",
-                "Seq Scan",
-                "Storage Filter",
-                "Materialize",
-            ] {
-                assert!(
-                    !plan.contains(node),
-                    "{label}: plans a {node}, whose index cond is the bucket \
-                     alone — it streams every row in it:\n{plan}"
-                );
-            }
+        assert!(
+            sql.contains(DEQUEUE_BNL_HINT),
+            "the dequeue lost its batched-NL hint:\n{sql}"
+        );
+        let plan = explain(&sql, &[&branch, &bucket, &idents, &kinds, &due]).await;
+        for node in [
+            "Index Scan using pending_gc_pkey",
+            "ROW(due_lsn, key, gc_kind) = ANY",
+        ] {
+            assert!(
+                plan.contains(node),
+                "plan lost {node}, so the candidate list is no longer an index \
+                 bound:\n{plan}"
+            );
+        }
+        // `Join Filter` is deliberately absent: the correct plan prints one
+        // too, as the batched nested loop's recheck above the pushed-down
+        // Index Cond, so its presence separates nothing.
+        for node in [
+            "Merge Semi Join",
+            "Hash Semi Join",
+            "Hash Join",
+            "Seq Scan",
+            "Storage Filter",
+            "Materialize",
+        ] {
+            assert!(
+                !plan.contains(node),
+                "dequeue plans a {node}, whose index cond is the bucket alone \
+                 — it streams every row in it:\n{plan}"
+            );
         }
     }
 

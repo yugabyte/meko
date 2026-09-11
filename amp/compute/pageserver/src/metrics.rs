@@ -345,10 +345,59 @@ pub(crate) static GC_CANDIDATES_READ: Lazy<IntCounter> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// Rows the dequeue deleted: each visited block's whole `(floor, cutoff]`
-/// candidate set, so >= the acted rows (it collapses a block's duplicates
-/// and stragglers). rate(emitted) − rate(dequeued) = queue growth.
-/// Charged per committed statement; see [`GC_ROWS_DELETED`].
+/// Trim-watermark cache hits and misses, spelled as two counters like the
+/// relsize snapshot cache's.
+///
+/// A miss is not neutral: the watermark is what tells the drain a candidate
+/// needs no action *and* what bounds a trim from below, so a miss costs both
+/// an act that was not needed and a full-depth scan for it. The lookup
+/// returns `Lsn(0)` either way, so without these nothing downstream can tell
+/// a miss from a real zero.
+///
+/// Counts every lookup, and an actionable key is looked up twice a tick — once
+/// to decide the skip, once to bound its trim — while a skipped one is looked
+/// up once and always hits. So the ratio understates the hit rate when the
+/// queue carries few duplicates. Read it as a floor when sizing
+/// `gc_trim_watermark_cache_capacity`.
+pub(crate) static GC_TRIM_WATERMARK_HITS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_trim_watermark_hits",
+        "GC trim-watermark cache hits",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Misses of [`GC_TRIM_WATERMARK_HITS`]' cache — see there for how to read
+/// the ratio.
+pub(crate) static GC_TRIM_WATERMARK_MISSES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_trim_watermark_misses",
+        "GC trim-watermark cache misses",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Trim candidates whose act had already happened when the tick read them.
+///
+/// A trim is greedy to the cutoff, so acting on one of a key's candidates
+/// subsumes every other below it — those later arrive with their `due_lsn`
+/// under the key's watermark and need no statement of their own. They are
+/// still **dequeued**; it is the act they do not need. Not "skipped", which
+/// in this subsystem means refused and left queued (a malformed key, a shape
+/// mismatch) — the opposite outcome.
+///
+/// `read − already_acted` is the work a tick actually had to do.
+pub(crate) static GC_TRIM_CANDIDATES_ALREADY_ACTED: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_trim_candidates_already_acted_total",
+        "Trim candidates dequeued without a statement, an earlier greedy trim having covered them",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Rows the dequeue deleted: exactly the candidates the tick selected, by PK.
+/// rate(emitted) − rate(dequeued) = queue growth. Charged per committed
+/// statement; see [`GC_ROWS_DELETED`].
 pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_candidates_dequeued_total",
@@ -3683,6 +3732,9 @@ pub fn preinitialize_metrics(
         &MISROUTED_PAGESTREAM_REQUESTS,
         &GC_ROWS_DELETED,
         &GC_CANDIDATES_DEQUEUED,
+        &GC_TRIM_CANDIDATES_ALREADY_ACTED,
+        &GC_TRIM_WATERMARK_HITS,
+        &GC_TRIM_WATERMARK_MISSES,
     ]
     .into_iter()
     .for_each(|c| {

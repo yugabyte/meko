@@ -12,7 +12,9 @@ use crate::page_server::gc_result::GcTickOutcome;
 /// order and the dequeue method. A candidate
 /// [`Timeline::classify_candidate`] rejects enters no bucket at all.
 struct PartitionedCandidates {
-    trims: Vec<(Key, crate::page_store::GcKind)>,
+    /// Every selected trim candidate. Not deduped by key: the dequeue clears
+    /// these rows and only these, so each has to survive to it.
+    trims: Vec<crate::page_store::PendingGcRow>,
     drops: Vec<crate::page_store::PendingGcRow>,
     shrinks: Vec<(crate::page_store::PendingGcRow, i64)>,
 }
@@ -296,8 +298,7 @@ impl Timeline {
     ///   moots its own shrink/trim work), forks parallel within a kind.
     ///   All drops are acted, busy or not;
     /// - **dequeue**, only after every action succeeded: trim blocks
-    ///   range-sweep their candidates in `(floor, cutoff]` (duplicates
-    ///   coalesce); drop/shrink clear by their PK `(ident, due_lsn)`. A
+    ///   clear by their PK `(ident, due_lsn)`, as every kind does. A
     ///   busy-object drop (a rel fork or SLRU segment with a materialise
     ///   job in flight) is acted but left queued so a later tick re-acts
     ///   it, sweeping any image a straggling job inserts after the delete
@@ -402,8 +403,6 @@ impl Timeline {
                 &partition,
                 &pending_materialise,
                 &acted.unfinished_sweeps,
-                floor,
-                applied_cutoff,
             )
             .await?;
         let next_floor = Self::next_drain_floor(
@@ -428,11 +427,10 @@ impl Timeline {
         // tick stopped on its own row budget with work left — even though it
         // visited everything due, so the loop keeps the short cadence instead
         // of pacing the sweep at one budget per base period.
-        result.outcome = if all_due_visited && acted.unfinished_sweeps.is_empty() {
-            GcTickOutcome::CaughtUp
-        } else {
-            GcTickOutcome::BacklogRemains
-        };
+        result.outcome = GcTickOutcome::caught_up_or_backlogged(
+            all_due_visited,
+            acted.unfinished_sweeps.is_empty(),
+        );
         // Not the deletion counters: those are charged per statement in
         // `PageStore`, not from these totals (#1142).
         crate::metrics::GC_DRAIN_TICKS
@@ -446,6 +444,54 @@ impl Timeline {
             "gc drain complete"
         );
         Ok(())
+    }
+
+    /// The distinct `(key, gc_kind)` this tick should act on: every selected
+    /// trim whose `due_lsn` is **above** its key's watermark.
+    ///
+    /// One at or below the watermark names only rows an earlier trim already
+    /// deleted — the watermark means everything under it is gone — so there is
+    /// nothing to act on and it is dequeued unacted. That is what lets the
+    /// dequeue clear exactly what it selected: a hot key's duplicates come
+    /// back on later ticks and cost a lookup each, instead of a window sweep
+    /// to pre-empt them.
+    ///
+    /// A miss reads as `Lsn(0)`, so it can only fail towards acting. Misses
+    /// are counted — see `gc_trim_watermark_cache_capacity`.
+    ///
+    /// Trap: a trim that loops and then fails keeps the watermark its
+    /// committed statements reached (#1142), which can sit above the
+    /// candidate that triggered it. The retry tick then skips that candidate
+    /// — correctly, the rows it named are gone — but the unfinished remainder
+    /// up to the cutoff now waits for that key's next candidate rather than
+    /// the next tick. Emission is sampled and self-healing, so the remainder
+    /// is reclaimed by the key's next base rather than lost.
+    ///
+    /// Returning nothing does **not** mean the queue is drained: the tick's
+    /// outcome comes from the select's raw count, never from this, or a tick
+    /// whose 10 000 candidates were all covered would back the loop off to
+    /// the caught-up cadence with the backlog untouched.
+    fn actionable_trims(
+        trims: &[crate::page_store::PendingGcRow],
+        watermarks: &[Lsn],
+    ) -> Vec<(Key, crate::page_store::GcKind)> {
+        let mut actionable: Vec<(Key, crate::page_store::GcKind)> = trims
+            .iter()
+            .zip(watermarks)
+            .filter(|(row, watermark)| row.due_lsn > **watermark)
+            .map(|(row, _)| (row.key, row.gc_kind))
+            .collect();
+        let already_acted = (trims.len() - actionable.len()) as u64;
+        if already_acted > 0 {
+            crate::metrics::GC_TRIM_CANDIDATES_ALREADY_ACTED.inc_by(already_acted);
+        }
+        // One act per object, however many of its candidates came back.
+        // `dedup` only drops adjacent equals, so the sort is what makes it
+        // total — and it is the only sort on this path, so `act_trims` still
+        // gets its key arrays in order.
+        actionable.sort_unstable();
+        actionable.dedup();
+        actionable
     }
 
     /// Act on every due candidate, coarsest-first — drop → shrink → trim,
@@ -464,7 +510,13 @@ impl Timeline {
     ) -> Result<ActOutcome, GcError> {
         let (mut rows_deleted, unfinished_sweeps) = self.act_drops(store, &due.drops).await?;
         rows_deleted += self.act_shrinks(store, &due.shrinks).await?;
-        rows_deleted += self.act_trims(store, &due.trims, applied_cutoff).await?;
+        let trim_keys: Vec<Key> = due.trims.iter().map(|row| row.key).collect();
+        let watermarks = {
+            let mut progress = self.gc_drain.progress.lock().unwrap();
+            progress.trim_watermarks_of(&trim_keys)
+        };
+        let actionable = Self::actionable_trims(&due.trims, &watermarks);
+        rows_deleted += self.act_trims(store, &actionable, applied_cutoff).await?;
         Ok(ActOutcome {
             rows_deleted,
             unfinished_sweeps,
@@ -472,8 +524,7 @@ impl Timeline {
     }
 
     /// Remove from `pending_gc` exactly what [`Self::act`] just reclaimed,
-    /// returning the count. Trim keys range-sweep `(floor, cutoff]`;
-    /// drop/shrink clear by their PK. A drop whose target could still receive
+    /// returning the count. Every kind clears by its own PK. A drop whose target could still receive
     /// a materialised image ([`PendingMaterialise::defers_dequeue`]) is left queued for
     /// a later tick — a straggling image INSERT after its delete would
     /// otherwise leak — and logged, not removed; so is a candidate in
@@ -486,22 +537,19 @@ impl Timeline {
         due: &PartitionedCandidates,
         pending_materialise: &PendingMaterialise,
         unfinished_sweeps: &std::collections::HashSet<crate::page_store::GcCandidateId>,
-        floor: Lsn,
-        applied_cutoff: Lsn,
     ) -> Result<u64, GcError> {
         let phases = &self.gc_drain.phases;
         let _timer = phases.dequeue.start_timer().record_on_drop();
-        // Trims dequeue by a range sweep over their (key, gc_kind) pairs;
-        // shrinks and finished, idle drops by PK. A busy drop and a
-        // budget-capped sweep stay queued.
-        let mut drop_shrink_to_dequeue: Vec<crate::page_store::GcCandidateId> = due
-            .shrinks
-            .iter()
-            .map(|(r, _)| (r.key, r.gc_kind, r.due_lsn))
-            .collect();
+        // Everything clears by its own PK. A busy drop and a budget-capped
+        // sweep stay queued.
+        // Shrinks and drops first, trims appended after the loop: only these
+        // leading ids can carry a sweep cursor, which `remove_cursors` below
+        // relies on.
+        let mut to_dequeue: Vec<crate::page_store::GcCandidateId> =
+            due.shrinks.iter().map(|(r, _)| r.id()).collect();
         let mut drops_awaiting_materialise: Vec<Key> = Vec::new();
         for r in &due.drops {
-            let id = (r.key, r.gc_kind, r.due_lsn);
+            let id = r.id();
             let sweep = crate::page_store::GcSweepCandidate::of(r);
             let dequeue_deferred = pending_materialise.defers_dequeue(r, sweep.map(|s| s.scope()));
             if dequeue_deferred {
@@ -522,7 +570,7 @@ impl Timeline {
             if dequeue_deferred || unfinished_sweeps.contains(&id) {
                 continue;
             }
-            drop_shrink_to_dequeue.push(id);
+            to_dequeue.push(id);
         }
         // A busy object's drop is acted but left queued; it re-selects (and
         // re-logs) only on floor resets, so an object recurring here across
@@ -537,22 +585,23 @@ impl Timeline {
                 "gc: busy-object drops left queued (materialise job in flight)"
             );
         }
-        let removed_trim = store
-            .gc_dequeue_trim_candidates(self.branch_id, &due.trims, floor, applied_cutoff)
+        // One statement set for all three kinds: every candidate clears by its
+        // own PK.
+        let cursor_bearing = to_dequeue.len();
+        to_dequeue.extend(due.trims.iter().map(crate::page_store::PendingGcRow::id));
+        let removed = store
+            .gc_dequeue_candidates(self.branch_id, &to_dequeue)
             .await
             .map_err(GcError::Persistence)?;
-        let removed_drop_shrink = store
-            .gc_dequeue_drop_shrink_candidates(self.branch_id, &drop_shrink_to_dequeue)
-            .await
-            .map_err(GcError::Persistence)?;
-        // A dequeued candidate has no cursor to resume from any more; only a
-        // resumable kind ever has one, and forgetting a missing id is a no-op.
+        // A dequeued candidate has no cursor to resume from any more. Only the
+        // drop/shrink prefix can have one — a trim never does — so the trims
+        // are left out rather than probed for a cursor they cannot hold.
         self.gc_drain
             .progress
             .lock()
             .unwrap()
-            .remove_cursors(&drop_shrink_to_dequeue);
-        Ok(removed_trim + removed_drop_shrink)
+            .remove_cursors(&to_dequeue[..cursor_bearing]);
+        Ok(removed)
     }
 
     /// Run `f` over each of `items` with bounded concurrency
@@ -815,7 +864,7 @@ impl Timeline {
         let phases = &self.gc_drain.phases;
 
         // Group by target table off the candidate's kind (block keys by
-        // their object); keys are already deduped in partition_by_kind.
+        // their object); `actionable_trims` deduped the keys.
         // Keys, not blknums: the watermark map is keyed by `Key`, and a rel
         // block key's `field6` is its blknum, so the store's blknums derive
         // from these. `classify_candidate` has already checked the shape.
@@ -1102,15 +1151,17 @@ impl Timeline {
     /// via [`Self::classify_candidate`] so the act helpers can trust theirs. A
     /// refused row is alarmed and left queued (see [`CandidateRejectionReason`]).
     ///
-    /// `trims` is deduped by key (a hot key has many due candidates), so
-    /// neither the trim action nor the dequeue carries duplicates.
+    /// `trims` keeps one entry per selected row — the dequeue clears exactly
+    /// these PKs. Acting is deduped separately, in
+    /// [`Timeline::actionable_trims`], which is also where a candidate whose
+    /// work is already done drops out.
     fn partition_by_kind(due: Vec<crate::page_store::PendingGcRow>) -> PartitionedCandidates {
         let mut trims = Vec::new();
         let mut drops = Vec::new();
         let mut shrinks = Vec::new();
         for row in due {
             match Self::classify_candidate(&row) {
-                Ok(CandidatePartition::Trim) => trims.push((row.key, row.gc_kind)),
+                Ok(CandidatePartition::Trim) => trims.push(row),
                 Ok(CandidatePartition::Drop) => drops.push(row),
                 Ok(CandidatePartition::Shrink { relsize }) => shrinks.push((row, relsize)),
                 Err(fault) => {
@@ -1128,8 +1179,6 @@ impl Timeline {
                 }
             }
         }
-        trims.sort_unstable();
-        trims.dedup();
         PartitionedCandidates {
             trims,
             drops,
@@ -1347,7 +1396,7 @@ mod tests {
             .to_vec(),
         );
         // 3 TRIM_* → trims, 4 DROP_* → drops, 1 SHRINK → shrinks.
-        let mut trim_kinds: Vec<GcKind> = p.trims.iter().map(|(_, kind)| *kind).collect();
+        let mut trim_kinds: Vec<GcKind> = p.trims.iter().map(|r| r.gc_kind).collect();
         trim_kinds.sort_unstable();
         assert_eq!(
             trim_kinds,
@@ -1484,6 +1533,58 @@ mod tests {
                 "{what} is trimmable — trim keeps the newest version"
             );
         }
+    }
+
+    /// A candidate at or below its key's watermark names only rows an earlier
+    /// trim already deleted, so it is dequeued unacted; one above it is
+    /// acted. A miss reads as `Lsn(0)` and so always acts — the test can only
+    /// ever fail towards doing the work.
+    #[test]
+    fn actionable_trims_drops_what_the_watermark_already_covers() {
+        let blk = |b: u32| rel_block_to_key(rel(16400), b);
+        let cand = |b: u32, due: u64| PendingGcRow {
+            key: blk(b),
+            gc_kind: GcKind::TrimPages,
+            due_lsn: Lsn(due),
+            relsize: None,
+        };
+        let trims = vec![
+            cand(1, 50),  // below watermark   -> covered
+            cand(2, 100), // equal             -> covered
+            cand(3, 150), // above             -> act
+            cand(4, 10),  // watermark missing -> act
+        ];
+        let watermarks = vec![Lsn(100), Lsn(100), Lsn(100), Lsn(0)];
+        assert_eq!(
+            Timeline::actionable_trims(&trims, &watermarks),
+            vec![(blk(3), GcKind::TrimPages), (blk(4), GcKind::TrimPages),]
+        );
+    }
+
+    /// Several candidates for one key collapse to a single act, and a key
+    /// whose every candidate is covered drops out entirely.
+    #[test]
+    fn actionable_trims_acts_once_per_key() {
+        let hot = rel_block_to_key(rel(16400), 7);
+        let done = rel_block_to_key(rel(16400), 8);
+        let cand = |key, due| PendingGcRow {
+            key,
+            gc_kind: GcKind::TrimPages,
+            due_lsn: Lsn(due),
+            relsize: None,
+        };
+        let trims = vec![
+            cand(hot, 150),
+            cand(hot, 160),
+            cand(hot, 170),
+            cand(done, 20),
+        ];
+        let watermarks = vec![Lsn(100), Lsn(100), Lsn(100), Lsn(999)];
+        assert_eq!(
+            Timeline::actionable_trims(&trims, &watermarks),
+            vec![(hot, GcKind::TrimPages)],
+            "one act for the hot key, none for the covered one"
+        );
     }
 
     /// The floor must move even when a tick clears nothing, or a tie group of
@@ -1624,7 +1725,7 @@ mod tests {
         let p = Timeline::partition_by_kind(vec![bad, bad_later, row_of(GcKind::TrimPages)]);
         assert_eq!(
             p.trims,
-            vec![(well_formed_key(GcKind::TrimPages), GcKind::TrimPages)],
+            vec![row_of(GcKind::TrimPages)],
             "only the well-formed trim is acted and dequeued"
         );
         assert!(p.drops.is_empty() && p.shrinks.is_empty());
