@@ -171,19 +171,23 @@ func paginationContract(ctx context.Context, cl *controller.Client, r listRoute)
 	}
 
 	// limit=0 clamps to one row, limit=1001 to the 1000 cap; neither is a 400.
+	// Judged against the total the same response carried, not the one the first
+	// call saw: on a shared collection another test can add or drop a row in
+	// between, and a fresh count against a stale total fails the clamp for a move
+	// the route is allowed to make.
 	zero, err := getPage(ctx, cl, r, vals("limit", "0"))
 	if err != nil {
 		return fmt.Errorf("limit=0 must be clamped to 1, not refused: %w", err)
 	}
-	if want := min(1, total); zero.count != want {
-		return fmt.Errorf("limit=0 returned %d rows, want %d (clamped to 1)", zero.count, want)
+	if want := min(1, zero.total); zero.count != want {
+		return fmt.Errorf("limit=0 returned %d rows, want %d (clamped to 1) for a total of %d", zero.count, want, zero.total)
 	}
 	over, err := getPage(ctx, cl, r, vals("limit", "1001"))
 	if err != nil {
 		return fmt.Errorf("limit=1001 must be clamped to 1000, not refused: %w", err)
 	}
-	if want := min(1000, total); over.count != want {
-		return fmt.Errorf("limit=1001 returned %d rows, want %d", over.count, want)
+	if want := min(1000, over.total); over.count != want {
+		return fmt.Errorf("limit=1001 returned %d rows, want %d for a total of %d", over.count, want, over.total)
 	}
 	if r.exclusive && over.total != total {
 		return fmt.Errorf("total moved between calls though nothing else writes this collection: %d then %d", total, over.total)
@@ -194,7 +198,11 @@ func paginationContract(ctx context.Context, cl *controller.Client, r listRoute)
 	if err != nil {
 		return fmt.Errorf("offset=-1 must be clamped to 0, not refused: %w", err)
 	}
-	if total > 0 && (len(neg.ids) != 1 || neg.ids[0] != zero.ids[0]) {
+	if neg.total > 0 && len(neg.ids) != 1 {
+		return fmt.Errorf("offset=-1 returned %v, want one row for a total of %d", neg.ids, neg.total)
+	}
+	// Which row it is only means something where nothing else can reorder them.
+	if r.exclusive && neg.total > 0 && neg.ids[0] != zero.ids[0] {
 		return fmt.Errorf("offset=-1 returned %v, want the first row %v", neg.ids, zero.ids)
 	}
 	past, err := getPage(ctx, cl, r, vals("offset", strconv.Itoa(pastOffset(total))))
