@@ -9,6 +9,7 @@
 #   meko/api_server/build-image.sh            # build + push to Quay
 #   meko/api_server/build-image.sh --no-push  # build only (no credentials needed)
 #   meko/api_server/build-image.sh --no-latest  # tag/push custom-<sha> only
+#   meko/api_server/build-image.sh --tag <tag>  # tag/push <tag>, implies --no-latest
 #
 # Credentials (push only), in precedence order:
 #   QUAY_USER + QUAY_TOKEN   — a Quay robot account name and its token
@@ -18,9 +19,10 @@
 # Overridable via env: IMAGE (default quay.io/yugabyte/ycp-api-server),
 # PLATFORM (default linux/amd64 — the GKE/EKS demo clusters are amd64), DOCKER.
 #
-# Tags: custom-<short-sha> (immutable, what a deployment should pin), plus
-# latest unless --no-latest. CI passes that off main, so only a main build
-# moves the floating tag a no-TAG deploy resolves.
+# Tags: custom-<short-sha>, or <tag> with --tag — immutable either way, and what a
+# deployment should pin. Plus latest unless --no-latest, or --tag, which never
+# moves it: an explicitly versioned build is not the floating tag a no-TAG deploy
+# resolves, and the only other guard on that is CI passing --no-latest off main.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,17 +36,28 @@ LATEST=1
 # truncate --help the way a fixed line range did.
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
 
-for arg in "$@"; do
-  case "$arg" in
+TAG=""
+TAG_GIVEN=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
     --no-push) PUSH=0 ;;
     --no-latest) LATEST=0 ;;
+    --tag) shift; TAG="${1:-}"; TAG_GIVEN=1 ;;
+    --tag=*) TAG="${1#--tag=}"; TAG_GIVEN=1 ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
+  shift
 done
 
+if [ "$TAG_GIVEN" = 1 ]; then
+  [ -n "$TAG" ] || { echo "--tag needs a value" >&2; exit 2; }
+  LATEST=0
+fi
+
 SHA="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-TAG_SHA="custom-${SHA}"
+TAG_SHA="${TAG:-custom-${SHA}}"
 
 if [ "$LATEST" = "1" ]; then
   echo "==> building ${IMAGE}:${TAG_SHA} (+ :latest) for ${PLATFORM}"
