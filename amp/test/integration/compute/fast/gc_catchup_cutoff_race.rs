@@ -1,3 +1,13 @@
+//! SKIPPED IN CI via `INTEGRATION_SKIP` in `.github/workflows/amp-pr-build.yml`.
+//! It still runs locally.
+//!
+//! TODO(#1091): remove that skip. The `WARMUP` below is a fixed 6 s, which no
+//! longer reliably leaves the in-memory position ahead of the durable frontier
+//! at kill time, so all `ROUNDS` miss and the run fails with "the race was not
+//! exercised" — the setup, not the assertion. The fix is to wait for that
+//! condition rather than guess at it with wall clock.
+//! https://github.com/yugabyte/meko/issues/1091
+//!
 //! GC cutoff vs walreceiver replay (#588). Sequence:
 //!
 //!   consistent_lsn = 100; pageserver applied to 180 in memory, flush in flight

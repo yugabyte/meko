@@ -876,7 +876,9 @@ below those records, so the gap-filling re-apply still happens. Without this
 rule: `could not ingest record at <lsn>` / `could not find data for key`, then
 a walreceiver reconnect loop and a stalled `consistent_lsn`
 ([#588](https://github.com/yugabyte/meko/issues/588)). Regression test:
-`test/integration/compute/fast/gc_catchup_cutoff_race.rs`.
+`test/integration/compute/fast/gc_catchup_cutoff_race.rs` — skipped in CI
+(`INTEGRATION_SKIP`) until [#1091](https://github.com/yugabyte/meko/issues/1091)
+lands, so run it locally when touching this rule.
 
 **Replay reads pre-record state exclusively.** Rows the first pass
 already upserted — including `rel_size_to_key` values written *at the
