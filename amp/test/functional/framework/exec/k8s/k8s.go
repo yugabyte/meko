@@ -273,6 +273,21 @@ func (k *Kubectl) LabelNamespace(ctx context.Context, name, key, value string) e
 	return err
 }
 
+// Label sets one label on a namespaced resource, overwriting any current value.
+func (k *Kubectl) Label(ctx context.Context, kind, name, key, value string) error {
+	_, err := k.exec(ctx, nil, "label", kind, name, fmt.Sprintf("%s=%s", key, value), "--overwrite")
+	return err
+}
+
+// Unlabel removes one label from a namespaced resource, tolerating its absence.
+func (k *Kubectl) Unlabel(ctx context.Context, kind, name, key string) error {
+	res, err := k.exec(ctx, nil, "label", kind, name, key+"-")
+	if err != nil && strings.Contains(res.Stderr, "not found") {
+		return nil
+	}
+	return err
+}
+
 // AnnotateNamespace sets one annotation on a namespace, overwriting any current
 // value. Annotations hold what a label value cannot — an RFC3339 timestamp's
 // colons, for one.

@@ -1382,6 +1382,57 @@ stress:
     # resume_duration is the post-kill write window proving COMMIT works again.
     resume_duration: "30s"
     payload_bytes: 256
+  # partition: shared by the two partition tests below. The rules are inserted in
+  # the TARGET pod's network namespace by a privileged, hostPID helper pod on the
+  # same node (nsenter + iptables), because neither the endpoint image nor the YB
+  # pods carry iptables or NET_ADMIN, and amp-dev's CNI does not enforce
+  # NetworkPolicy. helper_image needs nsenter, iptables, bash-less sh, grep, sed.
+  partition:
+    helper_image: "nicolaka/netshoot:v0.13"
+  # backing_node_partition: cuts ONE backing tserver pod off the network
+  # (every packet in and out dropped; the pod stays up, so peers and clients sit
+  # in RPC timeouts instead of seeing a connection refused) while tenants write
+  # through amp. With a quorum left, every INSERT must commit or error inside
+  # stall_limit. The partition is probed from inside the pod before the test
+  # relies on it.
+  backing_node_partition:
+    tenants: 3
+    # rounds: each cuts the next backing pod in a seeded order.
+    rounds: 2
+    baseline_duration: "20s"
+    # hold_duration is how long the pod stays partitioned while writers run;
+    # longer than stall_limit so a stall that ends is measured, not just seen.
+    hold_duration: "5m"
+    # stall_limit is the longest the write path may go without an
+    # acknowledgement; one INSERT past it is also cut off and journaled unknown.
+    stall_limit: "2m"
+    # min_backing_pods: below RF3 one node out legitimately stops the writes,
+    # so a smaller backing skips instead of failing.
+    min_backing_pods: 3
+    settle_timeout: "10m"
+    resume_duration: "30s"
+    payload_bytes: 256
+    control_plane_recovery_max: "2m"
+  # endpoint_backing_partition: cuts ONE tenant's endpoint pod off the backing
+  # (its egress to every backing pod and Service IP dropped; the pod stays up
+  # and reachable for clients) while journaled writes run. The write lease
+  # (endpoint_supervisor fence.rs) must then stop the endpoint acknowledging
+  # commits, every acknowledged id must be in storage once the link is back, the
+  # other tenants must keep committing, and the endpoint must come back by itself.
+  endpoint_backing_partition:
+    tenants: 2
+    rounds: 2
+    baseline_duration: "20s"
+    hold_duration: "90s"
+    # stall_limit bounds an INSERT on an UNCUT endpoint; on the cut one a hang
+    # is the expected outcome and only journaled.
+    stall_limit: "60s"
+    # fence_within is how long after the cut a commit may still be acknowledged:
+    # the lease TTL (15s) plus a renewal in flight, with margin.
+    fence_within: "45s"
+    settle_timeout: "10m"
+    resume_duration: "30s"
+    payload_bytes: 256
   # bulk_load_kill: deletes a tenant's endpoint compute pod while ONE large
   # write is streaming into it, and holds that write to all-or-nothing. Sizes
   # here are the nightly ones: 4M baseline + eight 1.5M blocks + the commit-kill
@@ -1503,7 +1554,9 @@ stress:
     verify_tables: 4
     verify_rows: 500
     # chaos_actions is the k8s-safe subset the loop draws from (pod/process level;
-    # the tc/iptables ones need privileged host tooling not present in YB pods).
+    # the tc/iptables ones need privileged host tooling not present in YB pods;
+    # stress.backing_node_partition and stress.endpoint_backing_partition bring
+    # their own through a helper pod, see stress.partition).
     chaos_actions: ["pod_delete", "process_kill", "process_restart"]
     # Timeouts.
     ready_timeout: "5m"
