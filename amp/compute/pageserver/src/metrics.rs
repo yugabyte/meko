@@ -73,6 +73,40 @@ pub(crate) enum StorageTimeOperation {
 
     #[strum(serialize = "find gc cutoffs")]
     FindGcCutoffs,
+
+    // The GC tick's phases; see `timeline::gc::GcPhaseMetrics`.
+    #[strum(serialize = "gc publish cutoff")]
+    GcPublishCutoff,
+
+    #[strum(serialize = "gc await readers")]
+    GcAwaitReaders,
+
+    #[strum(serialize = "gc select")]
+    GcSelect,
+
+    #[strum(serialize = "gc drop slru")]
+    GcDropSlru,
+
+    #[strum(serialize = "gc drop meta")]
+    GcDropMeta,
+
+    #[strum(serialize = "gc drop sweeps")]
+    GcDropSweeps,
+
+    #[strum(serialize = "gc shrink pages")]
+    GcShrinkPages,
+
+    #[strum(serialize = "gc trim pages")]
+    GcTrimPages,
+
+    #[strum(serialize = "gc trim slru")]
+    GcTrimSlru,
+
+    #[strum(serialize = "gc trim meta")]
+    GcTrimMeta,
+
+    #[strum(serialize = "gc dequeue")]
+    GcDequeue,
 }
 
 pub(crate) static STORAGE_TIME_SUM_PER_TIMELINE: Lazy<CounterVec> = Lazy::new(|| {

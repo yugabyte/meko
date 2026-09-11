@@ -790,6 +790,58 @@ The tick's own `rows_deleted` — the `gc drain complete` line and the `do_gc`
 response — is still reported only when the tick finishes, so on an erroring tick
 the counter is deliberately the higher of the two.
 
+### Phase timings
+
+Where a tick's wall clock goes, on the `pageserver_storage_operations_seconds_*`
+family (`operation` label, `branch_id`; see
+[`pageserver-metrics.md`](pageserver-metrics.md)), which `find gc cutoffs`
+already uses. In tick order:
+
+| `operation` | Also covers | Statements in flight |
+| --- | --- | --- |
+| `gc publish cutoff` | — | 1 |
+| `gc await readers` | the RCU write guard as well as the wait | — |
+| `gc select` | — | 1 (one `UNION ALL` over `GC_BUCKETS`) |
+| `gc drop slru` | — | `GC_ACTION_PARALLELISM` |
+| `gc drop meta` | one batched `key = ANY` delete per distinct `due_lsn` | 1 |
+| `gc drop sweeps` | `DropRel` and `DropDb` alike, `pages` then `meta`, under one shared row budget | 1 |
+| `gc shrink pages` | — | `GC_ACTION_PARALLELISM` x `PAGE_BUCKETS` |
+| `gc trim pages` | a fork's anchor as well as its delete | `GC_ACTION_PARALLELISM` x `PAGE_BUCKETS` |
+| `gc trim slru` | — | `GC_ACTION_PARALLELISM` |
+| `gc trim meta` | — | 1 |
+| `gc dequeue` | both dequeue statements, the busy-drop bookkeeping | `GC_BUCKETS`, for the trim sweep only |
+
+Every variant is a leaf — nothing nests — so these plus `find gc cutoffs` sum to
+the tick minus its in-memory work (`compute_gc_cutoff`, `pick_drain_floor`,
+`partition_by_kind`, the drop and trim routing).
+
+Read a phase as `increase(_sum[w]) / increase(_count[w])`, its mean per-tick
+cost. Not `histogram_quantile` on `..._seconds_global`: `STORAGE_OP_BUCKETS` is
+decade-wide (10 ms, 100 ms, 1 s, 10 s …), so it cannot separate a 2 s trim from
+a 9 s one.
+
+`_count` is a tick count only through `gc select`. A tick with nothing due
+returns right after it, and so do one cancelled between partitioning and the act
+and one whose act errors — so the later phases count only the ticks that reached
+them, which is what you want in that ratio. It also means the gap between the
+`gc select` and `gc dequeue` counts is all three causes at once, not the
+empty-tick count; `gc_drain_ticks_total{outcome}` is what separates them. A tick
+that errors part-way still records every phase it entered.
+
+A phase's `pg_stat_statements` time over its wall time here is the concurrency it
+actually realised, which statement time alone cannot give — it sums across
+concurrent calls and each phase fans out at a different width. Read it against
+the width above, not as a reading of `GC_ACTION_PARALLELISM`: the two block
+paths nest a `PAGE_BUCKETS` fan-out inside `run_parallel_actions`' one, so their
+ratio is the product of both and moving either knob moves it.
+
+All of this assumes one drain at a time per branch, which nothing enforces: the
+background loop and the HTTP `do_gc` path (`immediate_gc`) both call
+`gc_iteration` with no critical section between them, so a manual GC overlapping
+a scheduled one double-counts into the same series.
+`pageserver_active_storage_operations_count{operation=~"gc .*"} > 1` is that
+happening.
+
 The drain also owns five `kind` values of
 `pageserver_yb_correctness_errors_total` (the rest are in
 [`pageserver-metrics.md`](pageserver-metrics.md)). All five mean "the drain

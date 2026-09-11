@@ -456,12 +456,13 @@ impl GcDrainProgress {
     }
 }
 
-/// The GC drain's connection pool and in-memory progress.
+/// The GC drain's per-timeline state.
 pub(crate) struct GcDrain {
     /// Dedicated pool for the whole drain, off the ingest/materialiser
     /// lanes and compute reads.
     pub(crate) page_store: Arc<crate::page_store::PageStore>,
     pub(crate) progress: std::sync::Mutex<GcDrainProgress>,
+    pub(crate) phases: gc::GcPhaseMetrics,
 }
 
 /// The `GcInfo` component describing which Lsns need to be retained.  Functionally, this
@@ -2241,6 +2242,7 @@ impl Timeline {
                     progress: std::sync::Mutex::new(GcDrainProgress::new(
                         gc_trim_watermark_cache_capacity,
                     )),
+                    phases: gc::GcPhaseMetrics::new(&branch_id),
                 },
                 initdb_lsn: metadata.initdb_lsn(),
 

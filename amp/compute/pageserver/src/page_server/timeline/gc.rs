@@ -17,6 +17,44 @@ struct PartitionedCandidates {
     shrinks: Vec<(crate::page_store::PendingGcRow, i64)>,
 }
 
+/// One timer per tick phase, on the `StorageTimeMetrics` family
+/// `find gc cutoffs` uses. A phase must end in its own `.await` or its
+/// duration overlaps the next one's.
+pub(crate) struct GcPhaseMetrics {
+    publish_cutoff: crate::metrics::StorageTimeMetrics,
+    await_readers: crate::metrics::StorageTimeMetrics,
+    select: crate::metrics::StorageTimeMetrics,
+    drop_slru: crate::metrics::StorageTimeMetrics,
+    drop_meta: crate::metrics::StorageTimeMetrics,
+    drop_sweeps: crate::metrics::StorageTimeMetrics,
+    shrink_pages: crate::metrics::StorageTimeMetrics,
+    trim_pages: crate::metrics::StorageTimeMetrics,
+    trim_slru: crate::metrics::StorageTimeMetrics,
+    trim_meta: crate::metrics::StorageTimeMetrics,
+    dequeue: crate::metrics::StorageTimeMetrics,
+}
+
+impl GcPhaseMetrics {
+    pub(crate) fn new(branch_id: &BranchId) -> Self {
+        use crate::metrics::StorageTimeOperation as Op;
+        let branch_id = branch_id.to_string();
+        let phase = |op| crate::metrics::StorageTimeMetrics::new(op, &branch_id);
+        Self {
+            publish_cutoff: phase(Op::GcPublishCutoff),
+            await_readers: phase(Op::GcAwaitReaders),
+            select: phase(Op::GcSelect),
+            drop_slru: phase(Op::GcDropSlru),
+            drop_meta: phase(Op::GcDropMeta),
+            drop_sweeps: phase(Op::GcDropSweeps),
+            shrink_pages: phase(Op::GcShrinkPages),
+            trim_pages: phase(Op::GcTrimPages),
+            trim_slru: phase(Op::GcTrimSlru),
+            trim_meta: phase(Op::GcTrimMeta),
+            dequeue: phase(Op::GcDequeue),
+        }
+    }
+}
+
 /// What one tick's [`Timeline::act`] did, and what it couldn't finish.
 struct ActOutcome {
     rows_deleted: u64,
@@ -222,10 +260,17 @@ impl Timeline {
         store: &Arc<crate::page_store::PageStore>,
         cutoff: Lsn,
     ) -> Result<Lsn, GcError> {
+        let phases = &self.gc_drain.phases;
+        let timer = phases.publish_cutoff.start_timer().record_on_drop();
         let applied = store
             .publish_gc_cutoff(self.branch_id, cutoff)
             .await
             .map_err(GcError::Persistence)?;
+        drop(timer);
+
+        // Separate from the publish: a wait here is a compute holding the RCU
+        // guard, not slow SQL, and it is usually zero.
+        let _timer = phases.await_readers.start_timer().record_on_drop();
         let waitlist = {
             let write_guard = self.applied_gc_cutoff_lsn.lock_for_write();
             if applied > *write_guard {
@@ -274,10 +319,13 @@ impl Timeline {
     ) -> Result<(), GcError> {
         let drain_limit = self.get_gc_drain_limit();
         let (floor, is_reset) = self.pick_drain_floor();
-        let selected = store
-            .gc_select_due_candidates(self.branch_id, floor, applied_cutoff, drain_limit)
-            .await
-            .map_err(GcError::Persistence)?;
+        let selected = {
+            let _timer = self.gc_drain.phases.select.start_timer().record_on_drop();
+            store
+                .gc_select_due_candidates(self.branch_id, floor, applied_cutoff, drain_limit)
+                .await
+                .map_err(GcError::Persistence)?
+        };
         crate::metrics::GC_APPLIED_CUTOFF_LSN.set(applied_cutoff.0);
         // Under the limit ⇒ every due candidate was returned (drained vs
         // capped label). Raw count, so a dropped malformed row still counts.
@@ -441,6 +489,8 @@ impl Timeline {
         floor: Lsn,
         applied_cutoff: Lsn,
     ) -> Result<u64, GcError> {
+        let phases = &self.gc_drain.phases;
+        let _timer = phases.dequeue.start_timer().record_on_drop();
         // Trims dequeue by a range sweep over their (key, gc_kind) pairs;
         // shrinks and finished, idle drops by PK. A busy drop and a
         // budget-capped sweep stay queued.
@@ -578,6 +628,7 @@ impl Timeline {
     > {
         use crate::page_store::GcKind;
         use std::collections::HashMap;
+        let phases = &self.gc_drain.phases;
         let branch_id = self.branch_id;
 
         // Split by table: SLRU drops act per candidate; DropMeta
@@ -602,6 +653,7 @@ impl Timeline {
             }
         }
 
+        let timer = phases.drop_slru.start_timer().record_on_drop();
         let mut deleted = self
             .run_parallel_actions(store, slru_drops.into_iter(), |store, row| async move {
                 // An SLRU segment: its slru_pages rows plus its seg-size
@@ -617,14 +669,17 @@ impl Timeline {
                     .map_err(GcError::Persistence)
             })
             .await?;
+        drop(timer);
 
         // Dead meta keys, one batched delete per `due_lsn`.
+        let timer = phases.drop_meta.start_timer().record_on_drop();
         for (due, keys) in meta_by_due {
             deleted += store
                 .gc_act_drop_meta(branch_id, &keys, due)
                 .await
                 .map_err(GcError::Persistence)?;
         }
+        drop(timer);
 
         let (swept, unfinished_sweeps) = self.act_drop_sweeps(store, &sweeps).await?;
         Ok((deleted + swept, unfinished_sweeps))
@@ -649,6 +704,8 @@ impl Timeline {
         ),
         GcError,
     > {
+        let phases = &self.gc_drain.phases;
+        let _timer = phases.drop_sweeps.start_timer().record_on_drop();
         let mut unfinished = std::collections::HashSet::new();
         if sweeps.is_empty() {
             return Ok((0, unfinished));
@@ -710,6 +767,8 @@ impl Timeline {
         store: &Arc<crate::page_store::PageStore>,
         shrink_rows: &[(crate::page_store::PendingGcRow, i64)],
     ) -> Result<u64, GcError> {
+        let phases = &self.gc_drain.phases;
+        let _timer = phases.shrink_pages.start_timer().record_on_drop();
         let targets = Self::shrink_targets(shrink_rows);
         let branch_id = self.branch_id;
         self.run_parallel_actions(
@@ -753,6 +812,7 @@ impl Timeline {
         use std::collections::HashMap;
         let branch_id = self.branch_id;
         let rows_per_statement = self.get_gc_rows_per_statement();
+        let phases = &self.gc_drain.phases;
 
         // Group by target table off the candidate's kind (block keys by
         // their object); keys are already deduped in partition_by_kind.
@@ -779,6 +839,7 @@ impl Timeline {
             }
         }
 
+        let timer = phases.trim_pages.start_timer().record_on_drop();
         let rel_deleted = self
             .run_parallel_actions(
                 store,
@@ -805,7 +866,9 @@ impl Timeline {
                 },
             )
             .await?;
+        drop(timer);
 
+        let timer = phases.trim_slru.start_timer().record_on_drop();
         let slru_deleted = self
             .run_parallel_actions(
                 store,
@@ -832,6 +895,7 @@ impl Timeline {
                 },
             )
             .await?;
+        drop(timer);
 
         if self.cancel.is_cancelled() {
             return Err(GcError::TimelineCancelled);
@@ -847,6 +911,7 @@ impl Timeline {
         // Stores before propagating, as the two block trims above do — see
         // `store_block_trim_watermarks` for why.
         let meta_deleted = {
+            let _timer = phases.trim_meta.start_timer().record_on_drop();
             let mut meta_trimmed_to = Vec::new();
             let deleted = store
                 .gc_act_trim_meta(

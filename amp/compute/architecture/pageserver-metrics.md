@@ -184,7 +184,7 @@ GC metrics live with the GC docs — see
 | `pageserver_directory_entries_count` | UIntGaugeVec | `branch_id` | Sum of entries in pageserver-stored directory listings. |
 | `pageserver_valid_lsn_lease_count` | UIntGaugeVec | `branch_id` | Valid LSN leases after refreshing GC info. |
 | `pageserver_io_operations_bytes_total` | UIntGaugeVec | `operation`, `branch_id` | Bytes read/written in IO operations. `operation` ∈ `read`, `write`. |
-| `pageserver_storage_operations_seconds_sum` | CounterVec | `operation`, `branch_id` | Total time spent on storage operations (sum). `operation` ∈ `logical size`, `find gc cutoffs`. |
+| `pageserver_storage_operations_seconds_sum` | CounterVec | `operation`, `branch_id` | Total time spent on storage operations (sum). `operation` ∈ `logical size`, `find gc cutoffs`, and the GC drain's phases (see [`pageserver-gc.md`](pageserver-gc.md#phase-timings)). |
 | `pageserver_storage_operations_seconds_count` | IntCounterVec | `operation`, `branch_id` | Count of storage operations. |
 | `pageserver_active_storage_operations_count` | IntGaugeVec | `operation`, `branch_id` | Currently active storage operations. |
 | `pageserver_storage_operations_seconds_global` | HistogramVec | `operation` | Storage operation time, instance-wide. |
