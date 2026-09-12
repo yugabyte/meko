@@ -42,12 +42,12 @@ a minute, forever.
 ## Two things shape this LRU
 
 **The driver prints only an end-of-run summary.** No interval rows, no progress
-lines. So the cycle is 15 minutes rather than the hour newblack uses, and the
-app-side series move once a cycle. Continuous liveness comes from the endpoint's
-own Postgres metrics, which is what the checker leans on; the app-side rules
-describe the last completed cycle. The cost is an `ANALYZE` pass per cycle, which
-the driver schedules a minute into every run: that is the first thing to lengthen
-if it starts costing real time.
+lines, so the app-side series move once a cycle. Continuous liveness comes from
+the endpoint's own Postgres metrics, amp-time and `pgstats`.
+
+The cycle is an hour. It was fifteen minutes and the driver's per-cycle `ANALYZE`
+pass turned that into a third of the workload's time; FINDINGS has the numbers.
+`summary_age_s` in the checker is tied to `CYCLE_DURATION` and moves with it.
 
 **Its `-init` drops and recreates the workload tables.** It runs exactly once,
 gated on `core_account` being absent rather than on a flag someone has to

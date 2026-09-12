@@ -3,6 +3,65 @@
 What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
+## 2026-09-12 - the driver spends a third of every cycle in ANALYZE
+
+Mark read the amp-time chart as "the wise workload stopped". It had not. It was
+analysing.
+
+`runOneShotAnalyze` walks all fifteen tables a minute into every cycle with a
+five-minute budget. At 20M rows a table it spends the whole budget and still
+dies on `one-shot analyze failed (ANALYZE "ledger_bench"."fin_txn"): timeout`.
+
+amp-time, ten-second slices:
+
+    end_utc     select/s  insert/s  update/s
+    08:09:25     2076.2     720.7     136.9
+    08:09:35      255.0      85.3      16.9
+    08:09:45        9.8       0.0       0.0   <- writes stop
+    08:11:15       10.2       0.0       0.0
+
+`pg_stat_activity` in that window holds one workload session, `ANALYZE
+"ledger_bench"."acct_link"`, waiting on `YbAmp/PS_ReadIO`. Not-granted locks: 0.
+Nothing is blocked.
+
+Over eighteen minutes, **40% of slices had zero inserts**, in stretches of 4.8
+and 2.2 minutes, each beginning a minute after a cycle started. While writing,
+one thread does 1515 select/s, 453 insert/s, 88 update/s, which is what it
+should.
+
+The cost is fixed per cycle, so four cycles an hour paid it four times: 33% dead
+time at 15m, 8% at 60m. Hence `CYCLE_DURATION: 60m`. Fifteen minutes only ever
+existed because this driver prints nothing until its end-of-run summary, and
+amp-time now samples every ten seconds.
+
+**`summary_age_s` is coupled to the cycle length.** One summary lands per cycle,
+so its floor has to clear a whole cycle plus the ANALYZE inside it. Left at
+1500/2700 on an hourly cycle it would read FAIL forever. Any change to
+`CYCLE_DURATION` has to move it.
+
+**Not the index.** The 24% query plans correctly:
+
+    Limit  (cost=0.56..166.59 rows=41 width=18)
+      ->  Index Scan using fin_txn_pkey on ledger_bench.fin_txn
+            Index Cond: ((account_id = $1) AND (txn_id > $2))
+
+`fin_txn_pkey` is `(account_id, txn_id)`, matching the predicate and the ORDER
+BY, so no sort. The `rows=41` that reads as a bad estimate is amp-time's: it
+plans with typed NULL placeholders under `force_generic_plan`, because PGSS
+records no parameters. **Read the index choice from an amp-time plan, never the
+row estimate.**
+
+**`idx_fin_txn_account_created` has 0 scans** since this LRU started, maintained
+on 23M rows for nothing. Upstream schema, not fixed here.
+
+**Retention's catch-up is expensive and finite.** Switched on against a 23M-row
+backlog it reached 44% of database execution time, 3,614 tup_deleted/s against
+1,426 commits/s, draining ~3.3M rows/hour. It blocks nothing. Steady state is
+about one 5,000-row batch a minute; the 20-batch cap exists only for catch-up.
+Turning retention on for the first time against a large table costs hours of
+unrepresentative throughput, which is worth knowing before doing it to another
+LRU.
+
 ## 2026-09-12 - the cause was dataset growth, not max_wal_size
 
 The `max_wal_size` reading in the entry below is wrong, and Hari said so in

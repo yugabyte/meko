@@ -129,7 +129,8 @@ def check_all():
     summary_at = q(f"max(ledger_last_summary_timestamp_seconds{{{lru}}})") or 0
     if summary_at > 0:
         v = q(f"time() - max(ledger_last_summary_timestamp_seconds{{{lru}}})")
-        rules["summary_age_s"] = (v, band(v, 1500, 2700))
+        # Moves with CYCLE_DURATION: one summary per cycle, plus its ANALYZE.
+        rules["summary_age_s"] = (v, band(v, 4500, 7200))
 
         v = q(f'max(ledger_reported_rate{{{lru},kind="statements"}})')
         rules["last_cycle_statement_qps"] = (v, band(v, 200, 20, higher_is_bad=False))

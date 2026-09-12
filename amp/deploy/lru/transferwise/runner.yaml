@@ -37,10 +37,9 @@ data:
   ACCOUNTS: "20000"
   SETTLEMENT_ACCOUNTS: "1000"
   WRITE_LOCK_MODE: for-update
-  # Short, because the summary at the end of a cycle is the only app-side
-  # measurement we get. It also means an ANALYZE pass per cycle, which is the
-  # first thing to lengthen if it starts costing real time.
-  CYCLE_DURATION: 15m
+  # An hour, not fifteen minutes: the driver's per-cycle ANALYZE pass costs five
+  # minutes at this table size, and the cost is fixed per cycle. See FINDINGS.
+  CYCLE_DURATION: 60m
   # Retention, copied from what TransferWise actually deletes and nothing more:
   # the outbox, and jobs once they are processed. Everything else in this schema
   # accumulates, which is the point - real customers do not delete either, and
