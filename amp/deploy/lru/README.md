@@ -11,6 +11,7 @@ amp/deploy/lru/
   README.md          this file: how every LRU is built and wired
   pgstats.py         the Postgres internals amp's exporter omits; one copy per LRU
   monitoring/        shared: namespace, one Prometheus, one Grafana. Applied once.
+  amp-time/          shared: a pg_stat_statements browser per LRU. Applied once.
   small_temporal/    one LRU: Temporal server + Omes load, small rate
   newblack/          one LRU: the anonymised NewBlack checkout workload
   transferwise/      one LRU: the anonymised TransferWise ledger payment

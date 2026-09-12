@@ -11,12 +11,33 @@ some not.
 transferwise/
   workload/    the load test, copied verbatim from yugabyte/ledger_bench,
                plus to_amp_ddl.py
-  runner.yaml  the driver pod: convert + seed-gate init containers, driver, exporter
+  runner.yaml  the driver pod: convert + seed-gate init containers, driver,
+               retention sweeper, exporter
   checker.yaml the verdict pod
   exporter.py  driver summary -> Prometheus, because the driver has no /metrics
   up.sh        creates pool/cluster/endpoint and applies everything
   register.sh  creates or refreshes the report portal row from lru.env
 ```
+
+## Rate and retention
+
+It runs **one thread**, not four. At four it wrote ~86 GB a day, crossed the
+endpoint's 43 GB file cache inside a day, and lost 44% of its throughput over the
+following fourteen hours while staying green on the portal. One thread is ~50
+payments a second and ~21 GB a day, which buys about a week before the same
+crossing. `ledger_bench` has no pacing flag, so `-threads` is the only rate knob
+there is.
+
+A **retention sweeper** deletes exactly what TransferWise deletes and nothing
+more: the outbox (`out_msg_0`, fifteen minutes) and processed jobs (`op_job`
+and `op_job_blob`, a day). That is 585 bytes of the 5.0 KB a payment writes, so
+it slows growth by 12%. The other 88% accumulates on purpose - real customers do
+not delete it either, and watching a database get large on amp is the experiment.
+
+Both statements pick their victims through an index and delete through a primary
+key. The obvious `delete ... where id in (select ...)` does not: the planner
+hash-joins the subquery against a sequential scan of every row in the table, once
+a minute, forever.
 
 ## Two things shape this LRU
 
@@ -55,6 +76,7 @@ KUBE_CONTEXT=meko_dev_eks ./up.sh          # idempotent, safe to re-run
 ./register.sh                              # portal row; needs lru.env from up.sh
 kubectl -n amp-lru get all -l lru=transferwise
 kubectl -n amp-lru logs deploy/transferwise-runner -c ledger --tail=30
+kubectl -n amp-lru logs deploy/transferwise-runner -c retention --tail=10
 yb amp lru sync transferwise --yes
 ```
 

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>amp-time · pg_stat_statements</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <section id="error-banner" class="error-banner hidden" role="alert"></section>
+
+      <section class="toolbar" aria-label="Timeslice navigation">
+        <div class="nav-controls">
+          <button id="first" title="First timeslice (Home)">|‹</button>
+          <button id="previous" title="Previous timeslice (Left arrow)">‹</button>
+          <button id="window-button" class="window-button" title="Jump to a timeslice">
+            <span id="window-number">—</span>
+            <small id="window-total">of —</small>
+          </button>
+          <button id="next" title="Next timeslice (Right arrow)">›</button>
+          <button id="last" title="Follow latest (End)">›|</button>
+        </div>
+        <div class="window-copy">
+          <strong id="window-range">BASELINE</strong>
+          <span id="window-meta">10 s</span>
+        </div>
+        <div class="service-inline">
+          <span id="live-dot" class="live-dot"></span>
+          <div class="service-copy">
+            <strong>amp-time <span>pg_stat_statements</span></strong>
+            <small id="connection-target">—</small>
+          </div>
+          <span id="connection-state" class="toolbar-connection-state">STARTING</span>
+        </div>
+        <button id="follow" class="follow active"><span></span> LIVE</button>
+      </section>
+
+      <section class="summary-grid" aria-label="Timeslice summary">
+        <article>
+          <label>SELECTS/sec</label>
+          <strong id="metric-select-rate">—</strong>
+        </article>
+        <article>
+          <label>INSERTS/sec</label>
+          <strong id="metric-insert-rate">—</strong>
+        </article>
+        <article>
+          <label>UPDATE/sec</label>
+          <strong id="metric-update-rate">—</strong>
+        </article>
+        <article>
+          <label>DELETES/sec</label>
+          <strong id="metric-delete-rate">—</strong>
+        </article>
+        <article>
+          <label>ROWS/sec</label>
+          <strong id="metric-row-rate">—</strong>
+        </article>
+        <article>
+          <label>TOTAL/sec</label>
+          <strong id="metric-total-rate">—</strong>
+        </article>
+      </section>
+
+      <div class="charts-grid" aria-label="Timeslice charts">
+        <section class="activity-panel">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">TIMESLICES</span>
+              <h2>queries/s</h2>
+            </div>
+            <div class="chart-legend" aria-label="Query rate series">
+              <span><i class="selects"></i>selects</span>
+              <span><i class="inserts"></i>inserts</span>
+              <span><i class="updates"></i>updates</span>
+              <span><i class="deletes"></i>deletes</span>
+            </div>
+          </div>
+          <div id="query-rate-chart" class="chart" aria-label="Queries per second by timeslice"></div>
+        </section>
+
+        <section class="activity-panel">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">TIMESLICES</span>
+              <h2>mean_exec_time</h2>
+            </div>
+            <div class="chart-legend" aria-label="Mean execution time series">
+              <span><i class="selects"></i>selects</span>
+              <span><i class="inserts"></i>inserts</span>
+              <span><i class="updates"></i>updates</span>
+              <span><i class="deletes"></i>deletes</span>
+            </div>
+          </div>
+          <div id="operation-latency-chart" class="chart" aria-label="Mean execution time by operation and timeslice"></div>
+        </section>
+      </div>
+
+      <section class="statements-panel">
+        <div class="section-heading table-heading">
+          <div>
+            <span class="eyebrow">TIMESLICE</span>
+            <h2>pg_stat_statements</h2>
+          </div>
+          <label class="search">
+            <span aria-hidden="true">⌕</span>
+            <input id="search" type="search" placeholder="query · database · user · queryid" />
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-key="time_pct" class="numeric" tabindex="0" role="button" aria-sort="none">time_pct</th>
+                <th data-key="total_ms" class="numeric sorted" tabindex="0" role="button" aria-sort="descending">total_exec_time</th>
+                <th data-key="calls_per_sec" class="numeric" tabindex="0" role="button" aria-sort="none">queries/s</th>
+                <th data-key="mean_ms" class="numeric" tabindex="0" role="button" aria-sort="none">mean_exec_time</th>
+                <th data-key="rows_per_call" class="numeric" tabindex="0" role="button" aria-sort="none">rows/call</th>
+                <th data-key="shared_blks_hit" class="numeric" tabindex="0" role="button" aria-sort="none">shared_hits</th>
+                <th data-key="wal_bytes" class="numeric" tabindex="0" role="button" aria-sort="none">wal_bytes</th>
+                <th data-key="database_role" tabindex="0" role="button" aria-sort="none">datname:rolname</th>
+                <th data-key="query" tabindex="0" role="button" aria-sort="none">query</th>
+              </tr>
+            </thead>
+            <tbody id="statement-rows">
+              <tr><td colspan="9" class="empty">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-footer">
+          <span id="row-count">0 statements</span>
+          <div class="page-controls">
+            <button id="page-previous" type="button">‹</button>
+            <span id="page-meta">—</span>
+            <button id="page-next" type="button">›</button>
+          </div>
+          <span>PLAN · DDL · STATISTICS</span>
+        </div>
+      </section>
+    </main>
+
+    <div
+      id="inspection-modal"
+      class="inspection-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="inspection-title"
+    >
+      <section class="inspection-card" tabindex="-1">
+        <header class="inspection-header">
+          <div>
+            <div class="inspection-title-line">
+              <span class="live-explain-badge"><i></i> GENERIC LIVE PLAN</span>
+              <span class="planning-badge">ANALYZE FALSE</span>
+            </div>
+            <h2 id="inspection-title">GENERIC LIVE PLAN · DDL · statistics</h2>
+            <p id="inspection-context">—</p>
+          </div>
+          <button id="inspection-close" class="inspection-close" type="button" aria-label="Close query inspection">×</button>
+        </header>
+
+        <section id="inspection-latency" class="inspection-latency hidden">
+          <div class="inspection-latency-heading">
+            <div>
+              <span class="inspection-section-label">CALL-WEIGHTED DISTRIBUTION</span>
+              <h3>timeslice mean_exec_time · all retained calls</h3>
+            </div>
+            <span id="inspection-latency-meta" class="inspection-panel-meta"></span>
+          </div>
+          <div class="latency-metrics">
+            <article><label>max slice mean</label><strong id="latency-max">—</strong></article>
+            <article><label>p99 weighted mean</label><strong id="latency-p99">—</strong></article>
+            <article><label>p90 weighted mean</label><strong id="latency-p90">—</strong></article>
+            <article><label>p50 weighted mean</label><strong id="latency-p50">—</strong></article>
+            <article><label>exact mean</label><strong id="latency-avg">—</strong></article>
+            <article><label>min slice mean</label><strong id="latency-min">—</strong></article>
+          </div>
+          <div id="latency-histogram" class="latency-histogram" role="img" aria-label="mean_exec_time histogram"></div>
+          <div class="latency-footer">
+            <span id="latency-axis-min">—</span>
+            <code>percentiles=call-weighted timeslice means · exact execution percentiles unavailable in PGSS</code>
+            <span id="latency-axis-max">—</span>
+          </div>
+        </section>
+
+        <section id="pgss-lifetime" class="pgss-lifetime hidden" aria-label="PGSS lifetime execution statistics">
+          <div class="inspection-latency-heading">
+            <div>
+              <span class="inspection-section-label">PGSS LIFETIME</span>
+              <h3>all executions since stats_since</h3>
+            </div>
+            <span id="pgss-stats-since" class="inspection-panel-meta"></span>
+          </div>
+          <div class="lifetime-metrics">
+            <article><label>calls</label><strong id="pgss-calls">—</strong></article>
+            <article><label>mean_exec_time</label><strong id="pgss-mean">—</strong></article>
+            <article><label>min_exec_time</label><strong id="pgss-min">—</strong></article>
+            <article><label>max_exec_time</label><strong id="pgss-max">—</strong></article>
+            <article><label>stddev_exec_time</label><strong id="pgss-stddev">—</strong></article>
+          </div>
+        </section>
+
+        <div class="inspection-query-block">
+          <div class="inspection-label-row">
+            <div class="inspection-section-label">query</div>
+            <button class="copy-button" type="button" data-copy="inspection-query">COPY</button>
+          </div>
+          <pre id="inspection-query"></pre>
+        </div>
+
+        <div id="inspection-loading" class="inspection-loading" aria-live="polite">
+          <span class="spinner"></span>
+          <div>
+            <strong>GENERIC LIVE PLAN</strong>
+            <small>pg_catalog · pg_stats</small>
+          </div>
+        </div>
+
+        <div id="inspection-error" class="inspection-error hidden" role="alert"></div>
+
+        <div id="inspection-results" class="inspection-results hidden">
+          <div class="inspection-notice">
+            <code>EXPLAIN (ANALYZE FALSE)</code>
+            <span id="inspection-parameter-note"></span>
+          </div>
+          <div class="inspection-grid">
+            <article class="inspection-panel">
+              <div class="inspection-panel-heading">
+                <div>
+                  <span class="inspection-section-label">GENERIC LIVE PLAN</span>
+                  <h3>plan</h3>
+                </div>
+                <div class="panel-actions"><span id="inspection-plan-meta" class="inspection-panel-meta"></span><button class="copy-button" type="button" data-copy="inspection-plan">COPY</button></div>
+              </div>
+              <pre id="inspection-plan" class="inspection-code"></pre>
+            </article>
+            <article class="inspection-panel">
+              <div class="inspection-panel-heading">
+                <div>
+                  <span class="inspection-section-label">PLAN-REFERENCED DDL</span>
+                  <h3>CREATE · ALTER · GRANT</h3>
+                </div>
+                <div class="panel-actions"><span id="inspection-ddl-meta" class="inspection-panel-meta"></span><button class="copy-button" type="button" data-copy="inspection-ddl">COPY</button></div>
+              </div>
+              <pre id="inspection-ddl" class="inspection-code"></pre>
+            </article>
+          </div>
+          <article class="inspection-panel inspection-statistics-panel">
+            <div class="inspection-panel-heading">
+              <div>
+                <span class="inspection-section-label">STATISTICS</span>
+                <h3>pg_class · pg_stat_all_tables · pg_stats</h3>
+              </div>
+              <span id="inspection-statistics-meta" class="inspection-panel-meta"></span>
+            </div>
+            <div id="inspection-statistics" class="inspection-statistics"></div>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      <span>amp-time __VERSION__</span>
+      <span>10 s · GENERIC PLAN · DDL · STATISTICS</span>
+    </footer>
+    <script src="/app.js"></script>
+  </body>
+</html>

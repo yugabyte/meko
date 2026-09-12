@@ -2040,6 +2040,205 @@
      "legendFormat": "oldest analyze age s"
     }
    ]
+  },
+  {
+   "id": 40,
+   "type": "row",
+   "title": "Retention (the outbox and jobs TransferWise itself deletes)",
+   "gridPos": {
+    "x": 0,
+    "y": 143,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 41,
+   "type": "timeseries",
+   "title": "Rows in the tables retention sweeps",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 144,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (table) (lru_pg_table_rows{lru=\"$lru\",table=~\".*(out_msg_0|op_job|op_job_blob)\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{table}}"
+    }
+   ],
+   "description": "Flat means the sweeper is keeping up. A ramp means it has stopped, or the window is wider than the write rate."
+  },
+  {
+   "id": 42,
+   "type": "timeseries",
+   "title": "Bytes in those tables",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 144,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (table) (lru_pg_table_bytes{lru=\"$lru\",table=~\".*(out_msg_0|op_job|op_job_blob)\",kind=\"total\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{table}}"
+    }
+   ]
+  },
+  {
+   "id": 43,
+   "type": "timeseries",
+   "title": "Database growth per day",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 152,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "deriv(max(lru_pg_database_bytes{lru=\"$lru\"})[6h:5m])*86400",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "logical bytes/day"
+    }
+   ],
+   "description": "What retention is for. At four threads and no deletes this read ~86 GB/day; at one thread with the outbox and jobs swept it should be a fifth of that."
+  },
+  {
+   "id": 44,
+   "type": "timeseries",
+   "title": "Share of the database each table holds",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 152,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "topk(8, max by (table) (lru_pg_table_bytes{lru=\"$lru\",kind=\"total\"}) / scalar(max(lru_pg_database_bytes{lru=\"$lru\"})))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{table}}"
+    }
+   ]
   }
  ]
 }

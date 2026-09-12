@@ -1,0 +1,70 @@
+# One tailnet hostname per LRU. amp-time's assets are absolute (`/app.js`), so a
+# path prefix would need a rewriting proxy; a hostname each costs nothing and
+# says which endpoint you are looking at.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: amp-time-transferwise
+  namespace: amp-lru
+  annotations:
+    tailscale.com/tags: tag:k8s-meko
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: amp-time
+      port:
+        number: 8765
+  tls:
+    - hosts: [amp-time-transferwise]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: amp-time-solidgate
+  namespace: amp-lru
+  annotations:
+    tailscale.com/tags: tag:k8s-meko
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: amp-time
+      port:
+        number: 8766
+  tls:
+    - hosts: [amp-time-solidgate]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: amp-time-newblack
+  namespace: amp-lru
+  annotations:
+    tailscale.com/tags: tag:k8s-meko
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: amp-time
+      port:
+        number: 8767
+  tls:
+    - hosts: [amp-time-newblack]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: amp-time-small-temporal
+  namespace: amp-lru
+  annotations:
+    tailscale.com/tags: tag:k8s-meko
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: amp-time
+      port:
+        number: 8768
+  tls:
+    - hosts: [amp-time-small-temporal]

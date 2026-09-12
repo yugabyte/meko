@@ -1,0 +1,26 @@
+# amp-time for all four LRUs. Depends on ../monitoring having been applied only
+# for the namespace; it reads the endpoints directly, not Prometheus.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: amp-lru
+resources:
+  - amp-time.yaml
+  - ingress.yaml
+configMapGenerator:
+  # Two ConfigMaps because the package has a subdirectory and a ConfigMap mount
+  # is flat. `web` mounts inside `src`, which kubelet orders by path depth.
+  - name: amp-time-src
+    files:
+      - vendor/amp_time/__init__.py
+      - vendor/amp_time/__main__.py
+      - vendor/amp_time/cli.py
+      - vendor/amp_time/collector.py
+      - vendor/amp_time/inspector.py
+      - vendor/amp_time/server.py
+  - name: amp-time-web
+    files:
+      - vendor/amp_time/web/index.html
+      - vendor/amp_time/web/app.js
+      - vendor/amp_time/web/style.css
+generatorOptions:
+  disableNameSuffixHash: true

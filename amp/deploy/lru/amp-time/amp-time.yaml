@@ -1,0 +1,195 @@
+# amp-time, one instance per LRU: a pg_stat_statements browser for the endpoint
+# behind each workload. Every instance needs its own DSN, so they are four
+# containers in one pod rather than one process reading four databases.
+#
+# The shape is unusual for a reason. amp-time is a plain Python package in a
+# private repo with no image and no chart, so the source is vendored and mounted
+# and psycopg is installed once into a shared volume at startup, the way the
+# runner pods already build their drivers on the way up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amp-time-env
+  namespace: amp-lru
+data:
+  PGPORT: "55433"
+  PGUSER: cloud_admin
+  PGPASSWORD: cloud_admin
+  # 10s sampling over 7 days. The store is deltas, not the full statement text
+  # per slice, so a week costs well under the volume below.
+  INTERVAL: "10"
+  SEARCH_PATH: public
+  RETENTION_HOURS: "168"
+  # pg_stat_statements is preloaded on every amp endpoint but not created in any
+  # database, so each instance creates it before it starts sampling.
+  start.sh: |
+    #!/bin/sh
+    set -eu
+    export PGPASSWORD
+    export PYTHONPATH=/app:/pylibs
+    export AMP_TIME_PASSWORD="$PGPASSWORD"
+    # Covers the collector only. LiveInspector passes its own `options` on
+    # connect, which overrides this, so EXPLAIN of a statement written against a
+    # non-public schema relies on the database default instead - transferwise's
+    # seed.sh sets one.
+    export AMP_TIME_DSN="postgresql://$PGUSER@$PGHOST:$PGPORT/$PGDATABASE?options=-c%20search_path%3D$SEARCH_PATH"
+
+    for i in $(seq 1 60); do
+      python3 - <<'PY' && break
+    import os, sys
+    sys.path.insert(0, "/pylibs")
+    import psycopg
+    with psycopg.connect(os.environ["AMP_TIME_DSN"], password=os.environ["AMP_TIME_PASSWORD"], autocommit=True) as c:
+        c.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+    PY
+      echo "waiting for $PGHOST/$PGDATABASE ($i)"; sleep 5
+    done
+
+    mkdir -p "/data/$LRU"
+    exec python3 -u -m amp_time \
+      --bind 0.0.0.0 --port "$PORT" \
+      --interval "$INTERVAL" \
+      --retention-hours "$RETENTION_HOURS" \
+      --data-dir "/data/$LRU"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: amp-time-data
+  namespace: amp-lru
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gp3-max
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amp-time
+  namespace: amp-lru
+  labels:
+    app: amp-time
+spec:
+  replicas: 1
+  # One PVC, ReadWriteOnce: a second pod would not get the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: amp-time
+  template:
+    metadata:
+      labels:
+        app: amp-time
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        # The package is copied out of its ConfigMaps rather than mounted where
+        # it runs: every ConfigMap entry is a symlink into a timestamped
+        # directory, and amp-time finds its web assets through
+        # `Path(__file__).resolve().parent`, which lands there instead.
+        - name: prepare
+          image: python:3.12-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              mkdir -p /app/amp_time/web
+              cp /src/*.py /app/amp_time/
+              cp /srcweb/* /app/amp_time/web/
+              pip install --quiet --no-cache-dir --target /pylibs 'psycopg[binary]>=3.2'
+          volumeMounts:
+            - { name: pylibs, mountPath: /pylibs }
+            - { name: app, mountPath: /app }
+            - { name: src, mountPath: /src }
+            - { name: web, mountPath: /srcweb }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      containers:
+        - name: transferwise
+          image: python:3.12-slim
+          command: ["/bin/sh", "/etc/amp-time/start.sh"]
+          envFrom: [{ configMapRef: { name: amp-time-env } }]
+          env:
+            - { name: LRU, value: transferwise }
+            - { name: PGHOST, value: transferwise-endpoint }
+            - { name: PGDATABASE, value: transferwise_lru }
+            - { name: SEARCH_PATH, value: "ledger_bench,public" }
+            - { name: PORT, value: "8765" }
+          ports: [{ name: http-transferwi, containerPort: 8765 }]
+          volumeMounts: &mounts
+            - { name: env, mountPath: /etc/amp-time }
+            - { name: app, mountPath: /app }
+            - { name: pylibs, mountPath: /pylibs }
+            - { name: data, mountPath: /data }
+          resources: &res
+            requests: { cpu: 50m, memory: 192Mi }
+            limits: { cpu: "1", memory: 1Gi }
+        - name: solidgate
+          image: python:3.12-slim
+          command: ["/bin/sh", "/etc/amp-time/start.sh"]
+          envFrom: [{ configMapRef: { name: amp-time-env } }]
+          env:
+            - { name: LRU, value: solidgate }
+            - { name: PGHOST, value: solidgate-endpoint }
+            - { name: PGDATABASE, value: solidgate_lru }
+            - { name: PORT, value: "8766" }
+          ports: [{ name: http-solidgate, containerPort: 8766 }]
+          volumeMounts: *mounts
+          resources: *res
+        - name: newblack
+          image: python:3.12-slim
+          command: ["/bin/sh", "/etc/amp-time/start.sh"]
+          envFrom: [{ configMapRef: { name: amp-time-env } }]
+          env:
+            - { name: LRU, value: newblack }
+            - { name: PGHOST, value: newblack-endpoint }
+            - { name: PGDATABASE, value: newblack_lru }
+            - { name: PORT, value: "8767" }
+          ports: [{ name: http-newblack, containerPort: 8767 }]
+          volumeMounts: *mounts
+          resources: *res
+        - name: small-temporal
+          image: python:3.12-slim
+          command: ["/bin/sh", "/etc/amp-time/start.sh"]
+          envFrom: [{ configMapRef: { name: amp-time-env } }]
+          env:
+            - { name: LRU, value: small-temporal }
+            - { name: PGHOST, value: small-temporal-endpoint }
+            - { name: PGDATABASE, value: temporal_lru }
+            - { name: PORT, value: "8768" }
+          ports: [{ name: http-small-temp, containerPort: 8768 }]
+          volumeMounts: *mounts
+          resources: *res
+      volumes:
+        - name: env
+          configMap: { name: amp-time-env }
+        - name: src
+          configMap: { name: amp-time-src }
+        - name: web
+          configMap: { name: amp-time-web }
+        - name: app
+          emptyDir: {}
+        - name: pylibs
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: amp-time-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amp-time
+  namespace: amp-lru
+spec:
+  selector:
+    app: amp-time
+  ports:
+    - { name: transferwise, port: 8765, targetPort: 8765 }
+    - { name: solidgate, port: 8766, targetPort: 8766 }
+    - { name: newblack, port: 8767, targetPort: 8767 }
+    - { name: small-temporal, port: 8768, targetPort: 8768 }

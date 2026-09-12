@@ -259,6 +259,17 @@ def check_all():
     if v is not None:
         rules["checkpoint_write_busy_ratio"] = (v, advisory(band(v, 0.5, 0.9)))
 
+    # Retention is ours rather than the driver's, so it gets a rule of its own.
+    # out_msg_0 is where a stopped sweeper shows first and the only table with a
+    # bound to judge against: fifteen minutes at this LRU's rate is tens of
+    # thousands of rows, so a million means nothing has been deleted for hours.
+    # Advisory, because it cannot tell a stopped sweeper from one working through
+    # a backlog - widening the window, or turning retention on for the first time
+    # against 23 million rows, both read the same for hours.
+    v = q(f'max(lru_pg_table_rows{{{lru},table=~".*out_msg_0"}})')
+    if v is not None:
+        rules["outbox_rows"] = (v, advisory(band(v, 1e6, 1e7)))
+
     return rules
 
 

@@ -22,11 +22,17 @@ data:
   LEDGER_SCHEMA: ledger_bench
   # A write workflow is one transaction that records a job, a transaction,
   # idempotence rows, financial steps, balance changes, six ledger legs, an audit
-  # event, a snapshot and an outgoing message. Four threads is plenty to start:
-  # six on a laptop container already did 14k statements a second.
-  THREADS: "4"
-  POOL_MIN: "4"
-  POOL_MAX: "4"
+  # event, a snapshot and an outgoing message.
+  #
+  # One thread, down from four. At four this wrote ~86 GB a day, crossed the
+  # endpoint's 43 GB file cache inside a day and lost 44% of its throughput over
+  # the next fourteen hours. One thread is ~50 payments/s and ~21 GB a day, which
+  # buys about a week before the same crossing - long enough to watch it happen
+  # rather than to find it afterwards. ledger_bench has no pacing flag, so
+  # -threads is the only rate knob there is.
+  THREADS: "1"
+  POOL_MIN: "1"
+  POOL_MAX: "1"
   NON_TX_READERS: "2"
   ACCOUNTS: "20000"
   SETTLEMENT_ACCOUNTS: "1000"
@@ -35,6 +41,74 @@ data:
   # measurement we get. It also means an ANALYZE pass per cycle, which is the
   # first thing to lengthen if it starts costing real time.
   CYCLE_DURATION: 15m
+  # Retention, copied from what TransferWise actually deletes and nothing more:
+  # the outbox, and jobs once they are processed. Everything else in this schema
+  # accumulates, which is the point - real customers do not delete either, and
+  # this is only 12% of the growth.
+  RETENTION_INTERVAL_SEC: "60"
+  # out_msg_0 is an outbox: a publisher drains it continuously, so minutes is the
+  # faithful window, not days.
+  OUTBOX_RETENTION: 15 minutes
+  # op_job/op_job_blob outlive the outbox because the read workload looks jobs up
+  # by id, and a day still keeps every job a reader can hold.
+  JOB_RETENTION: 24 hours
+  RETENTION_BATCH: "5000"
+  retention.sh: |
+    #!/bin/sh
+    # Deletes in bounded batches so no single statement is long enough to matter
+    # to the workload sharing this endpoint, and caps a pass so a long outage
+    # cannot turn into one enormous catch-up delete.
+    set -eu
+    export PGPASSWORD
+    export PGOPTIONS="-c search_path=$LEDGER_SCHEMA"
+    db() {
+      psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$LEDGER_DB" \
+           -v ON_ERROR_STOP=1 -X -A -t --no-psqlrc -c "$1" | sed -n 's/^DELETE //p'
+    }
+
+    until psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$LEDGER_DB" -X -A -t -c \
+          "select 1 from information_schema.tables
+           where table_schema = '$LEDGER_SCHEMA' and table_name = 'op_job'" | grep -q 1; do
+      echo "waiting for the schema"; sleep 30
+    done
+
+    # Both statements pick their victims through an index and then delete
+    # through a primary key. The obvious `delete ... where id in (select ...)`
+    # does not: the planner hash-joins the subquery against a sequential scan of
+    # all 23 million rows, once a minute, forever.
+    OUTBOX_SQL="delete from out_msg_0
+                where message_id <= (
+                  select max(message_id) from (
+                    select message_id from out_msg_0
+                    where created_at < now() - interval '$OUTBOX_RETENTION'
+                    order by message_id limit $RETENTION_BATCH) t)"
+    # op_job.txn_id is a nanosecond clock reading, so the (job_status, txn_id)
+    # index answers "old and finished" directly and no extra index is needed.
+    # The ids are collected once into an array so the blob and the job rows
+    # cannot disagree about which jobs are going.
+    JOBS_SQL="with doomed as materialized (
+                select array_agg(job_id) as ids from (
+                  select job_id from op_job
+                  where job_status = 'SETTLED'
+                    and txn_id < (extract(epoch from now() - interval '$JOB_RETENTION') * 1e9)::bigint
+                  order by txn_id limit $RETENTION_BATCH) t),
+              blobs as (
+                delete from op_job_blob o using doomed d where o.job_id = any(d.ids))
+              delete from op_job o using doomed d where o.job_id = any(d.ids)"
+
+    while true; do
+      pass=0
+      i=0
+      while [ "$i" -lt 20 ]; do
+        m=$(db "$OUTBOX_SQL"); : "${m:=0}"
+        j=$(db "$JOBS_SQL"); : "${j:=0}"
+        pass=$((pass + m + j))
+        [ "$((m + j))" -gt 0 ] || break
+        i=$((i + 1))
+      done
+      echo "$(date -u +%H:%M:%S) deleted $pass rows"
+      sleep "$RETENTION_INTERVAL_SEC"
+    done
   seed.sh: |
     #!/bin/sh
     # Decides whether the driver's -init may run. -init drops and recreates the
@@ -54,6 +128,11 @@ data:
       admin -c "CREATE DATABASE $LEDGER_DB"
       echo "created database $LEDGER_DB"
     fi
+
+    # pg_stat_statements records no search_path, so amp-time cannot EXPLAIN a
+    # statement written against this schema without one on the connection. The
+    # database default is the only place every client picks it up.
+    admin -c "ALTER DATABASE $LEDGER_DB SET search_path = $LEDGER_SCHEMA, public"
 
     rm -f /work/needs-init
     if [ -z "$(db -Atqc "select 1 from information_schema.tables where table_schema = '$LEDGER_SCHEMA' and table_name = 'core_account'")" ]; then
@@ -82,7 +161,12 @@ data:
     if [ -f /work/needs-init ]; then
       echo "=== one-time init and seed"
       /work/bin/ledger_bench -schema "$LEDGER_SCHEMA" -init -run=false $SEED_FLAGS
-      rm -f /work/needs-init
+      # pg_stat_statements records no search_path, so amp-time cannot EXPLAIN a
+    # statement written against this schema without one on the connection. The
+    # database default is the only place every client picks it up.
+    admin -c "ALTER DATABASE $LEDGER_DB SET search_path = $LEDGER_SCHEMA, public"
+
+    rm -f /work/needs-init
     fi
 
     while true; do
@@ -167,6 +251,17 @@ spec:
           resources:
             requests: { cpu: "1", memory: 1Gi }
             limits: { cpu: "2", memory: 4Gi }
+        - name: retention
+          image: postgres:18-alpine
+          command: ["/bin/sh", "/etc/ledger/retention.sh"]
+          envFrom:
+            - configMapRef:
+                name: transferwise-runner
+          volumeMounts:
+            - { name: run, mountPath: /etc/ledger }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
         - name: exporter
           image: python:3.12-alpine
           command: [python3, -u, /app/exporter.py]

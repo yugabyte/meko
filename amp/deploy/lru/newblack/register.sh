@@ -42,6 +42,7 @@ print(json.dumps({
     "checks_expected_every": "1h",
     "links": [
         {"label": "Grafana", "url": f"https://grafana-lru.tail5955.ts.net/d/lru-{lru}"},
+        {"label": "amp-time", "url": f"https://amp-time-{lru.replace('_', '-')}.tail5955.ts.net"},
         {"label": "workload source", "url": "https://github.com/yugabyte/commerce-loadtest"},
     ],
     "access": (

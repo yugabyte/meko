@@ -3,6 +3,51 @@
 What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
+## 2026-09-12 - the cause was dataset growth, not max_wal_size
+
+The `max_wal_size` reading in the entry below is wrong, and Hari said so in
+`#amp-real-lru`. Checked properly with a range query: `pg_wal` sat at 100% of the
+limit from the first hour while throughput held flat for twelve, so forced
+checkpoints were already running at full rate through the entire healthy period
+and cannot be what changed. The ratio only falls below 1.00 *after* throughput
+does, because less throughput is less WAL.
+
+The one thing that moves across the inflection is dataset size crossing the file
+cache:
+
+    UTC          commits/s  wal_ratio  blks_read/s  logical GB
+    09-11 05:12      8322       1.00         373       40.9
+    09-11 06:12      8477       1.00         404       44.8   <- crosses 43 GB cache
+    09-11 08:12      7620       1.00         654       52.4   <- decline starts
+    09-12 03:12      5343       0.80         743      106
+
+**Where the growth goes.** One payment writes 25 rows across 13 tables, ~5.0 KB.
+39% of the 107 GB is indexes.
+
+    ledger/txn (6 tables)   60%   3000 B/payment
+    audit (evt_audit)       17%    867
+    plumbing (5 tables)     11%    562
+    jobs (op_job+blob)      10%    490
+    outbox (out_msg_0)       2%     95
+
+Mark's answer to "is it growing in the right places" is yes: 60% is in the ledger
+and transaction tables, which is where a ledger should grow.
+
+**What changed as a result**, agreed in the thread:
+
+- threads 4 -> 1. ~50 payments/s, ~21 GB/day against ~86. The only rate knob
+  `ledger_bench` has.
+- a retention sweeper deleting the outbox and processed jobs, exactly what
+  TransferWise deletes. 585 B of 5.0 KB per payment, so 12% of growth and no
+  more. Mark: "almost every one of our bigger RDS customers today doesn't really
+  delete outside of outbox patterns much".
+- no drop-and-recreate. Hari suggested running for x days and rebuilding; Mark's
+  objection stands - "if we drop and recreate, how will we ever see the edges of
+  bigger DBs on AMP".
+- amp-time deployed against all four endpoints, so the next step (more balance
+  lookups, adjusting the read/write ratio) is made against measured plans rather
+  than guesses. `-write-ratio` defaults to 0.62 and is the knob for that.
+
 ## 2026-09-10 - first run on meko_dev_eks
 
 Deployed against pool `lru-transferwise`, one 2 vCPU / 16Gi endpoint. The schema
