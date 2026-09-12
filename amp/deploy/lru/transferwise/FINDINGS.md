@@ -29,10 +29,42 @@ and 2.2 minutes, each beginning a minute after a cycle started. While writing,
 one thread does 1515 select/s, 453 insert/s, 88 update/s, which is what it
 should.
 
-The cost is fixed per cycle, so four cycles an hour paid it four times: 33% dead
-time at 15m, 8% at 60m. Hence `CYCLE_DURATION: 60m`. Fifteen minutes only ever
-existed because this driver prints nothing until its end-of-run summary, and
-amp-time now samples every ten seconds.
+The cycle went to 60m on that reading and came back to 15m once the pool was
+fixed, which is the honest end state: with four connections the same ANALYZE pass
+costs about 6% of throughput rather than all of it, and a short cycle keeps the
+app-side summary the portal rules read from going stale. Measured across one
+pass with the pool sized properly: 8,200-9,100 select/s during, 9,100-9,300
+after.
+
+**Why it stopped rather than slowed: our pool was one connection.** Mark's "it
+should not stop" was right. ANALYZE takes `ShareUpdateExclusiveLock`, which does
+not block DML, and not-granted locks were 0 throughout. The block was ours.
+`runOneShotAnalyze` shares the driver's `pgxpool`, and cutting `THREADS` 4 -> 1
+cut `POOL_MIN/MAX` with it. That left four things on one connection: one write
+worker, two `non-tx-readers`, and ANALYZE. `pool.Exec` holds the connection for
+each table, so everything else sat in `Acquire`. `pg_stat_activity` showed
+exactly one `ledger_bench` session, running ANALYZE, which is all one connection
+can show. At threads=4/pool=4 the same pass cost a quarter of the throughput and
+nobody noticed.
+
+**Pool size is not a rate knob.** `-threads` is. The pool needs one connection
+per worker plus headroom for the ANALYZE goroutine: `threads + non-tx-readers +
+1`. The driver's own default is `max(threads*4, 16)`; we override it, so the
+override has to move whenever `THREADS` does.
+
+**ANALYZE really is slow on amp, and that part is not ours.** Timed on a
+dedicated connection with nothing else running:
+
+    ANALYZE ledger_bench.fin_txn      30.8 s
+    ANALYZE ledger_bench.op_job       28.8 s
+    ANALYZE ledger_bench.out_msg_0    25.1 s
+
+`default_statistics_target` is 100, so each of those samples 30,000 rows and
+nothing more. Fifteen tables at that rate is about six minutes, which is why the
+driver's five-minute budget never completes. On local storage this is a second or
+two a table; here every sampled page is a pageserver read (`YbAmp/PS_ReadIO`) and
+random sampling across 20M rows is the worst case for a remote page store. Worth
+raising with the amp team: autovacuum's own analyze pays the same cost.
 
 **`summary_age_s` is coupled to the cycle length.** One summary lands per cycle,
 so its floor has to clear a whole cycle plus the ANALYZE inside it. Left at

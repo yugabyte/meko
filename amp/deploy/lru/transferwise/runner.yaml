@@ -31,15 +31,18 @@ data:
   # rather than to find it afterwards. ledger_bench has no pacing flag, so
   # -threads is the only rate knob there is.
   THREADS: "1"
-  POOL_MIN: "1"
-  POOL_MAX: "1"
+  # One per worker plus one for the ANALYZE goroutine, which shares this pool:
+  # at POOL_MAX 1 it takes the only connection and the workload stops dead.
+  POOL_MIN: "4"
+  POOL_MAX: "4"
   NON_TX_READERS: "2"
   ACCOUNTS: "20000"
   SETTLEMENT_ACCOUNTS: "1000"
   WRITE_LOCK_MODE: for-update
-  # An hour, not fifteen minutes: the driver's per-cycle ANALYZE pass costs five
-  # minutes at this table size, and the cost is fixed per cycle. See FINDINGS.
-  CYCLE_DURATION: 60m
+  # Back to fifteen minutes now that the pool is sized properly: the ANALYZE
+  # pass costs ~6% of throughput rather than all of it, and a short cycle keeps
+  # the app-side summary the portal rules read from going stale.
+  CYCLE_DURATION: 15m
   # Retention, copied from what TransferWise actually deletes and nothing more:
   # the outbox, and jobs once they are processed. Everything else in this schema
   # accumulates, which is the point - real customers do not delete either, and
