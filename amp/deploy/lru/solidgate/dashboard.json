@@ -1225,6 +1225,730 @@
      "legendFormat": "temp bytes/s"
     }
    ]
+  },
+  {
+   "id": 25,
+   "type": "row",
+   "title": "Drift vs its own past (the slow-decay detector)",
+   "gridPos": {
+    "x": 0,
+    "y": 84,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 26,
+   "type": "timeseries",
+   "title": "Throughput now vs 24h ago",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 85,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "thresholdsStyle": {
+       "mode": "dashed"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.6
+       },
+       {
+        "color": "green",
+        "value": 0.8
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "(max(card_qps{lru=\"$lru\",kind=\"total\"})) / (last_over_time((max(card_qps{lru=\"$lru\",kind=\"total\"}))[10m:1m] offset 24h))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "ratio vs 24h ago"
+    },
+    {
+     "refId": "B",
+     "expr": "1",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "baseline"
+    }
+   ]
+  },
+  {
+   "id": 27,
+   "type": "timeseries",
+   "title": "Latency now vs 24h ago",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 85,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "thresholdsStyle": {
+       "mode": "dashed"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1.5
+       },
+       {
+        "color": "red",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "(max(card_avg_latency_seconds{lru=\"$lru\",kind=\"txn\"})) / (last_over_time((max(card_avg_latency_seconds{lru=\"$lru\",kind=\"txn\"}))[10m:1m] offset 24h))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "ratio vs 24h ago"
+    },
+    {
+     "refId": "B",
+     "expr": "1",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "baseline"
+    }
+   ]
+  },
+  {
+   "id": 28,
+   "type": "timeseries",
+   "title": "Throughput, now and 24h/7d ago overlaid",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 93,
+    "w": 24,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(card_qps{lru=\"$lru\",kind=\"total\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "now"
+    },
+    {
+     "refId": "B",
+     "expr": "last_over_time((max(card_qps{lru=\"$lru\",kind=\"total\"}))[10m:1m] offset 24h)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "24h ago"
+    },
+    {
+     "refId": "C",
+     "expr": "last_over_time((max(card_qps{lru=\"$lru\",kind=\"total\"}))[10m:1m] offset 7d)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "7d ago"
+    }
+   ]
+  },
+  {
+   "id": 29,
+   "type": "row",
+   "title": "Capacity horizon",
+   "gridPos": {
+    "x": 0,
+    "y": 101,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 30,
+   "type": "timeseries",
+   "title": "Logical size against the endpoint file cache",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 102,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pageserver_current_logical_size{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "logical size"
+    },
+    {
+     "refId": "B",
+     "expr": "max(pg_settings_yb_amp_max_file_cache_size_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "file cache limit"
+    },
+    {
+     "refId": "C",
+     "expr": "max(lru_pg_setting_bytes{lru=\"$lru\",name=\"shared_buffers\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "shared_buffers"
+    }
+   ]
+  },
+  {
+   "id": 31,
+   "type": "timeseries",
+   "title": "Days until the data outgrows the file cache",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 102,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "d",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "thresholdsStyle": {
+       "mode": "dashed"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 2
+       },
+       {
+        "color": "green",
+        "value": 7
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "(max(pg_settings_yb_amp_max_file_cache_size_bytes{endpoint=\"$endpoint\"}) - max(pageserver_current_logical_size{endpoint=\"$endpoint\"})) / clamp_min(deriv(max(pageserver_current_logical_size{endpoint=\"$endpoint\"})[6h:5m]) * 86400, 1)",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "days of headroom"
+    }
+   ]
+  },
+  {
+   "id": 32,
+   "type": "row",
+   "title": "Checkpointer and table growth (why a write-side slide happens)",
+   "gridPos": {
+    "x": 0,
+    "y": 110,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 33,
+   "type": "timeseries",
+   "title": "Checkpoints per hour: timed vs forced by max_wal_size",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 111,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (kind) (rate(lru_pg_checkpoints_total{lru=\"$lru\"}[1h]))*3600",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{kind}}"
+    }
+   ]
+  },
+  {
+   "id": 34,
+   "type": "timeseries",
+   "title": "Checkpoint seconds per second of wall clock",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 111,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "thresholdsStyle": {
+       "mode": "dashed"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.5
+       },
+       {
+        "color": "red",
+        "value": 0.9
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (phase) (rate(lru_pg_checkpoint_seconds_total{lru=\"$lru\"}[1h]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{phase}}"
+    }
+   ]
+  },
+  {
+   "id": 35,
+   "type": "timeseries",
+   "title": "pg_wal against max_wal_size",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 119,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pg_wal_size_bytes{endpoint=\"$endpoint\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "pg_wal"
+    },
+    {
+     "refId": "B",
+     "expr": "max(lru_pg_setting_bytes{lru=\"$lru\",name=\"max_wal_size\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "max_wal_size"
+    }
+   ]
+  },
+  {
+   "id": 36,
+   "type": "timeseries",
+   "title": "Largest tables: heap and index",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 119,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "topk(8, sum by (table) (lru_pg_table_bytes{lru=\"$lru\",kind=\"total\"}))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{table}}"
+    },
+    {
+     "refId": "B",
+     "expr": "sum(lru_pg_table_bytes{lru=\"$lru\",kind=\"index\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "all indexes"
+    }
+   ]
+  },
+  {
+   "id": 37,
+   "type": "timeseries",
+   "title": "Index bytes vs shared_buffers (when inserts stop fitting in memory)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 127,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(lru_pg_table_bytes{lru=\"$lru\",kind=\"index\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "index bytes"
+    },
+    {
+     "refId": "B",
+     "expr": "max(lru_pg_setting_bytes{lru=\"$lru\",name=\"shared_buffers\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "shared_buffers"
+    },
+    {
+     "refId": "C",
+     "expr": "sum(rate(pg_stat_database_blks_read{endpoint=\"$endpoint\"}[10m]))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "blks_read/s (right)"
+    }
+   ]
+  },
+  {
+   "id": 38,
+   "type": "timeseries",
+   "title": "Planner staleness: rows modified since last analyze",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 127,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "topk(8, sum by (table) (lru_pg_table_mod_since_analyze{lru=\"$lru\"}))",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{table}}"
+    },
+    {
+     "refId": "B",
+     "expr": "max(lru_pg_table_analyze_age_seconds{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "oldest analyze age s"
+    }
+   ]
   }
  ]
 }

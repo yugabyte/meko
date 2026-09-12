@@ -109,3 +109,22 @@ The amp side was healthy throughout: pool `lru-temporal`, endpoint
 - Endpoint memory curve over 24 h at this rate.
 - `amp_storage.pages` and `wals` growth for branch `ae980ead-a32c-4404-8188-11c1a1424d86`.
 - Mark's Omes command line on `vmload2a`, to align scenario and rate.
+
+## 2026-09-11 - 99.98% of the endpoint file cache, hours of headroom left
+
+Stable for six days on every application measure: 5.8 workflows/s, persistence
+p99 flat at 18.8 ms, zero service errors, no restarts. Nothing in the workload
+suggests a problem.
+
+The capacity rules added in this commit say otherwise. Logical size is **42.94 GB
+against a 42.95 GB file-cache limit**, growing 1.4 GB/day, so
+`days_until_file_cache_full` reads **0.007 days**. It is at the boundary now.
+
+The transferwise LRU crossed the same line on 09-11 and lost 44% of its
+throughput over the following fourteen hours, with the same 8 GiB
+`shared_buffers` and the same 1 GiB `max_wal_size` underneath. This one writes
+far less WAL (1.4 MB/s, zero forced checkpoints so far), so the same collapse is
+not certain. It is the obvious thing to watch.
+
+Recorded before anything degrades, which is the point: the prediction is on
+record and either the mechanism generalises or it does not.

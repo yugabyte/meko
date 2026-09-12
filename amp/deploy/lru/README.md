@@ -9,6 +9,7 @@ in `yugabyte/meko-devops`.
 ```
 amp/deploy/lru/
   README.md          this file: how every LRU is built and wired
+  pgstats.py         the Postgres internals amp's exporter omits; one copy per LRU
   monitoring/        shared: namespace, one Prometheus, one Grafana. Applied once.
   small_temporal/    one LRU: Temporal server + Omes load, small rate
   newblack/          one LRU: the anonymised NewBlack checkout workload
@@ -19,7 +20,7 @@ amp/deploy/lru/
 
 ## The shape every LRU has
 
-The same seven pieces, so the sync job, the portal and a person on call can treat
+The same eight pieces, so the sync job, the portal and a person on call can treat
 them alike. Nothing about a particular cluster or workload is hardcoded anywhere:
 it is a field on the portal row, an env var with a default in `up.sh`, or a label.
 
@@ -60,6 +61,42 @@ it is a field on the portal row, an env var with a default in `up.sh`, or a labe
    `dashboard.json` has two LRUs overwriting each other once a minute. The shared Grafana's sidecar copies it in;
    no Grafana config changes. Every query is scoped with `lru="$lru"` where `$lru`
    is a hidden constant variable, so two LRUs of the same kind do not mix.
+
+8. **A `pgstats` sidecar in the checker pod.** `pgstats.py`, one copy per LRU,
+   querying the endpoint with `psql` once a minute for what the endpoint's own
+   exporter does not publish: `pg_stat_checkpointer`, per-table heap and index
+   size, rows modified since the last analyze, and the memory settings. It
+   exports on `:9096` as `metrics-pg`, so the shared Prometheus picks it up by
+   the same annotation as everything else. It only ever reads.
+
+   This exists because of a real diagnosis. The transferwise LRU lost 44% of its
+   throughput over fourteen hours and the cause - a checkpointer forced by
+   `max_wal_size` on every cycle, against indexes that had outgrown
+   `shared_buffers` - was only visible through `psql`. A metric nobody can graph
+   is a metric nobody will notice.
+
+## Rules that compare, not just rules that threshold
+
+A checker's absolute floors answer "is it alive". They cannot answer "is it
+worse than yesterday", and that is the failure an LRU is for. transferwise held
+every floor comfortably while it lost nearly half its throughput.
+
+So every LRU also carries:
+
+- `throughput_vs_24h_ago` and `latency_vs_24h_ago`, each series against
+  `last_over_time((expr)[10m:1m] offset 24h)`. Note the subquery: `offset` binds
+  to a selector, not to a parenthesised expression, so `(sum(...)) offset 24h`
+  is a parse error rather than a comparison.
+- `logical_size_vs_file_cache` and `days_until_file_cache_full`, because
+  capacity wants an answer in days rather than in bytes.
+- `checkpoints_forced_ratio` and `checkpoint_write_busy_ratio`, the mechanism
+  behind a write-side slide.
+
+All of these are **advisory**: capped at WARN by `advisory()`, never FAIL. They
+cannot tell a regression from a change somebody made on purpose - solidgate's
+throughput reads a fifth of yesterday's because its concurrency was deliberately
+cut - so FAIL stays reserved for the workload not doing its job, and the portal
+badge keeps meaning that.
 
 ## The shared monitoring base
 

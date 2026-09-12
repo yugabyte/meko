@@ -33,6 +33,11 @@ AMP_API = os.environ.get(
 )
 AMP_AUTH = os.environ.get("AMP_AUTH", "admin:admin")
 
+# The one throughput and the one latency series that stand for this workload,
+# named once so the drift rules below cannot drift from them.
+THROUGHPUT = 'sum(rate(workflow_success{lru="small_temporal"}[10m]))'
+LATENCY = 'histogram_quantile(0.99, sum by (le) (rate(persistence_latency_bucket{lru="small_temporal"}[10m])))'
+
 OK, WARN, FAIL, ERR = 1.0, 0.5, 0.0, -1.0
 
 
@@ -87,8 +92,22 @@ def http_ok(url):
         return 0.0
 
 
+def advisory(status):
+    """Caps a verdict at WARN.
+
+    Drift and capacity rules answer "someone should look at this", not "the
+    workload is broken". They cannot tell a regression from a change somebody
+    made on purpose: solidgate's throughput reads 0.20 of yesterday because its
+    concurrency was deliberately cut, which is not a failure by any reading. A
+    FAIL should stay reserved for the workload not doing its job, so the portal
+    badge keeps meaning that.
+    """
+    return WARN if status == FAIL else status
+
+
 def check_all():
     endpoint = state["endpoint_id"]
+    lru = f'lru="{LRU}"'
     ep = f'endpoint="{endpoint}"' if endpoint else ""
     rules = {}
 
@@ -124,6 +143,27 @@ def check_all():
     )
     rules["persistence_p99_s"] = (v, band(v, 0.05, 0.25))
 
+    # --- drift against this LRU's own past -----------------------------------
+    # The rules above are absolute floors picked on day one. transferwise lost
+    # 44% of its throughput and doubled its write latency over fourteen hours
+    # while every one of them stayed green, because 9,400 qps clears a floor of
+    # 200 just as easily as 17,000 does. Slow decay as data accumulates is the
+    # failure an LRU exists to find, and only a comparison with yesterday sees
+    # it. `offset` needs the series to exist that far back, so a young LRU
+    # simply has no drift rule rather than a failing one.
+    prev = q(f"last_over_time(({THROUGHPUT})[10m:1m] offset 24h)")
+    now_v = q(THROUGHPUT)
+    if prev and prev > 0 and now_v is not None:
+        rules["throughput_vs_24h_ago"] = (
+            now_v / prev,
+            advisory(band(now_v / prev, 0.8, 0.6, higher_is_bad=False)),
+        )
+
+    prev = q(f"last_over_time(({LATENCY})[10m:1m] offset 24h)")
+    now_v = q(LATENCY)
+    if prev and prev > 0 and now_v is not None:
+        rules["latency_vs_24h_ago"] = (now_v / prev, advisory(band(now_v / prev, 1.5, 3.0)))
+
     if not endpoint:
         # Nothing below can be scoped to one endpoint yet. Say so rather than
         # send Prometheus a selector with a leading comma.
@@ -143,6 +183,38 @@ def check_all():
     v = q(f'sum(rate(omes_execute_histogram_count{{lru="{LRU}"}}[5m]))')
     # one throughput_stress iteration is a whole kitchen-sink batch, ~0.07/s at 4 concurrent
     rules["omes_iterations_per_s"] = (v, band(v, 0.02, 0.0, higher_is_bad=False))
+
+    # --- how long until the data outgrows the endpoint -----------------------
+    # Not "is it big" but "when does it stop fitting". small_temporal reached 99%
+    # of its file cache with every rule green and no warning anywhere; the answer
+    # wanted to be a number of days, not a number of bytes.
+    size = q(f"max(pageserver_current_logical_size{{{ep}}})")
+    cache = q(f"max(pg_settings_yb_amp_max_file_cache_size_bytes{{{ep}}})")
+    if size and cache and cache > 0:
+        rules["logical_size_vs_file_cache"] = (size / cache, advisory(band(size / cache, 0.8, 1.0)))
+        growth = q(f"deriv(max(pageserver_current_logical_size{{{ep}}})[6h:5m])")
+        if growth and growth > 0:
+            days = max(0.0, cache - size) / (growth * 86400)
+            rules["days_until_file_cache_full"] = (
+                days,
+                advisory(band(days, 7, 2, higher_is_bad=False)),
+            )
+
+    # A checkpointer that never rests is the mechanism behind a write-side slide:
+    # requested checkpoints mean max_wal_size is the trigger, not the timeout.
+    v = q(
+        f'sum(rate(lru_pg_checkpoints_total{{{lru},kind="requested"}}[1h])) / '
+        f"clamp_min(sum(rate(lru_pg_checkpoints_total{{{lru}}}[1h])), 1e-9)"
+    )
+    if v is not None:
+        rules["checkpoints_forced_ratio"] = (v, advisory(band(v, 0.5, 0.9)))
+
+    # Seconds of checkpoint write per second of wall clock. Near 1 means the
+    # checkpointer is the workload.
+    v = q(f'sum(rate(lru_pg_checkpoint_seconds_total{{{lru},phase="write"}}[1h]))')
+    if v is not None:
+        rules["checkpoint_write_busy_ratio"] = (v, advisory(band(v, 0.5, 0.9)))
+
     return rules
 
 

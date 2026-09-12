@@ -47,7 +47,40 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+        # Everything amp's own exporter does not publish: the checkpointer, per
+        # table size and analyze staleness. Those were the series that explained
+        # the transferwise slide, and they had to be fetched by hand at the time.
+        - name: pgstats
+          image: python:3.12-alpine
+          command: ["/bin/sh", "-c", "apk add --no-cache postgresql-client >/dev/null && exec python3 -u /app/pgstats.py"]
+          env:
+            - name: PGHOST
+              value: small-temporal-endpoint
+            - name: PGPORT
+              value: "55433"
+            - name: PGUSER
+              value: cloud_admin
+            - name: PGPASSWORD
+              value: cloud_admin
+            - name: PGDATABASE
+              value: temporal_lru
+          ports:
+            - name: metrics-pg
+              containerPort: 9096
+          volumeMounts:
+            - name: pgstats
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
       volumes:
         - name: app
           configMap:
             name: small-temporal-checker
+        - name: pgstats
+          configMap:
+            name: small-temporal-pgstats
