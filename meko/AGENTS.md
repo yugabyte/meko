@@ -49,6 +49,7 @@ Meko is a polyglot monorepo. Each top-level directory is an independently-built 
 | `meko_ui/` | TypeScript (React 19 + Vite + Tailwind + Drizzle) + Node Express server | Web UI; Express server in `meko_ui/server/` proxies to `api_server`. |
 | `system_agent/` | Python (LangChain + mem0 + Streamlit) | Standalone agent + Streamlit playground; uses pgvector + BM25 over YugabyteDB. |
 | `docs/` | Hugo | Public documentation site. |
+| `jenkins/` | Groovy + bash | The image build pipeline: builds every meko component image on ephemeral AWS builders and pushes it to `quay.io/yugabyte/meko-*`. See `jenkins/README.md`. |
 | `deploy/helm/meko/` | Helm | One flat chart deploying the whole platform — every component above plus langfuse — toggled per component and rendered for EKS or GKE from the same templates via values presets. See `deploy/helm/meko/README.md`. |
 
 `ycp/` is **not** part of this tree — it is the shared control-plane surface between

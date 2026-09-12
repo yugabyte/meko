@@ -4,6 +4,8 @@ project_name: meko
 
 # The amp import brought amp's tags into this repo: 62 of the 64 tags here are
 # amp's (`amp-*`, `amp/*`, and bare `0.<date>.<n>`), against meko's two `v*`.
+# `meko-*` is the image build's release namespace (meko/jenkins/) and is not a
+# CLI version either.
 # Real releases are unaffected — meko-release.yml fires only on `v*` and
 # goreleaser then uses the pushed tag — but snapshot builds resolve the version
 # via `git describe`, which lands on an amp tag and stamps it into the binary
@@ -13,6 +15,7 @@ git:
     - "amp-*"
     - "amp/*"
     - "0.*"
+    - "meko-*"
 
 builds:
   - id: meko
