@@ -56,9 +56,9 @@
   <rect x="68" y="196" width="562" height="50" rx="6" fill="url(#layerBg)" stroke="#2d2d4a" stroke-width="1"/>
   <rect x="68" y="196" width="6" height="50" rx="3" fill="#6c5ce7"/>
   <text x="94" y="217" fill="#a29bfe" font-size="11" font-weight="600">MEMORY</text>
-  <text x="94" y="234" fill="#8888a0" font-size="10">Entity and relationship extraction · graph storage</text>
+  <text x="94" y="234" fill="#8888a0" font-size="10">Fact extraction · hybrid retrieval</text>
   <rect x="370" y="208" width="90" height="22" rx="4" fill="#2d2d4a" stroke="#6c5ce7" stroke-width="0.5"/>
-  <text x="415" y="223" text-anchor="middle" fill="#a29bfe" font-size="9">Meko Graph</text>
+  <text x="415" y="223" text-anchor="middle" fill="#a29bfe" font-size="9">Hybrid Rank</text>
   <rect x="470" y="208" width="90" height="22" rx="4" fill="#2d2d4a" stroke="#6c5ce7" stroke-width="0.5"/>
   <text x="515" y="223" text-anchor="middle" fill="#a29bfe" font-size="9">Memory Store</text>
 
@@ -68,7 +68,7 @@
   <text x="94" y="277" fill="#74b9ff" font-size="11" font-weight="600">DATABASE</text>
   <text x="94" y="294" fill="#8888a0" font-size="10">YugabyteDB YSQL · pgvector</text>
   <rect x="290" y="268" width="80" height="22" rx="4" fill="#2d2d4a" stroke="#0984e3" stroke-width="0.5"/>
-  <text x="330" y="283" text-anchor="middle" fill="#74b9ff" font-size="9">Meko AGE</text>
+  <text x="330" y="283" text-anchor="middle" fill="#74b9ff" font-size="9">MAGE</text>
   <rect x="380" y="268" width="80" height="22" rx="4" fill="#2d2d4a" stroke="#0984e3" stroke-width="0.5"/>
   <text x="420" y="283" text-anchor="middle" fill="#74b9ff" font-size="9">Vector Store</text>
   <rect x="470" y="268" width="55" height="22" rx="4" fill="#2d2d4a" stroke="#0984e3" stroke-width="0.5"/>

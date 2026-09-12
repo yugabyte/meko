@@ -16,7 +16,7 @@ Meko can also move memories into shared, institutional knowledge through a separ
 
 > [!NOTE] Memory retrieval
 >
-> Memory search combines semantic similarity, keyword matching, and entity-aware ranking. It returns memory results without graph relations.
+> Memory search combines semantic similarity, keyword matching, and entity-aware ranking.
 
 ## Add memories
 

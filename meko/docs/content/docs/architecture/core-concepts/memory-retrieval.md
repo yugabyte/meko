@@ -3,7 +3,6 @@ title: Memory retrieval
 linkTitle: Memory retrieval
 description: How Meko ranks personal memory search results
 weight: 40
-url: /architecture/core-concepts/memory-retrieval/
 aliases:
   - /architecture/core-concepts/graph-rag/
 ---
@@ -18,7 +17,7 @@ Meko uses hybrid retrieval to find personal memories by meaning while preserving
 1. **Keyword matching** gives exact terms more weight.
 1. **Entity boosting** raises memories that mention the people, projects, tools, or other named things in the query.
 
-The server combines these signals and returns the highest-ranked results. `memory_search` doesn't return graph relations.
+The server combines these signals and returns the highest-ranked memories.
 
 ## Keep model context bounded
 
