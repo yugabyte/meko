@@ -23,8 +23,15 @@ const (
 
 	// DefaultServerImage / DefaultClientImage run the server and the one-shot
 	// bucket bootstrap.
-	DefaultServerImage = "minio/minio:latest"
-	DefaultClientImage = "minio/mc:latest"
+	//
+	// quay.io and an immutable RELEASE tag, not Docker Hub and not `latest`:
+	// `docker.io/minio/minio:latest` stopped resolving ("not found") and took
+	// backing_backup_restore with it, and the repository itself now 404s on the
+	// Hub API. Pinning only stops the tag moving under us — the manifests hand
+	// the ref straight to the kubelet, so quay dropping the repository breaks
+	// the suite exactly the same way, and nothing here mirrors or caches it.
+	DefaultServerImage = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	DefaultClientImage = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
 
 	port      = 9000
 	readyPoll = 3 * time.Second

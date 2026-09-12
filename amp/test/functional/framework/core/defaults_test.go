@@ -1459,8 +1459,8 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	brStrs := map[string]string{
 		"stress.backing_backup_restore.storage_config_name": "ampqa-minio",
-		"stress.backing_backup_restore.minio_server_image":  "minio/minio:latest",
-		"stress.backing_backup_restore.minio_client_image":  "minio/mc:latest",
+		"stress.backing_backup_restore.minio_server_image":  "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
+		"stress.backing_backup_restore.minio_client_image":  "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z",
 		"stress.backing_backup_restore.client_image":        "eclipse-temurin:21-jdk",
 		"stress.backing_backup_restore.jar_secret":          "gh_package",
 		"stress.backing_backup_restore.remote_dir":          "/opt/ampqa",
