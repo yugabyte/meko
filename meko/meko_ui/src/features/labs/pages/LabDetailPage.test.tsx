@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -6,6 +6,12 @@ import { MemoryRouter } from "react-router-dom";
 import { labDetailPath } from "@/app/routes/paths";
 import { ADLC_REVIEW_AGENT_LAB } from "../data/labDefinitions";
 import LabDetailPage from "./LabDetailPage";
+
+// This page reads the lab via getLabDefinition, which drops any
+// requiresAmp chapter when AMP isn't enabled -- this suite is about tab
+// rendering in general, not AMP gating specifically, so it exercises the
+// lab's full, unfiltered chapter list.
+vi.mock("@/lib/amp", () => ({ isAmpEnabled: () => true }));
 
 const { chapters, startingPoint } = ADLC_REVIEW_AGENT_LAB;
 

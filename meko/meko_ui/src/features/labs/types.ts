@@ -21,7 +21,11 @@ export type LabStageId =
   | "review-sample-pr"
   | "claude-reference"
   | "run-review"
-  | "collaborate";
+  | "collaborate"
+  | "dashboard-intro"
+  | "create-amp-cluster"
+  | "run-review-again"
+  | "review-dashboard";
 
 export type LabStage = {
   id: LabStageId;
@@ -49,6 +53,11 @@ export type LabChapter = {
    *  the landing page shows only chapters, not individual stages. */
   summary: string;
   stages: LabStage[];
+  /** True if this chapter needs the AMP (Postgres databases) feature turned
+   *  on to make sense -- getLabDefinition (data/labDefinitions.ts) drops the
+   *  chapter entirely when isAmpEnabled() is false, rather than showing it
+   *  and having every stage inside immediately degrade. */
+  requiresAmp?: boolean;
 };
 
 export type LabDemoAppConfig = {

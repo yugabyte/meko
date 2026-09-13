@@ -46,6 +46,10 @@ function fakeSession(
       ? ({ id: "dep-1", status: deploymentStatus } as ReturnType<typeof useLabRunnerSession>["deployment"])
       : null,
     deploymentActive,
+    ampClusterId: null,
+    ampBranchId: null,
+    selectAmpCluster: vi.fn(),
+    clearAmpCluster: vi.fn(),
   };
 }
 

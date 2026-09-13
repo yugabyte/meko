@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { flattenLabStages } from "../lib/labChapters";
 import type { LabStageId } from "../types";
 import { LAB_DEFINITIONS, getLabDefinition } from "./labDefinitions";
 
-// LabStageId is a closed 11-value union LabStageSlot switches on
+// Defaults to enabled so every other test in this file sees the full,
+// unfiltered chapter list -- getLabDefinition's own AMP-gating behavior gets
+// its dedicated test below, which flips this per-test.
+const mockIsAmpEnabled = vi.fn(() => true);
+vi.mock("@/lib/amp", () => ({ isAmpEnabled: () => mockIsAmpEnabled() }));
+
+afterEach(() => {
+  mockIsAmpEnabled.mockReturnValue(true);
+});
+
+// LabStageId is a closed 15-value union LabStageSlot switches on
 // exhaustively -- a lab missing one silently gets a blank pane for it.
 const FIXED_STAGE_IDS: LabStageId[] = [
   "create-datapack",
@@ -18,6 +28,10 @@ const FIXED_STAGE_IDS: LabStageId[] = [
   "claude-reference",
   "run-review",
   "collaborate",
+  "dashboard-intro",
+  "create-amp-cluster",
+  "run-review-again",
+  "review-dashboard",
 ];
 
 describe("LAB_DEFINITIONS", () => {
@@ -43,7 +57,7 @@ describe("LAB_DEFINITIONS", () => {
     }
   });
 
-  it("every lab has exactly the 9 fixed stages", () => {
+  it("every lab has exactly the 15 fixed stages", () => {
     for (const lab of LAB_DEFINITIONS) {
       const stageIds = flattenLabStages(lab.chapters).map((stage) => stage.id);
       expect(new Set(stageIds)).toEqual(new Set(FIXED_STAGE_IDS));
@@ -99,5 +113,24 @@ describe("LAB_DEFINITIONS", () => {
     const first = LAB_DEFINITIONS[0];
     expect(getLabDefinition(first.id)).toBe(first);
     expect(getLabDefinition("does-not-exist")).toBeUndefined();
+  });
+
+  it("getLabDefinition drops a requiresAmp chapter when AMP isn't enabled, and keeps it when it is", () => {
+    const lab = LAB_DEFINITIONS[0];
+    const ampChapter = lab.chapters.find((c) => c.requiresAmp);
+    // This assertion only means something if some chapter actually opts in --
+    // if a future change drops requiresAmp from every chapter, this test
+    // should fail loudly rather than silently pass on an empty case.
+    expect(ampChapter).toBeDefined();
+
+    mockIsAmpEnabled.mockReturnValue(false);
+    const gated = getLabDefinition(lab.id);
+    expect(gated?.chapters.some((c) => c.id === ampChapter?.id)).toBe(false);
+    // Every other chapter stays -- this drops exactly the gated chapter(s),
+    // not a blanket "AMP off means fewer chapters" effect.
+    expect(gated?.chapters.length).toBe(lab.chapters.length - 1);
+
+    mockIsAmpEnabled.mockReturnValue(true);
+    expect(getLabDefinition(lab.id)).toBe(lab);
   });
 });

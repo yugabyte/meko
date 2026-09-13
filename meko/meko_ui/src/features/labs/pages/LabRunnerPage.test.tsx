@@ -65,10 +65,13 @@ describe("LabRunnerPage pre-GA gating", () => {
 });
 
 describe("shouldShowProvisionStatusSpinner", () => {
-  it("blocks memory, conversation, and run-review while the provision-status lookup is loading", () => {
+  it("blocks memory, conversation, run-review, and run-review-again while the provision-status lookup is loading", () => {
     expect(shouldShowProvisionStatusSpinner(true, "memory")).toBe(true);
     expect(shouldShowProvisionStatusSpinner(true, "conversation")).toBe(true);
     expect(shouldShowProvisionStatusSpinner(true, "run-review")).toBe(true);
+    // Regression: run-review-again renders the same PrReviewDemoApp, which
+    // needs session.userToken in dedicated mode just like run-review does.
+    expect(shouldShowProvisionStatusSpinner(true, "run-review-again")).toBe(true);
   });
 
   it("doesn't block create-datapack, context-intro, knowledge-base, deploy-agent, or collaborate -- none read session.userToken", () => {

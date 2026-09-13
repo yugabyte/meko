@@ -1,5 +1,7 @@
 import { GitPullRequest } from "lucide-react";
 
+import { isAmpEnabled } from "@/lib/amp";
+
 import type { LabDefinition } from "../types";
 import { ADLC_REVIEW_AGENT_LAB_CHAPTERS } from "./adlcReviewAgentLab/chapters";
 
@@ -34,6 +36,16 @@ export const ADLC_REVIEW_AGENT_LAB: LabDefinition = {
 /** Add a new lab by appending its LabDefinition here. */
 export const LAB_DEFINITIONS: LabDefinition[] = [ADLC_REVIEW_AGENT_LAB];
 
+/** Looks up a lab and drops any chapter whose `requiresAmp` isn't met yet --
+ *  LAB_DEFINITIONS itself stays the full, ungated list (labDefinitions.test.ts
+ *  and anything else that wants every chapter reads that directly); this is
+ *  the one funnel (LabRunnerPage, LabDetailPage) that actually renders a
+ *  lab's chapters to a user. */
 export function getLabDefinition(id: string): LabDefinition | undefined {
-  return LAB_DEFINITIONS.find((lab) => lab.id === id);
+  const lab = LAB_DEFINITIONS.find((l) => l.id === id);
+  if (!lab) return undefined;
+  if (isAmpEnabled()) return lab;
+  const chapters = lab.chapters.filter((chapter) => !chapter.requiresAmp);
+  if (chapters.length === lab.chapters.length) return lab;
+  return { ...lab, chapters };
 }

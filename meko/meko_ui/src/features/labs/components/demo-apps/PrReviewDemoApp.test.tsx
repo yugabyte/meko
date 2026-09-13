@@ -79,6 +79,10 @@ function fakeSession(
     selectDeploymentMode: vi.fn(),
     deployment: { id: "dep-1", status: "active" } as ReturnType<typeof useLabRunnerSession>["deployment"],
     deploymentActive: true,
+    ampClusterId: null,
+    ampBranchId: null,
+    selectAmpCluster: vi.fn(),
+    clearAmpCluster: vi.fn(),
     ...overrides,
   };
 }

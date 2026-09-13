@@ -39,6 +39,10 @@ function fakeSession(datapackId: string | null): ReturnType<typeof useLabRunnerS
     selectDeploymentMode: vi.fn(),
     deployment: null,
     deploymentActive: false,
+    ampClusterId: null,
+    ampBranchId: null,
+    selectAmpCluster: vi.fn(),
+    clearAmpCluster: vi.fn(),
   };
 }
 

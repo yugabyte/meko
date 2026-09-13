@@ -1,10 +1,16 @@
 import type { LabChapter } from "../../types";
 
-// Two chapters per claude_plans/labs-redesign-and-chapter-1.md's target
-// design: "Setup your context" builds the datapack + seeded knowledge
-// AgentK will review against, "Deploy an agent" gets AgentK running
-// (shared instance or your own dedicated one), shares the datapack with
-// it, then runs a review.
+// "Setup your context" builds the datapack + seeded knowledge AgentK will
+// review against; "Deploy an agent" gets AgentK running (shared instance or
+// your own dedicated one), shares the datapack with it, then runs a review;
+// "Build a dashboard" provisions a real per-datapack AMP Postgres cluster,
+// and previews what a review-run dashboard backed by it would look like. The
+// dashboard's data-capture path (writing a real row per review into the AMP
+// cluster) isn't wired up yet -- see the review-dashboard stage's own
+// comment -- so today it renders illustrative sample data, never a live
+// query, regardless of whether a cluster exists. requiresAmp on this chapter
+// (below) means getLabDefinition drops it entirely when AMP isn't enabled,
+// rather than showing four stages that all immediately degrade.
 export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   {
     id: "setup-context",
@@ -84,6 +90,39 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
         title: "Collaborate",
         summary: "Share this datapack with teammates so they see the same knowledge and memories.",
         highlights: ["Share with teammates", "Same context for everyone"],
+      },
+    ],
+  },
+  {
+    id: "build-a-dashboard",
+    title: "Build a dashboard",
+    summary:
+      "Every datapack can back its own app storage — provision a real fractional Postgres instance with AMP, then preview what a review-run dashboard backed by it would look like.",
+    requiresAmp: true,
+    stages: [
+      {
+        id: "dashboard-intro",
+        title: "Why a dashboard needs real storage",
+        summary: "Meko's memory and conversation store isn't built for structured, queryable app data — a dashboard needs a real database.",
+        highlights: ["Structured, not free-text", "Every datapack can have one"],
+      },
+      {
+        id: "create-amp-cluster",
+        title: "Create an AMP cluster",
+        summary: "Provision a real fractional Postgres instance for this datapack — this is your own app's storage, not Meko's.",
+        highlights: ["A real Postgres database", "Yours, not shared"],
+      },
+      {
+        id: "run-review-again",
+        title: "Run another review",
+        summary: "Run one more review — a second example to look at once you get to the dashboard preview.",
+        highlights: ["Same review flow as before", "Not recorded anywhere yet"],
+      },
+      {
+        id: "review-dashboard",
+        title: "See your dashboard",
+        summary: "A preview of what your review-run dashboard will look like — models used, tokens, cost, and findings.",
+        highlights: ["Stat tiles + a trend chart", "Sample data, not yet live"],
       },
     ],
   },

@@ -252,4 +252,48 @@ describe("useLabRunnerSession", () => {
     const { result: result2 } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
     expect(result2.current.deploymentMode).toBe("dedicated");
   });
+
+  it("clears the persisted AMP cluster/branch once the selected datapack actually changes", () => {
+    mockDatapacks = [
+      { datapack_id: "dp-1", datapack_name: "DP1", grant: "owner" },
+      { datapack_id: "dp-2", datapack_name: "DP2", grant: "owner" },
+    ];
+    mockGetDatapackProvisionStatus.mockResolvedValue({ mcp_api_key: "token" });
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+
+    act(() => result.current.selectDatapack("dp-1"));
+    act(() => result.current.selectAmpCluster("cluster-1", "branch-1"));
+    expect(result.current.ampClusterId).toBe("cluster-1");
+
+    // A cluster id only exists inside the datapack pool it was created in --
+    // switching datapacks must drop it, or CreateAmpClusterStage/
+    // ReviewDashboardStage would keep treating it as live for a datapack
+    // that has no such cluster.
+    act(() => result.current.selectDatapack("dp-2"));
+    expect(result.current.ampClusterId).toBeNull();
+    expect(result.current.ampBranchId).toBeNull();
+  });
+
+  it("does not clear a persisted AMP cluster choice on initial mount for the same restored datapack", () => {
+    mockDatapacks = [{ datapack_id: "dp-1", datapack_name: "DP1", grant: "owner" }];
+    mockGetDatapackProvisionStatus.mockResolvedValue({ mcp_api_key: "token" });
+    localStorage.setItem("meko:lab-datapack:test-lab", "dp-1");
+    localStorage.setItem("meko:lab-amp-cluster:test-lab", "cluster-1");
+    localStorage.setItem("meko:lab-amp-branch:test-lab", "branch-1");
+
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+
+    expect(result.current.ampClusterId).toBe("cluster-1");
+    expect(result.current.ampBranchId).toBe("branch-1");
+  });
+
+  it("clearAmpCluster drops the persisted selection", () => {
+    const { result } = renderHook(() => useLabRunnerSession(FIXTURE_LAB), { wrapper });
+    act(() => result.current.selectAmpCluster("cluster-1", "branch-1"));
+    expect(result.current.ampClusterId).toBe("cluster-1");
+
+    act(() => result.current.clearAmpCluster());
+    expect(result.current.ampClusterId).toBeNull();
+    expect(result.current.ampBranchId).toBeNull();
+  });
 });

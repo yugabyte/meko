@@ -28,6 +28,14 @@ function selectedDeploymentModeStorageKey(labId: string): string {
   return `meko:lab-deployment-mode:${labId}`;
 }
 
+function selectedAmpClusterStorageKey(labId: string): string {
+  return `meko:lab-amp-cluster:${labId}`;
+}
+
+function selectedAmpBranchStorageKey(labId: string): string {
+  return `meko:lab-amp-branch:${labId}`;
+}
+
 /**
  * Resolves the datapack a lab's demo app runs against, and exposes the
  * pieces the stage components need: the datapack id/name, the MCP bearer
@@ -230,6 +238,55 @@ export function useLabRunnerSession(lab: LabDefinition) {
     [lab.id],
   );
 
+  // The datapack's AMP cluster/branch for Chapter 3's dashboard -- same
+  // "explicit choice, persisted per lab" pattern as deploymentId above. A
+  // datapack's AMP pool can hold more than one cluster, but this lab only
+  // ever creates/uses one, so a single id pair (not a list) is all any
+  // stage needs. Data-capture (writing a real review-run row into this
+  // cluster) isn't wired up yet -- see review-dashboard's own stage
+  // comment -- so today this just remembers which cluster the user
+  // provisioned.
+  const [ampClusterId, setAmpClusterIdState] = useState<string | null>(() =>
+    getLocalItem(selectedAmpClusterStorageKey(lab.id)),
+  );
+  const [ampBranchId, setAmpBranchIdState] = useState<string | null>(() =>
+    getLocalItem(selectedAmpBranchStorageKey(lab.id)),
+  );
+  const selectAmpCluster = useCallback(
+    (clusterId: string, branchId: string) => {
+      setAmpClusterIdState(clusterId);
+      setAmpBranchIdState(branchId);
+      setLocalItem(selectedAmpClusterStorageKey(lab.id), clusterId);
+      setLocalItem(selectedAmpBranchStorageKey(lab.id), branchId);
+    },
+    [lab.id],
+  );
+  const clearAmpCluster = useCallback(() => {
+    setAmpClusterIdState(null);
+    setAmpBranchIdState(null);
+    removeLocalItem(selectedAmpClusterStorageKey(lab.id));
+    removeLocalItem(selectedAmpBranchStorageKey(lab.id));
+  }, [lab.id]);
+
+  // A cluster id only exists inside the datapack pool it was created in --
+  // unlike deploymentId (one account-wide resource), it doesn't carry over
+  // to a different datapack. So when datapackId actually CHANGES (a
+  // selectDatapack switch, or the eviction effect above nulling it), the
+  // persisted cluster choice is no longer meaningful and must be dropped
+  // too, or CreateAmpClusterStage/ReviewDashboardStage would keep showing
+  // "Ready"/a dashboard for a cluster that lives in the datapack the user
+  // just left. Guarded on an actual change (not the initial mount, where
+  // prevDatapackIdRef starts equal to datapackId) so a persisted cluster
+  // choice for the SAME restored datapack survives a page reload.
+  // This doesn't catch the cluster being deleted server-side while
+  // datapackId stays the same -- see useValidAmpCluster for that case.
+  const prevDatapackIdRef = useRef(datapackId);
+  useEffect(() => {
+    if (prevDatapackIdRef.current === datapackId) return;
+    prevDatapackIdRef.current = datapackId;
+    clearAmpCluster();
+  }, [datapackId, clearAmpCluster]);
+
   const sharedAgentSlug = lab.demoApp.deployable?.agentSlug ?? null;
   const { data: dedicatedDeployment } = useDeploymentStatus(deploymentId);
   const { data: sharedDeployment } = useSharedDeploymentStatus(
@@ -266,6 +323,10 @@ export function useLabRunnerSession(lab: LabDefinition) {
       selectDeploymentMode,
       deployment,
       deploymentActive,
+      ampClusterId,
+      ampBranchId,
+      selectAmpCluster,
+      clearAmpCluster,
     }),
     [
       userId,
@@ -293,6 +354,10 @@ export function useLabRunnerSession(lab: LabDefinition) {
       selectDeploymentMode,
       deployment,
       deploymentActive,
+      ampClusterId,
+      ampBranchId,
+      selectAmpCluster,
+      clearAmpCluster,
     ],
   );
 }
