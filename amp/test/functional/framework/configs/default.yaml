@@ -25,8 +25,9 @@ sched:
   parallel: 1
   # SHARED tests packed onto one shared env (default for --per-env-parallelism).
   per_env_parallelism: 4
-  # Extra attempts after a SCHEDULING-CLASS env failure only (unschedulable,
-  # insufficient cpu/memory, PV node affinity, readiness timeout). 0 = off.
+  # Extra attempts after a SCHEDULING-CLASS env failure (unschedulable,
+  # insufficient cpu/memory, PV node affinity, readiness timeout) or a failed
+  # provision_yba create-universe task. 0 = off.
   env_retries: 1
   # Pause before a retry — 60s ≈ a GKE node add.
   env_retry_backoff: 60s

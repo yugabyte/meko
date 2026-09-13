@@ -84,6 +84,8 @@ func TestSchedulingReasonMatchesCapacityFailures(t *testing.T) {
 		{"error: timed out waiting for the condition on statefulsets/yb-tserver", "readiness wait timed out"},
 		{"yugabyted cluster never became ready: deadline", "readiness wait timed out"},
 		{"tservers not Ready before workload: exit 1", "readiness wait timed out"},
+		{`provision_yba: create universe "ampqa-70c748e9": task 5643 (Created Universe) ended Failure: ConfigureUniverse: Failed to execute task {...}, hit error: Could not upload the ybc contents.`,
+			"yba universe create task failed"},
 	}
 	for _, c := range cases {
 		got, ok := core.SchedulingReason(c.msg)
@@ -107,6 +109,7 @@ func TestSchedulingReasonRejectsNonCapacityFailures(t *testing.T) {
 		"x509: certificate signed by unknown authority",
 		// Unschedulable BECAUSE the image never resolves — still no retry.
 		"pod unschedulable; last event: ErrImagePull for amp-controller:custom-nope",
+		`controller: yba task 5643 (Edit Universe) ended Failure: ConfigureUniverse`,
 	} {
 		if reason, ok := core.SchedulingReason(msg); ok {
 			t.Errorf("SchedulingReason(%q) matched %q, want no match", msg, reason)

@@ -53,16 +53,16 @@ func helperImage(c *core.Config) string {
 }
 
 // netnsHelper is the privileged pod through which one target pod's network
-// namespace is reached, and the pid nsenter enters it by.
+// namespace is reached, and the target's uid the pid is resolved from.
 type netnsHelper struct {
 	kube *k8s.Kubectl
 	name string
-	pid  string
+	uid  string
+	node string
+	pod  string
 }
 
-// attachNetns stands a helper up on the target pod's node and resolves a pid
-// inside the target's cgroup. The pid is any process of the pod, the pause
-// container's included: they all share the one network namespace.
+// attachNetns stands a helper up on the target's node; any pid of the pod does.
 func attachNetns(t *core.T, kube *k8s.Kubectl, pod, suffix string) (*netnsHelper, error) {
 	node, err := kube.Get(t.Context, "pod", pod, "{.spec.nodeName}")
 	if err != nil {
@@ -75,7 +75,7 @@ func attachNetns(t *core.T, kube *k8s.Kubectl, pod, suffix string) (*netnsHelper
 	if node == "" || uid == "" {
 		return nil, fmt.Errorf("pod %s has no node or uid yet (node %q, uid %q)", pod, node, uid)
 	}
-	h := &netnsHelper{kube: kube, name: "ampqa-netns-" + suffix}
+	h := &netnsHelper{kube: kube, name: "ampqa-netns-" + suffix, uid: uid, node: node, pod: pod}
 	if err := kube.Apply(t.Context, h.manifest(node, helperImage(t.Options))); err != nil {
 		return nil, fmt.Errorf("create the netns helper pod %s on node %s: %w", h.name, node, err)
 	}
@@ -83,28 +83,49 @@ func attachNetns(t *core.T, kube *k8s.Kubectl, pod, suffix string) (*netnsHelper
 		h.Close(t.Context)
 		return nil, fmt.Errorf("netns helper pod %s never became Ready on node %s: %w (%s)", h.name, node, err, kube.PodTrouble(t.Context, h.name))
 	}
-	res, err := h.exec().Run(t.Context, findPodPIDScript(uid))
-	if err != nil {
+	if _, err := h.podPID(t.Context); err != nil {
 		h.Close(t.Context)
-		return nil, fmt.Errorf("scan /proc on node %s for pod %s: %w", node, pod, err)
+		return nil, err
 	}
-	pid := strings.TrimSpace(res.Stdout)
-	if res.ExitCode != 0 || pid == "" {
-		h.Close(t.Context)
-		return nil, fmt.Errorf("no process on node %s belongs to pod %s (uid %s): the helper cannot enter its network namespace (exit %d, stderr %q)",
-			node, pod, uid, res.ExitCode, strings.TrimSpace(res.Stderr))
-	}
-	h.pid = pid
 	return h, nil
 }
 
 func (h *netnsHelper) exec() *k8s.Kubectl { return h.kube.ForPod(h.name, "") }
 
+// errNoPodProcess: no process left, so the namespace and its rules are gone.
+var errNoPodProcess = errors.New("no process on the node belongs to the target pod")
+
+// Resolved per call: a liveness restart retires the pid, not the namespace.
+func (h *netnsHelper) podPID(ctx context.Context) (string, error) {
+	res, err := h.exec().Run(ctx, findPodPIDScript(h.uid))
+	if err != nil {
+		return "", fmt.Errorf("scan /proc on node %s for pod %s: %w", h.node, h.pod, err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	// A non-zero exit is kubectl's, not the script's: OSRun reports a dead
+	// helper pod the same way, and that must never read as "rules are gone".
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("scan /proc on node %s for pod %s exited %d: %s", h.node, h.pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	if out == noPodPIDSentinel {
+		return "", fmt.Errorf("%w: pod %s (uid %s) on node %s, so the helper cannot enter its network namespace",
+			errNoPodProcess, h.pod, h.uid, h.node)
+	}
+	if out == "" {
+		return "", fmt.Errorf("scan /proc on node %s for pod %s printed nothing (stderr %q)", h.node, h.pod, strings.TrimSpace(res.Stderr))
+	}
+	return out, nil
+}
+
 // iptables runs one iptables invocation inside the target's network namespace,
 // erroring on a non-zero exit. iptables-legacy is preferred where the kernel
 // serves it (COS does, for kube-proxy) and iptables-nft is the fallback.
 func (h *netnsHelper) iptables(ctx context.Context, args string) error {
-	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s %s'", h.pid, iptablesPick, args))
+	pid, err := h.podPID(ctx)
+	if err != nil {
+		return err
+	}
+	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s %s'", pid, iptablesPick, args))
 	if err != nil {
 		return err
 	}
@@ -122,7 +143,14 @@ const iptablesPick = `IPT=iptables-legacy; $IPT -L -n >/dev/null 2>&1 || IPT=ipt
 func (h *netnsHelper) clearRules(ctx context.Context) error {
 	script := fmt.Sprintf(`IPT=iptables-legacy; $IPT -L -n >/dev/null 2>&1 || IPT=iptables; `+
 		`$IPT -S | grep -- "--comment %s" | sed "s/^-A/-D/" | while read -r r; do $IPT $r || exit 1; done`, iptablesComment)
-	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s'", h.pid, script))
+	pid, err := h.podPID(ctx)
+	if errors.Is(err, errNoPodProcess) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s'", pid, script))
 	if err != nil {
 		return err
 	}
@@ -164,12 +192,16 @@ spec:
 `, h.name, h.kube.Namespace(), node, image)
 }
 
+// noPodPIDSentinel is how a scan that RAN and matched nothing reports itself,
+// which an exec that never ran cannot forge.
+const noPodPIDSentinel = "ampqa-no-pid"
+
 // findPodPIDScript prints the first host pid whose cgroup path carries the pod
 // uid, in either spelling the cgroup drivers use (dashes, or underscores under
-// systemd slices), and exits 1 when none does.
+// systemd slices), and the sentinel when none does.
 func findPodPIDScript(uid string) string {
 	return fmt.Sprintf(`uid=%s; u2=$(echo "$uid" | tr - _); for p in /proc/[0-9]*; do `+
-		`grep -qs -e "$uid" -e "$u2" "$p/cgroup" && { echo "${p#/proc/}"; exit 0; }; done; exit 1`, uid)
+		`grep -qs -e "$uid" -e "$u2" "$p/cgroup" && { echo "${p#/proc/}"; exit 0; }; done; echo %s`, uid, noPodPIDSentinel)
 }
 
 // podPartition is one set of rules applied in one pod's network namespace.

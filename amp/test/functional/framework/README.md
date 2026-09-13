@@ -140,8 +140,9 @@ postmaster, postgres answering again (`core/conndrop.go`,
 **Env-failure retries** (`core/retry.go`). A test whose environment failed for a
 SCHEDULING-CLASS reason — pod unschedulable, insufficient cpu/memory,
 PersistentVolume node affinity, a readiness or `helm install --wait` deadline —
-is retried `sched.env_retries` times (default 1) after `sched.env_retry_backoff`
-(default 60s). Nothing else retries. Every attempt is reported as its OWN
+or on a YBA create-universe task failure during our own `provision_yba`
+backing, is retried `sched.env_retries` times (default 1) after
+`sched.env_retry_backoff` (default 60s). Nothing else retries. Every attempt is reported as its OWN
 result carrying `retry_group`, `attempt` (1-based) and, from attempt 2 on,
 `retry_reason`; run-level counts use each test's FINAL attempt only.
 

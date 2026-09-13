@@ -58,6 +58,8 @@ var schedulingSignals = []struct {
 	reason string
 	all    []string
 }{
+	// Both tokens: "ended Failure" alone reaches the product's own YBA calls.
+	{"yba universe create task failed", []string{"provision_yba: create universe", "ended failure"}},
 	{"pod unschedulable (insufficient cpu)", []string{"insufficient cpu"}},
 	{"pod unschedulable (insufficient memory)", []string{"insufficient memory"}},
 	{"pod unschedulable (persistentvolume node affinity)", []string{"persistentvolume's node affinity"}},
