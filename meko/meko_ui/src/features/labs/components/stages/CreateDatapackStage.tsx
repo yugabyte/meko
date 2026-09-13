@@ -20,6 +20,8 @@ export function CreateDatapackStage({
   creating,
   hasHitDatapackCount,
   onContinue,
+  heading,
+  description,
 }: {
   datapacks: Datapack[];
   loading: boolean;
@@ -29,6 +31,14 @@ export function CreateDatapackStage({
   creating: boolean;
   hasHitDatapackCount: boolean;
   onContinue: () => void;
+  /** Optional heading/description shown above the form -- omitted by
+   *  Chapter 1's own first-time use (nothing to explain yet), set by later
+   *  reuses of this same component (the "choose-datapack-again" case in
+   *  LabStageSlot.tsx -- there's no separate ChooseDatapackAgainStage
+   *  component) where the user already has a datapack selected and needs to
+   *  know why they're being asked again. */
+  heading?: string;
+  description?: string;
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -49,6 +59,8 @@ export function CreateDatapackStage({
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 overflow-y-auto p-6">
+      {heading && <h2 className="text-lg font-semibold text-foreground">{heading}</h2>}
+      {description && <p className="text-sm text-muted-foreground">{description}</p>}
       {showCreate ? (
         <div className="flex flex-col gap-3 rounded-md border border-border p-4">
           <Label htmlFor="create-datapack-name">New datapack name</Label>

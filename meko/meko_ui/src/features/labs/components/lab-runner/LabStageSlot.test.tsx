@@ -6,24 +6,27 @@ import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDefinition, LabStage } from "../../types";
 import { LabStageSlot } from "./LabStageSlot";
 
-// Only PrReviewDemoApp needs a controllable mock here -- this test is about
-// LabStageSlot's own reviewRun state surviving a switch to a different
-// stage and back, not about the review flow itself (see
-// PrReviewDemoApp.test.tsx for that).
-vi.mock("../demo-apps/PrReviewDemoApp", () => ({
-  PrReviewDemoApp: ({
-    savedRun,
-    onRunChange,
-  }: {
-    savedRun?: { reviewText: string | null } | null;
-    onRunChange?: (run: unknown) => void;
-  }) => (
+// Only PrReviewDemoApp/BringYourOwnPrStage need a controllable mock here --
+// these tests are about LabStageSlot's own reviewRun/byocReviewRun state
+// (surviving a stage switch, clearing on a datapack switch), not about
+// either stage's own internal review flow (see PrReviewDemoApp.test.tsx and
+// BringYourOwnPrStage.test.tsx for that).
+function stubReviewStage({
+  savedRun,
+  onRunChange,
+}: {
+  savedRun?: { reviewText: string | null } | null;
+  onRunChange?: (run: unknown) => void;
+}) {
+  return (
     <div>
       <button onClick={() => onRunChange?.({ reviewText: "Looks good." })}>simulate review complete</button>
       <div data-testid="review-text">{savedRun?.reviewText ?? "(none)"}</div>
     </div>
-  ),
-}));
+  );
+}
+vi.mock("../demo-apps/PrReviewDemoApp", () => ({ PrReviewDemoApp: stubReviewStage }));
+vi.mock("../stages/BringYourOwnPrStage", () => ({ BringYourOwnPrStage: stubReviewStage }));
 
 const RUN_REVIEW_STAGE: LabStage = {
   id: "run-review",
@@ -37,6 +40,12 @@ const CONTEXT_INTRO_STAGE: LabStage = {
   summary: "",
   highlights: ["a", "b"],
 };
+const BRING_YOUR_OWN_PR_STAGE: LabStage = {
+  id: "bring-your-own-pr",
+  title: "Review a real PR",
+  summary: "",
+  highlights: ["a", "b"],
+};
 
 const LAB = {
   id: "adlc-review-agent",
@@ -45,6 +54,10 @@ const LAB = {
 } as unknown as LabDefinition;
 
 const SESSION = { datapackId: "dp-1", deploymentActive: true } as unknown as ReturnType<typeof useLabRunnerSession>;
+
+function fakeSession(datapackId: string): ReturnType<typeof useLabRunnerSession> {
+  return { datapackId, deploymentActive: true } as unknown as ReturnType<typeof useLabRunnerSession>;
+}
 
 function fakeProgress(stage: LabStage): ReturnType<typeof useLabProgress> {
   return {
@@ -72,5 +85,19 @@ describe("LabStageSlot", () => {
     // reviewRun state back in as savedRun, so the result is still there.
     rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} />);
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
+  });
+
+  it("clears Chapter 4's byocReviewRun once session.datapackId actually changes", () => {
+    const { rerender } = render(
+      <LabStageSlot lab={LAB} session={fakeSession("dp-1")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} />,
+    );
+    fireEvent.click(screen.getByText("simulate review complete"));
+    expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
+
+    // Chapter 4's own choose-datapack-again stage can change session.datapackId
+    // mid-chapter -- a review run against the OLD datapack must not keep
+    // showing (and blocking the fetch form) once the datapack switches.
+    rerender(<LabStageSlot lab={LAB} session={fakeSession("dp-2")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} />);
+    expect(screen.getByTestId("review-text").textContent).toBe("(none)");
   });
 });

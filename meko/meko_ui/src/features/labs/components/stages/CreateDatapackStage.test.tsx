@@ -57,6 +57,45 @@ describe("CreateDatapackStage", () => {
     expect(onCreate).toHaveBeenCalledWith("My Pack");
   });
 
+  it("renders no heading/description by default, but shows them when passed (a later chapter's reuse)", () => {
+    const { rerender } = (() => {
+      const onSelect = vi.fn();
+      const onCreate = vi.fn().mockResolvedValue(undefined);
+      const onContinue = vi.fn();
+      const utils = render(
+        <CreateDatapackStage
+          datapacks={DATAPACKS}
+          loading={false}
+          selectedId={null}
+          onSelect={onSelect}
+          onCreate={onCreate}
+          creating={false}
+          hasHitDatapackCount={false}
+          onContinue={onContinue}
+        />,
+      );
+      return utils;
+    })();
+    expect(screen.queryByText("Choose a datapack")).toBeNull();
+
+    rerender(
+      <CreateDatapackStage
+        datapacks={DATAPACKS}
+        loading={false}
+        selectedId={null}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        creating={false}
+        hasHitDatapackCount={false}
+        onContinue={vi.fn()}
+        heading="Choose a datapack"
+        description="Keep the same one, or switch."
+      />,
+    );
+    expect(screen.getByText("Choose a datapack")).toBeTruthy();
+    expect(screen.getByText("Keep the same one, or switch.")).toBeTruthy();
+  });
+
   it("disables New once the datapack quota is hit", () => {
     renderStage({ hasHitDatapackCount: true });
     expect((screen.getByRole("button", { name: /new/i }) as HTMLButtonElement).disabled).toBe(true);

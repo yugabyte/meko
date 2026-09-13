@@ -11,6 +11,9 @@ import type { LabChapter } from "../../types";
 // query, regardless of whether a cluster exists. requiresAmp on this chapter
 // (below) means getLabDefinition drops it entirely when AMP isn't enabled,
 // rather than showing four stages that all immediately degrade.
+// "Bring your own PR" lets the user point AgentK at a real pull request
+// instead of the bundled sample -- fetched client-side with the user's own
+// GitHub token (lib/api/githubApi.ts), never sent to Meko.
 export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   {
     id: "setup-context",
@@ -123,6 +126,32 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
         title: "See your dashboard",
         summary: "A preview of what your review-run dashboard will look like — models used, tokens, cost, and findings.",
         highlights: ["Stat tiles + a trend chart", "Sample data, not yet live"],
+      },
+    ],
+  },
+  {
+    id: "bring-your-own-pr",
+    title: "Bring your own PR",
+    summary:
+      "Every review so far used a bundled sample PR — now point AgentK at a real pull request you have access to.",
+    stages: [
+      {
+        id: "choose-datapack-again",
+        title: "Choose a datapack",
+        summary: "Keep reviewing against the same datapack, or switch to a different one for this PR.",
+        highlights: ["Same one, or a different one", "Sets the context for this review"],
+      },
+      {
+        id: "share-with-agent-again",
+        title: "Share your datapack",
+        summary: "If you switched datapacks, AgentK needs sharing on this one too — reusing your own is a no-op.",
+        highlights: ["Only matters if you switched", "Same one-time share as Chapter 2"],
+      },
+      {
+        id: "bring-your-own-pr",
+        title: "Review a real PR",
+        summary: "Paste a GitHub PR reference and a personal access token — AgentK reviews it against the same context.",
+        highlights: ["Your own repo, your own PR", "Token stays in your browser"],
       },
     ],
   },

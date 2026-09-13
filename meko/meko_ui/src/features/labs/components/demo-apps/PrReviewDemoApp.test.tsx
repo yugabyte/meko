@@ -102,6 +102,45 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(mockInvokeDeployment).not.toHaveBeenCalled();
   });
 
+  it("shows no diff preview before running when using the bundled sample (it has its own earlier stage)", () => {
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    expect(screen.queryByText(/view on github/i)).toBeNull();
+  });
+
+  it("previews a real PR's title/diff and links to it before running, when given a prSource", () => {
+    render(
+      <PrReviewDemoApp
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        prSource={{
+          title: "Fix the thing",
+          diff: "diff --git a/x b/x\n+fixed\n",
+          htmlUrl: "https://github.com/acme/widgets/pull/42",
+        }}
+      />,
+    );
+    expect(screen.getByText("Fix the thing")).toBeTruthy();
+    expect(screen.getByText("+fixed")).toBeTruthy();
+    const link = screen.getByRole("link", { name: /view on github/i }) as HTMLAnchorElement;
+    expect(link.href).toBe("https://github.com/acme/widgets/pull/42");
+  });
+
+  it("runs the review with the prSource's title/diff, not the bundled sample", async () => {
+    render(
+      <PrReviewDemoApp
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        prSource={{ title: "Fix the thing", diff: "diff --git a/x b/x\n+fixed\n" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(mockInvokeDeployment).toHaveBeenCalledTimes(1));
+    const [, payload] = mockInvokeDeployment.mock.calls[0];
+    expect(payload.pr_title).toBe("Fix the thing");
+    expect(payload.pr_diff).toBe("diff --git a/x b/x\n+fixed\n");
+  });
+
   it("defaults both switches on and sends them, plus the default model, with the sample diff run", async () => {
     render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
 
@@ -382,6 +421,27 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(lastCall.diffContent).toBeTruthy();
     expect(lastCall.conversationId).toBe("conv-1");
     expect(lastCall.reviewFindings).toEqual(DEFAULT_FINDINGS);
+    expect(lastCall.isSample).toBe(true);
+    expect(lastCall.sourceUrl).toBeNull();
+  });
+
+  it("reports isSample: false and the real sourceUrl via onRunChange when run with a prSource", async () => {
+    const onRunChange = vi.fn();
+    render(
+      <PrReviewDemoApp
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        prSource={{ title: "Fix the thing", diff: "diff --git a/x b/x\n", htmlUrl: "https://github.com/acme/widgets/pull/42" }}
+        onRunChange={onRunChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => expect(screen.getByText("Looks good.")).toBeTruthy());
+    const lastCall = onRunChange.mock.calls.at(-1)?.[0];
+    expect(lastCall.isSample).toBe(false);
+    expect(lastCall.sourceUrl).toBe("https://github.com/acme/widgets/pull/42");
   });
 
   it("restores a previously-completed review from savedRun instead of starting over", () => {
@@ -392,6 +452,8 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
       ],
       diffTitle: "Add per-team spend aggregation endpoint",
       diffContent: "diff --git a/api/spend.py b/api/spend.py\n",
+      isSample: true,
+      sourceUrl: null,
       conversationId: "conv-1",
       reviewText: "Looks good.",
       reviewUsage: { input_tokens: 512, output_tokens: 128 },
@@ -410,5 +472,35 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(screen.queryByRole("button", { name: /run review/i })).toBeNull();
     expect(screen.getByText("Looks good.")).toBeTruthy();
     expect(mockInvokeDeployment).not.toHaveBeenCalled();
+  });
+
+  it("restores a real (non-sample) PR's badge and GitHub link from savedRun, without prSource -- regression test", () => {
+    // prSource is BringYourOwnPrStage's own local state, which resets to
+    // undefined on every remount (stage navigation) -- a restored run must
+    // not fall back to looking like the bundled sample just because
+    // prSource is absent this time. isSample/sourceUrl are what PrReviewRunState
+    // carries specifically so this doesn't happen.
+    const savedRun = {
+      messages: [{ id: "assistant-1", role: "assistant" as const, content: "Looks good." }],
+      diffTitle: "Fix the thing",
+      diffContent: "diff --git a/x b/x\n",
+      isSample: false,
+      sourceUrl: "https://github.com/acme/widgets/pull/42",
+      conversationId: "conv-1",
+      reviewText: "Looks good.",
+      reviewUsage: null,
+      contextStats: null,
+      reviewFindings: DEFAULT_FINDINGS,
+      initialReviewMessageId: "assistant-1",
+      selectedModelId: MODEL_OPTIONS[0].value,
+      reviewPromptMessageId: null,
+      sendError: null,
+    };
+    // No `prSource` prop passed -- exactly the remounted-after-navigation case.
+    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
+
+    expect(screen.queryByText("Sample PR")).toBeNull();
+    const link = screen.getByRole("link", { name: /view on github/i }) as HTMLAnchorElement;
+    expect(link.href).toBe("https://github.com/acme/widgets/pull/42");
   });
 });

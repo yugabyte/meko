@@ -25,7 +25,10 @@ export type LabStageId =
   | "dashboard-intro"
   | "create-amp-cluster"
   | "run-review-again"
-  | "review-dashboard";
+  | "review-dashboard"
+  | "choose-datapack-again"
+  | "share-with-agent-again"
+  | "bring-your-own-pr";
 
 export type LabStage = {
   id: LabStageId;

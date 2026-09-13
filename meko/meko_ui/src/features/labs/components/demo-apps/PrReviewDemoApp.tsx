@@ -22,10 +22,10 @@ import { InvokeDeploymentError, invokeDeployment, invokeSharedDeployment } from 
 import { ChatInput } from "@/features/workbench-lm/components/workbench-lm-chat/ChatInput";
 import type { Message } from "@/features/workbench-lm/components/workbench-lm-chat/types";
 
-// Bring-your-own-PR (a real GitHub PAT + owner/repo#123) is deferred to a
-// later chapter -- this stage only reviews the bundled sample diff for now.
-// lib/api/githubApi.ts's fetchPullRequestDiff/fetchPullRequestSummary/
-// parsePrRef stay in place unused here, for that future chapter to import.
+// Bring-your-own-PR: BringYourOwnPrStage fetches a real PR client-side (via
+// lib/api/githubApi.ts, using the user's own pasted GitHub PAT -- which never
+// reaches this component or Meko's backend) and hands the result in as
+// `prSource`, which overrides the bundled sample diff below.
 import { postToSlackChannel } from "@/lib/api/slackApi";
 import type { ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
 import {
@@ -53,6 +53,11 @@ import {
 
 export type ContextStats = NonNullable<Extract<ReviewStreamEvent, { type: "done" }>["context_stats"]>;
 
+/** A real PR fetched client-side (BringYourOwnPrStage), overriding the
+ *  bundled sample diff for this run. `htmlUrl` is optional purely because
+ *  fetchPullRequestSummary's own response can come back without one. */
+export type PrSource = { title: string; diff: string; htmlUrl?: string };
+
 /**
  * Everything needed to fully restore a completed (or in-progress) review
  * after this component unmounts and remounts -- which happens on every
@@ -69,6 +74,13 @@ export type PrReviewRunState = {
   messages: Message[];
   diffTitle: string | null;
   diffContent: string | null;
+  /** Whether THIS run's diff is the bundled sample, captured once at run
+   *  time -- see isSample's own state comment for why this can't be derived
+   *  from the `prSource` prop after a remount. */
+  isSample: boolean;
+  /** The real PR's GitHub URL for this run, if any -- same capture-once
+   *  reasoning as isSample. */
+  sourceUrl: string | null;
   conversationId: string | null;
   reviewText: string | null;
   reviewUsage: { input_tokens: number; output_tokens: number } | null;
@@ -109,13 +121,27 @@ function reviewConfigPayload(config: ReviewAgentConfig) {
 export function PrReviewDemoApp({
   demoApp,
   session,
+  prSource,
   savedRun,
   onRunChange,
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  /** A real PR to review instead of the bundled sample -- see PrSource's own
+   *  comment. Only read at the moment "Run review" is clicked (handleRunReview);
+   *  once a review is underway or restored from `savedRun`, this is ignored. */
+  prSource?: PrSource;
   /** A previous run's results, if this component is remounting after the
-   *  user navigated away and back -- see PrReviewRunState's own comment. */
+   *  user navigated away and back -- see PrReviewRunState's own comment.
+   *  Only read at the moment "Run review" is clicked (handleRunReview),
+   *  which captures its title/diff/htmlUrl into diffTitle/diffContent/
+   *  isSample/sourceUrl -- the post-review view reads THOSE, never
+   *  `prSource` directly, since `prSource` is this component's OWN local
+   *  state in BringYourOwnPrStage and resets to undefined on every remount,
+   *  while a completed run's `savedRun` (and the state seeded from it)
+   *  survives one. Reading `prSource` in the post-review render was a real
+   *  bug (a restored real-PR run rendered mislabeled "Sample PR" with no
+   *  GitHub link) -- fixed by capturing isSample/sourceUrl once instead. */
   savedRun?: PrReviewRunState | null;
   /** Called whenever any of PrReviewRunState's fields change, so the owner
    *  (LabStageSlot) can hand the same state back in as `savedRun` next time
@@ -125,6 +151,13 @@ export function PrReviewDemoApp({
   const [messages, setMessages] = useState<Message[]>(() => savedRun?.messages ?? []);
   const [diffTitle, setDiffTitle] = useState<string | null>(() => savedRun?.diffTitle ?? null);
   const [diffContent, setDiffContent] = useState<string | null>(() => savedRun?.diffContent ?? null);
+  // Captured once at send time (handleRunReview), same lifetime/reasoning as
+  // selectedModelId below -- `prSource` itself is BringYourOwnPrStage's own
+  // local state, which resets to undefined on every remount (stage
+  // navigation), so the post-review view can't read it directly without
+  // mislabeling a restored real-PR run as the bundled sample.
+  const [isSample, setIsSample] = useState<boolean>(() => savedRun?.isSample ?? true);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(() => savedRun?.sourceUrl ?? null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(() => savedRun?.conversationId ?? null);
@@ -224,6 +257,8 @@ export function PrReviewDemoApp({
       messages,
       diffTitle,
       diffContent,
+      isSample,
+      sourceUrl,
       conversationId,
       reviewText,
       reviewUsage,
@@ -238,6 +273,8 @@ export function PrReviewDemoApp({
     messages,
     diffTitle,
     diffContent,
+    isSample,
+    sourceUrl,
     conversationId,
     reviewText,
     reviewUsage,
@@ -318,11 +355,13 @@ export function PrReviewDemoApp({
   );
 
   const handleRunReview = useCallback(async () => {
-    const title = SAMPLE_DIFF_TITLE;
-    const diff = SAMPLE_DIFF_CONTENT;
+    const title = prSource?.title ?? SAMPLE_DIFF_TITLE;
+    const diff = prSource?.diff ?? SAMPLE_DIFF_CONTENT;
 
     setDiffTitle(title);
     setDiffContent(diff);
+    setIsSample(!prSource);
+    setSourceUrl(prSource?.htmlUrl ?? null);
     setSelectedModelId(reviewConfig.model);
     await send(
       {
@@ -337,7 +376,7 @@ export function PrReviewDemoApp({
       buildReviewPrompt(title, diff),
       true,
     );
-  }, [send, session.datapackId, session.userToken, session.deploymentMode, reviewConfig]);
+  }, [send, session.datapackId, session.userToken, session.deploymentMode, reviewConfig, prSource]);
 
   const handleFollowUp = useCallback(
     (text: string) => {
@@ -380,26 +419,40 @@ export function PrReviewDemoApp({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 overflow-y-auto p-4">
         {!hasReviewed ? (
-          <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
-            <p className="text-sm text-muted-foreground">
-              Every source you built in Chapter 1 is still live here — whichever model you pick
-              below reaches it the same way Claude did: by calling{" "}
-              <code className="font-mono">knowledgebase_search</code> and{" "}
-              <code className="font-mono">memory_search</code> against your datapack.
-            </p>
-            <ReviewAgentConfigPanel
-              value={reviewConfig}
-              onChange={setReviewConfig}
-              agentDisplayName={demoApp.agentDisplayName}
-            />
-            <Button onClick={handleRunReview} disabled={!canReview || sending} className="self-start">
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Run review
-            </Button>
+          <div className="flex flex-col gap-4">
+            {/* The bundled sample diff already gets its own preview in an
+                earlier stage (review-sample-pr) before reaching this one --
+                only a real, user-fetched PR (prSource) needs showing here,
+                so "what's being reviewed" is visible in every phase: after
+                fetching, while configuring, and (below, hasReviewed) during
+                and after the review itself. */}
+            {prSource && <PrDiffViewer title={prSource.title} diff={prSource.diff} url={prSource.htmlUrl} />}
+            <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
+              <p className="text-sm text-muted-foreground">
+                Every source in this datapack is live here — whichever model you pick below
+                reaches it the same way Claude did: by calling{" "}
+                <code className="font-mono">knowledgebase_search</code> and{" "}
+                <code className="font-mono">memory_search</code> against your datapack.
+              </p>
+              <ReviewAgentConfigPanel
+                value={reviewConfig}
+                onChange={setReviewConfig}
+                agentDisplayName={demoApp.agentDisplayName}
+              />
+              <Button onClick={handleRunReview} disabled={!canReview || sending} className="self-start">
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Run review
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            <PrDiffViewer title={diffTitle ?? SAMPLE_DIFF_TITLE} diff={diffContent} isSample />
+            <PrDiffViewer
+              title={diffTitle ?? SAMPLE_DIFF_TITLE}
+              diff={diffContent}
+              isSample={isSample}
+              url={sourceUrl ?? undefined}
+            />
             {/* The diff-embedded review prompt itself is skipped — PrDiffViewer
                 already shows the diff. Every later turn (reply + any
                 follow-up) renders normally. */}

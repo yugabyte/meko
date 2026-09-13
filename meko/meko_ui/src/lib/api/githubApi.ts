@@ -6,11 +6,17 @@
 export type ParsedPrRef = { owner: string; repo: string; number: number };
 
 const PR_REF_RE = /^([\w.-]+)\/([\w.-]+)#(\d+)$/;
+// A pasted PR link, e.g. "https://github.com/owner/repo/pull/123" (with or
+// without a trailing "/files", "/commits", query string, or fragment).
+const PR_URL_RE = /^https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:[/?#].*)?$/;
 
-/** Parses "owner/repo#123". Returns null for anything else so the caller can
+/** Parses "owner/repo#123" or a full GitHub PR URL -- pasting the URL
+ *  straight from the browser's address bar is the more natural thing to do,
+ *  so both are accepted. Returns null for anything else so the caller can
  *  show a clear validation error instead of a confusing fetch failure. */
 export function parsePrRef(input: string): ParsedPrRef | null {
-  const match = PR_REF_RE.exec(input.trim());
+  const trimmed = input.trim();
+  const match = PR_REF_RE.exec(trimmed) ?? PR_URL_RE.exec(trimmed);
   if (!match) return null;
   return { owner: match[1], repo: match[2], number: Number(match[3]) };
 }

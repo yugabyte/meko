@@ -14,7 +14,7 @@ afterEach(() => {
   mockIsAmpEnabled.mockReturnValue(true);
 });
 
-// LabStageId is a closed 15-value union LabStageSlot switches on
+// LabStageId is a closed 18-value union LabStageSlot switches on
 // exhaustively -- a lab missing one silently gets a blank pane for it.
 const FIXED_STAGE_IDS: LabStageId[] = [
   "create-datapack",
@@ -32,6 +32,9 @@ const FIXED_STAGE_IDS: LabStageId[] = [
   "create-amp-cluster",
   "run-review-again",
   "review-dashboard",
+  "choose-datapack-again",
+  "share-with-agent-again",
+  "bring-your-own-pr",
 ];
 
 describe("LAB_DEFINITIONS", () => {
@@ -57,7 +60,7 @@ describe("LAB_DEFINITIONS", () => {
     }
   });
 
-  it("every lab has exactly the 15 fixed stages", () => {
+  it("every lab has exactly the 18 fixed stages", () => {
     for (const lab of LAB_DEFINITIONS) {
       const stageIds = flattenLabStages(lab.chapters).map((stage) => stage.id);
       expect(new Set(stageIds)).toEqual(new Set(FIXED_STAGE_IDS));

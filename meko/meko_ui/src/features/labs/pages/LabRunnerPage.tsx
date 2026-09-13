@@ -17,10 +17,17 @@ import { LabObservationSlot } from "../components/lab-runner/LabObservationSlot"
 import type { LabStageId } from "../types";
 
 // The only stages that read session.userToken (MemoryStage,
-// ConversationStage's SeedContextChat, and both PrReviewDemoApp call sites --
-// run-review and run-review-again) -- Deploy Agent and Collaborate need just
-// session.datapackId, which is available synchronously.
-const STAGES_NEEDING_TOKEN: LabStageId[] = ["memory", "conversation", "run-review", "run-review-again"];
+// ConversationStage's SeedContextChat, and all three PrReviewDemoApp call
+// sites -- run-review, run-review-again, and bring-your-own-pr) -- Deploy
+// Agent and Collaborate need just session.datapackId, which is available
+// synchronously.
+const STAGES_NEEDING_TOKEN: LabStageId[] = [
+  "memory",
+  "conversation",
+  "run-review",
+  "run-review-again",
+  "bring-your-own-pr",
+];
 
 export function shouldShowProvisionStatusSpinner(loading: boolean, stageId: LabStageId): boolean {
   return loading && STAGES_NEEDING_TOKEN.includes(stageId);

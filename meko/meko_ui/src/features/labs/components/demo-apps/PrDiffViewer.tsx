@@ -1,3 +1,5 @@
+import { ExternalLink } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -29,16 +31,19 @@ export function PrDiffViewer({
   description,
   diff,
   isSample,
+  url,
 }: {
   title: string;
   description?: string;
   diff: string;
   /** Marks this as bundled sample content, not a real submitted PR --
-   *  otherwise indistinguishable from a genuine diff once BYOC-PR support
-   *  lands (deferred to a later chapter, per PrReviewDemoApp's own header
-   *  comment), so this needs to be explicit at every call site rather than
-   *  assumed. */
+   *  otherwise indistinguishable from a genuine diff now that BYOC-PR
+   *  support exists (see BringYourOwnPrStage), so this needs to be explicit
+   *  at every call site rather than assumed. */
   isSample?: boolean;
+  /** Links out to the real PR on GitHub -- only set for a bring-your-own-PR
+   *  review, where there's an actual page to link to. */
+  url?: string;
 }) {
   const lines = diff.split("\n");
   const stats = diffStats(diff);
@@ -51,6 +56,16 @@ export function PrDiffViewer({
             <Badge variant="outline" className="shrink-0">
               Sample PR
             </Badge>
+          )}
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <ExternalLink className="h-3 w-3" /> View on GitHub
+            </a>
           )}
         </div>
         {description && <p className="mt-1.5 text-xs text-muted-foreground">{description}</p>}

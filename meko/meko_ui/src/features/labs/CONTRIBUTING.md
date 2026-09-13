@@ -16,18 +16,22 @@ lab means adding config, not touching those pages.
    for the common mistakes (duplicate ids, empty summaries) before you get
    to manual testing.
 
-## The 15 fixed stages, grouped into chapters
+## The 18 fixed stages, grouped into chapters
 
-Every lab walks the same 15 stages (`LabStageId` in `types.ts`): Create
+Every lab walks the same 18 stages (`LabStageId` in `types.ts`): Create
 Datapack → What is context? → Build a knowledge base → Add a memory → Chat
 about a preference → Deploy Agent → Share your datapack → Review the sample
 PR → See Claude's reference review → Configure & run your review →
 Collaborate → Why a dashboard needs real storage → Create an AMP cluster →
-Run another review → See your dashboard. They're a closed union, not per-lab
+Run another review → See your dashboard → Choose a datapack → Share your
+datapack (again) → Review a real PR. They're a closed union, not per-lab
 config — a lab supplies the `title`/`summary`/`highlights` copy for each, but
 the stage components themselves (`components/stages/*`) are shared across
-every lab. `LabStageSlot.tsx` switches on `LabStage.id` to render the right
-one.
+every lab — some cover more than one stage id (`CreateDatapackStage` for
+both Create Datapack and Choose a Datapack, `ShareWithAgentStage` for both
+Share Your Datapack cases) via optional props rather than a separate
+component per reuse. `LabStageSlot.tsx` switches on `LabStage.id` to render
+the right one.
 
 The last four (the "Build a dashboard" chapter) are gated behind
 `LabChapter.requiresAmp` — `getLabDefinition` (`data/labDefinitions.ts`) drops
@@ -77,8 +81,8 @@ change — they're generic over any `LabDefinition`.
   datapack first" prompt every stage but Create Datapack degrades to when
   `session.datapackId` is null.
 - `components/lab-runner/LabStageNeedsDeployment.tsx` is the same pattern
-  for a stage that also needs an active deployment — Run a Review and Run
-  Another Review, both gated on `session.deploymentActive`.
+  for a stage that also needs an active deployment — Run a Review, Run
+  Another Review, and Review a Real PR, all gated on `session.deploymentActive`.
 - `components/lab-runner/LabStageNeedsAmpCluster.tsx` is the same pattern for
   a stage that needs the datapack's AMP cluster to exist first — currently
   just See Your Dashboard, gated on `session.ampClusterId` (confirmed live via
