@@ -11,13 +11,20 @@ Meko uses hybrid retrieval to find personal memories by meaning while preserving
 
 ## How it works
 
-`memory_search` ranks stored memories using three signals:
+The [memory_search](../../../reference/mcp-server/#memory-tools) tool ranks stored memories using three signals:
 
 1. **Semantic similarity** finds memories with related meaning.
 1. **Keyword matching** gives exact terms more weight.
 1. **Entity boosting** raises memories that mention the people, projects, tools, or other named things in the query.
 
 The server combines these signals and returns the highest-ranked memories.
+
+The response includes two score fields:
+
+- `score` is the fused hybrid rank. Results are ordered by this field.
+- `raw_similarity_score` is the cosine similarity from the vector store.
+
+A result with a lower `raw_similarity_score` can rank above one with a higher value when its keyword or entity signals are stronger.
 
 ## Keep model context bounded
 
@@ -36,4 +43,4 @@ Don't retry quota or permission errors. Resolve the account, key, or datapack ac
 
 ## Find older or exact memories
 
-`memory_get_all` returns a recent window, not a complete export. Use `memory_search` for older content and `memory_get_by_id` when you know the exact memory ID.
+The [memory_get_all](../../../reference/mcp-server/#memory-tools) tool returns a recent window, not a complete export. Use `memory_search` for older content and `memory_get_by_id` when you know the exact memory ID.

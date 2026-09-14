@@ -60,7 +60,7 @@ Example 2:
 What coding standards have I set?
 ```
 
-The MCP server performs a semantic similarity search across your memories and returns the most relevant results with relevance scores.
+The MCP server performs a hybrid search across your memories and returns the most relevant results.
 
 `memory_search` spans the current user's agent namespaces in the selected datapack. For example, a search from Claude Code can find a relevant memory written from Cursor or Claude Desktop. The `agent_id` sent with the search is used for trace attribution; it doesn't filter the results. Agents should make one search rather than repeating it for every known agent ID.
 
@@ -84,7 +84,7 @@ Memory search combines three signals:
 1. **Keyword matching** gives exact terms more weight.
 1. **Entity boosting** raises memories that mention the named people, projects, or tools in the query.
 
-Meko combines and ranks these signals. For example, the memory _"John likes bananas"_ can match the exact query _"Who likes bananas?"_ and the related query _"Who likes fruit?"_
+Meko combines these signals into `score` and orders results by that field. `raw_similarity_score` is the vector store's cosine similarity and does not determine the order by itself. For example, the memory _"John likes bananas"_ can match the exact query _"Who likes bananas?"_ and the related query _"Who likes fruit?"_
 
 ## View recent memories
 

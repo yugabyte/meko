@@ -44,13 +44,13 @@ The same extraction runs automatically whenever a conversation turn is saved (se
 
 ### Search memories
 
-Find relevant memories using semantic similarity search. A single search spans the authenticated user's agent namespaces in the selected datapack and returns the top matches with relevance scores. The calling `agent_id` is retained for trace attribution; it doesn't filter the results.
+Find relevant memories using hybrid search. A single search spans the authenticated user's agent namespaces in the selected datapack and returns the top matches ordered by `score`. The calling `agent_id` is retained for trace attribution; it doesn't filter the results.
 
 ```text
 "What are my vacation preferences?"
 ```
 
-This combines semantic similarity, keyword matching, and an entity boost, then returns the highest-ranked memories.
+This combines semantic similarity, keyword matching, and an entity boost, then orders results by `score`. The response also includes `raw_similarity_score`, the cosine similarity from the vector store. Strong keyword or entity signals can place a result above one with a higher `raw_similarity_score`. See [Memory retrieval](../memory-retrieval/).
 
 ### Get recent memories
 
