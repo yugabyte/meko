@@ -32,6 +32,7 @@
     windowTotal: $("window-total"),
     windowRange: $("window-range"),
     windowMeta: $("window-meta"),
+    totalExecHeader: $("total-exec-header"),
     selectRate: $("metric-select-rate"),
     insertRate: $("metric-insert-rate"),
     updateRate: $("metric-update-rate"),
@@ -295,6 +296,13 @@
       ? ` · resets=${formatNumber(state.slice.totals.counter_resets)}`
       : "";
     elements.windowMeta.textContent = `Δ pg_stat_statements · ${formatDecimal(state.slice.duration_seconds)} s${resetNote}`;
+    // total_exec_time is a per-slice total while the two columns beside it are
+    // per-second and per-call, so the window goes in the header: without it the
+    // three read as one unit and total != queries/s * mean_exec_time.
+    if (elements.totalExecHeader) {
+      elements.totalExecHeader.textContent =
+        `total_exec_time / ${formatDecimal(state.slice.duration_seconds)}s`;
+    }
   }
 
   function renderSummary() {

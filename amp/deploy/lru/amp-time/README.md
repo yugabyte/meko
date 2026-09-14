@@ -62,6 +62,17 @@ table in all four LRU databases is in that state, so every inspection failed.
 `aclexplode` is strict, so dropping the `COALESCE` returns no rows for a NULL
 `relacl`, which is what the `COALESCE` was reaching for.
 
+### Deviation: the statement table mixed units without saying so
+
+`total_exec_time` is a total for the timeslice; `queries/s` and `mean_exec_time`
+next to it are per second and per call. Nothing on the row said which, so
+`queries/s * mean_exec_time` misses `total_exec_time` by the interval and reads
+as a bug. The header now carries the window, taken from the slice's own
+`duration_seconds` so it stays right under a different `--interval`.
+
+The value stays a per-slice total rather than becoming a rate: `time_pct` beside
+it is a share, and a share only means anything inside one window.
+
 ## What it needs from the endpoint
 
 `pg_stat_statements` is preloaded on every amp endpoint but created in no
