@@ -13,7 +13,9 @@
 #      storage.objectViewer for classic gcr.io buckets); one minted from a GCP SA
 #      key; one minted from a raw docker config.json (e.g. a CI Quay secret); or an
 #      EXISTING named secret (bring your own)
-#   4. a single-node YugabyteDB (yugabyted) StatefulSet + headless Service
+#   4. the backing YugabyteDB, per FOUNDATION:
+#      yugabyted (default) a single-node StatefulSet + headless Service
+#      operator            an operator-managed universe, via foundation/
 #   5. the yb_storage database (the controller connects to it at startup)
 #   6. the amp controller (+ MCP + UI) via the yb-amp-controller Helm chart
 #
@@ -31,6 +33,7 @@
 #   PULL_SECRET=my-gcr-secret deploy/up-gke.sh                    # bring your own existing secret
 #   PULL_SECRET=gcr-pull-secret GCR_KEY_FILE=./gcr-sa-key.json deploy/up-gke.sh  # mint from a GCP SA key
 #   PULL_SECRET=quay-pull-secret PULL_SECRET_DOCKERCONFIGJSON="$(cat cfg.json)" deploy/up-gke.sh  # mint from a docker config.json
+#   FOUNDATION=operator deploy/up-gke.sh                          # operator-managed universe instead of yugabyted
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,7 +73,21 @@ PULL_SECRET="${PULL_SECRET:-}"
 GCR_KEY_FILE="${GCR_KEY_FILE:-}"                     # GCP SA JSON key to mint PULL_SECRET from (optional)
 PULL_SECRET_DOCKERCONFIGJSON="${PULL_SECRET_DOCKERCONFIGJSON:-}"  # raw docker config.json to mint PULL_SECRET from (optional)
 
-# Single-node YugabyteDB (yugabyted).
+# How the backing YugabyteDB is brought up.
+#   yugabyted (default) the single-node StatefulSet below. RF-1, no rolling
+#                       upgrade, no backups — fine for a dev/CI stack.
+#   operator            a real universe managed by the YugabyteDB Kubernetes
+#                       Operator, via the foundation/ deployer. Sets
+#                       YB_HOST_PORTS/DB_URL from its output, so the address
+#                       comes from the one place that knows it rather than being
+#                       duplicated here.
+# The default is deliberately unchanged: the operator path carries a ~5 CPU
+# yugaware pod and tens of minutes of install, and is exercised by its own
+# on-demand workflow rather than by every deploy.
+FOUNDATION="${FOUNDATION:-yugabyted}"
+FOUNDATION_SPEC="${FOUNDATION_SPEC:-${REPO_ROOT}/../foundation/examples/amp.yaml}"
+
+# yugabyted settings (FOUNDATION=yugabyted only).
 YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:latest}"
 YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 # Stable in-cluster address of the yugabyted pod (StatefulSet headless Service DNS).
@@ -130,6 +147,18 @@ case "${CONTROLLER_EXPOSE}" in
   nodeport|internal-lb|external-lb|none) ;;
   *) die "invalid CONTROLLER_EXPOSE=${CONTROLLER_EXPOSE} (want nodeport|internal-lb|external-lb|none)" ;;
 esac
+case "${FOUNDATION}" in
+  yugabyted) ;;
+  operator)
+    command -v go >/dev/null 2>&1 || die "FOUNDATION=operator runs the foundation CLI from source; go not found on PATH"
+    [ -f "${FOUNDATION_SPEC}" ] || die "FOUNDATION_SPEC=${FOUNDATION_SPEC} not found"
+    # Absolutise it: the deployer runs from a subshell cd'd into foundation/, so
+    # a relative path would resolve there instead of here — passing preflight
+    # and then failing with a confusing "not found".
+    FOUNDATION_SPEC="$(cd "$(dirname "${FOUNDATION_SPEC}")" && pwd)/$(basename "${FOUNDATION_SPEC}")"
+    ;;
+  *) die "invalid FOUNDATION=${FOUNDATION} (want yugabyted|operator)" ;;
+esac
 if [ "${BUILD}" = "1" ] && [ -z "${TAG}" ]; then TAG="$(date +%Y%m%d-%H%M%S)"; fi
 TAG="${TAG:-latest}"
 echo "   kube-context : ${CTX}"
@@ -137,6 +166,7 @@ echo "   namespace    : ${NS}"
 echo "   registry     : ${REGISTRY}   (host ${REG_HOST})"
 echo "   tag          : ${TAG}   (build=${BUILD})"
 echo "   expose       : ${CONTROLLER_EXPOSE}   endpoints=${ENDPOINT_SERVICE_TYPE}"
+echo "   foundation   : ${FOUNDATION}"
 
 # --- 1. (optional) build + push images to GCR ---
 if [ "${BUILD}" = "1" ]; then
@@ -204,7 +234,35 @@ else
     || die "pull secret '${PULL_SECRET}' not found in namespace ${NS} (create it, pass GCR_KEY_FILE=<key> or PULL_SECRET_DOCKERCONFIGJSON=<json> to mint it, or unset PULL_SECRET to use the node SA)"
 fi
 
-# --- 4. single-node YugabyteDB (yugabyted) ---
+# --- 4. the backing YugabyteDB ---
+if [ "${FOUNDATION}" = "operator" ]; then
+  # An operator-managed universe, stood up by the foundation/ deployer: CRDs,
+  # the yugaware chart with the Kubernetes operator enabled, a YBUniverse CR,
+  # the tserver Service and yb_storage. It takes the namespace this script
+  # already created, so the amp pods stay co-located with the DB.
+  say "YugabyteDB (operator-managed universe via foundation/)"
+  FOUNDATION_ARGS=(-c "${FOUNDATION_SPEC}" --namespace "${NS}")
+  [ -n "${CLUSTER}" ] && FOUNDATION_ARGS+=(--kube-context "${CLUSTER}")
+  ( cd "${REPO_ROOT}/../foundation" && go run ./cmd/foundation up "${FOUNDATION_ARGS[@]}" )
+
+  # Read the addresses back from the deployer rather than duplicating them: it
+  # owns the Service name, the port and the DSN shape, and a second copy here is
+  # a second thing to keep in step. Captured before eval so a failure is not
+  # swallowed by the command substitution.
+  say "resolving foundation connection details"
+  _foundation_conn="$(cd "${REPO_ROOT}/../foundation" \
+    && go run ./cmd/foundation connstr "${FOUNDATION_ARGS[@]}" --shell)" \
+    || die "foundation connstr failed; the universe may not be Ready"
+  eval "${_foundation_conn}"
+  [ -n "${YB_HOST_PORTS:-}" ] || die "foundation connstr produced no YB_HOST_PORTS"
+  [ -n "${DB_URL:-}" ] || die "foundation connstr produced no DB_URL"
+  echo "   YB_HOST_PORTS : ${YB_HOST_PORTS}"
+  echo "   DB_URL        : ${DB_URL}"
+else
+# The yugabyted body below is deliberately left unindented: its manifest is a
+# heredoc whose YAML terminator must sit at column 0, so indenting the branch
+# would mean converting it to <<- and re-tabbing ~80 lines of YAML. Not worth
+# obscuring the diff for.
 say "YugabyteDB (single-node yugabyted)"
 kubectl apply -f - <<YAML
 apiVersion: v1
@@ -313,16 +371,20 @@ else
 fi
 REMOTE
 
+# The yugabyted pod's own FQDN is the only address there is here.
+YB_HOST_PORTS="${YB_FQDN}:5433"
+DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable"
+fi
+
 # --- 6. the amp controller (+ MCP + UI) via Helm ---
 say "amp controller (Helm: controller=${REGISTRY}/${CONTROLLER_IMAGE_REPO}:${TAG})"
-DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable"
 
 HELM_SET=(
   "controller.image.repository=${REGISTRY}/${CONTROLLER_IMAGE_REPO}"
   "controller.image.tag=${TAG}"
   "controller.endpoint.image.repository=${REGISTRY}/${ENDPOINT_IMAGE_REPO}"
   "controller.endpoint.image.tag=${TAG}"
-  "controller.endpoint.ybHostPorts=${YB_FQDN}:5433"
+  "controller.endpoint.ybHostPorts=${YB_HOST_PORTS}"
   "controller.endpoint.service.type=${ENDPOINT_SERVICE_TYPE}"
   "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"

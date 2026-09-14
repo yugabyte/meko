@@ -10,6 +10,7 @@ so **the guide you need is the one covering the tree you are editing**:
 | `amp/**` | [`amp/AGENTS.md`](amp/AGENTS.md) — AMP's own layout, build and test commands |
 | `meko/**` | [`meko/AGENTS.md`](meko/AGENTS.md) — layout, build/run/test/lint commands, architecture notes, per-component guides |
 | `ycp/**` | this file, plus [`ycp/ARCHITECTURE.md`](ycp/ARCHITECTURE.md) and [`ycp/DEPLOY.md`](ycp/DEPLOY.md) |
+| `foundation/**` | [`foundation/ARCHITECTURE.md`](foundation/ARCHITECTURE.md), plus [`## foundation/`](#foundation--shared-top-level) below |
 
 ## Reading paths in this repo
 
@@ -82,6 +83,182 @@ api-server's REST API, the same shape amp's agent uses against its controller. S
 
 The reconcile-agent image publishes to Quay on merge to `main`
 (`.github/workflows/ycp-reconciler-agent-image.yml`).
+
+## `foundation/` — shared, top-level
+
+The YugabyteDB universe amp and meko run on, stood up with the **YugabyteDB Kubernetes
+Operator** instead of a hand-rolled `yugabyted` StatefulSet. Its own `go.mod`, a CLI under
+`cmd/foundation`, and unit tests that need no cluster.
+
+It lives at the root, like `ycp/`, because it is shared with meko. How it is wired and
+why — the object graph, the ordering constraints, the address contract, what is
+deliberately absent — is [`foundation/ARCHITECTURE.md`](foundation/ARCHITECTURE.md). The
+bullets below are the things a reader would otherwise re-derive the hard way.
+
+**The spec file is the source of truth and an update is a re-apply of it.** `render` emits the
+`YBProvider` and `YBUniverse` CRs and applies nothing, which is what makes a
+change reviewable as a manifest diff and the output consumable by GitOps. Nothing wraps the
+CR in a REST API or a task system, deliberately: it is already a declarative surface with
+server-side apply and a status the operator reconciles level-triggered.
+
+```bash
+cd foundation
+go test -race ./...                                        # no cluster needed
+go run ./cmd/foundation validate -c examples/amp.yaml      # offline: parse + the rules YBA enforces late
+go run ./cmd/foundation render -c examples/amp.yaml -o manifests/   # applies nothing
+go run ./cmd/foundation up      -c examples/amp.yaml       # CRDs, yugaware, universe, databases
+go run ./cmd/foundation apply   -c examples/amp.yaml       # converge after editing the spec
+eval "$(go run ./cmd/foundation connstr -c examples/amp.yaml --shell)"
+go run ./cmd/foundation down    -c examples/amp.yaml
+```
+
+`down` leaves the namespace and the CRDs alone by default, and both defaults are safety
+properties rather than conveniences: the namespace is shared with the consumer's own pods,
+and the CRDs are cluster-scoped, so deleting them takes every other foundation on the
+cluster with them.
+
+Things a reader will otherwise re-derive the hard way:
+
+- **The Spec IS the rendered body.** Every universe default this deployer owns is applied
+  at parse time (`Spec.universeDefaults`), so `s.Universe` and the `YBUniverse` spec are
+  the same map and anything reading the Spec sees what the cluster gets. When those
+  defaults were applied at render time instead, `sslMode` read the raw map, missed
+  `enableClientToNodeEncrypt`, fell back to the CRD's `true` and emitted `sslmode=require`
+  against a universe rendered with TLS off. `TestTheSpecIsTheRenderedBody` compares the
+  two key sets so a default cannot drift back. The one exception is the provider's
+  `kubeNamespace`, which defaults from `s.Namespace` — overridden by `--namespace` *after*
+  `Load` — so `providerSpec` fills it in at render time on a deep copy.
+- **`spec.provider` and `spec.universe` are the CR spec bodies VERBATIM.** Nothing is
+  modelled as Go structs, so every field the pinned release has is reachable and a new
+  operator release needs no code change. Nothing re-checks them against the CRD's schema
+  either: `kubectl apply` sends strict field validation, so the API server rejects an
+  undeclared field, a wrong type and a bad enum on its own —
+
+  ```
+  .spec.numNodez: field not declared in schema
+  spec.cloudInfo.kubernetesProvider: Unsupported value: "gke-typo": supported values: ...
+  ```
+
+  A copy of that schema in this repo would have to be regenerated on every chart bump to
+  say the same thing slightly earlier, which is not a trade worth making. What `Validate`
+  does check is only what no schema can express — YBA's own rules, which it enforces
+  asynchronously inside the operator with nothing written back to the CR.
+- **A provider CR is not optional in practice, and its storage class wins.** The operator
+  has an auto-provider, but a Kubernetes provider is what carries the DB image registry
+  and the per-zone storage class — neither of which the auto-provider can infer, and on
+  itest-dev both are non-default (`quay.io/yugabyte/yugabyte-itest`, `yb-standard`). The
+  zone's `kubernetesStorageClass` takes precedence over the universe's own, per the CRD.
+  The pull secret is on neither: see the bullet below.
+- **Three storage classes can be in play and they are not the same one.** The provider's
+  zone (which wins for the universe's PVCs), the universe's own volume blocks, and
+  `yba.values.yugaware.storageClass` for yugaware's PVC — a different class again, and
+  unset it silently takes the cluster default. Preflight collects all three, because an
+  `Immediate`-binding class provisions the disk first and zone-pins the ~4.5 CPU yugaware
+  pod before it can schedule.
+- **`placementInfo` is declared, and its zone codes must be ones the provider defines.**
+  YBA rejects a mismatch, and a bad placement or a per-zone count that does not sum to
+  `numNodes` surfaces as a failed task tens of minutes into a bring-up — so `Validate`
+  checks both offline. itest-dev is single-zone, so the example places all three RF3 nodes
+  in `us-west1-b`.
+- **The MAGE gflag is seeded at CREATE, and drags a second gflag with it.**
+  `ysql_yb_enable_mage` is a start-time gflag on both the master and the tserver — the
+  extension will not install without it and turning it on later is a rolling restart — and
+  it is a *preview* flag, which YBA refuses unless `allowed_preview_flags_csv` names it.
+  That CSV is itself an ordinary gflag and must list **every** preview flag in use, so
+  adding a second one means rewriting the value to carry both rather than adding a key.
+  Nothing here validates that: which flags are preview is YB's to decide and moves between
+  releases, so YBA is the authority and a mirror of its list in this repo would go stale.
+- **YBA needs EXACTLY ONE customer or the operator refuses every CR**, and the chart
+  creates it from a **post-install** hook gated on `yugaware.defaultUser.enabled`, which
+  the chart defaults *off*. Two consequences. Setting the `defaultUser` fields without the
+  flag does nothing — the whole Job template is behind it — so `HelmSets` forces the flag
+  on. And because it is post-install, a release that already exists without a customer
+  never gets one: every later `helm upgrade --install` is an upgrade, the hook does not
+  run, and helm reports success. The operator then throws in `getOperatorCustomer`
+  *before* it can write a status, so the CR sits with an **empty** status and the only
+  evidence is a stack trace in the yugaware log — indistinguishable from a slow bring-up,
+  which is why `checkYBACustomer` reads the count over YBA's own unauthenticated
+  `customer_count` and fails the install instead. A second customer (the console can
+  create one) breaks it the same way.
+- **`status` has no `observedGeneration`.** Right after an apply the operator has not looked
+  at the new spec and `universeState` still reads `Ready` from the *previous* generation, so
+  a wait on state alone reports an edit as applied before it starts. `ybuniverse.Settled`
+  therefore also requires no `status.actions` entry to be `queued` or `running`.
+- **`YB_HOST_PORTS` is the ONLY address the deploy path hands compute, and both lanes come
+  off it.** The YSQL pool uses it as given (5433); the direct-RPC lane *derives* its
+  address by appending 9100 to that host, because nothing can configure it — the deploy
+  path has no way to set `tserver_rpc_addrs` (`endpoint_supervisor` writes only
+  `host_ports`, `user`, `dbname`, `sslmode`, `sslrootcert`, `password_env`). That is why
+  the Service the CR asks for carries **both** client ports.
+- **It must stay a Service name, never a per-pod list.** A full move renames the tserver
+  pods, and the compute daemons cannot pick up a new list — the thin client re-resolves its
+  configured strings on recycle but never re-reads config, and the DSN reaches endpoint
+  pods as an env var, which Kubernetes never updates in a running container. The address
+  has to be a name whose membership changes underneath it.
+- **Both default addresses are intra-cluster only.** The headless tserver Service and the
+  tserver-RPC ClusterIP are unreachable from another cluster — a ClusterIP is a virtual
+  address existing only as kube-proxy rules on its own nodes, so no amount of VPC peering
+  routes to it. A cross-cluster foundation needs an internal LoadBalancer (the same
+  `serviceEndpoints` override with `type: LoadBalancer` plus the cloud's internal-LB
+  annotations — no code change) or an MCS clusterset name, which supplies discovery only
+  and still needs flat pod-level connectivity. A clusterset name additionally needs
+  `multicluster.createServiceExports`, which rewrites node broadcast addresses so the smart
+  driver's per-pod stage resolves cross-cluster, and a `ServiceExport` for the Service —
+  which the YugabyteDB chart cannot create for a `serviceEndpoints` entry yet. Either way
+  the address goes wherever the consumer is configured, not in this spec.
+- **The spec carries no address knob at all.** The address is the Service the chart created
+  in the namespace just deployed into, which `checkTServerService` verified. Which address
+  a *consumer* dials is a property of the consumer's topology, not of the universe, so it
+  belongs where the consumer is configured — `redeploy.sh` reads `YB_HOST_PORTS`/`DB_URL`
+  from env, the install hint has `YB=<host>:5433` — and a single field on the foundation
+  could not express two consumers in two places anyway.
+- **The universe lands wherever the provider zones' `kubeNamespace` says** — that is the
+  field YBA obeys, and when no zone sets one YBA invents a namespace
+  (`yb-<customer code>-<universe>-<suffix>`) and the tserver Service ends up somewhere no
+  consumer predicted. `providerSpec` therefore defaults it to the foundation's namespace,
+  so co-location is the default. A zone naming its own is honoured and is how you put the
+  universe elsewhere; `Spec.UniverseNamespace` is then what the DSN and every
+  universe-facing lookup use (`kubectlUniverse`), while the CRs stay in the foundation's
+  namespace because that is the one the operator watches. The zones must agree on one
+  namespace — those lookups run in exactly one, and a per-zone address is a different
+  feature.
+- **The DB image's pull secret is YBA's to place, not ours.** YBA derives it from its own
+  (`yba.values.image.pullSecret`) and propagates it into the namespace it deploys nodes
+  into. That is the only thing that can work: the `YBProvider` CRD has no field for
+  pull-secret *content* — only `kubeConfigSecret` — so a CR can name a Secret but never
+  put one in a namespace YBA created. Consequences: the spec sets no
+  `kubernetesOverrides.Image.pullSecretName` (naming one risks naming something absent
+  beside the DB pods), preflight checks only yugaware's own, and the robot behind that
+  secret needs pull access to the DB image repo as well as the YBA one.
+- **The tserver Service is created by the CHART, not by us** — a
+  `kubernetesOverrides.serviceEndpoints` entry in the CR (`type: ClusterIP`,
+  `scope: Namespaced`, ports `tcp-ysql-port: 5433` and `tcp-rpc-port: 9100`). The chart
+  supplies the selector, so there is nothing to guess. Its NAME, though, is not ours to
+  predict: a Namespaced endpoint is called
+  `<commonLabels."app.kubernetes.io/part-of" | "namespaced">-<endpoint name>`, and YBA
+  always sets that label — to the universe name it generated, suffix included. So the real
+  Service is `foundation-1954916679-yb-tserver-conn`, and it is found by the
+  `serviceName=yb-tserver-conn,scope=Namespaced` labels, which the chart writes from
+  values the CR sets. Three consequences: `enableLoadBalancer` is forced true
+  because the chart gates that whole template on it (it is *not* a request for public
+  exposure — overriding the endpoint list replaces the chart's three LoadBalancer
+  defaults); `scope: Namespaced` needs `oldNamingStyle` off, which is YBA's choice and
+  absent from the CRD's `kubernetesOverrides` schema, so `checkTServerService` verifies the
+  result instead of assuming it; and the Service carries
+  `helm.sh/resource-policy: keep`, so `helm uninstall` will not remove it — its lifecycle
+  belongs to the universe and YBA reclaims it, which the foundation CI asserts.
+
+`foundation/ybuniverse` is pure — no I/O, no binaries, no Kubernetes client — because the
+amp controller ships helm but no kubectl and the BYOC agent is distroless-static, so a
+consumer that manages a foundation has to speak the k8s REST API directly.
+
+The operator path is **not** the default anywhere yet: `amp/deploy/up.sh`,
+`amp/deploy/up-gke.sh`, `meko/deploy/helm/meko/scripts/deploy-gke.sh` and
+`ycp/cmd/agent` all still bring up their own single-node `yugabyted`. That is a decision,
+not an oversight — YBA is far too heavy for kind, so the operator path soaks in exactly one
+place first: `/ci amp_deploy_gke_foundation` and its nightly
+(`.github/workflows/amp-foundation-gke.yml`), which deploys `up-gke.sh` with
+`FOUNDATION=operator` and runs the agent-driven reconcile smoke against the universe.
 
 ## Repo-wide conventions
 
@@ -180,6 +357,7 @@ nothing.
 | `amp_generate_image` | controller container image build |
 | `amp_extensions_local` | local-deploy extension regression test (`amp/test/integration/compute/extensions.sh --regress`): builds the real extension image and runs each externalized extension's own upstream regression suite against a throwaway `yb_amp_local` cluster. Also automatic when the diff touches `amp/deploy/extensions/`, and nightly on `main`. The lighter twin of `amp_deploy_gke` for extension-pipeline changes |
 | `amp_deploy_gke` | build + push four images to Quay, deploy to the itest-dev GKE cluster, smoke test. Also nightly on `main` |
+| `amp_deploy_gke_foundation` | the only suite that runs the **operator-managed foundation**: deploys with `FOUNDATION=operator` so `up-gke.sh` calls the `foundation/` deployer instead of its yugabyted StatefulSet, runs the agent-driven reconcile smoke against that universe, then tears it down and asserts no cluster-scoped RBAC leaked. Its own workflow and cron (03:17 UTC). Also nightly on `main` |
 
 They are all `amp_`-prefixed because they belong to AMP; there is nothing equivalent for
 meko yet. Full contract (including `amp_deploy_gke_extensions` and what makes a change

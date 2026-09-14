@@ -1,8 +1,15 @@
 name: Amp control-plane GKE cleanup (itest-dev)
 
 # Sweeps stale per-PR namespaces (ci-pr-*) left on itest-dev when a
-# control-plane-gke.yml run was hard-cancelled before its teardown step ran.
-# Age-based: deletes any ci-pr-* namespace older than CI_NS_MAX_AGE_HOURS.
+# control-plane-gke.yml or amp-foundation-gke.yml run was hard-cancelled before
+# its teardown step ran. Age-based: deletes any ci-pr-* namespace older than
+# CI_NS_MAX_AGE_HOURS.
+#
+# It also reclaims ORPHANED cluster-scoped RBAC. The yugaware chart the
+# foundation workflow installs creates a ClusterRole and ClusterRoleBinding
+# named after its helm release (<namespace>-yugaware), and a namespace delete
+# never reclaims a cluster-scoped object — so a cancelled run leaves one behind
+# that collides with the next run reusing that namespace name.
 on:
   schedule:
     - cron: '0 */6 * * *'    # every 6 hours
@@ -18,7 +25,7 @@ permissions:
 
 jobs:
   sweep:
-    name: Amp GKE cleanup — sweep stale ci-pr namespaces
+    name: Amp GKE cleanup — sweep stale ci-pr namespaces and orphaned cluster RBAC
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -55,3 +62,27 @@ jobs:
                 fi
               done
           echo "sweep complete"
+
+      # Cluster-scoped, so nothing above reclaims these: delete any
+      # *-yugaware ClusterRole/ClusterRoleBinding whose namespace no longer
+      # exists. Keyed on the namespace rather than on age, so a live foundation
+      # run is never touched however long it takes.
+      - name: Delete orphaned yugaware cluster RBAC
+        run: |
+          kubectl get clusterrole,clusterrolebinding -o name \
+            | grep -E '/(ci-pr-[^/]*)-yugaware$' | while read -r obj; do
+                name="${obj##*/}"
+                ns="${name%-yugaware}"
+                phase=$(kubectl get ns "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                # Terminating counts as gone: a namespace stuck there (a CR
+                # finalizer with no operator left to clear it) would otherwise
+                # keep its ClusterRole forever, and the RBAC is useless to it
+                # either way.
+                if [ -n "$phase" ] && [ "$phase" != "Terminating" ]; then
+                  echo "keeping  $obj (namespace $ns is $phase)"
+                else
+                  echo "deleting $obj (namespace $ns is ${phase:-gone})"
+                  kubectl delete "$obj" --ignore-not-found || true
+                fi
+              done
+          echo "orphan sweep complete"

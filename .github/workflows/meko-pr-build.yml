@@ -75,6 +75,7 @@ jobs:
       meko_inference: ${{ steps.filter.outputs.meko_inference }}
       meko_ui: ${{ steps.filter.outputs.meko_ui }}
       meko_ycp: ${{ steps.filter.outputs.meko_ycp }}
+      meko_foundation: ${{ steps.filter.outputs.meko_foundation }}
       meko_ycp_cp: ${{ steps.filter.outputs.meko_ycp_cp }}
       meko_docs: ${{ steps.filter.outputs.meko_docs }}
       meko_code: ${{ steps.code.outputs.meko_code }}
@@ -108,6 +109,9 @@ jobs:
             meko_ycp:
               - 'ycp/**'
               - 'amp/controller/internal/api/openapi_spec.yaml'
+              - '.github/workflows/meko-pr-build.yml'
+            meko_foundation:
+              - 'foundation/**'
               - '.github/workflows/meko-pr-build.yml'
             meko_docs:
               - 'meko/docs/content/docs/**'
@@ -415,6 +419,47 @@ jobs:
       - name: Tests
         run: go test ./...
 
+  meko_foundation:
+    name: Meko foundation — build, vet & tests
+    needs: changes
+    if: needs.changes.outputs.meko_foundation == 'true' && needs.changes.outputs.meko_code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: foundation
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: foundation/go.mod
+          cache-dependency-path: foundation/go.sum
+
+      # Blocking from the start: this module is formatted and vet-clean as of the
+      # commit that added this job, so there is no baseline to grandfather in.
+      - name: Format (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      # The tests need no cluster: they compare rendered manifests against
+      # golden files and exercise the deployer through its command-runner seam.
+      # Field names and types are NOT checked here — the API server rejects
+      # those on apply — so a golden-file diff is the signal to read closely.
+      - name: Tests
+        run: go test -race ./...
+
   meko_ycp_e2e:
     name: Meko YCP — build & deploy (kind)
     needs: changes
@@ -469,6 +514,7 @@ jobs:
       - meko_inference
       - meko_ui
       - meko_ycp
+      - meko_foundation
       - meko_ycp_e2e
       - meko_docs
     runs-on: ubuntu-latest

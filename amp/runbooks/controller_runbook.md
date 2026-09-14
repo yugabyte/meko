@@ -305,13 +305,68 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   `jittered()` spreads over. `PingTimeout`, `MaxConnIdleTime` and `HealthCheckPeriod` are pgxpool's
   alone — the Rust clients have no acquire-time ping or background reaper to match.
 
-- **DB URL must match how YugabyteDB was stood up.** `deploy/controller/redeploy.sh` defaults
-  `DB_URL`/`YB_HOST_PORTS` to `yb-tserver.$NS.svc…`, but `deploy/up.sh` brings up a *yugabyted*
-  StatefulSet at `yugabyted-0.yugabyted.$NS.svc.cluster.local:5433`. Running `redeploy.sh` standalone
-  with the default DB URL → the new controller pod crash-loops on
-  `hostname resolving error: lookup yb-tserver.$NS.svc.cluster.local … no such host`. Pass the real
-  `DB_URL`/`YB_HOST_PORTS`, or just re-run `up.sh` (which sets them). Confirm with:
+- **DB URL must match how YugabyteDB was stood up.** There are three shapes, and the
+  controller crash-loops on `hostname resolving error: lookup … no such host` whenever the
+  DSN names one it did not get:
+  - `deploy/controller/redeploy.sh` defaults `DB_URL`/`YB_HOST_PORTS` to `yb-tserver.$NS.svc…`;
+  - `deploy/up.sh` and `deploy/up-gke.sh` (the default `FOUNDATION=yugabyted`) bring up a
+    *yugabyted* StatefulSet at `yugabyted-0.yugabyted.$NS.svc.cluster.local:5433`;
+  - `up-gke.sh` with **`FOUNDATION=operator`** brings up an operator-managed universe and
+    takes the address from `foundation connstr` — the chart-created ClusterIP
+    `<universe>-<suffix>-yb-tserver-conn.$NS.svc.cluster.local:5433`, which carries YSQL on
+    5433 and the tserver RPC port on 9100. The name carries a YBA-generated suffix, so find
+    it with `kubectl -n "$NS" get svc -l serviceName=yb-tserver-conn,scope=Namespaced`
+    rather than guessing.
+
+  Running `redeploy.sh` standalone with the default DB URL against either of the other two
+  is the usual way to hit this. Pass the real `DB_URL`/`YB_HOST_PORTS`, or re-run the
+  bring-up that set them — and for `up-gke.sh` **re-run it with the same `FOUNDATION` value**,
+  since that variable is what decides which shape you get. Confirm with:
   `kubectl -n "$NS" get pod <pod> -o jsonpath='{..env[?(@.name=="AMP_DATABASE_URL")].value}'`.
+
+  Deleting the foundation out from under a running controller produces the same symptom:
+  `foundation down` leaves the namespace up by default, so the controller and its endpoints
+  keep the old Service name in their env (Kubernetes does not rewrite env in a live
+  container) and crash-loop once it stops resolving. Scale them down before tearing a
+  foundation down, or expect to redeploy them after.
+
+- **`FOUNDATION=operator`: the controller crash-loops on `no pg_hba.conf entry ... no
+  encryption`.** The universe requires TLS for client connections while the DSN says
+  `sslmode=disable`. `enableClientToNodeEncrypt` defaults to **true** in the CRD, so a
+  foundation spec that does not set it explicitly gets TLS — and the field is create-time
+  only, so the universe has to be rebuilt rather than edited. The checked-in spec sets both
+  encryption flags false; if you are looking at a universe that predates that, rebuild it,
+  and note the deployer derives `sslmode` from the field, so a TLS universe gets a
+  `require` DSN once the compute side can supply certs for the 9100 lane
+  ([#1241](https://github.com/yugabyte/meko/issues/1241), behind
+  [#1114](https://github.com/yugabyte/meko/issues/1114)).
+
+- **`FOUNDATION=operator`: the CRs sit with an EMPTY status and no DB pods appear.** The
+  operator needs YBA to have exactly one customer and throws before it can write a status,
+  so the CR looks untouched rather than failed. Confirm it in one call — from the yugaware
+  pod, `curl -s localhost:9000/api/v1/customer_count` must return `{"count":1}` — and read
+  the operator log for `Customer list does not have exactly one customer`. The customer is
+  created by the chart's **post-install** hook, so it is never created on an upgrade: a
+  release first installed without `yba.values.yugaware.defaultUser` set will stay broken
+  through any number of re-runs. Either register it once against the `yugaware-ui` Service
+  (`POST /api/register` with `{email, password, code: "operator", name}`) or
+  `helm uninstall` the release so a fresh install runs the hook. `foundation up` now fails
+  at the install with this reason rather than waiting the universe out.
+
+- **`FOUNDATION=operator`: DB pods in `ImagePullBackOff`, or a universe that never leaves
+  `Creating`.** The DB image registry comes from the foundation spec's `provider` block,
+  and its pull secret is **YBA's**: YBA derives one from its own
+  (`yba.values.image.pullSecret`, which `up-gke.sh` mints from `PULL_SECRET`) and copies it
+  beside the DB pods. So the usual cause is that robot lacking pull access to the DB image
+  repo, not a name mismatch — do **not** add
+  `universe.kubernetesOverrides.Image.pullSecretName`, which would name a Secret that need
+  not exist where the DB pods run. Read the reason off the CRs, which is where YBA puts it:
+  `kubectl -n "$NS" get ybprovider,ybuniverse -o yaml` (`status.actions[]` carries the
+  failing task and its message), then the operator's own log —
+  `kubectl -n "$NS" logs "statefulset/$NS-yugaware-yugaware" -c yugaware --tail=300`.
+  Select on `release=$NS-yugaware` if you need a selector: the yugaware chart sets no
+  `app.kubernetes.io/*` labels, and `kubectl logs -l` with a selector that matches nothing
+  exits 0 with no output, which reads as an empty log.
 - **A single-host DB URL single-homes the control plane.** pgx dials only what the DSN lists, in
   order, so a DSN naming one tserver pod leaves the controller nothing to fail over to when that
   pod goes, even where the endpoints have the whole `YB_HOST_PORTS` CSV. List every tserver

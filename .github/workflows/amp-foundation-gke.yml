@@ -1,0 +1,448 @@
+name: Amp foundation GKE (itest-dev)
+
+# Stands the amp stack up on an OPERATOR-MANAGED foundation — a real YugabyteDB
+# universe reconciled by the YugabyteDB Kubernetes Operator via foundation/ —
+# and asserts the amp reconcile-agent converges against it.
+#
+# This is the only place the operator path runs. Every other deploy
+# (amp-control-plane-gke.yml, amp/deploy/up.sh, meko's deploy-gke.sh,
+# ycp/cmd/agent) still brings up its own single-node yugabyted, deliberately:
+# YBA adds a ~4.5 CPU yugaware pod and tens of minutes of install, which is far
+# too heavy for kind and too heavy to put on every deploy before it has soaked.
+#
+# Flow:
+#   images     — build + push the amp images plus the YCP control-plane and
+#                reconcile-agent images to Quay, tagged custom-<short-sha>.
+#   foundation — write the itest-dev kubeconfig, stand up an ephemeral YCP
+#                control plane (amp/deploy/ycp-up.sh), deploy the stack with
+#                FOUNDATION=operator so up-gke.sh calls the foundation deployer
+#                instead of applying its yugabyted StatefulSet, run the
+#                agent-driven reconcile smoke, then tear the foundation down and
+#                assert it left no cluster-scoped RBAC behind.
+#
+# `foundation down` runs as its own step rather than only in teardown: the
+# teardown path deletes the namespace, which would hide a broken down() forever.
+# Running it explicitly and then checking for orphaned ClusterRoles is the only
+# thing that keeps the teardown path honest, which is why this workflow is
+# ephemeral per run rather than reusing a standing foundation.
+#
+# Placement — separate from amp-control-plane-gke.yml, and on its own cron, so
+# two heavy GKE runs never contend for itest-dev. It fires only:
+#   * nightly on main (schedule), at 03:17 UTC — deliberately away from the
+#     07:17 slot amp-control-plane-gke.yml and on-demand-checks.yml share;
+#   * on manual dispatch;
+#   * on a PR carrying `/ci amp_deploy_gke_foundation` in its description
+#     (.github/actions/ci-directives, see amp/docs/ci-directives.md). Adding the
+#     line to a PR already up needs a commit to fire — an empty one is enough.
+#
+# It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
+# QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
+#
+# SECURITY: the PR body is untrusted. It is read only inside the ci-directives
+# action's github-script, which turns it into a boolean against the fixed suite
+# allowlist passed below, and is NEVER interpolated into a `run:` shell step.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    # No paths filter: the `/ci amp_deploy_gke_foundation` directive is the
+    # switch. `edited` is deliberately absent — see the note in
+    # on-demand-checks.yml.
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+env:
+  QUAY_NS: quay.io/yugabyte
+
+jobs:
+  decide:
+    name: Amp foundation — decide whether to deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      suites: ${{ steps.gate.outputs.decided }}
+    steps:
+      # Needed only to make the local composite action below available.
+      - uses: actions/checkout@v7
+
+      - id: gate
+        uses: ./.github/actions/ci-directives
+        with:
+          suites: '["amp_deploy_gke_foundation"]'
+          # Nightly and a manual dispatch both mean "run it", so they skip the
+          # body entirely. Unlike the extensions/ycp supersets over in
+          # amp-control-plane-gke.yml, this one IS unconditional on schedule:
+          # a nightly is the whole point of this workflow.
+          unconditional-events: schedule workflow_dispatch
+
+  images:
+    name: Amp foundation — build + push images (Quay)
+    needs: decide
+    if: >-
+      fromJSON(needs.decide.outputs.suites).amp_deploy_gke_foundation &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      # Shared with the foundation job below so a newer run supersedes an older
+      # run's whole pipeline, and one FIXED group across all runs (not per-PR):
+      # a foundation holds a ~5 CPU yugaware pod, and two at once would starve
+      # itest-dev.
+      group: foundation-gke
+      cancel-in-progress: true
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      # compute/vendor/postgres-v18 is the private yugabyte/amp-postgres repo,
+      # which the default GITHUB_TOKEN cannot read. Feeds the endpoint build.
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
+        with:
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Quay login
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: echo "${QUAY_TOKEN#*:}" | docker login quay.io -u "${QUAY_TOKEN%%:*}" --password-stdin
+
+      - name: Deploy tag (custom-<short commit id>)
+        id: tag
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "tag=custom-${SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+      # NB: these build steps mirror amp-control-plane-gke.yml's images job and
+      # must stay in step with it. They share its registry layer cache
+      # (amp-endpoint:buildcache), so building the same commit twice is cheap —
+      # but a Dockerfile or build-flag change made there and not here will drift.
+      - name: Endpoint image
+        run: |
+          EP="$QUAY_NS/amp-endpoint"
+          docker buildx build --push -f amp/deploy/endpoint/Dockerfile amp \
+            -t "$EP:${{ steps.tag.outputs.tag }}" \
+            --cache-from type=registry,ref="$EP:buildcache" \
+            --cache-to   type=registry,ref="$EP:buildcache",mode=max
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: amp/controller/go.mod
+          cache-dependency-path: amp/controller/go.sum
+
+      - name: Controller image
+        run: |
+          make -C amp controller-bundle-only
+          docker buildx build --push -f amp/deploy/controller/Dockerfile amp \
+            -t "$QUAY_NS/amp-controller:${{ steps.tag.outputs.tag }}"
+
+      - name: MCP image
+        run: |
+          docker buildx build --push -f amp/controller/mcp/Dockerfile \
+            -t "$QUAY_NS/amp-mcp:${{ steps.tag.outputs.tag }}" amp/controller/mcp
+
+      # The reconcile smoke drives the stack through YCP, so both halves of that
+      # path are built from this commit: the control plane the agent talks to,
+      # and the agent itself.
+      - name: YCP api-server image
+        run: |
+          docker buildx build --push --platform linux/amd64 \
+            -f meko/api_server/Dockerfile \
+            -t "$QUAY_NS/ycp-api-server:${{ steps.tag.outputs.tag }}" \
+            meko/api_server
+
+      - name: Reconcile-agent image
+        run: |
+          docker buildx build --push --platform linux/amd64 \
+            -f ycp/Dockerfile.reconcile-agent \
+            -t "$QUAY_NS/ycp-reconciler-agent:${{ steps.tag.outputs.tag }}" \
+            ycp
+
+  foundation:
+    name: Amp foundation — deploy on an operator-managed universe
+    needs: [decide, images]
+    runs-on: ubuntu-latest
+    # A yugaware install alone is given 40 minutes, and the universe create,
+    # controller deploy, reconcile smoke and teardown follow it. The
+    # control-plane deploy job's 45 does not fit.
+    timeout-minutes: 90
+    concurrency:
+      group: foundation-gke
+      cancel-in-progress: true
+    env:
+      # ci-pr-fnd-<n> rather than a prefix of its own: the reaper in
+      # amp-control-plane-gke-cleanup.yml sweeps ci-pr-*, so a hard-cancelled run
+      # still gets its namespace collected.
+      NS: ci-pr-fnd-${{ github.event.pull_request.number || github.run_id }}
+      PULL_SECRET: quay-pull-secret
+      TAG: ${{ needs.images.outputs.tag }}
+      FOUNDATION_SPEC: foundation/examples/amp.yaml
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: foundation/go.mod
+          cache-dependency-path: foundation/go.sum
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo '${{ secrets.KUBECONFIG_ITEST_DEV }}' | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl config current-context
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.18.6
+
+      # `validate` parses the spec and applies its semantic rules — the ones YBA
+      # would otherwise reject asynchronously, tens of minutes in. Schema errors
+      # are not its job: the API server rejects an undeclared field or a bad enum
+      # on apply. It then reports the storage classes, which is why this does not
+      # read the YAML directly: a class is settable on the universe's volumes AND
+      # on the provider's zones, and the provider's wins, so parsing one path
+      # would check the wrong class.
+      - name: Validate the spec and check its storage classes
+        run: |
+          cd foundation
+          # --namespace, the same override the deploy passes, so the facts
+          # describe THIS run rather than the spec file's checked-in namespace.
+          FACTS=$(go run ./cmd/foundation validate -c "$GITHUB_WORKSPACE/$FOUNDATION_SPEC" \
+            --namespace "$NS" --json)
+          echo "$FACTS"
+          # The DB pods land in the provider zones' kubeNamespace, which equals
+          # this namespace only because the spec leaves it unset. Read it rather
+          # than assume, so a spec that moves the universe cannot turn the
+          # Service assertions below into silent no-ops.
+          UNIVERSE_NS=$(echo "$FACTS" | python3 -c \
+            "import json,sys; print(json.load(sys.stdin)['universeNamespace'])")
+          echo "UNIVERSE_NS=$UNIVERSE_NS" >> "$GITHUB_ENV"
+          echo "universe namespace: $UNIVERSE_NS"
+          for SC in $(echo "$FACTS" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)['storageClasses']))"); do
+            MODE=$(kubectl get storageclass "$SC" -o jsonpath='{.volumeBindingMode}') \
+              || { echo "::error::storage class $SC does not exist on this cluster"; exit 1; }
+            echo "storage class $SC binds $MODE"
+            # Advisory, matching the deployer's own preflight: an Immediate class
+            # only bites a multi-zone cluster, where the PVC zone-pins the pod
+            # before it schedules.
+            [ "$MODE" = "WaitForFirstConsumer" ] || echo "::warning::$SC binds $MODE, not WaitForFirstConsumer"
+          done
+
+      # The control-plane half: Postgres + api_server --control-plane-mode in
+      # this namespace, an `amp` environment registered on it, and the agent's
+      # credentials in the Secret it reads. Runs BEFORE the deploy so the agent
+      # can enroll as soon as it is up. Appends YCP_URL / YCP_ENV_ID /
+      # YCP_ADMIN_KEY / YCP_AGENT_SECRET to $GITHUB_ENV.
+      - name: YCP control plane + register
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
+          export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
+          NS="$NS" \
+          YCP_IMAGE="$QUAY_NS/ycp-api-server:$TAG" \
+          PULL_SECRET="$PULL_SECRET" \
+          YCP_ENV_NAME="foundation-smoke" \
+          amp/deploy/ycp-up.sh
+
+      # FOUNDATION=operator is the whole point: up-gke.sh skips its yugabyted
+      # StatefulSet, runs `foundation up` in this namespace instead, and takes
+      # YB_HOST_PORTS/DB_URL from the deployer's output rather than duplicating
+      # the Service name, port and DSN shape.
+      - name: Deploy on the operator foundation (up-gke.sh)
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
+          export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
+          NS="$NS" \
+          FOUNDATION=operator \
+          FOUNDATION_SPEC="$PWD/$FOUNDATION_SPEC" \
+          REGISTRY="$QUAY_NS" \
+          CONTROLLER_IMAGE_REPO=amp-controller \
+          ENDPOINT_IMAGE_REPO=amp-endpoint \
+          MCP_IMAGE_REPO=amp-mcp \
+          UI_ENABLED=false \
+          TAG="$TAG" \
+          PULL_SECRET="$PULL_SECRET" \
+          CONTROLLER_EXPOSE=none \
+          ENDPOINT_SERVICE_TYPE=ClusterIP \
+          YCP_ENABLED=1 \
+          amp/deploy/up-gke.sh
+
+      # What the foundation is FOR: the agent declares desired state through YCP
+      # and the controller builds it on the operator-managed universe. This is
+      # the existing smoke, unchanged — the foundation is the variable.
+      - name: Reconcile smoke (agent-driven)
+        run: NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" amp/deploy/ycp-reconcile-smoke.sh
+
+      # One ClusterIP carries BOTH client ports, and both compute lanes come off
+      # it: the YSQL pool connects to 5433 as given, and the direct-RPC lane
+      # derives the same host on 9100 (the deploy path cannot set
+      # tserver_rpc_addrs, so that derivation is the only route). So this Service
+      # missing either port breaks one lane.
+      #
+      # The chart creates it from the kubernetesOverrides.serviceEndpoints entry
+      # in the CR — nothing in foundation/ creates it. Two chart values gate it
+      # and neither is ours to set, so this step is where we find out they held:
+      # enableLoadBalancer (the CR sets it) and oldNamingStyle off (YBA's choice,
+      # absent from the CRD's kubernetesOverrides schema, so unforceable).
+      #
+      # An empty endpoint list means the chart's own selector matched no pods;
+      # the symptom in production is compute daemons failing to open their table
+      # handles at startup, with nothing pointing back here.
+      - name: Check the tserver Service has both ports and endpoints
+        run: |
+          # Found by label, never by name. YBA prefixes a Namespaced endpoint
+          # with the universe name it GENERATED ("foundation-1954916679-..."),
+          # so there is no name to construct — but `serviceName` and `scope` are
+          # written from values the CR sets, so they are a stable identity.
+          SVC=$(kubectl -n "$UNIVERSE_NS" get svc \
+            -l serviceName=yb-tserver-conn,scope=Namespaced \
+            -o jsonpath='{.items[0].metadata.name}')
+          [ -n "$SVC" ] || {
+            echo "::error::nothing matched serviceName=yb-tserver-conn,scope=Namespaced in $UNIVERSE_NS"
+            kubectl -n "$UNIVERSE_NS" get svc --show-labels
+            exit 1
+          }
+          echo "tserver Service: $SVC (namespace $UNIVERSE_NS)"
+          kubectl -n "$UNIVERSE_NS" get svc,endpoints "$SVC" -o wide
+          # Both ports, or one lane has nowhere to connect.
+          for PORT in 5433 9100; do
+            kubectl -n "$UNIVERSE_NS" get svc "$SVC" -o jsonpath='{.spec.ports[*].port}' \
+              | tr ' ' '\n' | grep -qx "$PORT" \
+              || { echo "::error::$SVC does not expose port $PORT"; exit 1; }
+          done
+          echo "$SVC exposes 5433 and 9100"
+          IPS=$(kubectl -n "$UNIVERSE_NS" get endpoints "$SVC" \
+            -o jsonpath='{.subsets[*].addresses[*].ip}' | wc -w)
+          echo "$SVC has $IPS endpoint(s)"
+          [ "$IPS" -gt 0 ] || {
+            echo "::error::no endpoints — the chart's serviceEndpoint selector matched no pods"
+            kubectl -n "$UNIVERSE_NS" get svc "$SVC" -o jsonpath='{.spec.selector}'; echo
+            kubectl -n "$UNIVERSE_NS" get pods --show-labels | grep tserver || true
+            exit 1
+          }
+
+      # An explicit down, then proof it reclaimed the cluster-scoped RBAC. The
+      # chart names a ClusterRole and ClusterRoleBinding after the helm release,
+      # and a namespace delete never reclaims a cluster-scoped object — so
+      # without this the leak is invisible until it collides with a later run.
+      - name: foundation down
+        run: |
+          go run ./cmd/foundation down -c "../$FOUNDATION_SPEC" --namespace "$NS"
+        working-directory: foundation
+
+      - name: Assert nothing leaked
+        run: |
+          LEAKED=$(kubectl get clusterrole,clusterrolebinding -o name \
+            | grep -- "${NS}-yugaware" || true)
+          if [ -n "$LEAKED" ]; then
+            echo "::error::foundation down left cluster-scoped objects behind:"; echo "$LEAKED"
+            exit 1
+          fi
+          echo "no cluster-scoped RBAC left behind"
+
+          # Both CRs carry the operator's finalizer, and only the operator can
+          # clear it. One left behind after `down` means the namespace can never
+          # finish Terminating — unrecoverable, and NS is per-PR, so the next
+          # push would land on it.
+          LEFT=$(kubectl -n "$NS" get ybuniverse,ybprovider -o name 2>/dev/null || true)
+          if [ -n "$LEFT" ]; then
+            echo "::error::foundation down left CRs behind; their finalizers will strand $NS:"
+            echo "$LEFT"
+            exit 1
+          fi
+
+          # The tserver Service carries helm.sh/resource-policy: keep, so
+          # `helm uninstall` will not remove it — its lifecycle is the
+          # UNIVERSE's, and YBA is expected to delete it when the universe goes.
+          # foundation down deliberately does not touch it (deleting it could
+          # race YBA, and a Namespaced service is shared across releases by
+          # design). This is the check that YBA actually does reclaim it; if it
+          # does not, the Service has to be deleted explicitly instead.
+          if [ -n "$(kubectl -n "${UNIVERSE_NS:-$NS}" get svc -l serviceName=yb-tserver-conn,scope=Namespaced \
+                       -o name 2>/dev/null)" ]; then
+            echo "::error::YBA did not reclaim the tserver-conn Service on universe delete;"
+            echo "::error::foundation down must delete it explicitly (see down.go)"
+            exit 1
+          fi
+          echo "the tserver-RPC Service was reclaimed with the universe"
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl -n "$NS" get all || true
+          # status.actions[] on either CR is where YBA puts the failing task and
+          # its message; a rejected spec explains itself there and nowhere else.
+          kubectl -n "$NS" get ybprovider,ybuniverse -o yaml || true
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -60 || true
+          kubectl -n "$NS" logs deploy/amp-controller --tail=200 || true
+          kubectl -n "$NS" logs deploy/amp-reconcile-agent --tail=200 || true
+          kubectl -n "$NS" logs deploy/meko-api-server --tail=200 || true
+          # The operator's own log is where a rejected CR spec explains itself —
+          # including "Customer list does not have exactly one customer", which
+          # appears NOWHERE else because the reconciler throws before it can
+          # write a CR status.
+          #
+          # `release=`, not app.kubernetes.io/*: the yugaware chart sets only the
+          # old Helm labels, and a selector that matches nothing makes
+          # `kubectl logs -l` exit 0 with no output — so this step looked fine
+          # while dumping nothing at all.
+          kubectl -n "$NS" logs "statefulset/${NS}-yugaware-yugaware" \
+            --tail=300 --all-containers --prefix || \
+            kubectl -n "$NS" logs -l "release=${NS}-yugaware" --tail=300 --all-containers || true
+
+      # Belt and braces over the explicit `down` above: a run cancelled or failed
+      # earlier never reaches it, and the reaper only collects namespaces.
+      #
+      # The YBUniverse CR goes FIRST, and the order is load-bearing rather than
+      # tidy. The CR carries the operator's finalizer, and only the operator can
+      # clear it — so uninstalling yugaware first and then deleting the namespace
+      # strands a finalizer with nothing left to satisfy it, and the namespace
+      # hangs in Terminating forever. Nothing recovers that: the reaper's
+      # `kubectl delete ns` is a no-op on a Terminating namespace. Since NS is
+      # per-PR, the next push would land on a permanently-stuck namespace.
+      #
+      # --wait=false plus a bounded poll rather than a blocking delete, so a
+      # genuinely wedged operator costs a couple of minutes here instead of the
+      # job timeout, and the sweep below still runs.
+      - name: Teardown
+        if: always()
+        run: |
+          # The provider carries a finalizer too, and it is deleted after the
+          # universe that references it.
+          for KIND in ybuniverse ybprovider; do
+            kubectl -n "$NS" delete "$KIND" --all --wait=false --ignore-not-found || true
+            for _ in $(seq 1 24); do
+              kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q . || break
+              sleep 5
+            done
+            kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q . \
+              && echo "::warning::a $KIND is still present; its finalizer may strand the namespace"
+          done
+
+          helm -n "$NS" uninstall yb-amp-controller || true
+          helm -n "$NS" uninstall "${NS}-yugaware" || true
+          # By name only. The chart renders its ClusterRole with NO labels at
+          # all, so no label selector can reach it — an earlier
+          # app.kubernetes.io/instance selector here was a silent no-op.
+          kubectl delete clusterrole "${NS}-yugaware" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${NS}-yugaware" --ignore-not-found || true
+          kubectl delete ns "$NS" --wait=false || true

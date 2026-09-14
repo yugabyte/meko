@@ -118,7 +118,9 @@ stands the same stack up on GKE but pulls (and optionally builds/pushes) images
 from **GCR / Artifact Registry** instead of ECR — so it needs **no `aws`, no
 `dshubin_bot`, and no ~12 h ECR pull-secret refresh**. It runs the same steps
 (namespace → YugabyteDB → `yb_storage` → the `yb-amp-controller` Helm chart) and
-is likewise idempotent and non-destructive to YugabyteDB data.
+is likewise idempotent and non-destructive to YugabyteDB data. `FOUNDATION=operator`
+swaps the YugabyteDB step for an operator-managed universe — see
+[Foundation](#foundation--the-backing-yugabytedb) below.
 
 The two GKE clusters are already kubectl contexts:
 `gke_yugabyte_us-west1_itest-dev` and `gke_yugabyte_us-central1_itest-release`.
@@ -178,7 +180,48 @@ Key overrides: `REGISTRY` (base registry+path, default `gcr.io/yugabyte`), `TAG`
 (default `latest`, or a timestamp when `BUILD=1`), `CONTROLLER_EXPOSE`
 (`internal-lb` default), `ENDPOINT_SERVICE_TYPE`, `ENDPOINT_STORAGE_CLASS`
 (e.g. `standard-rwo` for a PD-backed `/data`), `MCP_ENABLED`, `UI_ENABLED`,
-`PULL_SECRET` / `GCR_KEY_FILE` (pull auth, see above).
+`PULL_SECRET` / `GCR_KEY_FILE` (pull auth, see above), `FOUNDATION` /
+`FOUNDATION_SPEC` (see below).
+
+### Foundation — the backing YugabyteDB
+
+`FOUNDATION` selects how the DB the controller keeps its state in is brought up:
+
+| | |
+|---|---|
+| `yugabyted` (default) | the inlined single-node StatefulSet. RF-1, no rolling upgrade, no backups — fine for a dev or CI stack, and what every deploy path here still uses. |
+| `operator` | a real universe managed by the YugabyteDB Kubernetes Operator, via the [`foundation/`](../../foundation) deployer ([architecture](../../foundation/ARCHITECTURE.md)): CRDs, the `yugaware` chart with the operator enabled, a `YBProvider` and `YBUniverse` CR, the tserver RPC Service and `yb_storage`. Needs `go` on PATH; `FOUNDATION_SPEC` points at the spec (default `foundation/examples/amp.yaml`). |
+
+The spec stands up a **3-node RF3** universe on `yb-standard`, placed explicitly
+on itest-dev's single zone, with the MAGE gflag seeded at create (it is
+start-time on both processes, so gaining it later is a rolling restart). The
+`provider` block carries the DB image registry, the per-zone storage class and
+the namespace the DB lands in (`kubeNamespace`, defaulted to this one), none of
+which the operator's auto-provider can infer. The DB image's pull secret is
+YBA's to place: it derives one from its own (`yba.values.image.pullSecret`,
+`quay-pull-secret` — what this script mints) and copies it beside the DB pods,
+which is the only workable route since the provider CRD carries no pull-secret
+content. That robot therefore needs pull access to the DB image repo as well as
+the amp and YBA ones.
+
+Under `operator`, `YB_HOST_PORTS` and `DB_URL` come from `foundation connstr`
+rather than being duplicated here — it owns the Service name, the port and the
+DSN shape. The
+single `YB_HOST_PORTS` is the only address handed to compute, and both its lanes
+come off it: the YSQL pool uses it as given, and the direct-RPC lane derives the
+same host on 9100. It points at a ClusterIP the YugabyteDB chart creates from a
+`serviceEndpoints` override in the CR, carrying both client ports. Its name is
+YBA's to choose — `<universe>-<suffix>-yb-tserver-conn` — so the deployer finds
+it by the `serviceName=yb-tserver-conn,scope=Namespaced` labels rather than
+building the name. To point consumers elsewhere — a clusterset
+name, an internal LoadBalancer, an external name — supply the address where the consumer is
+configured (`redeploy.sh`'s `YB_HOST_PORTS`/`DB_URL`, the install hint's `YB=`), not in the
+foundation spec.
+
+The default is deliberately unchanged: a `yugaware` pod alone wants ~4.5 CPU and
+tens of minutes to install, so the operator path soaks in its own nightly
+([`amp-foundation-gke.yml`](../../.github/workflows/amp-foundation-gke.yml),
+`/ci amp_deploy_gke_foundation`) before anything else is pointed at it.
 
 ### Running in CI (itest-dev)
 

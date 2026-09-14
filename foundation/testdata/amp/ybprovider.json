@@ -1,0 +1,28 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "YBProvider",
+  "metadata": {
+    "name": "foundation",
+    "namespace": "amp"
+  },
+  "spec": {
+    "cloudInfo": {
+      "kubernetesImageRegistry": "quay.io/yugabyte/yugabyte-itest",
+      "kubernetesProvider": "gke"
+    },
+    "regions": [
+      {
+        "code": "us-west1",
+        "zones": [
+          {
+            "cloudInfo": {
+              "kubeNamespace": "amp",
+              "kubernetesStorageClass": "yb-standard"
+            },
+            "code": "us-west1-b"
+          }
+        ]
+      }
+    ]
+  }
+}
