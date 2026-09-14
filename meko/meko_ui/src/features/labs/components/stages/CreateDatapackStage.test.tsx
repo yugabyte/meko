@@ -14,7 +14,7 @@ const DATAPACKS: Datapack[] = [
 function renderStage(overrides: Partial<Parameters<typeof CreateDatapackStage>[0]> = {}) {
   const onSelect = vi.fn();
   const onCreate = vi.fn().mockResolvedValue(undefined);
-  const onContinue = vi.fn();
+  const onComplete = vi.fn();
   render(
     <CreateDatapackStage
       datapacks={DATAPACKS}
@@ -24,28 +24,26 @@ function renderStage(overrides: Partial<Parameters<typeof CreateDatapackStage>[0
       onCreate={onCreate}
       creating={false}
       hasHitDatapackCount={false}
-      onContinue={onContinue}
+      onComplete={onComplete}
       {...overrides}
     />,
   );
-  return { onSelect, onCreate, onContinue };
+  return { onSelect, onCreate, onComplete };
 }
 
 describe("CreateDatapackStage", () => {
-  it("Next is disabled until a datapack is selected", () => {
-    renderStage({ selectedId: null });
-    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
+  // Advancing is the runner footer's job now; this stage only reports that a
+  // datapack was actually chosen, which is what releases the gate.
+  it("does not report completion before a datapack is chosen", () => {
+    const { onComplete } = renderStage({ selectedId: null });
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it("Next is enabled once a datapack is selected", () => {
+  it("frames the three context sources the next lessons fill", () => {
     renderStage({ selectedId: "dp-1" });
-    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("clicking Next calls onContinue", () => {
-    const { onContinue } = renderStage({ selectedId: "dp-1" });
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(onContinue).toHaveBeenCalled();
+    expect(screen.getByText("Knowledge Base")).toBeTruthy();
+    expect(screen.getByText("Memory")).toBeTruthy();
+    expect(screen.getByText("Conversation")).toBeTruthy();
   });
 
   it("creating a new datapack calls onCreate with the trimmed name", async () => {
@@ -61,7 +59,7 @@ describe("CreateDatapackStage", () => {
     const { rerender } = (() => {
       const onSelect = vi.fn();
       const onCreate = vi.fn().mockResolvedValue(undefined);
-      const onContinue = vi.fn();
+      const onComplete = vi.fn();
       const utils = render(
         <CreateDatapackStage
           datapacks={DATAPACKS}
@@ -71,7 +69,7 @@ describe("CreateDatapackStage", () => {
           onCreate={onCreate}
           creating={false}
           hasHitDatapackCount={false}
-          onContinue={onContinue}
+          onComplete={onComplete}
         />,
       );
       return utils;
@@ -87,7 +85,7 @@ describe("CreateDatapackStage", () => {
         onCreate={vi.fn()}
         creating={false}
         hasHitDatapackCount={false}
-        onContinue={vi.fn()}
+        onComplete={vi.fn()}
         heading="Choose a datapack"
         description="Keep the same one, or switch."
       />,

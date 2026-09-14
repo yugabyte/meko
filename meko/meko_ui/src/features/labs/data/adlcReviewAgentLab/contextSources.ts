@@ -13,7 +13,7 @@ export const CONTEXT_SOURCES: { key: ContextSourceKey; icon: LucideIcon; title: 
     key: "knowledge-base",
     icon: FileText,
     title: "Knowledge Base",
-    body: "Documents you upload — org standards, docs, references. Meko chunks and indexes them so they're searchable.",
+    body: "Documents you upload: org standards, docs, references. Meko chunks and indexes them so they're searchable.",
   },
   {
     key: "memory",
@@ -25,6 +25,6 @@ export const CONTEXT_SOURCES: { key: ContextSourceKey; icon: LucideIcon; title: 
     key: "conversation",
     icon: MessageSquare,
     title: "Conversation",
-    body: "Talking with Meko normally — it reads what you say and remembers what matters, without you doing anything extra.",
+    body: "Talking with Meko normally. It reads what you say and remembers what matters, without you doing anything extra.",
   },
 ];

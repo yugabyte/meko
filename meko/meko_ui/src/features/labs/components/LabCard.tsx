@@ -1,5 +1,7 @@
+// One runnable lab on the Labs list: what it is, and what it costs you to
+// run it (chapters and rough duration).
+
 import { Link } from "react-router-dom";
-import { Clock } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,10 +30,14 @@ export function LabCard({ lab }: { lab: LabDefinition }) {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-2">
+        <CardContent className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">{lab.summary}</p>
-          <p className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Clock className="h-3 w-3" /> ~{lab.estimatedMinutes} min
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <span>
+              {lab.chapters.length} chapter{lab.chapters.length === 1 ? "" : "s"}
+            </span>
+            <span aria-hidden>·</span>
+            <span>~{lab.estimatedMinutes} min</span>
           </p>
         </CardContent>
       </Card>

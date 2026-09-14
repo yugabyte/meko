@@ -1,66 +1,102 @@
-import { useEffect, useRef, useState } from "react";
+// Main content pane of the lab runner: switches on progress.currentStage.id
+// (closed union) to render one concrete stage component, and hands each
+// gated stage the callback that satisfies its gate.
+
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
 import { BringYourOwnPrStage } from "../stages/BringYourOwnPrStage";
-import { ClaudeReferenceStage } from "../stages/ClaudeReferenceStage";
 import { CollaborateStage } from "../stages/CollaborateStage";
-import { ContextIntroStage } from "../stages/ContextIntroStage";
 import { ConversationStage } from "../stages/ConversationStage";
-import { CreateAmpClusterStage } from "../stages/CreateAmpClusterStage";
+// PARKED with the create-amp-cluster stage, see chapters.ts.
+// import { CreateAmpClusterStage } from "../stages/CreateAmpClusterStage";
 import { CreateDatapackStage } from "../stages/CreateDatapackStage";
-import { DashboardIntroStage } from "../stages/DashboardIntroStage";
-import { DeployAgentStage } from "../stages/DeployAgentStage";
+// PARKED with chapter 4, see chapters.ts.
+// import { DashboardIntroStage } from "../stages/DashboardIntroStage";
+import { GuardrailStage } from "../stages/GuardrailStage";
 import { KnowledgeBaseStage } from "../stages/KnowledgeBaseStage";
+import { MakeItYoursStage } from "../stages/MakeItYoursStage";
+import { MeetAgentKStage } from "../stages/MeetAgentKStage";
 import { MemoryStage } from "../stages/MemoryStage";
-import { ReviewDashboardStage } from "../stages/ReviewDashboardStage";
-import { ReviewSamplePrStage } from "../stages/ReviewSamplePrStage";
-import { RunReviewAgainStage } from "../stages/RunReviewAgainStage";
+import { RetrievalCostStage } from "../stages/RetrievalCostStage";
+import { ReviewCostStage } from "../stages/ReviewCostStage";
+import { ReviewFindingsStage } from "../stages/ReviewFindingsStage";
+// PARKED with chapter 4, see chapters.ts.
+// import { ReviewDashboardStage } from "../stages/ReviewDashboardStage";
+// PARKED with chapter 4, see chapters.ts.
+// import { RunReviewAgainStage } from "../stages/RunReviewAgainStage";
 import { RunReviewStage } from "../stages/RunReviewStage";
+import { SaveFindingsStage } from "../stages/SaveFindingsStage";
+import { SeeThePrStage } from "../stages/SeeThePrStage";
 import { ShareWithAgentStage } from "../stages/ShareWithAgentStage";
 import type { useLabProgress } from "../../hooks/useLabProgress";
+import type { LabContextFeed } from "../../hooks/useLabContextFeed";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDefinition } from "../../types";
 
-/**
- * Main content pane of the lab runner: switches on progress.currentStage.id
- * (closed union, same convention the old LabDemoAppSlot used for
- * demoApp.kind) to render one of 18 fixed stages -- 16 distinct components,
- * since CreateDatapackStage (create-datapack, choose-datapack-again) and
- * ShareWithAgentStage (share-with-agent, share-with-agent-again) each cover
- * two stage ids.
- */
 export function LabStageSlot({
   lab,
   session,
   progress,
+  contextFeed,
+  onEndLab,
 }: {
   lab: LabDefinition;
   session: ReturnType<typeof useLabRunnerSession>;
   progress: ReturnType<typeof useLabProgress>;
+  /** Owned by LabRunnerPage; the retrieval lesson quotes the real size of the
+   *  documents the user uploaded. */
+  contextFeed: LabContextFeed;
+  /** Leaves the runner — the completion screen offers it as a way out. */
+  onEndLab: () => void;
 }) {
-  const goToCreateDatapack = () => progress.goToStageById("create-datapack");
-  const goToDeployAgent = () => progress.goToStageById("deploy-agent");
-  const goToCreateAmpCluster = () => progress.goToStageById("create-amp-cluster");
+  // Stable identities: these are handed to child effects as dependencies, and
+  // a fresh arrow per render makes any such effect re-run on every render.
+  const { goToStageById, markStageComplete, currentStage } = progress;
+  const goToCreateDatapack = useCallback(() => goToStageById("create-datapack"), [goToStageById]);
+  const goToMeetAgentK = useCallback(() => goToStageById("meet-agentk"), [goToStageById]);
+  const goToRunReview = useCallback(() => goToStageById("run-review"), [goToStageById]);
+  const currentStageId = currentStage.id;
+  const completeCurrentStage = useCallback(
+    () => markStageComplete(currentStageId),
+    [markStageComplete, currentStageId],
+  );
 
   // Owned here, not inside PrReviewDemoApp, because THIS component stays
   // mounted for the whole lab run while the switch below remounts whichever
   // stage component is current -- see PrReviewRunState's own doc comment.
   const [reviewRun, setReviewRun] = useState<PrReviewRunState | null>(null);
-  // Chapter 3's own run, independent of Chapter 2's reviewRun above -- see
-  // RunReviewAgainStage's own comment for why this is a separate state slot.
-  const [dashboardReviewRun, setDashboardReviewRun] = useState<PrReviewRunState | null>(null);
+  // A run that reported real token usage is a finished review, which is what
+  // releases run-review's gate -- and what the findings and cost stages both
+  // read. Checked on usage rather than on findings, since a review that
+  // genuinely found nothing still has usage.
+  // MUST be stable: PrReviewDemoApp lists onRunChange in the dependency array
+  // of the effect that CALLS it, and that effect hands back a freshly built
+  // object every time. A new arrow per render therefore loops -- effect fires,
+  // state changes, parent re-renders, new identity, effect fires again.
+  const handleReviewRunChange = useCallback(
+    (run: PrReviewRunState) => {
+      setReviewRun(run);
+      if (run.reviewUsage) markStageComplete("run-review");
+    },
+    [markStageComplete],
+  );
   // Chapter 4's own run (a real, user-fetched PR) -- same reasoning, its own
   // independent slot rather than reusing either run above.
   const [byocReviewRun, setByocReviewRun] = useState<PrReviewRunState | null>(null);
-  // Chapter 4's own choose-datapack-again stage can change session.datapackId
-  // mid-chapter (unlike Chapter 2/3, whose only datapack choice is the
-  // lab's very first stage) -- without this, a review already run against
-  // the OLD datapack stays in byocReviewRun, so BringYourOwnPrStage keeps
-  // showing it (fetch form unreachable) after switching to a datapack that
-  // was never reviewed, and a follow-up question would attach the NEW
-  // datapack_id to the OLD conversation_id. Guarded on an actual change (not
-  // the initial mount) the same way useLabRunnerSession's own datapackId-
-  // change eviction effect is.
+  // Every completed run this session, for the dashboard's per-run table and
+  // the completion screen -- the only place real per-review numbers live,
+  // since nothing persists them.
+  const sessionRuns = [reviewRun, byocReviewRun].filter(
+    (run): run is PrReviewRunState => run !== null,
+  );
+
+  // Navigating back to create-datapack and switching datapacks must not
+  // leave a review run against the OLD one on screen: BringYourOwnPrStage
+  // would keep showing it (fetch form unreachable), and a follow-up question
+  // would attach the NEW datapack_id to the OLD conversation_id. Guarded on
+  // an actual change (not the initial mount), the same way
+  // useLabRunnerSession's own datapackId-change eviction effect is.
   const prevDatapackIdRef = useRef(session.datapackId);
   useEffect(() => {
     if (prevDatapackIdRef.current === session.datapackId) return;
@@ -69,6 +105,13 @@ export function LabStageSlot({
   }, [session.datapackId]);
 
   switch (progress.currentStage.id) {
+    case "see-the-pr":
+      return (
+        <SeeThePrStage
+          agentDisplayName={lab.demoApp.agentDisplayName}
+          onComplete={completeCurrentStage}
+        />
+      );
     case "create-datapack":
       return (
         <CreateDatapackStage
@@ -79,89 +122,109 @@ export function LabStageSlot({
           onCreate={session.createAndSelectDatapack}
           creating={session.creating}
           hasHitDatapackCount={session.hasHitDatapackCount}
-          onContinue={progress.goToNext}
+          onComplete={completeCurrentStage}
         />
       );
-    case "context-intro":
-      return <ContextIntroStage />;
     case "knowledge-base":
-      return <KnowledgeBaseStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+      return (
+        <KnowledgeBaseStage
+          session={session}
+          feed={contextFeed}
+          onGoToCreateDatapack={goToCreateDatapack}
+        />
+      );
     case "memory":
       return <MemoryStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
     case "conversation":
       return <ConversationStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
-    case "deploy-agent":
+    case "meet-agentk":
       return (
-        <DeployAgentStage demoApp={lab.demoApp} session={session} onGoToCreateDatapack={goToCreateDatapack} />
+        <MeetAgentKStage demoApp={lab.demoApp} session={session} onGoToCreateDatapack={goToCreateDatapack} />
       );
     case "share-with-agent":
-      return <ShareWithAgentStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
-    case "review-sample-pr":
-      return <ReviewSamplePrStage agentDisplayName={lab.demoApp.agentDisplayName} />;
-    case "claude-reference":
-      return <ClaudeReferenceStage agentDisplayName={lab.demoApp.agentDisplayName} />;
+      return (
+        <ShareWithAgentStage
+          session={session}
+          onGoToCreateDatapack={goToCreateDatapack}
+          onComplete={completeCurrentStage}
+        />
+      );
+    case "retrieval-cost":
+      return <RetrievalCostStage agentDisplayName={lab.demoApp.agentDisplayName} feed={contextFeed} />;
+    case "guardrail":
+      return <GuardrailStage agentDisplayName={lab.demoApp.agentDisplayName} />;
     case "run-review":
       return (
         <RunReviewStage
           demoApp={lab.demoApp}
           session={session}
           onGoToCreateDatapack={goToCreateDatapack}
-          onGoToDeployAgent={goToDeployAgent}
+          onGoToDeployAgent={goToMeetAgentK}
           savedRun={reviewRun}
-          onRunChange={setReviewRun}
+          onRunChange={handleReviewRunChange}
+        />
+      );
+    case "review-findings":
+      return (
+        <ReviewFindingsStage
+          run={reviewRun}
+          datapackId={session.datapackId}
+          onGoToRunReview={goToRunReview}
+        />
+      );
+    case "review-cost":
+      return (
+        <ReviewCostStage
+          run={reviewRun}
+          datapackId={session.datapackId}
+          onGoToRunReview={goToRunReview}
         />
       );
     case "collaborate":
       return <CollaborateStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
-    case "dashboard-intro":
-      return <DashboardIntroStage />;
-    case "create-amp-cluster":
-      return <CreateAmpClusterStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
-    case "run-review-again":
-      return (
-        <RunReviewAgainStage
-          demoApp={lab.demoApp}
-          session={session}
-          onGoToCreateDatapack={goToCreateDatapack}
-          onGoToDeployAgent={goToDeployAgent}
-          savedRun={dashboardReviewRun}
-          onRunChange={setDashboardReviewRun}
-        />
-      );
-    case "review-dashboard":
-      return (
-        <ReviewDashboardStage
-          session={session}
-          onGoToCreateDatapack={goToCreateDatapack}
-          onGoToCreateAmpCluster={goToCreateAmpCluster}
-        />
-      );
-    case "choose-datapack-again":
-      return (
-        <CreateDatapackStage
-          datapacks={session.accessibleDatapacks}
-          loading={session.datapacksLoading}
-          selectedId={session.datapackId}
-          onSelect={session.selectDatapack}
-          onCreate={session.createAndSelectDatapack}
-          creating={session.creating}
-          hasHitDatapackCount={session.hasHitDatapackCount}
-          onContinue={progress.goToNext}
-          heading="Choose a datapack"
-          description="Keep reviewing against the same datapack, or switch to a different one you have access to -- this is what AgentK reviews your PR against."
-        />
-      );
-    case "share-with-agent-again":
-      return <ShareWithAgentStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    // case "dashboard-intro":
+    // return <DashboardIntroStage />;
+    // // case "create-amp-cluster":
+    // //   return <CreateAmpClusterStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
+    // case "run-review-again":
+    // return (
+    // <RunReviewAgainStage
+    // demoApp={lab.demoApp}
+    // session={session}
+    // onGoToCreateDatapack={goToCreateDatapack}
+    // onGoToDeployAgent={goToMeetAgentK}
+    // savedRun={dashboardReviewRun}
+    // onRunChange={handleDashboardRunChange}
+    // />
+    // );
+    // case "review-dashboard":
+    // return (
+    // <ReviewDashboardStage
+    // session={session}
+    // sessionRuns={sessionRuns}
+    // onGoToCreateDatapack={goToCreateDatapack}
+    // />
+    // );
+    case "save-findings":
+      return <SaveFindingsStage session={session} run={reviewRun} onComplete={completeCurrentStage} />;
     case "bring-your-own-pr":
       return (
         <BringYourOwnPrStage
           demoApp={lab.demoApp}
           session={session}
           onGoToCreateDatapack={goToCreateDatapack}
-          onGoToDeployAgent={goToDeployAgent}
+          onGoToDeployAgent={goToMeetAgentK}
           savedRun={byocReviewRun}
           onRunChange={setByocReviewRun}
+        />
+      );
+    case "make-it-yours":
+      return (
+        <MakeItYoursStage
+          session={session}
+          sessionRuns={sessionRuns}
+          onGoToCollaborate={() => progress.goToStageById("collaborate")}
+          onEndLab={onEndLab}
         />
       );
     default:

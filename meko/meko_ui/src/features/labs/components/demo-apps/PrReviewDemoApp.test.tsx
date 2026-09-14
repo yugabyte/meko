@@ -157,70 +157,8 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(payload.model).toBe(MODEL_OPTIONS[0].value);
   });
 
-  it("shows the chosen SLM's real token usage after the review completes", async () => {
-    mockInvokeDeployment.mockReturnValue(
-      fakeStream([
-        { type: "meta", conversation_id: "conv-1" },
-        { type: "text_delta", text: "Looks good." },
-        { type: "done", review: "Looks good.", usage: { input_tokens: 512, output_tokens: 128 } },
-      ]),
-    );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
-    await waitFor(() => expect(screen.getByText(/512 in/)).toBeTruthy());
-    expect(screen.getByText(new RegExp(MODEL_OPTIONS[0].label))).toBeTruthy();
-    expect(screen.getByText(/128 out/)).toBeTruthy();
-  });
-
-  it("shows real knowledgebase_search/memory_search retrieval counts from the run", async () => {
-    mockInvokeDeployment.mockReturnValue(
-      fakeStream([
-        { type: "meta", conversation_id: "conv-1" },
-        { type: "text_delta", text: "Looks good." },
-        {
-          type: "done",
-          review: "Looks good.",
-          usage: { input_tokens: 512, output_tokens: 128 },
-          context_stats: {
-            kb_chunks_retrieved: 10,
-            kb_chunks_total: 70,
-            kb_tokens_estimated: 410,
-            memories_retrieved: 3,
-            memories_total: 24,
-            memory_tokens_estimated: 85,
-          },
-        },
-      ]),
-    );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
-
-    await waitFor(() => expect(screen.getByText(/10 of 70 chunks/)).toBeTruthy());
-    expect(screen.getByText(/3 of 24 memories/)).toBeTruthy();
-  });
-
-  it("shows no cost-savings line while the Claude reference has no real captured tokens yet", async () => {
-    // ANTHROPIC_REFERENCE_INPUT_TOKENS/OUTPUT_TOKENS are 0 until
-    // gen_reference_review.py's real output is pasted into the fixture --
-    // dividing by a zero reference cost must not render a bogus "Infinity%"
-    // or "NaN%" savings line.
-    mockInvokeDeployment.mockReturnValue(
-      fakeStream([
-        { type: "meta", conversation_id: "conv-1" },
-        { type: "text_delta", text: "Looks good." },
-        { type: "done", review: "Looks good.", usage: { input_tokens: 512, output_tokens: 128 } },
-      ]),
-    );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
-
-    await waitFor(() => expect(screen.getByText(/512 in/)).toBeTruthy());
-    expect(screen.queryByText(/less, from this run/)).toBeNull();
-  });
 
   it("shows no usage line when the deployed image predates this feature (no usage on done)", async () => {
     render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);

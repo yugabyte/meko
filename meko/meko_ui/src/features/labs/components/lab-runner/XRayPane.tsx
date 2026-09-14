@@ -1,7 +1,9 @@
 // X-Ray: the MCP tool calls (memory_add, context_search, etc.) the most
 // recently completed lesson made, with latency -- or the equivalent API
 // calls for the one lesson (Knowledge Base) that isn't MCP-based. Collapsed
-// by default; empty until a lesson completes.
+// by default. The trace is persisted per lab (see useLabRunnerSession), so
+// it survives a reload rather than emptying out under a user who can still
+// see that lesson's results in the pane above.
 
 import { useState } from "react";
 import { ChevronDown, ScanLine } from "lucide-react";
@@ -43,7 +45,9 @@ export function XRayPane({ trace }: { trace: LessonTrace | null }) {
       <CollapsibleContent>
         <div className="px-4 pb-3">
           {!trace ? (
-            <p className="text-xs text-muted-foreground">Complete a lesson to see its API calls here.</p>
+            <p className="text-xs text-muted-foreground">
+              Nothing recorded in this browser yet. The calls a lesson makes appear here as you complete it.
+            </p>
           ) : (
             <ul className="max-h-[300px] space-y-1.5 overflow-y-auto">
               {trace.calls.map((call, i) => (

@@ -50,89 +50,95 @@ beforeEach(() => {
 });
 
 describe("ShareWithAgentStage", () => {
-  it("shows the degrade prompt when no datapack is selected", () => {
-    render(<ShareWithAgentStage session={fakeSession(null)} onGoToCreateDatapack={vi.fn()} />);
-    expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
-    expect(mockListMembers).not.toHaveBeenCalled();
-  });
-
-  it("renders members once loaded, same as CollaborateStage", async () => {
-    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText("Owner User")).toBeTruthy());
-  });
-
-  it("pre-fills the AgentK admin email and locks it from editing", async () => {
-    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
-    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
-
-    const emailInput = (await screen.findByDisplayValue("agentk-admin@example.com")) as HTMLInputElement;
-    expect(emailInput.disabled).toBe(true);
-  });
-
-  it("pre-selects Contributor and disables the grant picker", async () => {
-    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
-    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
-
-    // "Contributor" appears twice: the Select's current value, and the tile
-    // label -- both should sit inside a disabled control.
-    const contributorMatches = screen.getAllByText("Contributor");
-    expect(contributorMatches).toHaveLength(2);
-    for (const el of contributorMatches) {
-      const control = el.closest("button");
-      expect(control?.hasAttribute("disabled")).toBe(true);
-    }
-  });
-
-  it("clicking 'Send invite' shares with the locked email and grant, no typing required", async () => {
-    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
-    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
-
-    fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
-
-    await waitFor(() => expect(mockInvite).toHaveBeenCalledTimes(1));
-    expect(mockInvite).toHaveBeenCalledWith(
-      "dp-1",
-      { recipient_email: "agentk-admin@example.com", grant: "contributor" },
-      {},
+  it("prompts for a datapack before anything else", () => {
+    render(
+      <ShareWithAgentStage
+        session={fakeSession(null)}
+        onGoToCreateDatapack={vi.fn()}
+        onComplete={vi.fn()}
+      />,
     );
-    // Silent refetch after the invite, same as CollaborateStage.
-    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
 
-  it("disables Send invite once AgentK already has access, via Members", async () => {
+  it("names the exact access level AgentK is granted, in the product's own words", async () => {
+    render(
+      <ShareWithAgentStage
+        session={fakeSession("dp-1")}
+        onGoToCreateDatapack={vi.fn()}
+        onComplete={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Contributor")).toBeTruthy());
+    expect(screen.getByText("Includes viewer rights and can generate memories")).toBeTruthy();
+    // ONE grant, stated once. Listing the levels it implies made the reader
+    // work out which one actually applies.
+    expect(screen.queryByText("Viewer")).toBeNull();
+  });
+
+  it("shares with the configured address and grant, with nothing to type", async () => {
+    render(
+      <ShareWithAgentStage
+        session={fakeSession("dp-1")}
+        onGoToCreateDatapack={vi.fn()}
+        onComplete={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /share datapack/i }));
+    await waitFor(() =>
+      expect(mockInvite).toHaveBeenCalledWith(
+        "dp-1",
+        { recipient_email: "agentk-admin@example.com", grant: "contributor" },
+        {},
+      ),
+    );
+  });
+
+  it("surfaces a failed share instead of silently leaving the button idle", async () => {
+    mockInvite.mockRejectedValueOnce(new Error("share limit reached"));
+    render(
+      <ShareWithAgentStage
+        session={fakeSession("dp-1")}
+        onGoToCreateDatapack={vi.fn()}
+        onComplete={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /share datapack/i }));
+    // The API's own message, not a generic fallback that hides the reason.
+    await waitFor(() => expect(screen.getByText(/share limit reached/i)).toBeTruthy());
+  });
+
+  it("treats an existing member as already shared, so nobody shares twice", async () => {
     mockListMembers.mockResolvedValue({
       members: [
-        { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
-        {
-          user_id: "user-2",
-          is_owner: false,
-          user_name: "Agentk Admin",
-          user_email_id: "agentk-admin@example.com",
-          grant: "contributor",
-        },
+        { user_id: "user-1", is_owner: true, user_email_id: "owner@example.com", grant: "maintainer" },
+        { user_id: "agent-1", is_owner: false, user_email_id: "agentk-admin@example.com", grant: "contributor" },
       ],
-    });
-    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
-    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
-
-    const sendButton = await screen.findByRole("button", { name: /send invite/i });
-    expect(sendButton.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText(/already shared with agentk/i)).toBeTruthy();
-
-    fireEvent.click(sendButton);
-    expect(mockInvite).not.toHaveBeenCalled();
+    } as never);
+    const onComplete = vi.fn();
+    render(
+      <ShareWithAgentStage
+        session={fakeSession("dp-1")}
+        onGoToCreateDatapack={vi.fn()}
+        onComplete={onComplete}
+      />,
+    );
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect((await screen.findByRole("button", { name: /shared/i })).hasAttribute("disabled")).toBe(true);
   });
 
-  it("disables Send invite when AgentK still has a pending invite", async () => {
+  it("treats a still-pending invite as shared too, since re-inviting is a no-op", async () => {
     mockListOutgoingShares.mockResolvedValue({
-      pending_invites: [
-        { invite_id: "inv-1", grant: "contributor", recipient_email_id: "agentk-admin@example.com" },
-      ],
-    });
-    render(<ShareWithAgentStage session={fakeSession("dp-1")} onGoToCreateDatapack={vi.fn()} />);
-    await waitFor(() => expect(mockListMembers).toHaveBeenCalledTimes(1));
-
-    const sendButton = await screen.findByRole("button", { name: /send invite/i });
-    expect(sendButton.hasAttribute("disabled")).toBe(true);
+      pending_invites: [{ recipient_email_id: "agentk-admin@example.com", grant: "contributor" }],
+    } as never);
+    const onComplete = vi.fn();
+    render(
+      <ShareWithAgentStage
+        session={fakeSession("dp-1")}
+        onGoToCreateDatapack={vi.fn()}
+        onComplete={onComplete}
+      />,
+    );
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
   });
 });

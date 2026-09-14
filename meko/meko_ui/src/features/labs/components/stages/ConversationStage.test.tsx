@@ -51,12 +51,6 @@ describe("ConversationStage", () => {
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
 
-  it("shows the context source tracker with Knowledge Base and Memory marked done", () => {
-    const { container } = render(<ConversationStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
-    expect(screen.getByText("Conversation")).toBeTruthy();
-    // Knowledge Base and Memory both precede Conversation -- two done.
-    expect(container.querySelectorAll("svg.lucide-check")).toHaveLength(2);
-  });
 
   it("renders the chat and example prompts once a datapack is selected", () => {
     render(<ConversationStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);

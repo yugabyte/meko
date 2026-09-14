@@ -17,6 +17,7 @@ import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
+import { LabStageHeader } from "./LabStageHeader";
 
 export function RunReviewAgainStage({
   demoApp,
@@ -44,5 +45,16 @@ export function RunReviewAgainStage({
       />
     );
   }
-  return <PrReviewDemoApp demoApp={demoApp} session={session} savedRun={savedRun} onRunChange={onRunChange} />;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 px-6 pt-6">
+        <LabStageHeader
+          eyebrow="Chapter 4 · Step 2"
+          title="Run another review"
+          lede="One more review, so the dashboard's per-session table has more than a single row to show."
+        />
+      </div>
+      <PrReviewDemoApp demoApp={demoApp} session={session} savedRun={savedRun} onRunChange={onRunChange} />
+    </div>
+  );
 }

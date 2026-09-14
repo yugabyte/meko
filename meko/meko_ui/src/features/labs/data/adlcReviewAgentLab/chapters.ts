@@ -1,157 +1,191 @@
 import type { LabChapter } from "../../types";
 
-// "Setup your context" builds the datapack + seeded knowledge AgentK will
-// review against; "Deploy an agent" gets AgentK running (shared instance or
-// your own dedicated one), shares the datapack with it, then runs a review;
-// "Build a dashboard" provisions a real per-datapack AMP Postgres cluster,
-// and previews what a review-run dashboard backed by it would look like. The
-// dashboard's data-capture path (writing a real row per review into the AMP
-// cluster) isn't wired up yet -- see the review-dashboard stage's own
-// comment -- so today it renders illustrative sample data, never a live
-// query, regardless of whether a cluster exists. requiresAmp on this chapter
-// (below) means getLabDefinition drops it entirely when AMP isn't enabled,
-// rather than showing four stages that all immediately degrade.
-// "Bring your own PR" lets the user point AgentK at a real pull request
-// instead of the bundled sample -- fetched client-side with the user's own
-// GitHub token (lib/api/githubApi.ts), never sent to Meko.
+// Five chapters. Chapter 1 opens on the PR itself so the user watches AgentK
+// miss a real bug before building anything, Chapter 2 introduces the agent
+// and hands it the datapack, and Chapter 3 is the review. "Build a dashboard"
+// reads that datapack's own activity back out of Meko. "Bring your own PR"
+// points AgentK at a real pull request instead of the bundled sample, fetched
+// client-side with the user's own GitHub token (lib/api/githubApi.ts) and
+// never sent to Meko.
 export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   {
-    id: "setup-context",
-    title: "Setup your context",
+    id: "give-context",
+    title: "Give your agent context",
     summary:
-      "Build your org's coding standards into a Meko datapack — using the knowledge base, memory, and conversation primitives — so AgentK has something real to review against.",
+      "Watch AgentK review a pull request knowing nothing about your team, then build the knowledge, memory and conversation it was missing.",
     stages: [
+      {
+        id: "see-the-pr",
+        title: "See the pull request",
+        summary:
+          "Thirty-four lines, tests green, CI passing. Let AgentK review it with no context at all first.",
+        gate: { message: "Run the cold review to see the baseline" },
+      },
       {
         id: "create-datapack",
         title: "Create a datapack",
-        summary: "Pick an existing datapack or create a new one — this lab reads and writes into it.",
-        highlights: ["Pick or create one", "Everything lives here"],
-      },
-      {
-        id: "context-intro",
-        title: "What is context?",
-        summary: "Meko builds context from three sources — you'll add one of each next.",
-        highlights: ["Knowledge, memory, conversation", "Powers every later review"],
+        summary:
+          "One datapack holds the knowledge, memories and conversations AgentK will read. Pick an existing one or start fresh.",
+        gate: { message: "Pick or create a datapack to continue" },
       },
       {
         id: "knowledge-base",
-        title: "Build a knowledge base",
-        summary: "Upload your org's coding standards, or start from our sample — it becomes searchable knowledge.",
-        highlights: ["Upload docs or use ours", "Becomes searchable knowledge"],
+        title: "Load your coding standards",
+        summary:
+          "The rules your team already wrote down. Meko chunks and embeds them once, so an agent can ask for one rule instead of reading forty pages.",
+        gate: { message: "Add a standards doc to continue" },
       },
       {
         id: "memory",
         title: "Add a memory",
-        summary: "Tell Meko a coding preference directly — no chat needed, it's remembered instantly.",
-        highlights: ["One fact, saved instantly", "No conversation required"],
+        summary:
+          "Every team has rules that never made it into a document. Save one directly. It's live the moment you hit save.",
+        gate: { message: "Save one preference to continue" },
       },
       {
         id: "conversation",
-        title: "Chat about a preference",
-        summary: "Mention a coding preference in a normal chat — Meko extracts and remembers it automatically.",
-        highlights: ["Just talk naturally", "Meko extracts what matters"],
+        title: "Or just say it in passing",
+        summary:
+          "Talk the way you'd talk to a teammate. Meko reads the conversation and writes the memory itself.",
+        gate: { message: "Send a message to continue" },
       },
     ],
   },
   {
-    id: "deploy-an-agent",
-    title: "Deploy an agent",
-    summary: "Get AgentK running, share what it needs to see, then watch it review against the context you built.",
+    id: "share-with-agentk",
+    title: "Share it with AgentK",
+    summary:
+      "Meet the reviewer, grant it read access to the datapack you just built, and see what that access costs.",
     stages: [
       {
-        id: "deploy-agent",
-        title: "Deploy AgentK",
-        summary: "Use the shared AgentK instance instantly, or deploy your own dedicated one on AWS Bedrock AgentCore.",
-        highlights: ["Shared instance, no wait", "Or deploy your own"],
+        id: "meet-agentk",
+        title: "Meet AgentK",
+        summary:
+          "The reviewer. Open source, running on AWS AgentCore, and knowing nothing about your team until you hand it a datapack.",
       },
       {
         id: "share-with-agent",
-        title: "Share your datapack",
-        summary: "AgentK reads under its own account — share the datapack you built so it can see it.",
-        highlights: ["One-time share", "Needed for the shared instance"],
+        title: "Share the datapack, not a copy",
+        summary:
+          "Sharing is a grant, not a transfer. AgentK reads the live datapack, so a rule you edit at 4pm lands in the 4:01 review.",
+        gate: { message: "Share the datapack to continue" },
       },
       {
-        id: "review-sample-pr",
-        title: "Review the sample PR",
-        summary: "See exactly what AgentK is about to review — a small, clearly-marked sample pull request.",
-        highlights: ["A real diff, not a description", "Marked as sample content"],
+        id: "retrieval-cost",
+        title: "How it reads the standards",
+        summary:
+          "Two ways to get a forty-page document into a model, and the token bill for each. This is the whole cost argument.",
       },
       {
-        id: "claude-reference",
-        title: "See Claude's reference review",
-        summary: "Claude Sonnet 4.5 already reviewed this PR against your org's coding standards — see what it found first.",
-        highlights: ["Grounded in your knowledge base", "The benchmark your model is compared to"],
+        id: "guardrail",
+        title: "Decide where it needs you",
+        summary:
+          "An autonomous agent is only useful when you know where it stops. This is the human-in-the-loop line for review.",
       },
+    ],
+  },
+  {
+    id: "read-the-review",
+    title: "Read the review",
+    summary:
+      "The same pull request and the same agent, now reading the context you built: the findings it returns, and what that context cost.",
+    stages: [
       {
         id: "run-review",
-        title: "Configure & run your review",
-        summary: "Pick a smaller model, tune tone & strictness, then run it against the same context Claude used.",
-        highlights: ["Choose your own model", "Tune tone & strictness"],
+        title: "Run the review",
+        summary:
+          "Nothing about the diff changed. The only difference is that AgentK can now read your datapack.",
+        gate: { message: "Run the review to continue" },
+      },
+      {
+        id: "review-findings",
+        title: "The findings",
+        summary:
+          "Every comment names the rule it came from. Disagree with one and you fix the rule, not the prompt.",
+      },
+      {
+        id: "review-cost",
+        title: "What the context cost",
+        summary:
+          "Real token counts for the run you just did, and what the same review would have cost without retrieval.",
       },
       {
         id: "collaborate",
         title: "Collaborate",
         summary: "Share this datapack with teammates so they see the same knowledge and memories.",
-        highlights: ["Share with teammates", "Same context for everyone"],
       },
     ],
   },
+  // PARKED: the whole "Build a dashboard" chapter. Its dashboard read Meko's
+  // own conversation history and token accounting, which now lives at the end
+  // of "What the context actually cost" (DatapackActivitySummary) where the
+  // cost conversation already is. "Run another review" re-ran the same review
+  // against the same PR to add one row to a table that already had Chapter 3's
+  // run in it, and the AMP step before it provisioned a cluster nothing read.
+  // Every stage component is still in the tree; restoring the chapter is
+  // uncommenting this block and its cases in LabStageSlot.
+  // {
+  //   id: "build-a-dashboard",
+  //   title: "Build a dashboard",
+  //   summary:
+  //     "Read back a dashboard of this datapack's own activity, drawn from the conversations and token accounting Meko already keeps.",
+  //   stages: [
+  //     {
+  //       id: "dashboard-intro",
+  //       title: "Where a dashboard's data comes from",
+  //       summary:
+  //         "Meko already keeps enough about this datapack to chart it. Structured data your own app owns is a separate question.",
+  //     },
+  //     // PARKED: the AMP cluster step. The dashboard below reads Meko's own
+  //     // conversation history and token accounting, never the cluster, so
+  //     // provisioning one was a prerequisite nothing used. The stage,
+  //     // CreateAmpClusterStage, useValidAmpCluster and LabStageNeedsAmpCluster
+  //     // are all still in the tree for when the write path into that cluster
+  //     // exists and this step earns its place again.
+  //     // {
+  //     //   id: "create-amp-cluster",
+  //     //   title: "Create an AMP cluster",
+  //     //   summary:
+  //     //     "Provision a real fractional Postgres instance for this datapack. It's your app's storage, not Meko's.",
+  //     //   gate: { message: "Create a cluster to continue" },
+  //     // },
+  //     {
+  //       id: "run-review-again",
+  //       title: "Run another review",
+  //       summary:
+  //         "One more review, so the dashboard's per-session table has more than a single row to show.",
+  //       gate: { message: "Run a review to continue" },
+  //     },
+  //     {
+  //       id: "review-dashboard",
+  //       title: "See your dashboard",
+  //       summary:
+  //         "Conversations, memories, requests and tokens saved, read back from this datapack, plus this session's own runs.",
+  //     },
+  //   ],
+  // },
   {
-    id: "build-a-dashboard",
-    title: "Build a dashboard",
+    id: "close-the-loop",
+    title: "Close the loop",
     summary:
-      "Every datapack can back its own app storage — provision a real fractional Postgres instance with AMP, then preview what a review-run dashboard backed by it would look like.",
-    requiresAmp: true,
+      "Point AgentK at a real pull request of your own, then take the whole setup back to your work.",
     stages: [
       {
-        id: "dashboard-intro",
-        title: "Why a dashboard needs real storage",
-        summary: "Meko's memory and conversation store isn't built for structured, queryable app data — a dashboard needs a real database.",
-        highlights: ["Structured, not free-text", "Every datapack can have one"],
-      },
-      {
-        id: "create-amp-cluster",
-        title: "Create an AMP cluster",
-        summary: "Provision a real fractional Postgres instance for this datapack — this is your own app's storage, not Meko's.",
-        highlights: ["A real Postgres database", "Yours, not shared"],
-      },
-      {
-        id: "run-review-again",
-        title: "Run another review",
-        summary: "Run one more review — a second example to look at once you get to the dashboard preview.",
-        highlights: ["Same review flow as before", "Not recorded anywhere yet"],
-      },
-      {
-        id: "review-dashboard",
-        title: "See your dashboard",
-        summary: "A preview of what your review-run dashboard will look like — models used, tokens, cost, and findings.",
-        highlights: ["Stat tiles + a trend chart", "Sample data, not yet live"],
-      },
-    ],
-  },
-  {
-    id: "bring-your-own-pr",
-    title: "Bring your own PR",
-    summary:
-      "Every review so far used a bundled sample PR — now point AgentK at a real pull request you have access to.",
-    stages: [
-      {
-        id: "choose-datapack-again",
-        title: "Choose a datapack",
-        summary: "Keep reviewing against the same datapack, or switch to a different one for this PR.",
-        highlights: ["Same one, or a different one", "Sets the context for this review"],
-      },
-      {
-        id: "share-with-agent-again",
-        title: "Share your datapack",
-        summary: "If you switched datapacks, AgentK needs sharing on this one too — reusing your own is a no-op.",
-        highlights: ["Only matters if you switched", "Same one-time share as Chapter 2"],
+        id: "save-findings",
+        title: "Save the findings",
+        summary:
+          "Write this review's findings into the feature's own datapack, so the agent that fixes them starts where the reviewer stopped.",
       },
       {
         id: "bring-your-own-pr",
         title: "Review a real PR",
-        summary: "Paste a GitHub PR reference and a personal access token — AgentK reviews it against the same context.",
-        highlights: ["Your own repo, your own PR", "Token stays in your browser"],
+        summary:
+          "Paste a pull request you have access to. It's fetched in your browser with your own GitHub token, which never reaches Meko.",
+      },
+      {
+        id: "make-it-yours",
+        title: "Make it yours",
+        summary: "What you built, and the four ways to point the same setup at your own repositories.",
       },
     ],
   },

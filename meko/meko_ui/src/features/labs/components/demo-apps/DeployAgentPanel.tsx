@@ -56,7 +56,7 @@ function AboutAgent({
   return (
     <div className="flex flex-col gap-1 rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
       <p>
-        <span className="font-medium text-foreground">{agentDisplayName}</span> is open source —{" "}
+        <span className="font-medium text-foreground">{agentDisplayName}</span> is open source:{" "}
         <a
           href={sourceRepoUrl}
           target="_blank"
@@ -141,15 +141,15 @@ function SharedAgentPanel({
       {active ? (
         <p className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
           <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-          Ready — click Next to continue.
+          Ready. Click Next to continue.
         </p>
       ) : isError ? (
         <p className="text-xs text-destructive">
-          This lab isn't configured with a shared instance yet — deploy your own instead.
+          This lab isn't configured with a shared instance yet. Deploy your own instead.
         </p>
       ) : deployment ? (
         <p className="text-xs text-destructive">
-          The shared instance isn't available right now ({deployment.status}) — try deploying your own instead.
+          The shared instance isn't available right now ({deployment.status}). Try deploying your own instead.
         </p>
       ) : (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

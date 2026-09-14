@@ -81,7 +81,7 @@ export function DeploymentModeChooser({
             <Badge variant="secondary">No wait</Badge>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            A pre-deployed instance ready right now — no AWS account or deploy needed.
+            A pre-deployed instance ready right now, with no AWS account or deploy needed.
           </p>
         </Card>
 

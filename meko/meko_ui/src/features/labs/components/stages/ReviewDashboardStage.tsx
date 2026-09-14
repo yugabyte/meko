@@ -1,53 +1,39 @@
-// A personal dashboard of this datapack's review runs -- stat tiles plus a
-// runs-over-time chart, modeled at reduced scope on the user's own internal
-// AgentK ops dashboard (a single-user view of their own runs, not that
-// dashboard's bot-uptime/watched-repos/multi-repo widgets, which don't map
-// to one lab's single datapack).
-//
-// NOT WIRED UP YET: there is no backend path today for writing a review run
-// into the datapack's AMP cluster or reading it back -- see
-// chapter3-plan-a-meko.md (api_server + meko_ui write/read endpoints) and
-// chapter3-plan-b-amp-controller.md (the AMP-controller SQL-execution
-// primitive both depend on), both uploaded to the meko-labs-chapter3
-// datapack. Until that lands, this renders SAMPLE_REVIEW_RUNS -- clearly
-// labeled sample data, never a live query -- so the dashboard's shape is
-// real even though its numbers aren't yet.
+// A dashboard of this datapack's own activity, drawn entirely from data Meko
+// already has: the conversation history every review writes into, and the
+// datapack's token-savings summary. Per-run tokens/cost/findings still have
+// nowhere to persist, so those come from this session's own runs and are
+// labelled as such rather than faked for earlier ones.
 
-import { AlertTriangle, BarChart3, Coins, ListChecks, Sparkles } from "lucide-react";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Coins, Layers, MessageSquare, Zap } from "lucide-react";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { StatTile } from "@/components/ui/stat-tile";
+import { dollarsSavedByModel, formatTokens } from "@/lib/tokenSavings";
 
-import { LabStageNeedsAmpCluster } from "../lab-runner/LabStageNeedsAmpCluster";
-import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
-import { SAMPLE_REVIEW_RUNS } from "../../data/adlcReviewAgentLab/sampleReviewRuns";
-import { useValidAmpCluster } from "../../hooks/useValidAmpCluster";
+import { useLabReviewDashboard } from "../../hooks/useLabReviewDashboard";
+// PARKED with the create-amp-cluster stage, see chapters.ts.
+// import { useValidAmpCluster } from "../../hooks/useValidAmpCluster";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
+// import { LabStageNeedsAmpCluster } from "../lab-runner/LabStageNeedsAmpCluster";
+import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
+import { LabStageHeader } from "./LabStageHeader";
+import { SessionRunsTable } from "./SessionRunsTable";
 
-function formatUsd(amount: number): string {
-  return `$${amount.toFixed(4)}`;
-}
-
-function formatDate(iso: string): string {
+function formatDay(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export function ReviewDashboardStage({
   session,
+  sessionRuns,
   onGoToCreateDatapack,
-  onGoToCreateAmpCluster,
 }: {
   session: ReturnType<typeof useLabRunnerSession>;
+  /** The runs LabStageSlot is holding for this lab run — the only source of
+   *  real per-review tokens/cost/findings that exists today. */
+  sessionRuns: PrReviewRunState[];
   onGoToCreateDatapack: () => void;
-  onGoToCreateAmpCluster: () => void;
 }) {
   if (!session.datapackId) {
     return <LabStageNeedsDatapack onGoToCreateDatapack={onGoToCreateDatapack} />;
@@ -55,114 +41,115 @@ export function ReviewDashboardStage({
   return (
     <ReviewDashboardStageContent
       datapackId={session.datapackId}
-      session={session}
-      onGoToCreateAmpCluster={onGoToCreateAmpCluster}
+      sessionRuns={sessionRuns}
     />
   );
 }
 
 function ReviewDashboardStageContent({
   datapackId,
-  session,
-  onGoToCreateAmpCluster,
+  sessionRuns,
 }: {
   datapackId: string;
-  session: ReturnType<typeof useLabRunnerSession>;
-  onGoToCreateAmpCluster: () => void;
+  sessionRuns: PrReviewRunState[];
 }) {
-  // Confirms session.ampClusterId still exists (see useValidAmpCluster's own
-  // comment) before trusting it -- otherwise a cluster deleted from the
-  // datapack detail page would still pass this gate and render a dashboard
-  // for a cluster that's gone.
-  useValidAmpCluster(datapackId, session);
-  if (!session.ampClusterId) {
-    return <LabStageNeedsAmpCluster onGoToCreateAmpCluster={onGoToCreateAmpCluster} />;
-  }
+  // No AMP gate: everything below is read out of Meko, so a cluster was a
+  // prerequisite this page never used. Parked with that stage, see chapters.ts.
+  const { totals, activity, savings, error } = useLabReviewDashboard(datapackId);
 
-  const runs = SAMPLE_REVIEW_RUNS;
-  const totalReviews = runs.length;
-  const totalInputTokens = runs.reduce((sum, r) => sum + r.inputTokens, 0);
-  const totalOutputTokens = runs.reduce((sum, r) => sum + r.outputTokens, 0);
-  const totalCostUsd = runs.reduce((sum, r) => sum + r.estimatedCostUsd, 0);
-  const avgFindings = totalReviews > 0 ? runs.reduce((sum, r) => sum + r.findingsCount, 0) / totalReviews : 0;
-
-  const chartData = runs.map((r) => ({
-    date: formatDate(r.createdAt),
-    costUsd: r.estimatedCostUsd,
-  }));
+  const byModel = savings ? dollarsSavedByModel(savings) : [];
+  const chartData = activity.map((point) => ({ ...point, label: formatDay(point.date) }));
 
   return (
-    <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <BarChart3 className="h-5 w-5 text-primary" aria-hidden />
-          <h2 className="text-lg font-semibold text-foreground">Your review dashboard</h2>
-        </div>
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-          <Sparkles className="h-3 w-3" aria-hidden />
-          Sample data — live capture coming soon
-        </span>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        This is what your dashboard will look like once review runs are recorded into your
-        AMP cluster — the numbers below are illustrative, not yours yet.
-      </p>
+    <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+      <LabStageHeader
+        eyebrow="Chapter 4 · Step 3"
+        title="Your datapack's dashboard"
+        lede="Every number here is this datapack's own, read back from the conversations and token accounting Meko already keeps."
+        tags={["Live"]}
+      />
+
+      {error && <p className="text-sm text-muted-foreground">{error}</p>}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
-          icon={<ListChecks className="h-3.5 w-3.5" aria-hidden />}
-          label="Reviews run"
-          value={totalReviews}
+          icon={<MessageSquare className="h-3 w-3" />}
+          label="Conversations"
+          value={totals.conversations.toLocaleString()}
         />
         <StatTile
-          icon={<Coins className="h-3.5 w-3.5" aria-hidden />}
-          label="Total tokens"
-          value={`${(totalInputTokens / 1000).toFixed(1)}k in / ${(totalOutputTokens / 1000).toFixed(1)}k out`}
+          icon={<Layers className="h-3 w-3" />}
+          label="Memories extracted"
+          value={totals.memoriesAdded.toLocaleString()}
         />
         <StatTile
-          icon={<Coins className="h-3.5 w-3.5" aria-hidden />}
-          label="Total estimated cost"
-          value={formatUsd(totalCostUsd)}
+          icon={<Zap className="h-3 w-3" />}
+          label="Requests through Meko"
+          value={(savings?.total_requests ?? 0).toLocaleString()}
         />
         <StatTile
-          icon={<AlertTriangle className="h-3.5 w-3.5" aria-hidden />}
-          label="Avg findings / review"
-          value={avgFindings.toFixed(1)}
+          icon={<Coins className="h-3 w-3" />}
+          label="Tokens saved"
+          value={formatTokens(savings?.total_tokens_saved ?? 0)}
         />
       </div>
 
-      <div className="rounded-xl border border-border bg-card p-4">
-        <p className="mb-3 text-sm font-medium text-foreground">Estimated cost per review</p>
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={chartData} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-            <XAxis dataKey="date" tick={{ fontSize: 11 }} className="text-muted-foreground" />
-            <YAxis
-              tickFormatter={(v: number) => `$${v.toFixed(3)}`}
-              tick={{ fontSize: 11 }}
-              className="text-muted-foreground"
-              width={56}
-            />
-            <Tooltip
-              formatter={(value: number) => formatUsd(value)}
-              contentStyle={{
-                backgroundColor: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "6px",
-                fontSize: "12px",
-              }}
-            />
-            <Line
-              type="monotone"
-              dataKey="costUsd"
-              name="Estimated cost"
-              stroke="hsl(25 95% 53%)"
-              strokeWidth={2}
-              dot={{ r: 3 }}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
+      {chartData.length > 0 && (
+        <section className="rounded-xl border border-border bg-card p-4">
+          <h3 className="mb-3 text-sm font-medium text-foreground">Activity over time</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} className="text-muted-foreground" />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} className="text-muted-foreground" width={32} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(var(--card))",
+                  border: "1px solid hsl(var(--border))",
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                }}
+              />
+              {/* Semantic token, not a literal — the line has to stay legible
+                  when the viewer flips theme. */}
+              <Line
+                type="monotone"
+                dataKey="conversations"
+                name="Conversations"
+                stroke="hsl(var(--primary))"
+                strokeWidth={2}
+                dot={{ r: 3 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </section>
+      )}
+
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium text-foreground">
+          Reviews in this session
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            · per-run numbers aren't persisted yet, so these reset on reload
+          </span>
+        </h3>
+        <SessionRunsTable runs={sessionRuns} />
+      </section>
+
+      {byModel.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-sm font-medium text-foreground">What this datapack saved, by model</h3>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {byModel.map((entry) => (
+              <StatTile
+                key={entry.key}
+                icon={<Coins className="h-3 w-3" />}
+                label={entry.label}
+                value={`$${entry.dollars.toFixed(2)}`}
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

@@ -10,7 +10,7 @@ describe("XRayPane", () => {
   it("shows an empty state before any lesson has completed", () => {
     render(<XRayPane trace={null} />);
     fireEvent.click(screen.getByRole("button", { name: /x-ray/i }));
-    expect(screen.getByText("Complete a lesson to see its API calls here.")).toBeTruthy();
+    expect(screen.getByText(/Nothing recorded in this browser yet/)).toBeTruthy();
   });
 
   it("is collapsed by default -- the trace is not visible until expanded", () => {

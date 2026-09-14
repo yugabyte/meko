@@ -25,6 +25,7 @@ import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
+import { LabStageHeader } from "./LabStageHeader";
 
 export function BringYourOwnPrStage({
   demoApp,
@@ -115,7 +116,7 @@ function BringYourOwnPrStageContent({
         </div>
         <p className="text-sm text-muted-foreground">
           Every review so far used a bundled sample PR. Point {demoApp.agentDisplayName} at a real
-          pull request you have access to instead — fetched directly from GitHub in your browser;
+          pull request you have access to instead, fetched directly from GitHub in your browser;
           your token is never sent to Meko.
         </p>
         <div className="flex flex-col gap-3 rounded-md border border-border p-4">
@@ -143,7 +144,7 @@ function BringYourOwnPrStageContent({
               }}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              Needs read access to the repo — a fine-grained token scoped to "Pull requests:
+              Needs read access to the repo: a fine-grained token scoped to "Pull requests:
               Read-only" is enough.
             </p>
           </div>
@@ -162,12 +163,22 @@ function BringYourOwnPrStageContent({
   }
 
   return (
-    <PrReviewDemoApp
-      demoApp={demoApp}
-      session={session}
-      prSource={prSource ?? undefined}
-      savedRun={savedRun}
-      onRunChange={onRunChange}
-    />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 px-6 pt-6">
+        <LabStageHeader
+          eyebrow="Chapter 4 · Step 1"
+          title="Review a real PR"
+          lede={`Every review so far used a bundled sample. This one is the pull request you fetched, reviewed by ${demoApp.agentDisplayName} against the same context.`}
+          tags={["Your repo"]}
+        />
+      </div>
+      <PrReviewDemoApp
+        demoApp={demoApp}
+        session={session}
+        prSource={prSource ?? undefined}
+        savedRun={savedRun}
+        onRunChange={onRunChange}
+      />
+    </div>
   );
 }

@@ -51,6 +51,27 @@ function selectedAmpBranchStorageKey(labId: string): string {
  * filter WorkbenchLM uses (owner/maintainer/contributor, not viewer) since
  * this session also writes memories and KB uploads.
  */
+/** Keyed by datapack as well as lab: a trace describes calls made against ONE
+ *  datapack, so carrying it across a switch showed the new datapack's pane
+ *  beside the old one's X-Ray. */
+function lessonTraceStorageKey(labId: string, datapackId: string | null): string {
+  return `meko:lab-lesson-trace:${labId}:${datapackId ?? "none"}`;
+}
+
+/** A trace whose shape no longer parses is simply absent — X-Ray falls back
+ *  to its empty state rather than rendering half a row. */
+function readLessonTrace(labId: string, datapackId: string | null): LessonTrace | null {
+  const raw = getLocalItem(lessonTraceStorageKey(labId, datapackId));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<LessonTrace>;
+    if (typeof parsed.lessonTitle !== "string" || !Array.isArray(parsed.calls)) return null;
+    return parsed as LessonTrace;
+  } catch {
+    return null;
+  }
+}
+
 export function useLabRunnerSession(lab: LabDefinition) {
   const { data: currentUser } = useCurrentUser();
   const userId = currentUser?.account_id ?? null;
@@ -82,12 +103,28 @@ export function useLabRunnerSession(lab: LabDefinition) {
 
   const bumpRefreshTick = useCallback(() => setRefreshTick((t) => t + 1), []);
 
-  // The X-Ray pane's data: the calls the most recently completed lesson
-  // made. Not persisted -- resets on remount, which is correct, it's
-  // "since you opened this run." Recorded alongside bumpRefreshTick, not
-  // instead of it -- this carries no signal about *what* to refetch.
-  const [lastLessonTrace, setLastLessonTrace] = useState<LessonTrace | null>(null);
-  const recordLessonTrace = useCallback((trace: LessonTrace) => setLastLessonTrace(trace), []);
+  // The X-Ray pane's data: the calls the most recently completed lesson made.
+  // Persisted (per lab AND datapack) so a reload doesn't tell a user who just
+  // indexed a document to "complete a lesson" for work they can see in the
+  // pane above it. Read straight from storage on every render rather than
+  // held in state, so switching datapack swaps the trace with it instead of
+  // showing the previous datapack's calls beside the new one's contents.
+  // Recorded alongside bumpRefreshTick, not instead of it: this carries no
+  // signal about *what* to refetch.
+  const [traceTick, setTraceTick] = useState(0);
+  const lastLessonTrace = useMemo(
+    () => readLessonTrace(lab.id, datapackId),
+    // traceTick is the write signal; datapackId is what makes it swap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lab.id, datapackId, traceTick],
+  );
+  const recordLessonTrace = useCallback(
+    (trace: LessonTrace) => {
+      setLocalItem(lessonTraceStorageKey(lab.id, datapackId), JSON.stringify(trace));
+      setTraceTick((t) => t + 1);
+    },
+    [lab.id, datapackId],
+  );
 
   const selectDatapack = useCallback(
     (id: string) => {

@@ -1,7 +1,9 @@
+import { useEffect, useRef } from "react";
 import { Loader2, LogOut } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 import { ROUTES } from "@/app/routes/paths";
 import NotFoundPage from "@/features/system/pages/NotFoundPage";
@@ -11,9 +13,12 @@ import { parseLabRoute } from "../lib/parseLabRoute";
 import { useLabsNavFlag } from "../hooks/useLabsNavFlag";
 import { useLabProgress } from "../hooks/useLabProgress";
 import { useLabRunnerSession } from "../hooks/useLabRunnerSession";
+import { useLabContextFeed } from "../hooks/useLabContextFeed";
+import { stagesSatisfiedByContext } from "../lib/labGates";
 import { LabStageNav } from "../components/lab-runner/LabStageNav";
 import { LabStageSlot } from "../components/lab-runner/LabStageSlot";
-import { LabObservationSlot } from "../components/lab-runner/LabObservationSlot";
+import { LabStageFooter } from "../components/lab-runner/LabStageFooter";
+import { LabContextPane } from "../components/lab-runner/LabContextPane";
 import type { LabStageId } from "../types";
 
 // The only stages that read session.userToken (MemoryStage,
@@ -28,6 +33,26 @@ const STAGES_NEEDING_TOKEN: LabStageId[] = [
   "run-review-again",
   "bring-your-own-pr",
 ];
+
+/** The opening stage runs the agent with no context on purpose, so the pane
+ *  beside it must not already be full of it -- which it would be for anyone
+ *  resuming a run with a datapack still selected. */
+const STAGES_BEFORE_ANY_CONTEXT: LabStageId[] = ["see-the-pr"];
+
+/** Stages whose content needs more room than a comfortable reading measure.
+ *  Both show a four-up stat grid, which wraps every label onto two lines at
+ *  the default width. Prose stages stay narrow: a wide column is worse for
+ *  reading, which is why this is a list and not the default. */
+const WIDE_STAGES: LabStageId[] = ["review-cost", "make-it-yours"];
+
+/** The lessons that satisfy their gate by writing into the datapack. Each
+ *  reports a lesson trace on success, which releases the gate immediately.
+ *  That alone isn't enough, though: a user whose datapack ALREADY holds what
+ *  the lesson produces (an earlier run, a shared datapack, a reload
+ *  mid-lesson) never fires the event and would be stuck with no way to
+ *  satisfy it short of doing the work twice. So observed state releases the
+ *  gate too -- see the effect below. */
+const TRACE_COMPLETED_STAGES: LabStageId[] = ["knowledge-base", "memory", "conversation"];
 
 export function shouldShowProvisionStatusSpinner(loading: boolean, stageId: LabStageId): boolean {
   return loading && STAGES_NEEDING_TOKEN.includes(stageId);
@@ -46,6 +71,38 @@ export default function LabRunnerPage() {
   const progress = useLabProgress(lab ?? LAB_DEFINITIONS[0]);
   const session = useLabRunnerSession(lab ?? LAB_DEFINITIONS[0]);
 
+  // A lesson that recorded a trace did its work, so that's what satisfies
+  // its gate. Compared by identity, not content: re-recording the same
+  // lesson produces a new object, and an unchanged one must not re-fire.
+  const seenTraceRef = useRef(session.lastLessonTrace);
+  const { markStageComplete, currentStage } = progress;
+
+  // Lifted out of LabContextPane so the gate and the pane read one fetch
+  // rather than two: what the pane displays IS the evidence the lesson's
+  // work exists.
+  const contextFeed = useLabContextFeed({
+    datapackId: session.datapackId,
+    refreshTick: session.refreshTick,
+    paused: false,
+  });
+
+  // Whatever the datapack already holds satisfies the matching lesson's gate,
+  // however it got there. The lesson still renders -- this only decides
+  // whether Next is blocked.
+  const satisfiedByContext = stagesSatisfiedByContext(contextFeed, session.datapackId).join(",");
+  useEffect(() => {
+    for (const stageId of satisfiedByContext.split(",").filter(Boolean)) {
+      markStageComplete(stageId as LabStageId);
+    }
+  }, [satisfiedByContext, markStageComplete]);
+
+  useEffect(() => {
+    const trace = session.lastLessonTrace;
+    if (!trace || trace === seenTraceRef.current) return;
+    seenTraceRef.current = trace;
+    if (TRACE_COMPLETED_STAGES.includes(currentStage.id)) markStageComplete(currentStage.id);
+  }, [session.lastLessonTrace, currentStage.id, markStageComplete]);
+
   // Pre-GA: the flag gates more than the Sidebar entry -- a direct URL hit
   // must bounce too, same as BillingPage/AdminPage self-guard.
   if (!showLabs) return <NotFoundPage />;
@@ -59,7 +116,13 @@ export default function LabRunnerPage() {
     <div className="flex h-screen h-dvh w-full flex-col overflow-hidden bg-background text-foreground">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <LabIcon className="h-5 w-5 shrink-0 text-primary" aria-hidden />
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{lab.title}</h1>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-sm font-medium">{lab.title}</h1>
+          <p className="truncate text-xs text-muted-foreground">
+            Chapter {progress.chapterIndex + 1} · {progress.currentChapter.title} ·{" "}
+            {progress.currentStage.title}
+          </p>
+        </div>
         <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.labs)}>
           <LogOut className="h-3.5 w-3.5" aria-hidden />
           End Lab
@@ -70,7 +133,7 @@ export default function LabRunnerPage() {
           {session.error}
         </p>
       )}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[340px_1fr_440px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[300px_1fr_400px]">
         <div className="hidden min-h-0 flex-col overflow-hidden lg:flex">
           <LabStageNav chapters={lab.chapters} progress={progress} />
         </div>
@@ -80,17 +143,40 @@ export default function LabRunnerPage() {
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <LabStageSlot lab={lab} session={session} progress={progress} />
+            // One measure for the whole stage column, so a stage's prose and
+            // its cards line up instead of the text stopping short of them.
+            // Stages keep their own scrolling; this only bounds the width.
+            <div
+              className={cn(
+                "mx-auto flex w-full min-h-0 flex-1 flex-col overflow-hidden",
+                WIDE_STAGES.includes(progress.currentStage.id) ? "max-w-5xl" : "max-w-3xl",
+              )}
+            >
+              <LabStageSlot
+                lab={lab}
+                session={session}
+                progress={progress}
+                contextFeed={contextFeed}
+                onEndLab={() => navigate(ROUTES.labs)}
+              />
+            </div>
           )}
+          <LabStageFooter
+            onBack={progress.goToPrevious}
+            onNext={progress.goToNext}
+            canGoBack={progress.flatIndex > 0}
+            isLastStage={progress.isLastStage}
+            gateMessage={progress.gateMessage}
+          />
         </div>
         <div className="hidden min-h-0 flex-col overflow-hidden lg:flex">
-          <LabObservationSlot
-            observation={lab.observation}
+          <LabContextPane
+            feed={contextFeed}
             datapackId={session.datapackId}
             datapackName={session.datapackName}
             datapackGrant={session.datapackGrant}
-            refreshTick={session.refreshTick}
             lastLessonTrace={session.lastLessonTrace}
+            showContext={!STAGES_BEFORE_ANY_CONTEXT.includes(progress.currentStage.id)}
           />
         </div>
       </div>

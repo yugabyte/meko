@@ -2,7 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import type { LabContextFeed } from "../../hooks/useLabContextFeed";
 import { KnowledgeBaseStage } from "./KnowledgeBaseStage";
+
+function feed(overrides: Partial<LabContextFeed> = {}): LabContextFeed {
+  return {
+    knowledge: [],
+    knowledgeTotal: 0,
+    memories: [],
+    memoriesTotal: 0,
+    collective: [],
+    collectiveTotal: 0,
+    conversationsTotal: 0,
+  chunkSize: null,
+    loading: false,
+    ...overrides,
+  };
+}
 
 // Scope this test to KnowledgeBaseStage's own composition, not FileUpload's
 // internals (which have no existing tests of their own to lean on either).
@@ -56,27 +72,19 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("KnowledgeBaseStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
-    render(<KnowledgeBaseStage session={fakeSession({ datapackId: null })} onGoToCreateDatapack={vi.fn()} />);
+    render(<KnowledgeBaseStage session={fakeSession({ datapackId: null })} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
     expect(screen.queryByTestId("file-upload-mock")).toBeNull();
   });
 
   it("renders the upload widget once a datapack is selected", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
+    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
     expect(screen.getByTestId("file-upload-mock")).toBeTruthy();
   });
 
-  it("shows the context source tracker with Knowledge Base as the current source", () => {
-    const { container } = render(<KnowledgeBaseStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
-    expect(screen.getByText("Knowledge Base")).toBeTruthy();
-    expect(screen.getByText("Memory")).toBeTruthy();
-    expect(screen.getByText("Conversation")).toBeTruthy();
-    // First source -- nothing before it is "done" yet.
-    expect(container.querySelectorAll("svg.lucide-check")).toHaveLength(0);
-  });
 
   it("shows the sample-vs-own card, and 'Add the sample' seeds FileUpload's initialFiles", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
+    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
     expect(screen.getByText("org-coding-standards.md")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /add the sample/i }));
@@ -87,7 +95,7 @@ describe("KnowledgeBaseStage", () => {
   });
 
   it("shows the sample file's actual content inline by default, and can be hidden/re-shown", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
+    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
     expect(screen.getByText(/sql injection vulnerability/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /hide preview/i }));
@@ -98,7 +106,7 @@ describe("KnowledgeBaseStage", () => {
   });
 
   it("hides the sample card once FileUpload reports a queued doc", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
+    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
     expect(screen.getByText("org-coding-standards.md")).toBeTruthy();
 
     fireEvent.click(screen.getByText("simulate-queue-doc"));
@@ -106,22 +114,42 @@ describe("KnowledgeBaseStage", () => {
     expect(screen.queryByText("org-coding-standards.md")).toBeNull();
   });
 
-  it("shows a processing indicator while active, then a persistent done message", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
-    expect(screen.queryByText(/processing your file/i)).toBeNull();
-    expect(screen.queryByText(/check shared knowledge/i)).toBeNull();
+  it("shows a processing indicator while the upload is active", () => {
+    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    expect(screen.queryByText(/chunking and embedding your file/i)).toBeNull();
 
     fireEvent.click(screen.getByText("simulate-processing-start"));
-    expect(screen.getByText(/processing your file/i)).toBeTruthy();
+    expect(screen.getByText(/chunking and embedding your file/i)).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByText("simulate-processing-stop"));
-    expect(screen.queryByText(/processing your file/i)).toBeNull();
-    expect(screen.getByText(/check shared knowledge/i)).toBeTruthy();
+  // The indicator used to hang on FileUpload's own flag, which can stay true
+  // after the work is done and is false on a remount that missed the
+  // transition -- so an indexed document would sit behind a spinner forever.
+  it("reports done from the indexed document, not from the upload widget's flag", () => {
+    render(
+      <KnowledgeBaseStage
+        session={fakeSession()}
+        feed={feed({ knowledgeTotal: 1, knowledge: [{ id: "d1", status: "COMPLETED" }] as never })}
+        onGoToCreateDatapack={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/1 document indexed/i)).toBeTruthy();
+    expect(screen.queryByText(/chunking and embedding your file/i)).toBeNull();
+  });
+
+  it("keeps showing done across a remount, since the document is still indexed", () => {
+    const indexed = feed({ knowledgeTotal: 1, knowledge: [{ id: "d1", status: "COMPLETED" }] as never });
+    const { unmount } = render(
+      <KnowledgeBaseStage session={fakeSession()} feed={indexed} onGoToCreateDatapack={vi.fn()} />,
+    );
+    unmount();
+    render(<KnowledgeBaseStage session={fakeSession()} feed={indexed} onGoToCreateDatapack={vi.fn()} />);
+    expect(screen.getByText(/1 document indexed/i)).toBeTruthy();
   });
 
   it("records one aggregate X-Ray call once processing finishes", () => {
     const recordLessonTrace = vi.fn();
-    render(<KnowledgeBaseStage session={fakeSession({ recordLessonTrace })} onGoToCreateDatapack={vi.fn()} />);
+    render(<KnowledgeBaseStage session={fakeSession({ recordLessonTrace })} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
 
     fireEvent.click(screen.getByText("simulate-processing-start"));
     expect(recordLessonTrace).not.toHaveBeenCalled();

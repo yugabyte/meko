@@ -28,19 +28,10 @@ import type { Message } from "@/features/workbench-lm/components/workbench-lm-ch
 // `prSource`, which overrides the bundled sample diff below.
 import { postToSlackChannel } from "@/lib/api/slackApi";
 import type { ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
-import {
-  ANTHROPIC_REFERENCE_INPUT_TOKENS,
-  ANTHROPIC_REFERENCE_MODEL_ID,
-  ANTHROPIC_REFERENCE_MODEL_LABEL,
-  ANTHROPIC_REFERENCE_OUTPUT_TOKENS,
-  type ReviewFinding,
-} from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
+import type { ReviewFinding } from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
 import { SAMPLE_DIFF_CONTENT, SAMPLE_DIFF_TITLE } from "../../data/adlcReviewAgentLab/sampleDiff";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
-import { computeSavingsPct, estimateCost } from "../../lib/bedrockPricing";
 import type { LabDemoAppConfig } from "../../types";
-import { ContextStatsCard } from "./ContextStatsCard";
-import { CostPayoffCard } from "./CostPayoffCard";
 import { FindingsList } from "./FindingsList";
 import { PrDiffViewer } from "./PrDiffViewer";
 import {
@@ -429,7 +420,7 @@ export function PrReviewDemoApp({
             {prSource && <PrDiffViewer title={prSource.title} diff={prSource.diff} url={prSource.htmlUrl} />}
             <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
               <p className="text-sm text-muted-foreground">
-                Every source in this datapack is live here — whichever model you pick below
+                Every source in this datapack is live here. Whichever model you pick below
                 reaches it the same way Claude did: by calling{" "}
                 <code className="font-mono">knowledgebase_search</code> and{" "}
                 <code className="font-mono">memory_search</code> against your datapack.
@@ -501,34 +492,6 @@ export function PrReviewDemoApp({
               })}
             {sendError && <p className="text-sm text-destructive">{sendError}</p>}
 
-            {reviewUsage && selectedModelId && (
-              <div className="flex flex-col gap-3">
-                <p className="text-xs text-muted-foreground">
-                  Reviewed with {MODEL_LABELS[selectedModelId]} · {reviewUsage.input_tokens} in /{" "}
-                  {reviewUsage.output_tokens} out tokens
-                </p>
-                {contextStats && <ContextStatsCard stats={toNormalizedContextStats(contextStats)} />}
-                {(() => {
-                  const slmCost = estimateCost(selectedModelId, reviewUsage);
-                  const claudeCost = estimateCost(ANTHROPIC_REFERENCE_MODEL_ID, {
-                    input_tokens: ANTHROPIC_REFERENCE_INPUT_TOKENS,
-                    output_tokens: ANTHROPIC_REFERENCE_OUTPUT_TOKENS,
-                  });
-                  const savingsPct = computeSavingsPct(slmCost, claudeCost);
-                  if (slmCost === null || claudeCost === null || savingsPct === null) return null;
-                  return (
-                    <CostPayoffCard
-                      savingsPct={savingsPct}
-                      slmCost={slmCost}
-                      slmModelLabel={MODEL_LABELS[selectedModelId]}
-                      claudeCost={claudeCost}
-                      claudeModelLabel={ANTHROPIC_REFERENCE_MODEL_LABEL}
-                    />
-                  );
-                })()}
-              </div>
-            )}
-
             {messages.some((m) => m.role === "assistant" && m.content.trim()) && (
               <div className="flex flex-col gap-2 rounded-md border border-border p-3">
                 <p className="text-sm font-medium">Post the review to Slack (optional)</p>
@@ -561,7 +524,7 @@ export function PrReviewDemoApp({
                 )}
                 {slackStatus === "error" && (
                   <p className="text-sm text-destructive">
-                    Failed to post — Slack's API may not allow this call directly from a browser
+                    Failed to post. Slack's API may not allow this call directly from a browser
                     for this token type.
                   </p>
                 )}

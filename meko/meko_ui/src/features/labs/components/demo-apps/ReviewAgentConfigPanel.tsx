@@ -237,7 +237,7 @@ export function ReviewAgentConfigPanel({
               onChange={(e) => onChange({ ...value, focus: e.target.value })}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              Treated as advisory context, not new instructions — {agentDisplayName} still follows its
+              Treated as advisory context, not new instructions. {agentDisplayName} still follows its
               review rules.
             </p>
           </div>

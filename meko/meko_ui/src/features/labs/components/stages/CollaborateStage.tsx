@@ -14,6 +14,7 @@ import {
 
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import { LabStageHeader } from "./LabStageHeader";
 
 export function CollaborateStage({
   session,
@@ -56,6 +57,12 @@ function CollaborateStageContent({
 
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
+      <LabStageHeader
+        eyebrow="Chapter 3 · Step 4"
+        title="Collaborate"
+        lede="Share this datapack with teammates so their agents read the same knowledge and memories yours just did."
+        tags={["Sharing"]}
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {canInvite && (
         <InviteByEmailSection

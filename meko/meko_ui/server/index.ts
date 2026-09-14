@@ -25,6 +25,21 @@ declare module "http" {
   }
 }
 
+// MEKO_INFERENCE_UPSTREAM: inference gateway base URL; empty disables. Dev
+// default http://127.0.0.1:8088, where `meko/inference_gateway` runs locally.
+// To use an environment's gateway instead, include the prefix its nginx
+// listens on: MEKO_INFERENCE_UPSTREAM=https://<env>/inference.
+function mekoInferenceUpstream(): string | undefined {
+  if (process.env.MEKO_INFERENCE_UPSTREAM !== undefined) {
+    const trimmed = process.env.MEKO_INFERENCE_UPSTREAM.trim();
+    return trimmed || undefined;
+  }
+  if (process.env.NODE_ENV === "development") {
+    return "http://127.0.0.1:8088";
+  }
+  return undefined;
+}
+
 const apiUpstream = mekoApiUpstream();
 
 // Admin console BFF gate. api_server's /api/v1/admin/* endpoints require the
@@ -67,6 +82,32 @@ if (apiUpstream) {
           }
         },
       },
+    }),
+  );
+}
+
+// The inference gateway, same-origin, so the browser reaches /chat and
+// /memory/add without a cross-origin call to a second host it has to be told
+// about separately. Only used when this server is the front door: deployed,
+// nginx owns /inference (see the meko chart's nginx configmap) and never
+// routes it here, which is why this is unset in production.
+//
+// The gateway mounts its routes at the ROOT (/chat, /memory/add), so the
+// prefix comes off before forwarding -- the same rewrite nginx does.
+const inferenceUpstream = mekoInferenceUpstream();
+
+if (inferenceUpstream) {
+  app.use(
+    createProxyMiddleware({
+      target: inferenceUpstream,
+      changeOrigin: true,
+      pathFilter: "/inference",
+      pathRewrite: { "^/inference": "" },
+      // Streaming: /chat is server-sent events, so buffering it would hold
+      // the whole response until the stream ended.
+      selfHandleResponse: false,
+      proxyTimeout: 180_000,
+      timeout: 180_000,
     }),
   );
 }
@@ -121,6 +162,9 @@ app.use((req, res, next) => {
 (async () => {
   if (apiUpstream) {
     log(`proxy /api/v1 -> ${apiUpstream}`);
+  }
+  if (inferenceUpstream) {
+    log(`proxy /inference -> ${inferenceUpstream}`);
   }
   await registerRoutes(httpServer, app);
 

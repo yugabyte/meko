@@ -32,25 +32,22 @@ const RUN_REVIEW_STAGE: LabStage = {
   id: "run-review",
   title: "Configure & run your review",
   summary: "",
-  highlights: ["a", "b"],
 };
-const CONTEXT_INTRO_STAGE: LabStage = {
-  id: "context-intro",
-  title: "What is context?",
+const GUARDRAIL_STAGE: LabStage = {
+  id: "guardrail",
+  title: "Decide where it needs you",
   summary: "",
-  highlights: ["a", "b"],
 };
 const BRING_YOUR_OWN_PR_STAGE: LabStage = {
   id: "bring-your-own-pr",
   title: "Review a real PR",
   summary: "",
-  highlights: ["a", "b"],
 };
 
 const LAB = {
   id: "adlc-review-agent",
   demoApp: { kind: "pr-review-chat", agentDisplayName: "AgentK" },
-  chapters: [{ id: "c1", title: "Chapter", summary: "", stages: [CONTEXT_INTRO_STAGE, RUN_REVIEW_STAGE] }],
+  chapters: [{ id: "c1", title: "Chapter", summary: "", stages: [GUARDRAIL_STAGE, RUN_REVIEW_STAGE] }],
 } as unknown as LabDefinition;
 
 const SESSION = { datapackId: "dp-1", deploymentActive: true } as unknown as ReturnType<typeof useLabRunnerSession>;
@@ -67,29 +64,41 @@ function fakeProgress(stage: LabStage): ReturnType<typeof useLabProgress> {
   } as unknown as ReturnType<typeof useLabProgress>;
 }
 
+const EMPTY_FEED = {
+  knowledge: [],
+  knowledgeTotal: 0,
+  memories: [],
+  memoriesTotal: 0,
+  collective: [],
+  collectiveTotal: 0,
+  conversationsTotal: 0,
+  chunkSize: null,
+  loading: false,
+} as never;
+
 afterEach(cleanup);
 
 describe("LabStageSlot", () => {
   it("keeps a completed review's results after navigating to another stage and back", () => {
-    const { rerender } = render(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} />);
+    const { rerender } = render(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
 
     expect(screen.getByTestId("review-text").textContent).toBe("(none)");
     fireEvent.click(screen.getByText("simulate review complete"));
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
 
     // Navigate away -- PrReviewDemoApp's mock unmounts entirely.
-    rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(CONTEXT_INTRO_STAGE)} />);
+    rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(GUARDRAIL_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
     expect(screen.queryByTestId("review-text")).toBeNull();
 
     // Navigate back -- the same LabStageSlot instance re-passes its own
     // reviewRun state back in as savedRun, so the result is still there.
-    rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} />);
+    rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
   });
 
   it("clears Chapter 4's byocReviewRun once session.datapackId actually changes", () => {
     const { rerender } = render(
-      <LabStageSlot lab={LAB} session={fakeSession("dp-1")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} />,
+      <LabStageSlot lab={LAB} session={fakeSession("dp-1")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />,
     );
     fireEvent.click(screen.getByText("simulate review complete"));
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
@@ -97,7 +106,7 @@ describe("LabStageSlot", () => {
     // Chapter 4's own choose-datapack-again stage can change session.datapackId
     // mid-chapter -- a review run against the OLD datapack must not keep
     // showing (and blocking the fetch form) once the datapack switches.
-    rerender(<LabStageSlot lab={LAB} session={fakeSession("dp-2")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} />);
+    rerender(<LabStageSlot lab={LAB} session={fakeSession("dp-2")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
     expect(screen.getByTestId("review-text").textContent).toBe("(none)");
   });
 });

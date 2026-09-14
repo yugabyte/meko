@@ -13,7 +13,7 @@ export function LabStageNeedsAmpCluster({ onGoToCreateAmpCluster }: { onGoToCrea
       <p className="text-sm font-medium">Create an AMP cluster first</p>
       <p className="max-w-xs text-sm text-muted-foreground">
         This dashboard previews what review-run tracking will look like once it's backed by a
-        real AMP cluster — create one to continue.
+        real AMP cluster. Create one to continue.
       </p>
       <Button size="sm" variant="outline" onClick={onGoToCreateAmpCluster}>
         Go to Create an AMP cluster

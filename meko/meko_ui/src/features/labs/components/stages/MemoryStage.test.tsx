@@ -44,12 +44,6 @@ describe("MemoryStage", () => {
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
 
-  it("shows the context source tracker with Knowledge Base marked done", () => {
-    const { container } = render(<MemoryStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
-    expect(screen.getByText("Memory")).toBeTruthy();
-    // Knowledge Base precedes Memory in the fixed lesson order -- one done.
-    expect(container.querySelectorAll("svg.lucide-check")).toHaveLength(1);
-  });
 
   it("Save memory is disabled until text is entered", () => {
     render(<MemoryStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
@@ -91,7 +85,7 @@ describe("MemoryStage", () => {
       user_token: "mko_tkn_fake",
       datapack_id: "dp-1",
     });
-    expect(await screen.findByText(/check private memory/i)).toBeTruthy();
+    expect(await screen.findByText(/readable by an agent on its next query/i)).toBeTruthy();
     expect(bumpRefreshTick).toHaveBeenCalled();
 
     // X-Ray shows the real MCP tool name, not the REST route.

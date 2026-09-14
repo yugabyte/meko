@@ -76,7 +76,7 @@ export function SeedContextChat({
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {messages.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Tell Meko about your team's conventions, past incidents, anything worth remembering — every
+            Tell Meko about your team's conventions, past incidents, anything worth remembering. Every
             message here runs through the same memory pipeline the review chat uses.
           </p>
         )}

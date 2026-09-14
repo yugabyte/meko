@@ -25,6 +25,12 @@
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
   --color-border: hsl(var(--border));
+  /* NOTE: `--input` is a SURFACE token here, not shadcn's input-border token.
+   * It is consumed as `bg-input` (form field fills, segmented-control
+   * troughs, the Switch's unchecked track). In dark mode it resolves to the
+   * same value as `--background`, so `border-input` renders an INVISIBLE
+   * border -- that is why every input primitive uses `border-border`
+   * instead. Don't reintroduce `border-input`; reach for `border-border`. */
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
@@ -42,6 +48,21 @@
   --color-sidebar-border: hsl(var(--sidebar-border));
   --color-sidebar-accent: hsl(var(--sidebar-accent));
   --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+
+  /* --- Context sources -------------------------------------------------
+   * Meko builds context from three kinds of source, and Labs colour-codes
+   * them wherever they appear together (the runner's context pane, source
+   * pills, a finding's citations) so a row's origin reads at a glance.
+   * Each has a saturated stop for text/markers and a `-soft` fill for
+   * backgrounds. Consume as `text-context-knowledge`, `bg-context-memory-soft`,
+   * etc. -- these are semantic, so they re-map in dark mode like any other
+   * token. Don't reach for them outside a context-source affordance. */
+  --color-context-knowledge: hsl(var(--context-knowledge));
+  --color-context-knowledge-soft: hsl(var(--context-knowledge-soft));
+  --color-context-memory: hsl(var(--context-memory));
+  --color-context-memory-soft: hsl(var(--context-memory-soft));
+  --color-context-conversation: hsl(var(--context-conversation));
+  --color-context-conversation-soft: hsl(var(--context-conversation-soft));
 
   /*
    * Palette stops exposed as Tailwind utilities (`bg-meko-navy-700`,
@@ -151,6 +172,17 @@
   --sidebar-border: var(--meko-navy-200);
   --sidebar-accent: var(--meko-navy-100);
   --sidebar-accent-foreground: 222 47% 11%;
+
+  /* Context sources — light. Emerald / sky / slate, the colours a datapack's
+   * own detail page already gives knowledge, memory and conversations. Each
+   * stays distinguishable from the brand orange and from the others for the
+   * ~8% of users with red-green colour deficiency. */
+  --context-knowledge: 161 94% 24%;
+  --context-knowledge-soft: 152 81% 94%;
+  --context-memory: 201 90% 34%;
+  --context-memory-soft: 204 94% 94%;
+  --context-conversation: 215 19% 35%;
+  --context-conversation-soft: 210 40% 94%;
 }
 
 /* --- DARK THEME --- */
@@ -190,6 +222,16 @@
   --sidebar-border: 240 4% 20%;
   --sidebar-accent: 240 4% 20%;
   --sidebar-accent-foreground: 206 60% 97%;
+
+  /* Context sources — dark. Lifted well above the dark surfaces (the light
+   * stops sit at 26–55% lightness and vanish on navy-900), with the soft
+   * fills dropped to near-surface so a row tints rather than glows. */
+  --context-knowledge: 156 72% 67%;
+  --context-knowledge-soft: 164 60% 12%;
+  --context-memory: 199 95% 74%;
+  --context-memory-soft: 202 70% 13%;
+  --context-conversation: 213 27% 84%;
+  --context-conversation-soft: 215 20% 17%;
 }
 
 @layer base {

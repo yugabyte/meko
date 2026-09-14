@@ -189,7 +189,7 @@ describe("DeployAgentPanel", () => {
     fireEvent.click(screen.getByText("Use the shared AgentK"));
 
     expect(screen.queryByText("Choose a runtime")).toBeNull();
-    expect(await screen.findByText(/ready — click next/i)).toBeTruthy();
+    expect(await screen.findByText(/ready\. click next/i)).toBeTruthy();
   });
 
   it("shows the shared instance as unavailable when none is configured", async () => {

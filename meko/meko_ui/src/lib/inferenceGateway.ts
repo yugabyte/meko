@@ -5,16 +5,17 @@
 //   - Different response shape (no `{ data, error }` envelope; gateway returns
 //     the body directly with FastAPI-style `detail` strings on errors).
 //
-// Configure the base URL via `VITE_INFERENCE_GATEWAY_URL`. Defaults to
-// `http://localhost:8088` for local dev.
+// Defaults to the same-origin `/inference` path, which the Node server (and,
+// deployed, the chart's nginx) strips before forwarding to the gateway, so the
+// browser never makes a cross-origin call to a host it has to be told about
+// separately. Set `VITE_INFERENCE_GATEWAY_URL` to reach a gateway directly
+// instead, e.g. `http://localhost:8088` when serving the app without either.
 
 import axios from "axios";
 
 import { readRuntimeEnv } from "@/lib/runtimeEnv";
 
-const BASE_URL = (
-  import.meta.env.VITE_INFERENCE_GATEWAY_URL || "http://localhost:8088"
-).replace(/\/$/, "");
+const BASE_URL = (import.meta.env.VITE_INFERENCE_GATEWAY_URL || "/inference").replace(/\/$/, "");
 
 const client = axios.create({
   baseURL: BASE_URL,

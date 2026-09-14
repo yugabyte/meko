@@ -28,7 +28,7 @@ function ContextBarRow({ label, value, frac }: { label: ReactNode; value: string
       {frac !== null && (
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div
-            className="h-full rounded-full bg-violet-500"
+            className="h-full rounded-full bg-primary"
             style={{ width: `${Math.min(100, Math.max(2, frac * 100))}%` }}
           />
         </div>
@@ -51,15 +51,15 @@ export function ContextStatsCard({ stats }: { stats: NormalizedContextStats }) {
   if (!hasKb && !hasMemory) return null;
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-violet-500/30 bg-violet-500/5 p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+    <div className="flex flex-col gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
         What reached the model
       </p>
       {hasKb && (
         <ContextBarRow
           label={
             <>
-              <code>knowledgebase_search</code> — {stats.kbChunksRetrieved}
+              <code>knowledgebase_search</code>: {stats.kbChunksRetrieved}
               {stats.kbChunksTotal != null ? ` of ${stats.kbChunksTotal}` : ""} chunks
             </>
           }
@@ -71,7 +71,7 @@ export function ContextStatsCard({ stats }: { stats: NormalizedContextStats }) {
         <ContextBarRow
           label={
             <>
-              <code>memory_search</code> — {stats.memoriesRetrieved}
+              <code>memory_search</code>: {stats.memoriesRetrieved}
               {stats.memoriesTotal != null ? ` of ${stats.memoriesTotal}` : ""} memories
             </>
           }

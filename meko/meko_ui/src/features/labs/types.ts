@@ -11,24 +11,39 @@ import type { LucideIcon } from "lucide-react";
  *  adding a stage means adding a case there too, same convention LabStageSlot
  *  uses elsewhere for demoApp.kind. */
 export type LabStageId =
+  // Chapter 1 — give your agent context
+  | "see-the-pr"
   | "create-datapack"
-  | "context-intro"
   | "knowledge-base"
   | "memory"
   | "conversation"
-  | "deploy-agent"
+  // Chapter 2 — share it with AgentK
+  | "meet-agentk"
   | "share-with-agent"
-  | "review-sample-pr"
-  | "claude-reference"
+  | "retrieval-cost"
+  | "guardrail"
+  // Chapter 3 — read the review
   | "run-review"
+  | "review-findings"
+  | "review-cost"
   | "collaborate"
+  // Chapter 4 — build a dashboard
   | "dashboard-intro"
   | "create-amp-cluster"
   | "run-review-again"
   | "review-dashboard"
-  | "choose-datapack-again"
-  | "share-with-agent-again"
-  | "bring-your-own-pr";
+  // Chapter 4 — close the loop
+  | "save-findings"
+  | "bring-your-own-pr"
+  | "make-it-yours";
+
+/** Blocks "Next" until the stage reports its own work done, by calling the
+ *  `onComplete` LabStageSlot hands it. Completion is tracked per lab in
+ *  useLabProgress (not derived from datapack counts, which would already be
+ *  satisfied for a user reusing a datapack they filled in an earlier run).
+ *  `message` is the reason shown beside the disabled button. Omit `gate`
+ *  entirely for pure explainers -- those advance freely. */
+export type LabStageGate = { message: string };
 
 export type LabStage = {
   id: LabStageId;
@@ -38,9 +53,8 @@ export type LabStage = {
   title: string;
   /** One or two sentences shown under the title on the left-rail nav card. */
   summary: string;
-  /** Exactly two bullet points shown under this stage on its own left-rail
-   *  nav card -- a slightly more concrete "what this does" than `summary`. */
-  highlights: [string, string];
+  /** Present when finishing this stage's work is required to move on. */
+  gate?: LabStageGate;
 };
 
 /** Groups a lab's stages into named chapters -- e.g. "Setup your Context"
@@ -84,13 +98,6 @@ export type LabObservationConfig = {
   kind: "workbench-live-observation";
 };
 
-/** One box in LabDetailPage's "how this lab starts" flow diagram --
- *  subtitle is a diagram label, not a sentence, so keep it to a few words. */
-export type LabStartingPointStep = {
-  title: string;
-  subtitle: string;
-};
-
 export type LabDefinition = {
   id: string;
   title: string;
@@ -102,10 +109,6 @@ export type LabDefinition = {
   tags: string[];
   icon: LucideIcon;
   estimatedMinutes: number;
-  /** Exactly three steps: the ungoverned starting point, what the user
-   *  builds, and what it's used for -- rendered as a 3-box flow on
-   *  LabDetailPage. */
-  startingPoint: [LabStartingPointStep, LabStartingPointStep, LabStartingPointStep];
   chapters: LabChapter[];
   demoApp: LabDemoAppConfig;
   observation: LabObservationConfig;

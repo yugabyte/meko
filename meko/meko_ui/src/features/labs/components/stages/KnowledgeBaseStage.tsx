@@ -3,8 +3,9 @@
 // your own" affordance mirroring WorkbenchLMKnowledgePanel's pattern.
 
 import { useRef, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Sparkles } from "lucide-react";
 import FileUpload from "@/features/datapacks/components/FileUpload";
+import { WarningBanner } from "@/components/ui/warning-banner";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 import {
@@ -12,15 +13,22 @@ import {
   ORG_CODING_STANDARDS_CONTENT,
   ORG_CODING_STANDARDS_FILENAME,
 } from "../../data/adlcReviewAgentLab/orgCodingStandards";
+import type { LabContextFeed } from "../../hooks/useLabContextFeed";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
-import { ContextSourceTracker } from "./ContextSourceTracker";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import { LabStageHeader } from "./LabStageHeader";
 
 export function KnowledgeBaseStage({
   session,
+  feed,
   onGoToCreateDatapack,
 }: {
   session: ReturnType<typeof useLabRunnerSession>;
+  /** The datapack's real documents. FileUpload's own "processing" flag can
+   *  stay true after the work is finished (and is false on a remount that
+   *  missed the transition), so the indexed document itself is the authority
+   *  on whether this is still running. */
+  feed: LabContextFeed;
   onGoToCreateDatapack: () => void;
 }) {
   const [sampleSeed, setSampleSeed] = useState<File[] | undefined>(undefined);
@@ -38,6 +46,11 @@ export function KnowledgeBaseStage({
   // / S3 PUT / confirm) timing, so this is one honest aggregate duration
   // for X-Ray rather than a fake per-call breakdown.
   const processingStartedAtRef = useRef<number | null>(null);
+
+  // The document list is polled, so this flips to true on its own once the
+  // backend reports COMPLETED -- which is what the old spinner waited for and
+  // never saw.
+  const indexed = feed.knowledge.some((doc) => doc.status?.toUpperCase() === "COMPLETED");
 
   if (!session.datapackId) {
     return <LabStageNeedsDatapack onGoToCreateDatapack={onGoToCreateDatapack} />;
@@ -66,10 +79,15 @@ export function KnowledgeBaseStage({
 
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
-      <ContextSourceTracker current="knowledge-base" />
+      <LabStageHeader
+        eyebrow="Chapter 1 · Step 3"
+        title="Load your coding standards"
+        lede="The rules your team already wrote down. Meko chunks the document and embeds it once, so an agent can ask for one rule instead of reading all of them."
+        tags={["Knowledge"]}
+      />
       <div className="flex flex-col gap-3">
         <p className="text-sm text-muted-foreground">
-          Give the review agent something to check code against — load our sample
+          Give the review agent something to check code against. Load our sample
           coding standards, or upload your own.
         </p>
         {!hasQueuedDocs && (
@@ -115,16 +133,18 @@ export function KnowledgeBaseStage({
             </Collapsible>
           </div>
         )}
-        {processingActive ? (
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            Meko is processing your file…
-          </p>
-        ) : hasProcessedOnce ? (
-          <p className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
-            <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-            Done — check Shared Knowledge on the right.
-          </p>
+        {indexed ? (
+          <WarningBanner tone="success">
+            {feed.knowledgeTotal} document{feed.knowledgeTotal === 1 ? "" : "s"} indexed. It's in
+            Knowledge on the right, and searchable now.
+          </WarningBanner>
+        ) : processingActive ? (
+          <div className="flex items-center gap-2.5 rounded-md border border-border bg-card px-4 py-3">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" aria-hidden />
+            <p className="text-sm font-medium text-foreground">
+              Meko is chunking and embedding your file…
+            </p>
+          </div>
         ) : null}
         <FileUpload
           datapackName={session.datapackName ?? ""}

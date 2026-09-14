@@ -74,11 +74,11 @@ describe("shouldShowProvisionStatusSpinner", () => {
     expect(shouldShowProvisionStatusSpinner(true, "run-review-again")).toBe(true);
   });
 
-  it("doesn't block create-datapack, context-intro, knowledge-base, deploy-agent, or collaborate -- none read session.userToken", () => {
+  it("doesn't block see-the-pr, create-datapack, knowledge-base, meet-agentk, or collaborate -- none read session.userToken", () => {
+    expect(shouldShowProvisionStatusSpinner(true, "see-the-pr")).toBe(false);
     expect(shouldShowProvisionStatusSpinner(true, "create-datapack")).toBe(false);
-    expect(shouldShowProvisionStatusSpinner(true, "context-intro")).toBe(false);
     expect(shouldShowProvisionStatusSpinner(true, "knowledge-base")).toBe(false);
-    expect(shouldShowProvisionStatusSpinner(true, "deploy-agent")).toBe(false);
+    expect(shouldShowProvisionStatusSpinner(true, "meet-agentk")).toBe(false);
     expect(shouldShowProvisionStatusSpinner(true, "collaborate")).toBe(false);
   });
 

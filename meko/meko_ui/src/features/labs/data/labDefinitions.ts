@@ -10,15 +10,10 @@ export const ADLC_REVIEW_AGENT_LAB: LabDefinition = {
   title: "Review a PR with AgentK",
   summary: "AgentK reviews a pull request against your org's coding standards, live.",
   description:
-    "A sample project with no coding standards yet — you'll build context with a Meko datapack, then watch AgentK use it for reviewing a PR.",
+    "A sample project with no coding standards yet. You'll build context with a Meko datapack, then watch AgentK use it for reviewing a PR.",
   tags: ["ADLC", "Code review"],
   icon: GitPullRequest,
   estimatedMinutes: 5,
-  startingPoint: [
-    { title: "Sample project", subtitle: "No standards yet, ungoverned" },
-    { title: "Build context", subtitle: "Knowledge, memory, conversation" },
-    { title: "AgentK reviews", subtitle: "Against what you built" },
-  ],
   chapters: ADLC_REVIEW_AGENT_LAB_CHAPTERS,
   demoApp: {
     kind: "pr-review-chat",
@@ -41,11 +36,24 @@ export const LAB_DEFINITIONS: LabDefinition[] = [ADLC_REVIEW_AGENT_LAB];
  *  and anything else that wants every chapter reads that directly); this is
  *  the one funnel (LabRunnerPage, LabDetailPage) that actually renders a
  *  lab's chapters to a user. */
+/** Memoised because the AMP-filtered branch below BUILDS a lab object, and
+ *  this is called during render: returning a fresh object (and a fresh
+ *  `chapters` array) on every call gives every hook keyed on `lab` or
+ *  `lab.chapters` a new identity each render, so their useMemo/useCallback
+ *  never hold and any effect depending on one re-fires forever. Keyed on the
+ *  AMP flag too, since that decides which shape is correct. */
+const gatedLabCache = new Map<string, LabDefinition>();
+
 export function getLabDefinition(id: string): LabDefinition | undefined {
   const lab = LAB_DEFINITIONS.find((l) => l.id === id);
   if (!lab) return undefined;
   if (isAmpEnabled()) return lab;
   const chapters = lab.chapters.filter((chapter) => !chapter.requiresAmp);
   if (chapters.length === lab.chapters.length) return lab;
-  return { ...lab, chapters };
+  const cacheKey = `${id}:amp-off`;
+  const cached = gatedLabCache.get(cacheKey);
+  if (cached) return cached;
+  const gated = { ...lab, chapters };
+  gatedLabCache.set(cacheKey, gated);
+  return gated;
 }

@@ -2,20 +2,22 @@
 // through a conversation, unlike ConversationStage's chat-based extraction.
 
 import { useState } from "react";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { WarningBanner } from "@/components/ui/warning-banner";
 import { addMemory, getInferenceGatewayErrorMessage } from "@/lib/inferenceGateway";
 
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
-import { ContextSourceTracker } from "./ContextSourceTracker";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import { LabStageHeader } from "./LabStageHeader";
 
 const EXAMPLE_PREFERENCES = [
   "We squash-merge feature branches, never rebase-and-merge.",
   "Prefer composition over inheritance in new services.",
-  "Always use parameterized queries — never build SQL by string concatenation.",
+  "Always use parameterized queries, never build SQL by string concatenation.",
 ];
 
 export function MemoryStage({
@@ -68,11 +70,12 @@ export function MemoryStage({
 
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
-      <ContextSourceTracker current="memory" />
-      <p className="text-sm text-muted-foreground">
-        Tell Meko a coding preference directly — no chat needed, it's remembered
-        immediately.
-      </p>
+      <LabStageHeader
+        eyebrow="Chapter 1 · Step 4"
+        title="Tell it something the doc doesn't say"
+        lede="Every team has rules that never made it into a document. Save one directly. It's live the moment you hit save, with no re-index and no rebuild."
+        tags={["Memory"]}
+      />
       <div className="flex flex-wrap gap-2">
         {EXAMPLE_PREFERENCES.map((example) => (
           <button
@@ -98,15 +101,31 @@ export function MemoryStage({
           Meko is saving your memory…
         </p>
       ) : saved ? (
-        <p className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-          Done — check Private Memory on the right.
-        </p>
+        <WarningBanner tone="success">
+          Saved, and readable by an agent on its next query.
+        </WarningBanner>
       ) : null}
       <div>
         <Button size="sm" onClick={() => void handleSave()} disabled={!canSave}>
           Save memory
         </Button>
+      </div>
+
+      {/* Who can read it, stated before it's saved rather than left to be
+          inferred from the pane. A memory is private until someone promotes
+          it, and that difference is the point of the next two lessons. */}
+      <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-4">
+        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-context-memory" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-foreground">Scope</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Private to you. Agents you share this datapack with can read it; promoting it to collective
+            memory is a separate, deliberate step.
+          </p>
+        </div>
+        <Badge variant="secondary" className="shrink-0 text-[10px]">
+          private
+        </Badge>
       </div>
     </div>
   );

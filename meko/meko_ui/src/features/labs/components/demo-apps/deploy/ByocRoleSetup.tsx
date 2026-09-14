@@ -134,7 +134,7 @@ export function ByocRoleSetup({
           <AlertCircle className="h-4 w-4 shrink-0" />
           {confirmMutation.error instanceof Error
             ? confirmMutation.error.message
-            : "Role not assumable — check that the trust policy was pasted correctly."}
+            : "Role not assumable. Check that the trust policy was pasted correctly."}
         </p>
       )}
     </div>

@@ -7,9 +7,9 @@ import { useLabProgress } from "./useLabProgress";
 afterEach(() => localStorage.clear());
 
 const FIXTURE_STAGES: LabStage[] = [
-  { id: "create-datapack", title: "Create a datapack", summary: "", highlights: ["a", "b"] },
-  { id: "seed-context", title: "Seed context", summary: "", highlights: ["a", "b"] },
-  { id: "run-review", title: "Run a review", summary: "", highlights: ["a", "b"] },
+  { id: "create-datapack", title: "Create a datapack", summary: "" },
+  { id: "seed-context", title: "Seed context", summary: "" },
+  { id: "run-review", title: "Run a review", summary: "" },
 ];
 const ONE_CHAPTER_LAB = { id: "test-lab", chapters: [{ id: "chapter-1", title: "Chapter", stages: FIXTURE_STAGES }] } as never;
 
@@ -111,43 +111,108 @@ describe("useLabProgress — multiple chapters", () => {
     expect(result.current.chapterIndex).toBe(1);
     expect(result.current.stageIndex).toBe(0);
   });
+});
 
-  it("goToNextChapter jumps straight to the next chapter's first stage regardless of current stageIndex", () => {
-    const { result } = renderHook(() => useLabProgress(TWO_CHAPTER_LAB));
-    // Not on the last stage of chapter 0 -- goToNextChapter still moves on,
-    // unlike goToNext which would only advance within the chapter.
-    expect(result.current.stageIndex).toBe(0);
-    act(() => result.current.goToNextChapter());
-    expect(result.current.chapterIndex).toBe(1);
-    expect(result.current.stageIndex).toBe(0);
+describe("useLabProgress — gating and completion", () => {
+  const GATED_LAB = {
+    id: "gated-lab",
+    chapters: [
+      {
+        id: "chapter-1",
+        title: "Chapter",
+        stages: [
+          {
+            id: "knowledge-base",
+            title: "Knowledge",
+            summary: "",
+            gate: { message: "Add a standards doc to continue" },
+          },
+          { id: "memory", title: "Memory", summary: "" },
+          { id: "run-review", title: "Review", summary: "" },
+        ],
+      },
+    ],
+  } as never;
+
+  it("reports a gated stage's message until that stage is marked complete", () => {
+    const { result } = renderHook(() => useLabProgress(GATED_LAB));
+    expect(result.current.gateMessage).toBe("Add a standards doc to continue");
+    act(() => result.current.markStageComplete("knowledge-base"));
+    expect(result.current.gateMessage).toBeNull();
   });
 
-  it("goToNextChapter is a no-op on the last chapter", () => {
-    const { result } = renderHook(() => useLabProgress(TWO_CHAPTER_LAB));
-    act(() => result.current.goToStage(1, 0));
-    act(() => result.current.goToNextChapter());
-    expect(result.current.chapterIndex).toBe(1);
+  it("leaves ungated stages free to advance", () => {
+    const { result } = renderHook(() => useLabProgress(GATED_LAB));
+    act(() => result.current.goToStage(0, 1));
+    expect(result.current.gateMessage).toBeNull();
   });
 
-  it("goToPreviousChapter jumps back to the previous chapter's first stage", () => {
-    const { result } = renderHook(() => useLabProgress(TWO_CHAPTER_LAB));
-    act(() => result.current.goToStage(1, 0));
-    act(() => result.current.goToPreviousChapter());
-    expect(result.current.chapterIndex).toBe(0);
-    expect(result.current.stageIndex).toBe(0);
+  it("completing one stage does not satisfy another stage's gate", () => {
+    const { result } = renderHook(() => useLabProgress(GATED_LAB));
+    act(() => result.current.markStageComplete("memory"));
+    expect(result.current.gateMessage).toBe("Add a standards doc to continue");
   });
 
-  it("goToPreviousChapter is a no-op on the first chapter", () => {
-    const { result } = renderHook(() => useLabProgress(TWO_CHAPTER_LAB));
-    act(() => result.current.goToPreviousChapter());
-    expect(result.current.chapterIndex).toBe(0);
+  it("keeps completion across remounts, so a resumed run isn't re-gated", () => {
+    const first = renderHook(() => useLabProgress(GATED_LAB));
+    act(() => first.result.current.markStageComplete("knowledge-base"));
+    first.unmount();
+    const second = renderHook(() => useLabProgress(GATED_LAB));
+    expect(second.result.current.gateMessage).toBeNull();
   });
 
-  it("isLastStageInChapter and isLastChapter are independent of the overall isLastStage", () => {
-    const { result } = renderHook(() => useLabProgress(TWO_CHAPTER_LAB));
-    act(() => result.current.goToStage(0, 1)); // last stage of chapter 0, not the last chapter
-    expect(result.current.isLastStageInChapter).toBe(true);
-    expect(result.current.isLastChapter).toBe(false);
-    expect(result.current.isLastStage).toBe(false);
+  it("opens the next stage for navigation once the current one is complete, but no further", () => {
+    const { result } = renderHook(() => useLabProgress(GATED_LAB));
+    expect(result.current.furthestFlatIndex).toBe(0);
+    act(() => result.current.markStageComplete("knowledge-base"));
+    expect(result.current.furthestFlatIndex).toBe(1);
+  });
+});
+
+describe("useLabProgress — advancing marks a stage done", () => {
+  const LAB = {
+    id: "advance-lab",
+    chapters: [
+      {
+        id: "c1",
+        title: "C",
+        stages: [
+          { id: "retrieval-cost", title: "Explainer", summary: "" },
+          { id: "guardrail", title: "Another explainer", summary: "" },
+          { id: "collaborate", title: "Last", summary: "" },
+        ],
+      },
+    ],
+  } as never;
+
+  // The rail used to tick only gated lessons, so explainers the user read and
+  // moved past stayed blank and the progress count under-reported.
+  it("completes an ungated stage when the user moves past it", () => {
+    const { result } = renderHook(() => useLabProgress(LAB));
+    expect(result.current.completedStages.has("retrieval-cost")).toBe(false);
+    act(() => result.current.goToNext());
+    expect(result.current.completedStages.has("retrieval-cost")).toBe(true);
+    expect(result.current.currentStage.id).toBe("guardrail");
+  });
+
+  it("doesn't complete the stage the user lands on, only the one they left", () => {
+    const { result } = renderHook(() => useLabProgress(LAB));
+    act(() => result.current.goToNext());
+    expect(result.current.completedStages.has("guardrail")).toBe(false);
+  });
+
+  it("leaves the final stage alone, since there is nowhere to advance to", () => {
+    const { result } = renderHook(() => useLabProgress(LAB));
+    act(() => result.current.goToStage(0, 2));
+    act(() => result.current.goToNext());
+    expect(result.current.completedStages.has("collaborate")).toBe(false);
+    expect(result.current.currentStage.id).toBe("collaborate");
+  });
+
+  it("going back doesn't un-complete what was already finished", () => {
+    const { result } = renderHook(() => useLabProgress(LAB));
+    act(() => result.current.goToNext());
+    act(() => result.current.goToPrevious());
+    expect(result.current.completedStages.has("retrieval-cost")).toBe(true);
   });
 });

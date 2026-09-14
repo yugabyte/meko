@@ -31,6 +31,7 @@ import { CoreLimitNotice } from "@/features/datapacks/components/datapack-detail
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { useValidAmpCluster } from "../../hooks/useValidAmpCluster";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import { LabStageHeader } from "./LabStageHeader";
 
 // "standard" -> "Standard"; empty next_tier -> a safe generic. Mirrors
 // DatapackClustersPanel.tsx's own tierLabel (not exported/shared -- a
@@ -54,7 +55,7 @@ export function CreateAmpClusterStage({
   if (!isAmpEnabled()) {
     return (
       <p className="p-6 text-sm text-muted-foreground">
-        AMP isn't enabled in this environment yet — ask an admin to turn on the
+        AMP isn't enabled in this environment yet. Ask an admin to turn on the
         <code className="mx-1 font-mono">SHOW_PG_AMP</code> runtime flag.
       </p>
     );
@@ -113,18 +114,24 @@ function CreateAmpClusterStageContent({
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 overflow-y-auto p-6">
+      <LabStageHeader
+        eyebrow="Chapter 4 · Step 2"
+        title="Create an AMP cluster"
+        lede="Provision a real fractional Postgres instance for this datapack. It's your app's storage, not Meko's."
+        tags={["AMP"]}
+      />
       <div className="flex items-center gap-2">
         <Database className="h-5 w-5 text-primary" aria-hidden />
         <h2 className="text-lg font-semibold text-foreground">Create an AMP cluster</h2>
       </div>
       <p className="text-sm text-muted-foreground">
         A cluster is one real Postgres database, with a <code>main</code> branch and a
-        read-write endpoint — provisioned for this datapack in under a minute.
+        read-write endpoint, provisioned for this datapack in under a minute.
       </p>
 
       {session.ampClusterId ? (
         <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-300">
-          Ready — click Next to continue.
+          Ready. Click Next to continue.
         </div>
       ) : showCreate ? (
         <div className="flex flex-col gap-3 rounded-md border border-border p-4">

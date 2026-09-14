@@ -37,17 +37,17 @@ beforeEach(() => {
 });
 
 describe("ShareWithAgentStage — no AgentK admin email configured", () => {
-  it("shows a config-missing message and doesn't render the invite form", async () => {
+  it("says the lab isn't configured, and offers no way to share", () => {
     const session = {
       datapackId: "dp-1",
       datapackName: "test-datapack",
       currentUser: { account_id: "user-1", email: "owner@example.com" },
     } as unknown as ReturnType<typeof useLabRunnerSession>;
-    render(<ShareWithAgentStage session={session} onGoToCreateDatapack={vi.fn()} />);
+    render(<ShareWithAgentStage session={session} onGoToCreateDatapack={vi.fn()} onComplete={vi.fn()} />);
 
     expect(screen.getByText(/isn't configured with an AgentK account/i)).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("Owner User")).toBeTruthy());
-    expect(screen.queryByPlaceholderText("name@company.com")).toBeNull();
-    expect(screen.queryByRole("button", { name: /send invite/i })).toBeNull();
+    // No share control at all -- a button that can only fail is worse than
+    // the message explaining why there isn't one.
+    expect(screen.queryByRole("button", { name: /share datapack/i })).toBeNull();
   });
 });
