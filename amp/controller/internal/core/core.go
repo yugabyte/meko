@@ -244,6 +244,11 @@ type EndpointDeploy struct {
 	// reverting an nlb_* endpoint to cluster_ip behind every client's back.
 	Connectivity string
 	AllowedCIDRs []string
+	// Extensions is what this endpoint was last successfully deployed with, as
+	// add_branch_extensions recorded it after its deploy returned. Unlike the
+	// fields above it is not rendered onto the spec — the branch's resolved set is
+	// — it is read to decide whether a redeploy would change anything at all.
+	Extensions []string
 }
 
 // DefaultBranchName is the name given to a cluster's default (root) branch. The
@@ -383,7 +388,11 @@ type Backend interface {
 	// UpdateBranchSettings replaces the branch-wide settings that are non-nil
 	// and leaves the rest alone, so a caller that knows about one surface cannot
 	// blank another it has never heard of. An empty map clears a surface.
-	UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any) error
+	//
+	// ycpGeneration is stamped on the row by the same write, monotonically, and
+	// only when non-nil: these verbs are synchronous, so the write IS the work and
+	// the generation cannot be recorded for settings that did not land.
+	UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any, ycpGeneration *int64) error
 	// UpdateEndpointSettings does the same for one endpoint's three surfaces.
-	UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any) error
+	UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any, ycpGeneration *int64) error
 }

@@ -608,10 +608,20 @@ curl -sS -H "X-Meko-Admin-Secret: $SECRET" -H "X-Meko-Account-ID: $ACCOUNT" \
 ```
 
 **Recover.** Any controller-driven redeploy of that endpoint re-resolves and
-re-records the address — adding a branch extension is the usual trigger, since
-`add_branch_extensions` carries the endpoint's connectivity into the redeploy and
-calls `SetEndpointAddress` with the result. Failing that, correct the stored value
-directly and let clients re-read it:
+re-records the address. Roll just that endpoint — it is redeployed even when it is
+already at the target version, which is what makes this work as a trigger:
+
+```sh
+curl -sX POST "$AMP/endpoint-upgrades" -H 'Content-Type: application/json' \
+  -d "{\"endpoint_ids\":[\"$EP\"]}"
+```
+
+Adding a branch extension used to be the usual trigger, and is no longer reliable:
+`add_branch_extensions` now skips an endpoint already mounting the branch's set, so
+re-adding a name the branch already has redeploys nothing. Adding a genuinely new
+extension still rolls every endpoint, but that is a bigger change than an address
+fix needs. Failing either, correct the stored value directly and let clients
+re-read it:
 
 ```sql
 UPDATE amp_registry.endpoints SET address = '<lb-hostname>:55433' WHERE id = '<ep>';

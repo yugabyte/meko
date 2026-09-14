@@ -445,3 +445,199 @@ func TestUpdateBranchSettingsDoesNotAskAReadReplica(t *testing.T) {
 		t.Errorf("the write was not stored: %v", stored.PgSettings)
 	}
 }
+
+// The reconcile agent's generation is recorded by the same write that stores the
+// settings. They are the only stamping verbs that are synchronous — there is no
+// task and no worker, the handler returns once the row is written — which makes the
+// handler the only thing that can honestly say the work landed.
+//
+// Monotonic, like the worker's own write — an older generation arriving late must
+// not drag the column back and make the agent re-apply what already landed — and
+// absent when the caller sent none, including on a row that has never been
+// stamped, where the column is NULL rather than 0.
+func TestUpdateSettingsStampsTheYCPGeneration(t *testing.T) {
+	ctx := context.Background()
+	backend := core.NewMemBackend()
+	client, _, _ := newTestServerWith(t, backend, api.Provisioning{Deployer: &fakeDeployer{}})
+
+	pool := seedUserPool(t, backend)
+	cl, err := backend.CreateCluster(ctx, pool, "main", 18)
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	br := cl.DefaultBranch
+	ep, err := backend.CreateEndpoint(ctx, cl.ID, br.BranchID, core.RoleReadWrite, nil)
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	endpointGen := func() *int64 {
+		t.Helper()
+		stored, err := backend.GetEndpoint(ctx, pool, cl.ID, br.BranchID, ep.ID)
+		if err != nil {
+			t.Fatalf("GetEndpoint: %v", err)
+		}
+		return stored.YCPGeneration
+	}
+	branchGen := func() *int64 {
+		t.Helper()
+		stored, err := backend.GetBranch(ctx, pool, cl.ID, br.BranchID)
+		if err != nil {
+			t.Fatalf("GetBranch: %v", err)
+		}
+		return stored.YCPGeneration
+	}
+	patchEndpoint := func(body api.UpdateEndpointSettingsJSONRequestBody) int {
+		t.Helper()
+		resp, err := client.UpdateEndpointSettingsWithResponse(ctx, pool, cl.ID, br.BranchID, ep.ID, body)
+		if err != nil {
+			t.Fatalf("UpdateEndpointSettings: %v", err)
+		}
+		return resp.StatusCode()
+	}
+
+	// A write with no generation leaves the column alone — NULL stays NULL rather
+	// than becoming 0, which is the trap in GREATEST: it ignores NULL operands, so
+	// the obvious expression would quietly write a value the caller never sent.
+	work := map[string]string{"work_mem": "64MB"}
+	if code := patchEndpoint(api.UpdateEndpointSettingsJSONRequestBody{PgSettings: &work}); code != 200 {
+		t.Fatalf("status %d, want 200", code)
+	}
+	if got := endpointGen(); got != nil {
+		t.Errorf("ycp_generation = %d, want it untouched — the caller sent none", *got)
+	}
+
+	gen := func(n int64) *int64 { return &n }
+	if code := patchEndpoint(api.UpdateEndpointSettingsJSONRequestBody{
+		PgSettings: &work, YcpGeneration: gen(4)}); code != 200 {
+		t.Fatalf("status %d, want 200", code)
+	}
+	if got := endpointGen(); got == nil || *got != 4 {
+		t.Fatalf("ycp_generation = %v, want 4", got)
+	}
+
+	// An older generation completing late cannot regress it.
+	if code := patchEndpoint(api.UpdateEndpointSettingsJSONRequestBody{
+		PgSettings: &work, YcpGeneration: gen(2)}); code != 200 {
+		t.Fatalf("status %d, want 200", code)
+	}
+	if got := endpointGen(); got == nil || *got != 4 {
+		t.Errorf("ycp_generation = %v, want it held at 4 — the stamp is monotonic", got)
+	}
+
+	// The branch verb is the same write, and it is the one an agent leans on: a
+	// branch spec declaring only settings issues no task at all, so this PATCH is
+	// the only thing that can record the generation for it.
+	bwork := map[string]string{"shared_buffers": "1GB"}
+	resp, err := client.UpdateBranchSettingsWithResponse(ctx, pool, cl.ID, br.BranchID,
+		api.UpdateBranchSettingsJSONRequestBody{PgSettings: &bwork, YcpGeneration: gen(7)})
+	if err != nil {
+		t.Fatalf("UpdateBranchSettings: %v", err)
+	}
+	if resp.StatusCode() != 200 {
+		t.Fatalf("status %d, want 200: %s", resp.StatusCode(), string(resp.Body))
+	}
+	if got := branchGen(); got == nil || *got != 7 {
+		t.Errorf("branch ycp_generation = %v, want 7", got)
+	}
+}
+
+// A refused request stamps nothing. The check runs before the write, so a 400
+// stores neither the settings nor the generation — and a generation recorded for
+// settings that were rejected is precisely the latch meko#985 removed: the agent
+// would read the echo, believe the spec landed, and never retry.
+func TestRefusedSettingsStampNoGeneration(t *testing.T) {
+	ctx := context.Background()
+	backend := core.NewMemBackend()
+
+	sup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"not_applied":[{"name":"work_memm","reason":"unrecognized parameter"}]}`))
+	}))
+	defer sup.Close()
+
+	client, _, _ := newTestServerWith(t, backend,
+		api.Provisioning{Deployer: &fakeDeployer{supURL: sup.URL}})
+	pool := seedUserPool(t, backend)
+	cl, err := backend.CreateCluster(ctx, pool, "main", 18)
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	br := cl.DefaultBranch
+	ep, err := backend.CreateEndpoint(ctx, cl.ID, br.BranchID, core.RoleReadWrite, nil)
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	n := int64(4)
+	bad := map[string]string{"work_memm": "5MB"}
+	resp, err := client.UpdateEndpointSettingsWithResponse(ctx, pool, cl.ID, br.BranchID, ep.ID,
+		api.UpdateEndpointSettingsJSONRequestBody{PgSettings: &bad, YcpGeneration: &n})
+	if err != nil {
+		t.Fatalf("UpdateEndpointSettings: %v", err)
+	}
+	if resp.StatusCode() != 400 {
+		t.Fatalf("status %d, want 400: %s", resp.StatusCode(), string(resp.Body))
+	}
+	stored, err := backend.GetEndpoint(ctx, pool, cl.ID, br.BranchID, ep.ID)
+	if err != nil {
+		t.Fatalf("GetEndpoint: %v", err)
+	}
+	if stored.YCPGeneration != nil {
+		t.Errorf("ycp_generation = %d, want none — nothing was stored, so nothing landed", *stored.YCPGeneration)
+	}
+}
+
+// A body naming no settings surface is still a real write — it carries the
+// generation — but there is nothing for a compute to re-read, so no endpoint is
+// told. That is what lets the reconcile agent stamp a generation without bouncing
+// a reload through every endpoint on the branch.
+func TestSettingsBodyWithNoSurfaceNotifiesNobody(t *testing.T) {
+	ctx := context.Background()
+	backend := core.NewMemBackend()
+
+	var notified int
+	sup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v1/settings/reload") {
+			notified++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"restarted":[],"reloaded":[],"restart_forced_by":[],"not_applied":[]}`))
+	}))
+	defer sup.Close()
+
+	client, _, _ := newTestServerWith(t, backend,
+		api.Provisioning{Deployer: &fakeDeployer{supURL: sup.URL}})
+	pool := seedUserPool(t, backend)
+	cl, err := backend.CreateCluster(ctx, pool, "main", 18)
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	br := cl.DefaultBranch
+	if _, err := backend.CreateEndpoint(ctx, cl.ID, br.BranchID, core.RoleReadWrite, nil); err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	n := int64(9)
+	resp, err := client.UpdateBranchSettingsWithResponse(ctx, pool, cl.ID, br.BranchID,
+		api.UpdateBranchSettingsJSONRequestBody{YcpGeneration: &n})
+	if err != nil {
+		t.Fatalf("UpdateBranchSettings: %v", err)
+	}
+	if resp.StatusCode() != 200 {
+		t.Fatalf("status %d, want 200: %s", resp.StatusCode(), string(resp.Body))
+	}
+	if notified != 0 {
+		t.Errorf("endpoints notified = %d, want 0 — nothing changed for a compute to re-read", notified)
+	}
+	if resp.JSON200.Endpoints != nil {
+		t.Errorf("endpoints = %v, want none reported", resp.JSON200.Endpoints)
+	}
+	stored, err := backend.GetBranch(ctx, pool, cl.ID, br.BranchID)
+	if err != nil {
+		t.Fatalf("GetBranch: %v", err)
+	}
+	if stored.YCPGeneration == nil || *stored.YCPGeneration != 9 {
+		t.Errorf("branch ycp_generation = %v, want 9 — the write still happened", stored.YCPGeneration)
+	}
+}

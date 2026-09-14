@@ -93,9 +93,65 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 	// disjoint fixtures are what stops a transposed scan from passing.
 	branchPg := map[string]string{"statement_timeout": "30s"}
 	branchLease := map[string]any{"ttl_ms": 20000}
-	if err := b.UpdateBranchSettings(ctx, branchID, &branchPg, &branchLease); err != nil {
+	if err := b.UpdateBranchSettings(ctx, branchID, &branchPg, &branchLease, nil); err != nil {
 		t.Fatalf("seed branch settings: %v", err)
 	}
+
+	// The generation stamp rides the settings UPDATE, so it is only ever exercised
+	// over real SQL here. The expression is guarded with a CASE for a reason worth
+	// re-checking against a live server: GREATEST *ignores* NULL operands rather
+	// than returning NULL, so the obvious GREATEST(COALESCE(col,0), $n) would
+	// rewrite an unstamped row's NULL to 0 on every settings write that carried no
+	// generation — a value change nobody asked for.
+	t.Run("settings write stamps the ycp generation", func(t *testing.T) {
+		if got, err := b.GetBranch(ctx, sp.ID, clusterID, branchID); err != nil {
+			t.Fatalf("GetBranch: %v", err)
+		} else if got.YCPGeneration != nil {
+			t.Fatalf("ycp_generation = %d after a write carrying none, want it left NULL", *got.YCPGeneration)
+		}
+
+		gen := func(n int64) *int64 { return &n }
+		mustWrite := func(n *int64) {
+			t.Helper()
+			if err := b.UpdateBranchSettings(ctx, branchID, &branchPg, &branchLease, n); err != nil {
+				t.Fatalf("UpdateBranchSettings: %v", err)
+			}
+		}
+		readGen := func() *int64 {
+			t.Helper()
+			got, err := b.GetBranch(ctx, sp.ID, clusterID, branchID)
+			if err != nil {
+				t.Fatalf("GetBranch: %v", err)
+			}
+			return got.YCPGeneration
+		}
+
+		mustWrite(gen(4))
+		if got := readGen(); got == nil || *got != 4 {
+			t.Fatalf("ycp_generation = %v, want 4", got)
+		}
+		mustWrite(gen(2))
+		if got := readGen(); got == nil || *got != 4 {
+			t.Errorf("ycp_generation = %v, want it held at 4 — the stamp is monotonic", got)
+		}
+		mustWrite(nil)
+		if got := readGen(); got == nil || *got != 4 {
+			t.Errorf("ycp_generation = %v, want 4 — a write carrying none leaves it alone", got)
+		}
+
+		// The endpoint twin, same statement shape.
+		if err := b.UpdateEndpointSettings(ctx, endpointID,
+			&map[string]string{"work_mem": "64MB"}, nil, nil, gen(9)); err != nil {
+			t.Fatalf("UpdateEndpointSettings: %v", err)
+		}
+		ep, err := b.GetEndpoint(ctx, sp.ID, clusterID, branchID, endpointID)
+		if err != nil {
+			t.Fatalf("GetEndpoint: %v", err)
+		}
+		if ep.YCPGeneration == nil || *ep.YCPGeneration != 9 {
+			t.Errorf("endpoint ycp_generation = %v, want 9", ep.YCPGeneration)
+		}
+	})
 
 	t.Run("branches", func(t *testing.T) {
 		// GetBranch (branchSelect, pool-joined).

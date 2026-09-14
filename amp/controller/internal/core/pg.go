@@ -727,13 +727,19 @@ func (b *PgBackend) SetEndpointTargetVersion(ctx context.Context, endpointID uui
 	return nil
 }
 
-// UpdateBranchSettings writes the branch-wide settings the caller named.
+// UpdateBranchSettings writes the branch-wide settings the caller named, and
+// stamps the YCP generation the write applies.
 //
 // One statement with a COALESCE per column rather than a built-up SET list: an
 // omitted surface passes NULL and keeps what is stored, so the shape of the
 // query does not depend on which fields the caller happened to send. Idempotent;
 // an absent row is a no-op.
-func (b *PgBackend) UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any) error {
+//
+// The generation rides that same statement so the settings and the record of
+// which generation they satisfy cannot land apart. Unlike the task path, where
+// the worker stamps after every step succeeded, this verb IS the work — it
+// returns once the row is written — so the handler is the right place for it.
+func (b *PgBackend) UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any, ycpGeneration *int64) error {
 	pgJSON, err := settingsJSON(pg)
 	if err != nil {
 		return fmt.Errorf("encode branch pg_settings: %w", err)
@@ -742,12 +748,13 @@ func (b *PgBackend) UpdateBranchSettings(ctx context.Context, branchID uuid.UUID
 	if err != nil {
 		return fmt.Errorf("encode branch write_token_settings: %w", err)
 	}
+	stamp, args := ycpGenerationSet("$4", ycpGeneration)
 	_, err = b.pool.Exec(ctx,
 		`UPDATE amp_registry.branches
 		    SET pg_settings          = COALESCE($2::jsonb, pg_settings),
-		        write_token_settings = COALESCE($3::jsonb, write_token_settings)
+		        write_token_settings = COALESCE($3::jsonb, write_token_settings)`+stamp+`
 		  WHERE branch_id = $1::uuid`,
-		branchID.String(), pgJSON, wtJSON)
+		append([]any{branchID.String(), pgJSON, wtJSON}, args...)...)
 	if err != nil {
 		return fmt.Errorf("update branch settings: %w", err)
 	}
@@ -755,8 +762,8 @@ func (b *PgBackend) UpdateBranchSettings(ctx context.Context, branchID uuid.UUID
 }
 
 // UpdateEndpointSettings writes the endpoint settings the caller named, on the
-// same terms as UpdateBranchSettings.
-func (b *PgBackend) UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any) error {
+// same terms as UpdateBranchSettings, generation included.
+func (b *PgBackend) UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any, ycpGeneration *int64) error {
 	pgJSON, err := settingsJSON(pg)
 	if err != nil {
 		return fmt.Errorf("encode endpoint pg_settings: %w", err)
@@ -769,17 +776,42 @@ func (b *PgBackend) UpdateEndpointSettings(ctx context.Context, endpointID uuid.
 	if err != nil {
 		return fmt.Errorf("encode endpoint safekeeper_settings: %w", err)
 	}
+	stamp, args := ycpGenerationSet("$5", ycpGeneration)
 	_, err = b.pool.Exec(ctx,
 		`UPDATE amp_registry.endpoints
 		    SET pg_settings         = COALESCE($2::jsonb, pg_settings),
 		        pageserver_settings = COALESCE($3::jsonb, pageserver_settings),
-		        safekeeper_settings = COALESCE($4::jsonb, safekeeper_settings)
+		        safekeeper_settings = COALESCE($4::jsonb, safekeeper_settings)`+stamp+`
 		  WHERE id = $1::uuid`,
-		endpointID.String(), pgJSON, psJSON, skJSON)
+		append([]any{endpointID.String(), pgJSON, psJSON, skJSON}, args...)...)
 	if err != nil {
 		return fmt.Errorf("update endpoint settings: %w", err)
 	}
 	return nil
+}
+
+// ycpGenerationSet folds a generation stamp into a statement that is writing
+// something else, returning the SET fragment to append and the arg to append with
+// it. Both are empty when no generation was supplied.
+//
+// "Leave the column alone" is the ABSENCE of an assignment, not an expression that
+// evaluates to the old value. That distinction is the whole reason this is built
+// rather than inlined: the obvious `GREATEST(COALESCE(ycp_generation, 0), $n)`
+// rewrites an unstamped row's NULL to 0 whenever $n is NULL, and guarding it with
+// `CASE WHEN $n IS NULL THEN ycp_generation ELSE ... END` does not work on
+// YugabyteDB — that form wrote NULL over a stamped row, so the column is simply
+// left out of the statement instead. Nothing here depends on how the engine
+// evaluates a NULL parameter.
+//
+// When it is present the expression is SetBranchYCPGeneration's verbatim: an older
+// generation arriving late cannot drag the column backwards.
+func ycpGenerationSet(param string, gen *int64) (string, []any) {
+	if gen == nil {
+		return "", nil
+	}
+	return `,
+		        ycp_generation = GREATEST(COALESCE(ycp_generation, 0), ` + param + `::bigint)`,
+		[]any{*gen}
 }
 
 // settingsJSON encodes a settings map for the COALESCE above: nil means "leave

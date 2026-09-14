@@ -21,15 +21,22 @@
 // A resource's spec is the matching amp create request (a pool's owner_user_id,
 // a cluster's pg_version/extensions, a branch's parent_branch_id/fork_point_lsn/
 // pg_settings, an endpoint's role/resources). A branch spec also takes
-// extensions — the externalized extensions every endpoint on it mounts — but
-// only once the branch exists: amp applies them with addBranchExtensions, a
-// separate call against a branch id no create has produced yet, so Create
-// refuses a spec that declares them rather than dropping the field.
+// extensions — the externalized extensions every endpoint on it mounts — and
+// write_token_settings, but only once the branch exists: amp applies each with a
+// separate call against a branch id no create has produced yet, so Create refuses
+// a spec that declares either rather than dropping the field.
+//
+// Settings are the other post-create surface. A branch's pg_settings and an
+// endpoint's pg_settings/pageserver_settings/safekeeper_settings converge through
+// the two settings PATCHes, and a declared surface owns the whole map: what the
+// spec says the surface IS is what the row is set to, so a key stored there and
+// not declared is removed. Omitting a surface leaves it unmanaged.
 package ampbackend
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -83,7 +90,7 @@ type Backend struct {
 // the echo is the silent latch meko#985 is about.
 var updateFuncs = map[string]func(*Backend, context.Context, api.DesiredResource) error{
 	KindBranch:   (*Backend).updateBranch,
-	KindEndpoint: (*Backend).resizeEndpoint,
+	KindEndpoint: (*Backend).updateEndpoint,
 }
 
 // index maps a resource's hierarchical path to the controller UUIDs its
@@ -445,6 +452,16 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 				"create branch %q: extensions cannot be declared at branch create (a new branch inherits its parent's set) — declare them once the branch exists",
 				r.Name))
 		}
+		// Same shape, same reason: write_token_settings reaches a branch only through
+		// updateBranchSettings, which needs a branch id this call has not produced.
+		// CreateBranchRequest has no field for it either, so letting it through would
+		// drop a declared write lease silently — and the lease is what stops two
+		// computes both believing they may write.
+		if spec.WriteTokenSettings != nil {
+			return reconcile.Permanent(fmt.Errorf(
+				"create branch %q: write_token_settings cannot be declared at branch create (no create verb carries it) — declare it once the branch exists",
+				r.Name))
+		}
 		poolID, clusterID, ok := b.resolveCluster(idx, r.Name)
 		if !ok {
 			return fmt.Errorf("create branch %q: parent cluster not found", r.Name)
@@ -474,9 +491,9 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 	return fmt.Errorf("create: unknown kind %q", r.Kind)
 }
 
-// Update carries the two spec changes this agent applies to a resource that
-// already exists: resizing an endpoint, and enabling externalized extensions on
-// a branch. Clusters have no controller update path at all, and a pool's only
+// Update carries the spec changes this agent applies to a resource that already
+// exists: a branch's or endpoint's settings, resizing an endpoint, and enabling
+// externalized extensions on a branch. Clusters have no controller update path at all, and a pool's only
 // one is rename — which is not an update here, since a pool's resource key IS
 // its name, so renaming one reaches the engine as a different resource. Either
 // way a spec change to one is a permanent (non-retryable) error the engine
@@ -485,7 +502,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
 	apply, ok := updateFuncs[r.Kind]
 	if !ok {
-		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only endpoint resize and branch extensions)", r.Kind))
+		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only branch and endpoint settings, endpoint resize, and branch extensions)", r.Kind))
 	}
 	return apply(b, ctx, r)
 }
@@ -504,29 +521,16 @@ func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
 // generation and quietly drop it without that being visible at the call site;
 // TestUpdateSendsAppliedGeneration checks it actually lands in the body.
 //
-// A new update path hands its call here and gets all of it. One that bypasses this
-// gets none of it — a whole missing mechanism rather than a subtle omission.
+// Every update call that plans a TASK hands it here and gets all of it. One that
+// bypasses this gets none of it — a whole missing mechanism rather than a subtle
+// omission. The synchronous settings PATCHes are the deliberate exception and go
+// through patchSettings instead: they leave no task behind, so there is nothing
+// here for them to inherit.
 func (b *Backend) applyUpdate(ctx context.Context, key reconcile.ResourceKey, gen int64,
 	call func(ctx context.Context, gen int64) (*http.Response, error)) error {
 
-	if taskID, ok := b.inflightTask(key); ok {
-		status, taskErr, err := b.taskOutcome(ctx, taskID)
-		switch {
-		case err != nil:
-			return fmt.Errorf("read task %s for %s: %w", taskID, key, err)
-		case status == taskStatusPending || status == taskStatusRunning:
-			return reconcile.Pending(fmt.Errorf("controller task %s is %s", taskID, status))
-		case status == taskStatusFailed:
-			// The failure the 202 could not report. Clearing the entry lets the next
-			// tick re-issue after the engine's backoff.
-			b.clearInflight(key)
-			return fmt.Errorf("controller task %s failed: %s", taskID, taskErr)
-		default:
-			// Succeeded, yet the caller still sees the resource as stale — the engine
-			// only plans an update when the echoed generation is behind. Fall through
-			// and re-issue rather than reporting converged on the task's word.
-			b.clearInflight(key)
-		}
+	if err := b.priorTask(ctx, key); err != nil {
+		return err
 	}
 
 	resp, err := call(ctx, gen)
@@ -550,6 +554,48 @@ func (b *Backend) applyUpdate(ctx context.Context, key reconcile.ResourceKey, ge
 	// only records as applied by returning nil, which happens when this backend
 	// started no work at all.
 	return reconcile.Pending(fmt.Errorf("controller task %s planned for generation %d", *taskID, gen))
+}
+
+// priorTask is the verdict on the task the LAST update for this resource planned:
+// nil to go ahead, Pending while it is still running, its own error when it failed.
+//
+// Every path that can claim a generation has to consult this before doing so, not
+// just the ones that plan a task. A synchronous settings PATCH records the
+// generation the moment it returns, so issuing one while a task is still rolling
+// claims that generation for work which has not finished — and because the echo
+// then matches, the engine Noops the resource and no later tick ever revisits it.
+// That is the meko#985 latch, reached through the one door applyUpdate does not
+// cover.
+//
+// The branch path is where it bites. `adding` is a delta against the branch row,
+// and add_branch_extensions unions that row as its FIRST effect, before it
+// redeploys a single endpoint — so one tick after the 202 there is nothing left to
+// add, nothing to change, and an unstamped generation: exactly the shape that
+// reaches the pure stamp. Before the whole-set re-send was retired this was covered
+// by accident, because the re-send went through applyUpdate.
+func (b *Backend) priorTask(ctx context.Context, key reconcile.ResourceKey) error {
+	taskID, ok := b.inflightTask(key)
+	if !ok {
+		return nil
+	}
+	status, taskErr, err := b.taskOutcome(ctx, taskID)
+	switch {
+	case err != nil:
+		return fmt.Errorf("read task %s for %s: %w", taskID, key, err)
+	case status == taskStatusPending || status == taskStatusRunning:
+		return reconcile.Pending(fmt.Errorf("controller task %s is %s", taskID, status))
+	case status == taskStatusFailed:
+		// The failure the 202 could not report. Clearing the entry lets the next
+		// tick re-issue after the engine's backoff.
+		b.clearInflight(key)
+		return fmt.Errorf("controller task %s failed: %s", taskID, taskErr)
+	default:
+		// Succeeded, yet the caller still sees the resource as stale — the engine
+		// only plans an update when the echoed generation is behind. Fall through
+		// and re-issue rather than reporting converged on the task's word.
+		b.clearInflight(key)
+		return nil
+	}
 }
 
 func (b *Backend) inflightTask(key reconcile.ResourceKey) (openapi_types.UUID, bool) {
@@ -610,47 +656,111 @@ func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (s
 	return string(t.Status), taskErr, nil
 }
 
-func (b *Backend) resizeEndpoint(ctx context.Context, r api.DesiredResource) error {
+// updateEndpoint converges an endpoint's settings and its compute reservation.
+//
+// Two calls, and which one carries the generation is the whole ordering argument.
+// The settings PATCH goes FIRST and is synchronous, so a 200 means the row is
+// written; the resize that may follow is a task, and the worker stamps the
+// generation only once that task has succeeded — by which time the settings have
+// provably landed. A retryable PATCH failure returns before the resize is issued,
+// so no generation can ever be claimed for settings that did not land.
+//
+// The resize is issued only when the spec declares resources. It used to go out
+// unconditionally, which was harmless — an omitted dimension keeps the endpoint's
+// current value, so the task resized it to what it already was — but it was also
+// the only thing stamping the generation, and a settings-only spec would have
+// planned a pointless task to get one. Now the PATCH can carry it instead.
+func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) error {
 	b.mu.RLock()
 	idx := b.idx
 	b.mu.RUnlock()
 
 	poolID, clusterID, branchID, ok := b.resolveBranch(idx, r.Name)
 	if !ok {
-		return fmt.Errorf("resize endpoint %q: parent branch not found", r.Name)
+		return fmt.Errorf("update endpoint %q: parent branch not found", r.Name)
 	}
 	endpointID, ok := idx.endpoint[r.Name]
 	if !ok {
-		return fmt.Errorf("resize endpoint %q: endpoint not found", r.Name)
-	}
-	var req ampclient.ResizeEndpointRequest
-	if err := unmarshalSpec(r, &req); err != nil {
-		return err
+		return fmt.Errorf("update endpoint %q: endpoint not found", r.Name)
 	}
 
-	// Computed before anything is issued, for the same reason as updateBranch:
-	// resize is the only endpoint verb, so a spec declaring connectivity — which
-	// no update verb carries — never fully lands, and claiming the generation
-	// would leave the engine Noop'ing the endpoint forever at a generation its
-	// spec never met.
+	// Computed before anything is issued, for the same reason as updateBranch: a
+	// spec declaring connectivity — which no update verb carries — never fully
+	// lands, and claiming the generation would leave the engine Noop'ing the
+	// endpoint forever at a generation its spec never met.
 	spec, err := endpointSpecOf(r)
 	if err != nil {
 		return err
 	}
-	drift := unappliedEndpoint(spec, idx.endpointRow[r.Name])
+	ep := idx.endpointRow[r.Name]
+	drift := unappliedEndpoint(spec, ep)
+	resizing := spec.Resources != nil
 
-	gen := r.Generation
-	if len(drift) > 0 {
-		gen = 0 // claim nothing; see the drift note above
-	}
-	if err := b.applyUpdate(ctx, reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}, gen,
-		func(c context.Context, gen int64) (*http.Response, error) {
-			if gen > 0 {
-				req.YcpGeneration = &gen
-			}
-			return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
-		}); err != nil && len(drift) == 0 {
+	// Before anything is issued, and before anything can claim a generation: the
+	// last update may have planned a task that is still running or has failed. See
+	// priorTask — a settings PATCH stamps synchronously, so it must not go out on
+	// top of work that has not finished.
+	key := reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}
+	if err := b.priorTask(ctx, key); err != nil {
 		return err
+	}
+
+	body, changed := endpointSettingsPatch(spec, ep)
+	// Nothing to change, nothing else to issue, no drift, and the controller has not
+	// recorded this generation: PATCH an empty body purely to stamp it. Every surface
+	// is omitted, so it touches nothing a compute reads — the controller skips telling
+	// them for exactly that reason — but it is the only call left that can record the
+	// generation, and without it the engine would re-plan this update forever.
+	//
+	// Drift excluded because there would be nothing to stamp: a spec that never fully
+	// lands claims no generation, so the call would carry an empty body and no
+	// generation either.
+	if !changed && !resizing && len(drift) == 0 && b.generationBehind(r, ep.YcpGeneration) {
+		changed = true
+	}
+	if changed {
+		gen := r.Generation
+		if len(drift) > 0 {
+			gen = 0 // claim nothing; see the drift note above
+		}
+		if !resizing && gen > 0 {
+			body.YcpGeneration = &gen
+		}
+		if err := b.patchSettings(ctx, func(c context.Context) (*http.Response, error) {
+			return b.api.UpdateEndpointSettings(c, poolID, clusterID, branchID, endpointID, body)
+		}); err != nil {
+			var perm *reconcile.PermanentError
+			if !errors.As(err, &perm) {
+				// Retryable: the settings did not land, so nothing may be issued that
+				// could stamp this generation. The engine backs off and asks again.
+				return fmt.Errorf("update endpoint %q settings: %w", r.Name, err)
+			}
+			// The controller refused these settings as written and stored none of
+			// them. Report it with the rest of the drift rather than returning here,
+			// so one bad setting does not block a resources change — but the
+			// generation is now unclaimable, which the drift list takes care of.
+			drift = append(drift, err.Error())
+		}
+	}
+
+	if resizing {
+		var req ampclient.ResizeEndpointRequest
+		if err := unmarshalSpec(r, &req); err != nil {
+			return err
+		}
+		gen := r.Generation
+		if len(drift) > 0 {
+			gen = 0 // claim nothing; see the drift note above
+		}
+		if err := b.applyUpdate(ctx, key, gen,
+			func(c context.Context, gen int64) (*http.Response, error) {
+				if gen > 0 {
+					req.YcpGeneration = &gen
+				}
+				return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
+			}); err != nil && len(drift) == 0 {
+			return err
+		}
 	}
 	if len(drift) > 0 {
 		return reconcile.Permanent(fmt.Errorf("update endpoint %q: %s", r.Name, strings.Join(drift, "; ")))
@@ -658,13 +768,15 @@ func (b *Backend) resizeEndpoint(ctx context.Context, r api.DesiredResource) err
 	return nil
 }
 
-// endpointSpec is an endpoint's desired spec as Update reads it: the fields it
-// can only check. resources is the one thing resize applies, so everything else
-// CreateEndpointRequest accepts lands here. Every field is a pointer so an
-// omitted one — unmanaged — is distinguishable from a declared empty one.
+// endpointSpec is an endpoint's desired spec as Update reads it: the three
+// settings surfaces it can now apply, resources (read only to decide whether a
+// resize is wanted at all — the resize request is decoded separately), and the
+// fields it can still only check. Every field is a pointer so an omitted one —
+// unmanaged — is distinguishable from a declared empty one.
 type endpointSpec struct {
 	Connectivity       *ampclient.EndpointConnectivity      `json:"connectivity"`
 	Role               *ampclient.CreateEndpointRequestRole `json:"role"`
+	Resources          *ampclient.EndpointResources         `json:"resources"`
 	PgSettings         *map[string]string                   `json:"pg_settings"`
 	PageserverSettings *ampclient.DaemonSettings            `json:"pageserver_settings"`
 	SafekeeperSettings *ampclient.DaemonSettings            `json:"safekeeper_settings"`
@@ -701,11 +813,10 @@ func allowedCidrs(c *ampclient.EndpointConnectivity) []string {
 
 // unappliedEndpoint names the endpoint-spec fields whose declared value the
 // controller does not report, i.e. the ones this update did not and cannot
-// apply. resize carries resources and nothing else, so every other field an
-// endpoint spec may declare is a candidate: connectivity and role are
-// create-time in the controller, and the three settings maps plus
-// extended_config have an updateEndpointSettings verb this agent does not wire
-// — the endpoint analogue of the branch pg_settings case unapplied covers.
+// apply. What is left here after the settings verb is wired is create-time in the
+// controller — connectivity and role, which no update verb carries — plus
+// extended_config, which is the one surface updateEndpointSettings does NOT take,
+// so it stays unfixable for a reason of its own.
 //
 // disk_type is deliberately not compared: the Endpoint response does not report
 // it, so a declared value cannot be told from the one the endpoint was created
@@ -724,23 +835,6 @@ func unappliedEndpoint(spec endpointSpec, ep ampclient.Endpoint) []string {
 	}
 	if spec.Role != nil && string(*spec.Role) != string(ep.Role) {
 		out = append(out, "role")
-	}
-	if spec.PgSettings != nil {
-		have := map[string]string{}
-		if ep.PgSettings != nil {
-			have = *ep.PgSettings
-		}
-		for k, v := range *spec.PgSettings {
-			if cur, ok := have[k]; !ok || cur != v {
-				out = append(out, "pg_settings."+k)
-			}
-		}
-	}
-	if spec.PageserverSettings != nil && !sameJSON(spec.PageserverSettings, ep.PageserverSettings) {
-		out = append(out, "pageserver_settings")
-	}
-	if spec.SafekeeperSettings != nil && !sameJSON(spec.SafekeeperSettings, ep.SafekeeperSettings) {
-		out = append(out, "safekeeper_settings")
 	}
 	if spec.ExtendedConfig != nil && !sameJSON(spec.ExtendedConfig, ep.ExtendedConfig) {
 		out = append(out, "extended_config")
@@ -765,6 +859,63 @@ func sameJSON(declared, reported any) bool {
 	return string(a) == string(b)
 }
 
+// sameSurface compares a declared settings surface against what the controller
+// reports for it, treating an absent reported value as empty.
+//
+// That normalisation is the whole point: the GET omits an empty surface, so a
+// surface someone cleared and one never set arrive identically, and a spec
+// declaring `{}` against either must read as converged rather than as a change to
+// send forever. Both sides are decoded maps by the time they get here, so
+// comparing their re-encoding is structural — a number that survived a round trip
+// through the controller renders the same as the declared one.
+func sameSurface[T any](declared *map[string]T, reported *map[string]T) bool {
+	empty := map[string]T{}
+	d, r := empty, empty
+	if declared != nil {
+		d = *declared
+	}
+	if reported != nil {
+		r = *reported
+	}
+	return sameJSON(d, r)
+}
+
+// settingsSurface narrows a declared surface to one worth sending: the value to
+// PATCH, or nil when the row already carries it.
+//
+// Omitting an unchanged surface is required, not an optimisation. An omitted field
+// means "do not touch", and re-sending an identical one makes the controller push
+// a reload to every running endpoint for a change that is not one.
+func settingsSurface[T any](declared *map[string]T, reported *map[string]T) *map[string]T {
+	if declared == nil || sameSurface(declared, reported) {
+		return nil
+	}
+	return declared
+}
+
+// endpointSettingsPatch is the body converging an endpoint's three surfaces, and
+// whether any of them needed it.
+func endpointSettingsPatch(spec endpointSpec, ep ampclient.Endpoint) (ampclient.UpdateEndpointSettingsRequest, bool) {
+	var req ampclient.UpdateEndpointSettingsRequest
+	req.PgSettings = settingsSurface(spec.PgSettings, ep.PgSettings)
+	req.PageserverSettings = (*ampclient.DaemonSettings)(settingsSurface(
+		(*map[string]interface{})(spec.PageserverSettings), (*map[string]interface{})(ep.PageserverSettings)))
+	req.SafekeeperSettings = (*ampclient.DaemonSettings)(settingsSurface(
+		(*map[string]interface{})(spec.SafekeeperSettings), (*map[string]interface{})(ep.SafekeeperSettings)))
+	return req, req.PgSettings != nil || req.PageserverSettings != nil || req.SafekeeperSettings != nil
+}
+
+// branchSettingsPatch is endpointSettingsPatch for a branch's two surfaces. The
+// daemon surfaces have no branch equivalent — a pageserver serves the branch's
+// endpoints, but its settings are each endpoint's own.
+func branchSettingsPatch(spec branchSpec, br ampclient.Branch) (ampclient.UpdateBranchSettingsRequest, bool) {
+	var req ampclient.UpdateBranchSettingsRequest
+	req.PgSettings = settingsSurface(spec.PgSettings, br.PgSettings)
+	req.WriteTokenSettings = (*ampclient.WriteTokenSettings)(settingsSurface(
+		(*map[string]interface{})(spec.WriteTokenSettings), (*map[string]interface{})(br.WriteTokenSettings)))
+	return req, req.PgSettings != nil || req.WriteTokenSettings != nil
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -777,22 +928,20 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// updateBranch applies the one branch change amp can make after create — adding
-// externalized extensions — and reports whatever else the spec declares that it
-// could not. The add is an absolute union, so re-issuing it (a replayed tick, an
-// add still in flight) is a no-op, which is what lets the engine drive it with
-// no new verb. Only the missing names are sent, because every add redeploys the
-// branch's endpoints — except when there is nothing missing and the generation is
-// still unrecorded, where the full set goes out so the completing task can stamp
-// it (see the note in the body).
+// updateBranch applies the branch changes amp can make after create — its two
+// settings surfaces and adding externalized extensions — and reports whatever
+// else the spec declares that it could not.
 //
-// Anything else the spec declares is create-time here, so a value the branch
-// does not already carry is drift, not work: a name dropped from extensions
-// cannot be removed at all (a branch's set only grows, deliberately, so a fork's
-// endpoints keep mounting what its inherited objects need), and pg_settings has
-// a controller verb this agent does not wire (see updateBranchSettings). Adds
-// are issued before drift is reported, so one unfixable field does not block the
-// rest.
+// Same shape as updateEndpoint: the synchronous settings PATCH first, the
+// task-planning add after, and the generation on whichever is last. The add is an
+// absolute union, so re-issuing it (a replayed tick, an add still in flight) is a
+// no-op, which is what lets the engine drive it with no new verb.
+//
+// What remains drift is create-time here: a name dropped from extensions cannot
+// be removed at all (a branch's set only grows, deliberately, so a fork's
+// endpoints keep mounting what its inherited objects need), and parent_branch_id
+// is fixed at the fork. Work is issued before drift is reported, so one unfixable
+// field does not block the rest.
 func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error {
 	spec, err := branchSpecOf(r)
 	if err != nil {
@@ -825,37 +974,64 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 	}
 	drift = append(drift, unapplied(spec, br)...)
 
+	// As in updateEndpoint, and for the sharper reason described on priorTask: an
+	// add_branch_extensions task unions the branch row before it redeploys anything,
+	// so a tick landing mid-roll sees nothing to add and would otherwise stamp the
+	// generation for a roll still in progress.
+	key := reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}
+	if err := b.priorTask(ctx, key); err != nil {
+		return err
+	}
+
+	// Only the names the branch lacks: every add redeploys the endpoints that are
+	// behind, so asking for one already on would be work for nothing.
+	var send []string
 	if spec.Extensions != nil {
-		// Send only the missing names when there are any: every add redeploys the
-		// branch's endpoints, so re-sending a name already on would bounce compute.
-		//
-		// When nothing is missing but the generation has not been echoed back, send
-		// the full declared set anyway. The union is absolute, so the row does not
-		// change and an endpoint already mounting the set renders an identical
-		// manifest — but it is the only way this generation can ever be recorded, and
-		// without it a branch whose row was unioned by a task that then failed (or
-		// whose task this agent lost track of across a restart) reports converged at a
-		// generation no endpoint ever applied. It also re-drives the redeploy pass for
-		// an endpoint the first task never reached.
-		send := sortedMissing(want, have)
-		if len(send) == 0 && b.generationBehind(r, br.YcpGeneration) {
-			send = sortedKeys(want)
+		send = sortedMissing(want, have)
+	}
+	adding := len(send) > 0
+
+	body, changed := branchSettingsPatch(spec, br)
+	// As in updateEndpoint: an empty body is a pure stamp. This replaces re-sending
+	// the whole extension set to get a generation recorded, which was the only way
+	// before this verb could carry one — and which cost an add_branch_extensions
+	// task on every generation bump of a branch that declares extensions.
+	if !changed && !adding && len(drift) == 0 && b.generationBehind(r, br.YcpGeneration) {
+		changed = true
+	}
+	if changed {
+		gen := r.Generation
+		if len(drift) > 0 {
+			gen = 0 // claim nothing; see the drift note above
 		}
-		if len(send) > 0 {
-			gen := r.Generation
-			if len(drift) > 0 {
-				gen = 0 // claim nothing; see the drift note above
+		if !adding && gen > 0 {
+			body.YcpGeneration = &gen
+		}
+		if err := b.patchSettings(ctx, func(c context.Context) (*http.Response, error) {
+			return b.api.UpdateBranchSettings(c, poolID, clusterID, branchID, body)
+		}); err != nil {
+			var perm *reconcile.PermanentError
+			if !errors.As(err, &perm) {
+				return fmt.Errorf("update branch %q settings: %w", r.Name, err)
 			}
-			if err := b.applyUpdate(ctx, reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}, gen,
-				func(c context.Context, gen int64) (*http.Response, error) {
-					req := ampclient.AddBranchExtensionsRequest{Extensions: send}
-					if gen > 0 {
-						req.YcpGeneration = &gen
-					}
-					return b.api.AddBranchExtensions(c, poolID, clusterID, branchID, req)
-				}); err != nil && len(drift) == 0 {
-				return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(send, ","), r.Name, err)
-			}
+			drift = append(drift, err.Error())
+		}
+	}
+
+	if adding {
+		gen := r.Generation
+		if len(drift) > 0 {
+			gen = 0 // claim nothing; see the drift note above
+		}
+		if err := b.applyUpdate(ctx, key, gen,
+			func(c context.Context, gen int64) (*http.Response, error) {
+				req := ampclient.AddBranchExtensionsRequest{Extensions: send}
+				if gen > 0 {
+					req.YcpGeneration = &gen
+				}
+				return b.api.AddBranchExtensions(c, poolID, clusterID, branchID, req)
+			}); err != nil && len(drift) == 0 {
+			return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(send, ","), r.Name, err)
 		}
 	}
 
@@ -873,38 +1049,19 @@ func (b *Backend) generationBehind(r api.DesiredResource, echoed *int64) bool {
 	return r.Generation > observedGen(echoed)
 }
 
-// sortedKeys is the whole set, in the stable order the controller logs.
-func sortedKeys(names map[string]bool) []string {
-	out := make([]string, 0, len(names))
-	for n := range names {
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // unapplied names the branch-spec fields whose declared value the controller does
 // not report, i.e. the ones this update did not and cannot apply. Without it a
-// spec whose extensions are already converged would report success on a
-// generation bump that changed something else entirely, and the engine would
+// spec whose extensions and settings are already converged would report success on
+// a generation bump that changed something else entirely, and the engine would
 // latch that generation as applied.
+//
+// Only parent_branch_id is left: it is fixed at the fork and no verb moves it.
 //
 // fork_point_lsn is deliberately not compared: a branch records the fork LSN the
 // controller resolved, which is not textually what a caller requested, so a
 // mismatch would not reliably mean drift.
 func unapplied(spec branchSpec, br ampclient.Branch) []string {
 	var out []string
-	if spec.PgSettings != nil {
-		have := map[string]string{}
-		if br.PgSettings != nil {
-			have = *br.PgSettings
-		}
-		for k, v := range *spec.PgSettings {
-			if cur, ok := have[k]; !ok || cur != v {
-				out = append(out, "pg_settings."+k)
-			}
-		}
-	}
 	if spec.ParentBranchId != nil && (br.ParentBranchId == nil || *br.ParentBranchId != *spec.ParentBranchId) {
 		out = append(out, "parent_branch_id")
 	}
@@ -912,14 +1069,16 @@ func unapplied(spec branchSpec, br ampclient.Branch) []string {
 	return out
 }
 
-// branchSpec is a branch's desired spec as Update reads it: the field it can
-// apply (extensions) plus the ones it can only check (Create decodes the whole
-// thing into CreateBranchRequest instead). Every field is a pointer so an
-// omitted one — unmanaged — is distinguishable from a declared empty one.
+// branchSpec is a branch's desired spec as Update reads it: the fields it can
+// apply (extensions, and the two settings surfaces) plus the one it can only
+// check (Create decodes the whole thing into CreateBranchRequest instead). Every
+// field is a pointer so an omitted one — unmanaged — is distinguishable from a
+// declared empty one.
 type branchSpec struct {
-	Extensions     *[]string           `json:"extensions"`
-	PgSettings     *map[string]string  `json:"pg_settings"`
-	ParentBranchId *openapi_types.UUID `json:"parent_branch_id"`
+	Extensions         *[]string                     `json:"extensions"`
+	PgSettings         *map[string]string            `json:"pg_settings"`
+	WriteTokenSettings *ampclient.WriteTokenSettings `json:"write_token_settings"`
+	ParentBranchId     *openapi_types.UUID           `json:"parent_branch_id"`
 }
 
 func branchSpecOf(r api.DesiredResource) (branchSpec, error) {
@@ -1101,6 +1260,43 @@ func (b *Backend) mutateTask(resp *http.Response) (*openapi_types.UUID, error) {
 		return nil, nil
 	}
 	return &t.Id, nil
+}
+
+// patchSettings issues one of the two settings PATCHes. They are SYNCHRONOUS —
+// a 200 means the row is written, with no task to follow and nothing left in
+// flight — which is why they do not go through applyUpdate (there is no task to
+// read, record or wait on) and why a caller may treat a nil return as applied
+// rather than pending.
+//
+// They are not the API's only synchronous verbs (createUser, createStoragePool,
+// the pool rename and the pool delete plan no task either); they are the only ones
+// this agent's Update path issues, and the only ones that carry a ycp_generation.
+//
+// Deliberately not mutate: that maps 409 to success, which is right for a create
+// racing itself but would be a silent lie here. These endpoints answer no 409 at
+// all, so one would mean something unmodelled, and calling it success would claim
+// settings landed that never did. 400 is permanent for mutate's reason — the
+// controller refused the body as written (a setting Postgres will not take, a
+// daemon key it does not know) and every retry sends the same bytes.
+//
+// The 200's SettingsUpdateResult is deliberately dropped. It reports what running
+// endpoints did with the change, and convergence here is the row: a setting stored
+// but listed in not_applied, or an endpoint listed unreachable, is applied as far
+// as desired state goes — it takes effect when that compute next starts.
+func (b *Backend) patchSettings(ctx context.Context, call func(context.Context) (*http.Response, error)) error {
+	resp, err := call(ctx)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 300 {
+		return nil
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		return reconcile.Permanent(httpErr(resp.StatusCode, body))
+	}
+	return httpErr(resp.StatusCode, body)
 }
 
 // mutate issues a create/delete. 2xx and 409 (already exists / in

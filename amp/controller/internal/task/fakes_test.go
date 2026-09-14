@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -196,10 +197,21 @@ func (f *fakeStateStore) EndpointDeploy(_ context.Context, endpointID uuid.UUID)
 }
 
 // UpdateEndpointExtensions records the resolved names last written to an endpoint.
+//
+// It writes BOTH the audit map and the endpoint's deploy record, because in the
+// database they are one place: `config->'extensions'`, which endpointDeploySelect
+// projects straight into EndpointDeploy.Extensions. Keeping them apart here would
+// let a step that reads the record back — to skip an endpoint already mounting the
+// set — pass against a fake that never reflects its own writes.
 func (f *fakeStateStore) UpdateEndpointExtensions(_ context.Context, endpointID uuid.UUID, names []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.endpointExts[endpointID] = append([]string(nil), names...)
+	stored := append([]string(nil), names...)
+	f.endpointExts[endpointID] = stored
+	if d, ok := f.endpointBranch[endpointID]; ok {
+		d.Extensions = stored
+		f.endpointBranch[endpointID] = d
+	}
 	return nil
 }
 
@@ -562,6 +574,9 @@ type fakeDeployer struct {
 	// falls back to its configured image tag. Empty: reports nothing.
 	defaultVersion string
 	createErr      error
+	// createErrAfter, when positive, fails every CreateEndpoint past the first N,
+	// so a test can leave a step half-applied the way a real partial failure does.
+	createErrAfter int
 	deleteErr      error
 	resizeErr      error
 }
@@ -570,6 +585,9 @@ func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, spec)
+	if f.createErrAfter > 0 && len(f.created) > f.createErrAfter {
+		return deploy.Endpoint{}, fmt.Errorf("deploy refused endpoint %s", spec.EndpointID)
+	}
 	if f.createErr != nil {
 		return deploy.Endpoint{}, f.createErr
 	}

@@ -344,11 +344,19 @@ type AddBranchExtensionsRequest struct {
 	Extensions []string `json:"extensions"`
 
 	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
-	// applies. Recorded on the target resource by the task worker once every step
-	// of the task has succeeded, and echoed back as the resource's
-	// `ycp_generation` — so the reconcile agent can tell an update that landed
-	// from one whose asynchronous task never finished. Omit it: it is for the
-	// reconcile agent, and any other caller leaves the recorded value untouched.
+	// applies. Recorded on the target resource once the work has actually landed,
+	// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+	// can tell an update that landed from one that never finished.
+	//
+	// Who records it follows what the call does. An **asynchronous** verb is
+	// stamped by the task worker, once every step of the task has succeeded; a
+	// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+	// part of the same write, because there the handler *is* the work. Either way
+	// it is never recorded for a request that was refused: a `400` stores nothing
+	// and stamps nothing.
+	//
+	// Omit it: it is for the reconcile agent, and any other caller leaves the
+	// recorded value untouched.
 	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
@@ -1305,11 +1313,19 @@ type ResizeEndpointRequest struct {
 	Resources EndpointResources `json:"resources"`
 
 	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
-	// applies. Recorded on the target resource by the task worker once every step
-	// of the task has succeeded, and echoed back as the resource's
-	// `ycp_generation` — so the reconcile agent can tell an update that landed
-	// from one whose asynchronous task never finished. Omit it: it is for the
-	// reconcile agent, and any other caller leaves the recorded value untouched.
+	// applies. Recorded on the target resource once the work has actually landed,
+	// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+	// can tell an update that landed from one that never finished.
+	//
+	// Who records it follows what the call does. An **asynchronous** verb is
+	// stamped by the task worker, once every step of the task has succeeded; a
+	// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+	// part of the same write, because there the handler *is* the work. Either way
+	// it is never recorded for a request that was refused: a `400` stores nothing
+	// and stamps nothing.
+	//
+	// Omit it: it is for the reconcile agent, and any other caller leaves the
+	// recorded value untouched.
 	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
@@ -1499,6 +1515,22 @@ type UpdateBranchSettingsRequest struct {
 	// Empty means the supervisor's own defaults. Read when an endpoint
 	// starts.
 	WriteTokenSettings *WriteTokenSettings `json:"write_token_settings,omitempty"`
+
+	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
+	// applies. Recorded on the target resource once the work has actually landed,
+	// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+	// can tell an update that landed from one that never finished.
+	//
+	// Who records it follows what the call does. An **asynchronous** verb is
+	// stamped by the task worker, once every step of the task has succeeded; a
+	// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+	// part of the same write, because there the handler *is* the work. Either way
+	// it is never recorded for a request that was refused: a `400` stores nothing
+	// and stamps nothing.
+	//
+	// Omit it: it is for the reconcile agent, and any other caller leaves the
+	// recorded value untouched.
+	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
 // UpdateEndpointSettingsRequest This endpoint's settings to replace. Every field is optional and an
@@ -1561,6 +1593,22 @@ type UpdateEndpointSettingsRequest struct {
 	// Applied at pod start, so a change takes effect on the endpoint's next
 	// start — there is no live-reload path today.
 	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
+
+	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
+	// applies. Recorded on the target resource once the work has actually landed,
+	// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+	// can tell an update that landed from one that never finished.
+	//
+	// Who records it follows what the call does. An **asynchronous** verb is
+	// stamped by the task worker, once every step of the task has succeeded; a
+	// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+	// part of the same write, because there the handler *is* the work. Either way
+	// it is never recorded for a request that was refused: a `400` stores nothing
+	// and stamps nothing.
+	//
+	// Omit it: it is for the reconcile agent, and any other caller leaves the
+	// recorded value untouched.
+	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
 // UpdateStoragePoolRequest defines model for UpdateStoragePoolRequest.
@@ -1639,11 +1687,19 @@ type Version struct {
 type WriteTokenSettings map[string]interface{}
 
 // YCPGenerationApplied The YCP (Yugabyte Control Plane) desired-state generation this call
-// applies. Recorded on the target resource by the task worker once every step
-// of the task has succeeded, and echoed back as the resource's
-// `ycp_generation` — so the reconcile agent can tell an update that landed
-// from one whose asynchronous task never finished. Omit it: it is for the
-// reconcile agent, and any other caller leaves the recorded value untouched.
+// applies. Recorded on the target resource once the work has actually landed,
+// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+// can tell an update that landed from one that never finished.
+//
+// Who records it follows what the call does. An **asynchronous** verb is
+// stamped by the task worker, once every step of the task has succeeded; a
+// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+// part of the same write, because there the handler *is* the work. Either way
+// it is never recorded for a request that was refused: a `400` stores nothing
+// and stamps nothing.
+//
+// Omit it: it is for the reconcile agent, and any other caller leaves the
+// recorded value untouched.
 type YCPGenerationApplied = int64
 
 // YCPGenerationObserved The highest YCP desired-state generation fully applied to this resource,

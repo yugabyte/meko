@@ -25,11 +25,10 @@ var ErrResizeInProgress = errors.New("a resize is already in progress for this e
 
 // ErrBranchExtensionsInProgress is the add_branch_extensions twin: the in-flight
 // add holds the branch until it reaches a terminal status. It matters more than a
-// duplicate add's own cost, because the step redeploys every endpoint on the
-// branch — two concurrent tasks would run concurrent helm upgrades of the same
-// release. The reconcile agent re-issues the add until the controller confirms the
-// generation (meko#985), including once the branch row already carries the names,
-// so a second tick during that redeploy pass is exactly when this fires.
+// duplicate add's own cost, because two concurrent tasks redeploy overlapping sets
+// of the branch's endpoints — concurrent helm upgrades of the same release. The
+// step skipping endpoints already mounting the set narrows that overlap but does
+// not remove it: two adds of different names both leave every endpoint behind.
 var ErrBranchExtensionsInProgress = errors.New("an extension add is already in progress for this branch")
 
 // taskLockViolation reports the typed conflict when inserting spec failed because

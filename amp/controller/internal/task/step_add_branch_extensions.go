@@ -25,7 +25,7 @@ type AddBranchExtensionsArgs struct {
 }
 
 // addBranchExtensionsStep unions the requested extensions into the branch's
-// durable set and re-renders every endpoint on the branch so the changed
+// durable set and re-renders the endpoints on the branch that are behind it so the changed
 // ImageVolume mounts take effect. It is one self-contained cascade step
 // (mirroring delete_branch): it enumerates the branch's endpoints at Execute
 // time — robust to a concurrently-added endpoint on replay — and each effect is
@@ -94,7 +94,22 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(err)
 	}
+	want := extensionNames(exts)
+	redeployed := 0
 	for _, d := range deploys {
+		// Skip an endpoint already mounting this set. The record is written below,
+		// only after its deploy returned, so it means "last successfully deployed
+		// with" — which makes a replay after a partial failure redeploy exactly the
+		// endpoints the first run never reached, and nothing else.
+		//
+		// Anything unknown reads as behind: an endpoint with no record, or one whose
+		// record could not be parsed, is redeployed. The cost of being wrong that way
+		// is an identical manifest; the cost of the other way is an endpoint that
+		// never mounts what its branch says it has.
+		if sameExtensionSet(d.Extensions, want) {
+			continue
+		}
+		redeployed++
 		spec := deploy.EndpointSpecFrom(d, s.yb, s.scURL, exts)
 		deployed, err := s.deployer.CreateEndpoint(ctx, spec)
 		if err != nil {
@@ -126,11 +141,36 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 		}
 	}
 
-	logger.Info("branch extensions added", "added", s.Extensions, "endpoints_redeployed", len(deploys))
+	logger.Info("branch extensions added", "added", s.Extensions,
+		"endpoints_redeployed", redeployed, "endpoints_already_current", len(deploys)-redeployed)
 	return Ok(mustResult(map[string]any{
 		"cluster_id":           s.ClusterID.String(),
 		"branch_id":            s.BranchID.String(),
 		"extensions":           s.Extensions,
-		"endpoints_redeployed": len(deploys),
+		"endpoints_redeployed": redeployed,
 	}))
+}
+
+// sameExtensionSet reports whether an endpoint's recorded mount set is already the
+// one we would deploy.
+//
+// Compared as a set: the recorded side went through marshalExtensions, which sorts
+// and dedups, while the wanted side comes out of the catalog in catalog order, so
+// the two agree on membership but not on order. Names only is all there is to
+// compare — a catalog entry's version rides its image, not its name — so a version
+// bump does not land through this path; the fleet upgrade re-renders for that.
+func sameExtensionSet(have, want []string) bool {
+	if len(have) != len(want) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(have))
+	for _, n := range have {
+		seen[n] = struct{}{}
+	}
+	for _, n := range want {
+		if _, ok := seen[n]; !ok {
+			return false
+		}
+	}
+	return true
 }

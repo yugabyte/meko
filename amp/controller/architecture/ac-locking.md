@@ -343,9 +343,9 @@ today: it is what stops a resize racing a create or a delete, which the index ne
 covered.
 
 What did move is that the plan-time refusal is no longer resize-only.
-`add_branch_extensions` needs the same lock — the reconcile agent re-issues an
-update until the controller confirms it, and that task redeploys every endpoint on
-its branch ([`ac-ycp.md`](ac-ycp.md)) — so the mechanism is now per-kind:
+`add_branch_extensions` needs the same lock — two concurrent adds redeploy
+overlapping endpoint sets, which is concurrent helm upgrades of the same release
+([`ac-ycp.md`](ac-ycp.md)) — so the mechanism is now per-kind:
 `Kind.lockIndex` names the partial unique index and `Kind.inProgress` the conflict
 it reports, `taskLockViolation` (formerly `isResizeLockViolation`) classifies by
 kind, and `TestPgUniqueConstraintsOnTask` derives the expected index set from

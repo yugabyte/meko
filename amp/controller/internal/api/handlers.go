@@ -502,8 +502,8 @@ func (c *Controllers) AddBranchExtensions(ctx context.Context, request AddBranch
 	switch {
 	case errors.Is(err, task.ErrBranchExtensionsInProgress):
 		// First-writer-wins: the in-flight add holds the branch until it is terminal.
-		// It redeploys every endpoint on the branch, so admitting a second would run
-		// concurrent upgrades of the same release.
+		// Two adds redeploy overlapping sets of the branch's endpoints, so admitting a
+		// second would run concurrent upgrades of the same release.
 		return AddBranchExtensions409JSONResponse{ConflictJSONResponse(apiError("conflict", "an extension add is already in progress for this branch"))}, nil
 	case err != nil:
 		return nil, fmt.Errorf("add branch extensions task: %w", err)

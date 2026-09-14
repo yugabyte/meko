@@ -483,7 +483,7 @@ func (in AddBranchExtensionsInput) ycpGeneration() *int64 { return in.YCPGenerat
 
 // AddBranchExtensions records an add_branch_extensions task: a single,
 // self-contained step that unions the names into the branch's durable set and
-// re-renders every endpoint on the branch so the new ImageVolume mounts take
+// re-renders the endpoints that are behind it so the new ImageVolume mounts take
 // effect. One idempotent step (absolute union + deploy-per-endpoint), for the
 // same reason as DeleteBranch.
 func (s *Service) AddBranchExtensions(ctx context.Context, in AddBranchExtensionsInput) (*Task, error) {

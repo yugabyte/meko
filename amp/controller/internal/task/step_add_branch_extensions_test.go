@@ -12,7 +12,7 @@ import (
 )
 
 // TestAddBranchExtensionsStepUnionsAndRedeploys covers the happy path: the step
-// unions the requested names into the branch's set and redeploys every endpoint
+// unions the requested names into the branch's set and redeploys the endpoints that are behind it
 // on the branch with the resolved (defaults ∪ opted-in) mount set.
 func TestAddBranchExtensionsStepUnionsAndRedeploys(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
@@ -260,5 +260,115 @@ func TestAddBranchExtensionsStepPreservesConnectivity(t *testing.T) {
 	}
 	if !sawNLB {
 		t.Fatalf("the nlb_internal endpoint was never redeployed; specs = %+v", dep.created)
+	}
+}
+
+// An endpoint already mounting the set is left alone. The step used to redeploy
+// every endpoint on the branch unconditionally, because AddBranchExtensions
+// reports only an error and never whether the union changed the row — so a task
+// whose set was already applied still ran a helm upgrade per endpoint, rendering
+// an identical manifest each time.
+//
+// The signal was already there: the step records what each endpoint mounts, and
+// only after that endpoint's deploy returned. That makes it "last successfully
+// deployed with", which is exactly the question here.
+func TestAddBranchExtensionsStepSkipsEndpointsAlreadyCurrent(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	deps := endpointDeps(state, nil, dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID, "pgvector")
+
+	// current already mounts what this task will resolve to; behind does not.
+	current, behind := uuid.New(), uuid.New()
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{
+		ID: current, BranchID: branchID, Extensions: []string{"pg_cron", "pgvector"}})
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{
+		ID: behind, BranchID: branchID, Extensions: []string{"pgvector"}})
+
+	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
+		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"}}, deps)
+	res := step.Execute(t.Context())
+	if res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+
+	if len(dep.created) != 1 {
+		t.Fatalf("deploy calls = %d, want 1 — only the endpoint that is behind", len(dep.created))
+	}
+	if dep.created[0].EndpointID != behind.String() {
+		t.Errorf("redeployed %s, want the endpoint that was behind (%s)", dep.created[0].EndpointID, behind)
+	}
+}
+
+// Order is not membership. The recorded set is written through marshalExtensions,
+// which sorts, while the resolved set comes out of the catalog in catalog order —
+// so comparing the two as sequences would redeploy every endpoint on every task
+// and quietly undo the skip above.
+func TestAddBranchExtensionsStepIgnoresRecordedOrder(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	deps := endpointDeps(state, nil, dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID, "pgvector")
+	ep := uuid.New()
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{
+		ID: ep, BranchID: branchID, Extensions: []string{"pgvector", "pg_cron"}})
+
+	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
+		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"}}, deps)
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if len(dep.created) != 0 {
+		t.Errorf("deploy calls = %d, want 0 — the same set in a different order is current", len(dep.created))
+	}
+}
+
+// The recovery the agent used to force by re-sending the whole set, now the
+// task's own: a run that unions the row and then fails partway leaves the
+// endpoints it never reached unrecorded, so a replay redeploys exactly those.
+//
+// It matters because the union lands first. Once the row says the branch has the
+// extension, nothing downstream would ever revisit an endpoint that never got it.
+func TestAddBranchExtensionsStepReplayRedeploysOnlyWhatItMissed(t *testing.T) {
+	state := newFakeStateStore()
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID, "pgvector")
+	reached, missed := uuid.New(), uuid.New()
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: reached, BranchID: branchID})
+	state.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: missed, BranchID: branchID})
+
+	// First run: the deployer fails on the second endpoint it is handed.
+	failing := &fakeDeployer{}
+	failing.createErrAfter = 1
+	deps := endpointDeps(state, nil, failing)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
+		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"}}, deps)
+	if res := step.Execute(t.Context()); !res.Failed() {
+		t.Fatal("Execute: want the first run to fail partway")
+	}
+	if len(failing.created) != 2 {
+		t.Fatalf("first run deploy attempts = %d, want 2 (one succeeded, one failed)", len(failing.created))
+	}
+	done := failing.created[0].EndpointID
+
+	// Replay. The row already carries the union, so nothing else would re-drive it.
+	replay := &fakeDeployer{}
+	deps2 := endpointDeps(state, nil, replay)
+	deps2.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	step2 := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
+		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"}}, deps2)
+	if res := step2.Execute(t.Context()); res.Failed() {
+		t.Fatalf("replay: %v", res.Err)
+	}
+	if len(replay.created) != 1 {
+		t.Fatalf("replay deploy calls = %d, want 1 — only the endpoint the first run never reached", len(replay.created))
+	}
+	if replay.created[0].EndpointID == done {
+		t.Errorf("replay redeployed %s, which the first run already did", done)
 	}
 }

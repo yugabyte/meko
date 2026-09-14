@@ -27,6 +27,11 @@ type MemBackend struct {
 	clusterNames map[clusterNameKey]struct{} // cluster names are unique within their pool
 	branchNames  map[branchNameKey]struct{}  // branch names are unique within their cluster
 	endpoints    map[uuid.UUID]Endpoint
+	// endpointExts is what each endpoint was last successfully deployed mounting.
+	// Kept beside the endpoint rather than on it because that is its shape in
+	// Postgres: it lives in the endpoint's `config` blob and surfaces only on the
+	// deploy projection, never on Endpoint.
+	endpointExts map[uuid.UUID][]string
 	writers      map[branchKey]struct{} // at most one read_write endpoint per branch
 	now          func() time.Time
 }
@@ -67,6 +72,7 @@ func NewMemBackend() *MemBackend {
 		clusterNames: make(map[clusterNameKey]struct{}),
 		branchNames:  make(map[branchNameKey]struct{}),
 		endpoints:    make(map[uuid.UUID]Endpoint),
+		endpointExts: make(map[uuid.UUID][]string),
 		writers:      make(map[branchKey]struct{}),
 		now:          time.Now,
 	}
@@ -609,6 +615,7 @@ func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) End
 		Version:      e.Version,
 		Connectivity: e.Connectivity,
 		AllowedCIDRs: e.AllowedCIDRs,
+		Extensions:   m.endpointExts[id],
 	}
 }
 
@@ -698,10 +705,18 @@ func (m *MemBackend) EndpointDeploy(_ context.Context, endpointID uuid.UUID) (En
 	return m.endpointDeploy(endpointID, e, b.PgVersion), nil
 }
 
-// UpdateEndpointExtensions is a no-op in the in-memory backend: it models the
-// endpoint's audit config blob, which MemBackend does not store. The resolved set
-// is recomputed from the cluster at deploy, so nothing depends on it here.
-func (m *MemBackend) UpdateEndpointExtensions(_ context.Context, _ uuid.UUID, _ []string) error {
+// UpdateEndpointExtensions records what an endpoint was last deployed mounting.
+//
+// It used to be a no-op, on the grounds that the resolved set is recomputed at
+// deploy so nothing read it back. That stopped being true when add_branch_extensions
+// began skipping endpoints already mounting the branch's set: a backend that drops
+// this write reports an empty set for every endpoint, so the skip can never fire and
+// any test on it silently exercises the old unconditional redeploy. Sorted and
+// deduped to match marshalExtensions, so the two backends agree on what they stored.
+func (m *MemBackend) UpdateEndpointExtensions(_ context.Context, endpointID uuid.UUID, names []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.endpointExts[endpointID] = dedupSorted(names)
 	return nil
 }
 
@@ -876,7 +891,7 @@ func (m *MemBackend) SetEndpointTargetVersion(_ context.Context, endpointID uuid
 // UpdateBranchSettings stores the branch-wide settings the caller named,
 // mirroring PgBackend: nil leaves a surface alone, an empty map clears it.
 // Absent branch is a no-op.
-func (m *MemBackend) UpdateBranchSettings(_ context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any) error {
+func (m *MemBackend) UpdateBranchSettings(_ context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any, ycpGeneration *int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	br, ok := m.branches[branchID]
@@ -889,12 +904,15 @@ func (m *MemBackend) UpdateBranchSettings(_ context.Context, branchID uuid.UUID,
 	if writeToken != nil {
 		br.WriteTokenSettings = orNil(*writeToken)
 	}
+	if ycpGeneration != nil {
+		br.YCPGeneration = maxYCPGeneration(br.YCPGeneration, *ycpGeneration)
+	}
 	m.branches[branchID] = br
 	return nil
 }
 
 // UpdateEndpointSettings does the same for one endpoint's three surfaces.
-func (m *MemBackend) UpdateEndpointSettings(_ context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any) error {
+func (m *MemBackend) UpdateEndpointSettings(_ context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any, ycpGeneration *int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ep, ok := m.endpoints[endpointID]
@@ -909,6 +927,9 @@ func (m *MemBackend) UpdateEndpointSettings(_ context.Context, endpointID uuid.U
 	}
 	if safekeeper != nil {
 		ep.SafekeeperSettings = orNil(*safekeeper)
+	}
+	if ycpGeneration != nil {
+		ep.YCPGeneration = maxYCPGeneration(ep.YCPGeneration, *ycpGeneration)
 	}
 	m.endpoints[endpointID] = ep
 	return nil

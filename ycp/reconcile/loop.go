@@ -423,7 +423,7 @@ func (e *Engine) recordPermanent(k ResourceKey, err error, gen int64) {
 // a later tick reads the task's failure — so clearing here would reset the count
 // on every attempt and pin the backoff at its first rung forever. A resize the
 // controller can never satisfy would then plan a task every BaseBackoff, and each
-// add_branch_extensions task redeploys every endpoint on its branch. The ladder is
+// add_branch_extensions task redeploys each endpoint on its branch that is behind. The ladder is
 // cleared by success, by a permanent mark, and by the resource going quiet (see
 // Reconcile's pruning).
 func (e *Engine) recordUpdating(k ResourceKey, gen int64) {

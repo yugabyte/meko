@@ -3,6 +3,7 @@ package ampbackend
 import (
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -47,16 +48,31 @@ type genServer struct {
 	// of its `connectivity` property. Empty renders no property at all, i.e. an
 	// endpoint from before connectivity was configurable.
 	endpointConnectivity string
+	// endpointSettings / branchSettings are spliced into their row as raw JSON
+	// properties, e.g. `,"pg_settings":{"work_mem":"64MB"}`. Empty renders none,
+	// which is how the controller reports a surface that is empty or never set —
+	// the two are indistinguishable on the wire, deliberately.
+	endpointSettings string
+	branchSettings   string
+	// settingsStatus overrides the status code the two settings PATCHes return;
+	// settingsError is the body sent with a non-2xx.
+	settingsStatus int
+	settingsError  string
 
-	resizes  []ampclient.ResizeEndpointRequest
-	extAdds  []ampclient.AddBranchExtensionsRequest
-	taskGets int
+	resizes   []ampclient.ResizeEndpointRequest
+	extAdds   []ampclient.AddBranchExtensionsRequest
+	epPatches []ampclient.UpdateEndpointSettingsRequest
+	brPatches []ampclient.UpdateBranchSettingsRequest
+	taskGets  int
 }
 
 func (g *genServer) start(t *testing.T) *Backend {
 	t.Helper()
 	if g.mutateStatus == 0 {
 		g.mutateStatus = http.StatusAccepted
+	}
+	if g.settingsStatus == 0 {
+		g.settingsStatus = http.StatusOK
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -82,6 +98,20 @@ func (g *genServer) start(t *testing.T) *Backend {
 			}
 			g.resizes = append(g.resizes, req)
 			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/settings") && strings.Contains(p, "/endpoints/"):
+			var req ampclient.UpdateEndpointSettingsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode endpoint settings body: %v", err)
+			}
+			g.epPatches = append(g.epPatches, req)
+			g.writeSettingsResponse(w)
+		case strings.HasSuffix(p, "/settings"):
+			var req ampclient.UpdateBranchSettingsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode branch settings body: %v", err)
+			}
+			g.brPatches = append(g.brPatches, req)
+			g.writeSettingsResponse(w)
 		case strings.HasSuffix(p, "/extensions"):
 			var req ampclient.AddBranchExtensionsRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -97,11 +127,12 @@ func (g *genServer) start(t *testing.T) *Backend {
 			io.WriteString(w, `{"endpoints":[{"id":"`+genEndpointID+`","name":"rw","branch_id":"`+genBranchID+
 				`","cluster_id":"`+genClusterID+`","role":"read_write","address":"ep.host:5433",`+
 				`"resources":{"cpu":"2","memory":"4Gi"},"ycp_generation":`+jsonGen(g.endpointGen)+conn+
-				`,"created_at":"2026-01-01T00:00:00Z"}]}`)
+				g.endpointSettings+`,"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/branches"):
 			io.WriteString(w, `{"branches":[{"branch_id":"`+genBranchID+`","cluster_id":"`+genClusterID+
 				`","name":"main","is_default":true,"pg_version":18,"extensions":["pgvector"],`+
-				`"ycp_generation":`+jsonGen(g.branchGen)+`,"created_at":"2026-01-01T00:00:00Z"}]}`)
+				`"ycp_generation":`+jsonGen(g.branchGen)+g.branchSettings+
+				`,"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/clusters"):
 			io.WriteString(w, `{"clusters":[{"id":"`+genClusterID+`","name":"recproj","storage_pool_id":"`+genPoolID+
 				`","created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+genBranchID+
@@ -138,6 +169,20 @@ func (g *genServer) writeMutateResponse(w http.ResponseWriter) {
 		return
 	}
 	io.WriteString(w, `{"error":{"code":"conflict","message":"a task is already in progress"}}`)
+}
+
+// writeSettingsResponse answers a settings PATCH. Unlike the mutating calls it is
+// synchronous: a 200 carrying SettingsUpdateResult, never a Task.
+func (g *genServer) writeSettingsResponse(w http.ResponseWriter) {
+	w.WriteHeader(g.settingsStatus)
+	if g.settingsStatus < 300 {
+		io.WriteString(w, `{"applied":true}`)
+		return
+	}
+	if g.settingsError == "" {
+		g.settingsError = "the controller refused these settings"
+	}
+	io.WriteString(w, `{"error":{"code":"invalid_argument","message":"`+g.settingsError+`"}}`)
 }
 
 func jsonGen(gen *int64) string {
@@ -458,28 +503,39 @@ func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 // endpoint, leaving ycp_generation unstamped and the endpoints on the old set.
 // An agent restart makes it certain: the in-flight task id is gone, so the 409
 // cannot save it either.
-func TestUpdateBranchIssuesWhileTheGenerationIsUnrecorded(t *testing.T) {
+//
+// The answer is a settings PATCH carrying nothing but the generation. It used to
+// be a re-send of the whole extension set — the only branch call that could carry
+// one — which planned a task on every generation bump of a branch declaring
+// extensions. Re-driving the redeploy an unstamped row implies is the task's job
+// now: it redeploys exactly the endpoints whose recorded set is behind.
+func TestUpdateBranchStampsAnUnrecordedGenerationWithoutWork(t *testing.T) {
 	// The row already carries what the spec declares — the union landed — but the
 	// generation has not been echoed back.
 	g := &genServer{branchGen: nil}
 	b := g.start(t)
 
-	err := b.Update(t.Context(), api.DesiredResource{
+	if err := b.Update(t.Context(), api.DesiredResource{
 		Kind: KindBranch, Name: genBranchPath, Generation: 4,
 		Spec: json.RawMessage(`{"extensions":["pgvector"]}`),
-	})
-	mustIssue(t, err)
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
 
-	if len(g.extAdds) != 1 {
-		t.Fatalf("add-extensions calls = %d, want 1 — nothing missing must not read as converged", len(g.extAdds))
+	if len(g.extAdds) != 0 {
+		t.Errorf("add-extensions calls = %d, want 0 — nothing is missing, so nothing is added", len(g.extAdds))
 	}
-	// The full declared set, since there is no delta to send: the union is absolute,
-	// so the row is unchanged and only an endpoint that never got the redeploy moves.
-	if got := g.extAdds[0].Extensions; len(got) != 1 || got[0] != "pgvector" {
-		t.Errorf("sent extensions = %v, want the full declared set [pgvector]", got)
+	if len(g.brPatches) != 1 {
+		t.Fatalf("branch settings calls = %d, want 1 — nothing missing must not read as converged", len(g.brPatches))
 	}
-	if got := g.extAdds[0].YcpGeneration; got == nil || *got != 4 {
-		t.Errorf("sent ycp_generation = %v, want 4", got)
+	// Nothing but the generation: every surface omitted means "do not touch", so the
+	// controller writes the stamp and tells no endpoint to reload.
+	p := g.brPatches[0]
+	if p.PgSettings != nil || p.WriteTokenSettings != nil {
+		t.Errorf("patched surfaces = %+v, want none — this call exists only to stamp", p)
+	}
+	if p.YcpGeneration == nil || *p.YcpGeneration != 4 {
+		t.Errorf("sent ycp_generation = %v, want 4", p.YcpGeneration)
 	}
 }
 
@@ -498,6 +554,9 @@ func TestUpdateBranchIssuesNothingOnceTheGenerationIsRecorded(t *testing.T) {
 	if len(g.extAdds) != 0 {
 		t.Errorf("add-extensions calls = %d, want 0 once the row confirms the generation", len(g.extAdds))
 	}
+	if len(g.brPatches) != 0 {
+		t.Errorf("branch settings calls = %d, want 0 — nothing to change, nothing to stamp", len(g.brPatches))
+	}
 }
 
 // A generation that declares something no verb here can apply never fully lands,
@@ -508,18 +567,20 @@ func TestUpdateBranchWithDriftClaimsNoGeneration(t *testing.T) {
 	g := &genServer{branchGen: gen64(1)}
 	b := g.start(t)
 
-	// pg_settings is create-time here, so declaring a value the branch does not
-	// carry is drift; the extensions add is real work alongside it.
+	// parent_branch_id is fixed at the fork and no verb moves it, so declaring one
+	// the branch does not carry is drift; the extensions add is real work alongside
+	// it. (pg_settings used to stand in here, before the settings verb was wired.)
 	err := b.Update(t.Context(), api.DesiredResource{
 		Kind: KindBranch, Name: genBranchPath, Generation: 4,
-		Spec: json.RawMessage(`{"extensions":["pgvector","pg_cron"],"pg_settings":{"work_mem":"64MB"}}`),
+		Spec: json.RawMessage(`{"extensions":["pgvector","pg_cron"],` +
+			`"parent_branch_id":"99999999-9999-9999-9999-999999999999"}`),
 	})
 
 	var perm *reconcile.PermanentError
 	if !errors.As(err, &perm) {
 		t.Fatalf("Update = %v (%T), want the drift reported as permanent", err, err)
 	}
-	if !strings.Contains(err.Error(), "pg_settings.work_mem") {
+	if !strings.Contains(err.Error(), "parent_branch_id") {
 		t.Errorf("err = %v, want it to name the field it cannot apply", err)
 	}
 	if len(g.extAdds) != 1 {
@@ -633,19 +694,15 @@ func TestUpdateEndpointIgnoresAllowedCidrOrder(t *testing.T) {
 	}
 }
 
-// resize carries only `resources`, so every other field CreateEndpointRequest
-// accepts is dropped the same way connectivity was — and all of these predate
-// connectivity, so the latch was already open for them. pg_settings and the two
-// daemon settings maps are the direct endpoint analogue of the branch case
-// unapplied covers: the controller has updateEndpointSettings and this agent
-// does not wire it.
-func TestUpdateEndpointReportsEveryFieldResizeCannotApply(t *testing.T) {
+// What an endpoint spec can declare and still not get. `role` and `connectivity`
+// are create-time in the controller — no update verb carries them, so recreating
+// the endpoint is the only path. `extended_config` is the one surface
+// updateEndpointSettings does NOT take, so it stays here for a reason of its own
+// even though its three neighbours converge now.
+func TestUpdateEndpointReportsEveryFieldItCannotApply(t *testing.T) {
 	for name, tc := range map[string]struct{ declare, want string }{
-		"pg_settings":         {`"pg_settings":{"work_mem":"64MB"}`, "pg_settings.work_mem"},
-		"role":                {`"role":"read_only"`, "role"},
-		"pageserver_settings": {`"pageserver_settings":{"get_page_timeout":"5s"}`, "pageserver_settings"},
-		"safekeeper_settings": {`"safekeeper_settings":{"flush_timeout":"1s"}`, "safekeeper_settings"},
-		"extended_config":     {`"extended_config":{"shared_preload_libraries":"pg_stat_statements"}`, "extended_config"},
+		"role":            {`"role":"read_only"`, "role"},
+		"extended_config": {`"extended_config":{"shared_preload_libraries":"pg_stat_statements"}`, "extended_config"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := &genServer{endpointGen: gen64(1)}
@@ -683,5 +740,352 @@ func TestUpdateEndpointMatchingRoleClaimsTheGeneration(t *testing.T) {
 	}))
 	if got := g.resizes[0].YcpGeneration; got == nil || *got != 4 {
 		t.Errorf("resize ycp_generation = %v, want 4 — the declared role is the one it has", got)
+	}
+}
+
+// --- endpoint settings -------------------------------------------------------
+
+// The three surfaces converge through updateEndpointSettings, and only the ones
+// that differ are named: an omitted field means "do not touch", so re-sending an
+// identical surface would push a reload to the compute for a change that is not
+// one. The endpoint row here carries none of them.
+func TestUpdateEndpointAppliesDeclaredSettings(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1)}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"pg_settings":{"work_mem":"64MB"},` +
+			`"pageserver_settings":{"tenant_config.enable_gc":true}}`),
+	}))
+
+	if len(g.epPatches) != 1 {
+		t.Fatalf("endpoint settings calls = %d, want 1", len(g.epPatches))
+	}
+	p := g.epPatches[0]
+	if p.PgSettings == nil || (*p.PgSettings)["work_mem"] != "64MB" {
+		t.Errorf("patched pg_settings = %v, want work_mem=64MB", p.PgSettings)
+	}
+	if p.PageserverSettings == nil {
+		t.Error("patched pageserver_settings = nil, want the declared map")
+	}
+	if p.SafekeeperSettings != nil {
+		t.Errorf("patched safekeeper_settings = %v, want it absent — undeclared surfaces are untouched", p.SafekeeperSettings)
+	}
+}
+
+// A surface the row already matches is left out of the body, and with nothing
+// else to change the PATCH is not issued at all.
+func TestUpdateEndpointSkipsSettingsAlreadyStored(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1), endpointSettings: `,"pg_settings":{"work_mem":"64MB"}`}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"pg_settings":{"work_mem":"64MB"}}`),
+	}))
+
+	if len(g.epPatches) != 0 {
+		t.Errorf("endpoint settings calls = %d, want 0 — the row already carries it", len(g.epPatches))
+	}
+	if got := g.resizes[0].YcpGeneration; got == nil || *got != 4 {
+		t.Errorf("resize ycp_generation = %v, want 4 — the settings are converged", got)
+	}
+}
+
+// Replace, not merge: the body is the declared map verbatim, so a key the row
+// carries and the spec does not is dropped. Desired state says what the surface
+// IS, which is also what the PATCH itself means.
+func TestUpdateEndpointSettingsReplaceTheWholeSurface(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1),
+		endpointSettings: `,"pg_settings":{"work_mem":"64MB","shared_buffers":"1GB"}`}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"pg_settings":{"work_mem":"64MB"}}`),
+	}))
+
+	if len(g.epPatches) != 1 {
+		t.Fatalf("endpoint settings calls = %d, want 1", len(g.epPatches))
+	}
+	sent := *g.epPatches[0].PgSettings
+	if len(sent) != 1 || sent["work_mem"] != "64MB" {
+		t.Errorf("patched pg_settings = %v, want exactly the declared map — shared_buffers is pruned", sent)
+	}
+}
+
+// `{}` clears a surface, and is distinguishable from omitting it. Against a row
+// that already reports nothing it is a no-op, because the controller omits an
+// empty surface from the GET — cleared and never-set are the same on the wire.
+func TestUpdateEndpointSettingsClearAndNoOp(t *testing.T) {
+	t.Run("clears a populated surface", func(t *testing.T) {
+		g := &genServer{endpointGen: gen64(1), endpointSettings: `,"pg_settings":{"work_mem":"64MB"}`}
+		b := g.start(t)
+
+		mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+			Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+			Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"pg_settings":{}}`),
+		}))
+		if len(g.epPatches) != 1 {
+			t.Fatalf("endpoint settings calls = %d, want 1", len(g.epPatches))
+		}
+		if sent := g.epPatches[0].PgSettings; sent == nil || len(*sent) != 0 {
+			t.Errorf("patched pg_settings = %v, want an empty map", sent)
+		}
+	})
+	t.Run("is a no-op against an empty row", func(t *testing.T) {
+		g := &genServer{endpointGen: gen64(1)}
+		b := g.start(t)
+
+		mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+			Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+			Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"pg_settings":{}}`),
+		}))
+		if len(g.epPatches) != 0 {
+			t.Errorf("endpoint settings calls = %d, want 0 — nothing to clear", len(g.epPatches))
+		}
+	})
+}
+
+// A setting the controller refuses is permanent drift, never a retry: the 400
+// stored nothing, so every retry sends the same rejected body. The resize still
+// goes out — one bad setting does not block a resources change — but without a
+// generation, because this spec did not fully land.
+//
+// The controller has two independent 400 sources here (Postgres refusing a
+// pg_settings name, and the daemon key-set check refusing a pageserver key) and
+// they reach the agent identically, as the controller's own message.
+func TestUpdateEndpointRefusedSettingIsPermanent(t *testing.T) {
+	g := &genServer{
+		endpointGen:    gen64(1),
+		settingsStatus: http.StatusBadRequest,
+		settingsError:  "Postgres will not accept: work_memm (unrecognized parameter)",
+	}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"pg_settings":{"work_memm":"64MB"}}`),
+	})
+
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Update = %v (%T), want the refusal reported as permanent", err, err)
+	}
+	if !strings.Contains(err.Error(), "work_memm") {
+		t.Errorf("err = %v, want it to carry the controller's own message", err)
+	}
+	if len(g.resizes) != 1 {
+		t.Fatalf("resize calls = %d, want the resize still issued", len(g.resizes))
+	}
+	if got := g.resizes[0].YcpGeneration; got != nil {
+		t.Errorf("resize ycp_generation = %d, want none — the settings never landed", *got)
+	}
+}
+
+// A transient settings failure is retryable, and must stop the tick before the
+// resize: letting the resize go out would plan a task that stamps a generation
+// for settings that are not stored.
+func TestUpdateEndpointTransientSettingsFailureIssuesNoResize(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1), settingsStatus: http.StatusServiceUnavailable}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"pg_settings":{"work_mem":"64MB"}}`),
+	})
+
+	if err == nil {
+		t.Fatal("Update = nil, want a retryable error")
+	}
+	var perm *reconcile.PermanentError
+	var pending *reconcile.PendingError
+	if errors.As(err, &perm) || errors.As(err, &pending) {
+		t.Fatalf("Update = %v (%T), want a plain retryable error", err, err)
+	}
+	if len(g.resizes) != 0 {
+		t.Errorf("resize calls = %d, want 0 — nothing may claim a generation for settings that did not land", len(g.resizes))
+	}
+}
+
+// A settings-only endpoint spec plans no task at all: the PATCH carries the
+// generation itself. The resize used to go out unconditionally just to get one
+// stamped, which resized the endpoint to the size it already was.
+func TestUpdateEndpointWithOnlySettingsIssuesNoResize(t *testing.T) {
+	g := &genServer{endpointGen: gen64(1)}
+	b := g.start(t)
+
+	if err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"pg_settings":{"work_mem":"64MB"}}`),
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(g.resizes) != 0 {
+		t.Errorf("resize calls = %d, want 0 — nothing declared a reservation", len(g.resizes))
+	}
+	if len(g.epPatches) != 1 {
+		t.Fatalf("endpoint settings calls = %d, want 1", len(g.epPatches))
+	}
+	if got := g.epPatches[0].YcpGeneration; got == nil || *got != 4 {
+		t.Errorf("patched ycp_generation = %v, want 4 — the PATCH is the only call this tick", got)
+	}
+}
+
+// The endpoint twin of the branch pure stamp: nothing to change, nothing else to
+// issue, and the generation unrecorded.
+func TestUpdateEndpointStampsAnUnrecordedGenerationWithoutWork(t *testing.T) {
+	g := &genServer{endpointGen: nil, endpointSettings: `,"pg_settings":{"work_mem":"64MB"}`}
+	b := g.start(t)
+
+	if err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"pg_settings":{"work_mem":"64MB"}}`),
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(g.resizes) != 0 {
+		t.Errorf("resize calls = %d, want 0", len(g.resizes))
+	}
+	if len(g.epPatches) != 1 {
+		t.Fatalf("endpoint settings calls = %d, want 1", len(g.epPatches))
+	}
+	p := g.epPatches[0]
+	if p.PgSettings != nil || p.PageserverSettings != nil || p.SafekeeperSettings != nil {
+		t.Errorf("patched surfaces = %+v, want none — this call exists only to stamp", p)
+	}
+	if p.YcpGeneration == nil || *p.YcpGeneration != 4 {
+		t.Errorf("sent ycp_generation = %v, want 4", p.YcpGeneration)
+	}
+}
+
+// An endpoint's pg_settings and its branch's are separate rows, and each PATCH
+// carries its own. The agent never merges them: precedence — the endpoint's
+// winning on a shared key — is the compute's business, resolved by the
+// supervisor's own query (amp/compute/endpoint_supervisor/src/registry.rs) and
+// mirrored in core.EffectivePgSettings. An agent that compared against the merged
+// view would see a branch-supplied value as the endpoint's own and never write it.
+func TestBranchAndEndpointSettingsGoToTheirOwnRows(t *testing.T) {
+	g := &genServer{
+		branchGen:      gen64(1),
+		endpointGen:    gen64(1),
+		branchSettings: `,"pg_settings":{"work_mem":"16MB"}`,
+	}
+	b := g.start(t)
+
+	// The branch says 16MB; the endpoint declares its own 64MB override and its
+	// row carries nothing, so both sides have work to do.
+	if err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindBranch, Name: genBranchPath, Generation: 4,
+		Spec: json.RawMessage(`{"pg_settings":{"work_mem":"32MB"}}`),
+	}); err != nil {
+		t.Fatalf("Update branch: %v", err)
+	}
+	if err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"pg_settings":{"work_mem":"64MB"}}`),
+	}); err != nil {
+		t.Fatalf("Update endpoint: %v", err)
+	}
+
+	if len(g.brPatches) != 1 || (*g.brPatches[0].PgSettings)["work_mem"] != "32MB" {
+		t.Errorf("branch patch = %+v, want work_mem=32MB", g.brPatches)
+	}
+	if len(g.epPatches) != 1 || (*g.epPatches[0].PgSettings)["work_mem"] != "64MB" {
+		t.Errorf("endpoint patch = %+v, want work_mem=64MB", g.epPatches)
+	}
+}
+
+// --- a stamp must never outrun the task that is still doing the work ----------
+
+// The branch shape that made retiring the whole-set re-send a regression.
+//
+// add_branch_extensions unions the branch row as its FIRST effect, before it
+// redeploys a single endpoint, so one tick after the 202 the agent sees nothing
+// left to add, nothing to change, and a generation the worker has not stamped —
+// because the worker stamps only once every step has succeeded. That is exactly
+// the shape the pure stamp fires on, and stamping there claims the desired
+// generation for a roll that is still running: the echo then matches, Diff Noops
+// the branch forever, and if the roll fails on some endpoint nothing re-drives it
+// and nothing reports it. The meko#985 latch, reached through the one door
+// applyUpdate does not cover.
+//
+// The re-send used to cover this by accident, because it went through applyUpdate.
+func TestUpdateBranchDoesNotStampOverARunningTask(t *testing.T) {
+	g := &genServer{branchGen: nil, taskStatus: "running"}
+	b := g.start(t)
+	// What the previous tick left behind: a task this agent planned for the branch.
+	b.setInflight(reconcile.ResourceKey{Kind: KindBranch, Name: genBranchPath}, uuid.MustParse(genTaskID))
+
+	// The row already reports pgvector — the task unioned it on the way in — so
+	// there is nothing to add and nothing to change.
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindBranch, Name: genBranchPath, Generation: 4,
+		Spec: json.RawMessage(`{"extensions":["pgvector"]}`),
+	})
+
+	var pending *reconcile.PendingError
+	if !errors.As(err, &pending) {
+		t.Fatalf("Update = %v (%T), want Pending while the extensions task is still running", err, err)
+	}
+	if len(g.brPatches) != 0 {
+		t.Errorf("branch settings calls = %d, want 0 — nothing may stamp a generation the roll has not earned", len(g.brPatches))
+	}
+}
+
+// And the failed case: the task's own error has to surface, not a stamp. Without
+// the guard the generation would be claimed for a roll that never finished, and
+// the failure would never be reported at all — no task is re-planned, because
+// there is nothing left to add.
+func TestUpdateBranchSurfacesAFailedTaskInsteadOfStamping(t *testing.T) {
+	g := &genServer{branchGen: nil, taskStatus: "failed", taskError: "redeploy endpoint 3 of 5 failed"}
+	b := g.start(t)
+	b.setInflight(reconcile.ResourceKey{Kind: KindBranch, Name: genBranchPath}, uuid.MustParse(genTaskID))
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindBranch, Name: genBranchPath, Generation: 4,
+		Spec: json.RawMessage(`{"extensions":["pgvector"]}`),
+	})
+
+	if err == nil {
+		t.Fatal("Update = nil, want the failed task's error")
+	}
+	var pending *reconcile.PendingError
+	var perm *reconcile.PermanentError
+	if errors.As(err, &pending) || errors.As(err, &perm) {
+		t.Fatalf("Update = %v (%T), want a plain retryable error carrying the task's failure", err, err)
+	}
+	if !strings.Contains(err.Error(), "redeploy endpoint 3 of 5 failed") {
+		t.Errorf("err = %v, want the controller's own task error", err)
+	}
+	if len(g.brPatches) != 0 {
+		t.Errorf("branch settings calls = %d, want 0", len(g.brPatches))
+	}
+}
+
+// The endpoint twin. `resizing` is derived from the spec, so a running task cannot
+// falsify it — but the operator can, by dropping `resources` from the spec while
+// the resize it asked for is still in flight. Then nothing routes through
+// applyUpdate and the pure stamp would claim the generation over it.
+func TestUpdateEndpointDoesNotStampOverARunningTask(t *testing.T) {
+	g := &genServer{endpointGen: nil, taskStatus: "running",
+		endpointSettings: `,"pg_settings":{"work_mem":"64MB"}`}
+	b := g.start(t)
+	b.setInflight(reconcile.ResourceKey{Kind: KindEndpoint, Name: genEndpointPath}, uuid.MustParse(genTaskID))
+
+	// No resources, and the settings already match: nothing to issue.
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"pg_settings":{"work_mem":"64MB"}}`),
+	})
+
+	var pending *reconcile.PendingError
+	if !errors.As(err, &pending) {
+		t.Fatalf("Update = %v (%T), want Pending while the resize task is still running", err, err)
+	}
+	if len(g.epPatches) != 0 {
+		t.Errorf("endpoint settings calls = %d, want 0", len(g.epPatches))
 	}
 }

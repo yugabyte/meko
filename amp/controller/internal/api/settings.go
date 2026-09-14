@@ -178,12 +178,20 @@ func (c *Controllers) UpdateBranchSettings(ctx context.Context, request UpdateBr
 	if err := c.backend.UpdateBranchSettings(ctx, request.BranchId,
 		pgSettingsOf(request.Body.PgSettings),
 		daemonSettingsOf(request.Body.WriteTokenSettings),
+		request.Body.YcpGeneration,
 	); err != nil {
 		return nil, fmt.Errorf("update branch settings: %w", err)
 	}
-	ids := make([]uuid.UUID, 0, len(eps))
-	for _, ep := range eps {
-		ids = append(ids, ep.ID)
+	// Only a body that named a surface has anything for a running endpoint to
+	// re-read. One carrying nothing but a ycp_generation is still a real write, so
+	// it cannot be short-circuited earlier — but telling every endpoint on the
+	// branch to reload identical config would be pure noise.
+	var ids []uuid.UUID
+	if request.Body.PgSettings != nil || request.Body.WriteTokenSettings != nil {
+		ids = make([]uuid.UUID, 0, len(eps))
+		for _, ep := range eps {
+			ids = append(ids, ep.ID)
+		}
 	}
 	return UpdateBranchSettings200JSONResponse{
 		Applied:   true,
@@ -234,12 +242,19 @@ func (c *Controllers) UpdateEndpointSettings(ctx context.Context, request Update
 		pgSettingsOf(request.Body.PgSettings),
 		daemonSettingsOf(request.Body.PageserverSettings),
 		daemonSettingsOf(request.Body.SafekeeperSettings),
+		request.Body.YcpGeneration,
 	); err != nil {
 		return nil, fmt.Errorf("update endpoint settings: %w", err)
 	}
+	// As in UpdateBranchSettings: nothing to re-read means nothing to tell.
+	var ids []uuid.UUID
+	if request.Body.PgSettings != nil || request.Body.PageserverSettings != nil ||
+		request.Body.SafekeeperSettings != nil {
+		ids = []uuid.UUID{request.EndpointId}
+	}
 	return UpdateEndpointSettings200JSONResponse{
 		Applied:   true,
-		Endpoints: c.notifyEndpoints(ctx, []uuid.UUID{request.EndpointId}),
+		Endpoints: c.notifyEndpoints(ctx, ids),
 	}, nil
 }
 

@@ -115,13 +115,13 @@ exposes no live/head LSN, so the only LSN reported is the branch fork point.
 
 ## The applied generation
 
-Every mutating controller call is asynchronous, so `202` means *task planned*, not
-*task done*. The engine is level-triggered on **existence** — a failed create
-leaves the resource absent and a failed delete leaves it present, so the next diff
-re-issues both — but an update's only staleness signal is the generation. Holding
-that in the agent and writing it from the 202 meant a task that failed afterwards
-left the resource unconverged with the agent reporting healthy, permanently
-(meko#985).
+Almost every mutating controller call is asynchronous, so `202` means *task
+planned*, not *task done*. The engine is level-triggered on **existence** — a
+failed create leaves the resource absent and a failed delete leaves it present, so
+the next diff re-issues both — but an update's only staleness signal is the
+generation. Holding that in the agent and writing it from the 202 meant a task that
+failed afterwards left the resource unconverged with the agent reporting healthy,
+permanently (meko#985).
 
 So the controller records it and echoes it back, the `metadata.generation` /
 `status.observedGeneration` split `Actual.ObservedGen` was designed around:
@@ -134,6 +134,13 @@ So the controller records it and echoes it back, the `metadata.generation` /
   every step has succeeded, never the handler that planned it. The write is
   `GREATEST(...)`, so an older task completing late cannot regress it. See
   [ac-tasks.md](ac-tasks.md).
+- The two settings PATCHes are the exception, because they are **synchronous**:
+  they return once the row is written, with no task to follow. (Not the API's only
+  synchronous verbs — `createUser`, `createStoragePool` and the pool rename/delete
+  plan no task either — but the only ones that carry a generation.) There the handler stamps, in the same statement as the settings —
+  which satisfies the rule above rather than breaking it, since for a synchronous
+  verb the handler *is* the work. A `400` returns before the write, so a refused
+  request stores neither the settings nor the generation.
 - `ampbackend.List` reads it into `Actual.ObservedGen` for those two kinds; pools
   and clusters have no update path and report 0.
 
@@ -143,15 +150,30 @@ has nothing else — but it is now only ever written for work that *completed*,
 because an `ampbackend` verb that plans a task returns `reconcile.Pending`, which
 records nothing.
 
-A branch is the case that forces this. `add_branch_extensions` unions the branch row
-**before** it redeploys the branch's endpoints, so a tick landing after the union
+**The generation rides the last call the agent issues for a resource in a tick** —
+synchronous, so the handler stamps; asynchronous, so the worker does. An endpoint
+declaring `resources` sends its settings PATCH first without one and lets the resize
+carry it; a settings-only endpoint issues no resize at all and the PATCH carries it.
+A branch works the same way with `add_branch_extensions` as its asynchronous tail.
+The PATCH going first is what makes the ordering safe: it is synchronous, so by the
+time a task stamps anything the settings have provably landed, and a retryable PATCH
+failure returns before any task is planned.
+
+A branch is the case that forces the rule. `add_branch_extensions` unions the branch
+row **before** it redeploys the branch's endpoints, so a tick landing after the union
 sees nothing missing. Treating that as converged would cache the generation and
-no-op the branch forever, while the task that unioned the row may still fail on a
-redeploy — the same latch, reached from the other side. So the add goes out whenever
-the generation is still unrecorded, carrying the full declared set when there is no
-delta: the union is absolute, so the row does not move and a converged endpoint
-renders an identical manifest, but the completing task can finally stamp the
-generation, and an endpoint the first task never reached gets its redeploy.
+no-op the branch forever — the same latch, reached from the other side. So when
+nothing needs changing but the generation is still unrecorded, the agent sends an
+**empty** settings PATCH carrying only the generation: every surface omitted means
+"do not touch", and the controller skips notifying endpoints for a body that names
+none, so it is a stamp and nothing else.
+
+That replaced re-sending the whole extension set, which was the only branch call
+that could carry a generation before this. The cost of the old shape was an
+`add_branch_extensions` task on *every* generation bump of a branch declaring
+extensions; and the redeploy pass it dragged along is no longer needed to re-drive
+an endpoint a failed task never reached, because the task now redeploys exactly the
+endpoints whose recorded set is behind the branch's.
 
 Distinguishing **Updating** from **Failed** on later ticks needs no timer, because
 the `202` body is the `Task`. The backend keeps that task id per resource and reads
@@ -173,10 +195,12 @@ inflight map costs a verdict, while the collector's watermark is what guarantees
 delivery, so folding them together would trade one's failure mode for the other's. See
 [ac-tasks.md](ac-tasks.md) §4.1 for why the feed orders by `updated_at`.
 
-Adding an update path keeps this by construction. Every `Backend.Update` arm hands
-its call to one `applyUpdate` helper that owns the task lookup, the verdict and
-recording the new task, so an arm bypassing it loses the whole mechanism rather
-than one detail; `updateFuncs` is the only place the updatable set is written down;
+Adding an update path keeps this by construction. Every `Backend.Update` arm that
+plans a **task** hands its call to one `applyUpdate` helper that owns the task
+lookup, the verdict and recording the new task, so an arm bypassing it loses the
+whole mechanism rather than one detail — the synchronous PATCHes go through
+`patchSettings` instead, which is the deliberate exception because they leave no
+task to inherit any of it. `updateFuncs` is the only place the updatable set is written down;
 and a table-driven test walks `allKinds` asserting each is either `Permanent` on
 `Update` or both sends a generation and has one echoed back.
 
@@ -203,9 +227,15 @@ its cluster is inert until a later edit. Seed it through the cluster spec instea
 
 An unknown name is a `400`, which the backend already treats as permanent drift, so
 a typo surfaces as a reason on the resource rather than an endless backoff. The
-update sends only the names the controller does not already report, because the
-add **redeploys every endpoint on the branch** — the ImageVolume set is fixed at pod
-start — so expect a compute bounce on the tick that applies one. The endpoint's
+update sends only the names the controller does not already report, because the add
+**redeploys the endpoints that are behind** — the ImageVolume set is fixed at pod
+start — so expect a compute bounce on the tick that applies one. Only endpoints
+whose recorded mount set differs from the branch's are rolled: the task records what
+each endpoint mounts after its deploy returns, so a replay redeploys exactly the
+endpoints a failed run never reached, and a task whose set is already applied
+everywhere deploys nothing. (Names only, so a catalog revision that moves an
+extension's *image* without renaming it does not land through this path — the fleet
+upgrade re-renders extensions for that.) The endpoint's
 recorded address is never blanked (the redeploy re-records it, since a ClusterIP
 address is the pod IP and the old one is dead), so the agent's readiness check —
 address non-empty — stays true throughout, including the window where the row still
@@ -219,35 +249,65 @@ therefore permanent drift, named in the resource's `Error`. Omitting `extensions
 altogether leaves the branch's set unmanaged, which is what a fork inheriting its
 parent's set wants.
 
-Extensions are the only branch field the agent converges, not the only one the
-controller can change: `PATCH …/branches/{id}/settings` (`updateBranchSettings`)
-replaces a branch's `pg_settings`, and the generated client already has it. It is
-not wired because create and update disagree about what a declared set means — a
-create *merges* over what the fork inherited, that PATCH *replaces* — and picking
-one is an operator-facing decision, not a mapping detail. Until it is, a
-`pg_settings` value the branch does not already carry is reported as drift, naming
-the settings that were not applied.
+### Settings are replaced, not merged
 
-### Endpoints converge `resources` and nothing else
+A branch's `pg_settings` and `write_token_settings`, and an endpoint's
+`pg_settings` / `pageserver_settings` / `safekeeper_settings`, converge through the
+two settings PATCHes. **A declared surface owns the whole map**: what the spec says
+the surface IS is what the row is set to, so a key stored there that the spec does
+not name is removed. Omitting a surface leaves it unmanaged; declaring `{}` clears
+it. That is the PATCH's own semantics, and the only reading consistent with desired
+state being authoritative.
 
-`resizeEndpoint` is the only endpoint verb the agent wires, and it carries
-`resources` alone. Every other field `createEndpoint` accepts — `connectivity`,
-`role`, `pg_settings`, `pageserver_settings`, `safekeeper_settings`,
-`extended_config` — is therefore permanent drift on an **existing** endpoint,
-named in the resource's `Error`. Omitting a field leaves it unmanaged.
+Create and update disagree about this, which is the part that bites: a create
+**merges** over what a fork inherited, this PATCH **replaces**. A fork copies its
+ancestor's `pg_settings`, and `createBranch`'s own settings merge over that set — so
+a fork that inherited `work_mem` and whose spec declares only `shared_buffers` loses
+`work_mem` on the first update tick, and a branch created *with* `pg_settings`
+converges to replace semantics on its first generation bump.
 
-The two reasons differ. `connectivity` and `role` are create-time in the
-controller: no update verb carries them, so they can never converge and
-recreating the endpoint is the only path. The settings maps do have a verb
-(`updateEndpointSettings`), unwired here for the same merge-vs-replace reason as
-`updateBranchSettings` below.
+`write_token_settings` is reachable *only* this way — nothing inherits it on a fork
+and no create request carries it — so, like `extensions`, `Create` refuses a branch
+spec that declares it rather than dropping the field, and it is declared in a later
+write once the branch exists.
 
-`disk_type` is the exception: the `Endpoint` response does not report it, so a
+A setting the controller refuses is permanent drift, not a retry: the `400` stored
+nothing, so every retry would send the same rejected body. Two independent checks
+produce one — Postgres itself refusing a `pg_settings` name or value, and the
+controller's generated key set refusing a daemon key — and the agent reports either
+as the controller's own message. A `200` that lists settings in `not_applied`, or an
+endpoint in `unreachable`, is **not** a convergence failure: the row is stored, so it
+takes effect when that compute next starts.
+
+One operational difference: a storage daemon's config has no reload path, so
+changing `pageserver_settings` or `safekeeper_settings` restarts that daemon in the
+pod, where most `pg_settings` reload in place.
+
+### What an endpoint spec can declare and not get
+
+An endpoint converges `resources` and its three settings surfaces. What is left
+over — `connectivity`, `role`, `extended_config` — is permanent drift on an
+**existing** endpoint, named in the resource's `Error`. Omitting a field leaves it
+unmanaged.
+
+The reasons differ. `connectivity` and `role` are create-time in the controller:
+no update verb carries them, so they can never converge and recreating the endpoint
+is the only path. `extended_config` is the odd one out — it is the single surface
+`updateEndpointSettings` does *not* take, so it stays unfixable for a reason of its
+own now that its three neighbours converge.
+
+`disk_type` is a third case: the `Endpoint` response does not report it, so a
 declared value cannot be told from the one the endpoint was created with and is
 not checked. The agent keeps each endpoint row from `List` to make this
 comparison, the way it keeps branch rows.
 
-Reporting it matters more than the refusal reading well. A dropped field that
+The resize is issued only when the spec declares `resources`. It used to go out on
+every tick, which was harmless in itself — the handler keeps a dimension the request
+does not name, so an empty body resized the endpoint to the size it already had —
+but it was also the only thing that could stamp the generation, so a settings-only
+spec planned a task purely to get one. The PATCH carries it now.
+
+Reporting the rest matters more than the refusal reading well. A dropped field that
 still stamped `ycp_generation` would have the engine Noop the endpoint forever,
 converged on a spec that never applied — and for `connectivity` that means an
 endpoint silently unreachable, or an `allowed_cidrs` narrowing that never took

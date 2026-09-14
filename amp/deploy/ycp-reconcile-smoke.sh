@@ -30,7 +30,13 @@
 #      the resource settles back to ready instead of being re-issued. It does not
 #      catch a controller that stamped on the 202 rather than on completion —
 #      that window is not sampled, and is covered by the unit tests (meko#985);
-#   6. (SMOKE_EXTENSIONS=1) enables an extension on the branch by editing its
+#   6. declares pg_settings on the branch and on the endpoint and asserts both
+#      converge: the controller's own rows carry them, a branch spec that declares
+#      ONLY settings still gets its generation stamped (the settings PATCH is
+#      synchronous, so the handler stamps it — nothing else could), a key dropped
+#      from a declared surface is removed from the row (desired state owns the whole
+#      map), and none of it restarts the endpoint pod;
+#   7. (SMOKE_EXTENSIONS=1) enables an extension on the branch by editing its
 #      spec — the only path an operator has for a branch that already exists —
 #      and asserts the agent applies it: the branch reports it in
 #      attrs.extensions AND the endpoint the add redeploys comes back Ready with
@@ -38,12 +44,12 @@
 #      add_branch_extensions unions the branch row before it touches any
 #      endpoint, so it converges even if every redeploy fails. Then re-declares
 #      the same extension (an inert edit that still bumps the generation) and
-#      asserts the endpoint pod's uid is UNCHANGED — the agent re-sends the full
-#      set when a generation is unrecorded, which is only safe because an
-#      unchanged set re-renders to an identical manifest. Opt-in for the
+#      asserts the endpoint pod's uid is UNCHANGED: with nothing to add, the
+#      generation is stamped by an empty settings PATCH and no task is planned at
+#      all, so nothing may touch compute. Opt-in for the
 #      same reason as smoke-test.sh's extension scenario: the images and the
 #      controller catalog only exist under /ci amp_deploy_gke_extensions;
-#   7. withdraws the cluster subtree from desired state (leaving just the pool)
+#   8. withdraws the cluster subtree from desired state (leaving just the pool)
 #      and asserts the agent deletes it — the authoritative GC path.
 #
 # It leaves the pool in desired state on purpose: storage pools have no controller
@@ -238,6 +244,141 @@ else
     || bad "environment=$state endpoint=$estate after the update (want READY/ready)"
 fi
 
+# --- branch + endpoint settings ---
+#
+# Settings were declarable in desired state long before the agent could apply
+# them: every declared surface was counted as drift, which forced the update to
+# claim no generation and ended the tick Permanent (meko#1246). So the assertions
+# here are that the values actually reach the controller's rows, and that the
+# generation is claimed only when they did.
+#
+# Read back from the amp API rather than the inventory, because the agent does not
+# report settings in attrs — the row is the durable answer and the controller is
+# the only thing that can show it. That is a READ; the environment is still driven
+# entirely through desired state.
+hdr "branch and endpoint settings converge from desired state"
+
+AMP="http://127.0.0.1:${AMP_PF_PORT}/api/v1"
+inv_attr() { # inv_attr <kind> <name> <attr>
+  env_json | jq -r --arg k "$1" --arg n "$2" --arg a "$3" \
+    '.resources[]?|select(.kind==$k and .name==$n)|.attrs[$a] // empty' 2>/dev/null | head -1
+}
+POOL_ID=$(inv_attr storage-pool "$POOL_NAME" id)
+CLUSTER_ID=$(inv_attr cluster "$CLUSTER_NAME" id)
+BRANCH_ID=$(inv_attr branch "$BRANCH_NAME" id)
+SET_EP_ID=$(inv_attr endpoint "$EP_NAME" id)
+BRANCH_URL="$AMP/storage-pools/$POOL_ID/clusters/$CLUSTER_ID/branches/$BRANCH_ID"
+
+if [ -z "$POOL_ID" ] || [ -z "$CLUSTER_ID" ] || [ -z "$BRANCH_ID" ] || [ -z "$SET_EP_ID" ]; then
+  bad "could not resolve amp ids from the inventory (pool=${POOL_ID:-} cluster=${CLUSTER_ID:-} branch=${BRANCH_ID:-} endpoint=${SET_EP_ID:-})"
+else
+  ok "amp ids resolved from the inventory (branch $BRANCH_ID)"
+
+  # Captured before the first settings write, compared after the last. This catches
+  # a settings edit that REPLACES the pod — the agent planning a resize or a redeploy
+  # off the back of one — which would be a real regression and is otherwise invisible
+  # here, since the pod comes back Ready either way.
+  #
+  # It does NOT catch the narrower blip of Postgres being bounced inside the pod for
+  # a start-time-only setting: the supervisor restarts the process and the pod's uid
+  # is unchanged. The signal for that is the PATCH response's restarted /
+  # restart_forced_by, which only the agent sees. Both settings declared below are
+  # reloadable, so neither should bounce anything.
+  SET_POD=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$SET_EP_ID" | head -1)
+  SET_POD="${SET_POD#pod/}"
+  SET_UID_BEFORE=""
+  if [ -n "$SET_POD" ]; then
+    SET_UID_BEFORE=$(kubectl -n "$NS" get "pod/$SET_POD" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+  fi
+  [ -n "$SET_UID_BEFORE" ] && ok "endpoint pod uid before the settings edits ($SET_POD)" \
+    || bad "could not read the endpoint pod's uid before the settings edits"
+
+  # branch pg_settings <- the baseline; endpoint pg_settings <- its own override.
+  # work_mem is declared on BOTH with different values on purpose: they are
+  # separate rows, and the endpoint's winning is the compute's business, so each
+  # row must carry exactly what its own spec declared and nothing merged.
+  BRANCH_PATH="${POOL_NAME}/${CLUSTER_NAME}/${BRANCH_NAME}"
+  EP_PATH="${BRANCH_PATH}/${EP_NAME}"
+  WITH_SETTINGS=$(jq -nc --argjson r "$DESIRED" --arg b "$BRANCH_PATH" --arg e "$EP_PATH" '
+    [ $r[]
+      | if .kind=="branch"   and .name==$b then .spec.pg_settings={statement_timeout:"30s", work_mem:"16MB"}
+        elif .kind=="endpoint" and .name==$e then .spec.pg_settings={work_mem:"64MB"}
+        else . end ]')
+  set_desired "$WITH_SETTINGS" && ok "desired state declares branch + endpoint pg_settings" \
+    || bad "POST desired (settings) failed"
+  DESIRED="$WITH_SETTINGS"
+
+  # The branch is the load-bearing half. Its spec declares settings and nothing
+  # else, so the agent issues no task for it at all — the settings PATCH is
+  # synchronous, and its handler stamping the row is the only way this generation
+  # can ever be recorded. Before #1246 it was never stamped, because a declared
+  # pg_settings was drift and drift claims nothing.
+  bset=""; bgen=""
+  for ((i=0; i<36; i++)); do
+    bj=$(curl -sf "$BRANCH_URL" 2>/dev/null)
+    bset=$(printf '%s' "$bj" | jq -c '.pg_settings // empty' 2>/dev/null)
+    bgen=$(printf '%s' "$bj" | jq -r '.ycp_generation // empty' 2>/dev/null)
+    [ "$(printf '%s' "$bset" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] && break
+    sleep 5
+  done
+  [ "$(printf '%s' "$bset" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] \
+    && [ "$(printf '%s' "$bset" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
+    && ok "branch row carries the declared pg_settings (${bset})" \
+    || bad "branch pg_settings='${bset:-none}', want statement_timeout=30s and work_mem=16MB"
+  [ -n "$bgen" ] && [ "$bgen" != 0 ] && [ "$bgen" != null ] \
+    && ok "branch ycp_generation=$bgen — the synchronous PATCH stamped it with no task" \
+    || bad "branch ycp_generation='${bgen:-none}' — a settings-only spec never recorded its generation"
+
+  eset=""
+  for ((i=0; i<36; i++)); do
+    eset=$(curl -sf "$BRANCH_URL/endpoints/$SET_EP_ID" 2>/dev/null | jq -c '.pg_settings // empty' 2>/dev/null)
+    [ "$(printf '%s' "$eset" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] && break
+    sleep 5
+  done
+  if [ "$(printf '%s' "$eset" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ]; then
+    ok "endpoint row carries its own pg_settings (${eset})"
+  else
+    bad "endpoint pg_settings='${eset:-none}', want work_mem=64MB"
+  fi
+  # Its own, not the branch's merged in: the agent writes each row from that
+  # resource's spec, and an agent that compared against the merged view would read
+  # a branch-supplied value as the endpoint's and never write it.
+  [ "$(printf '%s' "$eset" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] \
+    && ok "endpoint row did not absorb the branch's statement_timeout" \
+    || bad "endpoint pg_settings='${eset}' contains the branch's key — the rows were merged"
+
+  # --- a declared surface owns the whole map ---
+  #
+  # The operator-facing half of #1246: desired state says what pg_settings IS, so
+  # dropping a key removes it. The PATCH replaces a named surface, and a spec that
+  # only ever added would leave an operator unable to take a setting off.
+  hdr "dropping a key from a declared surface removes it from the row"
+  DROPPED=$(jq -nc --argjson r "$DESIRED" --arg b "$BRANCH_PATH" \
+    '[ $r[] | if .kind=="branch" and .name==$b then .spec.pg_settings={work_mem:"16MB"} else . end ]')
+  set_desired "$DROPPED" && ok "desired state drops statement_timeout, keeping work_mem" \
+    || bad "POST desired (dropped key) failed"
+  DESIRED="$DROPPED"
+
+  bset2=""
+  for ((i=0; i<36; i++)); do
+    bset2=$(curl -sf "$BRANCH_URL" 2>/dev/null | jq -c '.pg_settings // empty' 2>/dev/null)
+    [ "$(printf '%s' "$bset2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] && break
+    sleep 5
+  done
+  [ "$(printf '%s' "$bset2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] \
+    && [ "$(printf '%s' "$bset2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
+    && ok "branch pg_settings is now exactly what the spec declares (${bset2})" \
+    || bad "branch pg_settings='${bset2:-none}', want only work_mem=16MB — the dropped key was not removed"
+
+  # The other end of SET_UID_BEFORE, now that every settings edit has landed.
+  if [ -n "$SET_UID_BEFORE" ]; then
+    suid_after=$(kubectl -n "$NS" get "pod/$SET_POD" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+    [ "$suid_after" = "$SET_UID_BEFORE" ] \
+      && ok "endpoint pod was not replaced by the settings edits ($SET_POD)" \
+      || bad "endpoint pod replaced across the settings edits (uid $SET_UID_BEFORE -> ${suid_after:-gone}) — a settings edit must not redeploy compute"
+  fi
+fi
+
 # --- enable an extension on the existing branch (opt-in) ---
 if [ "${SMOKE_EXTENSIONS:-0}" != 1 ]; then
   hdr "branch extensions"
@@ -298,16 +439,18 @@ else
 
     # --- a generation bump that changes no extension must NOT bounce compute ---
     #
-    # The agent re-sends the branch's full declared set whenever the generation is
-    # still unrecorded, even with nothing to add — that is the only way a completing
-    # task can stamp it, and without it a branch whose row was unioned by a task
-    # that then failed reports converged at a generation no endpoint applied
-    # (meko#985). It rests on the redeploy being a no-op when the set is unchanged:
-    # the union is absolute, so the row does not move, and the endpoint re-renders
-    # to an identical manifest.
+    # With nothing to add, the agent issues no add_branch_extensions at all: the
+    # generation is recorded by an empty settings PATCH, which names no surface and
+    # so plans no task and tells no endpoint anything. The branch still has to end
+    # up stamped, because a branch whose row was unioned by a task that then failed
+    # would otherwise report converged at a generation no endpoint applied
+    # (meko#985).
     #
-    # If that is wrong, every generation bump on a branch with extensions restarts
-    # every endpoint on it — a user-visible outage, and invisible to every other
+    # This used to be a re-send of the branch's whole extension set — the only
+    # branch call that could carry a generation before #1246 — which planned a task
+    # on every generation bump and leaned on the redeploy rendering an identical
+    # manifest. If that ever stopped holding, every bump on a branch with extensions
+    # restarted every endpoint on it: a user-visible outage invisible to every other
     # assertion here, since the pod comes back Ready either way. So compare the
     # pod's UID: a restart mints a new one.
     #
@@ -336,14 +479,14 @@ else
         sleep 5
       done
       [ -n "$after_gen" ] && [ "$after_gen" != "${before_gen:-}" ] \
-        && ok "branch attrs.applied_generation advanced to $after_gen (the re-send stamped it)" \
+        && ok "branch attrs.applied_generation advanced to $after_gen (the empty settings PATCH stamped it)" \
         || bad "branch attrs.applied_generation='${after_gen:-none}' did not advance past '${before_gen:-none}'"
 
       after_uid=$(kubectl -n "$NS" get "pod/$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
       if [ "$after_uid" = "$before_uid" ]; then
         ok "endpoint pod was not restarted by the no-delta bump ($after_uid)"
       else
-        bad "endpoint pod restarted for an unchanged extension set (uid ${before_uid} -> ${after_uid:-gone}) — the re-send bounces compute"
+        bad "endpoint pod restarted for an unchanged extension set (uid ${before_uid} -> ${after_uid:-gone}) — a no-delta bump bounced compute"
       fi
     fi
 fi

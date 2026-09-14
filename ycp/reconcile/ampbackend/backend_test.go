@@ -296,8 +296,9 @@ func TestBadRequestIsPermanent(t *testing.T) {
 
 // calls records what a test's apply verbs sent to the fake controller.
 type calls struct {
-	posts []string                               // method+path of every mutating request
-	added []ampclient.AddBranchExtensionsRequest // addBranchExtensions bodies, in order
+	posts   []string                                // method+path of every mutating request
+	added   []ampclient.AddBranchExtensionsRequest  // addBranchExtensions bodies, in order
+	patched []ampclient.UpdateBranchSettingsRequest // updateBranchSettings bodies, in order
 }
 
 // listedTree stands up a controller serving one pool -> cluster -> branch whose
@@ -326,6 +327,16 @@ func listedTree(t *testing.T, branchExts []string) (*Backend, *calls) {
 		case strings.HasSuffix(p, "/branches") && r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusAccepted)
 			io.WriteString(w, `{}`)
+		case strings.HasSuffix(p, "/settings"):
+			if want := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/settings"; p != want {
+				t.Errorf("updateBranchSettings path = %s, want %s", p, want)
+			}
+			var body ampclient.UpdateBranchSettingsRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode branch settings body: %v", err)
+			}
+			got.patched = append(got.patched, body)
+			io.WriteString(w, `{"applied":true}`)
 		case strings.HasSuffix(p, "/extensions"):
 			if want := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/extensions"; p != want {
 				t.Errorf("addBranchExtensions path = %s, want %s", p, want)
@@ -366,6 +377,14 @@ func branchRes(spec string) api.DesiredResource {
 	return api.DesiredResource{Kind: KindBranch, Name: "pool-a/recproj/main", Spec: json.RawMessage(spec)}
 }
 
+// branchResGen is branchRes at a generation, for the tests that care which call
+// carried it.
+func branchResGen(spec string, gen int64) api.DesiredResource {
+	r := branchRes(spec)
+	r.Generation = gen
+	return r
+}
+
 // Updating a branch enables only the declared extensions the controller does not
 // already report: the union is idempotent, but every add redeploys the branch's
 // endpoints, so re-sending a name that is already on would bounce compute for
@@ -399,37 +418,54 @@ func TestUpdateBranchAlreadyConvergedIssuesNoCall(t *testing.T) {
 
 // Converged extensions must not make the rest of the spec a silent success. A
 // generation bump that edited pg_settings reaches Update with nothing to add, and
-// reporting nil there would latch the generation as applied and lose the edit —
-// every branch update was drift before extensions were wired, and a change this
-// agent cannot apply still is.
-func TestUpdateBranchReportsFieldsItCannotApply(t *testing.T) {
+// reporting nil there without issuing anything would latch the generation as
+// applied and lose the edit. pg_settings is now work rather than drift, so the
+// edit goes out as a PATCH — and, with no extension add to follow it, that PATCH
+// is what carries the generation.
+func TestUpdateBranchAppliesPgSettingsWithNothingToAdd(t *testing.T) {
 	b, got := listedTree(t, []string{"pgvector"})
 
-	err := b.Update(t.Context(), branchRes(`{"extensions":["pgvector"],"pg_settings":{"work_mem":"64MB"}}`))
-	var perm *reconcile.PermanentError
-	if !errors.As(err, &perm) {
-		t.Fatalf("Update err = %v, want a PermanentError", err)
+	if err := b.Update(t.Context(), branchResGen(`{"extensions":["pgvector"],"pg_settings":{"work_mem":"64MB"}}`, 4)); err != nil {
+		t.Fatalf("Update: %v", err)
 	}
-	if !strings.Contains(err.Error(), "pg_settings.work_mem") {
-		t.Errorf("Update err = %v, want it to name the setting it did not apply", err)
+	if len(got.patched) != 1 {
+		t.Fatalf("updateBranchSettings calls = %d, want 1", len(got.patched))
+	}
+	if got.patched[0].PgSettings == nil || (*got.patched[0].PgSettings)["work_mem"] != "64MB" {
+		t.Errorf("patched pg_settings = %v, want work_mem=64MB", got.patched[0].PgSettings)
+	}
+	if gen := got.patched[0].YcpGeneration; gen == nil || *gen != 4 {
+		t.Errorf("patched ycp_generation = %v, want 4 — the PATCH is the only call this tick", gen)
 	}
 	if len(got.added) != 0 {
 		t.Errorf("addBranchExtensions calls = %d, want 0 — the extension set was already converged", len(got.added))
 	}
 }
 
-// The adds a spec does ask for still go out when another field of the same spec
-// is unfixable, so one bad field does not block the rest.
-func TestUpdateBranchAppliesAddsBeforeReportingDrift(t *testing.T) {
+// The work a spec does ask for still goes out when another field of the same spec
+// is unfixable, so one bad field does not block the rest. parent_branch_id is the
+// unfixable one here: it is fixed at the fork and no verb moves it.
+func TestUpdateBranchAppliesWorkBeforeReportingDrift(t *testing.T) {
 	b, got := listedTree(t, nil)
 
-	err := b.Update(t.Context(), branchRes(`{"extensions":["pgvector"],"pg_settings":{"work_mem":"64MB"}}`))
+	err := b.Update(t.Context(), branchRes(
+		`{"extensions":["pgvector"],"pg_settings":{"work_mem":"64MB"},`+
+			`"parent_branch_id":"99999999-9999-9999-9999-999999999999"}`))
 	var perm *reconcile.PermanentError
 	if !errors.As(err, &perm) {
 		t.Fatalf("Update err = %v, want a PermanentError", err)
 	}
+	if !strings.Contains(err.Error(), "parent_branch_id") {
+		t.Errorf("Update err = %v, want it to name parent_branch_id", err)
+	}
 	if len(got.added) != 1 || got.added[0].Extensions[0] != "pgvector" {
 		t.Errorf("added = %v, want pgvector issued despite the drift", got.added)
+	}
+	if len(got.patched) != 1 {
+		t.Errorf("updateBranchSettings calls = %d, want 1 — the settings edit goes out too", len(got.patched))
+	}
+	if gen := got.patched[0].YcpGeneration; gen != nil {
+		t.Errorf("patched ycp_generation = %d, want none — this spec never fully lands", *gen)
 	}
 }
 
@@ -451,19 +487,72 @@ func TestUpdateBranchReportsUnremovableExtensionAsPermanent(t *testing.T) {
 	}
 }
 
-// Extensions are the only branch field the controller can change after create,
-// so a spec that changed anything else is drift, as it was before extensions
-// were wired up.
-func TestUpdateBranchWithoutExtensionsIsPermanent(t *testing.T) {
+// A branch spec declaring only settings converges on the PATCH alone, planning no
+// task at all. It used to be permanent drift: extensions were the only branch
+// field the agent could apply.
+func TestUpdateBranchWithOnlySettingsConverges(t *testing.T) {
 	b, got := listedTree(t, nil)
 
-	err := b.Update(t.Context(), branchRes(`{"pg_settings":{"work_mem":"64MB"}}`))
-	var perm *reconcile.PermanentError
-	if !errors.As(err, &perm) {
-		t.Fatalf("Update err = %v, want a PermanentError", err)
+	if err := b.Update(t.Context(), branchResGen(`{"pg_settings":{"work_mem":"64MB"}}`, 4)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.patched) != 1 {
+		t.Fatalf("updateBranchSettings calls = %d, want 1", len(got.patched))
+	}
+	if gen := got.patched[0].YcpGeneration; gen == nil || *gen != 4 {
+		t.Errorf("patched ycp_generation = %v, want 4", gen)
 	}
 	if len(got.added) != 0 {
 		t.Fatalf("addBranchExtensions calls = %d, want 0", len(got.added))
+	}
+}
+
+// The surface is replaced, not merged: a key the row carries and the spec does not
+// is dropped, because desired state says what the surface IS. The fake's branch
+// reports work_mem=32MB, which this spec does not declare.
+func TestUpdateBranchSettingsReplaceTheWholeSurface(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	if err := b.Update(t.Context(), branchRes(`{"pg_settings":{"shared_buffers":"1GB"}}`)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.patched) != 1 {
+		t.Fatalf("updateBranchSettings calls = %d, want 1", len(got.patched))
+	}
+	sent := *got.patched[0].PgSettings
+	if len(sent) != 1 || sent["shared_buffers"] != "1GB" {
+		t.Errorf("patched pg_settings = %v, want exactly the declared map — work_mem is pruned", sent)
+	}
+}
+
+// A surface the row already matches is left out of the body entirely: an omitted
+// field means "do not touch", and re-sending an identical one would push a reload
+// to every endpoint on the branch for a change that is not one. With nothing else
+// to send and the generation already recorded, no call goes out at all.
+func TestUpdateBranchSkipsSettingsAlreadyStored(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	if err := b.Update(t.Context(), branchRes(`{"pg_settings":{"work_mem":"32MB"}}`)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.patched) != 0 {
+		t.Errorf("updateBranchSettings calls = %d, want 0 — the row already carries it", len(got.patched))
+	}
+}
+
+// write_token_settings reaches a branch only through this PATCH: no create verb
+// carries it, and nothing inherits it on a fork.
+func TestUpdateBranchAppliesWriteTokenSettings(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	if err := b.Update(t.Context(), branchRes(`{"write_token_settings":{"ttl_ms":30000,"renew_seconds":10}}`)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.patched) != 1 || got.patched[0].WriteTokenSettings == nil {
+		t.Fatalf("patched = %+v, want one call carrying write_token_settings", got.patched)
+	}
+	if got.patched[0].PgSettings != nil {
+		t.Errorf("patched pg_settings = %v, want it absent — an undeclared surface is not touched", got.patched[0].PgSettings)
 	}
 }
 
@@ -489,6 +578,26 @@ func TestCreateBranchRefusesExtensions(t *testing.T) {
 
 // A branch spec with no extensions still creates normally — the fork inherits
 // its parent's set, which is the only way a new branch gets one.
+// write_token_settings is refused at create for the same reason and in the same
+// shape: updateBranchSettings needs a branch id this call has not produced, and
+// CreateBranchRequest has no field for it — so letting it through would drop a
+// declared write lease with no error anywhere.
+func TestCreateBranchRefusesWriteTokenSettings(t *testing.T) {
+	b, got := listedTree(t, nil)
+
+	err := b.Create(t.Context(), branchRes(`{"write_token_settings":{"ttl_ms":30000}}`))
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("Create err = %v, want a PermanentError", err)
+	}
+	if !strings.Contains(err.Error(), "once the branch exists") {
+		t.Errorf("Create err = %v, want it to say when it can be declared", err)
+	}
+	if len(got.posts) != 0 {
+		t.Errorf("requests = %v, want none — the branch must not be created either", got.posts)
+	}
+}
+
 func TestCreateBranchWithoutExtensionsProceeds(t *testing.T) {
 	b, got := listedTree(t, nil)
 

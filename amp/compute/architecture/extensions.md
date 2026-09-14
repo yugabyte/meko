@@ -211,7 +211,7 @@ the feature is additive.
   "Opt-in API" below), which persists the choice on the branch. Because the
   volume set is fixed at pod start, **adding or removing an extension requires
   recreating the endpoint pod** (a rolling restart) — so `addBranchExtensions`
-  redeploys every existing endpoint on the branch. A `preload` extension needs
+  redeploys the endpoints on the branch whose mounts are behind it. A `preload` extension needs
   the postmaster restart regardless. Non-preload extensions are otherwise
   ready to `CREATE EXTENSION` as soon as the pod is up with the volume mounted.
   The ImageVolume carries only the extension **tree** (control + SQL + `.so`), not
@@ -244,9 +244,17 @@ branch, and `addBranchExtensions`
 - `createCluster` writes the initial set onto the new cluster's default branch;
   `addBranchExtensions` runs an async task that unions the requested names into
   **that branch's** set (`AddBranchExtensions`, an idempotent absolute union)
-  and then **redeploys every existing endpoint on the branch** so the changed
-  ImageVolume mounts take effect. Both are durable: an endpoint create or recreate
-  resolves **catalog defaults ∪ its branch's set**.
+  and then **redeploys the branch's endpoints whose recorded mount set differs from
+  it** so the changed ImageVolume mounts take effect. Both are durable: an endpoint
+  create or recreate resolves **catalog defaults ∪ its branch's set**.
+
+  The step records what each endpoint mounts after that endpoint's deploy returns,
+  which is what makes the comparison safe: a run that fails partway leaves the
+  endpoints it never reached unrecorded, so a replay redeploys exactly those — and
+  a task whose set is already applied everywhere deploys nothing. The comparison is
+  on names, so a catalog revision that moves an extension's *image* without
+  renaming it does not reach endpoints this way; `upgrade_endpoint` re-resolves
+  against the current catalog and is the path for that.
 - The opted-in set (not the catalog defaults) is **readable** on both the
   `Cluster` response (`getCluster`/`listClusters` return the default branch's set
   as the cluster's) and the `Branch` response (`getBranch`/`listBranches` return
@@ -358,7 +366,7 @@ audit / recreate.
 
 - **Controller unit tests** cover the catalog (`Has`/`Resolve`, preload flag
   threaded through), the create_endpoint step (branch-set mount), the
-  add_branch_extensions step (union + redeploy of the branch's endpoints), and the
+  add_branch_extensions step (union + redeploy of the endpoints that are behind), and the
   API (`createCluster extensions[]` / `addBranchExtensions` → 202/400, deploy spec,
   persistence) — see `controller/internal/extensions`,
   `controller/internal/task`, `controller/internal/api`.

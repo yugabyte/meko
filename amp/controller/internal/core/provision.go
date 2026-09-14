@@ -272,7 +272,8 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.pg_version,
 	        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
 	        COALESCE(e.version, ''),
-	        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs'
+	        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs',
+	        e.config->'extensions'
 	   FROM amp_registry.endpoints e
 	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -280,9 +281,10 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 	var (
 		id, branchID string
 		cidrsRaw     []byte
+		extsRaw      []byte
 		d            EndpointDeploy
 	)
-	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Connectivity, &cidrsRaw); err != nil {
+	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Connectivity, &cidrsRaw, &extsRaw); err != nil {
 		return EndpointDeploy{}, err
 	}
 	// Same tolerance as scanEndpoint: a malformed allowed_cidrs must not fail the
@@ -293,6 +295,15 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 		if err := json.Unmarshal(cidrsRaw, &d.AllowedCIDRs); err != nil {
 			log.FromContext(ctx).Warn("endpoint config.allowed_cidrs is not a JSON string array; redeploying without source ranges",
 				"endpoint", id, "error", err, "raw", string(cidrsRaw))
+		}
+	}
+	// Tolerated the same way, and erring the same direction: an unreadable record
+	// leaves Extensions empty, which reads as "behind" and redeploys — the wasteful
+	// answer rather than the wrong one.
+	if len(extsRaw) > 0 {
+		if err := json.Unmarshal(extsRaw, &d.Extensions); err != nil {
+			log.FromContext(ctx).Warn("endpoint config.extensions is not a JSON string array; treating the endpoint as not yet redeployed",
+				"endpoint", id, "error", err, "raw", string(extsRaw))
 		}
 	}
 	var err error
