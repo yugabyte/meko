@@ -588,6 +588,25 @@ Empty means the LB is still provisioning or failed — describe the Service and 
 its events before anything else; a missing subnet tag or an exhausted NLB quota
 (50 per region) stops it here.
 
+For a BYOC environment the same endpoint reports `attrs.connectivity_mode` beside
+its `address`, which is the only way to see the requested mode without cluster
+access — a `cluster_ip` endpoint and one that asked for a load balancer otherwise
+look alike. It is **conclusive only for `nlb_external`**, where a private address
+is this bug outright. An `nlb_internal` LB on GKE/AKS is itself assigned a private
+VPC IP in the same `<addr>:<port>` shape as the fallback, so there the mode only
+tells you to go check the Service above.
+
+```sh
+# YCP fleet API, not the controller's: see ycp/DEPLOY.md for these values.
+export YCP=https://<control-plane> ENV=<environment-id>
+export SECRET=<admin-secret> ACCOUNT=<account-id>
+
+curl -sS -H "X-Meko-Admin-Secret: $SECRET" -H "X-Meko-Account-ID: $ACCOUNT" \
+  "$YCP/api/v1/environments/$ENV" \
+  | jq -r '.data.resources[]?|select(.kind=="endpoint")
+           |"\(.name) \(.attrs.connectivity_mode) \(.attrs.address)"'
+```
+
 **Recover.** Any controller-driven redeploy of that endpoint re-resolves and
 re-records the address — adding a branch extension is the usual trigger, since
 `add_branch_extensions` carries the endpoint's connectivity into the redeploy and

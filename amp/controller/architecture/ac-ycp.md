@@ -86,7 +86,28 @@ branch's `extensions` (opted in per branch — seeded at create, inherited on fo
 the default branch's set is also mirrored on the cluster); a branch's `fork_lsn`,
 `parent_branch_id`,
 `is_default`; and an endpoint's `role`, `address`, `tailnet_address`, `cpu`,
-`memory`. A branch and an endpoint also report `applied_generation` — see below.
+`memory`, `connectivity_mode` and `connectivity_allowed_cidrs`. A branch and an
+endpoint also report `applied_generation` — see below.
+The connectivity pair is the observed counterpart of the create-time field
+[endpoints cannot converge](#endpoints-converge-resources-and-nothing-else).
+`connectivity_mode` is emitted by every agent at this release or later, and is
+**resolved** — an endpoint predating the field reports none and behaves as
+`cluster_ip` — so the inventory records the exposure that was *asked* for, which
+the address alone cannot show. Against a private address that is conclusive for
+`nlb_external` only; an `nlb_internal` LB is itself privately addressed on GKE/AKS.
+`connectivity_allowed_cidrs` (comma-joined and sorted, as `extensions` is joined)
+exists *only* under an `nlb_*` mode, where an empty value means **unrestricted**;
+absent means there is no load balancer to restrict, so a console can warn about an
+open `nlb_external` endpoint without misreading every `cluster_ip` one.
+
+That last rule holds **only once `connectivity_mode` is present**. An older agent
+emits neither key — the customer upgrades on their own schedule, so the two sides
+are routinely skewed — and reading that absence as the default would report an
+`nlb_external` endpoint with unrestricted CIDRs as having no load balancer to
+restrict, silently dropping the warning for the one case the present-but-empty
+encoding exists to surface. A missing `connectivity_mode` means *unknown*, never
+`cluster_ip`. The wire contract is `ycp/internal/api/types.go`, which is the
+authority ([`REVIEW.md`](../../../REVIEW.md) treats it as one).
 A branch's `id`
 pairs with a fork's `parent_branch_id` so a console can rebuild the fork tree
 (the containment tree is already derivable from `ID`/`Parent`). The controller

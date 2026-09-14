@@ -189,6 +189,13 @@ gen0=$(ep_attr applied_generation)
 [ -z "$gen0" ] && ok "no applied_generation before any update (a create does not stamp)" \
   || bad "applied_generation=$gen0 before any update, want none"
 
+# The attr reaches the console only if it survives the heartbeat; the agent's own
+# tests stop at List. This endpoint declares no connectivity, so the reported mode
+# is the resolved default rather than nothing.
+conn=$(ep_attr connectivity_mode)
+[ "$conn" = cluster_ip ] && ok "endpoint attrs.connectivity_mode=cluster_ip" \
+  || bad "endpoint attrs.connectivity_mode='${conn:-none}', want cluster_ip"
+
 cur_cpu=$(ep_attr cpu); cur_mem=$(ep_attr memory)
 if [ -z "$cur_cpu" ] || [ -z "$cur_mem" ]; then
   bad "endpoint reports no cpu/memory in the inventory (cpu='${cur_cpu:-}' memory='${cur_mem:-}')"

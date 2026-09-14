@@ -199,8 +199,22 @@ type ResourceStatus struct {
 	// convenience view),
 	// a branch's fork_lsn, parent_branch_id
 	// (pairs with a branch's id to rebuild the fork tree), is_default, and an
-	// endpoint's role, address, tailnet_address, cpu, memory. Empty when the
+	// endpoint's role, address, tailnet_address, cpu, memory,
+	// connectivity_mode and connectivity_allowed_cidrs. Empty when the
 	// backend has none.
+	//
+	// connectivity_mode is reported resolved: an endpoint predating the field
+	// behaves as cluster_ip. connectivity_allowed_cidrs is present only under an
+	// nlb_* mode, comma-joined like extensions, and an EMPTY value there means
+	// unrestricted, not unset — so a consumer splitting on "," must treat the
+	// empty string as the empty list rather than as one blank entry.
+	//
+	// Both keys are absent altogether from an agent older than the release that
+	// added them, and the two sides are always skewed (the customer upgrades on
+	// their own schedule). So a MISSING connectivity_mode means unknown, never
+	// cluster_ip; only when it is present does a missing cidr key mean "no load
+	// balancer to restrict". Reading absence as the default would silently drop
+	// the warning for the internet-exposed case this encoding exists to surface.
 	Attrs map[string]string `json:"attrs,omitempty"`
 }
 

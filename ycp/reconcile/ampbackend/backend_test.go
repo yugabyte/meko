@@ -167,9 +167,80 @@ func TestListReportsResourceAttrs(t *testing.T) {
 		ep["tailnet_address"] != "ep.tail:5433" || ep["cpu"] != "2" || ep["memory"] != "4Gi" {
 		t.Errorf("endpoint attrs = %v", ep)
 	}
+	// The row reports no connectivity — an endpoint from before it was
+	// configurable — which resolves to the default rather than being omitted.
+	if ep["connectivity_mode"] != "cluster_ip" {
+		t.Errorf("endpoint connectivity_mode = %q, want cluster_ip", ep["connectivity_mode"])
+	}
+	if _, ok := ep["connectivity_allowed_cidrs"]; ok {
+		t.Errorf("connectivity_allowed_cidrs should be absent under cluster_ip, got %v", ep)
+	}
 
 	if a := byKind[KindPool].Attrs; a["id"] != poolID {
 		t.Errorf("pool attrs = %v, want id %s", a, poolID)
+	}
+}
+
+// The console writes an endpoint's connectivity and has no other way to read back
+// what the controller applied, and an nlb_* endpoint on the pod-IP fallback is
+// otherwise indistinguishable from a cluster_ip one. Both halves are encoded so
+// that the cidr key exists iff the mode has a load balancer, and an empty value
+// there means unrestricted rather than unset.
+func TestListReportsEndpointConnectivity(t *testing.T) {
+	for name, tc := range map[string]struct {
+		row       string // the endpoint row's `connectivity`, "" for no property
+		mode      string
+		cidrs     string
+		wantCidrs bool
+	}{
+		"absent resolves to the default": {
+			row: "", mode: "cluster_ip",
+		},
+		"an explicit default is the same thing": {
+			row: `{"mode":"cluster_ip"}`, mode: "cluster_ip",
+		},
+		"source ranges are joined, sorted": {
+			row:   `{"mode":"nlb_internal","allowed_cidrs":["10.2.0.0/16","10.0.0.0/16"]}`,
+			mode:  "nlb_internal",
+			cidrs: "10.0.0.0/16,10.2.0.0/16", wantCidrs: true,
+		},
+		// The case the whole encoding exists for: on nlb_external this is Postgres
+		// on the public internet, so it must arrive as a present-but-empty key, not
+		// as an absent one the console would read as "not configured".
+		"unrestricted is reported, not dropped": {
+			row:  `{"mode":"nlb_external"}`,
+			mode: "nlb_external",
+			// cidrs is the zero value: present and empty.
+			wantCidrs: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := &genServer{endpointConnectivity: tc.row}
+			b := g.start(t)
+
+			actuals, err := b.List(t.Context())
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			var attrs map[string]string
+			for _, a := range actuals {
+				if a.Key.Kind == KindEndpoint {
+					attrs = a.Attrs
+				}
+			}
+			if got := attrs["connectivity_mode"]; got != tc.mode {
+				t.Errorf("connectivity_mode = %q, want %q", got, tc.mode)
+			}
+			// Comma-ok, not a bare comparison: an absent key also reads as "",
+			// which would let the unrestricted case pass against attrPut's drop.
+			got, ok := attrs["connectivity_allowed_cidrs"]
+			if ok != tc.wantCidrs {
+				t.Fatalf("connectivity_allowed_cidrs present = %v, want %v (attrs %v)", ok, tc.wantCidrs, attrs)
+			}
+			if ok && got != tc.cidrs {
+				t.Errorf("connectivity_allowed_cidrs = %q, want %q", got, tc.cidrs)
+			}
+		})
 	}
 }
 

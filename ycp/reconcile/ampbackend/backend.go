@@ -168,6 +168,12 @@ func attrPut(m map[string]string, k, v string) map[string]string {
 	if v == "" {
 		return m
 	}
+	return attrSet(m, k, v)
+}
+
+// attrSet is attrPut without the drop rule, for the attrs where an empty value is
+// itself the observation rather than an absent one.
+func attrSet(m map[string]string, k, v string) map[string]string {
 	if m == nil {
 		m = map[string]string{}
 	}
@@ -230,14 +236,36 @@ func attrPutAppliedGen(m map[string]string, echoed *int64) map[string]string {
 	return attrPut(m, "applied_generation", strconv.FormatInt(*echoed, 10))
 }
 
-// endpointAttrs reports a compute endpoint's amp id, role, connection
-// addresses, and reserved compute.
+// endpointAttrs reports a compute endpoint's amp id, role, connection addresses,
+// client reachability, and reserved compute.
+//
+// The mode is reported resolved and unconditionally, because an endpoint created
+// before connectivity was configurable reports none and behaves as cluster_ip. It
+// is also the only record of the exposure that was ASKED for, which an address
+// alone cannot show: an nlb_* create whose load balancer outruns the controller's
+// poll falls back to the pod IP and nothing re-polls. That makes a private address
+// conclusive for nlb_external, and merely a reason to check the Service for
+// nlb_internal, whose LB address is itself private on GKE/AKS
+// (controller_runbook.md, "Endpoint stuck on a pod IP after an nlb_* create").
 func endpointAttrs(ep ampclient.Endpoint) map[string]string {
 	var m map[string]string
 	m = attrPut(m, "id", ep.Id.String())
 	m = attrPut(m, "role", string(ep.Role))
 	m = attrPut(m, "address", ep.Address)
 	m = attrPut(m, "tailnet_address", ep.TailnetAddress)
+	mode := connectivityMode(ep.Connectivity)
+	m = attrPut(m, "connectivity_mode", string(mode))
+	if mode == ampclient.NlbInternal || mode == ampclient.NlbExternal {
+		// Written even when the list is empty, which attrPut would drop: empty
+		// means UNRESTRICTED, and on nlb_external that is Postgres reachable from
+		// the internet with the password as the only barrier. Under cluster_ip the
+		// field has no meaning (the controller refuses it with a 400), so the key
+		// is absent there rather than empty — which would read as unrestricted.
+		// Sorted through the same helper the drift comparison normalises with, so
+		// the reported value matches what that check treats as equal and does not
+		// churn tick to tick on a re-ordering the controller considers identical.
+		m = attrSet(m, "connectivity_allowed_cidrs", strings.Join(allowedCidrs(ep.Connectivity), ","))
+	}
 	if ep.Resources != nil {
 		if ep.Resources.Cpu != nil {
 			m = attrPut(m, "cpu", *ep.Resources.Cpu)
