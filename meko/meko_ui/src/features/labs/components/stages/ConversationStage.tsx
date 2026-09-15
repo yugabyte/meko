@@ -34,7 +34,7 @@ export function ConversationStage({
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
       <LabStageHeader
         eyebrow="Chapter 1 · Step 5"
-        title="Or just say it in passing"
+        title="Or just start a conversation"
         lede="Talk the way you'd talk to a teammate. Meko reads the conversation, decides what's worth keeping, and writes the memory itself."
         tags={["Conversation"]}
       />
@@ -65,11 +65,11 @@ export function ConversationStage({
           <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-context-conversation" aria-hidden />
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">
-              You didn't ask Meko to remember that
+              Meko is reading that for anything worth keeping
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Meko reads the conversation and extracts what's worth keeping on its own. That runs after
-              the reply, so a new memory appears shortly rather than instantly.
+              No need to say "remember this". Extraction runs after the reply, so a new memory shows up
+              shortly rather than instantly.
             </p>
           </div>
         </div>

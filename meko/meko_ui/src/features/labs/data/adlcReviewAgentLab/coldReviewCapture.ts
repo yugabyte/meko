@@ -54,8 +54,3 @@ export const COLD_REVIEW_OUTPUT_TOKENS = 0;
  *  non-zero usage, so this is the single source of truth for "has anyone run
  *  the capture yet". */
 export const COLD_REVIEW_IS_POPULATED = COLD_REVIEW_INPUT_TOKENS > 0;
-
-/** What the cold agent missed, stated once here so the stage copy and any
- *  later comparison screen can't drift from each other. */
-export const COLD_REVIEW_MISSED_SUMMARY =
-  "Line 22 concatenates request input straight into a SQL string. The agent isn't wrong by its own lights: nobody ever told it how your team writes SQL.";

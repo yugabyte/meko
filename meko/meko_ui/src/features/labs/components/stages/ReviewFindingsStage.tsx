@@ -89,7 +89,6 @@ export function ReviewFindingsStage({
           <p className="text-xs text-muted-foreground">{retrieval.error}</p>
         ) : (
           <ReviewRetrievalSources
-            variant="citations"
             kbHits={retrieval.trace?.kb_hits ?? []}
             memoryHits={retrieval.trace?.memory_hits ?? []}
           />

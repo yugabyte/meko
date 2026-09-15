@@ -135,11 +135,16 @@ describe("ReviewCostStage", () => {
     expect(screen.getByText(/fewer input tokens on this review/)).toBeTruthy();
   });
 
-  // The card above states "knowledgebase_search: N chunks"; a count with no
-  // way to see what it counted is the question this page kept raising.
-  it("shows the chunks behind the retrieval counts it reports", async () => {
+  // The datapack rollup is the half that outlives the session, so it gets its
+  // own tab rather than sitting under this run's numbers.
+  it("keeps the datapack rollup behind the Metrics tab", () => {
     renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" onGoToRunReview={vi.fn()} />);
-    expect(await screen.findByText("Never build SQL by concatenation.")).toBeTruthy();
-    expect(screen.getByText("org-coding-standards.md")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Cost" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Metrics" })).toBeTruthy();
+    expect(screen.queryByText(/What the datapack has built up/)).toBeNull();
+
+    // Radix activates a tab on mousedown, not click.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Metrics" }));
+    expect(screen.getByText(/What the datapack has built up/)).toBeTruthy();
   });
 });

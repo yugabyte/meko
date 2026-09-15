@@ -44,7 +44,7 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
       },
       {
         id: "conversation",
-        title: "Or just say it in passing",
+        title: "Or just start a conversation",
         summary:
           "Talk the way you'd talk to a teammate. Meko reads the conversation and writes the memory itself.",
         gate: { message: "Send a message to continue" },
