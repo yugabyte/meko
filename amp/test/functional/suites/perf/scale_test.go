@@ -395,7 +395,8 @@ func TestZeroThroughputIsNotACeiling(t *testing.T) {
 // the env only collects the endpoint IT provisioned and these ladders create
 // their own.
 func TestLaddersCaptureTheEndpointThatDied(t *testing.T) {
-	for _, f := range []string{"scale_depth.go", "scale.go", "scale_tables.go"} {
+	for _, f := range []string{"scale_depth.go", "scale.go", "scale_tables.go",
+		"scale_endpoints.go", "scale_branches.go", "scale_transaction.go", "scale_wal_ingest.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
@@ -433,5 +434,35 @@ func TestScaleLaddersAreNotOnThePerfSchedule(t *testing.T) {
 		if len(tags) == 0 {
 			t.Errorf("%s carries no tag at all, so nothing can select it", tc.Name)
 		}
+	}
+}
+
+func TestLimitsLaddersParamsDeclaredInDefaults(t *testing.T) {
+	cfg, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	for _, key := range []string{
+		"perf.scale_endpoints.start", "perf.scale_endpoints.factor", "perf.scale_endpoints.max_stages",
+		"perf.scale_endpoints.stop_max_create_time", "perf.scale_endpoints.budget",
+		"perf.scale_endpoints.probe_timeout",
+		"perf.scale_branches.start", "perf.scale_branches.factor", "perf.scale_branches.max_stages",
+		"perf.scale_branches.stop_max_fork_time", "perf.scale_branches.max_parent_read_ratio",
+		"perf.scale_branches.seed_rows", "perf.scale_branches.budget", "perf.scale_branches.read_timeout",
+		"perf.scale_transaction.start", "perf.scale_transaction.factor", "perf.scale_transaction.max_stages",
+		"perf.scale_transaction.stop_statement_timeout", "perf.scale_transaction.payload_bytes",
+		"perf.scale_transaction.recover_timeout", "perf.scale_transaction.budget",
+		"perf.scale_wal_ingest.start", "perf.scale_wal_ingest.factor", "perf.scale_wal_ingest.max_stages",
+		"perf.scale_wal_ingest.stop_max_p99", "perf.scale_wal_ingest.stop_throughput_drop_pct",
+		"perf.scale_wal_ingest.batch_rows", "perf.scale_wal_ingest.payload_bytes",
+		"perf.scale_wal_ingest.statement_timeout",
+	} {
+		if !cfg.Has(key) {
+			t.Errorf("%s is read by the test but not declared in configs/default.yaml", key)
+		}
+	}
+	wal := walIngestParamsFromConfig(cfg)
+	if wal.StatementTimeout <= wal.StageDuration {
+		t.Errorf("scale_wal_ingest statement_timeout = %s, must exceed stage_duration %s", wal.StatementTimeout, wal.StageDuration)
 	}
 }

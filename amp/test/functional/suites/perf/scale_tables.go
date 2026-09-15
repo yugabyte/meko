@@ -97,6 +97,8 @@ func runScaleTables(t *core.T) error {
 		}
 	}()
 
+	var pod string
+	var health endpointHealth
 	if err := t.Step("create_endpoint", func(s *core.StepHandle) error {
 		ten, _, err := createTenant(t, cl, env, poolID, 0, multitenantParams{
 			SeedRows:       1,
@@ -114,7 +116,11 @@ func runScaleTables(t *core.T) error {
 		s.Set("endpoint_size", params.EndpointCPU+" / "+params.EndpointMem)
 		s.Set("batch_size", params.BatchSize)
 		s.Set("rows_per_table", params.RowsPerTable)
-		return nil
+		if pod, err = endpointPodByID(t.Context, kubeEnv.AmpKube(), tenants[0].Endpoint.ID); err != nil {
+			return err
+		}
+		health, err = snapshotEndpointHealth(t.Context, kubeEnv.AmpKube(), pod)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -214,6 +220,10 @@ func runScaleTables(t *core.T) error {
 		id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsScaleTables(params))
 		t.SetPerfIdentity(id.core())
 		gateErr := emitAndGateAuto(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_tables", gated, info, id, logf)
+		var clean error
+		if brokeAt != 0 {
+			clean = assertCleanCeiling(t.Context, s, kubeEnv.AmpKube(), pod, health)
+		}
 		t.Chart(core.Chart{
 			Title: "scale_tables: create rate vs table count", Kind: core.ChartLine,
 			XLabel: "tables", YLabel: "creates/s",
@@ -224,7 +234,10 @@ func runScaleTables(t *core.T) error {
 			XLabel: "tables", YLabel: "ms",
 			Series: []core.ChartSeries{{Name: "count(pg_class)", Points: catalogAt}},
 		})
-		return gateErr
+		if gateErr != nil {
+			return gateErr
+		}
+		return clean
 	})
 }
 

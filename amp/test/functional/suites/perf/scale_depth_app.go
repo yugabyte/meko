@@ -121,6 +121,8 @@ func runDepthAppLadder(t *core.T) error {
 
 	var measure, seeder Workload
 	var ex exec.RemoteExecutor
+	var pod string
+	var health endpointHealth
 	if err := t.Step("create_endpoint", func(s *core.StepHandle) error {
 		ten, _, err := createTenant(t, cl, env, poolID, 0, multitenantParams{
 			SeedRows:       1,
@@ -161,7 +163,11 @@ func runDepthAppLadder(t *core.T) error {
 		}
 		s.Set("endpoint", ten.Endpoint.ID)
 		s.Set("endpoint_size", params.EndpointCPU+" / "+params.EndpointMem)
-		return nil
+		if pod, err = endpointPodByID(t.Context, kube, ten.Endpoint.ID); err != nil {
+			return err
+		}
+		health, err = snapshotEndpointHealth(t.Context, kube, pod)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -259,10 +265,20 @@ func runDepthAppLadder(t *core.T) error {
 		s.Set("stop_reason", stopReason)
 		s.Set("max_rungs", reached)
 		s.Set("broke_at_rung", brokeAt)
+		id := identityFromConfig(t.Options, "", frameworkCommit(),
+			LoadFields{Script: "scale_depth_sqltx:" + params.EndpointCPU + "/" + params.EndpointMem,
+				Rows: params.BulkRowsPerRung, MeasurementMS: params.StageDuration.Milliseconds()})
+		t.SetPerfIdentity(id.core())
 		if n := len(tpsAt); n > 0 {
 			s.Set("last_backing_used_gb", fmt.Sprintf("%.1f", tpsAt[n-1].X))
 			s.Set("last_tps", fmt.Sprintf("%.1f", tpsAt[n-1].Y))
+			t.Datapoint(core.Datapoint{Name: "scale_depth_sqltx.gb_at_ceiling",
+				Value: tpsAt[n-1].X, Unit: "GB", Direction: core.HigherIsBetter})
+			t.Datapoint(core.Datapoint{Name: "scale_depth_sqltx.tps_at_ceiling",
+				Value: tpsAt[n-1].Y, Unit: "tps", Direction: core.HigherIsBetter})
 		}
+		t.Datapoint(core.Datapoint{Name: "scale_depth_sqltx.max_rungs",
+			Value: float64(reached), Unit: "rungs", Direction: core.HigherIsBetter})
 		t.Chart(core.Chart{
 			Title: "sqltx throughput vs backing dataset (" + params.EndpointCPU + "/" + params.EndpointMem + ")",
 			Kind:  core.ChartLine, XLabel: "backing used GB", YLabel: "tps",
@@ -271,6 +287,9 @@ func runDepthAppLadder(t *core.T) error {
 		for _, p := range tpsAt {
 			logf("scale_depth_sqltx: %.1f GB on backing: %.1f tps", p.X, p.Y)
 		}
-		return nil
+		if brokeAt == 0 {
+			return nil
+		}
+		return assertCleanCeiling(t.Context, s, kube, pod, health)
 	})
 }

@@ -93,6 +93,8 @@ func runScaleTenants(t *core.T) error {
 		createAt  []core.ChartPoint
 		brokeAt   int
 		peakCount int
+		pod       string
+		health    endpointHealth
 	)
 	stopReason := fmt.Sprintf("carried all %d tenants without breaking", params.MaxTenants)
 	deadline := time.Now().Add(params.Budget)
@@ -121,6 +123,15 @@ func runScaleTenants(t *core.T) error {
 					return fmt.Errorf("tenant %d probe table: %w", len(tenants)+1, err)
 				}
 				tenants = append(tenants, ten)
+			}
+			if kube != nil && pod == "" {
+				var err error
+				if pod, err = endpointPodByID(t.Context, kube, tenants[0].Endpoint.ID); err != nil {
+					return err
+				}
+				if health, err = snapshotEndpointHealth(t.Context, kube, pod); err != nil {
+					return fmt.Errorf("baseline endpoint health: %w", err)
+				}
 			}
 			perTenant := time.Since(start).Seconds() / float64(params.BatchSize)
 			s.Set("tenants_total", len(tenants))
@@ -171,12 +182,26 @@ func runScaleTenants(t *core.T) error {
 			LoadFields{Script: "scale_tenants", Rows: params.SeedRows})
 		t.SetPerfIdentity(id.core())
 		gateErr := emitAndGateAuto(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_tenants", gated, info, id, logf)
+		var clean error
+		if brokeAt != 0 {
+			ctx, cancel := context.WithTimeout(t.Context, tenantProbeTimeout)
+			oldest := probeWriteRead(ctx, tenants[0], len(tenants))
+			cancel()
+			if oldest != nil && isTransportErr(oldest) {
+				return fmt.Errorf("the oldest tenant's probe lost its connection, which is the coordinator's tunnel and not the product at its ceiling: %w", oldest)
+			}
+			clean = assertCleanCeiling(t.Context, s, kube, pod, health,
+				cleanCheck{"the oldest tenant", oldest})
+		}
 		t.Chart(core.Chart{
 			Title: "scale_tenants: seconds per tenant vs population", Kind: core.ChartLine,
 			XLabel: "tenants", YLabel: "s",
 			Series: []core.ChartSeries{{Name: "create", Points: createAt}},
 		})
-		return gateErr
+		if gateErr != nil {
+			return gateErr
+		}
+		return clean
 	})
 }
 

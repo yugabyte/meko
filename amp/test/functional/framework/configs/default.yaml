@@ -2380,6 +2380,103 @@ perf:
     endpoint_cpu: "2"
     endpoint_memory: "4Gi"
 
+  # The four ladders below publish a LIMIT rather than a comparison: each climbs
+  # until a stop condition, emits the last rung that held as a datapoint, and
+  # then holds the product's failure at that ceiling to a clean one (no compute
+  # restart, no daemon respawn, the endpoint still serving). A ladder that runs
+  # out of stages without reaching a ceiling FAILS: its last rung is the config,
+  # not the product. They all share perf.scale.stage_duration where they measure
+  # over a window, and every one of them costs hours.
+  #
+  # start / factor / max_stages are the rung geometry: stage i is
+  # start * factor^i, capped at max_stages stages.
+
+  # perf/scale_wal_ingest doubles the number of writers committing small batches
+  # inside the endpoint pod, and measures the WAL the endpoint actually wrote.
+  # The writers run in-pod because the coordinator's tunnel adds ~29ms per round
+  # trip, which would be most of a healthy commit.
+  scale_wal_ingest:
+    start: 2
+    factor: 2.0
+    # 8 stages, up to 256 writers: on amp-dev eight writers still committed at a
+    # p99 well under 200ms, so a shorter ladder finds no ceiling at all.
+    max_stages: 8
+    # stop_max_p99 is the commit latency past which the endpoint is no longer
+    # sustaining the load, and stop_throughput_drop_pct the fall in WAL
+    # throughput stage over stage that says the same thing without a latency
+    # spike.
+    stop_max_p99: "2s"
+    stop_throughput_drop_pct: 5.0
+    # batch_rows x payload_bytes is one commit's payload. Kept small: the stage
+    # writes for stage_duration at every writer count, and the backing has to
+    # hold it (the table is truncated between stages).
+    batch_rows: 100
+    payload_bytes: 64
+    # statement_timeout is what makes a writer at the wall report a timeout
+    # rather than hang: the clean-failure check demands an answer. It must stay
+    # ABOVE perf.scale.stage_duration: a writer's whole stage is one CALL, and
+    # the procedure's internal COMMITs do not re-arm the timeout, so a value
+    # below the stage cancels every healthy writer with 57014.
+    statement_timeout: "10m"
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
+
+  # perf/scale_endpoints creates endpoints on ONE cluster until a create refuses
+  # or runs past the bound. factor 1.0 keeps the batch flat at five: the cost
+  # here is per endpoint, not per stage.
+  scale_endpoints:
+    start: 5
+    factor: 1.0
+    max_stages: 10
+    # stop_max_create_time is read off the elapsed time, not imposed as a
+    # deadline: a create cancelled on the test's own clock reports "context
+    # deadline exceeded" and hides what the control plane would have said.
+    # A create that cannot schedule fails on its own after 35 minutes.
+    stop_max_create_time: "20m"
+    budget: "6h"
+    probe_timeout: "60s"
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+
+  # perf/scale_branches forks one seeded branch, more forks every stage, and
+  # reads the parent after each one.
+  scale_branches:
+    start: 5
+    factor: 2.0
+    # 9 stages, 2555 branches: a fork stayed flat at ~2s all the way to 35
+    # branches on amp-dev, so a shorter ladder finds no ceiling at all.
+    max_stages: 9
+    # The stage's MEAN fork time, not its worst: one tail outlier is not a limit.
+    stop_max_fork_time: "2m"
+    # max_parent_read_ratio is the clean-failure bound: forks may cost the
+    # parent's reads up to this multiple of the first stage, no more.
+    max_parent_read_ratio: 2.0
+    # seed_rows is sized so the parent read is hundreds of ms: the tunnel adds
+    # ~29ms to every round trip and a sub-10ms measurement would be mostly that.
+    seed_rows: 2000000
+    budget: "3h"
+    read_timeout: "5m"
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
+
+  # perf/scale_transaction doubles the rows in ONE transaction until the commit
+  # fails, on a pinned backend so a severed connection is visible.
+  scale_transaction:
+    start: 100000
+    factor: 2.0
+    max_stages: 12
+    # stop_statement_timeout is both the stage bound and the stop condition: a
+    # transaction that outruns it comes back as SQLSTATE 57014, which is a
+    # clean refusal.
+    stop_statement_timeout: "30m"
+    # recover_timeout is how long the endpoint gets to take the next, smaller
+    # transaction after the ceiling.
+    recover_timeout: "60s"
+    budget: "3h"
+    payload_bytes: 64
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
+
   scale_depth:
     # warehouses and terminals pair index for index: stage i loads
     # warehouses[i] and drives it with terminals[i] clients.

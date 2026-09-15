@@ -159,6 +159,8 @@ func runScaleDepth(t *core.T) error {
 	}()
 
 	var client tenantClient
+	var pod string
+	var health endpointHealth
 	if err := t.Step("create_tenant", func(s *core.StepHandle) error {
 		ten, _, err := createTenant(t, cl, env, poolID, 0, multitenantParams{
 			SeedRows:       1,
@@ -180,12 +182,16 @@ func runScaleDepth(t *core.T) error {
 		}
 		s.Set("endpoint", ten.Endpoint.ID)
 		s.Set("endpoint_size", params.EndpointCPU+" / "+params.EndpointMem)
-		return nil
+		if pod, err = endpointPodByID(t.Context, kube, ten.Endpoint.ID); err != nil {
+			return err
+		}
+		health, err = snapshotEndpointHealth(t.Context, kube, pod)
+		return err
 	}); err != nil {
 		return err
 	}
 
-	var reached, reachedTerminals int
+	var reached, reachedTerminals, brokeAt int
 	var tpsAt []core.ChartPoint
 	stopReason := "completed every configured stage without wedging"
 
@@ -336,6 +342,7 @@ func runScaleDepth(t *core.T) error {
 		}
 		if tps <= params.MinTPS {
 			stopReason = fmt.Sprintf("%d warehouses / %d terminals: %.2f tps — no throughput left", wh, term, tps)
+			brokeAt = wh
 			break
 		}
 	}
@@ -344,6 +351,7 @@ func runScaleDepth(t *core.T) error {
 		s.Set("stop_reason", stopReason)
 		s.Set("max_warehouses", reached)
 		s.Set("max_terminals", reachedTerminals)
+		s.Set("broke_at_warehouses", brokeAt)
 		t.Datapoint(core.Datapoint{Name: "scale_depth.tpcc.max_warehouses",
 			Value: float64(reached), Unit: "warehouses", Direction: core.HigherIsBetter})
 		t.Datapoint(core.Datapoint{Name: "scale_depth.tpcc.max_terminals",
@@ -357,7 +365,10 @@ func runScaleDepth(t *core.T) error {
 				Series: []core.ChartSeries{{Name: "tps", Points: tpsAt}},
 			})
 		}
-		return nil
+		if brokeAt == 0 {
+			return nil
+		}
+		return assertCleanCeiling(t.Context, s, kube, pod, health)
 	})
 }
 

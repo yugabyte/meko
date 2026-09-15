@@ -5,6 +5,7 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -117,7 +118,11 @@ func runScaleConnections(t *core.T) error {
 		return err
 	}
 	ex := kube.ForPod(pod, "endpoint")
-	psql := "psql -U cloud_admin -h 127.0.0.1 -p 55433 -d postgres -Atc"
+	psql := endpointPsql
+	health, err := snapshotEndpointHealth(t.Context, kube, pod)
+	if err != nil {
+		return fmt.Errorf("baseline endpoint health: %w", err)
+	}
 
 	// The server's own ceiling, so the measured wall can be read against what
 	// the endpoint was configured to allow.
@@ -187,8 +192,8 @@ func runScaleConnections(t *core.T) error {
 				tail, _ := ex.Run(t.Context, "tail -3 /tmp/connladder.err 2>/dev/null")
 				lastError = strings.TrimSpace(tail.Stdout + " " + pres.Stderr)
 				s.Set("first_refusal", lastError)
-				return fmt.Errorf("wall at %d connections (batch gained %d of %d; fresh probe exit %d): %s",
-					held, gained, params.BatchSize, pres.ExitCode, lastError)
+				return wallError{fmt.Errorf("wall at %d connections (batch gained %d of %d; fresh probe exit %d): %s",
+					held, gained, params.BatchSize, pres.ExitCode, lastError)}
 			}
 			return nil
 		})
@@ -196,7 +201,11 @@ func runScaleConnections(t *core.T) error {
 			if held == 0 {
 				return fmt.Errorf("not a single connection was established: %w", err)
 			}
-			stopReason = fmt.Sprintf("%d connections: broke — %v", held, err)
+			var wall wallError
+			if !errors.As(err, &wall) {
+				return fmt.Errorf("the ladder stopped at %d connections for a reason that is not a refusal: %w", held, err)
+			}
+			stopReason = fmt.Sprintf("%d connections: broke - %v", held, err)
 			brokeAt = held
 			break
 		}
@@ -224,6 +233,16 @@ func runScaleConnections(t *core.T) error {
 			LoadFields{Script: "scale_connections", Clients: params.BatchSize})
 		t.SetPerfIdentity(id.core())
 		gateErr := emitAndGateAuto(t, perfFromConfig(t.Options), scaleVersion(t), "perf/scale_connections", gated, info, id, logf)
+		var clean error
+		if brokeAt != 0 {
+			// The holders own every slot, so a fresh probe cannot tell a refusing endpoint from a dead one until they let go. The bracket keeps the draining shell's own argv out of the pattern.
+			drain := fmt.Sprintf("pkill -f '[p]g_sleep'; for i in $(seq 1 30); do %s 'select 1' >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1", psql)
+			if res, err := ex.Run(t.Context, drain); err != nil || res.ExitCode != 0 {
+				logf("scale_connections: the held connections were not released within 60s (exit %d, %v)", res.ExitCode, err)
+			}
+			clean = assertCleanCeiling(t.Context, s, kube, pod, health,
+				cleanCheck{"the refusal", connRefusalVerdict(lastError)})
+		}
 		t.Chart(core.Chart{
 			Title: "scale_connections: endpoint memory vs held connections", Kind: core.ChartLine,
 			XLabel: "connections", YLabel: "MiB",
@@ -234,23 +253,37 @@ func runScaleConnections(t *core.T) error {
 			XLabel: "connections", YLabel: "ms",
 			Series: []core.ChartSeries{{Name: "probe", Points: probeAt}},
 		})
-		return gateErr
+		if gateErr != nil {
+			return gateErr
+		}
+		return clean
 	})
 }
 
 // endpointPodFor names the endpoint's compute pod.
 func endpointPodFor(t *core.T, kube *k8s.Kubectl, ten tenant) (string, error) {
-	pods, err := kube.ListPods(t.Context)
-	if err != nil {
-		return "", fmt.Errorf("list pods: %w", err)
+	return endpointPodByID(t.Context, kube, ten.Endpoint.ID)
+}
+
+// Anything outside this list means the endpoint fell over instead of refusing.
+var refusalMarkers = []string{
+	"too many clients",
+	"remaining connection slots",
+	"too many connections",
+	"connection limit",
+}
+
+func connRefusalVerdict(last string) error {
+	low := strings.ToLower(last)
+	if strings.TrimSpace(last) == "" {
+		return fmt.Errorf("the ladder ended with no refusal recorded at all")
 	}
-	want := "yb-ep-" + ten.Endpoint.ID
-	for _, p := range pods {
-		if strings.HasPrefix(p, want) {
-			return p, nil
+	for _, m := range refusalMarkers {
+		if strings.Contains(low, m) {
+			return nil
 		}
 	}
-	return "", fmt.Errorf("no pod matches endpoint %s", ten.Endpoint.ID)
+	return fmt.Errorf("the endpoint did not refuse the connection, it stopped answering: %q", strings.TrimSpace(last))
 }
 
 // podMemoryBytes reads the endpoint container's cgroup v2 usage from inside.
