@@ -58,6 +58,18 @@ isolated ephemeral database (this is how CI runs them — see
   `passed / failed` count. It runs *all* selected tests each iteration
   (failures are tallied, not fatal) — for hunting flakiness. Without
   `-n` the run is fail-fast: the first failure aborts.
+  All iterations share one cluster, so the harness isolates them: the
+  cluster and branch names a scenario provisions carry the iteration
+  number (`catchup_race_2`, `gc_dm_2`), and the previous iteration's
+  scenario endpoints are destroyed on the way in, freeing their ids,
+  compute ports and pageserver/safekeeper pairs. Their `*.log` files are
+  copied to `iteration_<n>_logs/` in the run dir first, so a failing
+  iteration is still postmortem-able. Only the logs survive the destroy,
+  so to keep a failing iteration's pgdata and configs as well, run with
+  `INTEGRATION_STOP_ON_FAIL=1 ... --no-fail-stop`: the first flips `-n`
+  back to fail-fast, so the run stops at the failing iteration before
+  anything is swept, and the second keeps teardown from running `clean.sh`,
+  which deletes everything that is not a `*.log`.
 - A passing run tears the cluster + DB + run dir down. A failing run stops
   the cluster + drops the DB but keeps its `*.log` files under
   `.integration-tests/run_<id>/` (harness + compute/pageserver/safekeeper/
@@ -135,6 +147,15 @@ Nothing central to edit — tests are auto-discovered.
   `INTEGRATION_REGEN_EXPECTED=1 test/integration/compute/run.sh <name>` and review the diff
   before committing. `.sql` workloads are discovered at runtime — no
   recompile needed to add one.
+- **Provisioning a cluster or branch of your own**: name it through the
+  `Cluster` helpers (`cluster_create`, `branch_create_named`,
+  `branch_create_at`), not a raw `c.yb(&["cluster", "create", …])`. They
+  route the name through `Cluster::iteration_name`, which is what keeps `-n
+  <count>` off the rows the previous iteration left live. To use the name
+  again (in a SQL assertion, say) call `c.iteration_name(<base>)` — always
+  on the base name, never on one a helper or an earlier call already
+  resolved, which would suffix it twice. Endpoints need no such care:
+  `Cluster::begin_iteration` destroys the previous iteration's.
 - **Disabling a workload**: rename both files to `<name>.sql.disabled`
   and `<name>.out.disabled`. The runner skips them but prints them as
   `disabled (skipped)` so they stay visible; re-enable by stripping the

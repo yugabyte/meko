@@ -20,6 +20,9 @@ use crate::db;
 
 const PARENT: &str = "gc_fork_parent";
 const ENDPOINT: &str = "ep_gc_fork";
+/// The below-cutoff fork the controller must refuse. A const because the
+/// assertion reads its name back out of `amp_registry`.
+const DOOMED: &str = "gc_fork_doomed";
 
 /// `X/Y` pg_lsn text → u64.
 fn lsn_u64(text: &str) -> anyhow::Result<u64> {
@@ -101,7 +104,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "SELECT count(*) FROM amp_storage.branch_state WHERE ancestor_branch_id = '{parent_id}'"
     );
     let children_before = db::query_i64(&yb, &children_sql).await?;
-    let (created, out) = c.branch_create_at("gc_fork_doomed", &parent_id, &doomed)?;
+    let (created, out) = c.branch_create_at(DOOMED, &parent_id, &doomed)?;
     if let Some(id) = created {
         bail!("fork at {doomed} (below cutoff {cutoff}) was accepted as {id}:\n{out}");
     }
@@ -113,8 +116,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     let reg = db::query_text_opt(
         &yb,
-        "SELECT branch_id::text FROM amp_registry.branches \
-         WHERE name = 'gc_fork_doomed' AND dropped_at IS NULL",
+        &format!(
+            "SELECT branch_id::text FROM amp_registry.branches \
+             WHERE name = '{}' AND dropped_at IS NULL",
+            c.iteration_name(DOOMED)
+        ),
     )
     .await?;
     if reg.is_some() {

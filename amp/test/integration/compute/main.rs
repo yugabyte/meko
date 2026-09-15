@@ -30,6 +30,8 @@
 //!                              # run-all (failures are tallied, not fatal)
 //!                              # — useful for flakiness hunting, e.g.
 //!                              # `integration_tests -n 20 restart_wal_replay_yb`.
+//!                              # Iterations are isolated: see
+//!                              # `Cluster::begin_iteration`.
 
 mod cluster;
 pub(crate) use integration_common::db;
@@ -176,9 +178,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     } = args;
     // #57: stop at the FIRST failing iteration while still running
     // multiple iterations for churn. `-n` normally disables fail_fast
-    // (run-all + tally); this env flips it back so the failing
-    // iteration's cluster state is preserved uncontaminated (pair with
-    // --no-fail-stop to keep the cluster live for forensics).
+    // (run-all + tally); this env flips it back so the failing iteration
+    // is not swept by the next one. Pair with --no-fail-stop: teardown
+    // otherwise runs clean.sh, which keeps only *.log.
     if std::env::var("INTEGRATION_STOP_ON_FAIL").is_ok() {
         fail_fast = true;
     }
@@ -189,6 +191,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
         if repeat > 1 {
             cluster::step(&format!("iteration {iter}/{repeat}"));
         }
+        // Name this iteration's objects apart and free the last one's endpoints.
+        cluster.begin_iteration(iter);
         // Rebuild the item list each iteration: scenario futures are
         // one-shot, so they can't be reused across repeats.
         let items = collect_items(&cluster, &mode)?;

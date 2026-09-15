@@ -145,6 +145,17 @@ pub fn signal(pid: i32, sig: &str, what: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Copy `file` into `dir`, creating `dir`. Best-effort: a failed copy must
+/// not fail the run.
+fn copy_into(dir: &Path, file: &Path) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    if let Some(name) = file.file_name() {
+        let _ = std::fs::copy(file, dir.join(name));
+    }
+}
+
 pub struct Cluster {
     /// Path to the `yb_amp_local` binary.
     yb_amp: PathBuf,
@@ -165,6 +176,9 @@ pub struct Cluster {
     compute_port: u16,
     /// The shared `main` branch id, set by [`Cluster::setup`].
     branch: String,
+    /// Current `-n <count>` iteration (1-based), the suffix source for
+    /// [`Cluster::iteration_name`].
+    iteration: u32,
     /// Regex form of [`MARKERS`].
     markers: Regex,
     /// Regex form of [`FATAL_MARKERS`] (polled across all cluster logs
@@ -312,6 +326,7 @@ impl Cluster {
             port_base: 0,
             compute_port: 0,
             branch: String::new(),
+            iteration: 1,
             markers: Regex::new(MARKERS).expect("static marker regex"),
             fatal_markers: Regex::new(FATAL_MARKERS).expect("static fatal-marker regex"),
             success: false,
@@ -590,6 +605,122 @@ impl Cluster {
         Ok((branch, text))
     }
 
+    /// The name a scenario's cluster or branch gets this iteration: `name`
+    /// on the first, `name_<iter>` after, since nothing frees these names
+    /// between iterations. Pure, so a caller can ask again for the name a
+    /// provisioning helper already used — always from the base name, never
+    /// from a name this already returned.
+    pub fn iteration_name(&self, name: &str) -> String {
+        if self.iteration <= 1 {
+            return name.to_string();
+        }
+        // Applied twice this yields `foo_2_2`, a name nothing created, and
+        // the scenario asserting on it passes vacuously.
+        debug_assert!(
+            !name.ends_with(&format!("_{}", self.iteration)),
+            "iteration_name({name}) looks already suffixed; pass the base name"
+        );
+        format!("{name}_{}", self.iteration)
+    }
+
+    /// Enter iteration `iter` (1-based) of a `-n <count>` run, destroying
+    /// every endpoint but `main` past the first: a scenario endpoint's
+    /// compute port is a fixed offset, so a fresh name would not free it.
+    /// Logs are archived first, since `--destroy` removes the directory.
+    ///
+    /// Best-effort, like `-n` itself: what cannot be freed is reported and
+    /// the iteration runs anyway, tallying whatever that breaks.
+    pub fn begin_iteration(&mut self, iter: u32) {
+        self.iteration = iter;
+        if iter <= 1 {
+            return;
+        }
+        let leftovers = self.scenario_endpoints();
+        if leftovers.is_empty() {
+            return;
+        }
+        step(&format!(
+            "free iteration {}'s endpoints: {}",
+            iter - 1,
+            leftovers.join(" ")
+        ));
+        // The destroys are controller calls; a scenario may have left it down.
+        if let Err(e) = self.restart_downed_components() {
+            tee_println!("  (restart before the sweep failed: {e:#})");
+        }
+        for ep in leftovers {
+            // Stop the compute and the pair before the copy, so the archived
+            // logs carry each daemon's shutdown; `--destroy` stops the pair in
+            // the same call that removes the directory.
+            self.yb_quiet(&["endpoint", "stop", &ep, "--mode", "immediate"]);
+            self.yb_quiet(&["pageserver", "stop", &ep, "-m", "immediate"]);
+            self.yb_quiet(&["safekeeper", "stop", &ep, "-m", "immediate"]);
+            self.archive_endpoint_logs(&ep, iter - 1);
+            // `--mode immediate`: the default `fast` waits on a shutdown
+            // checkpoint the safekeeper stopped above cannot take, blocking
+            // pg_ctl for 60s and then failing before the destroy.
+            //
+            // Logged, not quiet: the launcher skips the destroy when a stop
+            // errored, and a surviving row makes the name ambiguous on the
+            // branch this iteration forks, failing its every later `endpoint`
+            // call. The directory survives too, so the next sweep retries it.
+            if let Err(e) =
+                self.yb_logged(&["endpoint", "stop", &ep, "--mode", "immediate", "--destroy"])
+            {
+                tee_println!("  (endpoint {ep} not freed: {e:#})");
+            }
+        }
+    }
+
+    /// Every endpoint under the run dir except the shared `main`.
+    fn scenario_endpoints(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(self.repo_dir.join("endpoints")) else {
+            return Vec::new();
+        };
+        let mut eps: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "main")
+            .collect();
+        eps.sort();
+        eps
+    }
+
+    /// Mirror `ep`'s `*.log` tree into `iteration_<iter>_logs/<ep>/`, which
+    /// a failed run keeps. Daemons log in the endpoint dir and in their own
+    /// subdir, so both levels are copied.
+    fn archive_endpoint_logs(&self, ep: &str, iter: u32) {
+        let src = self.repo_dir.join("endpoints").join(ep);
+        let dst = self
+            .repo_dir
+            .join(format!("iteration_{iter}_logs"))
+            .join(ep);
+        let is_log = |p: &Path| p.extension().is_some_and(|e| e == "log");
+        let Ok(entries) = std::fs::read_dir(&src) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if is_log(&path) {
+                    copy_into(&dst, &path);
+                }
+                continue;
+            }
+            let Ok(inner) = std::fs::read_dir(&path) else {
+                continue;
+            };
+            let sub = dst.join(entry.file_name());
+            for f in inner.flatten() {
+                let p = f.path();
+                if p.is_file() && is_log(&p) {
+                    copy_into(&sub, &p);
+                }
+            }
+        }
+    }
+
     /// Create an amp CLUSTER and return its default branch's id — the root of a new
     /// lineage, with its own initdb and its own GC cutoff.
     ///
@@ -599,20 +730,22 @@ impl Cluster {
     /// fork `main`. There is no such thing as a rootless branch: a lineage is an
     /// amp cluster, in the launcher exactly as in the product.
     pub fn cluster_create(&self, name: &str) -> anyhow::Result<String> {
+        let name = self.iteration_name(name);
         let (branch, text) =
-            self.scrape_branch_id(&["cluster", "create", name], "cluster create")?;
+            self.scrape_branch_id(&["cluster", "create", &name], "cluster create")?;
         branch
             .ok_or_else(|| anyhow::anyhow!("cluster create {name} produced no branch id:\n{text}"))
     }
 
     /// Fork `ancestor_id` and return the new branch's id.
     pub fn branch_create_named(&self, name: &str, ancestor_id: &str) -> anyhow::Result<String> {
+        let name = self.iteration_name(name);
         let (branch, text) = self.scrape_branch_id(
             &[
                 "branch",
                 "create",
                 "--branch-name",
-                name,
+                &name,
                 "--ancestor-branch-id",
                 ancestor_id,
             ],
@@ -633,12 +766,13 @@ impl Cluster {
         ancestor_id: &str,
         start_lsn: &str,
     ) -> anyhow::Result<(Option<String>, String)> {
+        let name = self.iteration_name(name);
         self.scrape_branch_id(
             &[
                 "branch",
                 "create",
                 "--branch-name",
-                name,
+                &name,
                 "--ancestor-branch-id",
                 ancestor_id,
                 "--ancestor-start-lsn",
@@ -1061,10 +1195,8 @@ impl Cluster {
         Ok(Some(t0.elapsed().as_secs()))
     }
 
-    /// Restart any cluster component the prior scenario left stopped,
-    /// then recycle the compute, so each scenario starts from a clean
-    /// compute state.
-    pub async fn prep_for_next_test(&self) -> anyhow::Result<()> {
+    /// Restart any cluster component the prior scenario left stopped.
+    fn restart_downed_components(&self) -> anyhow::Result<()> {
         let r = &self.repo_dir;
         let sc = r.join("controller_1/controller.pid");
         let ps = r.join("endpoints/main/pageserver/pageserver.pid");
@@ -1082,8 +1214,16 @@ impl Cluster {
             step("restart safekeeper (prior test left it down)");
             self.yb(&["safekeeper", "start"])?;
         }
+        Ok(())
+    }
 
-        // The pid check above can pass while the PS serves nothing — a
+    /// Restart any cluster component the prior scenario left stopped,
+    /// then recycle the compute, so each scenario starts from a clean
+    /// compute state.
+    pub async fn prep_for_next_test(&self) -> anyhow::Result<()> {
+        self.restart_downed_components()?;
+
+        // A pid check can pass while the PS serves nothing: a
         // failed config-restore restart leaves a live-but-wedged process,
         // and every later test then fails confusingly on connection
         // refused (#241). Probe the management port and force one restart

@@ -138,7 +138,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if let Some(id) = created {
         bail!("fork off a dropped parent was accepted as {id}:\n{out}");
     }
-    if named_rows(&yb, ORPHAN).await? != 0 {
+    if named_rows(&yb, &c.iteration_name(ORPHAN)).await? != 0 {
         bail!("refused fork left an amp_registry.branches row behind");
     }
     // `>`, not `!=`: the suite runs the reaper at zero retention, so both branches

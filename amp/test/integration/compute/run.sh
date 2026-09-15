@@ -40,6 +40,10 @@ Options:
   -n <count>      repeat the selection <count> times and print a
                   cumulative pass/fail count (run-all: failures are
                   tallied, not fatal). Useful for flakiness hunting.
+                  Iterations are isolated: a scenario's cluster and branch
+                  names carry the iteration, and the previous iteration's
+                  endpoints are destroyed (logs kept under
+                  iteration_<n>_logs/ in the run dir).
   --release       build + run in release mode (default: debug, which is
                   what the dev/integration loop normally wants)
   --no-fail-stop  on failure, leave the cluster + DB running for postmortem
