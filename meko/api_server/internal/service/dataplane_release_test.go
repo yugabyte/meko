@@ -16,10 +16,20 @@ func TestDefaultDataPlaneReleaseIsComplete(t *testing.T) {
 		rel.RAGWorker, rel.InferenceGateway, rel.UI,
 	}
 	for _, image := range images {
+		// Every reference is host-qualified today, so the qualified branch below is not
+		// what fires — but a bare path stays legal in the pin, and this is what would
+		// catch one. Either way the invariant is the same: the reference names a
+		// registry, because an unqualified one resolves against Docker Hub and fails as
+		// ImagePullBackOff minutes into a deploy.
 		repo, ok := strings.CutPrefix(image, DefaultDataPlaneRegistry+"/")
 		if !ok {
-			t.Errorf("image %q was not qualified by the registry", image)
-			continue
+			host, rest, hasSlash := strings.Cut(image, "/")
+			if !hasSlash || !strings.ContainsAny(host, ".:") {
+				t.Errorf("image %q names no registry: it is neither qualified by %s nor host-qualified itself",
+					image, DefaultDataPlaneRegistry)
+				continue
+			}
+			repo = rest
 		}
 		// A reference with no tag resolves to :latest, which is the one thing a pinned
 		// release must not be — the data plane would drift under its own feet.
@@ -30,7 +40,7 @@ func TestDefaultDataPlaneReleaseIsComplete(t *testing.T) {
 	}
 	// The database has to be Yugabyte's Meko build: mage and pg_dist_rag are in that
 	// one, and api_server's own data migrations reference the dist_rag schema.
-	if !strings.Contains(rel.Database, "ybdb-meko-release") {
+	if !strings.Contains(rel.Database, "meko-yugabytedb") {
 		t.Errorf("database image = %q, want the MAGE-enabled Meko YugabyteDB build", rel.Database)
 	}
 }

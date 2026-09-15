@@ -236,14 +236,23 @@ chart's, not the control plane's. `values-byoc.yaml` goes **last**: it is what
 collapses the release into one self-contained namespace, and an earlier preset
 otherwise wins.
 
-**Include the env preset.** It is what sets `global.imageRegistry`, and dev and prod
-are different ECR accounts, so the registry cannot live in the cloud preset. Without
-it the stack images render bare and the pulls fail. The agent's own image is on Quay
-and is unaffected.
+**One pull credential.** Every image a BYOC release pulls privately names
+`quay.io/yugabyte`, set in `values-byoc.yaml` — the stack per component, the bundled
+YugabyteDB through the subchart's own `Image`. (The meko-ui proxy sidecar is
+`nginx:1.27-alpine` from Docker Hub and needs no credential.) So the env preset is no
+longer what makes them resolvable, and the namespace needs one `docker-registry`
+Secret rather than that plus a rotating ECR token.
 
-**The three stack tags differ** — they are versioned per component, not per release,
-so one shared `$TAG` renders three references that cannot be pulled. The hint prints
-each.
+The preset names that Secret — `quay-registry-creds` — in both
+`global.imagePullSecrets` and `yugabyte.Image.pullSecretName`, because the chart's list
+is resolved by its own templates and never reaches the subchart. The install hint
+creates it. Node IAM is not a substitute here the way it was for ECR on EKS: it
+authorizes nothing on quay.io.
+
+**The stack tags now match.** `meko/jenkins` versions every component at one release,
+so the three the hint prints carry the same value. They are still printed separately:
+the pin can name different tags, and a hint that assumed otherwise would be wrong the
+moment it did.
 
 `reconcileAgent.envName` must match the registered environment's id — the slug of the
 name you registered. A mismatch, or an `ENV_KIND` that disagrees with how the

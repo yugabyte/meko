@@ -20,7 +20,8 @@ Verified 2026-08-03 on `gke_yugabyte_us-west1_itest-mcs`.
 | | |
 |---|---|
 | A cluster | `kubectl config get-contexts`. The nodes are **amd64** — that matters below. |
-| `AWS_PROFILE` | A profile with Meko ECR read access; `meko-dev` here. Every image in the release is private. |
+| `AWS_PROFILE` | A profile with Meko ECR read access; `meko-dev` here. The control plane's api-server is still an ECR image. |
+| `QUAY_USER` / `QUAY_TOKEN` | A robot that can read `quay.io/yugabyte/meko-*`. The whole data-plane stack, database included, is private there. |
 | `MEKO_DEVOPS` | A [meko-devops](https://github.com/yugabyte/meko-devops) checkout for the `meko` chart. Defaults to `~/code/meko-devops`. |
 | Tools | `kubectl`, `helm`, `podman` (or docker), `curl`, `python3`, `aws`. |
 | `OPENAI_API_KEY` | Optional, but see [the gateway](#the-gateway-needs-a-key-or-it-does-not-start). |
@@ -30,21 +31,24 @@ with `Reauthentication failed`, run `gcloud auth login`.
 
 ## 1. Build and push the api-server image
 
+Only needed to try a build that is not yet released. `meko/jenkins` publishes every
+component nightly, so to use a released one skip this and pass its tag at step N —
+`values-byoc.yaml` resolves the stack against `quay.io/yugabyte/meko-*`.
+
 ```bash
 cd ~/code/meko
-export AWS_PROFILE=meko-dev
 TAG="mekostack-$(git rev-parse --short HEAD)"
-ECR=161908593886.dkr.ecr.us-east-2.amazonaws.com
+QUAY=quay.io/yugabyte
 
-podman build --platform linux/amd64 -f meko/api_server/Dockerfile -t "$ECR/meko/meko-api-server:$TAG" meko/api_server
+podman build --platform linux/amd64 -f meko/api_server/Dockerfile -t "$QUAY/meko-api-server:$TAG" meko/api_server
 
 # Check the architecture before pushing. An arm64 image pulls cleanly and then dies with
 # `exec format error`, which reads like a broken build rather than a wrong platform.
-podman inspect "$ECR/meko/meko-api-server:$TAG" --format "{{.Os}}/{{.Architecture}}"
+podman inspect "$QUAY/meko-api-server:$TAG" --format "{{.Os}}/{{.Architecture}}"
 
-aws ecr get-login-password --region us-east-2 |
-  podman login --username AWS --password-stdin "$ECR"
-podman push "$ECR/meko/meko-api-server:$TAG"
+# A robot with write on quay.io/yugabyte/meko-api-server.
+podman login quay.io
+podman push "$QUAY/meko-api-server:$TAG"
 ```
 
 The **reconcile-agent** is not built here: it publishes to Quay
@@ -61,7 +65,7 @@ deploy the previous build and spend a while wondering why a fix had no effect.
 
 ```bash
 cd ~/code/meko/ycp
-AWS_PROFILE=meko-dev ./test/local/ycp-on-cluster.sh \
+AWS_PROFILE=meko-dev QUAY_USER=... QUAY_TOKEN=... ./test/local/ycp-on-cluster.sh \
   --context gke_yugabyte_us-west1_itest-mcs \
   --all --env-name itest-mcs \
   --ycp-ns ycp-anijhawan --meko-ns itest-mcs \

@@ -49,6 +49,12 @@ func installHint(c echo.Context, e *models.Environment) string {
 // environment id will not serve as a namespace.
 const mekoStackNamespace = "meko"
 
+// mekoPullSecretName is the docker-registry Secret every pod in a BYOC release pulls
+// with. Named here and in values-byoc.yaml's global.imagePullSecrets +
+// yugabyte.Image.pullSecretName — three places that must agree, because the subchart
+// does not read the chart's list and would otherwise be the one pod that cannot pull.
+const mekoPullSecretName = "quay-registry-creds"
+
 // mekoTokenSecretName is the Secret the reconcile-agent reads its api-server token
 // from. Passed to the chart explicitly so the created Secret and the Deployment's
 // secretKeyRef cannot drift, even though it is the chart's default.
@@ -73,24 +79,29 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "# Prerequisites\n")
 	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
 	fmt.Fprintf(&b, "#   - a cluster with a default StorageClass (the bundled YugabyteDB claims it)\n")
-	fmt.Fprintf(&b, "#   - image pull access to the Meko registry\n\n")
+	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-*\n\n")
 
-	// One tag per component, not one for the release: the pinned set in
-	// dataplane_release.go carries a different tag for each, so a single shared
-	// variable renders three image references that cannot be pulled.
-	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is. The three stack tags differ —\n")
-	fmt.Fprintf(&b, "# they are versioned per component, not per release.\n")
+	// The tags are one release across the stack, but printed separately anyway: the
+	// pin can name different tags per component, and a hint that collapsed them to
+	// one variable would be wrong the moment it did.
+	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is.\n")
 	fmt.Fprintf(&b, "NS=%s\n", ns)
 	fmt.Fprintf(&b, "API_TAG=%s\n", tagOf(rel.APIServer))
 	fmt.Fprintf(&b, "MCP_TAG=%s\n", tagOf(rel.MCPServer))
 	fmt.Fprintf(&b, "UI_TAG=%s\n", tagOf(rel.UI))
-	fmt.Fprintf(&b, "AGENT_TAG=<agent image tag>     # quay.io/yugabyte/ycp-reconciler-agent\n\n")
+	fmt.Fprintf(&b, "AGENT_TAG=<agent image tag>     # quay.io/yugabyte/ycp-reconciler-agent\n")
+	fmt.Fprintf(&b, "QUAY_USER=<robot name>         # e.g. yugabyte+something\n")
+	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n\n")
 
-	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable\n")
-	fmt.Fprintf(&b, "#      there). This is the only credential the install needs.\n")
+	fmt.Fprintf(&b, "# 1 — two credentials. The agent's API key (shown once by YBM; revocable\n")
+	fmt.Fprintf(&b, "#      there), and a pull secret: every image in this release is on private\n")
+	fmt.Fprintf(&b, "#      Quay, and %s is the name values-byoc.yaml expects.\n", mekoPullSecretName)
 	fmt.Fprintf(&b, "kubectl create namespace \"${NS}\" --dry-run=client -o yaml | kubectl apply -f -\n")
 	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic meko-agent-api-key \\\n")
 	fmt.Fprintf(&b, "  --from-literal=api-key=%s \\\n", apiKeyPlaceholder)
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret docker-registry %s \\\n", mekoPullSecretName)
+	fmt.Fprintf(&b, "  --docker-server=quay.io --docker-username=\"${QUAY_USER}\" --docker-password=\"${QUAY_TOKEN}\" \\\n")
 	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
 
 	fmt.Fprintf(&b, "# 2 — install the stack and the reconcile-agent, from a meko checkout. Swap\n")

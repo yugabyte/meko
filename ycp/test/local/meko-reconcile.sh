@@ -29,11 +29,13 @@
 #
 # Environment:
 #   MEKO_API_TAG / MEKO_MCP_TAG / MEKO_UI_TAG
-#                   Stack image tags. They default to the release pinned in
-#                   meko/api_server/internal/service/dataplane_release.go, and they
-#                   are NOT the same tag — each component is versioned separately, so
-#                   one shared value renders three references that cannot be pulled.
-#   AWS_PROFILE     a profile that can read the Meko ECR. Every stack image is private.
+#                   Stack image tags, defaulting to the release pinned in
+#                   meko/api_server/internal/service/dataplane_release.go. meko/jenkins
+#                   versions every component together, so these are one value today —
+#                   kept as three because the pin may name different tags.
+#   QUAY_USER / QUAY_TOKEN
+#                   A Quay robot that can read quay.io/yugabyte/meko-*. Every stack
+#                   image is private, and so is the bundled database.
 #   OPENAI_API_KEY  optional; without it the MCP server fails on the first embedding.
 #                   Datapack reconciliation does not need it.
 #   MEKO_RECONCILE_NS    namespace for the data plane (default ycp-meko-reconcile).
@@ -55,9 +57,8 @@ ADMIN_KEY=e2eadminkey
 PORT="${YCP_LOCAL_PORT:-18084}"
 BASE="${YCP_E2E_BASE_PATH-/ycp}"
 CHART="$REPO_ROOT/meko/deploy/helm/meko"
-ECR="161908593886.dkr.ecr.us-east-2.amazonaws.com"
-ECR_REGION=us-east-2
-PULL_SECRET=meko-ecr
+# The name values-byoc.yaml wires into global.imagePullSecrets and the subchart.
+PULL_SECRET=quay-registry-creds
 AGENT_IMAGE="ycp-reconciler-agent:local"
 # docker or podman, whichever this machine has. kind needs to be told too: with the
 # podman provider `kind load docker-image` cannot reach the image, so the image goes
@@ -92,9 +93,9 @@ done
 # Defaults from meko/api_server/internal/service/dataplane_release.go. Kept in step
 # with it by hand: this script runs against a released stack, so a drifted default
 # fails loudly at pull time rather than silently testing the wrong images.
-MEKO_API_TAG="${MEKO_API_TAG:-console-943437724}"
-MEKO_MCP_TAG="${MEKO_MCP_TAG:-2.1.0-20260731-7b3fdd3}"
-MEKO_UI_TAG="${MEKO_UI_TAG:-1.0.0-20260729-bf56db7}"
+MEKO_API_TAG="${MEKO_API_TAG:-0.260912.0-59d52fac1}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.260912.0-59d52fac1}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-0.260912.0-59d52fac1}"
 
 cleanup() {
   rc=$?
@@ -186,12 +187,12 @@ PY
 
 # --------------------------------------------------------------------- credentials
 
-log "creating namespace $NS and the ECR pull secret"
+log "creating namespace $NS and the Quay pull secret"
 k create namespace "$NS" --dry-run=client -o yaml | k apply -f - >/dev/null
-ecr_token="$(aws ecr get-login-password --region "$ECR_REGION")" ||
-  die "aws ecr get-login-password failed — is AWS_PROFILE set to a profile with ECR access?"
+: "${QUAY_USER:?set QUAY_USER — a robot that can read quay.io/yugabyte/meko-*}"
+: "${QUAY_TOKEN:?set QUAY_TOKEN}"
 k -n "$NS" create secret docker-registry "$PULL_SECRET" \
-  --docker-server="$ECR" --docker-username=AWS --docker-password="$ecr_token" \
+  --docker-server=quay.io --docker-username="$QUAY_USER" --docker-password="$QUAY_TOKEN" \
   --dry-run=client -o yaml | k apply -f - >/dev/null
 
 # Dev-mode credentials: there is no YBM here to mint a real key, so the agent sends
@@ -216,7 +217,6 @@ helm --kube-context "$CTX" upgrade --install meko "$CHART" -n "$NS" \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \
-  --set "global.imagePullSecrets[0].name=$PULL_SECRET" \
   --set reconcileAgent.enabled=true \
   --set reconcileAgent.ycpUrl="http://meko-api-server.$CP_NS.svc.cluster.local:80$BASE/api/v1" \
   --set reconcileAgent.envName="$ENV_NAME" \

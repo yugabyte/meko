@@ -18,6 +18,56 @@ amp's build (`jenkins/amp/` in yugabyte/meko-devops).
 | `langfuse-web` | `yugabyte/meko-langfuse` | `web/Dockerfile` | `meko-langfuse-web` |
 | `langfuse-worker` | `yugabyte/meko-langfuse` | `worker/Dockerfile` | `meko-langfuse-worker` |
 
+The database is **copied, not built**: it is a YugabyteDB release artifact carrying MAGE
+and pg_dist_rag, and a data plane on a stock image fails its first migration.
+`scripts/mirror-database-image.sh` copies it from the Meko ECR to
+`quay.io/yugabyte/meko-yugabytedb`, manifest-to-manifest so a multi-arch index survives.
+Run it where AWS credentials are — the Jenkins agent, not a builder instance, which
+launches with no instance profile and cannot read ECR:
+
+```bash
+TAG=2026.1.0.0-b1-meko-2 QUAY_USER=... QUAY_TOKEN=... \
+  meko/jenkins/scripts/mirror-database-image.sh
+```
+
+Not on the nightly: the database tag follows YugabyteDB's release cadence, not this
+repo's, so mirroring is driven by a tag bump rather than a schedule.
+
+## Registry access
+
+Every `quay.io/yugabyte/*` repository is private, and the robots are not
+interchangeable. This is worth knowing before debugging a pull that "should" work:
+
+| Robot | Grant | Where the credential is |
+|---|---|---|
+| `yugabyte+mekobot` | **push** — the only write identity | Jenkins credential `quay-mekobot` |
+| `yugabyte+ampbot` | broad org read, including every `meko-*` | Secret `quay-pull-secret`, `amp` namespace |
+| `yugabyte+cloud_ga` | reads `ycp-api-server` only | Secret `quay-registry-creds`, `ycp-system` |
+
+`cloud_ga` is YBM's platform robot — it holds the pull secrets for `cloudapp`,
+`cloudadmin`, `monitoring-core` and `ycp-system` — and it reads `ycp-api-server`, which is
+all the control plane pulls. It is **not** a data-plane identity, and it has read on only
+some `meko-*` repositories.
+
+The one to get right is the robot an operator passes as `QUAY_USER`/`QUAY_TOKEN` when the
+install hint creates `quay-registry-creds`. It needs read on the four repositories a BYOC
+release pulls — `meko-api-server`, `meko-mcp-server`, `meko-ui`, `meko-yugabytedb` — or the
+install fails in the customer's cluster with a green build behind it. `ampbot` has all
+four today.
+
+To check what a credential is actually granted — Quay mints a token whose claims list the
+allowed actions, and `actions: []` means authenticated but not authorized:
+
+```bash
+curl -s -H "Authorization: Basic $BASIC" \
+  "https://quay.io/v2/auth?service=quay.io&scope=repository:yugabyte/<repo>:pull,push" \
+  | python3 -c "import sys,json,base64;t=json.load(sys.stdin)['token'];p=t.split('.')[1];p+='='*(-len(p)%4);print(json.loads(base64.urlsafe_b64decode(p))['access'])"
+```
+
+Note `UNAUTHORIZED` is returned for both "no access" and "does not exist", so it never
+proves a repository is absent. A 504 on `/v2/` is an outage rather than an auth problem:
+during one, pushes fail with "System is currently read-only".
+
 Where a component already has a build script or Make target, the pipeline calls it
 instead of restating the build.
 

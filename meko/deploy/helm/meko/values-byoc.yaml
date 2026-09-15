@@ -52,10 +52,28 @@ global:
   # One namespace: the only shape an agent can install, since it manages exactly the
   # namespace it runs in.
   singleNamespace: true
+  # Every image in this release is on private Quay. The chart's default is an empty
+  # list because ECR-on-EKS needed no secret — node IAM authorized the pull — and node
+  # IAM authorizes nothing on quay.io, so leaving it empty is ImagePullBackOff on every
+  # pod. Named here rather than left to the caller so this preset installs on its own;
+  # the install hint creates a Secret under this name.
+  imagePullSecrets: [quay-registry-creds]
 
 yugabyte:
   # Its own database. Requires the Meko build and the mage gflag — see values.yaml.
   enabled: true
+  # From Quay, like the rest of the stack, so the namespace needs one pull credential
+  # rather than also an ECR token that expires every ~12h. Same artifact, mirrored by
+  # meko/jenkins/scripts/mirror-database-image.sh under the same tag. That script skips
+  # a tag already present, so re-publishing an ECR tag in place would leave this one on
+  # the old manifest — bump the tag rather than moving it.
+  Image:
+    repository: quay.io/yugabyte/meko-yugabytedb
+    tag: 2026.1.0.0-b1-meko-2
+    # Its own lever: global.imagePullSecrets is resolved by this chart's templates and
+    # never reaches a subchart, so the database pod would get nothing from the list
+    # above. Must name the same Secret.
+    pullSecretName: quay-registry-creds
   storage:
     # Use whatever this cluster puts volumes on. See the header: these are the only
     # PVCs in the release, and a customer's class names are not ours to guess. The
@@ -87,8 +105,24 @@ dataPlaneSecrets:
   #   --set dataPlaneSecrets.mcpInternalSecret=$(openssl rand -hex 24)
   mcpInternalSecret: meko-byoc-internal
 
+# Images from Quay, not the Meko ECR. A customer's cluster cannot hold an ECR token: it
+# expires every ~12h and refreshing it means AWS keys in their namespace, which is why
+# ecrCredentialRefresh stays off below. A Quay robot credential is one static
+# docker-registry Secret, and with the database mirrored too (see `yugabyte` above) it is
+# the only one this release needs.
+#
+# Set per component rather than through global.imageRegistry, so a caller who passes an
+# env preset for its other settings does not have to fight it over the registry. Quay
+# repositories are flat, so the ECR-style `meko/<name>` path is replaced rather than
+# re-hosted. Only these three: the rest of the stack is disabled below.
 apiServer:
+  image:
+    registry: quay.io/yugabyte
+    repository: meko-api-server
   migrate:
+    # The database's own image, for a ysqlsh matching the server — from Quay for the
+    # same reason as everything else here.
+    extensionsImage: quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2
     # Create pg_dist_rag / mage / vector before migrating. Without this the first
     # data migration dies partway on `dist_rag.vector_indexes`, and golang-migrate
     # then marks the schema dirty — which no restart recovers from.
@@ -118,6 +152,9 @@ apiServer:
     SYSTEM_DB_SSL_MODE: disable
 
 mekoMcpServer:
+  image:
+    registry: quay.io/yugabyte
+    repository: meko-mcp-server
   config:
     # Emptied for the same reason as the api-server's: the env preset points these
     # at the SHARED dev YugabyteDB, and the chart refills them with this release's
@@ -139,6 +176,9 @@ mekoMcpServer:
     authProvider: meko_tkn
 
 mekoUi:
+  image:
+    registry: quay.io/yugabyte
+    repository: meko-ui
   ingress:
     enabled: false
 

@@ -52,11 +52,11 @@ AGENT_TAG="${AGENT_TAG:-latest}"
 # the tag. Empty leaves the preset's registry alone and --tag supplies the tag.
 YCP_IMAGE="${YCP_IMAGE:-}"
 # The pinned data-plane release (meko/api_server/internal/service/dataplane_release.go).
-# One tag per component: they are versioned separately, so a single shared value
-# renders references that cannot be pulled.
-MEKO_API_TAG="${MEKO_API_TAG:-console-943437724}"
-MEKO_MCP_TAG="${MEKO_MCP_TAG:-2.1.0-20260731-7b3fdd3}"
-MEKO_UI_TAG="${MEKO_UI_TAG:-1.0.0-20260729-bf56db7}"
+# One value today — meko/jenkins versions every component together — but kept as three
+# because the pin in dataplane_release.go may name different tags.
+MEKO_API_TAG="${MEKO_API_TAG:-0.260912.0-59d52fac1}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.260912.0-59d52fac1}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-0.260912.0-59d52fac1}"
 CLOUD="${CLOUD:-gcp}"          # which cloud preset: gcp | aws
 # Storage class for the control plane's bundled Postgres. Empty keeps the cloud
 # preset's (pd-ssd on GKE, gp2-csi on AWS); override for a cluster that has neither,
@@ -75,7 +75,11 @@ HERE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MEKO_CHART="${MEKO_CHART:-$(cd "$HERE_DIR/../../.." && pwd)/meko/deploy/helm/meko}"
 ECR=161908593886.dkr.ecr.us-east-2.amazonaws.com
 ECR_REGION=us-east-2
-PULL_SECRET=ecr-registry-creds   # the name values-gcp.yaml already uses
+# Two registries, so two Secrets. The control plane still pulls the api-server from
+# ECR under the name values-gcp.yaml sets; the data plane is entirely on Quay under the
+# name values-byoc.yaml sets. Creating only one leaves the other stage unable to pull.
+PULL_SECRET=ecr-registry-creds        # control plane — values-gcp.yaml
+QUAY_PULL_SECRET=quay-registry-creds  # data plane — values-byoc.yaml
 CREDS_SECRET=meko-data-plane
 ADMIN_KEY="${ADMIN_KEY:-}"
 PORT="${PORT:-18083}"
@@ -227,18 +231,25 @@ done
 
 # -------------------------------------------------------------------- pull secrets
 #
-# GKE has no AWS IAM, so every pod pulling from ECR needs a dockerconfigjson Secret
-# in its own namespace — including the pods the AGENT creates in $MEKO_NS.
+# Every image is on private Quay, and node IAM authorizes nothing there, so each pod
+# needs a dockerconfigjson Secret in its own namespace — including the pods the AGENT
+# creates in $MEKO_NS.
 
-log "writing the ECR pull Secret into ${STAGE_NS[*]}"
+log "writing the pull Secrets into ${STAGE_NS[*]}"
+: "${QUAY_USER:?set QUAY_USER — a robot that can read quay.io/yugabyte/meko-*}"
+: "${QUAY_TOKEN:?set QUAY_TOKEN}"
 ecr_token="$(aws ecr get-login-password --region "$ECR_REGION")" ||
   die "aws ecr get-login-password failed — set AWS_PROFILE to a profile with Meko ECR access"
 for ns in "${STAGE_NS[@]}"; do
   k -n "$ns" create secret docker-registry "$PULL_SECRET" \
     --docker-server="$ECR" --docker-username=AWS --docker-password="$ecr_token" \
     --dry-run=client -o yaml | k apply -f - >/dev/null
+  k -n "$ns" create secret docker-registry "$QUAY_PULL_SECRET" \
+    --docker-server=quay.io --docker-username="$QUAY_USER" --docker-password="$QUAY_TOKEN" \
+    --dry-run=client -o yaml | k apply -f - >/dev/null
 done
 echo "    $PULL_SECRET (ECR tokens last ~12h; re-run this script to refresh)"
+echo "    $QUAY_PULL_SECRET (a robot token, no refresh needed)"
 
 if [ "$STAGE" = ycp ]; then
   creds=()   # the data-plane credentials Secret lives with the agent, not here

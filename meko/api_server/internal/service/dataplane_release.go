@@ -16,9 +16,10 @@ import (
 // Hints rendered afterwards carry the new set; an already-installed release keeps what
 // it was installed with until someone upgrades the chart.
 
-// DefaultDataPlaneRegistry is where the Meko images live. Every reference in the
-// pinned release is a bare repository path qualified by this, so a deployment mirroring
-// the images somewhere else changes one flag instead of six.
+// DefaultDataPlaneRegistry is the Meko ECR, kept for the deprecated
+// --dataplane-registry flag and for tests. It qualifies nothing in the pin any more:
+// every reference there is host-qualified on Quay, so mirroring the images elsewhere
+// means editing the pin rather than passing a registry.
 const DefaultDataPlaneRegistry = "161908593886.dkr.ecr.us-east-2.amazonaws.com"
 
 // DataPlaneRelease is one image reference per data-plane component. The JSON tags are
@@ -41,18 +42,27 @@ type DataPlaneRelease struct {
 // migrations reference the dist_rag schema, so a data plane on a stock image fails its
 // first migration.
 //
-// The api-server tag is a commit build because nothing in the repo publishes
-// meko/meko-api-server from main — it is the one YCP component whose image is built by
-// hand, tracked in https://github.com/yugabyte/meko/issues/572. Until it publishes on
-// merge, this pin is the closest thing to a release and has to be bumped by hand with
-// the others, and every environment registered here depends on a tag no CI job produced.
+// Only APIServer, MCPServer and UI are rendered: the meko install hint prints one tag
+// each, and a BYOC release runs nothing else — values-byoc.yaml disables the inference
+// gateway, the RAG worker, langfuse and the provisioner. RAGWorker and InferenceGateway
+// are carried at the same release for when it does not, and Database is read by nothing
+// at all, the chart owning that image. Wiring those up or deleting them is
+// https://github.com/yugabyte/meko/issues/1319.
 var pinnedDataPlaneRelease = DataPlaneRelease{
-	Database:         "yugabyte-db/ybdb-meko-release:2026.1.0.0-b53",
-	APIServer:        "meko/meko-api-server:console-943437724",
-	MCPServer:        "meko/meko-mcp-server:2.1.0-20260731-7b3fdd3",
-	RAGWorker:        "meko/rag-agent:1.0.7-20260703-2669cba",
-	InferenceGateway: "meko/inference-gateway:0.1.0-20260730-ae46721",
-	UI:               "meko/meko-ui:1.0.0-20260729-bf56db7",
+	// Mirrored to Quay by meko/jenkins/scripts/mirror-database-image.sh rather than
+	// built: it is a YugabyteDB release artifact carrying MAGE and pg_dist_rag, and a
+	// stock image fails the first data migration. Its tag follows YugabyteDB's cadence,
+	// not this repo's, so it moves independently of the release below.
+	Database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2",
+
+	// One release, built by meko/jenkins on 2026-09-12 from 59d52fac1c. Host-qualified
+	// like the database above, so qualifyImage leaves every reference alone and the
+	// registry argument decides nothing.
+	APIServer:        "quay.io/yugabyte/meko-api-server:0.260912.0-59d52fac1",
+	MCPServer:        "quay.io/yugabyte/meko-mcp-server:0.260912.0-59d52fac1",
+	UI:               "quay.io/yugabyte/meko-ui:0.260912.0-59d52fac1",
+	RAGWorker:        "quay.io/yugabyte/meko-rag-agent:0.260912.0-59d52fac1",
+	InferenceGateway: "quay.io/yugabyte/meko-inference-gateway:0.260912.0-59d52fac1",
 }
 
 // dataPlaneComponents maps the name an operator writes in --dataplane-image to the
@@ -69,9 +79,10 @@ func (r *DataPlaneRelease) dataPlaneComponents() map[string]*string {
 	}
 }
 
-// DefaultDataPlaneRelease is the pinned release with every reference qualified by
-// registry. An empty registry leaves the bare repository paths alone, which is what a
-// test or a side-loaded kind cluster wants.
+// DefaultDataPlaneRelease is the pinned release, with any bare reference qualified by
+// registry. Every reference is host-qualified today, so this is a no-op for all of
+// them; it stays because a bare path is still legal in the pin and would otherwise
+// render as a Docker Hub reference. The one production caller passes "".
 func DefaultDataPlaneRelease(registry string) DataPlaneRelease {
 	out := pinnedDataPlaneRelease
 	for _, field := range out.dataPlaneComponents() {

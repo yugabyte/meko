@@ -30,9 +30,12 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		// the install one self-contained namespace.
 		"meko/deploy/helm/meko",
 		"values-byoc.yaml",
-		// The one credential the install needs, in a Secret rather than on a
-		// command line.
+		// Both credentials, in Secrets rather than on a command line: the agent's
+		// API key, and the pull secret every image in the release needs now that
+		// they are all on private Quay.
 		"create secret generic meko-agent-api-key",
+		"create secret docker-registry quay-registry-creds",
+		"--docker-server=quay.io",
 		// The chart wiring that makes the agent render at all.
 		"--set reconcileAgent.enabled=true",
 		"--set reconcileAgent.ycpUrl=http://ycp.example.com/api/v1",
@@ -53,6 +56,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 			continue
 		}
 		if strings.HasPrefix(line, "TAG=") || strings.HasPrefix(line, "AGENT_TAG=") ||
+			strings.HasPrefix(line, "QUAY_USER=") || strings.HasPrefix(line, "QUAY_TOKEN=") ||
 			strings.Contains(line, "--from-literal=") {
 			continue
 		}
