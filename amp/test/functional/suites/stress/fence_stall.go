@@ -1,14 +1,5 @@
-// A writer that stalls and resumes mid-write, the one shape the branch write
-// lease does not stop: the lease is cooperative (compute/architecture/
-// compute-fencing.md, "Known gaps"), so nothing on the YugabyteDB write path
-// checks the token and the writer is stopped only by its own processes.
-// Nothing is taken away here, unlike every other stress scenario.
-//
-// stress/fence_stall freezes the whole pod through cgroup v2.
-// stress/fence_stall_supervisor SIGSTOPs the supervisor alone, leaving postgres
-// flushing WAL with nobody renewing the lease, so only that variant can assert
-// the fence fired: a frozen pod writes nothing its expired token is checked
-// against.
+// Only fence_stall_supervisor asserts the fence FIRED. A frozen pod writes nothing its
+// expired token is checked against. The fence deadline is asserted by both variants.
 package stress
 
 import (
@@ -59,9 +50,6 @@ func init() {
 }
 
 type fenceStallParams struct {
-	// The product's own numbers (compute/architecture/compute-fencing.md),
-	// config so a branch retuned through write_token_settings can be measured
-	// against the lease it actually runs.
 	LeaseTTL   time.Duration
 	SkewGrace  time.Duration
 	Stall      time.Duration
@@ -172,8 +160,7 @@ func runFenceStall(t *core.T, action string) error {
 		return err
 	}
 	target := chaos.NewPodTarget(pod, kube, pod, "")
-	// Set before Inject, not after: a partial injection leaves the pod frozen
-	// and the helper pod running, and Recover is contracted safe either way.
+	// Armed before Inject, not after: a partial injection still needs the Recover.
 	stalled := true
 	defer func() {
 		if !stalled {
@@ -211,8 +198,6 @@ func runFenceStall(t *core.T, action string) error {
 	secondJournal := NewAckJournal()
 	var st *partitionWriteStats
 	if err := t.Step("writes_under_stall", func(s *core.StepHandle) error {
-		// AndWait: the API accepts the request and answers with a task, so the
-		// one-writer-per-branch guardrail is a verdict on the task, not the call.
 		createCtx, cancelCreate := context.WithTimeout(t.Context, params.SettleTimeout)
 		defer cancelCreate()
 		var wg sync.WaitGroup
@@ -242,8 +227,7 @@ func runFenceStall(t *core.T, action string) error {
 			return fmt.Errorf("no write reached the stalled endpoint in %s, neither acknowledged nor hung, so the window proves nothing about the fence (first error: %v)",
 				params.Stall, st.firstErr.Load())
 		}
-		// Offsets are into the write window, which opens once the stall took and
-		// the evidence probe returned. The deadline runs from the stall itself.
+		// LastAckOffset is an offset into the write window, while the deadline runs from the stall.
 		if st.LastAckOffset >= 0 {
 			sinceStall := windowStart.Add(st.LastAckOffset).Sub(stallAt)
 			s.Set("last_ack_after_stall", sinceStall.Round(time.Second).String())
@@ -279,10 +263,6 @@ func runFenceStall(t *core.T, action string) error {
 		return err
 	}
 
-	// Only the supervisor variant can demand this: under a whole-pod freeze no
-	// WAL reaches the safekeeper's deadline check while the token is expired,
-	// and the first renewal after the thaw is granted because nobody took the
-	// branch.
 	if action == chaos.ActionProcessStall {
 		if err := t.Step("fence_fired", func(s *core.StepHandle) error {
 			after, err := awaitSafekeeperReplaced(t, kube, ten, pod, sksBefore, params.FenceAfter)
@@ -363,8 +343,7 @@ func stallHeld(t *core.T, kube *k8s.Kubectl, pod, action, pattern string) (strin
 		}
 		return "", fmt.Errorf("no process matching %q in pod %s is in state T after the SIGSTOP (states %v): nothing was stalled", pattern, pod, states)
 	}
-	// Every new process in a frozen cgroup is frozen before it runs, so the
-	// exec itself never returns: a probe that ANSWERS is the failure here.
+	// A frozen cgroup freezes the exec before it runs, so a probe that ANSWERS is the failure.
 	ctx, cancel := context.WithTimeout(t.Context, frozenProbeTimeout)
 	defer cancel()
 	if _, err := ex.Run(ctx, "echo alive"); err == nil {
@@ -375,17 +354,11 @@ func stallHeld(t *core.T, kube *k8s.Kubectl, pod, action, pattern string) (strin
 
 const frozenProbeTimeout = 20 * time.Second
 
-// The exe link is what separates the target from the shell carrying the
-// pattern in its own arguments.
 func stoppedStateScript(pattern string) string {
 	return fmt.Sprintf(`for d in /proc/[0-9]*; do case "$(readlink $d/exe 2>/dev/null)" in *%s) `+
 		`sed -n "s/.*) \([A-Za-z]\).*/\1/p" $d/stat;; esac; done; exit 0`, pattern)
 }
 
-// The supervisor is the stalled process, so its own renewal is granted after
-// the thaw and it stops nothing: the safekeeper's deadline check against its
-// expired token is the only mechanism here. A pod the kubelet replaced
-// satisfies it too, the processes being gone either way.
 func awaitSafekeeperReplaced(t *core.T, kube *k8s.Kubectl, ten *tenant, pod string, before []int, within time.Duration) (string, error) {
 	var last []int
 	err := t.WaitFor(fmt.Sprintf("the safekeeper in pod %s to be replaced", pod), within, 3*time.Second, func() (bool, error) {
@@ -399,7 +372,6 @@ func awaitSafekeeperReplaced(t *core.T, kube *k8s.Kubectl, ten *tenant, pod stri
 		}
 		pids, err := daemonPIDs(t.Context, kube.ForPod(pod, ""), "safekeeper")
 		if err != nil {
-			// The container is restarting: exec fails until it is back.
 			return false, nil
 		}
 		last = pids

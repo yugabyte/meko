@@ -277,16 +277,11 @@ func waitProcessUp(ctx context.Context, t *Target, pattern string, timeout time.
 	}
 }
 
-// --- process_stall: SIGSTOP the matched process, SIGCONT it on recover. It
-// keeps every lease, socket and file it held, which is the long-GC-pause shape
-// a kill cannot produce. ---
-
 type processStall struct{ pattern string }
 
 func (processStall) Name() string { return ActionProcessStall }
 
 func (a processStall) Inject(ctx context.Context, t *Target) error {
-	// pkill exits 1 when nothing matched, which is not an injection failure.
 	return t.runTolerant(ctx, "pkill -STOP -f "+shellQuote(selfExcludingPattern(a.pattern)))
 }
 
@@ -294,22 +289,13 @@ func (a processStall) Recover(ctx context.Context, t *Target) error {
 	return t.runTolerant(ctx, "pkill -CONT -f "+shellQuote(selfExcludingPattern(a.pattern)))
 }
 
-// pkill -f also matches the shell running pkill, whose own cmdline carries the
-// pattern, and SIGSTOP on that shell hangs the exec forever. Bracketing the
-// first character leaves the ERE matching the target and not that literal.
+// Without this, pkill -f matches the shell running it and SIGSTOPs the exec forever.
 func selfExcludingPattern(p string) string {
 	if p == "" {
 		return p
 	}
 	return "[" + p[:1] + "]" + p[1:]
 }
-
-// --- pod_freeze: freeze every process in the pod through its cgroup v2
-// cgroup.freeze, and thaw it on recover. Nothing inside the pod can do this to
-// itself and a frozen pod cannot be exec-ed into at all, so the write goes
-// through a privileged hostPID helper pod pinned to the same node, as
-// suites/stress/partition_helper.go does. The namespace it enters is the
-// host's, not the target's: a cgroup path resolves nowhere else. ---
 
 type podFreeze struct {
 	image       string
@@ -341,12 +327,10 @@ func (a *podFreeze) Recover(ctx context.Context, t *Target) error {
 	a.mu.Lock()
 	h := a.helpers[t.name]
 	a.mu.Unlock()
-	// No helper means Inject never got as far as freezing anything.
 	if h == nil {
 		return nil
 	}
-	// The helper is the only way back to a frozen pod, so it goes only once the
-	// thaw took. A failed lift stays retryable.
+	// The helper is the only way back to a frozen pod, so it goes only once the thaw took.
 	if err := h.setFreeze(ctx, freezeOff); err != nil {
 		return err
 	}
@@ -358,10 +342,8 @@ func (a *podFreeze) Recover(ctx context.Context, t *Target) error {
 }
 
 const (
-	freezeOn  = "1"
-	freezeOff = "0"
-	// How a scan that RAN and matched nothing reports itself, which an exec
-	// that never ran cannot forge.
+	freezeOn            = "1"
+	freezeOff           = "0"
 	freezeNoPIDSentinel = "ampqa-no-pid"
 )
 
@@ -385,8 +367,7 @@ func (a *podFreeze) helperFor(ctx context.Context, t *Target) (*freezeHelper, er
 	}
 	h = &freezeHelper{
 		kube: t.kube,
-		// A name per injection: close() only requests deletion, and an Apply
-		// against a still-terminating pod is a rejected spec update.
+		// A name per injection: close() only requests deletion, and Apply onto a still-terminating pod is rejected.
 		name: fmt.Sprintf("ampqa-freeze-%s-%d", helperSuffix(uid), a.seq.Add(1)),
 		uid:  uid,
 		node: node,
@@ -421,9 +402,7 @@ type freezeHelper struct {
 	pod  string
 }
 
-// The read-back confirms the write, not the effective state: cgroup.freeze
-// echoes what was asked for, and the freeze is proven by the exec probe in
-// suites/stress/fence_stall.go.
+// cgroup.freeze echoes the write, not the effective state. The exec probe in suites/stress/fence_stall.go is the proof.
 func (h *freezeHelper) setFreeze(ctx context.Context, value string) error {
 	res, err := h.kube.ForPod(h.name, "").Run(ctx, freezeScript(h.uid, value))
 	if err != nil {
@@ -434,7 +413,6 @@ func (h *freezeHelper) setFreeze(ctx context.Context, value string) error {
 		return fmt.Errorf("write cgroup.freeze=%s for pod %s exited %d: %s", value, h.pod, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	// Thawing a pod whose processes are already gone is a no-op, not a failure.
-	// Freezing one that has none never happened.
 	if out == freezeNoPIDSentinel {
 		if value == freezeOff {
 			return nil
@@ -453,11 +431,7 @@ func (h *freezeHelper) close(ctx context.Context) {
 	_ = h.kube.DeleteNow(ctx, h.name)
 }
 
-// The write happens inside the HOST mount and cgroup namespaces (nsenter -t 1
-// -m -C): a cgroup path read from any other namespace does not resolve under
-// /sys/fs/cgroup. It targets the POD slice, the parent of the container scope,
-// so every container freezes. The container scope is reached only where that
-// parent carries no cgroup.freeze, which a cgroup v2 node always does.
+// A cgroup path resolves only in the host mount and cgroup namespaces, hence nsenter -t 1 -m -C.
 func freezeScript(uid, value string) string {
 	inner := fmt.Sprintf(`u2=$(echo %s | tr - _); p=; `+
 		`for d in /proc/[0-9]*; do grep -qs -e %s -e "$u2" "$d/cgroup" && { p=$d; break; }; done; `+

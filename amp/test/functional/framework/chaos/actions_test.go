@@ -338,7 +338,6 @@ func TestPodFreezeInjectRecover(t *testing.T) {
 	if err := a.Recover(context.Background(), tgt); err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	// A second Recover must be a no-op: the loop always calls it.
 	if err := a.Recover(context.Background(), tgt); err != nil {
 		t.Fatalf("second recover: %v", err)
 	}

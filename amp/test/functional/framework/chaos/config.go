@@ -54,7 +54,6 @@ type Config struct {
 	// NodeUnits are the systemd units NodeRestart restarts on a host.
 	NodeUnits []string
 
-	// StallPattern matches the process ProcessStall SIGSTOPs (pkill -f).
 	StallPattern string
 	// FreezeHelperImage needs nsenter (util-linux).
 	FreezeHelperImage string
