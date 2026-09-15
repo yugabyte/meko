@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Settings, Share2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,7 +58,7 @@ import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
-import { DatapackMetricsSection } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
+import { DatapackMetricsSection, DatapackMetricsSummaryRow } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
 import { DatapackTokenBurnTile } from "@/features/datapacks/components/efficiency/TokenBurnTile";
 import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
@@ -172,6 +173,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isCreateClusterOpen, setIsCreateClusterOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
 
   const qc = useQueryClient();
   const [memoriesCount, setMemoriesCount] = useState(0);
@@ -535,69 +537,91 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
 
         {statusError ? <WarningBanner>{statusError}</WarningBanner> : null}
 
-        {/* Meko efficiency — token burn saved for this datapack, above the
-            collective-learning pipeline it summarizes. Only shown where
-            contextual prominence search (which produces the data) is enabled. */}
-        {CONTEXTUAL_PROMINENCE_SEARCH_ENABLED ? (
-          <DatapackTokenBurnTile datapackId={datapack?.datapack_id ?? null} />
-        ) : null}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList variant="segmented" className="mb-6">
+            <TabsTrigger value="overview" variant="segmented">Overview</TabsTrigger>
+            <TabsTrigger value="analytics" variant="segmented">Analytics</TabsTrigger>
+          </TabsList>
 
-        <DatapackMetricsSection
-          knowledgeCount={datapack?.knowledge_count ?? 0}
-          memoryCount={memoriesCount}
-          collectiveMemoryCount={collectiveMemoryCount}
-          learningsCount={learningsCount}
-        />
+          <TabsContent value="overview" className="space-y-6 mt-0">
+            {/* M01 / M02 / M03 summary chips */}
+            <DatapackMetricsSummaryRow
+              datapackId={datapack?.datapack_id ?? null}
+              knowledgeCount={datapack?.knowledge_count ?? 0}
+              memoryCount={memoriesCount}
+              collectiveMemoryCount={collectiveMemoryCount}
+              onNavigateToMetric={(sectionId) => {
+                setActiveTab("analytics");
+                setTimeout(() => {
+                  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }, 80);
+              }}
+            />
 
-        <CollectiveLearningPipeline
-          currentUser={currentUser}
-          conversationsCount={conversationsCount}
-          memoryCount={memoriesCount}
-          learningsCount={learningsCount}
-          collectiveMemoryCount={collectiveMemoryCount}
-          datapackId={datapack?.datapack_id ?? null}
-          knowledgeFileCount={knowledgeFileCount ?? undefined}
-          knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
-          onSelectSection={handlePipelineSelect}
-          onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
-          onCreateCluster={
-            isAmpEnabled() ? () => setIsCreateClusterOpen(true) : undefined
-          }
-          statusLoading={statusLoading}
-        />
+            {/* Meko efficiency — token burn saved for this datapack. Only shown
+                where contextual prominence search is enabled. */}
+            {CONTEXTUAL_PROMINENCE_SEARCH_ENABLED ? (
+              <DatapackTokenBurnTile datapackId={datapack?.datapack_id ?? null} />
+            ) : null}
 
-        {/* Sidebar tiles — at-a-glance views; the pipeline above is the
-            only path into the full Conversations / Memories / Learnings /
-            Collective Memory / Knowledge summary pages. */}
-        <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch lg:gap-6">
-          <DatapackDetailMembersTile
-            datapackName={displayDatapackName}
-            datapackId={routeDatapackId}
-            currentUser={currentUser}
-            members={members}
-            canShare={isDatapackGrantEligibleToShare({ grant: datapackGrant })}
-            membersListStatus={membersListStatus}
-          />
-          <DatapackDetailKnowledgeTile
-            datapackId={routeDatapackId}
-            documents={knowledgeDocuments}
-            documentsLoading={knowledgeDocumentsLoading}
-            documentsError={knowledgeDocumentsError}
-            totalFileCount={knowledgeFileCount}
-            canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
-            onAddSource={() => setIsUploadOpen(true)}
-            highlightDocumentId={highlightDocId}
-          />
-          <DatapackDetailAgentsTile datapackId={routeDatapackId} />
-          <DatapackDetailConnectTile
-            mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
-            onOpenConnect={() => setIsConnectOpen(true)}
-          />
-          {isAmpEnabled() ? (
-            <DatapackDetailClustersTile datapackId={routeDatapackId} />
-          ) : null}
-          <DatapackDetailArtifactsTile datapackId={routeDatapackId} />
-        </div>
+            <CollectiveLearningPipeline
+              currentUser={currentUser}
+              conversationsCount={conversationsCount}
+              memoryCount={memoriesCount}
+              learningsCount={learningsCount}
+              collectiveMemoryCount={collectiveMemoryCount}
+              datapackId={datapack?.datapack_id ?? null}
+              knowledgeFileCount={knowledgeFileCount ?? undefined}
+              knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
+              onSelectSection={handlePipelineSelect}
+              onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
+              onCreateCluster={
+                isAmpEnabled() ? () => setIsCreateClusterOpen(true) : undefined
+              }
+              statusLoading={statusLoading}
+            />
+
+            <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch lg:gap-6">
+              <DatapackDetailMembersTile
+                datapackName={displayDatapackName}
+                datapackId={routeDatapackId}
+                currentUser={currentUser}
+                members={members}
+                canShare={isDatapackGrantEligibleToShare({ grant: datapackGrant })}
+                membersListStatus={membersListStatus}
+              />
+              <DatapackDetailKnowledgeTile
+                datapackId={routeDatapackId}
+                documents={knowledgeDocuments}
+                documentsLoading={knowledgeDocumentsLoading}
+                documentsError={knowledgeDocumentsError}
+                totalFileCount={knowledgeFileCount}
+                canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
+                onAddSource={() => setIsUploadOpen(true)}
+                highlightDocumentId={highlightDocId}
+              />
+              <DatapackDetailAgentsTile datapackId={routeDatapackId} />
+              <DatapackDetailConnectTile
+                mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
+                onOpenConnect={() => setIsConnectOpen(true)}
+              />
+              {isAmpEnabled() ? (
+                <DatapackDetailClustersTile datapackId={routeDatapackId} />
+              ) : null}
+              <DatapackDetailArtifactsTile datapackId={routeDatapackId} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="analytics" className="mt-0">
+            <DatapackMetricsSection
+              datapackId={datapack?.datapack_id ?? null}
+              knowledgeCount={datapack?.knowledge_count ?? 0}
+              memoryCount={memoriesCount}
+              collectiveMemoryCount={collectiveMemoryCount}
+              learningsCount={learningsCount}
+            />
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );

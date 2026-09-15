@@ -914,6 +914,36 @@ export async function getDatapackTokenSavings(
   );
 }
 
+export type DatapackMetrics = {
+  datapack_id: string;
+  total_requests: number;
+  tokens_saved_total: number;
+  tokens_if_raw_total: number;
+  savings_pct: number;
+  score_high_total: number;
+  score_mid_total: number;
+  score_low_total: number;
+  agent_count: number;
+  human_count: number;
+  last_accessed_at?: string;
+  daily_activity: Array<{ date: string; hybrid: number; kb: number; memory: number }>;
+  conversation_count: number;
+  memory_extraction_count: number;
+  extraction_rate: number;
+};
+
+export async function getDatapackMetrics(
+  datapackId: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<DatapackMetrics>(
+    `/datapacks/${encodeURIComponent(datapackId)}/metrics`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
 export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
   return request<{ message: string; has_completed_onboarding: boolean }>("/auth/me", "PATCH", {
     has_completed_onboarding: hasCompletedOnboarding,
