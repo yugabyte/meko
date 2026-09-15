@@ -58,6 +58,7 @@ type serviceRegistry struct {
 	artifactSvc        *service.ArtifactService
 	tokenSavingsRepo   *repository.TokenSavingsRepo
 	tokenSavingsSvc    *service.TokenSavingsService
+	datapackMetricsRepo *repository.DatapackMetricsRepo
 	// ampSvc is nil unless the AMP feature is enabled (--show-pg-amp); the AMP
 	// datapack-database routes are registered only when it is non-nil. The AMP
 	// controller endpoint is resolved at request time from the registration row,
@@ -251,6 +252,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	tokenSavingsRepo := repository.NewTokenSavingsRepo(cfg.SystemDB)
 	tokenSavingsSvc := service.NewTokenSavingsService(tokenSavingsRepo, dpRepo)
+	datapackMetricsRepo := repository.NewDatapackMetricsRepo(cfg.SystemDB, cfg.DB)
 
 	// AWS Marketplace: nil until AWS_MARKETPLACE_PRODUCT_CODE is set on
 	// the pod. NewMarketplaceService returns (nil, nil) in that state
@@ -314,6 +316,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		artifactSvc:           artifactSvc,
 		tokenSavingsRepo:      tokenSavingsRepo,
 		tokenSavingsSvc:       tokenSavingsSvc,
+		datapackMetricsRepo:   datapackMetricsRepo,
 		ampSvc:                ampSvc,
 		ampRegistrationRepo:   ampRegistrationRepo,
 		envSvc:                envSvc,
@@ -901,6 +904,8 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	tokenSavingsH := handlers.NewTokenSavingsHandler(reg.tokenSavingsSvc)
 	g.GET("/me/token-savings", tokenSavingsH.GetForAccount)
 
+	datapackMetricsH := handlers.NewDatapackMetricsHandler(reg.datapackMetricsRepo)
+
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc, reg.dpRepo)
 	// On dpDirect (not the JWT-only group) so BOTH the UI (Cognito JWT) and the
 	// meko-mcp-server (PAT, mko_tkn_) can reach them — the JWT-only group rejects
@@ -978,6 +983,10 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	// as conversations above (owner or shared member). On dpDirect so PAT
 	// bearers (eval harnesses, MCP-adjacent tooling) are accepted.
 	dpDirect.GET("/datapacks/:datapack_id/token-savings", tokenSavingsH.GetForDatapack,
+		auth.RequireScope(auth.ScopeRead),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	dpDirect.GET("/datapacks/:datapack_id/metrics", datapackMetricsH.GetMetrics,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
