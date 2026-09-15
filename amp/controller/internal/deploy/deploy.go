@@ -265,10 +265,31 @@ type ConnectivitySupporter interface {
 // ingress.Allocate already answers it per family. A second, coarser copy of that
 // judgement here could only disagree with the one actually enforced.
 //
-// Nothing calls this yet: the flag that sets it and the API refusal that reads
-// it both land later in this series.
+// It answers only whether the deployment opted in. Whether the deploy path can
+// actually place an endpoint on a shard is IngressPlacer, below — the two are
+// separate because the switch lands before the placement does.
 type IngressSupporter interface {
 	SupportsIngress() bool
+}
+
+// IngressPlacer is implemented by a deployer whose CreateEndpoint knows what to
+// do with an EndpointSpec.Ingress — render the endpoint's route onto its shard
+// and report the address it answers on.
+//
+// Separate from IngressSupporter because a deployment can have the switch on
+// while the deploy path still has no idea what an ingress endpoint is, and that
+// is exactly the window this series passes through: the flag arrives before the
+// placement. Accepting the mode in that window would record an exposure the
+// endpoint does not have — the create succeeds, the endpoint comes back
+// reporting ingress_internal, and its address is the ordinary in-cluster one.
+// That is the failure ConnectivitySupporter exists to prevent for the nlb_*
+// modes, and it needs preventing here for the same reason.
+//
+// The Kubernetes deployer starts satisfying this when the lifecycle wiring
+// lands, so the API opens to the ingress modes exactly when something can honour
+// them rather than on a date.
+type IngressPlacer interface {
+	PlacesIngress() bool
 }
 
 // Deployer places and removes compute endpoints on a runtime. CreateEndpoint

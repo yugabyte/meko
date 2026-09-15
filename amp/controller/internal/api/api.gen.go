@@ -97,15 +97,21 @@ func (e EndpointRole) Valid() bool {
 
 // Defines values for EndpointConnectivityMode.
 const (
-	ClusterIp   EndpointConnectivityMode = "cluster_ip"
-	NlbExternal EndpointConnectivityMode = "nlb_external"
-	NlbInternal EndpointConnectivityMode = "nlb_internal"
+	ClusterIp       EndpointConnectivityMode = "cluster_ip"
+	IngressExternal EndpointConnectivityMode = "ingress_external"
+	IngressInternal EndpointConnectivityMode = "ingress_internal"
+	NlbExternal     EndpointConnectivityMode = "nlb_external"
+	NlbInternal     EndpointConnectivityMode = "nlb_internal"
 )
 
 // Valid indicates whether the value is a known member of the EndpointConnectivityMode enum.
 func (e EndpointConnectivityMode) Valid() bool {
 	switch e {
 	case ClusterIp:
+		return true
+	case IngressExternal:
+		return true
+	case IngressInternal:
 		return true
 	case NlbExternal:
 		return true
@@ -898,26 +904,50 @@ type EndpointConnectivity struct {
 	// be a valid CIDR **with** a prefix length; a bare IP is rejected with
 	// 400. Only meaningful for the `nlb_*` modes.
 	//
+	// Not yet supported on the `ingress_*` modes, and rejected with 400
+	// there rather than ignored: the load balancer is shared, so
+	// `loadBalancerSourceRanges` — a per-Service field — cannot express a
+	// per-endpoint allowlist, and accepting one silently would leave the
+	// endpoint open to more than the caller asked for.
+	//
 	// Empty means unrestricted. On `nlb_external` that puts Postgres on the
 	// public internet with password authentication as the only barrier, so
 	// set it for anything but a deliberately open test endpoint.
 	AllowedCidrs *[]string `json:"allowed_cidrs,omitempty"`
 
 	// Mode Client reachability for the Postgres port. Requires the Kubernetes
-	// deployer on EKS, GKE or AKS; the `nlb_*` modes are rejected with 400
-	// on other drivers.
+	// deployer on EKS, GKE or AKS; the `nlb_*` and `ingress_*` modes are
+	// rejected with 400 on other drivers.
+	//
 	// Each `nlb_*` endpoint provisions its own load balancer, which is a
 	// billed cloud resource and counts against the account's per-region
 	// load balancer quota.
+	//
+	// The `ingress_*` modes place the endpoint on a **shared** load
+	// balancer instead — a port on an ingress shard — so creating one
+	// provisions nothing in the cloud and costs no additional load
+	// balancer. They are rejected with 400 unless the deployment has a
+	// shared ingress configured; there is deliberately no fallback to a
+	// dedicated load balancer, which would reinstate the per-endpoint cost
+	// without the caller asking for it.
 	Mode *EndpointConnectivityMode `json:"mode,omitempty"`
 }
 
 // EndpointConnectivityMode Client reachability for the Postgres port. Requires the Kubernetes
-// deployer on EKS, GKE or AKS; the `nlb_*` modes are rejected with 400
-// on other drivers.
+// deployer on EKS, GKE or AKS; the `nlb_*` and `ingress_*` modes are
+// rejected with 400 on other drivers.
+//
 // Each `nlb_*` endpoint provisions its own load balancer, which is a
 // billed cloud resource and counts against the account's per-region
 // load balancer quota.
+//
+// The `ingress_*` modes place the endpoint on a **shared** load
+// balancer instead — a port on an ingress shard — so creating one
+// provisions nothing in the cloud and costs no additional load
+// balancer. They are rejected with 400 unless the deployment has a
+// shared ingress configured; there is deliberately no fallback to a
+// dedicated load balancer, which would reinstate the per-endpoint cost
+// without the caller asking for it.
 type EndpointConnectivityMode string
 
 // EndpointList defines model for EndpointList.

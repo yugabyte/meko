@@ -408,6 +408,13 @@ endpoint:
 | `cluster_ip` (default) | the ClusterIP Service only — in-cluster, plus the tailnet when tailnet-exposed |
 | `nlb_internal` | additionally a Postgres-only Service behind a VPC-routable AWS NLB |
 | `nlb_external` | the same, internet-facing |
+| `ingress_internal` | a port on a **shared** VPC-routable load balancer instead of one of its own ([`ac-ingress.md`](ac-ingress.md)) |
+| `ingress_external` | the same, internet-facing |
+
+The `ingress_*` pair is refused with `400` unless the deployment has
+`--deploy-ingress-enabled` set **and** this controller can place an endpoint on a
+shard; the error says which is missing. `allowed_cidrs` is refused on them too —
+a shared load balancer cannot carry a per-endpoint allowlist.
 
 `connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`;
 empty is unrestricted, which on `nlb_external` leaves password authentication as

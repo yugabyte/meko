@@ -184,8 +184,9 @@ func (k *KubernetesDeployer) SupportsConnectivity() bool { return true }
 //
 // It reports the switch and nothing more. It is NOT a promise that a slot can be
 // had: capacity is a question about rows in ingress_shards, which only the
-// allocator can answer, and it refuses per family. --deploy-ingress-enabled is
-// what sets it; the API refusal that reads it lands later in this series.
+// allocator can answer, and it refuses per family. --deploy-ingress-enabled sets
+// it, and endpointConnectivity reads it to reject the ingress_* modes up front,
+// so a caller gets a 400 rather than an endpoint that deploys unreachable.
 func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnabled }
 
 // CreateEndpoint installs/updates the endpoint's Helm release and waits for it

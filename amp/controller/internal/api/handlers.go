@@ -1507,9 +1507,11 @@ func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string
 		mode = string(*in.Mode)
 	}
 	switch mode {
-	case deploy.ConnectivityClusterIP, deploy.ConnectivityNLBInternal, deploy.ConnectivityNLBExternal:
+	case deploy.ConnectivityClusterIP, deploy.ConnectivityNLBInternal, deploy.ConnectivityNLBExternal,
+		deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal:
 	default:
-		e := apiError("invalid_request", fmt.Sprintf("connectivity.mode must be one of cluster_ip, nlb_internal, nlb_external (got %q)", mode))
+		e := apiError("invalid_request", fmt.Sprintf(
+			"connectivity.mode must be one of cluster_ip, ingress_internal, ingress_external, nlb_internal, nlb_external (got %q)", mode))
 		return "", nil, &e
 	}
 	var cidrs []string
@@ -1532,10 +1534,54 @@ func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string
 		e := apiError("invalid_request", "connectivity.allowed_cidrs applies only to the nlb_internal and nlb_external modes")
 		return "", nil, &e
 	}
-	if mode == deploy.ConnectivityNLBInternal || mode == deploy.ConnectivityNLBExternal {
+	// An ingress endpoint shares its load balancer, so loadBalancerSourceRanges
+	// — a per-Service field — cannot express a per-endpoint allowlist. The
+	// filtering moves into the shard's proxy instead, which is real work and not
+	// yet done. Refused rather than accepted-and-ignored: silently dropping an
+	// allowlist is how an endpoint ends up open to more than the caller asked
+	// for, and they would have no way to tell.
+	if len(cidrs) > 0 && deploy.IsIngress(mode) {
+		e := apiError("invalid_request", fmt.Sprintf(
+			"connectivity.allowed_cidrs is not yet supported for %s; use nlb_internal or nlb_external for an endpoint that needs one", mode))
+		return "", nil, &e
+	}
+	if deploy.IsDedicatedLB(mode) || deploy.IsIngress(mode) {
 		cs, ok := dep.(deploy.ConnectivitySupporter)
 		if !ok || !cs.SupportsConnectivity() {
-			e := apiError("unsupported_connectivity", fmt.Sprintf("connectivity.mode %q needs the kubernetes deploy driver; this controller cannot provision a load balancer", mode))
+			why := "this controller cannot provision a load balancer"
+			if deploy.IsIngress(mode) {
+				why = "this controller cannot render an endpoint's ingress route"
+			}
+			e := apiError("unsupported_connectivity", fmt.Sprintf(
+				"connectivity.mode %q needs the kubernetes deploy driver; %s", mode, why))
+			return "", nil, &e
+		}
+	}
+	// The ingress modes need two separate things to be true, and the messages keep
+	// them apart because the operator's next step differs.
+	//
+	// Refused here rather than at deploy time so the caller learns now, and
+	// refused rather than quietly downgraded to a dedicated load balancer: that
+	// would put the per-endpoint bill back without anyone choosing it.
+	if deploy.IsIngress(mode) {
+		// One: the deployment opted in. This is the switch and nothing more — it
+		// promises no capacity, which is the allocator's question and is answered
+		// per family when the endpoint is actually placed.
+		is, ok := dep.(deploy.IngressSupporter)
+		if !ok || !is.SupportsIngress() {
+			e := apiError("unsupported_connectivity", fmt.Sprintf(
+				"connectivity.mode %q needs a shared ingress, which this deployment has not turned on (--deploy-ingress-enabled is off)", mode))
+			return "", nil, &e
+		}
+		// Two: the deploy path can actually place an endpoint on a shard. Without
+		// this the create would succeed, the endpoint would report ingress_internal
+		// on GET, and its address would be the ordinary in-cluster one — an
+		// exposure it does not have.
+		if p, ok := dep.(deploy.IngressPlacer); !ok || !p.PlacesIngress() {
+			e := apiError("unsupported_connectivity", fmt.Sprintf(
+				"connectivity.mode %q is not available on this controller yet: shared ingress is "+
+					"turned on, but placing an endpoint on a shard is not wired up, so the endpoint "+
+					"would come back reporting an exposure it does not have", mode))
 			return "", nil, &e
 		}
 	}

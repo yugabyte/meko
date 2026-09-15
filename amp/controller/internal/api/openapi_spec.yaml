@@ -2146,15 +2146,30 @@ components:
       properties:
         mode:
           type: string
-          enum: [cluster_ip, nlb_internal, nlb_external]
+          enum: [cluster_ip, ingress_internal, ingress_external, nlb_internal, nlb_external]
           default: cluster_ip
           description: |
             Client reachability for the Postgres port. Requires the Kubernetes
-            deployer on EKS, GKE or AKS; the `nlb_*` modes are rejected with 400
-            on other drivers.
+            deployer on EKS, GKE or AKS; the `nlb_*` and `ingress_*` modes are
+            rejected with 400 on other drivers.
+
             Each `nlb_*` endpoint provisions its own load balancer, which is a
             billed cloud resource and counts against the account's per-region
             load balancer quota.
+
+            The `ingress_*` modes place the endpoint on a **shared** load
+            balancer instead — a port on an ingress shard — so creating one
+            provisions nothing in the cloud and costs no additional load
+            balancer. They are rejected with 400 unless the deployment has a
+            shared ingress turned on *and* this controller can place an endpoint
+            on a shard; the error says which of the two is missing. There is
+            deliberately no fallback to a dedicated load balancer, which would
+            reinstate the per-endpoint cost without the caller asking for it.
+
+            `allowed_cidrs` is rejected with 400 on the `ingress_*` modes: a
+            shared load balancer cannot carry a per-endpoint allowlist, so the
+            filtering has to move into the shard's proxy, which is not built yet.
+            Use `nlb_internal` or `nlb_external` for an endpoint that needs one.
         allowed_cidrs:
           type: array
           items:
@@ -2164,6 +2179,12 @@ components:
             (`loadBalancerSourceRanges`), e.g. `["10.0.0.0/16"]`. Each entry must
             be a valid CIDR **with** a prefix length; a bare IP is rejected with
             400. Only meaningful for the `nlb_*` modes.
+
+            Not yet supported on the `ingress_*` modes, and rejected with 400
+            there rather than ignored: the load balancer is shared, so
+            `loadBalancerSourceRanges` — a per-Service field — cannot express a
+            per-endpoint allowlist, and accepting one silently would leave the
+            endpoint open to more than the caller asked for.
 
             Empty means unrestricted. On `nlb_external` that puts Postgres on the
             public internet with password authentication as the only barrier, so

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/yugabyte/amp/controller/internal/deploy"
@@ -15,6 +16,23 @@ type connOK struct{ deploy.Deployer }
 func (connOK) SupportsConnectivity() bool { return true }
 
 type connNo struct{ deploy.Deployer }
+
+// ingressOK is a Kubernetes deployer with shared ingress turned on AND able to
+// place an endpoint on a shard — the only configuration in which an ingress mode
+// is usable. connOK is the same driver with the switch off, which is every
+// deployment today; ingressNoPlacement has the switch on but no placement, the
+// window this series passes through. The three together cover both gates rather
+// than only the driver.
+type ingressOK struct{ deploy.Deployer }
+
+func (ingressOK) SupportsConnectivity() bool { return true }
+func (ingressOK) SupportsIngress() bool      { return true }
+func (ingressOK) PlacesIngress() bool        { return true }
+
+type ingressNoPlacement struct{ deploy.Deployer }
+
+func (ingressNoPlacement) SupportsConnectivity() bool { return true }
+func (ingressNoPlacement) SupportsIngress() bool      { return true }
 
 // A nil block is what every caller that predates this option sends, so it must
 // mean cluster_ip rather than an error.
@@ -33,8 +51,10 @@ func TestEndpointConnectivityAcceptsEveryMode(t *testing.T) {
 		deploy.ConnectivityClusterIP,
 		deploy.ConnectivityNLBInternal,
 		deploy.ConnectivityNLBExternal,
+		deploy.ConnectivityIngressInternal,
+		deploy.ConnectivityIngressExternal,
 	} {
-		mode, _, err := endpointConnectivity(&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(want))}, connOK{})
+		mode, _, err := endpointConnectivity(&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(want))}, ingressOK{})
 		if err != nil {
 			t.Errorf("mode %q must be accepted, got %v", want, err)
 			continue
@@ -119,5 +139,97 @@ func TestEndpointConnectivityRejectsNLBOnDeployerWithoutSupport(t *testing.T) {
 	if _, _, err := endpointConnectivity(
 		&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(deploy.ConnectivityClusterIP))}, connNo{}); err != nil {
 		t.Errorf("cluster_ip must remain valid on every driver, got %v", err)
+	}
+}
+
+// The ingress modes need the deployment to have opted in, not just the right
+// driver. Refused here rather than at deploy time so the caller learns now — and
+// refused rather than quietly downgraded to a dedicated load balancer, which
+// would put the per-endpoint bill back without anyone choosing it.
+func TestEndpointConnectivityRejectsIngressWithoutSharedIngress(t *testing.T) {
+	for _, mode := range []string{deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal} {
+		// The Kubernetes driver, but the feature switched off: every deployment today.
+		_, _, err := endpointConnectivity(
+			&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(mode))}, connOK{})
+		if err == nil {
+			t.Fatalf("mode %q must be rejected when the deployment has no shared ingress", mode)
+		}
+		if err.Error.Code != "unsupported_connectivity" {
+			t.Errorf("code = %q, want unsupported_connectivity", err.Error.Code)
+		}
+		// A driver that cannot render the route at all is refused too.
+		if _, _, err := endpointConnectivity(
+			&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(mode))}, connNo{}); err == nil {
+			t.Errorf("mode %q must be rejected on a deployer that cannot render an ingress route", mode)
+		}
+	}
+	// The nlb_* modes must not start depending on the ingress switch.
+	for _, mode := range []string{deploy.ConnectivityNLBInternal, deploy.ConnectivityNLBExternal} {
+		if _, _, err := endpointConnectivity(
+			&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(mode))}, connOK{}); err != nil {
+			t.Errorf("mode %q must stay valid without shared ingress, got %v", mode, err)
+		}
+	}
+}
+
+// An ingress endpoint shares its load balancer, so loadBalancerSourceRanges — a
+// per-Service field — cannot express a per-endpoint allowlist. Refusing is the
+// point: silently dropping one is how an endpoint ends up reachable from more
+// than the caller asked for, with no way for them to tell.
+func TestEndpointConnectivityRejectsCIDRsWithIngress(t *testing.T) {
+	for _, mode := range []string{deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal} {
+		_, _, err := endpointConnectivity(&EndpointConnectivity{
+			Mode:         ptr(EndpointConnectivityMode(mode)),
+			AllowedCidrs: &[]string{"10.0.0.0/8"},
+		}, ingressOK{})
+		if err == nil {
+			t.Fatalf("allowed_cidrs with %q must be refused, not accepted and ignored", mode)
+		}
+		if err.Error.Code != "invalid_request" {
+			t.Errorf("code = %q, want invalid_request", err.Error.Code)
+		}
+	}
+	// Without an allowlist the same modes are fine.
+	if _, _, err := endpointConnectivity(&EndpointConnectivity{
+		Mode: ptr(EndpointConnectivityMode(deploy.ConnectivityIngressInternal)),
+	}, ingressOK{}); err != nil {
+		t.Errorf("ingress_internal without allowed_cidrs must be accepted, got %v", err)
+	}
+	// And the allowlist still works where it is actually implemented.
+	if _, cidrs, err := endpointConnectivity(&EndpointConnectivity{
+		Mode:         ptr(EndpointConnectivityMode(deploy.ConnectivityNLBInternal)),
+		AllowedCidrs: &[]string{"10.0.0.0/8"},
+	}, ingressOK{}); err != nil || len(cidrs) != 1 {
+		t.Errorf("nlb_internal with allowed_cidrs = (%v, %v), want it kept", cidrs, err)
+	}
+}
+
+// The switch being on is not enough: until the deploy path can place an endpoint
+// on a shard, accepting the mode would record an exposure the endpoint does not
+// have — the create succeeds, GET reports ingress_internal, and the address is
+// the ordinary in-cluster one. This is the same interlock ConnectivitySupporter
+// provides for the nlb_* modes, and it is why the API opens to these modes when
+// placement is wired rather than when the flag exists.
+func TestEndpointConnectivityRejectsIngressUntilPlacementIsWired(t *testing.T) {
+	for _, mode := range []string{deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal} {
+		_, _, err := endpointConnectivity(
+			&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(mode))}, ingressNoPlacement{})
+		if err == nil {
+			t.Fatalf("mode %q must be refused while the deploy path cannot place it", mode)
+		}
+		if err.Error.Code != "unsupported_connectivity" {
+			t.Errorf("code = %q, want unsupported_connectivity", err.Error.Code)
+		}
+		// The two refusals must stay distinguishable: the operator's next step is
+		// "turn the switch on" in one case and "you cannot yet" in the other.
+		if !strings.Contains(err.Error.Message, "not wired up") {
+			t.Errorf("message %q does not distinguish missing placement from the switch being off",
+				err.Error.Message)
+		}
+		// And with placement wired, the same mode is accepted.
+		if _, _, err := endpointConnectivity(
+			&EndpointConnectivity{Mode: ptr(EndpointConnectivityMode(mode))}, ingressOK{}); err != nil {
+			t.Errorf("mode %q must be accepted once placement is wired, got %v", mode, err)
+		}
 	}
 }
