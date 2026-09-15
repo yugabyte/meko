@@ -16,7 +16,7 @@ func TestIsConnDropRequiresTheTypedMarker(t *testing.T) {
 	drops := []error{
 		&pg.TransportError{Err: errors.New("unexpected EOF")},
 		fmt.Errorf(`exec "INSERT INTO cold_x (id, v) VALUES ($1, $2)": %w`,
-			&pg.TransportError{Err: errors.New("unexpected EOF")}),
+			&pg.TransportError{Err: errors.New("unexpected EOF"), Addr: "127.0.0.1:5001"}),
 	}
 	for _, err := range drops {
 		if !core.IsConnDrop(err) {
@@ -42,9 +42,10 @@ func TestIsConnDropRequiresTheTypedMarker(t *testing.T) {
 }
 
 type attestingEnv struct {
-	reason string
-	ok     bool
-	asked  bool
+	reason  string
+	ok      bool
+	asked   bool
+	gotAddr string
 }
 
 func (e *attestingEnv) ControllerURL() string                            { return "" }
@@ -52,8 +53,9 @@ func (e *attestingEnv) Versions() core.DetectedVersions                  { retur
 func (e *attestingEnv) Exec() exec.RemoteExecutor                        { return nil }
 func (e *attestingEnv) Handles() core.EnvHandles                         { return core.EnvHandles{} }
 func (e *attestingEnv) Collect(context.Context, core.ArtifactSink) error { return nil }
-func (e *attestingEnv) AttestPGConnDrop(context.Context) (string, bool) {
+func (e *attestingEnv) AttestPGConnDrop(_ context.Context, addr string) (string, bool) {
 	e.asked = true
+	e.gotAddr = addr
 	return e.reason, e.ok
 }
 
@@ -67,9 +69,13 @@ func runFailingBody(t *testing.T, env core.Environment, bodyErr error) *core.Res
 
 func TestConnDropAttestedBecomesEnvFailed(t *testing.T) {
 	env := &attestingEnv{reason: "pod survived, postgres accepts again", ok: true}
-	r := runFailingBody(t, env, fmt.Errorf(`exec "INSERT": %w`, &pg.TransportError{Err: errors.New("unexpected EOF")}))
+	r := runFailingBody(t, env, fmt.Errorf(`exec "INSERT": %w`,
+		&pg.TransportError{Err: errors.New("unexpected EOF"), Addr: "127.0.0.1:5001"}))
 	if !env.asked {
 		t.Fatal("the env was never asked to attest")
+	}
+	if env.gotAddr != "127.0.0.1:5001" {
+		t.Fatalf("attester got addr %q, want the dropped connection's", env.gotAddr)
 	}
 	if r.Status != core.StatusEnvFailed {
 		t.Fatalf("status = %s, want env_failed", r.Status)
@@ -81,9 +87,20 @@ func TestConnDropAttestedBecomesEnvFailed(t *testing.T) {
 
 func TestConnDropUnattestedStaysFailed(t *testing.T) {
 	env := &attestingEnv{ok: false}
-	r := runFailingBody(t, env, &pg.TransportError{Err: errors.New("unexpected EOF")})
+	r := runFailingBody(t, env, &pg.TransportError{Err: errors.New("unexpected EOF"), Addr: "127.0.0.1:5001"})
 	if !env.asked {
 		t.Fatal("the env was never asked to attest")
+	}
+	if r.Status != core.StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status)
+	}
+}
+
+func TestConnDropWithoutAddrIsNeverAttested(t *testing.T) {
+	env := &attestingEnv{reason: "would have attested", ok: true}
+	r := runFailingBody(t, env, &pg.TransportError{Err: errors.New("unexpected EOF")})
+	if env.asked {
+		t.Fatal("the env was asked to attest a drop with no address")
 	}
 	if r.Status != core.StatusFailed {
 		t.Fatalf("status = %s, want failed", r.Status)

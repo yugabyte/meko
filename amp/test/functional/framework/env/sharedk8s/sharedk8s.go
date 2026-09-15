@@ -1311,6 +1311,9 @@ type Env struct {
 	// and call ConnectEndpoint concurrently; all are closed in Teardown.
 	extraMu  sync.Mutex
 	extraPFs []*k8s.PortForward
+	// extraPG is AttestPGConnDrop's baseline for those endpoints, keyed by the
+	// address the caller dials.
+	extraPG map[string]*extraEndpoint
 
 	// pgMu serializes rebuilds of the endpoint forward and guards pg/pfs. One
 	// Env serves many co-tenant tests, so a refused connection is noticed by
@@ -1319,8 +1322,13 @@ type Env struct {
 
 	// pgPod is AttestPGConnDrop's baseline (conndrop.go), guarded by pgMu.
 	pgPod *pgPodSnap
-	// pgProbe overrides the postmaster start-time query in tests.
+	// ownAddrs are the addresses THIS endpoint has been reachable at, superseded
+	// ones included: a co-tenant may rebuild the forward before a drop on the old
+	// local port is attested. Guarded by pgMu.
+	ownAddrs map[string]bool
+	// pgProbe and pgReady are test seams over the postmaster query and the wait.
 	pgProbe func(ctx context.Context, ci pg.ConnInfo) (string, error)
+	pgReady func(ctx context.Context, ci pg.ConnInfo) error
 
 	// samplers holds the per-test server-metrics samplers (servermetrics.go).
 	samplers serverSamplers
@@ -1346,6 +1354,12 @@ type Env struct {
 	// between the capability check at test start and the storage phase that
 	// actually dials it, so YBStorage re-resolves instead of returning a dead one.
 	storagePF *k8s.PortForward
+}
+
+type extraEndpoint struct {
+	ep   controller.Endpoint
+	ci   pg.ConnInfo
+	snap *pgPodSnap
 }
 
 // addExtraPF records a port-forward ConnectEndpoint opened, so Teardown closes it.
@@ -1548,8 +1562,38 @@ func (e *Env) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (*pg.
 	if pf != nil {
 		e.addExtraPF(pf)
 	}
+	e.recordExtraEndpoint(ctx, ep, ci)
 	ok = true
 	return client, nil
+}
+
+// Best effort: a nil snap makes AttestPGConnDrop decline for this endpoint
+// rather than judge it against another one's pod.
+func (e *Env) recordExtraEndpoint(ctx context.Context, ep controller.Endpoint, ci pg.ConnInfo) {
+	entry := &extraEndpoint{ep: ep, ci: ci}
+	if e.kube != nil {
+		snap, err := e.endpointPodStateFor(ctx, ep.ID)
+		if err != nil {
+			e.log("sharedk8s: pg pod snapshot for endpoint %s not captured: %v", ep.ID, err)
+		} else if start, serr := e.postmasterStart(ctx, ci); serr != nil {
+			e.log("sharedk8s: postmaster start time for endpoint %s not captured: %v", ep.ID, serr)
+		} else {
+			snap.postmasterStart = start
+			entry.snap = &snap
+		}
+	}
+	e.extraMu.Lock()
+	if e.extraPG == nil {
+		e.extraPG = map[string]*extraEndpoint{}
+	}
+	e.extraPG[ci.Addr()] = entry
+	e.extraMu.Unlock()
+}
+
+func (e *Env) extraEndpointFor(addr string) *extraEndpoint {
+	e.extraMu.Lock()
+	defer e.extraMu.Unlock()
+	return e.extraPG[addr]
 }
 
 // PGEndpoint is connection info for the endpoint's compute Postgres.
@@ -1710,14 +1754,22 @@ func (e *Env) RestartCompute(ctx context.Context) error {
 // Exported so a test can point a pod-level app (e.g. apps/metrics) at the
 // endpoint without knowing how the chart labels it.
 func (e *Env) EndpointPodSelector() string {
-	return "app.kubernetes.io/instance=yb-ep-" + e.endpointID
+	return endpointPodSelector(e.endpointID)
+}
+
+func endpointPodSelector(id string) string {
+	return "app.kubernetes.io/instance=yb-ep-" + id
 }
 
 // computePodName returns the endpoint's Running compute pod (falling back to the
 // first pod during a reschedule), matched by the app.kubernetes.io/instance
 // label the endpoint's Deployment stamps on its pods.
 func (e *Env) computePodName(ctx context.Context) (string, error) {
-	sel := e.EndpointPodSelector()
+	return e.computePodNameFor(ctx, e.endpointID)
+}
+
+func (e *Env) computePodNameFor(ctx context.Context, id string) (string, error) {
+	sel := endpointPodSelector(id)
 	names, err := e.kube.GetSelector(ctx, "pod", sel, "{.items[*].metadata.name}")
 	if err != nil {
 		return "", err
@@ -1735,7 +1787,7 @@ func (e *Env) computePodName(ctx context.Context) (string, error) {
 	if len(nf) > 0 {
 		return nf[0], nil
 	}
-	return "", fmt.Errorf("no pod found for endpoint %s (selector %q)", e.endpointID, sel)
+	return "", fmt.Errorf("no pod found for endpoint %s (selector %q)", id, sel)
 }
 
 // ErrPGForwardAlive says the endpoint's port-forward is up, so a Postgres
@@ -1827,6 +1879,7 @@ const forwardProbeTimeout = 2 * time.Second
 // forward's pod is gone and nobody can still be using it. Caller holds pgMu.
 func (e *Env) swapPG(ci pg.ConnInfo, pf *k8s.PortForward) {
 	old := e.pfs
+	e.rememberOwnAddr(ci)
 	e.pg = ci
 	e.pfs = nonNilPFs(pf)
 	closeAll(old)
@@ -1840,11 +1893,23 @@ func (e *Env) swapPG(ci pg.ConnInfo, pf *k8s.PortForward) {
 // Caller holds pgMu.
 func (e *Env) swapPGRetiring(ci pg.ConnInfo, pf *k8s.PortForward) {
 	old := e.pfs
+	e.rememberOwnAddr(ci)
 	e.pg = ci
 	e.pfs = nonNilPFs(pf)
 	for _, o := range old {
 		e.addExtraPF(o)
 	}
+}
+
+// Caller holds pgMu.
+func (e *Env) rememberOwnAddr(ci pg.ConnInfo) {
+	if e.ownAddrs == nil {
+		e.ownAddrs = map[string]bool{}
+	}
+	if e.pg.Host != "" {
+		e.ownAddrs[e.pg.Addr()] = true
+	}
+	e.ownAddrs[ci.Addr()] = true
 }
 
 // ControllerURL is the current controller root URL. It tracks the shared

@@ -30,7 +30,7 @@ func (e *Env) capturePGPod(ctx context.Context) {
 	if e.kube == nil {
 		return
 	}
-	snap, err := e.endpointPodState(ctx)
+	snap, err := e.endpointPodStateFor(ctx, e.endpointID)
 	if err != nil {
 		e.log("sharedk8s: pg pod snapshot for endpoint %s not captured: %v", e.endpointID, err)
 		return
@@ -49,6 +49,13 @@ func (e *Env) capturePGPod(ctx context.Context) {
 	e.pgMu.Unlock()
 }
 
+func (e *Env) waitPGReady(ctx context.Context, ci pg.ConnInfo) error {
+	if e.pgReady != nil {
+		return e.pgReady(ctx, ci)
+	}
+	return pg.WaitReady(ctx, ci, connDropReadyTimeout)
+}
+
 func (e *Env) postmasterStart(ctx context.Context, ci pg.ConnInfo) (string, error) {
 	if e.pgProbe != nil {
 		return e.pgProbe(ctx, ci)
@@ -63,8 +70,8 @@ func (e *Env) postmasterStart(ctx context.Context, ci pg.ConnInfo) (string, erro
 	return cl.QueryString(qctx, "SELECT pg_postmaster_start_time()::text")
 }
 
-func (e *Env) endpointPodState(ctx context.Context) (pgPodSnap, error) {
-	pod, err := e.computePodName(ctx)
+func (e *Env) endpointPodStateFor(ctx context.Context, id string) (pgPodSnap, error) {
+	pod, err := e.computePodNameFor(ctx, id)
 	if err != nil {
 		return pgPodSnap{}, err
 	}
@@ -92,18 +99,26 @@ func (e *Env) endpointPodState(ctx context.Context) (pgPodSnap, error) {
 }
 
 // AttestPGConnDrop testifies only when every check passes; any doubt keeps the
-// product verdict. The declined paths log why, so the run record explains the
-// verdict either way.
-func (e *Env) AttestPGConnDrop(ctx context.Context) (string, bool) {
+// product verdict. addr names the connection that died, so a drop on a tenant
+// endpoint from ConnectEndpoint is judged against THAT endpoint's pod and never
+// against the env's own idle one. The declined paths log why.
+func (e *Env) AttestPGConnDrop(ctx context.Context, addr string) (string, bool) {
 	e.pgMu.Lock()
 	owned := len(e.pfs) > 0
 	snap := e.pgPod
 	ci := e.pg
+	own := addr == ci.Addr() || e.ownAddrs[addr]
 	e.pgMu.Unlock()
-	if !owned || snap == nil || e.kube == nil {
+	if e.kube == nil {
 		return "", false
 	}
-	cur, err := e.endpointPodState(ctx)
+	if !own {
+		return e.attestExtra(ctx, addr)
+	}
+	if !owned || snap == nil {
+		return "", false
+	}
+	cur, err := e.endpointPodStateFor(ctx, e.endpointID)
 	if err != nil {
 		e.log("sharedk8s: conn-drop attestation declined: %v", err)
 		return "", false
@@ -124,21 +139,74 @@ func (e *Env) AttestPGConnDrop(ctx context.Context) (string, bool) {
 		rebuilt = true
 		e.log("sharedk8s: conn-drop attestation rebuilt the dead pg forward for endpoint %s (now %s)", e.endpointID, ci.Addr())
 	}
-	if err := pg.WaitReady(ctx, ci, connDropReadyTimeout); err != nil {
-		e.log("sharedk8s: conn-drop attestation declined: postgres not answering: %v", err)
-		return "", false
-	}
-	start, err := e.postmasterStart(ctx, ci)
-	if err != nil || start == "" || start != snap.postmasterStart {
-		e.log("sharedk8s: conn-drop attestation declined: postmaster start time %q vs snapshot %q (err=%v), postgres restarted in place",
-			start, snap.postmasterStart, err)
+	if !e.pgAliveSince(ctx, ci, snap.postmasterStart) {
 		return "", false
 	}
 	detail := ""
 	if rebuilt {
 		detail = ", forward rebuilt"
 	}
+	return attestation(cur.name, cur.restarts, snap.postmasterStart, detail), true
+}
+
+// A co-tenant may still be using the recorded forward, so a rebuild here probes
+// over a throwaway one instead of swapping it.
+func (e *Env) attestExtra(ctx context.Context, addr string) (string, bool) {
+	entry := e.extraEndpointFor(addr)
+	if entry == nil || entry.snap == nil {
+		e.log("sharedk8s: conn-drop attestation declined: no pg pod baseline for %s", addr)
+		return "", false
+	}
+	cur, err := e.endpointPodStateFor(ctx, entry.ep.ID)
+	if err != nil {
+		e.log("sharedk8s: conn-drop attestation declined for %s: %v", addr, err)
+		return "", false
+	}
+	if cur.uid != entry.snap.uid || cur.restarts > entry.snap.restarts {
+		e.log("sharedk8s: conn-drop attestation declined: endpoint %s pod %s changed (uid %s -> %s, restarts %d -> %d)",
+			entry.ep.ID, cur.name, entry.snap.uid, cur.uid, entry.snap.restarts, cur.restarts)
+		return "", false
+	}
+	ci, detail := entry.ci, ""
+	if !pgForwardAccepts(ctx, ci) {
+		if e.prov == nil {
+			e.log("sharedk8s: conn-drop attestation declined for %s: no provider to re-resolve endpoint %s", addr, entry.ep.ID)
+			return "", false
+		}
+		fresh, pf, rerr := e.prov.resolvePG(ctx, e.kube, entry.ep)
+		if rerr != nil {
+			e.log("sharedk8s: conn-drop attestation declined for %s: re-resolve endpoint %s: %v", addr, entry.ep.ID, rerr)
+			return "", false
+		}
+		if pf != nil {
+			defer func() { _ = pf.Close() }()
+		}
+		ci = fresh
+		detail = ", probed over a fresh forward"
+	}
+	if !e.pgAliveSince(ctx, ci, entry.snap.postmasterStart) {
+		return "", false
+	}
+	return attestation(cur.name, cur.restarts, entry.snap.postmasterStart, detail), true
+}
+
+func (e *Env) pgAliveSince(ctx context.Context, ci pg.ConnInfo, want string) bool {
+	if err := e.waitPGReady(ctx, ci); err != nil {
+		e.log("sharedk8s: conn-drop attestation declined: postgres not answering: %v", err)
+		return false
+	}
+	start, err := e.postmasterStart(ctx, ci)
+	if err != nil || start == "" || start != want {
+		e.log("sharedk8s: conn-drop attestation declined: postmaster start time %q vs snapshot %q (err=%v), postgres restarted in place",
+			start, want, err)
+		return false
+	}
+	return true
+}
+
+// The closing phrase is matched verbatim by core/envfail.go's scheduling signal.
+func attestation(pod string, restarts int, since, detail string) string {
 	return fmt.Sprintf(
 		"env: connection dropped mid-statement but compute pod %s survived it (uid unchanged, %d container restarts, same postmaster since %s) and postgres accepts again%s: harness port-forward drop, not a product failure",
-		cur.name, cur.restarts, snap.postmasterStart, detail), true
+		pod, restarts, since, detail)
 }

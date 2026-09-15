@@ -84,6 +84,8 @@ func TestSchedulingReasonMatchesCapacityFailures(t *testing.T) {
 		{"error: timed out waiting for the condition on statefulsets/yb-tserver", "readiness wait timed out"},
 		{"yugabyted cluster never became ready: deadline", "readiness wait timed out"},
 		{"tservers not Ready before workload: exit 1", "readiness wait timed out"},
+		{"copy into mt_0: unexpected EOF [env: connection dropped mid-statement but compute pod yb-ep-1 survived it (uid unchanged, 0 container restarts, same postmaster since 2026-09-15 11:00:43+00) and postgres accepts again: harness port-forward drop, not a product failure]",
+			"attested harness port-forward drop"},
 		{`provision_yba: create universe "ampqa-70c748e9": task 5643 (Created Universe) ended Failure: ConfigureUniverse: Failed to execute task {...}, hit error: Could not upload the ybc contents.`,
 			"yba universe create task failed"},
 	}
@@ -110,6 +112,8 @@ func TestSchedulingReasonRejectsNonCapacityFailures(t *testing.T) {
 		// Unschedulable BECAUSE the image never resolves — still no retry.
 		"pod unschedulable; last event: ErrImagePull for amp-controller:custom-nope",
 		`controller: yba task 5643 (Edit Universe) ended Failure: ConfigureUniverse`,
+		// An unattested conn drop is a product signal; only the attestation retries.
+		"copy into mt_0: unexpected EOF",
 	} {
 		if reason, ok := core.SchedulingReason(msg); ok {
 			t.Errorf("SchedulingReason(%q) matched %q, want no match", msg, reason)

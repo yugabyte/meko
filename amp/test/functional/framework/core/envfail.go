@@ -60,6 +60,9 @@ var schedulingSignals = []struct {
 }{
 	// Both tokens: "ended Failure" alone reaches the product's own YBA calls.
 	{"yba universe create task failed", []string{"provision_yba: create universe", "ended failure"}},
+	// Only sharedk8s' conn-drop attestation emits this, and only after proving
+	// the pod, its restart count and its postmaster all survived the drop.
+	{"attested harness port-forward drop", []string{"harness port-forward drop, not a product failure"}},
 	{"pod unschedulable (insufficient cpu)", []string{"insufficient cpu"}},
 	{"pod unschedulable (insufficient memory)", []string{"insufficient memory"}},
 	{"pod unschedulable (persistentvolume node affinity)", []string{"persistentvolume's node affinity"}},

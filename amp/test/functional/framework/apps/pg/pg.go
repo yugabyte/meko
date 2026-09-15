@@ -98,6 +98,7 @@ func quoteDSN(v string) string {
 // Client is a pooled Postgres connection.
 type Client struct {
 	pool *pgxpool.Pool
+	ci   ConnInfo
 }
 
 // Connect opens a connection pool to the endpoint described by ci.
@@ -110,7 +111,7 @@ func Connect(ctx context.Context, ci ConnInfo) (*Client, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping %s:%d: %w", ci.Host, ci.port(), err)
 	}
-	return &Client{pool: pool}, nil
+	return &Client{pool: pool, ci: ci}, nil
 }
 
 // Session is one Postgres backend, held for as long as the caller keeps it.
@@ -132,7 +133,12 @@ type Session interface {
 // socket died under the client with no answer from the server. Deliberately
 // absent: "connection refused" (ConnectPG's own recovery path), timeouts, and
 // every SQLSTATE-carrying error (the server answered, so the transport worked).
-type TransportError struct{ Err error }
+// Addr is the dropped connection's host:port, which is what tells an attester
+// which endpoint to check.
+type TransportError struct {
+	Err  error
+	Addr string
+}
 
 func (e *TransportError) Error() string { return e.Err.Error() }
 func (e *TransportError) Unwrap() error { return e.Err }
@@ -145,7 +151,7 @@ var transportMarkers = []string{
 	"use of closed network connection",
 }
 
-func wrapTransport(err error) error {
+func wrapTransport(err error, addr string) error {
 	if err == nil {
 		return nil
 	}
@@ -155,7 +161,7 @@ func wrapTransport(err error) error {
 	}
 	for _, m := range transportMarkers {
 		if strings.Contains(low, m) {
-			return &TransportError{Err: err}
+			return &TransportError{Err: err, Addr: addr}
 		}
 	}
 	return err
@@ -170,17 +176,18 @@ func (c *Client) Pin(ctx context.Context) (Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pin a connection: %w", err)
 	}
-	return &pinned{conn: conn}, nil
+	return &pinned{conn: conn, addr: c.ci.Addr()}, nil
 }
 
 type pinned struct {
 	conn *pgxpool.Conn
+	addr string
 }
 
 func (p *pinned) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	tag, err := p.conn.Exec(ctx, sql, args...)
 	if err != nil {
-		return 0, fmt.Errorf("exec %q: %w", truncate(sql), wrapTransport(err))
+		return 0, fmt.Errorf("exec %q: %w", truncate(sql), wrapTransport(err, p.addr))
 	}
 	return tag.RowsAffected(), nil
 }
@@ -188,7 +195,7 @@ func (p *pinned) Exec(ctx context.Context, sql string, args ...any) (int64, erro
 func (p *pinned) QueryInt(ctx context.Context, sql string, args ...any) (int64, error) {
 	var v int64
 	if err := p.conn.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return 0, fmt.Errorf("query int %q: %w", truncate(sql), wrapTransport(err))
+		return 0, fmt.Errorf("query int %q: %w", truncate(sql), wrapTransport(err, p.addr))
 	}
 	return v, nil
 }
@@ -196,7 +203,7 @@ func (p *pinned) QueryInt(ctx context.Context, sql string, args ...any) (int64, 
 func (p *pinned) QueryString(ctx context.Context, sql string, args ...any) (string, error) {
 	var v string
 	if err := p.conn.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return "", fmt.Errorf("query string %q: %w", truncate(sql), wrapTransport(err))
+		return "", fmt.Errorf("query string %q: %w", truncate(sql), wrapTransport(err, p.addr))
 	}
 	return v, nil
 }
@@ -226,7 +233,7 @@ func (c *Client) Pool() *pgxpool.Pool { return c.pool }
 func (c *Client) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	tag, err := c.pool.Exec(ctx, sql, args...)
 	if err != nil {
-		return 0, fmt.Errorf("exec %q: %w", truncate(sql), wrapTransport(err))
+		return 0, fmt.Errorf("exec %q: %w", truncate(sql), wrapTransport(err, c.ci.Addr()))
 	}
 	return tag.RowsAffected(), nil
 }
@@ -237,7 +244,7 @@ func (c *Client) Exec(ctx context.Context, sql string, args ...any) (int64, erro
 func (c *Client) CopyFrom(ctx context.Context, table string, columns []string, src pgx.CopyFromSource) (int64, error) {
 	n, err := c.pool.CopyFrom(ctx, pgx.Identifier{table}, columns, src)
 	if err != nil {
-		return n, fmt.Errorf("copy into %s: %w", table, wrapTransport(err))
+		return n, fmt.Errorf("copy into %s: %w", table, wrapTransport(err, c.ci.Addr()))
 	}
 	return n, nil
 }
@@ -246,7 +253,7 @@ func (c *Client) CopyFrom(ctx context.Context, table string, columns []string, s
 func (c *Client) Query(ctx context.Context, scan func(pgx.Rows) error, sql string, args ...any) error {
 	rows, err := c.pool.Query(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("query %q: %w", truncate(sql), wrapTransport(err))
+		return fmt.Errorf("query %q: %w", truncate(sql), wrapTransport(err, c.ci.Addr()))
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -254,14 +261,14 @@ func (c *Client) Query(ctx context.Context, scan func(pgx.Rows) error, sql strin
 			return fmt.Errorf("scan %q: %w", truncate(sql), err)
 		}
 	}
-	return wrapTransport(rows.Err())
+	return wrapTransport(rows.Err(), c.ci.Addr())
 }
 
 // QueryInt runs a query returning a single int64.
 func (c *Client) QueryInt(ctx context.Context, sql string, args ...any) (int64, error) {
 	var v int64
 	if err := c.pool.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return 0, fmt.Errorf("query int %q: %w", truncate(sql), wrapTransport(err))
+		return 0, fmt.Errorf("query int %q: %w", truncate(sql), wrapTransport(err, c.ci.Addr()))
 	}
 	return v, nil
 }
@@ -270,7 +277,7 @@ func (c *Client) QueryInt(ctx context.Context, sql string, args ...any) (int64, 
 func (c *Client) QueryString(ctx context.Context, sql string, args ...any) (string, error) {
 	var v string
 	if err := c.pool.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
-		return "", fmt.Errorf("query string %q: %w", truncate(sql), wrapTransport(err))
+		return "", fmt.Errorf("query string %q: %w", truncate(sql), wrapTransport(err, c.ci.Addr()))
 	}
 	return v, nil
 }

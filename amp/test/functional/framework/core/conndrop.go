@@ -11,9 +11,10 @@ import (
 // PGConnDropAttester verifies a mid-statement connection drop was the harness's
 // transport (kubectl port-forward), not the product: ok only when the same
 // compute pod survived with no container restarts, the same postmaster is
-// still running (no in-place respawn), and postgres accepts again.
+// still running (no in-place respawn), and postgres accepts again. It is keyed
+// on addr, the dropped connection's host:port.
 type PGConnDropAttester interface {
-	AttestPGConnDrop(ctx context.Context) (reason string, ok bool)
+	AttestPGConnDrop(ctx context.Context, addr string) (reason string, ok bool)
 }
 
 // IsConnDrop is true only for errors the pg client itself marked as a severed
@@ -29,7 +30,8 @@ const connDropAttestTimeout = 2 * time.Minute
 // Own bounded context, deliberately detached: the attestation is post-mortem
 // evidence gathering and should finish even when the run is being aborted.
 func attestConnDrop(env Environment, err error) (string, bool) {
-	if !IsConnDrop(err) {
+	var te *pg.TransportError
+	if !errors.As(err, &te) || te.Addr == "" {
 		return "", false
 	}
 	a, ok := env.(PGConnDropAttester)
@@ -38,5 +40,5 @@ func attestConnDrop(env Environment, err error) (string, bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), connDropAttestTimeout)
 	defer cancel()
-	return a.AttestPGConnDrop(ctx)
+	return a.AttestPGConnDrop(ctx, te.Addr)
 }

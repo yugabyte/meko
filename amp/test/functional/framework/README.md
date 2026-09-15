@@ -141,8 +141,10 @@ postmaster, postgres answering again (`core/conndrop.go`,
 SCHEDULING-CLASS reason — pod unschedulable, insufficient cpu/memory,
 PersistentVolume node affinity, a readiness or `helm install --wait` deadline —
 or on a YBA create-universe task failure during our own `provision_yba`
-backing, is retried `sched.env_retries` times (default 1) after
-`sched.env_retry_backoff` (default 60s). Nothing else retries. Every attempt is reported as its OWN
+backing, or on an attested harness port-forward drop, is retried
+`sched.env_retries` times (default 1) after `sched.env_retry_backoff`
+(default 60s). The port-forward case re-runs the whole body, so a retried long
+test costs its budget twice. Nothing else retries. Every attempt is reported as its OWN
 result carrying `retry_group`, `attempt` (1-based) and, from attempt 2 on,
 `retry_reason`; run-level counts use each test's FINAL attempt only.
 
