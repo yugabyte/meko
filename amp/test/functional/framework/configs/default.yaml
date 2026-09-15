@@ -2104,6 +2104,76 @@ perf:
     # until the controller grows the pause/resume routes (meko#518): the POST
     # 404s today, which is also why features/amp_endpoint_pause_resume is skipped.
     pause_resume: false
+  # ops_latency is perf/ops_latency: every control-plane operation timed on
+  # fresh objects, at two layers — the API call that hands back a task, and the
+  # wait to a usable result. Runs on a stack of its own.
+  ops_latency:
+    # repeats is how many times each operation runs, each on its own cluster.
+    # A single shot is not a signal: endpoint create has shown a 0.49
+    # coefficient of variation within one run, so the gated value is the median
+    # of the repeats and the CV rides along as its own datapoint. Endpoint
+    # create is the exception: it splits cold from warm by node, so each of
+    # those two keys carries only the repeats that landed in its bucket, and on
+    # a one-node stack cold has a single sample.
+    repeats: 5
+    # seed_rows is the parent dataset a fork is timed against, sized so
+    # copy-on-write behaviour is visible rather than assumed. batch_rows is one
+    # INSERT ... SELECT of that load; payload_bytes is the per-row filler.
+    seed_rows: 1000000
+    batch_rows: 200000
+    payload_bytes: 64
+    # endpoint_cpu/memory is what every timed endpoint is created with;
+    # resize_cpu/memory is what the timed resize moves it to. Both shapes are
+    # explicit because an unsized endpoint takes the product's generous default
+    # reservation, which a shared test cluster cannot fit several of.
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+    resize_cpu: "1"
+    resize_memory: "2Gi"
+  # chain_depth is perf/chain_depth_read: cold single-page read latency as a
+  # function of how many deltas have accumulated on a page since its last
+  # anchor image.
+  chain_depth:
+    # pages is how many one-row pages each rung's table holds; payload_bytes is
+    # the PLAIN-stored filler that makes a row fill its own page. samples is how
+    # many distinct pages are read per rung after the compute restart. Below 100
+    # samples a p99 is just the maximum, so the test refuses that with max_ratio
+    # set rather than gate the ratio on two single reads.
+    pages: 1000
+    payload_bytes: 700
+    samples: 300
+    # depths is the ladder of update rounds applied per rung — one delta per
+    # page per round. It straddles the pageserver's image_chain_limit (20), so
+    # the rungs below, at and above it are all measured.
+    depths: [1, 5, 10, 20, 40]
+    # max_ratio gates p99 at ratio_depth over p99 at the shallowest rung. The
+    # materialiser folds a chain once it crosses image_chain_limit, so a read at
+    # the limit must not cost proportionally more than a read at depth 1.
+    # p50 is steady across the whole ladder (2.5 to 2.8 ms in runs 5a527679 and
+    # 97521a40), but the p99 tail is what the contract is about and it swings:
+    # those two runs reported 1.17x and 2.43x. 4.0 is the headroom that leaves.
+    # Raise it if the tail turns out wider on other hardware. 0 keeps the
+    # datapoints and drops the assertion.
+    max_ratio: 4.0
+    ratio_depth: 20
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+    # ready_timeout bounds the compute workload becoming ready again after the
+    # pod is rolled for the cold read.
+    ready_timeout: 10m
+  # idle_footprint is perf/idle_footprint: what one endpoint costs while nobody
+  # is connected to it, split per process inside the endpoint container.
+  idle_footprint:
+    # hold is how long the endpoint is left alone. Long enough that startup
+    # transients are a small share of the window, short enough to fit a run.
+    hold: 10m
+    # interval paces the /proc sweeps inside the hold.
+    interval: 30s
+    # settle is waited before the first sweep: a just-created endpoint is still
+    # finishing its own startup, which is not idle cost.
+    settle: 1m
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
   # scale is the shape every ladder shares: ONE tenant (one cluster, one
   # branch, one endpoint) that keeps getting more concurrent drivers —
   # perf/scale_tpcc, scale_ycsb, scale_pgbench escalate copies of one workload,

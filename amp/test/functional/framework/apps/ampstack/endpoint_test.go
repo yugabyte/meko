@@ -83,3 +83,52 @@ func TestWaitEndpointWorkloadReadyRealFailureNotSwallowed(t *testing.T) {
 		t.Fatalf("a timeout must not trigger the ReplicaSet fallback, got %v", rec.calls)
 	}
 }
+
+type podRec struct {
+	calls   []string
+	running string
+	first   string
+}
+
+func (r *podRec) run(_ context.Context, _ io.Reader, argv []string) (exec.Result, error) {
+	joined := strings.Join(argv, " ")
+	r.calls = append(r.calls, joined)
+	if strings.Contains(joined, `status.phase=="Running"`) {
+		return exec.Result{Stdout: r.running}, nil
+	}
+	return exec.Result{Stdout: r.first}, nil
+}
+
+func TestEndpointPodNamePrefersRunning(t *testing.T) {
+	rec := &podRec{running: "yb-ep-ep-1-live", first: "yb-ep-ep-1-dying"}
+	kube := k8s.New(k8s.Config{Namespace: "amp"}).WithRunner(rec.run)
+
+	pod, err := EndpointPodName(context.Background(), kube, "ep-1")
+	if err != nil {
+		t.Fatalf("EndpointPodName: %v", err)
+	}
+	if pod != "yb-ep-ep-1-live" {
+		t.Errorf("want the Running pod, got %q", pod)
+	}
+	if len(rec.calls) != 1 {
+		t.Errorf("want one kubectl call when a Running pod exists, got %v", rec.calls)
+	}
+}
+
+func TestEndpointPodNameFallsBackWhileRescheduling(t *testing.T) {
+	rec := &podRec{first: "yb-ep-ep-1-pending"}
+	kube := k8s.New(k8s.Config{Namespace: "amp"}).WithRunner(rec.run)
+
+	pod, err := EndpointPodName(context.Background(), kube, "ep-1")
+	if err != nil {
+		t.Fatalf("EndpointPodName: %v", err)
+	}
+	if pod != "yb-ep-ep-1-pending" {
+		t.Errorf("want the first listed pod, got %q", pod)
+	}
+
+	none := k8s.New(k8s.Config{Namespace: "amp"}).WithRunner((&podRec{}).run)
+	if _, err := EndpointPodName(context.Background(), none, "ep-1"); err == nil {
+		t.Error("want an error when the selector matches no pod")
+	}
+}

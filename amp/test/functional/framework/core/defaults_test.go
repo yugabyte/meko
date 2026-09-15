@@ -1632,6 +1632,52 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 
+	// --- perf/ops_latency, perf/chain_depth_read, perf/idle_footprint ---
+	for key, want := range map[string]int{
+		"perf.ops_latency.repeats":       perf.DefaultOpsRepeats,
+		"perf.ops_latency.seed_rows":     perf.DefaultOpsSeedRows,
+		"perf.ops_latency.batch_rows":    perf.DefaultOpsBatchRows,
+		"perf.ops_latency.payload_bytes": perf.DefaultOpsPayloadBytes,
+		"perf.chain_depth.pages":         perf.DefaultChainPages,
+		"perf.chain_depth.samples":       perf.DefaultChainSamples,
+		"perf.chain_depth.payload_bytes": perf.DefaultChainPayloadBytes,
+		"perf.chain_depth.ratio_depth":   perf.DefaultChainRatioDepth,
+	} {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	for key, want := range map[string]string{
+		"perf.ops_latency.endpoint_cpu":       perf.DefaultOpsEndpointCPU,
+		"perf.ops_latency.endpoint_memory":    perf.DefaultOpsEndpointMem,
+		"perf.ops_latency.resize_cpu":         perf.DefaultOpsResizeCPU,
+		"perf.ops_latency.resize_memory":      perf.DefaultOpsResizeMem,
+		"perf.chain_depth.endpoint_cpu":       perf.DefaultChainEndpointCPU,
+		"perf.chain_depth.endpoint_memory":    perf.DefaultChainEndpointMem,
+		"perf.idle_footprint.endpoint_cpu":    perf.DefaultIdleEndpointCPU,
+		"perf.idle_footprint.endpoint_memory": perf.DefaultIdleEndpointMem,
+	} {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := cfg.GetFloat("perf.chain_depth.max_ratio", -1); got != perf.DefaultChainMaxRatio {
+		t.Errorf("perf.chain_depth.max_ratio = %v, want %v", got, perf.DefaultChainMaxRatio)
+	}
+	if got := cfg.GetStringSlice("perf.chain_depth.depths", nil); !slices.Equal(got, perf.DefaultChainDepths) {
+		t.Errorf("perf.chain_depth.depths = %v, want %v", got, perf.DefaultChainDepths)
+	}
+	for key, want := range map[string]time.Duration{
+		"perf.chain_depth.ready_timeout": perf.DefaultChainReadyTimeout,
+		"perf.idle_footprint.hold":       perf.DefaultIdleHold,
+		"perf.idle_footprint.interval":   perf.DefaultIdleInterval,
+		"perf.idle_footprint.settle":     perf.DefaultIdleSettle,
+	} {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+
 	// --- perf.bench.* (the multi-iteration benchmark harness) ---
 	if got := cfg.GetInt("perf.bench.iterations", -1); got != perf.DefaultBenchIterations {
 		t.Errorf("perf.bench.iterations = %d, want %d", got, perf.DefaultBenchIterations)

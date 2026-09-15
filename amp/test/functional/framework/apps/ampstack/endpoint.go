@@ -36,6 +36,26 @@ func WaitEndpointWorkloadReady(ctx context.Context, kube *k8s.Kubectl, endpointI
 	return nil
 }
 
+// EndpointPodName names an endpoint's compute pod, preferring a Running one: a rolled endpoint leaves a Terminating pod on the same selector.
+func EndpointPodName(ctx context.Context, kube *k8s.Kubectl, endpointID string) (string, error) {
+	sel := "app.kubernetes.io/instance=" + EndpointWorkloadName(endpointID)
+	running, err := kube.GetSelector(ctx, "pod", sel, `{.items[?(@.status.phase=="Running")].metadata.name}`)
+	if err != nil {
+		return "", err
+	}
+	if f := strings.Fields(running); len(f) > 0 {
+		return f[0], nil
+	}
+	pod, err := kube.GetSelector(ctx, "pod", sel, "{.items[0].metadata.name}")
+	if err != nil {
+		return "", err
+	}
+	if pod = strings.TrimSpace(pod); pod == "" {
+		return "", fmt.Errorf("no pod matched %s", sel)
+	}
+	return pod, nil
+}
+
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
