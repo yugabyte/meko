@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
 -- load.
 CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     branch_id  uuid     NOT NULL,
-    bucket_id  INT      NOT NULL,   -- FROZEN: FNV-1a(key) % 3 (page_store::gc_bucket_id)
+    bucket_id  SMALLINT NOT NULL,   -- FROZEN: FNV-1a(key) % 3 (page_store::gc_bucket_id)
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_rel 5=drop_slru 6=drop_meta 7=drop_db

@@ -165,9 +165,9 @@ async fn sum_bucket_dequeues(
     outcomes.into_iter().sum()
 }
 
-/// Placement bucket for a candidate.
-pub fn gc_bucket_id(key: &Key) -> i32 {
-    (key_hash(key) % GC_BUCKETS as u64) as i32
+/// Placement bucket for a candidate, typed as its `SMALLINT` column.
+pub fn gc_bucket_id(key: &Key) -> i16 {
+    (key_hash(key) % GC_BUCKETS as u64) as i16
 }
 
 /// GC candidate kind — the `pending_gc.gc_kind` column. Each variant maps
@@ -795,7 +795,7 @@ impl PageStore {
             return Ok(0);
         }
         // Bucket straight into the three parallel arrays the statement binds.
-        let mut by_bucket: std::collections::HashMap<i32, DropShrinkBinds> =
+        let mut by_bucket: std::collections::HashMap<i16, DropShrinkBinds> =
             std::collections::HashMap::new();
         for c in candidates {
             let (keyb, kinds, due) = by_bucket.entry(gc_bucket_id(&c.0)).or_default();
@@ -2333,7 +2333,7 @@ mod tests {
             let key = blk(1663, 5, 16400 + (g % 50), g);
             let b = gc_bucket_id(&key);
             assert_eq!(b, gc_bucket_id(&key), "stable");
-            assert!((0..GC_BUCKETS).contains(&b), "in range");
+            assert!((0..GC_BUCKETS as i16).contains(&b), "in range");
             counts[b as usize] += 1;
         }
         // No bucket is starved or dominant (even spread ⇒ no tablet hotspot).
@@ -4167,7 +4167,7 @@ mod tests {
     async fn gc_dequeue_pins_its_candidates_to_the_index_cond() {
         let (store, _schema) = make_store("gc_dequeue_plan").await;
         let branch = BranchId::generate();
-        let bucket: i32 = 0;
+        let bucket: i16 = 0;
         // Enough keys that the planner would not pick a tight plan unaided,
         // which would make the assertions vacuous.
         let key_count = 2_000;

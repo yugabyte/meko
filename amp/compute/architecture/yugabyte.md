@@ -748,7 +748,7 @@ CONFLICT` needed under `yb_enable_upsert_mode`.
 ```sql
 CREATE TABLE amp_storage.pending_gc (
     branch_id  uuid     NOT NULL,
-    bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key), FNV-1a % GC_BUCKETS (3)
+    bucket_id  SMALLINT NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key), FNV-1a % GC_BUCKETS (3)
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,  -- encoded 18-byte Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,  -- page_store::GcKind (0..=7; trim/shrink/drop × table, plus drop_db/drop_rel)
