@@ -83,6 +83,10 @@ type EnvSpec struct {
 	// sharedk8s it buys a cluster, not a control plane. The scheduler runs such a
 	// test alone where the provider is a SharedInfraProvider.
 	FaultsSharedInfra bool
+	// SharedLock names a control-plane-global resource this test takes for its
+	// whole body. Tests sharing a key never run concurrently on a shared control
+	// plane; a dedicated stack has its own, so the key is ignored there.
+	SharedLock string
 	// PreferredYBDeploy is a test's HINT for which YugabyteDB deployment it would
 	// like (e.g. "yb_k8s"). It is opaque to the engine — carried, never
 	// interpreted here — and read only by the deploy selector (apps/ybdeploy).
@@ -97,6 +101,18 @@ func (s EnvSpec) Dedicated() bool { return s.Shape == DedicatedStack }
 // FaultsShared is FaultsSharedInfra as it matters to the scheduler: a test that
 // faults infrastructure only it uses faults nothing shared.
 func (s EnvSpec) FaultsShared() bool { return s.FaultsSharedInfra && !s.Dedicated() }
+
+// LockEndpointFleetUpgrade: the controller admits one fleet endpoint upgrade at
+// a time and 409s the rest, and a roll retargets endpoints another test owns.
+const LockEndpointFleetUpgrade = "endpoint_fleet_upgrade"
+
+// Locks is SharedLock as it matters to the scheduler.
+func (s EnvSpec) Locks() string {
+	if s.Dedicated() {
+		return ""
+	}
+	return s.SharedLock
+}
 
 // StackOverrideKey is the run-level knob that moves every control-plane test
 // between the two stack shapes: "dedicated" gives each test its own backing and

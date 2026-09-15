@@ -192,6 +192,14 @@ to isolate a flaky features run); the provision budget for a dedicated stack is
 attached standing control plane cannot build one, and the test skips with the
 reason.
 
+**Control-plane-global locks.** `EnvSpec.SharedLock` names a resource a test
+holds for its whole body; tests sharing a key never run concurrently on a
+shared control plane, and the key is ignored on a `DedicatedStack`, which has
+its own. `core.LockEndpointFleetUpgrade` is the one key today: the controller
+admits a single fleet endpoint upgrade and 409s the rest, and a roll retargets
+endpoints another test owns. Unlike `FaultsSharedInfra` this serializes only
+the tests sharing the key, not the whole run.
+
 **Lifecycle — `--env-mode build|attach|keep`.** Every `run` provisions an
 environment, runs the selected tests, and (by default) tears it down. The mode
 changes whether teardown happens:

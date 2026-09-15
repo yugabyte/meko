@@ -37,7 +37,7 @@ func init() {
 		Name:        "features/amp_endpoint_upgrade_roll_failfast",
 		Suite:       "features",
 		Category:    core.Functional,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Roll three seeded endpoints at max_parallel 2 onto a version tag no registry carries: the parent task fails and its error carries the tally and the first failure, nothing is reported upgraded, no more endpoints failed than ran at once so a failing child stopped new ones starting, at least one was left unattempted, every targeted endpoint has a failed upgrade_endpoint subtask and the unattempted ones say they never started, those endpoints still record the original version and serve their rows; a second roll onto the original version then succeeds for all three with every endpoint serving its seeded rows intact.",

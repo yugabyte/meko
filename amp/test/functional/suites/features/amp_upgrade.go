@@ -58,7 +58,7 @@ func init() {
 		Name:        "features/amp_upgrade",
 		Suite:       "features",
 		Category:    core.Functional,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression", "upgrade"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "In-place control-plane upgrade on its own backing and control plane, apart from the shared environment: resolve the previous release from the report portal (or functional.upgrade.from_*_image), deploy it, seed checksummed data through an endpoint, upgrade the controller image to the release under test, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, a whole-fleet POST /endpoint-upgrades rolls that endpoint onto the new endpoint image with its data intact, and a new endpoint gets the post-upgrade image.",

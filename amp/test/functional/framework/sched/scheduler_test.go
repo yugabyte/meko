@@ -416,3 +416,88 @@ func TestSchedulerHealthyProbeDoesNotPoisonRun(t *testing.T) {
 		t.Fatalf("a recovered stack must leave later tests alone, got %s (%s)", results[1].Status, results[1].ErrorSummary)
 	}
 }
+
+func lockedTest(name, key string, sharing core.Sharing, run func(*core.T) error) core.Test {
+	return core.Test{
+		Name:     name,
+		Suite:    "s",
+		Category: core.Functional,
+		Env:      core.EnvSpec{Sharing: sharing, Shape: core.SingleContainer, SharedLock: key},
+		Run:      run,
+	}
+}
+
+// The regression: three upgrade tests drive one controller-global fleet upgrade,
+// and the controller 409s the second (result 7883b585).
+func TestSchedulerSerializesTestsSharingALock(t *testing.T) {
+	var mu sync.Mutex
+	var live, peak int
+	body := func(*core.T) error {
+		mu.Lock()
+		live++
+		if live > peak {
+			peak = live
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		live--
+		mu.Unlock()
+		return nil
+	}
+	tests := []core.Test{
+		lockedTest("x1", "fleet", core.Exclusive, body),
+		lockedTest("x2", "fleet", core.Exclusive, body),
+		lockedTest("s1", "fleet", core.Shared, body),
+		lockedTest("s2", "fleet", core.Shared, body),
+	}
+	summary, _ := sched.Run(context.Background(), tests, sched.Options{
+		RunOptions: core.RunOptions{Parallel: 8, Seed: core.NewRunSeed(9, true), Provider: &fake.Provider{}},
+		Capacity:   8,
+	})
+	if peak != 1 {
+		t.Errorf("peak concurrency under one lock key = %d, want 1", peak)
+	}
+	if summary.Counts[core.StatusPassed] != len(tests) {
+		t.Errorf("passed = %d, want %d", summary.Counts[core.StatusPassed], len(tests))
+	}
+}
+
+// An empty key must not serialize anything.
+func TestSchedulerLeavesUnlockedTestsConcurrent(t *testing.T) {
+	start := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	var live, peak int
+	body := func(*core.T) error {
+		mu.Lock()
+		live++
+		if live > peak {
+			peak = live
+		}
+		n := live
+		mu.Unlock()
+		if n >= 2 {
+			once.Do(func() { close(start) })
+		}
+		select {
+		case <-start:
+		case <-time.After(5 * time.Second):
+		}
+		mu.Lock()
+		live--
+		mu.Unlock()
+		return nil
+	}
+	tests := []core.Test{
+		exclusiveTest("e1", body),
+		exclusiveTest("e2", body),
+	}
+	sched.Run(context.Background(), tests, sched.Options{
+		RunOptions: core.RunOptions{Parallel: 4, Seed: core.NewRunSeed(10, true), Provider: &fake.Provider{}},
+		Capacity:   4,
+	})
+	if peak < 2 {
+		t.Errorf("peak concurrency without a lock key = %d, want 2", peak)
+	}
+}

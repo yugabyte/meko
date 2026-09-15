@@ -38,7 +38,7 @@ func init() {
 		Name:        "features/amp_endpoint_upgrade_roll",
 		Suite:       "features",
 		Category:    core.Functional,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Roll two named endpoints through POST /endpoint-upgrades onto the previous release's endpoint image and back, max_parallel 1, and assert each roll's parent task succeeds with one upgraded line and one succeeded upgrade_endpoint subtask per endpoint, both compute pods are replaced and run the target image, each endpoint records the target version and serves its seeded rows intact; a second roll while one is in flight is refused 409, an empty version and an out-of-range max_parallel are refused 400, and a roll naming an unknown endpoint reports it skipped rather than failing.",

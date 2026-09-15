@@ -162,6 +162,34 @@ type scheduler struct {
 	poisonMu  sync.Mutex
 	poisonBy  string
 	poisonErr error
+
+	// sharedLocks serialize the tests that take the same control-plane-global
+	// resource, one mutex per EnvSpec.SharedLock key.
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex
+}
+
+// enterSharedLock serializes tests declaring the same SharedLock key.
+//
+// Taken after the infra gate and before the lease and the slot, for the same
+// reason: a waiter holding either would deadlock the gate's writer.
+func (s *scheduler) enterSharedLock(test core.Test) func() {
+	key := test.Env.Locks()
+	if key == "" {
+		return func() {}
+	}
+	s.locksMu.Lock()
+	if s.locks == nil {
+		s.locks = map[string]*sync.Mutex{}
+	}
+	mu, ok := s.locks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.locks[key] = mu
+	}
+	s.locksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // enterInfraGate takes this test's side of the gate and returns the release.
@@ -223,6 +251,7 @@ func (s *scheduler) releaseSlot() { <-s.slots }
 func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	test := s.tests[i]
 	defer s.enterInfraGate(test)()
+	defer s.enterSharedLock(test)()
 	if res := s.failIfInfraPoisoned(test); res != nil {
 		return res
 	}
@@ -356,6 +385,7 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 			defer batch.Done()
 			defer func() { <-inFlight }()
 			defer s.enterInfraGate(s.tests[idx])()
+			defer s.enterSharedLock(s.tests[idx])()
 			if res := s.failIfInfraPoisoned(s.tests[idx]); res != nil {
 				s.results[idx] = res
 				return
