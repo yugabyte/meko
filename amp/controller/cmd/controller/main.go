@@ -144,6 +144,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ServiceType:                cfg.Deploy.ServiceType,
 				ServiceAnnotations:         cfg.Deploy.ServiceAnnotations,
 				Cloud:                      cfg.Deploy.Cloud,
+				IngressEnabled:             cfg.Deploy.IngressEnabled,
 				NodeSelector:               cfg.Deploy.NodeSelector,
 				TailnetSuffix:              cfg.Deploy.TailnetSuffix,
 				StorageClass:               cfg.Deploy.StorageClass,

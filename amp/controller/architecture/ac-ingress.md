@@ -120,16 +120,34 @@ the original shard is replaced.
 
 ## Config
 
-Empty `--deploy-ingress-zone` is the off switch **and the default**, so this is
-inert on every deployment that has not opted in, and the `ingress_*` modes are
-refused with `400` rather than falling back to a dedicated load balancer — a
-fallback would reinstate the per-endpoint bill without anyone choosing it.
+`--deploy-ingress-enabled` is off by **default**, so this is inert on every
+deployment that has not opted in, and the `ingress_*` modes are refused with
+`400` rather than falling back to a dedicated load balancer — a fallback would
+reinstate the per-endpoint bill without anyone choosing it.
+
+Enabling it needs at least one zone. An endpoint's address **is** its published
+name — `Allocation.Address()` is `dns_name:port` — so a family with no zone has
+nothing to hand a client, and the allocator refuses it with `ErrNotConfigured`.
+Startup refuses the combination outright rather than letting it fail on every
+endpoint create.
+
+Addressing an endpoint by its shard's own `host:port` instead, so a kind or CI
+cluster with no external-dns can route identically, is **not yet built** — see
+the section below. Until it lands, the switch and "has a zone" are not separable.
+
+There are two zones rather than one because external-dns is pinned to a zone with
+`--zone-id-filter`, and the point of the internal family is that its names do not
+resolve publicly. The name an endpoint is issued is stored on its allocation row,
+so pointing both families at one zone is not a mistake a later config change can
+correct — it means reissuing addresses customers already hold.
 
 | Flag | Effect |
 |---|---|
-| `--deploy-ingress-zone` | DNS zone for endpoint names. Empty = no ingress. |
+| `--deploy-ingress-enabled` | The opt-in. Off = the `ingress_*` modes are refused. |
+| `--deploy-ingress-zone-internal` | DNS zone for internal endpoint names. Empty = that family cannot be allocated; at least one zone is required. |
+| `--deploy-ingress-zone-external` | DNS zone for external endpoint names. Must differ from the internal zone, so an internal name can never reach a public one. |
 | `--deploy-ingress-port-range` | Range each shard provisions in full; its width is how many endpoints a shard holds. |
-| `--deploy-ingress-headroom` | Free ports kept per family before another shard is built. Must be below a shard's width, or every new shard arrives already short. |
+| `--deploy-ingress-headroom` | Free ports kept per family before another shard is built. Measured across the family's ready shards, so it may exceed one shard's width; refused only if above what `--deploy-ingress-max-shards` shards can hold. |
 | `--deploy-ingress-max-shards` | Ceiling on what the control plane may build unattended. |
 | `--deploy-ingress-quarantine` | How long a released port stays unissued. Should exceed the record TTL. |
 | `--deploy-ingress-placement` | `spread` or `pack`, per the table above. |
@@ -156,7 +174,9 @@ reconcile since it was installed, so it has never published a record.
 
 Charts, the endpoint lifecycle wiring, per-endpoint certificates (so
 `sslmode=verify-full` works against an endpoint's own name — a prerequisite for
-`ingress_external`), the capacity reconciler's watermark and ceiling, and
-per-listener source-IP filtering. `allowed_cidrs` is refused on the `ingress_*`
+`ingress_external`), the capacity reconciler's watermark and ceiling,
+**addressing an endpoint by its shard's `host:port` where there is no DNS zone**
+(until then a zone is required, see Config), and per-listener source-IP
+filtering. `allowed_cidrs` is refused on the `ingress_*`
 modes until that last one lands; `nlb_*` remains the mode for an endpoint that
 needs an allowlist today.

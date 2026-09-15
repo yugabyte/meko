@@ -120,6 +120,55 @@ type DeployConfig struct {
 	NodeSelector  map[string]string // node labels endpoint pods must match (e.g. a local-NVMe-SSD pool)
 	TailnetSuffix string            // Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") for deriving endpoint tailnet addresses; empty = disabled
 
+	// IngressEnabled is the switch for the whole feature. Off means this
+	// deployment has no shards and the ingress_* connectivity modes are refused,
+	// rather than silently falling back to a dedicated load balancer — which is
+	// the bill this design exists to remove
+	// (controller/architecture/ac-ingress.md).
+	IngressEnabled bool
+	// IngressZoneInternal/External are the DNS zones endpoint names are published
+	// under. A family with no zone cannot be allocated: ingress.Allocate refuses
+	// it with ErrNotConfigured, because an endpoint's address IS its published
+	// name (Allocation.Address is dns_name:port) and there is nothing else to
+	// hand a client. Enabling ingress therefore requires at least one zone, which
+	// validateIngress enforces so the failure lands at startup rather than on
+	// every endpoint create.
+	//
+	// Addressing an endpoint by its shard's own host:port instead — what a kind
+	// or CI cluster with no external-dns would want — is a later change in this
+	// series; until it lands, "enabled" and "has a zone" are not yet separable.
+	//
+	// One zone per family rather than one for both, because external-dns is
+	// pinned to a zone with --zone-id-filter and the point of the internal family
+	// is that its names do not resolve publicly. The allocator stores the name it
+	// mints on the allocation row, so pointing both at a single zone is not
+	// something a later config change can undo — it means reissuing addresses
+	// customers already hold.
+	IngressZoneInternal string
+	IngressZoneExternal string
+	// IngressPortRange is the listener range every shard provisions in full at
+	// build time, "lo-hi". Provisioned once so that creating an endpoint never
+	// mutates a load balancer live connections are sitting behind.
+	IngressPortRange string
+	// IngressPortLo/Hi are the parsed range, filled by Validate.
+	IngressPortLo, IngressPortHi int
+	// IngressHeadroom is how many free ports a family keeps before the
+	// reconciler builds another shard. A shard takes minutes to come up, so the
+	// watermark exists to keep that off an endpoint's critical path.
+	IngressHeadroom int
+	// IngressMaxShards caps what the control plane may build on its own
+	// initiative. It is spending cloud money without a human in the loop, so the
+	// ceiling is not optional.
+	IngressMaxShards int
+	// IngressQuarantine keeps a released port out of the pool, so a client
+	// holding a cached address cannot land on whichever database takes the slot
+	// next. Should comfortably exceed the DNS record TTL.
+	IngressQuarantine time.Duration
+	// IngressPlacement is "spread" (emptiest shard: smallest blast radius, but
+	// no shard ever empties and none can be reclaimed) or "pack" (fullest shard
+	// with room: shards drain by themselves as endpoints retire).
+	IngressPlacement string
+
 	// StorageClass provisions the endpoint's data volume (/data: pgdata, LFC,
 	// logs) as a PersistentVolumeClaim of that class — a network block volume
 	// (EBS on AWS, Persistent Disk on GCP). Empty falls back to an ephemeral
@@ -302,6 +351,14 @@ func Load(args []string) (*Config, error) {
 	var nodeSelectorRaw string
 	fs.StringVar(&nodeSelectorRaw, "deploy-node-selector", env("AMP_DEPLOY_NODE_SELECTOR", ""), "k8s: comma-separated key=value node labels endpoint pods must schedule onto, e.g. a local-NVMe-SSD ephemeral pool (values cannot contain commas)")
 	fs.StringVar(&d.TailnetSuffix, "deploy-tailnet-suffix", env("AMP_DEPLOY_TAILNET_SUFFIX", ""), "k8s: Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each endpoint's tailnet address when its Service is tailnet-exposed (tailscale.com/expose=true); empty = disabled")
+	fs.BoolVar(&d.IngressEnabled, "deploy-ingress-enabled", envBool("AMP_DEPLOY_INGRESS_ENABLED", false), "k8s: route endpoints through shared ingress shards. Off (the default) = the ingress_* connectivity modes are refused")
+	fs.StringVar(&d.IngressZoneInternal, "deploy-ingress-zone-internal", env("AMP_DEPLOY_INGRESS_ZONE_INTERNAL", ""), "k8s: DNS zone INTERNAL shared-ingress endpoint names are published under, e.g. internal.pg.example.com. Empty = the internal family cannot be allocated; enabling ingress needs at least one zone")
+	fs.StringVar(&d.IngressZoneExternal, "deploy-ingress-zone-external", env("AMP_DEPLOY_INGRESS_ZONE_EXTERNAL", ""), "k8s: DNS zone EXTERNAL shared-ingress endpoint names are published under, e.g. external.pg.example.com. Must differ from the internal zone, so external-dns can be pinned to each with --zone-id-filter and an internal name is never published publicly")
+	fs.StringVar(&d.IngressPortRange, "deploy-ingress-port-range", env("AMP_DEPLOY_INGRESS_PORT_RANGE", "20000-20049"), "k8s: listener range each ingress shard provisions in full, \"lo-hi\"; its width is how many endpoints one shard holds")
+	fs.IntVar(&d.IngressHeadroom, "deploy-ingress-headroom", envInt("AMP_DEPLOY_INGRESS_HEADROOM", 10), "k8s: free ports kept per family before another ingress shard is built, so a slow shard build never lands on an endpoint create")
+	fs.IntVar(&d.IngressMaxShards, "deploy-ingress-max-shards", envInt("AMP_DEPLOY_INGRESS_MAX_SHARDS", 24), "k8s: ceiling on ingress shards the control plane may build on its own; reaching it alerts rather than spending more")
+	fs.DurationVar(&d.IngressQuarantine, "deploy-ingress-quarantine", envDuration("AMP_DEPLOY_INGRESS_QUARANTINE", 10*time.Minute), "k8s: how long a released ingress port stays unissued, so a cached address cannot reach the database that takes the slot next")
+	fs.StringVar(&d.IngressPlacement, "deploy-ingress-placement", env("AMP_DEPLOY_INGRESS_PLACEMENT", "spread"), "k8s: which shard a new endpoint lands on — spread (emptiest: smallest blast radius, shards never empty) or pack (fullest with room: shards drain and can be reclaimed)")
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")
 	fs.IntVar(&d.DiskGiBPerVCPU, "deploy-disk-gib-per-vcpu", envInt("AMP_DEPLOY_DISK_GIB_PER_VCPU", 0), "k8s: GiB of endpoint data volume per vCPU (0 = the built-in 20 GiB/vCPU policy; override only for a pool built to a different disk-per-core shape)")
@@ -523,6 +580,13 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	default:
 		return fmt.Errorf(`invalid deploy cloud %q (want "aws", "gcp", or "azure")`, d.Cloud)
 	}
+	// Validated even when --deploy-ingress-enabled is off, deliberately. These
+	// knobs all carry defaults, so a bad value sits there harmlessly until the
+	// day somebody flips the switch — and then surfaces as a half-built shard,
+	// far from the typo. Cheap to check now, expensive to discover later.
+	if err := d.validateIngress(); err != nil {
+		return err
+	}
 	// A storage class provisions a PVC, which needs a requested size; without a
 	// class the data volume is an ephemeral emptyDir and the size is unused.
 	if d.StorageClass != "" && d.DiskSize == "" {
@@ -597,4 +661,104 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// validateIngress checks the shared-ingress knobs and parses the port range.
+//
+// Every failure here is one that would otherwise surface as a half-built shard
+// or an endpoint holding an address nothing answers on, hours later and far from
+// the typo that caused it.
+func (d *DeployConfig) validateIngress() error {
+	lo, hi, err := parsePortRange(d.IngressPortRange)
+	if err != nil {
+		return fmt.Errorf("invalid deploy ingress port range %q: %w", d.IngressPortRange, err)
+	}
+	d.IngressPortLo, d.IngressPortHi = lo, hi
+
+	switch d.IngressPlacement {
+	case "", "spread":
+		d.IngressPlacement = "spread"
+	case "pack":
+	default:
+		return fmt.Errorf(`invalid deploy ingress placement %q (want "spread" or "pack")`, d.IngressPlacement)
+	}
+
+	if d.IngressHeadroom < 0 {
+		return fmt.Errorf("deploy ingress headroom %d cannot be negative", d.IngressHeadroom)
+	}
+	if d.IngressMaxShards < 1 {
+		return fmt.Errorf("deploy ingress max shards %d must be at least 1", d.IngressMaxShards)
+	}
+	// Headroom is measured per FAMILY against ingress.Capacity, which sums free
+	// slots over every ready shard of that family — so a watermark above one
+	// shard's width is legitimate and simply settles once the second shard is
+	// ready. What can never be satisfied is a watermark above what the ceiling
+	// itself can hold, and that is the only case worth refusing at startup.
+	if width := hi - lo + 1; d.IngressHeadroom >= width*d.IngressMaxShards {
+		return fmt.Errorf("deploy ingress headroom %d is unreachable: %d shards of %d ports hold %d, "+
+			"so the watermark is never met and the reconciler builds to the ceiling and alerts",
+			d.IngressHeadroom, d.IngressMaxShards, width, width*d.IngressMaxShards)
+	}
+
+	// Both families in one zone is the one ingress misconfiguration a later
+	// config change cannot undo: the allocator stores the name it mints on the
+	// allocation row (0018), so an internal endpoint published into the public
+	// zone stays there until its address is reissued. Cheap to refuse, and the
+	// reason the zones are two flags rather than one.
+	if d.IngressZoneInternal != "" && d.IngressZoneInternal == d.IngressZoneExternal {
+		return fmt.Errorf("deploy ingress zones are both %q: the internal family's names would be "+
+			"published in the external zone, and the allocator stores each name it mints, so this "+
+			"cannot be corrected later without reissuing addresses customers already hold",
+			d.IngressZoneInternal)
+	}
+	// Ingress with nowhere to publish cannot allocate anything: Allocate refuses a
+	// family whose zone is empty, and an endpoint's address is its published name.
+	// Refused here so it fails at startup rather than on every endpoint create.
+	if d.IngressEnabled && d.IngressZoneInternal == "" && d.IngressZoneExternal == "" {
+		return fmt.Errorf("deploy ingress is enabled but neither zone is set; an endpoint's address " +
+			"is its published DNS name, so at least one of --deploy-ingress-zone-internal or " +
+			"--deploy-ingress-zone-external is required")
+	}
+	if d.IngressQuarantine < 0 {
+		return fmt.Errorf("deploy ingress quarantine %s cannot be negative", d.IngressQuarantine)
+	}
+	return nil
+}
+
+// ephemeralPortFloor is the bottom of Linux's default outbound source-port range
+// (net.ipv4.ip_local_port_range, 32768-60999). Fixed listeners must stay below it.
+const ephemeralPortFloor = 32768
+
+// parsePortRange reads "lo-hi" into its two ends.
+func parsePortRange(s string) (lo, hi int, err error) {
+	before, after, found := strings.Cut(s, "-")
+	if !found {
+		return 0, 0, fmt.Errorf(`want "lo-hi"`)
+	}
+	if lo, err = strconv.Atoi(strings.TrimSpace(before)); err != nil {
+		return 0, 0, fmt.Errorf("low port: %w", err)
+	}
+	if hi, err = strconv.Atoi(strings.TrimSpace(after)); err != nil {
+		return 0, 0, fmt.Errorf("high port: %w", err)
+	}
+	if lo < 1 || hi > 65535 {
+		return 0, 0, fmt.Errorf("ports must be within 1-65535, got %d-%d", lo, hi)
+	}
+	// Below the reserved ports, and below the EPHEMERAL range. The second is the
+	// one that bites: Linux allocates outbound source ports from 32768-60999 by
+	// default, so a listener up there races the kernel for its own port and
+	// fails to bind only sometimes, under load, on one node. The registered
+	// range (1024-32767) is the only safe place for a fixed listener.
+	if lo < 1024 {
+		return 0, 0, fmt.Errorf("low port %d is in the reserved range; use 1024 or above", lo)
+	}
+	if hi >= ephemeralPortFloor {
+		return 0, 0, fmt.Errorf("high port %d is in the ephemeral range (%d+), where the kernel "+
+			"allocates outbound source ports — a listener there intermittently fails to bind",
+			hi, ephemeralPortFloor)
+	}
+	if hi < lo {
+		return 0, 0, fmt.Errorf("high port %d is below low port %d", hi, lo)
+	}
+	return lo, hi, nil
 }

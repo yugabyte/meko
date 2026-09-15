@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -637,5 +638,176 @@ func TestVoyagerRejectsLocalDriver(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected an error enabling Voyager on the local deploy driver")
+	}
+}
+
+// The ingress knobs all carry defaults, so an invalid one is inert until the day
+// somebody enables the feature — which is why Validate checks them whether or
+// not it is on, and why these run against a deployment that never turned it on.
+func TestDeployIngressDefaults(t *testing.T) {
+	c, err := Load(kubernetesDeployArgs(t))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	d := c.Deploy
+	if d.IngressEnabled {
+		t.Error("IngressEnabled = true by default; the feature must be opt-in, or a deployment " +
+			"that never asked for it starts refusing nothing and placing endpoints on shards")
+	}
+	if d.IngressZoneInternal != "" || d.IngressZoneExternal != "" {
+		t.Errorf("zones default to %q/%q, want empty", d.IngressZoneInternal, d.IngressZoneExternal)
+	}
+	if d.IngressPlacement != "spread" {
+		t.Errorf("IngressPlacement = %q, want spread", d.IngressPlacement)
+	}
+	// The parsed range is a side effect of validation; nothing else fills it.
+	if d.IngressPortLo != 20000 || d.IngressPortHi != 20049 {
+		t.Errorf("parsed port range = %d-%d, want 20000-20049", d.IngressPortLo, d.IngressPortHi)
+	}
+	if d.IngressQuarantine != 10*time.Minute {
+		t.Errorf("IngressQuarantine = %v, want 10m", d.IngressQuarantine)
+	}
+	if d.IngressHeadroom != 10 {
+		t.Errorf("IngressHeadroom = %d, want 10", d.IngressHeadroom)
+	}
+	if d.IngressMaxShards != 24 {
+		t.Errorf("IngressMaxShards = %d, want 24", d.IngressMaxShards)
+	}
+}
+
+// Each of these is a misconfiguration that would otherwise surface as a
+// half-built shard or an endpoint on an address nothing answers, hours later.
+func TestDeployIngressRejectsBadConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string // substring the message must carry, so the operator can act on it
+	}{
+		{"range without a dash", []string{"--deploy-ingress-port-range", "20000"}, "lo-hi"},
+		{"non-numeric low", []string{"--deploy-ingress-port-range", "x-20049"}, "low port"},
+		{"non-numeric high", []string{"--deploy-ingress-port-range", "20000-y"}, "high port"},
+		{"inverted range", []string{"--deploy-ingress-port-range", "20050-20000"}, "below low port"},
+		{"reserved low port", []string{"--deploy-ingress-port-range", "80-1000"}, "reserved"},
+		// The one that bites: a listener in the kernel's outbound source-port
+		// range fails to bind only sometimes, under load, on one node.
+		{"ephemeral high port", []string{"--deploy-ingress-port-range", "32000-40000"}, "ephemeral"},
+		{"port above 65535", []string{"--deploy-ingress-port-range", "20000-70000"}, "1-65535"},
+		{"unknown placement", []string{"--deploy-ingress-placement", "balanced"}, "spread"},
+		// Only a watermark the ceiling itself cannot hold is unreachable: 10 ports
+		// a shard, 24 shards, so 240 is the most that can ever be free.
+		{"headroom above the ceiling's capacity", []string{
+			"--deploy-ingress-port-range", "20000-20009",
+			"--deploy-ingress-headroom", "240",
+		}, "unreachable"},
+		{"negative headroom", []string{"--deploy-ingress-headroom", "-1"}, "negative"},
+		{"zero max shards", []string{"--deploy-ingress-max-shards", "0"}, "at least 1"},
+		{"negative quarantine", []string{"--deploy-ingress-quarantine", "-5m"}, "negative"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(append(kubernetesDeployArgs(t), tc.args...))
+			if err == nil {
+				t.Fatalf("Load accepted %v, want an error", tc.args)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q, so it does not tell the operator what to fix",
+					err, tc.want)
+			}
+		})
+	}
+}
+
+// Headroom is measured across a family's ready shards, not against one shard, so
+// a watermark wider than a single shard is legitimate — it just settles once the
+// second shard is ready. Pinned because the obvious-looking check (headroom <
+// one shard's width) refuses a valid fleet-wide watermark, and 239 of a 240-port
+// ceiling is where an off-by-one in the real bound would hide.
+func TestDeployIngressAcceptsHeadroomWiderThanOneShard(t *testing.T) {
+	c, err := Load(append(kubernetesDeployArgs(t),
+		"--deploy-ingress-enabled",
+		"--deploy-ingress-port-range", "20000-20009",
+		"--deploy-ingress-headroom", "239",
+		"--deploy-ingress-placement", "pack",
+		"--deploy-ingress-zone-internal", "internal.pg.example",
+		"--deploy-ingress-zone-external", "external.pg.example",
+	))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	d := c.Deploy
+	if !d.IngressEnabled {
+		t.Error("IngressEnabled = false after --deploy-ingress-enabled")
+	}
+	if d.IngressPlacement != "pack" {
+		t.Errorf("IngressPlacement = %q, want pack", d.IngressPlacement)
+	}
+	if d.IngressHeadroom != 239 {
+		t.Errorf("IngressHeadroom = %d, want 239", d.IngressHeadroom)
+	}
+	if d.IngressZoneInternal != "internal.pg.example" || d.IngressZoneExternal != "external.pg.example" {
+		t.Errorf("zones = %q/%q, want the two passed in", d.IngressZoneInternal, d.IngressZoneExternal)
+	}
+}
+
+// Enabling ingress with nowhere to publish is refused at startup rather than on
+// every endpoint create: an endpoint's address IS its published name
+// (Allocation.Address is dns_name:port), so ingress.Allocate refuses a family
+// whose zone is empty. Addressing an endpoint by its shard's host:port instead
+// is a later change in this series, and this expectation flips when it lands.
+func TestDeployIngressEnabledNeedsAZone(t *testing.T) {
+	_, err := Load(append(kubernetesDeployArgs(t), "--deploy-ingress-enabled"))
+	if err == nil {
+		t.Fatal("Load accepted ingress enabled with neither zone set; every endpoint create would " +
+			"then fail with ErrNotConfigured instead of the config failing at startup")
+	}
+	if !strings.Contains(err.Error(), "zone") {
+		t.Errorf("error %q does not point at the missing zone", err)
+	}
+	// One zone is enough: that family is allocatable and the other simply is not.
+	if _, err := Load(append(kubernetesDeployArgs(t),
+		"--deploy-ingress-enabled",
+		"--deploy-ingress-zone-internal", "internal.pg.example",
+	)); err != nil {
+		t.Errorf("Load rejected ingress enabled with only the internal zone: %v", err)
+	}
+}
+
+// Both families in one zone publishes internal names publicly, and the allocator
+// stores each name it mints — so this is the one ingress typo that cannot be
+// undone by fixing the config later. It has to fail at startup.
+func TestDeployIngressRejectsSharedZone(t *testing.T) {
+	_, err := Load(append(kubernetesDeployArgs(t),
+		"--deploy-ingress-enabled",
+		"--deploy-ingress-zone-internal", "pg.example",
+		"--deploy-ingress-zone-external", "pg.example",
+	))
+	if err == nil {
+		t.Fatal("Load accepted both families in one zone; internal endpoint names would be " +
+			"published in the public zone and could not be corrected without reissuing addresses")
+	}
+	if !strings.Contains(err.Error(), "pg.example") {
+		t.Errorf("error %q does not name the offending zone", err)
+	}
+	// Distinct zones stay legal, and so does leaving one family unconfigured.
+	if _, err := Load(append(kubernetesDeployArgs(t),
+		"--deploy-ingress-enabled",
+		"--deploy-ingress-zone-internal", "internal.pg.example",
+		"--deploy-ingress-zone-external", "external.pg.example",
+	)); err != nil {
+		t.Errorf("Load rejected two distinct zones: %v", err)
+	}
+}
+
+// kubernetesDeployArgs is the minimum that gets Load as far as the ingress
+// checks, which only run for an enabled kubernetes deployment.
+func kubernetesDeployArgs(t *testing.T) []string {
+	t.Helper()
+	return []string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy",
+		"--deploy-driver", "kubernetes",
+		"--deploy-namespace", "endpoints",
+		"--deploy-chart", t.TempDir(),
+		"--endpoint-image-repo", "registry.example.com/endpoint",
+		"--deploy-yb-host-ports", "yb-tserver:5433",
 	}
 }
