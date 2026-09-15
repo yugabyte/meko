@@ -22,9 +22,10 @@
 //!     lsn         BIGINT   NOT NULL,
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
+//!     CHECK (will_init OR NOT is_image),
 //!     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
 //!                  relnode ASC, forknum ASC, blknum ASC,
-//!                  lsn DESC, is_image DESC)
+//!                  lsn DESC, will_init DESC)
 //! ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 //! ```
 //!
@@ -44,15 +45,16 @@
 //! [`yb_thin_client::RangeRead::new_range`] binds one value per key column,
 //! and the shim's `range_values` ABI has no set form.
 //!
-//! The trailing `is_image` breaks `lsn` ties; it is DESC so the stored
-//! order matches the read-path `ORDER BY lsn DESC, is_image DESC`
-//! (image before delta at a tie — see [`assert_chain_step`]). Reads
-//! anchor the chain on the newest image at-or-below target_lsn
-//! (`AND is_image=TRUE ORDER BY lsn DESC LIMIT 1`) and return the
-//! deltas above it. Chain length is not a write-time invariant — the
-//! background image materialiser creates fresh images for hot keys to
-//! keep chains short. Reads remain correct without it, just
-//! potentially slower.
+//! The trailing `will_init` breaks `lsn` ties; it is DESC so the stored
+//! order matches the read-path `ORDER BY lsn DESC, will_init DESC`
+//! (base before non-base at a tie; see [`assert_chain_step`]). Reads
+//! anchor the chain on the newest **base** at-or-below target_lsn
+//! (`AND will_init ORDER BY lsn DESC LIMIT 1`) and return the deltas
+//! above it. `is_image` is a value column: it says only whether the
+//! payload is a page or a WAL record.
+//! Chain length is not a write-time invariant: the background image
+//! materialiser creates fresh images for hot keys to keep chains
+//! short. Reads remain correct without it, just potentially slower.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -132,8 +134,9 @@ pub struct SlruPageRow {
 
 /// Dedup an LSN-descending, image-first-on-ties page chain by LSN.
 ///
-/// The chain MUST already be sorted descending by LSN with images sorting
-/// before deltas on a tie (`b.lsn.cmp(&a.lsn).then(b.is_image.cmp(&a.is_image))`).
+/// The chain MUST already be sorted descending by LSN with bases sorting
+/// before non-bases on a tie
+/// (`b.lsn.cmp(&a.lsn).then(b.will_init.cmp(&a.will_init))`).
 /// Like `Vec::dedup_by`, the first row of each equal-LSN run is kept and the
 /// rest dropped.
 ///
@@ -144,8 +147,8 @@ pub struct SlruPageRow {
 ///      it in both sources — byte-identical, so dropping the duplicate is
 ///      lossless.
 ///
-/// What IS flagged: two non-image rows at one LSN whose CONTENT differs — a
-/// *non-image* survivor over a row with a different payload. That means we are
+/// What IS flagged: two non-base rows at one LSN whose CONTENT differs: a
+/// *non-base* survivor over a row with a different payload. That means we are
 /// silently dropping a real, distinct record. It reads back as a hole in the chain
 /// and surfaces downstream as a walredo `invalid max offset number` /
 /// `failed to add new item` PANIC (issue #22, the "catch me if you can"
@@ -156,13 +159,14 @@ pub struct SlruPageRow {
 /// want to amplify by aborting), but now it leaves a fingerprint.
 pub(crate) fn dedup_page_chain_by_lsn(chain: &mut Vec<Arc<PageRow>>) {
     // A collision is `chain[i].lsn == chain[i-1].lsn` where the survivor
-    // (chain[i-1], which the dedup keeps) is a *delta*, not an image — so
-    // chain[i] is a real record about to be silently dropped. Walk pairs so
-    // both rows are in hand for the diagnostic dump.
+    // (chain[i-1], which the dedup keeps) is not a base, so chain[i] is a
+    // real record about to be silently dropped. Walk pairs so both rows are
+    // in hand for the diagnostic dump. A base survivor shadows the row
+    // below it either way, so that drop loses nothing.
     for i in 1..chain.len() {
         let survivor = &chain[i - 1];
         let dropped = &chain[i];
-        if survivor.lsn != dropped.lsn || survivor.is_image {
+        if survivor.lsn != dropped.lsn || survivor.will_init {
             continue;
         }
         // Benign and common: the SAME flushed delta is present in BOTH the
@@ -438,9 +442,10 @@ pub struct ThinClientTables {
 }
 
 /// Anchor-stop accumulation for ONE block's chain over a clustered scan.
-/// Rows arrive `lsn DESC`, image before delta on an equal-LSN tie (the PKs are
-/// `is_image DESC`), so once the `will_init` anchor and its tie group are in
-/// hand the rest of that block's (shadowed) history streams past unbuffered.
+/// Rows arrive `lsn DESC`, base before non-base on an equal-LSN tie (the PKs
+/// are `will_init DESC`), so once the `will_init` anchor and its tie group are
+/// in hand the rest of that block's (shadowed) history streams past
+/// unbuffered.
 struct ChainCollector<T> {
     blk: i64,
     rows: Vec<T>,
@@ -639,16 +644,20 @@ impl SlruScan {
     }
 }
 
-/// Put a merged SLRU chain into result form: LSN-descending, image before
+/// Put a merged SLRU chain into result form: LSN-descending, base before
 /// delta on ties, one row per LSN, nothing below the newest `will_init`, and
 /// at most `n` rows for [`SlruScan::NewestUpTo`].
 ///
 /// Every SLRU merge (two branch segments, or the writer's buffer with the
-/// store) goes through here. The tie order makes the dedup keep the image,
+/// store) goes through here. The tie order makes the dedup keep the base,
 /// which is the page after the equal-LSN delta; the dedup also collapses the
 /// same flushed delta seen from both buffer and store.
 pub(crate) fn merge_slru_chain(chain: &mut Vec<SlruPageRow>, mode: SlruScan) {
-    chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+    chain.sort_by(|a, b| {
+        b.lsn
+            .cmp(&a.lsn)
+            .then_with(|| b.will_init.cmp(&a.will_init))
+    });
     chain.dedup_by(|a, b| a.lsn == b.lsn);
     if let Some(idx) = chain.iter().position(|r| r.will_init) {
         chain.truncate(idx + 1);
@@ -767,8 +776,8 @@ fn slru_segment_read(
 /// Normalize a chain fetched in DocDB storage order into SQL result
 /// order and trim it to the served prefix.
 ///
-/// The pages/slru PKs cluster `(lsn DESC, is_image DESC)`, matching the SQL
-/// readers' `ORDER BY lsn DESC, is_image DESC` — image before delta on a tie.
+/// The pages/slru PKs cluster `(lsn DESC, will_init DESC)`, matching the SQL
+/// readers' `ORDER BY lsn DESC, will_init DESC` (base first on a tie).
 /// The stable sort re-establishes that for any caller whose rows arrived
 /// otherwise,
 /// then the walk mirrors the SQL readers: validate order per step
@@ -777,13 +786,13 @@ fn slru_segment_read(
 /// anchor, is shadowed and dropped.
 fn normalize_chain<T>(
     mut rows: Vec<T>,
-    meta: impl Fn(&T) -> (Lsn, bool, bool),
+    meta: impl Fn(&T) -> (Lsn, bool /* is_image */, bool /* will_init */),
     where_: &str,
 ) -> Vec<T> {
     rows.sort_by(|a, b| {
-        let (a_lsn, a_img, _) = meta(a);
-        let (b_lsn, b_img, _) = meta(b);
-        b_lsn.cmp(&a_lsn).then(b_img.cmp(&a_img))
+        let (a_lsn, _, a_init) = meta(a);
+        let (b_lsn, _, b_init) = meta(b);
+        b_lsn.cmp(&a_lsn).then(b_init.cmp(&a_init))
     });
     let mut chain = Vec::with_capacity(rows.len());
     let mut order_check: Vec<(Lsn, bool, bool)> = Vec::with_capacity(rows.len());
@@ -1211,9 +1220,14 @@ pub use pageserver_api::pages_bucket::{PAGE_BUCKET_STRIDE, PAGE_BUCKETS, page_bu
 /// Shared body of the one-fork block-chain scan, used by the scattered set
 /// scan ([`build_scan_one_fork_scattered_sql`]). For each `b(blknum)` row the
 /// `driver` produces, a CROSS JOIN LATERAL resolves that block's chain: rows
-/// from the newest image at-or-below `lsn` onward, newest-first (the per-block
-/// InitPlan anchor is a pushable lower bound, so both ends of the lsn range
-/// push into the DocDB scan). Results are ordered by blknum then lsn.
+/// from the newest **base** at-or-below `lsn` onward, newest-first (the
+/// per-block InitPlan anchor is a pushable lower bound, so both ends of the
+/// lsn range push into the DocDB scan). Results are ordered by blknum then
+/// lsn.
+///
+/// `will_init`, not `is_image`, so the anchor is the *nearest* base: an
+/// image is only a base whose payload is already a page, and every version
+/// under a newer init record is shadowed (#1171).
 ///
 /// - `prefix`: any leading `WITH` clause the driver needs (empty for the set).
 /// - `driver`: the `FROM` source yielding `b(blknum)` — `unnest($6::bigint[])`.
@@ -1247,11 +1261,11 @@ fn build_scan_one_fork_lateral_sql(
                      WHERE a.bucket_id={bucket} AND a.branch_id=$1 \
                        AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
                        AND a.forknum=$5 AND a.blknum = b.blknum \
-                       AND a.is_image=TRUE AND a.lsn <= {lsn} \
+                       AND a.will_init AND a.lsn <= {lsn} \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
-             ORDER BY p.lsn DESC, p.is_image DESC \
+             ORDER BY p.lsn DESC, p.will_init DESC \
          ) p \
-         ORDER BY p.blknum, p.lsn DESC, p.is_image DESC"
+         ORDER BY p.blknum, p.lsn DESC, p.will_init DESC"
     )
 }
 
@@ -1316,11 +1330,11 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
                        AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
                        AND a.relnode = b.relnode AND a.forknum = b.forknum \
                        AND a.blknum = b.blknum \
-                       AND a.is_image=TRUE AND a.lsn <= $12 \
+                       AND a.will_init AND a.lsn <= $12 \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
-             ORDER BY p.lsn DESC, p.is_image DESC \
+             ORDER BY p.lsn DESC, p.will_init DESC \
          ) p \
-         ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC, p.is_image DESC"
+         ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC, p.will_init DESC"
     )
 }
 
@@ -1512,11 +1526,11 @@ impl PageStore {
             for (i, row) in chunk.iter().enumerate() {
                 let (sp, db, rel, fork, blk) =
                     key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
-                // key_values are in PRIMARY KEY order, not declaration order —
-                // hence bucket_id first and (lsn, is_image) rather than
-                // (is_image, lsn). The CHECK constraint in the migration does
-                // NOT fire on this lane, so `page_bucket_id` here is the only
-                // thing keeping these rows findable.
+                // key_values are in PRIMARY KEY order, not declaration
+                // order: bucket_id first, (lsn, will_init) last, is_image
+                // out in the value list. Neither CHECK fires on this lane,
+                // so `page_bucket_id` here is the only thing keeping these
+                // rows findable.
                 batch.push(UpsertRow::new(
                     pages,
                     vec![
@@ -1528,10 +1542,10 @@ impl PageStore {
                         int_bind_thin(col_fork, fork as i64),
                         BindValue::I64(blk),
                         BindValue::I64(row.lsn.0 as i64),
-                        BindValue::Bool(row.is_image),
+                        BindValue::Bool(row.will_init),
                     ],
                     &[
-                        ("will_init", BindValue::Bool(row.will_init)),
+                        ("is_image", BindValue::Bool(row.is_image)),
                         ("payload", BindValue::Bytes(enc_chunk[i].clone())),
                     ],
                 )?);
@@ -1571,19 +1585,10 @@ impl PageStore {
 
     /// Per-key chain read. `key` must be a valid relation-page Key.
     ///
-    /// Fast path: a CTE seeks the latest `is_image=TRUE` row at LSN ≤
-    /// `target_lsn` and returns it plus all delta rows above it (up to
-    /// `target_lsn`). With `is_image` in the clustering key, this is a
-    /// single tablet seek for the anchor and a small range scan for the
-    /// deltas.
-    ///
-    /// Slow path: if no image exists at or before `target_lsn`, fall
-    /// back to scanning the per-key chain LSN-descending and walking
-    /// rows until a `will_init=true` row is found. This is what gets
-    /// hit for blocks the background image materialiser hasn't reached
-    /// yet, or freshly-written blocks whose first record was a
-    /// will_init delta (page creation). Correct in all cases; only
-    /// slower because the will_init scan isn't index-seek-friendly.
+    /// No anchor predicate. The direct-RPC lane binds the whole key
+    /// prefix, streams the block's versions LSN-descending and stops at
+    /// the first `will_init` row ([`ChainFetchState::push`]), which
+    /// `will_init DESC` puts at the head of its tie group.
     pub async fn read_chain(
         &self,
         branch_id: BranchId,
@@ -1754,11 +1759,10 @@ impl PageStore {
         // `read_chain` (ancestor timelines hit this path).
         let target = target_lsn.0 as i64;
 
-        // Per-block image anchor via CTE: for each block in the range,
-        // find the latest image at or below target_lsn, then return
-        // only rows from that image onward. Blocks without an image get
-        // their full chain (slow path) — app-side will still truncate
-        // at the latest will_init delta.
+        // Per-block anchor: for each block in the range, find the newest
+        // base at or below target_lsn and return only rows from there
+        // onward. A block with no base below the target yields its full
+        // chain, which `group_page_rows_by_key` truncates anyway.
         let rows = if one_fork {
             // Hash-pinned single-tablet scan.
             let sp = range.start.field2 as i64;
@@ -1825,8 +1829,8 @@ impl PageStore {
     /// the chains for an arbitrary SET of same-fork relation-page keys
     /// in ONE query (`unnest($6::bigint[])`) instead of one query per
     /// block. All keys must share (spcnode, dbnode, relnode, forknum) —
-    /// the caller buckets by fork. Per-block image-anchor + will_init
-    /// trim semantics are identical to `scan_range` (the SQL body is the
+    /// the caller buckets by fork. Per-block `will_init` anchor and trim
+    /// semantics are identical to `scan_range` (the SQL body is the
     /// same LATERAL, only the block-selection driver differs).
     pub async fn scan_scattered_set(
         &self,
@@ -1905,8 +1909,8 @@ impl PageStore {
         tally.record();
         Ok(())
     }
-    /// Per-block SLRU chain read — same image-anchored CTE shape as
-    /// `read_chain`, just keyed by `(kind, segno, blknum)`.
+    /// Per-block SLRU chain read: the same direct-RPC, anchor-stopped
+    /// shape as `read_chain`, just keyed by `(kind, segno, blknum)`.
     pub async fn read_slru_chain(
         &self,
         branch_id: BranchId,
@@ -2101,10 +2105,10 @@ impl PageStore {
                         int_bind_thin(col_segno, row.segno as i64),
                         BindValue::I64(row.blknum as i64),
                         BindValue::I64(row.lsn.0 as i64),
-                        BindValue::Bool(row.is_image),
+                        BindValue::Bool(row.will_init),
                     ],
                     &[
-                        ("will_init", BindValue::Bool(row.will_init)),
+                        ("is_image", BindValue::Bool(row.is_image)),
                         ("payload", BindValue::Bytes(enc.clone())),
                     ],
                 )?);
@@ -2379,10 +2383,14 @@ impl PageStore {
         if lineage.len() > 1 {
             // Cross-segment rows can interleave (an ancestor delta
             // above a descendant copy-up image) and tie at the branch
-            // boundary. Re-sort (image first on ties), dedup by LSN,
+            // boundary. Re-sort (base first on ties), dedup by LSN,
             // and trim at the first anchor — same blend rules as
             // PageWriter's in-RAM merge.
-            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.sort_by(|a, b| {
+                b.lsn
+                    .cmp(&a.lsn)
+                    .then_with(|| b.will_init.cmp(&a.will_init))
+            });
             dedup_page_chain_by_lsn(&mut chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
@@ -2485,7 +2493,11 @@ impl PageStore {
         // order, so re-merge each: sort newest-first, dedup by lsn, truncate at
         // the newest will_init.
         for chain in out.values_mut() {
-            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.sort_by(|a, b| {
+                b.lsn
+                    .cmp(&a.lsn)
+                    .then_with(|| b.will_init.cmp(&a.will_init))
+            });
             dedup_page_chain_by_lsn(chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
@@ -2969,17 +2981,15 @@ impl PageStore {
 
 /// Invariants that every chain returned by `read_chain` / `scan_range` /
 /// `read_slru_chain` / `scan_slru_range` must satisfy *for a single key*
-/// when iterated in the SQL's `lsn DESC, is_image DESC` order — i.e.
+/// when iterated in the SQL's `lsn DESC, will_init DESC` order, i.e.
 /// in the order rows are pushed into the chain `Vec`.
 ///
 /// 1. `lsn` is non-increasing as we step through the slice.
-/// 2. At a tied LSN, an image (`is_image == true`) MUST come before a
-///    delta (`is_image == false`). This guarantees the
-///    "break at first will_init=true" trim sees the image first and
-///    drops the same-LSN delta (which is the WAL record already baked
-///    into the image — applying it would double-apply).
+/// 2. At a tied LSN, a base (`will_init == true`) MUST come before a
+///    non-base, so the "break at first will_init=true" trim drops the
+///    same-LSN non-base rather than double-applying it.
 ///
-/// Violations indicate either a missing `ORDER BY ... is_image DESC`
+/// Violations indicate either a missing `ORDER BY ... will_init DESC`
 /// tiebreaker (caller bug) or stale prepared-statement state. Panic
 /// rather than silently feed walredo a chain that would yield wrong
 /// page contents.
@@ -2992,22 +3002,22 @@ impl PageStore {
 /// thousands of rows that was ~15s of pure assertion overhead per chain,
 /// the dominant cost behind slow post-burst materialise / basebackup
 /// reconstruction; see #115.)
-fn assert_chain_step(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) {
+fn assert_chain_step(chain: &[(Lsn, bool /* is_image */, bool /* will_init */)], where_: &str) {
     let n = chain.len();
     if n < 2 {
         return;
     }
-    let (plsn, pis_image, _) = chain[n - 2];
-    let (lsn, is_image, _) = chain[n - 1];
+    let (plsn, _, pwill_init) = chain[n - 2];
+    let (lsn, _, will_init) = chain[n - 1];
     if lsn > plsn {
         panic!(
             "{where_}: chain row {} lsn {lsn} > prev lsn {plsn} (must be DESC)",
             n - 1
         );
     }
-    if lsn == plsn && !pis_image && is_image {
+    if lsn == plsn && !pwill_init && will_init {
         panic!(
-            "{where_}: chain has image at lsn {lsn} after a delta at the same lsn (need ORDER BY ..., is_image DESC tiebreaker)",
+            "{where_}: chain has a base at lsn {lsn} after a non-base at the same lsn (need ORDER BY ..., will_init DESC tiebreaker)",
         );
     }
 }
@@ -3015,8 +3025,8 @@ fn assert_chain_step(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) 
 #[cfg(test)]
 mod normalize_chain_tests {
     //! [`normalize_chain`] re-establishes the SQL readers' result order
-    //! (`lsn DESC, is_image DESC` — image before delta on a tie) and trims
-    //! at the anchor.
+    //! (`lsn DESC, will_init DESC`, base before non-base on a tie) and
+    //! trims at the anchor.
     use super::*;
 
     fn walk(rows: &[(u64, bool, bool)]) -> Vec<(u64, bool, bool)> {
@@ -3047,17 +3057,24 @@ mod normalize_chain_tests {
 
     #[test]
     fn equal_lsn_tie_serves_image_and_drops_the_delta() {
-        // Storage order puts the delta BEFORE the image at the tied LSN
-        // (PK trailing is_image is ASC). The SQL readers order the image
-        // first and anchor there, dropping the tied delta. The
-        // materialiser stamps its image at the folded delta's LSN, so
-        // this shape is common.
+        // Whatever order the two arrive in, the base sorts first and the
+        // reader anchors there, dropping the tied delta. The materialiser
+        // stamps its image at the folded delta's LSN, so this shape is
+        // common; see #1153.
         let rows = [
             (90, false, false),
             (70, false, false), // folded delta, arrives first in storage order
             (70, true, true),   // image at the same LSN
         ];
         assert_eq!(walk(&rows), vec![(90, false, false), (70, true, true)]);
+    }
+
+    /// Both rows are `is_image=false`, so only a `will_init` comparator
+    /// sorts the base first and drops the delta its page shadows.
+    #[test]
+    fn equal_lsn_tie_serves_the_init_record_and_drops_the_delta() {
+        let rows = [(90, false, false), (70, false, false), (70, false, true)];
+        assert_eq!(walk(&rows), vec![(90, false, false), (70, false, true)]);
     }
 
     #[test]
@@ -3181,25 +3198,25 @@ mod chain_order_tests {
         );
     }
 
-    /// The post-fix tied-LSN order. At LSN 100 the image is FIRST,
+    /// The post-fix tied-LSN order. At LSN 100 the base is FIRST,
     /// then a same-LSN delta would appear (but the trim breaks
-    /// on the image before reaching it). This represents what the
-    /// SQL with `ORDER BY p.lsn DESC, p.is_image DESC` produces.
+    /// on the base before reaching it). This represents what the
+    /// SQL with `ORDER BY p.lsn DESC, p.will_init DESC` produces.
     #[test]
-    fn image_first_at_tied_lsn_is_accepted() {
+    fn base_first_at_tied_lsn_is_accepted() {
         check(
             &[
                 row(200, false, false),
                 row(100, true, true),
                 row(100, false, false),
             ],
-            "test_image_first_tie",
+            "test_base_first_tie",
         );
     }
 
-    /// Two deltas at the same LSN, then an image at a lower LSN.
-    /// Same-LSN deltas are legal; only image-AFTER-delta-at-tied-LSN
-    /// is forbidden.
+    /// Two plain deltas at the same LSN, then an image at a lower LSN.
+    /// Same-LSN non-bases are legal; only base-AFTER-non-base at a tied
+    /// LSN is forbidden.
     #[test]
     fn delta_delta_at_same_lsn_is_accepted() {
         check(
@@ -3212,13 +3229,14 @@ mod chain_order_tests {
         );
     }
 
-    /// Two images at the same LSN — pathological but legal under the
-    /// rule (only image-AFTER-delta at the same LSN is forbidden).
+    /// Two bases at one LSN: pathological but legal (only
+    /// base-after-non-base is forbidden). `will_init` trails the PK, so
+    /// these are one row in the store and only a merge can pair them.
     #[test]
-    fn image_image_at_same_lsn_is_accepted() {
+    fn base_base_at_same_lsn_is_accepted() {
         check(
             &[row(100, true, true), row(100, true, true)],
-            "test_image_image_tie",
+            "test_base_base_tie",
         );
     }
 
@@ -3257,11 +3275,11 @@ mod chain_order_tests {
         );
     }
 
-    /// Image AFTER a delta at the same LSN is the pre-fix bug: the chain
-    /// handed to walredo would contain a same-LSN delta whose effect is
-    /// already baked into the image — double-apply.
+    /// A base AFTER a non-base at the same LSN is the pre-fix bug: the
+    /// chain handed to walredo would contain a same-LSN delta whose effect
+    /// is already baked into the base, a double-apply.
     #[test]
-    #[should_panic(expected = "after a delta at the same lsn")]
+    #[should_panic(expected = "after a non-base at the same lsn")]
     fn image_after_delta_at_tied_lsn_panics() {
         check(
             &[
@@ -3273,8 +3291,23 @@ mod chain_order_tests {
         );
     }
 
+    /// Same violation with an init record as the base, which an
+    /// `is_image` check cannot see: both rows are `is_image=false`.
+    #[test]
+    #[should_panic(expected = "after a non-base at the same lsn")]
+    fn init_record_after_delta_at_tied_lsn_panics() {
+        check(
+            &[
+                row(200, false, false),
+                row(100, false, false),
+                row(100, false, true),
+            ],
+            "test_init_after_delta_tie",
+        );
+    }
+
     /// Equal LSNs are fine; only an increase panics (`lsn > plsn`, not
-    /// `>=`). Two same-LSN deltas don't trip the DESC or image checks.
+    /// `>=`). Two same-LSN deltas trip neither the DESC nor the base check.
     #[test]
     fn equal_lsn_does_not_trigger_desc_panic() {
         check(
@@ -3679,16 +3712,16 @@ mod tests {
     /// double-apply the tied WAL record (once via the image, once
     /// via the delta) and produce a corrupt page.
     ///
-    /// After the fix (`ORDER BY p.lsn DESC, p.is_image DESC`) the
-    /// image at the tied LSN ALWAYS comes first; the trim breaks
-    /// on it and the same-LSN delta is dropped. Walredo sees
-    /// `[higher_delta, tied_image]`, applies the higher delta once
-    /// to the post-tied-record image, and produces the right page.
+    /// Now the PK's trailing `will_init DESC` puts the image at the
+    /// tied LSN first; the trim breaks on it and the same-LSN delta
+    /// is dropped. Walredo sees `[higher_delta, tied_image]`, applies
+    /// the higher delta once to the post-tied-record image, and
+    /// produces the right page.
     ///
     /// Note: we intentionally insert the rows in the worst-case
     /// "delta first" insertion order so we don't accidentally test
     /// the trivial case where the storage layer happens to return
-    /// images first regardless of ORDER BY.
+    /// images first regardless of key order.
     #[tokio::test]
     async fn read_chain_image_before_delta_at_tied_lsn() {
         let (store, schema) = make_store("tied_lsn_image_first").await;
@@ -4770,6 +4803,73 @@ mod tests {
                 .await
                 .is_err(),
             "keys spanning forks must error"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The anchor subquery has to find the *nearest* base. Anchoring on
+    /// `is_image` instead starts the LATERAL below any init record above the
+    /// newest image and ships the versions between, which
+    /// [`group_page_rows_by_key`] then drops. Only the raw row count shows
+    /// it, so this test counts rows rather than chain entries (#1171).
+    ///
+    /// Driven through the cross-fork builder because it is the YSQL reader
+    /// that outlives #1173, which moves the scattered set to the thin lane.
+    #[tokio::test]
+    async fn cross_fork_scan_anchors_on_the_nearest_base() {
+        let (store, schema) = make_store("cross_fork_anchor").await;
+        let br = rand_branch();
+        let k = page_key(1663, 5, 16384, 0, 3);
+        store
+            .put_pages(
+                br,
+                &[
+                    page_row(k.clone(), 10, true, true, b"img"),
+                    page_row(k.clone(), 20, false, false, b"d20"),
+                    page_row(k.clone(), 30, false, false, b"d30"),
+                    // A base that is not an image.
+                    page_row(k.clone(), 40, false, true, b"init"),
+                    page_row(k.clone(), 50, false, false, b"d50"),
+                    page_row(k.clone(), 60, false, false, b"d60"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let key = Key::from_slice(&k);
+        let (sp, db, rel, fork, blk) = key_columns(&key).unwrap();
+        let bucket = page_bucket_id(rel, blk);
+        let (blk_hi, target) = (blk + 1, 100i64);
+        let raw = store
+            .ysql_client
+            .query(
+                &build_scan_cross_fork_sql(&schema),
+                &[
+                    &br, &sp, &db, &rel, &fork, &blk, &sp, &db, &rel, &fork, &blk_hi, &target,
+                    &bucket,
+                ],
+            )
+            .await
+            .expect("raw cross-fork scan");
+        let lsns: Vec<i64> = raw.iter().map(|r| r.get::<_, i64>(5)).collect();
+        assert_eq!(
+            lsns,
+            vec![60, 50, 40],
+            "the LATERAL must start at the newest base, the init record at 40, \
+             not the image at 10 below it"
+        );
+
+        // The served chain is unchanged. The range spans forks so this goes
+        // through the cross-fork builder; `key..key.next()` would take
+        // `scan_range`'s single-key fast path to `read_chain` instead.
+        let fork_end = Key::from_slice(&page_key(1663, 5, 16384, 1, 0));
+        let chain = store
+            .scan_range(br, key..fork_end, Lsn(target as u64))
+            .await
+            .unwrap();
+        assert_eq!(
+            chain[&key].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![60, 50, 40],
         );
         drop_schema(&store, &schema).await;
     }

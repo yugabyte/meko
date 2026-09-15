@@ -136,11 +136,11 @@ var specs = []tableSpec{
 	{table: "branch_state"},
 
 	// PK (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, blknum ASC,
-	//     lsn DESC, is_image DESC) — all-range, so the cursor anchors at
+	//     lsn DESC, will_init DESC), all-range, so the cursor anchors at
 	// bucket_id and one pass covers all six buckets.
 	{table: "pages", rowConstructor: true,
 		cursorCols: []string{"bucket_id", "branch_id", "spcnode", "dbnode", "relnode", "forknum", "blknum"},
-		orderTail:  "lsn DESC, is_image DESC"},
+		orderTail:  "lsn DESC, will_init DESC"},
 
 	// PK (bucket_id, branch_id, segno, chunk_offset) — all-range, and the cursor
 	// covers the whole key, so no version tail below it.
@@ -155,13 +155,13 @@ var specs = []tableSpec{
 		cursorCols: []string{"due_lsn"},
 		orderTail:  "key, gc_kind"},
 
-	// PK ((branch_id) HASH, kind, segno, blknum ASC, lsn DESC, is_image DESC).
+	// PK ((branch_id) HASH, kind, segno, blknum ASC, lsn DESC, will_init DESC).
 	// kind is fanned out because the cursor range-compares segno, which needs kind
 	// pinned above it. blknum stays out of the cursor: a (kind, segno) segment is
 	// ~32 contiguous blocks, so the residual is tens of rows.
 	{table: "slru_pages", fanOut: fanOutSpec{"kind", slruKinds},
 		cursorCols: []string{"segno"},
-		orderTail:  "blknum, lsn DESC, is_image DESC"},
+		orderTail:  "blknum, lsn DESC, will_init DESC"},
 
 	// PK ((branch_id) HASH, key ASC, lsn DESC).
 	{table: "meta",

@@ -361,9 +361,11 @@ bucket (`page_store::page_bucket_id`) so the table pre-splits into
 exactly 6 tablets and writes spread from the first row. Within a bucket
 the relfork identity still clusters together, so range scans within a
 relfork stay tablet-local for any 2MB stretch. Clustering by
-`(blknum, lsn DESC, is_image DESC)` stores a block's rows newest-first;
-`is_image` is DESC so the stored order matches the chain-read
-`ORDER BY lsn DESC, is_image DESC` (image before delta at an LSN tie).
+`(blknum, lsn DESC, will_init DESC)` stores a block's rows newest-first;
+`will_init` is DESC so the stored order matches the chain-read
+`ORDER BY lsn DESC, will_init DESC` (base before non-base at an LSN
+tie). It closes the key because it marks a chain base, which both the
+read anchor and the GC anchor seek; `is_image` is a value column (#1171).
 
 ```sql
 CREATE TABLE amp_storage.pages (
@@ -381,8 +383,9 @@ CREATE TABLE amp_storage.pages (
     CONSTRAINT pages_bucket_id_matches_formula CHECK (
         bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
     ),
+    CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
-                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, is_image DESC)
+                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, will_init DESC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
 
@@ -407,10 +410,12 @@ bytes — so use `dump-pages`, which decodes client-side. See
 the `yb_payload_compression` knob, and why compressing above DocDB
 (which does not TOAST these values) pays.
 
-The chain read is image-anchored: a correlated subquery seeks the
-newest `is_image = TRUE` row at LSN ≤ target and bounds the scan from
-below, so the fast path is one anchor seek plus a small range scan
-above it (the anchor is a pushable lower bound on the DocDB scan):
+The chain read is base-anchored: a correlated subquery seeks the newest
+`will_init` row at LSN ≤ target and bounds the scan from below, so the
+read is one anchor seek plus a small range scan above it (the anchor is
+a pushable lower bound on the DocDB scan). `will_init` rather than
+`is_image` lands on the *nearest* base, since an init record is a base
+too and shadows every version below it:
 
 ```sql
 SELECT p.lsn, p.is_image, p.will_init, p.payload
@@ -424,17 +429,19 @@ WHERE p.branch_id=$1
         WHERE a.branch_id=$1
           AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4
           AND a.forknum=$5 AND a.blknum=$6
-          AND a.is_image=TRUE AND a.lsn <= $7
+          AND a.will_init AND a.lsn <= $7
         ORDER BY a.lsn DESC LIMIT 1), 0)
-ORDER BY p.lsn DESC, p.is_image DESC;
+ORDER BY p.lsn DESC, p.will_init DESC;
 ```
 
-When no image exists for the block (the anchor subquery is empty, so
-the bound falls back to 0), the reader walks rows LSN-descending until
-it hits a `will_init = true` delta. That is the cold path; the
-background image materialiser (see
-[`pageserver.md`](pageserver.md)) compacts long delta chains into
-walredo-applied images to keep it rare.
+When the newest base is an old init record the chain above it is long:
+that is the cold path, which the background image materialiser (see
+[`pageserver.md`](pageserver.md)) keeps rare by compacting long delta
+chains into walredo-applied images. A block with no base at all leaves
+the subquery empty and the bound at 0; the read is unservable, and
+`chain_to_value_reconstruct_state` bumps
+`CORRECTNESS_ERRORS{read_unanchored_chain}` rather than fold deltas onto
+a zero page.
 
 ### `amp_storage.slru_pages`
 
@@ -461,8 +468,9 @@ CREATE TABLE amp_storage.slru_pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
+    CONSTRAINT slru_pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY ((branch_id) HASH,
-                 kind ASC, segno ASC, blknum ASC, lsn DESC, is_image DESC)
+                 kind ASC, segno ASC, blknum ASC, lsn DESC, will_init DESC)
 );
 ```
 

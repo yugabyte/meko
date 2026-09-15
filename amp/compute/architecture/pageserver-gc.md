@@ -84,7 +84,7 @@ knows the table it wrote, stamps the kind; the key stays pure identity.
 
 | operation | key | recorded when | becomes collectable |
 | --- | --- | --- | --- |
-| **trim** (`TrimPages`/`TrimSlru`/`TrimMeta`) | the block (rel / SLRU) or meta key | a block's every-n-th new base (`is_image`/`will_init`), or a meta put; `due_lsn` = the newest counted base's LSN | that key's versions below its newest base `<= cutoff` |
+| **trim** (`TrimPages`/`TrimSlru`/`TrimMeta`) | the block (rel / SLRU) or meta key | a block's every-n-th new base (`will_init`), or a meta put; `due_lsn` = the newest counted base's LSN | that key's versions below its newest base `<= cutoff` |
 | **shrink** (`ShrinkPages`, rel-only) | the rel-size key | a relation is truncated at `due_lsn` | blocks at/above the post-truncation size |
 | **drop** (`DropSlru`/`DropMeta`) | the retired object's key | an SLRU segment truncation or a two-phase resolve, at `due_lsn` | all of the object's rows `<= due_lsn` |
 | **drop_db** (`DropDb`) | the database's relmap key — its `(spcnode, dbnode)` identity | a `DROP DATABASE` at `due_lsn` | every `pages` row and every `meta` key of that database, `<= due_lsn` |
@@ -441,8 +441,8 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
 
    Half-open means the two block trims leave the same-LSN delta at the anchor —
    the delta the materialiser stamped its image over. Reads already tolerate
-   one: the PK orders `lsn DESC, is_image DESC` and chain reconstruction stops
-   at the first `will_init` row, so the image shadows it from the moment it is
+   one: the PK orders `lsn DESC, will_init DESC` and chain reconstruction stops
+   at the first `will_init` row, so the base shadows it from the moment it is
    stamped until a trim removes it. Excluding it needs an `OR ... NOT
    will_init` disjunct that turns the index range into a Storage Filter,
    15-25% of the DELETE's time on amp2 warm and cold (#1153), and the next
@@ -516,7 +516,7 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    statement fails keeps the watermark its first two earned.
 
    The watermark is *inclusive* of that highest `lsn`, for all three. The two
-   block trims require it: `is_image` sits after `lsn` in their PKs, so two rows
+   block trims require it: `will_init` sits after `lsn` in their PKs, so two rows
    can share an `lsn` and the cap can cut the tie group in half — moving past
    would strand the survivor permanently. `meta` has one row per `lsn` and could
    move past, but all it re-reads is the tombstone its own last statement wrote,

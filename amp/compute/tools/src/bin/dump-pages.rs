@@ -164,7 +164,7 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
         "SELECT blknum::text, bucket_id::text, {lsn}, {fork}, is_image::text, \
                 will_init::text{payload} \
          FROM amp_storage.pages WHERE {w} \
-         ORDER BY blknum ASC, lsn DESC, is_image DESC {lim}"
+         ORDER BY blknum ASC, lsn DESC, will_init DESC {lim}"
     );
     let rows = client
         .query(&sql, &[])
@@ -354,13 +354,13 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
         key_where(a),
         bucket_where(a.rel, a.blknum, a.blknum_from, a.blknum_to)
     );
-    // LSN-ascending, image-first on ties (an image supersedes a same-LSN delta).
+    // LSN-ascending, base-first on ties (a base supersedes a same-LSN delta).
     // `payload` comes back as raw bytea (not server-side hex): it carries a
     // compression envelope that has to be unwrapped here before the image /
     // delta decoders below can read page structure out of it.
     let sql = format!(
         "SELECT to_hex(lsn), is_image::int::text, will_init::int::text, payload \
-         FROM amp_storage.pages WHERE {w} ORDER BY lsn, is_image DESC"
+         FROM amp_storage.pages WHERE {w} ORDER BY lsn, will_init DESC"
     );
     let rows = client
         .query(&sql, &[])

@@ -28,7 +28,7 @@ Read in this order:
 3. `compute/architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
 4. `compute/architecture/pageserver.md` — the row-per-page YugabyteDB
-   storage design: image-anchored reads, the background image materialiser,
+   storage design: base-anchored reads, the background image materialiser,
    the getpage RPC, Key encoding, walredo, WAL ingest, and the
    implementation phases. yb-amp is single-shard.
 5. `compute/architecture/safekeeper.md` — `ControlFileStorage::Yb`,

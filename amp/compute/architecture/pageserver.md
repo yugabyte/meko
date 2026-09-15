@@ -135,10 +135,13 @@ effective config comes from `pageserver.toml`. See
 
 One row per (Key, LSN). The PK is **all-range**, led by a 6-way placement
 bucket, then the **(branch_id, spcnode, dbnode, relnode, forknum)**
-identity, then `(blknum, lsn DESC, is_image DESC)` so a per-block scan
-walks rows in LSN-descending order; `is_image` is DESC so the stored
-order matches the chain-read `ORDER BY lsn DESC, is_image DESC` (image
-before delta at a tie).
+identity, then `(blknum, lsn DESC, will_init DESC)` so a per-block scan
+walks rows in LSN-descending order; `will_init` is DESC so the stored
+order matches the chain-read `ORDER BY lsn DESC, will_init DESC` (base
+before non-base at a tie). `will_init` closes the key because it marks
+a chain **base**, which both the read anchor and the GC anchor seek; in
+the key that seek is an index bound. `is_image` is a format tag (page vs.
+WAL record) and stays a value column (#1171).
 
 ```sql
 CREATE TABLE amp_storage.pages (
@@ -156,8 +159,9 @@ CREATE TABLE amp_storage.pages (
     CONSTRAINT pages_bucket_id_matches_formula CHECK (
         bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
     ),
+    CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
-                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, is_image DESC)
+                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, will_init DESC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
 
@@ -224,17 +228,22 @@ Only **relation-page keys** live here — keys where
 `is_image` says whether the payload is an 8 KiB Postgres page (vs. a
 serialised `NeonWalRecord`). `will_init` mirrors `Value::will_init()` —
 true for every image and for records that fully initialise the page
-(e.g. `XLOG_HEAP_INIT_PAGE`); it is the read side's chain-anchor
-marker.
+(e.g. `XLOG_HEAP_INIT_PAGE`); it is the chain-anchor marker for reads
+and GC alike, which is why it closes the key. Every image is therefore a
+base, which the table's `CHECK (will_init OR NOT is_image)` records on
+the YSQL lane (thin-client writes bypass CHECKs).
 
 ### `amp_storage.slru_pages`
 
 SLRU blocks (pg_xact, pg_multixact offsets/members). `kind` is 0=Clog,
 1=MultiXactMembers, 2=MultiXactOffsets (`slru_kind_to_i16`,
 `page_store.rs`). PK: `((branch_id) HASH, kind ASC, segno ASC,
-blknum ASC, lsn DESC, is_image DESC)` — a branch's whole SLRU space
+blknum ASC, lsn DESC, will_init DESC)` — a branch's whole SLRU space
 lives on one tablet, with each `(kind, segno)` segment a contiguous
-range inside it. Same image/delta chain semantics as `pages`.
+range inside it. Same base/delta chain semantics as `pages`, except
+that here the two flags coincide: only `NeonWalRecord::Postgres` carries
+`will_init`, and SLRU rows are neon-special records or images. So the
+SLRU gain is on the GC anchor, where bases are ~0.1% of a clog segment.
 
 ### `amp_storage.meta`
 
@@ -398,7 +407,7 @@ than aborting the dump. Server-side `octet_length(payload)` or
 `substring(payload, …)` in ad-hoc SQL now measures *stored* bytes and
 slices *envelope* bytes — decode in the client instead.
 
-## Read path: image-anchored chain reads
+## Read path: base-anchored chain reads
 
 `Timeline::get_vectored_impl` queries the row store via `PageWriter`
 (`page_server/timeline.rs`, `get_vectored_via_page_writer`):
@@ -425,14 +434,15 @@ return an error.
 
 ### The scan shape
 
-Every chain read is anchored on the newest image at or below the target
-LSN, and returns that image plus the deltas above it. With `is_image` in
-the clustering key the anchor seek is `O(log B)` where `B` is the number of
-image rows for that block — typically 1. If no image exists the read
-degrades to a plain LSN-descending scan of the whole chain; the Rust-side
-trim stops at the first `will_init=true` row, so both cases shorten
-correctly. The no-image case is the only slow path and only fires for cold
-blocks the background image materialiser has not visited yet.
+Every chain read is anchored on the newest **base** at or below the
+target LSN (a materialised image, or an init record that replays over a
+zero page) and returns that base plus the deltas above it. With
+`will_init` in the clustering key the anchor seek is `O(log B)` where `B`
+is the number of base rows for that block. A block with no base below
+the target has nothing to anchor on: the read scans the whole chain and
+then fails in `chain_to_value_reconstruct_state`, which bumps
+`CORRECTNESS_ERRORS{read_unanchored_chain}` rather than fold deltas onto
+a zero page.
 
 The remaining YSQL readers (the cross-forknum range scan and
 `scan_scattered_set`) express that anchor as a scalar subquery with
@@ -448,9 +458,9 @@ WHERE <key_filter>
   AND p.lsn >= COALESCE((
         SELECT a.lsn FROM amp_storage.pages a
         WHERE <key_filter>
-          AND a.is_image = TRUE AND a.lsn <= $target
+          AND a.will_init AND a.lsn <= $target
         ORDER BY a.lsn DESC LIMIT 1), 0)
-ORDER BY p.lsn DESC, p.is_image DESC;
+ORDER BY p.lsn DESC, p.will_init DESC;
 ```
 
 The YSQL multi-block scans that remain (`build_scan_one_fork_scattered_sql`,
@@ -464,9 +474,9 @@ all buckets and is rare in practice.
 On the direct-RPC lane, the single-key readers —
 `read_chain`, `read_slru_chain`, `read_meta` — run as paged clustered
 scans from the target LSN downward that stop at the anchor client-side
-(`ChainFetchState`); `normalize_chain` re-orders equal-LSN image/delta
-ties into the SQL result order (the PK's trailing `is_image` clusters
-ASC on the storage side, the SQL readers order it DESC). It relies
+(`ChainFetchState`); `normalize_chain` re-orders equal-LSN base/delta
+ties into the SQL result order (`lsn DESC, will_init DESC`, base
+first). It relies
 on the `lsn DESC` clustering, so a forward scan surfaces the newest
 version first — `read_meta` takes just `limit(1)`, and the chain readers
 truncate at the first `will_init` anchor. One-forknum multi-block scans
@@ -1171,7 +1181,7 @@ The compute opens libpq connections to the pageserver per backend
 ## Code anchors
 
 - `compute/pageserver/src/page_store.rs` — `PageStore`: the four-table
-  row store, image-anchored read SQL, lineage walks, timeline-state
+  row store, base-anchored read SQL, lineage walks, timeline-state
   CRUD, the branch-state UPDATEs, direct-RPC lane.
 - `compute/pageserver/src/page_writer.rs` — `PageWriter`: buffered
   write path, flush + `consistent_lsn` advance, backpressure,

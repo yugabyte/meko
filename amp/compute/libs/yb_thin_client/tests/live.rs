@@ -1164,7 +1164,7 @@ async fn repro_pages_multipage_scan() {
                  payload BYTEA NOT NULL,
                  PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
                               relnode ASC, forknum ASC, blknum ASC,
-                              lsn DESC, is_image DESC))
+                              lsn DESC, will_init DESC))
              SPLIT AT VALUES ((1), (2), (3), (4), (5))"
         ),
     )
@@ -1278,14 +1278,14 @@ async fn repro_pages_multipage_scan() {
         want_buckets
     );
 
-    // --- thin-client WRITE round-trip with distinct lsn/is_image ---------
+    // --- thin-client WRITE round-trip with distinct lsn/will_init --------
     // `key_values` go in PRIMARY KEY order, which is NOT the declaration
-    // order: `bucket_id` leads, and (lsn DESC, is_image DESC) cluster in the
-    // opposite order to how the table declares (is_image, lsn). Write via the
-    // thin client with distinct lsn (777) and is_image (false), read back, and
-    // cross-check via YSQL, to catch any key-column misordering in the write
-    // path — including a bucket bound to the wrong column, which would land
-    // the row where no reader looks.
+    // order: `bucket_id` leads, (lsn DESC, will_init DESC) close the key, and
+    // `is_image` is a value column though the table declares it between
+    // blknum and lsn. Write distinct lsn (777), will_init (true) and is_image
+    // (false), read back, and cross-check via YSQL, to catch a key-column
+    // misordering: a bucket on the wrong column lands the row where no reader
+    // looks, and `is_image` as the key tail lands it at the wrong version.
     let w_blk: i64 = 9;
     let w_bucket = pages_bucket_of(REL, w_blk);
     let row = UpsertRow::new(
@@ -1297,12 +1297,12 @@ async fn repro_pages_multipage_scan() {
             BindValue::I64(2),
             BindValue::I64(REL),
             BindValue::I16(0),
-            BindValue::I64(w_blk),  // blknum
-            BindValue::I64(777),    // lsn
-            BindValue::Bool(false), // is_image
+            BindValue::I64(w_blk), // blknum
+            BindValue::I64(777),   // lsn
+            BindValue::Bool(true), // will_init
         ],
         &[
-            ("will_init", BindValue::Bool(true)),
+            ("is_image", BindValue::Bool(false)),
             (
                 "payload",
                 BindValue::Bytes(bytes::Bytes::from_static(b"pg")),

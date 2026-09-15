@@ -106,9 +106,14 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
 -- not the eventual tablet count. Whole-branch / whole-db / whole-fork
 -- operations (drops, dumps) must fan out across all six buckets.
 --
--- The trailing `is_image` breaks `lsn` ties; it is DESC so the stored
--- order matches the read-path `ORDER BY lsn DESC, is_image DESC`
--- (image before delta at a tie).
+-- The trailing `will_init` breaks `lsn` ties; it is DESC so the stored
+-- order matches the read-path `ORDER BY lsn DESC, will_init DESC` (base
+-- first at a tie). `will_init` marks a chain base, which is what the
+-- read anchor and the GC anchor both seek: in the key that seek is an
+-- index bound, out of it a value decode per candidate row (#1171).
+-- `is_image` says only whether `payload` is a page or a WAL record, so
+-- it is a value column. The reader still needs it: a base is either
+-- kind, and nothing else tells them apart.
 CREATE TABLE IF NOT EXISTS amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,
     branch_id    uuid     NOT NULL,
@@ -129,8 +134,12 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
     CONSTRAINT pages_bucket_id_matches_formula CHECK (
         bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
     ),
+    -- An image initialises the page, so every image is a base.
+    -- `build_page_row` holds this by construction. YSQL lane only, so
+    -- like `bucket_id` above it documents the contract, not enforces it.
+    CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
-                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, is_image DESC)
+                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, will_init DESC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 
 -- SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
@@ -141,7 +150,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
 -- (2 bits/xact clog; vacuum horizons truncate; the 32-bit xid/mxid spaces
 -- bound the worst case below a tablet), and the hot key is the single
 -- head page per kind — one key, which no bucketing can spread. A
--- `(kind, segno)` segment stays contiguous; versions `lsn DESC`, image
+-- `(kind, segno)` segment stays contiguous; versions `lsn DESC`, base
 -- first on ties (matching `pages`).
 CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     branch_id    uuid     NOT NULL,
@@ -152,8 +161,9 @@ CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
+    CONSTRAINT slru_pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY ((branch_id) HASH,
-                 kind ASC, segno ASC, blknum ASC, lsn DESC, is_image DESC)
+                 kind ASC, segno ASC, blknum ASC, lsn DESC, will_init DESC)
 );
 
 -- Metadata blobs — everything that isn't a relation page or SLRU

@@ -352,13 +352,14 @@ lifetime; detaching a branch from its ancestor is unsupported.
 `PageRow.lsn`, `SlruPageRow.lsn`, `MetaRow.lsn` — one row per version in
 `amp_storage.pages`, `amp_storage.slru_pages`, `amp_storage.meta`. Each
 WAL-derived write is stamped with the **end-LSN of the record** that
-produced it. The tables' primary keys order by `lsn DESC` (with `is_image
-DESC` breaking ties so an image sorts before a same-LSN delta).
+produced it. The tables' primary keys order by `lsn DESC` (with
+`will_init DESC` breaking ties so a base sorts before a same-LSN
+non-base).
 
 **Read path:** `PageWriter::scan_range` / `read_chain` /
 `scan_scattered_set` blend `UnifiedPages` (unflushed buffer + read cache)
 with the lineage-aware `PageStore` SQL. Rel and SLRU pages are
-image-anchored chains truncated at the newest `will_init=true` row; `meta`
+base-anchored chains truncated at the newest `will_init=true` row; `meta`
 reads take the latest row at `lsn ≤ target_lsn` (full overwrite semantics).
 
 **`PageWriter` internal LSN state (memory only):**

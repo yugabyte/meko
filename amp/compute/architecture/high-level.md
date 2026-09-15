@@ -74,7 +74,7 @@ A yb-amp install is:
   and every WAL flush to the safekeeper via the walproposer.
 - **Pageserver (`pageserver`)**: the row-store gateway. Two YSQL
   connection pools:
-  - `compute_page_store`: serves compute reads, running image-anchored
+  - `compute_page_store`: serves compute reads, running base-anchored
     LSN-chain reconstruction over `amp_storage.pages` /
     `amp_storage.slru_pages` / `amp_storage.meta`.
   - `hot_path_page_store`: the walreceiver ingestion path + image
@@ -172,7 +172,7 @@ Compute backend --(miss)--> shared_buffers --(miss)--> LFC --(miss)-->
                                                                 v
                                                           Pageserver
                                                                 |
-                                                  image-anchored chain read on
+                                                  base-anchored chain read on
                                                   amp_storage.pages (one anchor
                                                   seek + range scan above it)
                                                                 |

@@ -980,7 +980,7 @@ impl PageStore {
                 let bound_key: T = row.get(target.key_col);
                 deleted += row.get::<_, i64>(TRIM_DELETED_COUNT_COL) as u64;
                 // Inclusive, so the next statement re-reads that one row:
-                // `is_image` follows `lsn` in both block PKs, so two rows can
+                // `will_init` follows `lsn` in both block PKs, so two rows can
                 // share an `lsn` and the cap can cut between them. `meta` could
                 // move past; one rule beats saving it a tombstone.
                 let watermark: i64 = row.get(TRIM_DELETED_TO_COL);
@@ -1025,10 +1025,8 @@ impl PageStore {
     /// due_lsn); no base <= cutoff = block untouched. Returns rows
     /// deleted.
     ///
-    /// Anchoring on `will_init` matches the read base (`is_image OR
-    /// will_init`) because an image initializes the page (is_image =>
-    /// will_init, true for all current writers). If that broke, the
-    /// trim would under-delete (keep the image) — safe, never over.
+    /// Anchors on `will_init`, the same base the read path uses. It
+    /// trails the primary key, so the predicate is an index bound.
     ///
     /// Deletes YB rows only — the in-RAM `UnifiedPages` read cache is
     /// NOT invalidated. Safe: trimmed rows are below the cutoff/anchor
@@ -1404,7 +1402,7 @@ impl PageStore {
                AND lsn <= $5{rel_bound} \
                AND (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, blknum) \
                    >= ($1, $2, $3, $4, $6, $7, $8) \
-             ORDER BY relnode, forknum, blknum, lsn DESC, is_image DESC \
+             ORDER BY relnode, forknum, blknum, lsn DESC, will_init DESC \
              LIMIT $9",
             schema = self.schema
         );
@@ -2073,10 +2071,11 @@ mod tests {
     const TRIM_UNBATCHED: usize = 1_000;
 
     impl PageStore {
-        /// Test-only: every stored version of one block, unfiltered —
-        /// `(lsn, is_image, will_init)` ascending. The production read
-        /// paths anchor-trim their results, which hides exactly the rows
-        /// GC tests must assert about (deleted sub-anchor versions).
+        /// Test-only: every stored version of one block, unfiltered, as
+        /// `(lsn, is_image, will_init)` ordered by `(lsn, will_init)`
+        /// ascending, oldest first. The production read paths anchor-trim
+        /// their results, which hides exactly the rows GC tests must assert
+        /// about (deleted sub-anchor versions).
         async fn test_raw_block_versions(
             &self,
             branch_id: BranchId,
@@ -2090,7 +2089,7 @@ mod tests {
                 "SELECT lsn, is_image, will_init FROM \"{}\".pages \
                  WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
                    AND relnode=$4 AND forknum=$5 AND blknum=$6 \
-                 ORDER BY lsn, is_image",
+                 ORDER BY lsn, will_init",
                 self.schema
             );
             let rows = self
@@ -2204,7 +2203,8 @@ mod tests {
         }
 
         /// SLRU analog of [`Self::test_raw_block_versions`]: one block's
-        /// stored versions for `(kind, segno, blknum)`, ordered by lsn.
+        /// stored versions for `(kind, segno, blknum)`, ordered by
+        /// `(lsn, will_init)` ascending.
         async fn test_raw_slru_versions(
             &self,
             branch_id: BranchId,
@@ -2215,7 +2215,7 @@ mod tests {
             let sql = format!(
                 "SELECT lsn, is_image, will_init FROM \"{}\".slru_pages \
                  WHERE branch_id=$1 AND kind=$2 AND segno=$3 AND blknum=$4 \
-                 ORDER BY lsn, is_image",
+                 ORDER BY lsn, will_init",
                 self.schema
             );
             let rows = self
@@ -3411,9 +3411,30 @@ mod tests {
     /// hint at all, whichever test runs next. The readback stays: a reconnect
     /// between the `SET` and the EXPLAIN would silently drop it.
     async fn explain(sql: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> String {
+        explain_with(plan_client().await, "EXPLAIN", sql, params).await
+    }
+
+    /// [`explain`] with `ANALYZE, DIST`, so the plan carries DocDB's row
+    /// accounting. Only for statements safe to execute; callers here pass a
+    /// `SELECT`.
+    async fn explain_analyze(
+        client: &ysql_client::YsqlClient,
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> String {
+        explain_with(
+            client,
+            "EXPLAIN (ANALYZE, DIST, COSTS OFF, TIMING OFF)",
+            sql,
+            params,
+        )
+        .await
+    }
+
+    async fn plan_client() -> &'static ysql_client::YsqlClient {
         static PLAN_CLIENT: tokio::sync::OnceCell<ysql_client::YsqlClient> =
             tokio::sync::OnceCell::const_new();
-        let client = PLAN_CLIENT
+        PLAN_CLIENT
             .get_or_init(|| async {
                 ysql_client::YsqlClient::from_yb_config(
                     &super::test_support::test_yb_config(),
@@ -3423,7 +3444,58 @@ mod tests {
                 .await
                 .expect("open the plan tests' own connection")
             })
-            .await;
+            .await
+    }
+
+    /// A second plan connection, for the statements that need `enable_seqscan`
+    /// off. See [`explain_analyze_indexed`].
+    async fn indexed_plan_client() -> &'static ysql_client::YsqlClient {
+        static INDEXED_PLAN_CLIENT: tokio::sync::OnceCell<ysql_client::YsqlClient> =
+            tokio::sync::OnceCell::const_new();
+        INDEXED_PLAN_CLIENT
+            .get_or_init(|| async {
+                ysql_client::YsqlClient::from_yb_config(
+                    &super::test_support::test_yb_config(),
+                    "gc_plan_test_indexed",
+                    false,
+                )
+                .await
+                .expect("open the indexed plan tests' own connection")
+            })
+            .await
+    }
+
+    /// [`explain_analyze`] with sequential scans off.
+    ///
+    /// The `*_anchors_sql` carry no pg_hint_plan directive, unlike the trims,
+    /// so on a few hundred unANALYZEd rows the cost model picks `Seq Scan` +
+    /// `Sort` or an index scan depending on the fixture's size. What this
+    /// asserts is the index scan's shape, so force one.
+    ///
+    /// On its own connection, and never restored: a restoring `SET` does not
+    /// run if the EXPLAIN between the two panics, and the plan tests in this
+    /// binary run concurrently over one connection, so a leaked `off` would
+    /// reshape an unrelated test's plan. This GUC needs no readback: if a
+    /// reconnect drops it the plan reverts to `Seq Scan` and the caller's
+    /// assertion fails loudly.
+    async fn explain_analyze_indexed(
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> String {
+        let client = indexed_plan_client().await;
+        client
+            .execute("SET enable_seqscan = off", &[])
+            .await
+            .expect("disable seqscan");
+        explain_analyze(client, sql, params).await
+    }
+
+    async fn explain_with(
+        client: &ysql_client::YsqlClient,
+        prefix: &str,
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> String {
         client
             .execute("SET pg_hint_plan.yb_bad_hint_mode = error", &[])
             .await
@@ -3438,9 +3510,9 @@ mod tests {
             "the GUC did not stick, so every hint assertion is vacuous"
         );
         client
-            .query(format!("EXPLAIN {sql}").as_str(), params)
+            .query(format!("{prefix} {sql}").as_str(), params)
             .await
-            .unwrap_or_else(|e| panic!("EXPLAIN {sql} rejected by the server: {e}"))
+            .unwrap_or_else(|e| panic!("{prefix} {sql} rejected by the server: {e}"))
             .iter()
             .map(|r| r.get::<_, String>(0))
             .collect::<Vec<_>>()
@@ -4136,6 +4208,111 @@ mod tests {
                 !plan.contains(node),
                 "dequeue plans a {node}, whose index cond is the bucket alone \
                  — it streams every row in it:\n{plan}"
+            );
+        }
+    }
+
+    /// Both block anchors must seek the newest base at or below the cutoff.
+    /// `will_init` has to reach the `Index Cond` to do that; as a `Storage
+    /// Filter` DocDB decodes every candidate row's value to test it, which on
+    /// clog (~0.1% bases) is hundreds of decodes to return one row.
+    ///
+    /// Asserted on the plan, since the result cannot distinguish a seek from
+    /// a scan that read the block and discarded it (#1133). Both halves
+    /// matter: the Index Cond bound, and the rows the scan actually read.
+    #[tokio::test]
+    async fn gc_anchor_lookups_seek_the_newest_base() {
+        let (store, _schema) = make_store("gc_anchor_plan").await;
+        let branch = rand_branch();
+        // One base in 400 versions, clog's density.
+        const VERSIONS: i64 = 400;
+        let (rel, fork, blk) = (16_384i64, 0i16, 0i64);
+        let bucket = page_bucket_id(rel, blk);
+        // YSQL lane, so both CHECKs fire and the seed is one statement.
+        store
+            .test_only_execute(&format!(
+                "INSERT INTO \"{schema}\".pages \
+                     (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, \
+                      blknum, is_image, lsn, will_init, payload) \
+                 SELECT {bucket}, '{branch}', {GC_SPC}, {GC_DB}, {rel}, {fork}, \
+                        {blk}, i = 1, i, i = 1, '\\x00'::bytea \
+                 FROM generate_series(1, {VERSIONS}) i \
+                 ON CONFLICT DO NOTHING",
+                schema = store.schema,
+            ))
+            .await
+            .expect("seed one pages block");
+        let (kind, segno) = (0i16, 640i64);
+        store
+            .test_only_execute(&format!(
+                "INSERT INTO \"{schema}\".slru_pages \
+                     (branch_id, kind, segno, blknum, is_image, lsn, will_init, payload) \
+                 SELECT '{branch}', {kind}, {segno}, {blk}, i = 1, i, i = 1, \
+                        '\\x00'::bytea \
+                 FROM generate_series(1, {VERSIONS}) i \
+                 ON CONFLICT DO NOTHING",
+                schema = store.schema,
+            ))
+            .await
+            .expect("seed one slru block");
+
+        // Cut above every version: the base is at the far end of the range.
+        let cutoff = VERSIONS;
+        let blknums = vec![blk];
+        let buckets = vec![bucket];
+        let watermarks = vec![0i64];
+        let pages_plan = explain_analyze_indexed(
+            &store.gc_trim_blocks_anchors_sql(),
+            &[
+                &branch,
+                &GC_SPC,
+                &GC_DB,
+                &rel,
+                &fork,
+                &blknums,
+                &cutoff,
+                &buckets,
+                &watermarks,
+            ],
+        )
+        .await;
+        let slru_plan = explain_analyze_indexed(
+            &store.gc_trim_slru_anchors_sql(),
+            &[&branch, &kind, &segno, &blknums, &cutoff, &watermarks],
+        )
+        .await;
+
+        for (label, plan) in [("pages", pages_plan), ("slru_pages", slru_plan)] {
+            let index_cond = plan
+                .lines()
+                .find(|l| l.trim_start().starts_with("Index Cond:"))
+                .unwrap_or_else(|| panic!("{label}: the anchor plan has no Index Cond:\n{plan}"));
+            assert!(
+                index_cond.contains("will_init"),
+                "{label}: the anchor no longer bounds `will_init` in its Index \
+                 Cond, so DocDB decodes every candidate row's value to test it \
+                 (#1171); plan was:\n{plan}"
+            );
+            assert!(
+                !plan.contains("Storage Filter"),
+                "{label}: the anchor demoted a bound to a Storage Filter:\n{plan}"
+            );
+            // The plan's own accounting, so row width cannot skew it.
+            let scanned: i64 = plan
+                .lines()
+                .find_map(|l| {
+                    l.trim()
+                        .strip_prefix("Storage Table Rows Scanned: ")?
+                        .parse()
+                        .ok()
+                })
+                .unwrap_or_else(|| {
+                    panic!("{label}: the anchor plan reports no rows scanned:\n{plan}")
+                });
+            assert!(
+                scanned < VERSIONS / 4,
+                "{label}: the anchor scanned {scanned} of {VERSIONS} versions to \
+                 return one base; plan was:\n{plan}"
             );
         }
     }
@@ -5035,7 +5212,9 @@ mod tests {
                         .filter(|(lsn, _, _)| *lsn >= a)
                         .collect(),
                 };
-                expected.sort_by_key(|(lsn, im, _)| (*lsn, *im));
+                // Mirror `test_raw_block_versions`'s `ORDER BY lsn, will_init`
+                // so an init-record tie cannot fail on row order alone.
+                expected.sort_by_key(|(lsn, _, wi)| (*lsn, *wi));
                 let got = store
                     .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
                     .await

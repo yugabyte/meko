@@ -1282,7 +1282,11 @@ impl PageWriter {
         target_lsn: Lsn,
     ) {
         for (key, chain) in out.iter_mut() {
-            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.sort_by(|a, b| {
+                b.lsn
+                    .cmp(&a.lsn)
+                    .then_with(|| b.will_init.cmp(&a.will_init))
+            });
             dedup_page_chain_by_lsn(chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
@@ -1415,10 +1419,18 @@ impl PageWriter {
         let mut merged = cached;
         merged.extend(persisted);
         // Descending LSN; on ties (materialiser INSERTed an image at
-        // the same LSN as an existing delta), the image must sort
-        // first so dedup keeps it and discards the now-superseded
-        // delta. Otherwise the chain can lose its anchor.
-        merged.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+        // the same LSN as an existing delta), the base must sort first
+        // so dedup keeps it and discards the now-superseded delta.
+        // Otherwise the chain can lose its anchor. `will_init` matches
+        // the PK tail and covers a base that is an init record. Two
+        // bases at one LSN (an image over the record it folded) tie;
+        // the stable sort keeps the cached row, which replays to the
+        // same page.
+        merged.sort_by(|a, b| {
+            b.lsn
+                .cmp(&a.lsn)
+                .then_with(|| b.will_init.cmp(&a.will_init))
+        });
         dedup_page_chain_by_lsn(&mut merged);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
@@ -1470,10 +1482,18 @@ impl PageWriter {
         let mut merged = cached;
         merged.extend(persisted);
         // Descending LSN; on ties (materialiser INSERTed an image at
-        // the same LSN as an existing delta), the image must sort
-        // first so dedup keeps it and discards the now-superseded
-        // delta. Otherwise the chain can lose its anchor.
-        merged.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+        // the same LSN as an existing delta), the base must sort first
+        // so dedup keeps it and discards the now-superseded delta.
+        // Otherwise the chain can lose its anchor. `will_init` matches
+        // the PK tail and covers a base that is an init record. Two
+        // bases at one LSN (an image over the record it folded) tie;
+        // the stable sort keeps the cached row, which replays to the
+        // same page.
+        merged.sort_by(|a, b| {
+            b.lsn
+                .cmp(&a.lsn)
+                .then_with(|| b.will_init.cmp(&a.will_init))
+        });
         dedup_page_chain_by_lsn(&mut merged);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);

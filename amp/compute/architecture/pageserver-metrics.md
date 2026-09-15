@@ -130,9 +130,9 @@ per-branch variants add `branch_id`.
 | `materializer_redo` | `redo_one` returned an error (chain deserialise, walredo panic, or INSERT failure). |
 | `materializer_setup` | Materialiser setup (`redo_phase`, typically a YB read of a chain) failed before any per-job work ran. |
 | `materializer_commit` | Materialiser `commit_phase` `put_pages` failed. |
-| `materialize_unanchored_chain` | The merged cache+YB chain up to the target LSN has no `will_init` anchor image; the materialiser refuses rather than fold deltas onto a zero page and make the loss durable. |
+| `materialize_unanchored_chain` | The merged cache+YB chain up to the target LSN has no `will_init` anchor; the materialiser refuses rather than fold deltas onto a zero page and make the loss durable. |
 | `materialize_unanchored_slru_chain` | The SLRU twin of the above: the durable `slru_pages` chain up to the target LSN has no `will_init` anchor even after the full lineage walk, so the page's init record is missing on this branch *and* every ancestor. The materialiser refuses instead of folding `SETBIT` deltas onto a zero clog page (which would read back as "all transactions aborted"). |
-| `read_unanchored_chain` | A read found a chain with no anchoring image (init record missing), so the read is unservable. |
+| `read_unanchored_chain` | A read found a chain with no `will_init` anchor (neither an image nor the block's init record), so the read is unservable. |
 | `chain_dedup_dropped_delta` | Chain dedup found two rows at the same LSN whose content diverges, dropping a genuine delta — a record-loss signature (byte-identical duplicates are benign and not flagged). |
 | `durable_walk_unflushed_row` | The durable-chain walk saw a not-yet-flushed row at or below the target LSN. Benign during attach replay; a sustained rate outside attach means a flush-horizon violation. |
 | `pagewriter_flush` | `PageWriter::flush` returned an error on a periodic or shutdown tick; rows may not have reached YB. |

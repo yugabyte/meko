@@ -7,8 +7,8 @@
 //! current chain from `PageStore`, walredos to a fresh page image at
 //! the triggering LSN, and INSERTs the result as a new image row
 //! (`is_image=TRUE, will_init=TRUE`). Subsequent reads at LSN ≥ target
-//! land on the fast-path image-anchored CTE instead of walking back
-//! to the latest `will_init` delta.
+//! anchor on that row instead of the block's last init record. Both
+//! are anchors; the image saves walredo the replay.
 //!
 //! Why a background task and not at-write materialisation: walredo is
 //! per-key and synchronous (subprocess RPC). Doing it on the
@@ -409,7 +409,7 @@ impl ImageMaterializer {
                     held_image_bytes += b;
                     images.push(std::sync::Arc::new(image_row));
                 }
-                Ok(None) => {} // nothing-to-do (no chain / already image-anchored)
+                Ok(None) => {} // nothing-to-do (no chain / already anchored)
                 Err(e) => {
                     // A walredo failure means the chain we assembled
                     // does not legally produce a page (PG's walredo
@@ -515,8 +515,8 @@ impl ImageMaterializer {
         // Route images by key type: rel images go to `pages` and are
         // installed into the in-RAM UnifiedPages cache; SLRU images go to
         // `slru_pages` and need no cache install — there is no long-lived
-        // in-RAM SLRU read cache, and the `is_image` row anchors
-        // subsequent `read_slru_chain` reads on its own.
+        // in-RAM SLRU read cache, and the image row is a base, so it
+        // anchors subsequent `read_slru_chain` reads on its own.
         let (slru_images, rel_images): (
             Vec<std::sync::Arc<PageRow>>,
             Vec<std::sync::Arc<PageRow>>,
@@ -605,7 +605,7 @@ impl ImageMaterializer {
 
     /// Per-job read + walredo. Returns:
     /// - `Some((image_row, chain_len, n_records))` to enqueue for COPY,
-    /// - `None` to drop the job (nothing durable yet, or already image-anchored),
+    /// - `None` to drop the job (nothing durable yet, or already anchored),
     /// - `Err` to log and skip.
     async fn redo_one(&self, job: &MaterializeJob) -> Result<Option<(PageRow, usize, usize)>> {
         // Test-only: hold the job in flight (its key stays in
@@ -694,9 +694,9 @@ impl ImageMaterializer {
         if chain.is_empty() {
             return Ok(None);
         }
-        if let Some(head) = chain.first()
-            && head.is_image
-            && head.lsn >= job.target_lsn
+        if chain
+            .first()
+            .is_some_and(|head| head_is_anchor_at(head, job.target_lsn))
         {
             return Ok(None);
         }
@@ -769,6 +769,12 @@ impl ImageMaterializer {
     }
 }
 
+/// Whether the chain head is already a base at the target. `will_init`, not
+/// `is_image`: folding an init record writes an image at its own primary key.
+fn head_is_anchor_at(head: &PageRow, target_lsn: Lsn) -> bool {
+    head.will_init && head.lsn >= target_lsn
+}
+
 /// The `(base_img, records)` pair `WalRedoManager::request_redo` expects:
 /// an optional base image at an LSN, plus the LSN-stamped WAL records to
 /// replay on top of it.
@@ -834,4 +840,55 @@ fn parse_chain(chain: &[std::sync::Arc<PageRow>]) -> Result<RedoChain> {
     // does the same reverse before its own walredo call).
     records.reverse();
     Ok((base_img, records))
+}
+
+#[cfg(test)]
+mod redo_skip_tests {
+    use pageserver_api::key::rel_block_to_key;
+    use pageserver_api::reltag::RelTag;
+
+    use super::*;
+
+    fn row(lsn: u64, is_image: bool, will_init: bool) -> PageRow {
+        PageRow {
+            key: rel_block_to_key(
+                RelTag {
+                    spcnode: 1663,
+                    dbnode: 5,
+                    relnode: 16384,
+                    forknum: 0,
+                },
+                7,
+            ),
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::from_static(b"x"),
+        }
+    }
+
+    /// An init record at the target is a base, so the chain is already
+    /// anchored there.
+    #[test]
+    fn a_will_init_delta_head_is_an_anchor() {
+        assert!(head_is_anchor_at(&row(100, false, true), Lsn(100)));
+    }
+
+    #[test]
+    fn an_image_head_is_still_an_anchor() {
+        assert!(head_is_anchor_at(&row(100, true, true), Lsn(100)));
+    }
+
+    /// A plain delta anchors nothing however high it sits.
+    #[test]
+    fn a_plain_delta_head_is_never_an_anchor() {
+        assert!(!head_is_anchor_at(&row(100, false, false), Lsn(100)));
+    }
+
+    /// A base below the target still leaves deltas above it to fold.
+    #[test]
+    fn a_base_below_the_target_still_folds() {
+        assert!(!head_is_anchor_at(&row(99, true, true), Lsn(100)));
+        assert!(!head_is_anchor_at(&row(99, false, true), Lsn(100)));
+    }
 }
