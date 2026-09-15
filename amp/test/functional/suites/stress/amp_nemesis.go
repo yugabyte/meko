@@ -39,7 +39,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Kill amp's own endpoint compute pods while tenants write through them, then assert recovery: every endpoint serves again, the pre-chaos data verifies exactly, and the control plane can still create a tenant.",
-		Params:      []string{"stress.amp_nemesis", "chaos"},
+		Params:      []string{"stress.amp_nemesis", "chaos", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runAmpNemesis,
 	})
@@ -156,7 +156,7 @@ func runAmpNemesis(t *core.T) error {
 		return err
 	}
 
-	return t.Step("control_plane_recovered", func(s *core.StepHandle) error {
+	if err := t.Step("control_plane_recovered", func(s *core.StepHandle) error {
 		before := len(fleet.Tenants)
 		if err := fleet.Create(t, 1); err != nil {
 			return fmt.Errorf("the control plane cannot create a tenant after the chaos: %w", err)
@@ -165,6 +165,12 @@ func runAmpNemesis(t *core.T) error {
 			return fmt.Errorf("creating a tenant after the chaos reported success but added none")
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }
 

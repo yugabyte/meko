@@ -23,7 +23,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Commit a fresh WAL tail, then SIGKILL the safekeeper repeatedly while a backing YugabyteDB pod is down, so every safekeeper startup runs its end-of-WAL scan against failing backing reads (the meko#777/meko#941 WAL-loss class); after recovery every acknowledged commit must verify exactly and writes must flow again.",
-		Params:      []string{"stress.wal_tail_nemesis"},
+		Params:      []string{"stress.wal_tail_nemesis", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runWalTailNemesis,
 	})
@@ -204,7 +204,7 @@ func runWalTailNemesis(t *core.T) error {
 		}
 	}
 
-	return t.Step("writes_flow_again", func(s *core.StepHandle) error {
+	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
 		before := totalAcked(journals)
 		runJournaledWriters(t.Context, env, fleet.Tenants, journals, t.Seed.Fork("resume"),
 			params.ResumeDuration, commitDurabilityParams{PayloadBytes: params.PayloadBytes}, nil)
@@ -215,6 +215,20 @@ func runWalTailNemesis(t *core.T) error {
 				params.ResumeDuration, walTailWriteFailure(t, kube, s, "writes_flow_again", fleet.Tenants, journals, logf))
 		}
 		return verifyExactSets(t, s, env, fleet.Tenants, journals, params.PayloadBytes)
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		err := verifyPhysicalConsistency(t, s, env, fleet.Tenants)
+		if err != nil {
+			// Teardown deletes these pods, so the evidence goes with them.
+			for i := range fleet.Tenants {
+				ten := &fleet.Tenants[i]
+				attachEndpointDiagnostics(t, kube, ten, "physical_consistency-"+ten.Name, logf)
+			}
+		}
+		return err
 	})
 }
 

@@ -32,7 +32,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Cut one tenant's endpoint pod off the backing YugabyteDB (iptables in its own network namespace dropping its egress to the store, the pod up and reachable) while journaled writes run, and hold the endpoint to its write lease: no commit acknowledged past the lease's TTL, every acknowledged id in storage once the link is back, the other tenants committing throughout, and the cut endpoint serving and committing again on its own after the heal.",
-		Params:      []string{"stress.endpoint_backing_partition"},
+		Params:      []string{"stress.endpoint_backing_partition", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runEndpointBackingPartition,
 	})
@@ -327,7 +327,7 @@ func runEndpointBackingPartition(t *core.T) error {
 		}
 	}
 
-	return t.Step("writes_flow_again", func(s *core.StepHandle) error {
+	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
 		st := partitionWriters(t.Context, env, fleet.Tenants, journals, params.ResumeDuration, params.StallLimit, params.PayloadBytes)
 		s.Set("acked_after_recovery", st.acked)
 		if st.hung > 0 {
@@ -338,5 +338,11 @@ func runEndpointBackingPartition(t *core.T) error {
 				params.ResumeDuration, st.firstErr.Load())
 		}
 		return verifyExactSets(t, s, env, fleet.Tenants, journals, params.PayloadBytes)
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }

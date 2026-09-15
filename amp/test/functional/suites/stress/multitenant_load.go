@@ -29,7 +29,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "N tenants (cluster + endpoint each) writing in parallel on one control plane for a config-tunable duration: every tenant's rows and checksum must match what its own writer committed, no tenant may see another's tables, nobody may be starved, and the control plane must still serve afterwards.",
-		Params:      []string{"stress.multitenant"},
+		Params:      []string{"stress.multitenant", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runMultitenantLoad,
 	})
@@ -173,7 +173,7 @@ func runMultitenantLoad(t *core.T) error {
 	}
 
 	// A control plane that survived the load still has to be able to do its job.
-	return t.Step("control_plane_still_works", func(s *core.StepHandle) error {
+	if err := t.Step("control_plane_still_works", func(s *core.StepHandle) error {
 		cl, err := env.AmpController(t.Context)
 		if err != nil {
 			return fmt.Errorf("the controller is unreachable after the load: %w", err)
@@ -192,5 +192,11 @@ func runMultitenantLoad(t *core.T) error {
 			return fmt.Errorf("creating a tenant after the load reported success but added none")
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }

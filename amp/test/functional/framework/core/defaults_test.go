@@ -1178,6 +1178,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetDuration("stress.duration", -1); got != 60*time.Second {
 		t.Errorf("stress.duration = %s, want 60s", got)
 	}
+	if !cfg.GetBool("stress.consistency.enabled", false) {
+		t.Errorf("stress.consistency.enabled = false, want true (every stress test that drives amp tenants ends with the check)")
+	}
 	if cfg.GetBool("stress.combined.enabled", true) {
 		t.Errorf("stress.combined.enabled = true, want false (opt-in)")
 	}
@@ -1214,6 +1217,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.bulk_load_kill.payload_bytes":             128,
 		"stress.bulk_load_kill.load_chunk_rows":           50_000,
 		"stress.bulk_load_kill.verify_chunk_rows":         500_000,
+		"stress.consistency.max_relations":                0,
 	}
 	for key, want := range stressInts {
 		if got := cfg.GetInt(key, -1); got != want {
@@ -1237,11 +1241,17 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetString("stress.combined.client_pull_secret", "__MISSING__"); got != "" {
 		t.Errorf("stress.combined.client_pull_secret = %q, want present and empty", got)
 	}
+	// probe_sql is a documented-empty debug knob, but must be PRESENT.
+	if got := cfg.GetString("stress.consistency.probe_sql", "__MISSING__"); got != "" {
+		t.Errorf("stress.consistency.probe_sql = %q, want present and empty", got)
+	}
 	stressDurs := map[string]time.Duration{
 		"stress.combined.run_time":       3 * time.Minute,
 		"stress.combined.ready_timeout":  5 * time.Minute,
 		"stress.combined.verify_timeout": 5 * time.Minute,
 		"stress.combined.health_timeout": 5 * time.Minute,
+
+		"stress.consistency.timeout": 10 * time.Minute,
 
 		"stress.commit_durability.baseline_duration": 20 * time.Second,
 		"stress.commit_durability.duration":          3 * time.Minute,

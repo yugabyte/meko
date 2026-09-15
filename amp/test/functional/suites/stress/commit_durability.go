@@ -31,7 +31,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Journal every write's outcome while pod_delete faults hit amp's endpoint computes and the backing YugabyteDB, aiming a PostgreSQL cancel request at a seeded share of in-flight inserts plus a forced floor per writer, then recycle one tenant's endpoint and hold storage to the exact set: every acknowledged id present with its value, every present id one that was issued, and writes flowing again. A cancelled insert the server acks anyway is journaled as acked, which makes the meko#473 window reachable, not certain.",
-		Params:      []string{"stress.commit_durability", "chaos"},
+		Params:      []string{"stress.commit_durability", "chaos", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runCommitDurability,
 	})
@@ -163,7 +163,7 @@ func runCommitDurability(t *core.T) error {
 		return err
 	}
 
-	return t.Step("writes_flow_again", func(s *core.StepHandle) error {
+	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
 		before := totalAcked(journals)
 		runJournaledWriters(t.Context, env, fleet.Tenants, journals,
 			t.Seed.Fork("resume"), params.ResumeDuration, params, nil)
@@ -174,6 +174,12 @@ func runCommitDurability(t *core.T) error {
 				params.ResumeDuration)
 		}
 		return verifyExactSets(t, s, env, fleet.Tenants, journals, params.PayloadBytes)
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }
 

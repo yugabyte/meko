@@ -26,7 +26,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Fill every backing data disk to within a few MiB while tenants write through amp, and hold each INSERT to committing or erroring within the stall limit rather than hanging; then free the disks and assert writes resume and every acknowledged row is present.",
-		Params:      []string{"stress.backing_disk_full"},
+		Params:      []string{"stress.backing_disk_full", "stress.consistency"},
 		Timeout:     60 * time.Minute,
 		Run:         runBackingDiskFull,
 	})
@@ -264,8 +264,14 @@ func runBackingDiskFull(t *core.T) error {
 		return err
 	}
 
-	return t.Step("verify_exact_sets", func(s *core.StepHandle) error {
+	if err := t.Step("verify_exact_sets", func(s *core.StepHandle) error {
 		return verifyExactSets(t, s, env, fleet.Tenants, journals, params.PayloadBytes)
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }
 

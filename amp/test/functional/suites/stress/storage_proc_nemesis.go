@@ -38,7 +38,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Kill the pageserver and safekeeper processes by pid inside a tenant's endpoint pod, under a live postgres, while journaled writes run; then hold the endpoint supervisor to what it promises — the daemon respawned in place within its restart budget, no pod recreation — and hold storage to the exact acknowledged set, to a read over a fresh connection, and to writes committing again.",
-		Params:      []string{"stress.storage_proc_nemesis"},
+		Params:      []string{"stress.storage_proc_nemesis", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runStorageProcNemesis,
 	})
@@ -199,7 +199,7 @@ func runStorageProcNemesis(t *core.T) error {
 
 	// SELECT 1 answering while no COMMIT ever returns is the shape of meko#727,
 	// and an ordinary OOM reaches it as easily as an injected kill does.
-	return t.Step("writes_flow_again", func(s *core.StepHandle) error {
+	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
 		before := totalAcked(journals)
 		runJournaledWriters(t.Context, env, fleet.Tenants, journals, t.Seed.Fork("resume"),
 			params.ResumeDuration, commitDurabilityParams{PayloadBytes: params.PayloadBytes}, nil)
@@ -210,6 +210,12 @@ func runStorageProcNemesis(t *core.T) error {
 				params.ResumeDuration)
 		}
 		return verifyExactSets(t, s, env, fleet.Tenants, journals, params.PayloadBytes)
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }
 

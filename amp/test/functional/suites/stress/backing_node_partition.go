@@ -25,7 +25,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Cut one backing tserver pod off the network (iptables in its own network namespace dropping every packet, the pod stays up) while tenants write through amp, and hold the write path to never stalling past the stall limit: with a quorum left, writes must keep flowing. Lift the partition, demand the node rejoins, every acknowledged row reads back, writes flow, and the control plane still creates a tenant.",
-		Params:      []string{"stress.backing_node_partition"},
+		Params:      []string{"stress.backing_node_partition", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runBackingNodePartition,
 	})
@@ -279,7 +279,7 @@ func runBackingNodePartition(t *core.T) error {
 		return err
 	}
 
-	return t.Step("control_plane_recovered", func(s *core.StepHandle) error {
+	if err := t.Step("control_plane_recovered", func(s *core.StepHandle) error {
 		before := len(fleet.Tenants)
 		if err := fleet.Create(t, 1); err != nil {
 			return fmt.Errorf("the control plane cannot create a tenant after the partitions: %w", err)
@@ -288,5 +288,11 @@ func runBackingNodePartition(t *core.T) error {
 			return fmt.Errorf("creating a tenant after the partitions reported success but added none")
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }

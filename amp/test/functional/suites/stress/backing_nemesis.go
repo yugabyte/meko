@@ -22,7 +22,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Kill the backing YugabyteDB's serving pods (YBA universe / ybk8s tservers, or the built-in yugabyted) while tenants write through amp endpoints, then assert full recovery: endpoints serve, writes flow again, and every acknowledged row verifies exactly.",
-		Params:      []string{"stress.backing_nemesis", "chaos"},
+		Params:      []string{"stress.backing_nemesis", "chaos", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runBackingNemesis,
 	})
@@ -177,7 +177,7 @@ func runBackingNemesis(t *core.T) error {
 		return err
 	}
 
-	return t.Step("control_plane_recovered", func(s *core.StepHandle) error {
+	if err := t.Step("control_plane_recovered", func(s *core.StepHandle) error {
 		waited, err := awaitControlPlaneReady(t, fleet, params.SettleTimeout)
 		if err != nil {
 			return err
@@ -198,5 +198,11 @@ func runBackingNemesis(t *core.T) error {
 			return fmt.Errorf("creating a tenant after the chaos reported success but added none")
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }

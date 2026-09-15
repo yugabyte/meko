@@ -24,7 +24,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Force-delete the amp controller pod while branch and endpoint tasks are in flight, then hold the control plane to the task contract (meko#578, meko#971): every fired task finishes after the restart, no task stays non-terminal, no orphaned compute pod survives, tenants keep committing through the outage, and the control plane still creates a tenant.",
-		Params:      []string{"stress.control_plane_nemesis"},
+		Params:      []string{"stress.control_plane_nemesis", "stress.consistency"},
 		Timeout:     90 * time.Minute,
 		Run:         runControlPlaneNemesis,
 	})
@@ -357,7 +357,7 @@ func runControlPlaneNemesis(t *core.T) error {
 		return err
 	}
 
-	return t.Step("control_plane_still_creates", func(s *core.StepHandle) error {
+	if err := t.Step("control_plane_still_creates", func(s *core.StepHandle) error {
 		before := len(fleet.Tenants)
 		if err := fleet.Create(t, 1); err != nil {
 			return fmt.Errorf("the control plane cannot create a tenant after the chaos: %w", err)
@@ -366,5 +366,11 @@ func runControlPlaneNemesis(t *core.T) error {
 			return fmt.Errorf("creating a tenant after the chaos reported success but added none")
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 	})
 }

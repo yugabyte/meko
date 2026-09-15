@@ -25,7 +25,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Back up, restore, PITR-rewind and schedule backups on the YugabyteDB universe under amp while amp tenants run bank-transfer and SQL-transaction workloads through their endpoints, then assert every operation succeeded, restores round-tripped exactly, and amp acknowledged commits throughout.",
-		Params:      []string{"stress.backing_backup_restore"},
+		Params:      []string{"stress.backing_backup_restore", "stress.consistency"},
 		Timeout:     4 * time.Hour,
 		Run:         runBackingBackupRestore,
 	})
@@ -120,6 +120,7 @@ func runBackingBackupRestore(t *core.T) error {
 		{"endpoints_serve_again", r.endpointsServeAgain},
 		{"writes_flow_again", r.writesFlowAgain},
 		{"verify_data", r.verifyData},
+		{"physical_consistency", r.physicalConsistency},
 	}
 	for _, p := range phases {
 		if err := t.Step(p.name, func(*core.StepHandle) error { return p.fn(t.Context) }); err != nil {
@@ -168,4 +169,10 @@ func (r *backupRestoreRun) backupRestoreUnderLoad(ctx context.Context) error {
 	<-done
 	r.t.Metric("commits_during_backup_restore", float64(totalWritten(r.fleet.Tenants)-before), "count")
 	return err
+}
+
+func (r *backupRestoreRun) physicalConsistency(ctx context.Context) error {
+	return r.t.Step("amcheck", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(r.t, s, r.env, r.fleet.Tenants)
+	})
 }

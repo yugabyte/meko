@@ -57,7 +57,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Churn the branch lifecycle (fork, endpoint, write, retire, delete) in parallel lanes against one cluster and assert every cycle converged, nothing was orphaned, and no task failed.",
-		Params:      []string{"env.sharedk8s"},
+		Params:      []string{"env.sharedk8s", "stress.consistency"},
 		Run:         runBranchChurn,
 	})
 }
@@ -82,6 +82,7 @@ type churnRun struct {
 	// churn's own endpoints live on its own branches, so this one is the only
 	// endpoint the default branch is allowed to have at the end.
 	seedEndpoint string
+	seedEP       controller.Endpoint
 }
 
 // runBranchChurn creates one cluster, runs churnLanes × churnCycles branch
@@ -150,6 +151,7 @@ func runBranchChurn(t *core.T) (err error) {
 		}
 		ep := eps[len(eps)-1]
 		run.seedEndpoint = ep.ID
+		run.seedEP = ep
 		s.Set("endpoint", ep.ID)
 		conn, err := env.ConnectEndpoint(t.Context, ep)
 		if err != nil {
@@ -192,7 +194,7 @@ func runBranchChurn(t *core.T) (err error) {
 		return err
 	}
 
-	return t.Step("verify_no_orphans", func(s *core.StepHandle) error {
+	if err := t.Step("verify_no_orphans", func(s *core.StepHandle) error {
 		branches, err := cl.ListAllBranches(t.Context, poolID, proj.ID)
 		if err != nil {
 			return fmt.Errorf("list branches after the churn: %w", err)
@@ -241,6 +243,14 @@ func runBranchChurn(t *core.T) (err error) {
 			return fmt.Errorf("the controller is not ready after the churn: %w", err)
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The churn deletes every branch it forked, so the parent's own endpoint is
+	// all that is left to read pages from.
+	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+		return verifyEndpointConsistency(t, s, env, []consistencyTarget{{Name: "seed endpoint", Endpoint: run.seedEP}})
 	})
 }
 

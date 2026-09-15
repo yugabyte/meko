@@ -44,7 +44,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Put the YugabyteDB under amp through planned maintenance — rolling restart, gflag change, data move, software upgrade — while amp tenants write through their endpoints, then assert commits kept flowing through every operation and no acknowledged row was lost.",
-		Params:      []string{"stress.backing_maintenance"},
+		Params:      []string{"stress.backing_maintenance", "stress.consistency"},
 		Timeout:     4 * time.Hour,
 		Run:         runBackingMaintenance,
 	})
@@ -119,6 +119,7 @@ func runBackingMaintenance(t *core.T) error {
 		{"endpoints_serve_again", r.endpointsServeAgain},
 		{"writes_flow_again", r.writesFlowAgain},
 		{"verify_data", r.verifyData},
+		{"physical_consistency", r.physicalConsistency},
 	}
 	for _, p := range phases {
 		if err := t.Step(p.name, func(*core.StepHandle) error { return p.fn(t.Context) }); err != nil {
@@ -598,5 +599,11 @@ func (r *maintenanceRun) writesFlowAgain(ctx context.Context) error {
 func (r *maintenanceRun) verifyData(ctx context.Context) error {
 	return r.t.Step("verify_tenant_rows", func(s *core.StepHandle) error {
 		return verifyTenantData(r.t, s, r.env, r.fleet.Tenants, r.cfg.PayloadBytes)
+	})
+}
+
+func (r *maintenanceRun) physicalConsistency(ctx context.Context) error {
+	return r.t.Step("amcheck", func(s *core.StepHandle) error {
+		return verifyPhysicalConsistency(r.t, s, r.env, r.fleet.Tenants)
 	})
 }

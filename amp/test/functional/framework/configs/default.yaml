@@ -1296,8 +1296,8 @@ stress:
   # amp_nemesis kills the endpoint compute pods amp deployed while tenants
   # write through them; backing_nemesis kills the pods of the backing
   # YugabyteDB itself — whichever backing the run deployed (a YBA universe's
-  # tservers, a ybk8s deploy's tservers, or the built-in yugabyted). Both end
-  # by reading every acknowledged row back over a fresh connection.
+  # tservers, a ybk8s deploy's tservers, or the built-in yugabyted). Both read
+  # every acknowledged row back and then check the pages themselves.
   amp_nemesis:
     tenants: 3
     # duration is the fault window; settle_timeout bounds recovery after it.
@@ -1316,6 +1316,23 @@ stress:
     # endpoints served normally). Any 500 during the window fails outright
     # (meko#886: an unreachable store is a 503, never a 500).
     control_plane_recovery_max: "2m"
+  # consistency: the final physical-consistency step every stress test that
+  # drives amp tenants ends with (suites/stress/consistency_helper.go). amcheck
+  # reads the pages themselves, so a heap or index rebuilt wrongly after a fault
+  # fails here rather than passing a row count.
+  consistency:
+    enabled: true
+    # timeout bounds the step per endpoint: bt_index_check(heapallindexed) and
+    # verify_heapam each read the entire relation.
+    timeout: "10m"
+    # max_relations caps how many relations, indexes and primary-key tables are
+    # checked per endpoint. 0 means all, and anything left out is recorded on
+    # the step rather than passed over silently.
+    max_relations: 0
+    # probe_sql is DEBUG ONLY. When set it runs in place of bt_index_check, once
+    # per index, so the step can be shown to fail (a page cannot be corrupted
+    # over the wire). Leave it empty in any real run.
+    probe_sql: ""
   # backing_unreachable_api: deletes the backing's serving pods, then drives
   # reads and cluster creates on a transport that retries nothing, so the 503 the
   # controller sends for an unreachable store is seen rather than retried away
