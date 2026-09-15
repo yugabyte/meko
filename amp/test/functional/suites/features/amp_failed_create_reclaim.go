@@ -25,7 +25,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression"},
+		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Create an endpoint no node can schedule, wait for its create task to fail, then assert the sweeper removes the failed endpoint and the branch accepts a new writer.",
 		Params:      []string{"functional.failed_create_reclaim", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},

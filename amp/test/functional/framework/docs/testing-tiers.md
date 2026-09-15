@@ -6,7 +6,7 @@ untagged and run on demand — see the Perf bullet):
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — all fourteen `suites/stress` scenarios: `load_sustain` (workloadgen
+- **`stress`** — all seventeen `suites/stress` scenarios: `load_sustain` (workloadgen
   soak), `combined_load` (four parallel workloads under chaos on a co-located YB
   backing), `backing_maintenance` (workloads through a rolling restart, a gflag
   change, a data move and a YugabyteDB upgrade), `backing_backup_restore`
@@ -15,18 +15,26 @@ untagged and run on demand — see the Perf bullet):
   `branch_churn` (many tenants, many branches), the nemesis / durability
   scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
   `wal_tail_nemesis`, `control_plane_nemesis`,
-  `commit_durability`, `backing_node_partition`, `endpoint_backing_partition`),
+  `commit_durability`, `backing_node_partition`, `endpoint_backing_partition`,
+  `backing_unreachable_api`),
   `bulk_load_kill` (one large write killed mid-flight) and
   `backing_disk_full` (the backing's data disks filled, every INSERT held to an
-  answer, then freed).
-  Every stress test that drives amp runs on a stack of its own
+  answer, then freed), plus the two `suites/features` tests below: nineteen in all.
+  Every `suites/stress` test that drives amp runs on a stack of its own
   (`Shape: DedicatedStack`: its own YugabyteDB and amp control plane, torn
   down with the test), so a fault one injects, or a wedge it leaves behind,
   never reaches the next test. `load_sustain` (`SingleContainer`) and
   `combined_load` (`Universe`) already stood on their own.
   Scheduled as its own tier so the report portal gets a Stress
-  column; the `Category: core.Stress` tests in `suites/features` are **not** in it
-  (they belong to `regression` and would double-report).
+  column. Membership is by cost, not by category. The `Category: core.Stress`
+  tests in `suites/features` are **not** in it (they belong to `regression` and
+  would double-report), while `amp_failed_create_reclaim` and
+  `amp_cluster_failed_create_reclaim` are: each waits out the controller's 35m
+  deploy timeout and then the sweeper's 30m gc-grace, over an hour before either
+  can assert anything. Both grace periods are control-plane-wide settings, and
+  both tests stay `Shape: SharedControlPlane`, so they cannot be shortened for
+  themselves alone and they are the two tests in this tier without a stack of
+  their own.
 - **`perf`** — the baseline-gated benchmarks in `suites/perf` (`tpcc`, `pgbench`,
   `sysbench`), with version/image comparison + bisect + history/trend.
 
@@ -39,14 +47,17 @@ not by tier.
 
 ---
 
-## `regression` — every PR / master change (68 tests)
+## `regression` — every PR / master change (77 tests)
 
 Fast, deterministic, each asserting a distinct core guarantee. The table below is
 the core-guarantee subset; the tier also carries the amp-feature tests
 (`amp_branch_isolation`, `amp_endpoint_lifecycle`, `amp_compute_restart`), the
-control-plane upgrade tests (`amp_upgrade`, `amp_upgrade_chain`), the control-plane
+control-plane upgrade tests (`amp_upgrade`, `amp_upgrade_chain` — the chain never
+calls `POST /endpoint-upgrades`, so it does not subsume the single hop and both
+stay here), the control-plane
 contract tests (`amp_pool_lifecycle`, `amp_endpoint_upgrade_roll`, the resize and
-race tests) and the extension / PG-compatibility matrix. Env-portable: the
+race tests) and the extension / PG-compatibility matrix. The two failed-create
+reclaim tests are `stress`, not here. Env-portable: the
 tests depend on env *capabilities* (`pgEnv` to reach the endpoint's Postgres, plus
 `computeRestarter` for the restart tests), not a concrete env — so the same tests
 run against a self-built or a standing control plane alike:
@@ -105,7 +116,9 @@ tests need (a single run would demand every cloud credential at once):
   held to fencing itself, coming back, and every acknowledged id in storage) and `bulk_load_kill`, which deletes an endpoint's compute
   pod — gracefully and by killing the container outright — in the middle of one
   large COPY / INSERT ... SELECT / batched-insert transaction / million-row
-  UPDATE and holds it to all-or-nothing.
+  UPDATE and holds it to all-or-nothing. The tier also carries the two
+  `suites/features` failed-create reclaim tests, which are here for their
+  runtime rather than for any fault they inject.
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
   each gated against a LIVE baseline by default (`perf.baseline.live`): a second
   set of stacks on the prior release runs the same workload concurrently, and

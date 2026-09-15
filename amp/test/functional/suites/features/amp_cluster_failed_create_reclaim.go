@@ -22,7 +22,7 @@ func init() {
 		Suite:       "features",
 		Category:    core.Functional,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"regression", "gapcoverage"},
+		Tags:        []string{"stress", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Two clusters created with a writer no node can schedule: both create tasks fail; the orphans are absent from the default cluster list and present, with a consistent total, under include_failed=true; deleting one through the API succeeds and removes it; the other is swept by the failed-create collector within the sweep budget, and a fresh cluster under the same name can be created afterwards.",
 		Params:      []string{"functional", "functional.failed_create_reclaim", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
