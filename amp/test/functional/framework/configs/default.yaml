@@ -1391,6 +1391,19 @@ stress:
     # endpoints served normally). Any 500 during the window fails outright
     # (meko#886: an unreachable store is a 503, never a 500).
     control_plane_recovery_max: "2m"
+  # fault_metrics: the last step of wal_tail_nemesis, backing_node_partition and
+  # control_plane_nemesis (suites/stress/fault_metrics_helper.go). It samples the
+  # product's OWN prometheus exposition across the fault and holds each named
+  # metric to rising inside the window and coming back after it, so the signal an
+  # operator would be paged on is proved to exist. A metric the exposition does
+  # not carry fails the step naming it: that absence is the finding.
+  fault_metrics:
+    enabled: true
+    # rise_factor is how many times its pre-fault baseline a metric must reach
+    # inside the window to count as having moved, and the margin it must come
+    # back within afterwards. A counter whose baseline is zero only has to leave
+    # zero and return.
+    rise_factor: 2.0
   # consistency: the final physical-consistency step every stress test that
   # drives amp tenants ends with (suites/stress/consistency_helper.go). amcheck
   # reads the pages themselves, so a heap or index rebuilt wrongly after a fault

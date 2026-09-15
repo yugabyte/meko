@@ -24,7 +24,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Force-delete the amp controller pod while branch and endpoint tasks are in flight, then hold the control plane to the task contract (meko#578, meko#971): every fired task finishes after the restart, no task stays non-terminal, no orphaned compute pod survives, tenants keep committing through the outage, and the control plane still creates a tenant.",
-		Params:      []string{"stress.control_plane_nemesis", "stress.consistency"},
+		Params:      []string{"stress.control_plane_nemesis", "stress.consistency", "stress.fault_metrics"},
 		Timeout:     90 * time.Minute,
 		Run:         runControlPlaneNemesis,
 	})
@@ -88,6 +88,10 @@ func runControlPlaneNemesis(t *core.T) error {
 		return err
 	}
 	defer fleet.Close()
+
+	cpsrc, cpspecs := controllerFaultMetrics(t)
+	faults := startFaultMetrics(t, kube, cpsrc, cpspecs, logf)
+	defer faults.stop()
 
 	var journals []*AckJournal
 	if err := t.Step("create_tenants", func(s *core.StepHandle) error {
@@ -205,6 +209,7 @@ func runControlPlaneNemesis(t *core.T) error {
 			}
 			s.Set("killed", strings.Join(pods, ","))
 			killed = pods
+			faults.Open()
 			return nil
 		}); err != nil {
 			return err
@@ -216,6 +221,7 @@ func runControlPlaneNemesis(t *core.T) error {
 				return err
 			}
 			s.Set("ready_after", waited.Round(time.Second).String())
+			faults.Close()
 			return gate.attestNonTarget(t, s, killed...)
 		}); err != nil {
 			return err
@@ -377,7 +383,11 @@ func runControlPlaneNemesis(t *core.T) error {
 		return err
 	}
 
-	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+	if err := t.Step("physical_consistency", func(s *core.StepHandle) error {
 		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
-	})
+	}); err != nil {
+		return err
+	}
+
+	return faults.Assert(t)
 }

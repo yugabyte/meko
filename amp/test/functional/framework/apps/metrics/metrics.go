@@ -359,6 +359,32 @@ func NewEndpoint(kube *k8s.Kubectl, cfg Config, selector string) *Sampler {
 	return newSampler(kube, cfg, []role{endpointRole(cfg, selector)})
 }
 
+type Source struct {
+	Tag       string
+	Selector  string
+	Container string
+	Port      int
+	Path      string
+	Collect   []Entry
+}
+
+// One source per pod: two roles on the same pod share a cgroup probe state and
+// would each consume the other's deltas.
+func NewSources(kube *k8s.Kubectl, cfg Config, srcs ...Source) *Sampler {
+	roles := make([]role, 0, len(srcs))
+	for _, src := range srcs {
+		path := src.Path
+		if path == "" {
+			path = pageserverPromPath
+		}
+		roles = append(roles, role{
+			tag: src.Tag, selector: src.Selector, container: src.Container,
+			port: src.Port, path: path, entries: compileEntries(src.Collect),
+		})
+	}
+	return newSampler(kube, cfg, roles)
+}
+
 func newSampler(kube *k8s.Kubectl, cfg Config, roles []role) *Sampler {
 	if cfg.SampleInterval <= 0 {
 		cfg.SampleInterval = DefaultSampleInterval
@@ -446,14 +472,40 @@ func (s *Sampler) loop(ctx context.Context, targets []target) {
 	tick := time.NewTicker(s.cfg.SampleInterval)
 	defer tick.Stop()
 	s.sampleAll(ctx, targets, states)
-	for {
+	for n := 1; ; n++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			if n%rediscoverEvery == 0 {
+				targets = s.rediscover(ctx, targets, states)
+			}
 			s.sampleAll(ctx, targets, states)
 		}
 	}
+}
+
+// A fault that deletes a pod gives its replacement a name Start never saw.
+const rediscoverEvery = 12
+
+// Departed pods stay: dropping one discards the lines it already contributed.
+func (s *Sampler) rediscover(ctx context.Context, have []target, states map[string]*podState) []target {
+	seen := make(map[string]bool, len(have))
+	for _, tg := range have {
+		seen[tg.role.tag+"/"+tg.pod] = true
+	}
+	for _, tg := range s.discover(ctx) {
+		key := tg.role.tag + "/" + tg.pod
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if states[tg.pod] == nil {
+			states[tg.pod] = newPodState()
+		}
+		have = append(have, tg)
+	}
+	return have
 }
 
 // sampleAll probes every target concurrently. Each goroutine touches only its

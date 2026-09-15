@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 func init() {
@@ -25,7 +26,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Cut one backing tserver pod off the network (iptables in its own network namespace dropping every packet, the pod stays up) while tenants write through amp, and hold the write path to never stalling past the stall limit: with a quorum left, writes must keep flowing. Lift the partition, demand the node rejoins, every acknowledged row reads back, writes flow, and the control plane still creates a tenant.",
-		Params:      []string{"stress.backing_node_partition", "stress.consistency"},
+		Params:      []string{"stress.backing_node_partition", "stress.consistency", "stress.fault_metrics"},
 		Timeout:     90 * time.Minute,
 		Run:         runBackingNodePartition,
 	})
@@ -80,6 +81,10 @@ func runBackingNodePartition(t *core.T) error {
 	}
 	logf := t.Masker().Logf(log.Printf)
 	bkube := backingEnv.BackingKube()
+	var ampKube *k8s.Kubectl
+	if ae, ok := t.Env.(ampKubeEnv); ok {
+		ampKube = ae.AmpKube()
+	}
 
 	ips, err := backingPodIPs(t, bkube)
 	if err != nil {
@@ -96,6 +101,10 @@ func runBackingNodePartition(t *core.T) error {
 		return err
 	}
 	defer fleet.Close()
+
+	pssrc, psspecs := pageserverFaultMetrics()
+	faults := startFaultMetrics(t, ampKube, pssrc, psspecs, logf)
+	defer faults.stop()
 
 	var journals []*AckJournal
 	if err := t.Step("create_tenants", func(s *core.StepHandle) error {
@@ -180,6 +189,7 @@ func runBackingNodePartition(t *core.T) error {
 			}
 			s.Set("enforced_after", took.Round(time.Second).String())
 			probe.Start(t.Context)
+			faults.Open()
 			return nil
 		}); err != nil {
 			return err
@@ -222,6 +232,7 @@ func runBackingNodePartition(t *core.T) error {
 				return fmt.Errorf("pod %s still cannot reach %s:%d after its DROP rules were deleted: %w", victim, peerIP, tserverRPCPort, err)
 			}
 			s.Set("reachable_after", took.Round(time.Second).String())
+			faults.Close()
 			cpRecovery, measured := probe.Stop(partitionEnd, params.SettleTimeout)
 			tally, bad := probe.Summary()
 			s.Set("control_plane_probe", tally)
@@ -297,7 +308,11 @@ func runBackingNodePartition(t *core.T) error {
 		return err
 	}
 
-	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+	if err := t.Step("physical_consistency", func(s *core.StepHandle) error {
 		return verifyPhysicalConsistency(t, s, env, fleet.Tenants)
-	})
+	}); err != nil {
+		return err
+	}
+
+	return faults.Assert(t)
 }

@@ -23,7 +23,7 @@ func init() {
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Commit a fresh WAL tail, then SIGKILL the safekeeper repeatedly while a backing YugabyteDB pod is down, so every safekeeper startup runs its end-of-WAL scan against failing backing reads (the meko#777/meko#941 WAL-loss class); after recovery every acknowledged commit must verify exactly and writes must flow again.",
-		Params:      []string{"stress.wal_tail_nemesis", "stress.consistency"},
+		Params:      []string{"stress.wal_tail_nemesis", "stress.consistency", "stress.fault_metrics"},
 		Timeout:     90 * time.Minute,
 		Run:         runWalTailNemesis,
 	})
@@ -97,6 +97,10 @@ func runWalTailNemesis(t *core.T) error {
 		return err
 	}
 
+	sksrc, skspecs := safekeeperFaultMetrics()
+	faults := startFaultMetrics(t, kube, sksrc, skspecs, logf)
+	defer faults.stop()
+
 	rnd := t.Seed.Fork("wal-tail").Rand()
 	for r := 1; r <= params.Rounds; r++ {
 		// The bug erases WAL the pageserver has not consumed yet.
@@ -142,6 +146,7 @@ func runWalTailNemesis(t *core.T) error {
 			}
 			s.Set("backing_pod", pod)
 			degraded = pod
+			faults.Open()
 			return nil
 		}); err != nil {
 			return err
@@ -188,6 +193,7 @@ func runWalTailNemesis(t *core.T) error {
 				return err
 			}
 			s.Set("ready_after", waited.Round(time.Second).String())
+			faults.Close()
 			return gate.attestNonTarget(t, s, append(fleetEndpointTargets(fleet.Tenants), degraded)...)
 		}); err != nil {
 			return err
@@ -226,7 +232,7 @@ func runWalTailNemesis(t *core.T) error {
 		return err
 	}
 
-	return t.Step("physical_consistency", func(s *core.StepHandle) error {
+	if err := t.Step("physical_consistency", func(s *core.StepHandle) error {
 		err := verifyPhysicalConsistency(t, s, env, fleet.Tenants)
 		if err != nil {
 			// Teardown deletes these pods, so the evidence goes with them.
@@ -236,7 +242,11 @@ func runWalTailNemesis(t *core.T) error {
 			}
 		}
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+
+	return faults.Assert(t)
 }
 
 // walTailWriteFailure collects why a burst acked nothing while the evidence still exists: teardown deletes the tenants' endpoint pods before the run collects anything.

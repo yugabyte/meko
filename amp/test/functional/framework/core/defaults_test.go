@@ -1204,6 +1204,12 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if !cfg.GetBool("stress.consistency.enabled", false) {
 		t.Errorf("stress.consistency.enabled = false, want true (every stress test that drives amp tenants ends with the check)")
 	}
+	if !cfg.GetBool("stress.fault_metrics.enabled", false) {
+		t.Errorf("stress.fault_metrics.enabled = false, want true (the three fault tests end by asserting the product's own metrics moved)")
+	}
+	if got := cfg.GetFloat("stress.fault_metrics.rise_factor", -1); got != 2.0 {
+		t.Errorf("stress.fault_metrics.rise_factor = %v, want 2", got)
+	}
 	if cfg.GetBool("stress.combined.enabled", true) {
 		t.Errorf("stress.combined.enabled = true, want false (opt-in)")
 	}
