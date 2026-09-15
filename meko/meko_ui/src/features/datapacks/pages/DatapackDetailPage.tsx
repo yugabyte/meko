@@ -57,6 +57,7 @@ import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
+import { DatapackMetricsSection } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
 import { DatapackTokenBurnTile } from "@/features/datapacks/components/efficiency/TokenBurnTile";
 import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
@@ -540,6 +541,13 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
         {CONTEXTUAL_PROMINENCE_SEARCH_ENABLED ? (
           <DatapackTokenBurnTile datapackId={datapack?.datapack_id ?? null} />
         ) : null}
+
+        <DatapackMetricsSection
+          knowledgeCount={datapack?.knowledge_count ?? 0}
+          memoryCount={memoriesCount}
+          collectiveMemoryCount={collectiveMemoryCount}
+          learningsCount={learningsCount}
+        />
 
         <CollectiveLearningPipeline
           currentUser={currentUser}
