@@ -49,9 +49,9 @@ MANIFEST="${SCRIPT_DIR}/ycp/controlplane.yaml"
 # --- configuration (override via environment) ---
 NS="${NS:?NS (target namespace) is required}"
 YCP_IMAGE="${YCP_IMAGE:?YCP_IMAGE (ycp-api-server ref, incl tag) is required}"
-# Name to register the amp environment under. The control plane slugs it and bakes
-# it into the id as "amp-<slug(name)>"; we read that id back rather than recomputing
-# the slug here, so the two can never drift.
+# Name to register the amp environment under. The control plane slugs it into the id;
+# we read that id back rather than recomputing the slug here, so the two can never
+# drift — which is what keeps this script correct across a change in the derivation.
 # Stable, so a re-run reaches the environment it stood up before. The amp controller
 # binds to one environment id for the life of its database, so a name that changed per
 # run would strand a controller whose storage outlived the control plane

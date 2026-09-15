@@ -30,10 +30,10 @@ func envRow(id, kind string) *sqlmock.Rows {
 	)
 }
 
-// The kind is baked into the id so an amp and a meko environment of the same name
-// can coexist, and an amp environment seeds no meko-stack — it is a running
-// controller reporting what it owns, not a data plane to bring up.
-func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
+// An amp environment's id is a bare slug like any other — the kind lives in the kind
+// column, never in the addressing key — and it seeds no meko stack, being a running
+// controller reporting what it owns rather than a data plane to bring up.
+func TestRegister_AmpKindKeepsBareIDAndSeedsNothing(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -51,8 +51,8 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if e.ID != "amp-acme-prod" {
-		t.Errorf("amp environment id = %q, want %q", e.ID, "amp-acme-prod")
+	if e.ID != "acme-prod" {
+		t.Errorf("amp environment id = %q, want %q (the id must not encode the kind)", e.ID, "acme-prod")
 	}
 	if e.Kind != KindAmp {
 		t.Errorf("kind = %q, want %q", e.Kind, KindAmp)
@@ -62,6 +62,38 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations (an amp registration must not write desired state): %v", err)
+	}
+}
+
+// The id derives from the name alone, so the same name yields the same id in either
+// kind. That is what lets an environment's id outlive a change in what it serves; it
+// is also why one account can no longer hold an amp and a meko environment of the
+// same name, the second being refused as a conflict.
+func TestRegister_IDIsIndependentOfKind(t *testing.T) {
+	ids := map[string]string{}
+	for _, kind := range []string{KindAmp, KindMeko} {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock: %v", err)
+		}
+		svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), repository.NewEnvironmentTaskRepo(db))
+		expectRegisterInsert(mock, envUUID)
+
+		e, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: kind, APIKeyID: keyA}, "")
+		if err != nil {
+			t.Fatalf("Register(%s): %v", kind, err)
+		}
+		ids[kind] = e.ID
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations for kind %s: %v", kind, err)
+		}
+		db.Close()
+	}
+	if ids[KindAmp] != ids[KindMeko] {
+		t.Errorf("amp id = %q, meko id = %q, want both %q", ids[KindAmp], ids[KindMeko], "acme-prod")
+	}
+	if ids[KindMeko] != "acme-prod" {
+		t.Errorf("id = %q, want the bare slug %q", ids[KindMeko], "acme-prod")
 	}
 }
 

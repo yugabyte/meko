@@ -157,7 +157,7 @@ receiver promotes them to labels without the receiving control plane setting
 `promote_resource_attributes` (same reasoning as the BYOC `source` label).
 
 The values come from YCP, which owns both: `environment_id` is the environment
-slug (`amp-acme-prod` — the same value as `agent.envName`), and the install hint
+slug (`acme-prod` — the same value as `agent.envName`), and the install hint
 the console prints fills both in. Unset, nothing is stamped. The hint omits
 `account_id` for a standalone YCP, whose all-zeros sentinel account would label
 every series identically.

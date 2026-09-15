@@ -343,9 +343,10 @@ effect.
 ## Environment `kind`
 
 An environment is registered as **`amp`** or **`meko`**. The kind is fixed at
-registration. A meko id stays a bare `slug(name)`; an amp id is prefixed **`amp-`**,
-so an amp and a meko environment of the same name never collide and the two coexist
-in one fleet. Enrollment carries the kind and YCP rejects a mismatch (409), so an
+registration. The id is a bare `slug(name)` for either kind and encodes nothing —
+the kind column is what distinguishes them, so a name is unique per account across
+kinds. (Ids minted before this carry an `amp-` prefix and still resolve.)
+Enrollment carries the kind and YCP rejects a mismatch (409), so an
 agent configured for one kind cannot attach to the other's environment. An amp
 environment seeds **no** desired state at registration — an operator declares its resources afterwards through
 `POST /environments/{id}/desired`.
@@ -387,7 +388,7 @@ image is `quay.io/yugabyte/ycp-reconciler-agent` (`ycp/Dockerfile.reconcile-agen
 
 The controller-side unit coverage is the binding store + endpoint
 (`internal/ycp/binding.go`, `internal/api/ycp_binding_test.go`) and, on the
-control-plane side, the `kind`-qualified id, enroll kind-mismatch, and desired /
+control-plane side, the kind-independent id, enroll kind-mismatch, and desired /
 `resources` round-trip (`meko/api_server/internal/service` and `.../repository`).
 The engine, backend mapping, and agent live in the `ycp` module and are tested
 there.

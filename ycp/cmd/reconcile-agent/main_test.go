@@ -182,9 +182,9 @@ func TestEnrollCarriesTheConfiguredKind(t *testing.T) {
 	if got.Kind != "meko" {
 		t.Errorf("enrolled kind = %q, want meko", got.Kind)
 	}
-	// The kind is persisted too: environment names are unique only within a
-	// kind, so a resumed identity that did not record it cannot be told apart
-	// from a same-named environment of the other kind.
+	// The kind is persisted too, and compared on resume: an operator re-pointing
+	// this agent at an environment of the other kind must not have the persisted
+	// identity silently accepted.
 	if cluster.secret["environment-kind"] != "meko" {
 		t.Errorf("persisted kind = %q, want meko", cluster.secret["environment-kind"])
 	}

@@ -23,10 +23,10 @@ type Environment struct {
 	// it leaks nothing.
 	APIKeyID string `json:"api_key_id"`
 	// Kind distinguishes an amp environment (the amp controller) from a meko one
-	// (the datapack/stack agent). It is fixed at registration. A meko id is a bare
-	// slug(name) (unchanged, backward compatible); an amp id is prefixed "amp-",
-	// so the two can coexist in one fleet and the kind column disambiguates. Legacy
-	// rows registered before this read as "meko".
+	// (the datapack/stack agent). It is fixed at registration, and it is the only
+	// thing that says what an environment serves: the id is a bare slug(name) and
+	// encodes nothing. Ids minted before that carry an "amp-" prefix and still
+	// resolve. Legacy rows registered before this field read as "meko".
 	Kind            string          `json:"kind"`
 	Placement       string          `json:"placement"`
 	Region          string          `json:"region"`

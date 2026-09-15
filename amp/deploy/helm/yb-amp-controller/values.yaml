@@ -351,7 +351,7 @@ otel:
   # scrape (controller/architecture/ac-metrics.md). Normally set by the install
   # hint the YCP console prints; unset stamps nothing.
   #
-  # -- The YCP environment id — the slug, e.g. "amp-acme-prod", the same value as
+  # -- The YCP environment id — the slug, e.g. "acme-prod", the same value as
   # agent.envName. Unique per account, which accountId resolves.
   environmentId: ""
   # -- The YBM account that owns this environment. The install hint omits it for a

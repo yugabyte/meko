@@ -86,11 +86,10 @@ type state struct {
 	EnvID   string `json:"environment-id"`
 	EnvUUID string `json:"environment-uuid"`
 	EnvName string `json:"environment-name"`
-	// EnvKind is what this identity was confirmed as. Environment names are only
-	// unique within a kind — an amp environment's id is prefixed "amp-" where a
-	// meko one is a bare slug — so the name alone cannot tell a resumed identity
-	// apart from a same-named environment of the other kind. An empty value is a
-	// state written before this field existed, which is treated as a match.
+	// EnvKind is what this identity was confirmed as, and is compared on resume: an
+	// operator re-pointing this agent at an environment of the other kind must not
+	// have the persisted identity silently accepted. An empty value is a state
+	// written before this field existed, which is treated as a match.
 	EnvKind string `json:"environment-kind,omitempty"`
 }
 

@@ -285,10 +285,10 @@ no longer demo residue either — `ENV_NAME` has no default and is required, and
 YCP now registers **amp** environments too, not just meko ones — an amp
 environment is a running **amp controller** that reports the storage pools,
 databases, branches and compute endpoints it owns. Registration takes a
-`kind` (`amp` | `meko`, default meko); a meko id stays a bare `<slug>` while an
-amp id is prefixed `amp-<slug>`, and the enroll handshake checks the kind — a mismatch
-is fatal to the agent — so the two coexist in one fleet and neither attaches to the
-other's environment. An amp environment's install hint installs the `yb-amp-controller` chart with the reconcile-agent
+`kind` (`amp` | `meko`, default meko). The id is a bare `<slug>` for either kind —
+ids minted before this carry an `amp-` prefix and still resolve — and the enroll
+handshake checks the kind, a mismatch being fatal to the agent, so neither attaches
+to the other's environment. An amp environment's install hint installs the `yb-amp-controller` chart with the reconcile-agent
 (`agent.enabled=true`) turned on — the agent is the sole YCP client and drives the
 controller over its REST API. Everything the control plane can know is filled in —
 the namespace (defaulted to the environment id, one per environment per cluster), the

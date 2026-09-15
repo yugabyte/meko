@@ -48,8 +48,8 @@ type ClusterFacts struct {
 type Environment struct {
 	ID string `json:"id"`
 	// Kind is "amp" (the amp controller) or "meko" (the datapack/stack agent),
-	// fixed at registration. A meko id is a bare slug; an amp id is prefixed
-	// "amp-". Empty legacy rows read as meko.
+	// fixed at registration. The id is a bare slug and does not encode the kind;
+	// ids minted before that carry an "amp-" prefix. Empty legacy rows read as meko.
 	Kind            string           `json:"kind,omitempty"`
 	AccountID       string           `json:"account_id,omitempty"`
 	Placement       string           `json:"placement"` // cloud | onprem

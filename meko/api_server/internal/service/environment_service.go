@@ -56,8 +56,8 @@ type AccountScope string
 
 // Environment kinds. An amp environment is driven by the amp controller (which
 // reports a resource inventory and no meko-stack); a meko environment is driven
-// by the datapack/stack agent. The kind is fixed at registration and baked into
-// the id so both can coexist in one fleet.
+// by the datapack/stack agent. The kind is fixed at registration and is the only
+// record of what an environment serves — the id derives from the name alone.
 const (
 	KindMeko = "meko"
 	KindAmp  = "amp"
@@ -138,8 +138,8 @@ type ClusterSpec struct {
 type RegisterEnvironmentRequest struct {
 	Name string `json:"name"`
 	// Kind is "amp" (the amp controller) or "meko" (the datapack/stack agent);
-	// empty defaults to "meko". It fixes what the environment runs and is baked
-	// into the returned id.
+	// empty defaults to "meko". It fixes what the environment runs. The returned id
+	// derives from the name alone, so a name is unique per account across kinds.
 	Kind        string       `json:"kind,omitempty"`
 	AccountID   string       `json:"account_id"`
 	Placement   string       `json:"placement"`
@@ -307,15 +307,21 @@ func (s *EnvironmentService) Register(
 	if req.ClusterSpec != nil {
 		state = "CLUSTER_PROVISIONING"
 	}
-	// A meko environment keeps a bare slug id — that is the id the existing meko
-	// agent, e2e, and console already use, so prefixing it would silently break
-	// them. An amp environment is prefixed "amp-", so an amp and a meko
-	// environment of the same name never collide and the kind is legible from the
-	// id. The kind column disambiguates regardless of the id shape.
+	// The id is the slug of the name, whatever the kind. It deliberately encodes no
+	// kind: the id is the environment's addressing key — unique per account, the
+	// {id} path segment, reconcileAgent.envName, the namespace namespaceFor derives —
+	// so an id
+	// asserting one kind could never be reused by an environment that came to serve
+	// more than one. The kind column is what disambiguates, and always was.
+	//
+	// Ids minted before this keep their "amp-" prefix and keep resolving: nothing
+	// parses the prefix, and every lookup is exact-match on the stored id.
+	//
+	// The trade-off is deliberate. A name is now unique per account across kinds, so
+	// one account cannot hold both an amp and a meko environment called "prod" — the
+	// second registration is refused as a conflict instead of being silently
+	// qualified into a different id than the caller asked for.
 	id := slug(name)
-	if kind == KindAmp {
-		id = KindAmp + "-" + id
-	}
 	e = &models.Environment{
 		ID: id, Kind: kind, AccountID: accountID, Placement: placement, Region: req.Region,
 		State: state, MaxDatapacks: 400, CreatedAt: time.Now().UTC(),

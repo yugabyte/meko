@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
     mcp_base_url       TEXT,
     cert_fingerprint   TEXT,
     components         JSONB NOT NULL DEFAULT '[]'::jsonb,
-    kind               TEXT NOT NULL DEFAULT 'meko',        -- amp | meko; meko id is bare slug, amp id is prefixed "amp-"
+    kind               TEXT NOT NULL DEFAULT 'meko',        -- amp | meko; the id is a bare slug either way
     resources          JSONB NOT NULL DEFAULT '[]'::jsonb,  -- amp controller's reported inventory ([] for meko)
     live               BOOLEAN NOT NULL DEFAULT FALSE,
     enroll_token_hash        TEXT NOT NULL DEFAULT '',   -- SHA-256 hex
