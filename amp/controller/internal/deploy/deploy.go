@@ -85,10 +85,12 @@ type EndpointSpec struct {
 	Version string
 	// Connectivity is how clients reach this endpoint's Postgres port:
 	// ConnectivityClusterIP (the default, in-cluster and tailnet only),
-	// ConnectivityNLBInternal (VPC-routable) or ConnectivityNLBExternal
-	// (internet-facing). The NLB modes add a SECOND, Postgres-only Service in
-	// front of a load balancer; the pageserver/safekeeper/supervisor ports are
-	// never published on it. Only the Kubernetes deployer implements this.
+	// ConnectivityNLBInternal (VPC-routable), ConnectivityNLBExternal
+	// (internet-facing), or the ingress pair, which gives the same two exposures
+	// from a SHARED load balancer. The NLB modes add a second, Postgres-only
+	// Service in front of a load balancer of their own; the
+	// pageserver/safekeeper/supervisor ports are never published on it. Only the
+	// Kubernetes deployer implements this.
 	Connectivity string
 	// AllowedCIDRs restricts which sources may reach that load balancer
 	// (loadBalancerSourceRanges). Empty leaves it unrestricted, which for
@@ -107,11 +109,42 @@ type EndpointSpec struct {
 // Client reachability modes for EndpointSpec.Connectivity. These strings are
 // also the chart's `service.connectivity` values and the API's enum, so one
 // vocabulary runs end to end and nothing has to translate between layers.
+//
+// That end-to-end claim is not yet true of the ingress pair below: the API enum
+// and the endpoint chart still know only the first three, and each catches up
+// later in this series. Until then an ingress_* value cannot reach
+// CreateEndpoint — the API rejects it as invalid_request — which is the only
+// reason it is safe for the chart to render nothing for it.
 const (
 	ConnectivityClusterIP   = "cluster_ip"
 	ConnectivityNLBInternal = "nlb_internal"
 	ConnectivityNLBExternal = "nlb_external"
+
+	// The ingress modes put the endpoint on a SHARED load balancer — a port on a
+	// shard — rather than provisioning one of its own. Same exposure as the
+	// nlb_* pair either side of the cluster boundary; the difference is who owns
+	// the load balancer, which is why they are separate modes rather than an
+	// implementation detail of the existing two.
+	//
+	// An endpoint's address becomes its own DNS name, which hides WHICH shard it
+	// is on — but only the host half. The port comes from the target shard's own
+	// range, so moving an endpoint between shards still changes its address, and
+	// that is why nothing moves them on this path
+	// (controller/architecture/ac-ingress.md).
+	ConnectivityIngressInternal = "ingress_internal"
+	ConnectivityIngressExternal = "ingress_external"
 )
+
+// IsIngress reports whether mode puts the endpoint on a shared ingress shard.
+func IsIngress(mode string) bool {
+	return mode == ConnectivityIngressInternal || mode == ConnectivityIngressExternal
+}
+
+// IsDedicatedLB reports whether mode provisions the endpoint its own cloud load
+// balancer.
+func IsDedicatedLB(mode string) bool {
+	return mode == ConnectivityNLBInternal || mode == ConnectivityNLBExternal
+}
 
 // Extension is one externalized extension to mount into an endpoint: its name
 // (the /extensions/<Name> mount subdir), the OCI image built by
@@ -219,6 +252,23 @@ type Endpoint struct {
 // up front rather than persisting an exposure the endpoint will never have.
 type ConnectivitySupporter interface {
 	SupportsConnectivity() bool
+}
+
+// IngressSupporter is implemented by a deployer that can place an endpoint on a
+// shared ingress shard. Separate from ConnectivitySupporter because the two ask
+// different questions: that one is "can this driver render an exposure at all",
+// this one is "does THIS deployment route endpoints through shards".
+//
+// Deliberately one deployment-wide answer and not a per-family one. Whether a
+// given family can be served is the allocator's question, not the deployer's —
+// it depends on the shard rows in ingress_shards and on that family's zone, and
+// ingress.Allocate already answers it per family. A second, coarser copy of that
+// judgement here could only disagree with the one actually enforced.
+//
+// Nothing calls this yet: the flag that sets it and the API refusal that reads
+// it both land later in this series.
+type IngressSupporter interface {
+	SupportsIngress() bool
 }
 
 // Deployer places and removes compute endpoints on a runtime. CreateEndpoint

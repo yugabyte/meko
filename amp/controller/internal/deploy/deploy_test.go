@@ -690,3 +690,58 @@ func TestKubernetesDeployerSupportsConnectivity(t *testing.T) {
 		t.Error("SupportsConnectivity() = false, want true")
 	}
 }
+
+// The two classifiers partition the modes, and the API branches on them: an
+// ingress mode must never be mistaken for one that provisions a load balancer of
+// its own, since that is the per-endpoint bill shared ingress exists to remove.
+func TestConnectivityModeClassifiers(t *testing.T) {
+	for _, tc := range []struct {
+		mode        string
+		ingress     bool
+		dedicatedLB bool
+	}{
+		{ConnectivityClusterIP, false, false},
+		{ConnectivityNLBInternal, false, true},
+		{ConnectivityNLBExternal, false, true},
+		{ConnectivityIngressInternal, true, false},
+		{ConnectivityIngressExternal, true, false},
+		{"", false, false},
+		{"nlb_ingress", false, false}, // neither, not both
+	} {
+		if got := IsIngress(tc.mode); got != tc.ingress {
+			t.Errorf("IsIngress(%q) = %v, want %v", tc.mode, got, tc.ingress)
+		}
+		if got := IsDedicatedLB(tc.mode); got != tc.dedicatedLB {
+			t.Errorf("IsDedicatedLB(%q) = %v, want %v", tc.mode, got, tc.dedicatedLB)
+		}
+		if IsIngress(tc.mode) && IsDedicatedLB(tc.mode) {
+			t.Errorf("%q classified as both ingress and dedicated-LB", tc.mode)
+		}
+	}
+}
+
+// SupportsIngress reports the deployment's switch and nothing else — the API
+// keys its 400 off this interface, so an opt-in that defaulted on would deploy
+// endpoints nobody can reach.
+func TestKubernetesDeployerSupportsIngress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{"off by default", false},
+		{"enabled", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testKubernetesConfig()
+			cfg.IngressEnabled = tc.enabled
+			var d Deployer = NewKubernetesDeployer(cfg, nil)
+			is, ok := d.(IngressSupporter)
+			if !ok {
+				t.Fatal("KubernetesDeployer must implement IngressSupporter")
+			}
+			if got := is.SupportsIngress(); got != tc.enabled {
+				t.Errorf("SupportsIngress() = %v, want %v", got, tc.enabled)
+			}
+		})
+	}
+}

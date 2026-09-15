@@ -93,6 +93,12 @@ type KubernetesConfig struct {
 	ServiceType       string // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
+	// IngressEnabled is whether this deployment routes endpoints through shared
+	// ingress shards at all, and it is the whole of what the deployer knows about
+	// ingress. The DNS zones deliberately do not appear here: the deployer never
+	// mints a name — the allocator does, and hands the finished address down — so
+	// a copy of the zones on this struct could only go stale.
+	IngressEnabled bool
 	// Cloud overrides the cloud detected from node provider IDs ("aws", "gcp",
 	// "azure"), which selects the load-balancer annotations the endpoint chart
 	// renders for the nlb_* connectivity modes. Empty (the normal case) = detect.
@@ -173,6 +179,18 @@ var _ Deployer = (*KubernetesDeployer)(nil)
 // local deployers do not implement it.
 func (k *KubernetesDeployer) SupportsConnectivity() bool { return true }
 
+// SupportsIngress reports whether this deployment routes endpoints through
+// shared ingress shards, satisfying deploy.IngressSupporter.
+//
+// It reports the switch and nothing more. It is NOT a promise that a slot can be
+// had: capacity is a question about rows in ingress_shards, which only the
+// allocator can answer, and it refuses per family. The API reads this to reject
+// the ingress_* modes up front on a deployment that never opted in, so a caller
+// gets a 400 instead of an endpoint that deploys and cannot be reached — but
+// that wiring, and the flag that sets the field, both land later in this series,
+// so nothing reads it at this commit.
+func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnabled }
+
 // CreateEndpoint installs/updates the endpoint's Helm release and waits for it
 // to be ready, then returns the stable in-cluster client address. The release
 // name (= spec.Name, a DNS-1123 label) is also the object/Service name via
@@ -183,7 +201,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	vals := k.values(spec, release)
 	// Only needed for the load-balanced modes, and it costs a node list — so it is
 	// resolved here rather than in values(), which has no context to do it with.
-	if spec.Connectivity == ConnectivityNLBInternal || spec.Connectivity == ConnectivityNLBExternal {
+	if IsDedicatedLB(spec.Connectivity) {
 		vals.Service.Cloud = k.detectCloud(ctx)
 	}
 	if err := k.applyDiskSizing(&vals); err != nil {
@@ -218,7 +236,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	// redeploy renders service.connectivity empty, helm prunes the -lb Service and
 	// the load balancer is deleted. Checked before the Service-type switch because
 	// it is a per-endpoint choice, not the controller-wide default.
-	if spec.Connectivity == ConnectivityNLBInternal || spec.Connectivity == ConnectivityNLBExternal {
+	if IsDedicatedLB(spec.Connectivity) {
 		if lb := k.serviceLBAddress(ctx, release+"-lb"); lb != "" {
 			if err := k.verifyReady(ctx, release); err != nil {
 				return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
