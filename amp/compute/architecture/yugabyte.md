@@ -391,13 +391,14 @@ CREATE TABLE amp_storage.pages (
 
 Because `bucket_id` leads the key, **every** query against `pages` binds
 it to a single value. A chain read knows its blknum and so binds the
-entire 7-column prefix (one tablet), and the thin-lane per-fork scan is
-one such read per block, so each stops at its own anchor. A scattered key
-set partitions its blknums by `page_bucket_id`, one bucket-pinned query per
-group; whole-fork and cross-fork operations fan out over all six. One bucket per
-query is forced: the range-key bind takes one value per column, with no
-set form. See [`pageserver.md`](pageserver.md) "Why the
-bucket" for the function's design and the salt's failure mode.
+entire 7-column prefix (one tablet), and the thin-lane one-fork scans — a
+contiguous range and a scattered key set alike — are one such read per
+block, so each stops at its own anchor and each carries its own
+`bucket_id`. Whole-fork and cross-fork operations cannot derive the bucket
+from their bounds and fan out over all six. One bucket per query is forced:
+the range-key bind takes one value per column, with no set form. See
+[`pageserver.md`](pageserver.md) "Why the bucket" for the function's design
+and the salt's failure mode.
 
 `payload` here — and in `slru_pages` and `meta` below — holds a
 compression envelope, not bare page bytes: a codec tag byte followed by

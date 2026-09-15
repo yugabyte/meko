@@ -88,28 +88,34 @@ inventory is in [`pageserver-apis.md`](pageserver-apis.md).
 
 ## Connections to YugabyteDB
 
-`bin/pageserver.rs` opens two `PageStore` handles at startup, each
-with its own YSQL connection pool, so compute-facing reads never queue
-behind internal writes:
+`bin/pageserver.rs` opens three `PageStore` handles at startup, each with
+its own connection pool on both transports, so compute-facing reads never
+queue behind internal writes:
 
 - **`compute_page_store`** (`application_name =
   "pageserver:compute_reads"`, pool of 2 × `scale_factor`) — the
-  GetPage hot path (`PageWriter::scan_range` / `read_chain`). Compute
-  backends issue parallel prefetches, and each lands on its own YSQL
-  connection instead of serialising on one backend.
+  GetPage hot path (`PageWriter::scan_range` / `read_chain` /
+  `scan_scattered_set`), all of which take the direct-RPC lane below.
+  What is left on this handle's YSQL pool is the reads with no lane of
+  their own: the cross-forknum `scan_range`, the meta range scans, and the
+  `branch_state` reads — `get_branch_state`, `get_branch_seed`, and
+  `load_lineage`'s walk up the ancestry, one query per segment.
 - **`hot_path_page_store`** (`application_name = "pageserver:hot_path"`, pool
   of 2 × `scale_factor`) — walreceiver flushes, the materialiser's
   durable chain reads, and the materialiser's image writes. The flush's
   four writes — pages, SLRU, meta, and the `pending_gc` candidates that
   trail them — all take the direct-RPC lane below. What goes out over YSQL
-  from this pool is everything with no lane of its own: the meta *range*
-  scans, branch-state CRUD, and the lineage walks.
+  from this pool is the `branch_state` traffic: `advance_consistent_lsn` once
+  per flush window, `update_branch_initial_state` at bootstrap, and the
+  `get_branch_state` read inside `create_branch_row` at branch creation.
 
   Each connection still runs `SET yb_enable_upsert_mode = true`, which is
-  now vestigial: the GUC only skips YB's read-before-write on INSERT, and
-  no production INSERT reaches these connections any more — what is left is
-  SELECTs, branch-state UPDATEs and GC DELETEs. The flag outlives its
-  reason; the pool was renamed off it.
+  now vestigial: the GUC only skips YB's read-before-write on INSERT, and no
+  production INSERT reaches these connections any more — only those UPDATEs
+  do. The flag outlives its reason; the pool was renamed off it.
+- **`gc_page_store`** (`application_name = "pageserver:gc"`, pool of
+  `GC_ACTION_PARALLELISM` × `scale_factor`) — the GC drain
+  ([`pageserver-gc.md`](pageserver-gc.md)).
 
 `PageStore` also opens direct-RPC table handles over `libs/yb_thin_client`
 (`PageStore::thinclient`, the batch-first client over the
@@ -200,11 +206,12 @@ Consequences to know:
 
 - Every query binds `bucket_id` to a single **VALUE**. A read with a known
   blknum binds the whole 7-column prefix and hits one tablet, and the
-  thin-lane per-fork scan is one such read per block. A scattered key set
-  partitions its blknums by `page_bucket_id` and sends one bucket-pinned
-  query per group; whole-fork and cross-fork operations fan out over all
-  six. One bucket per query is forced — `RangeRead::new_range` binds one
-  value per key column and the shim's `range_values` ABI has no set form.
+  thin-lane per-fork scan is one such read per block — a scattered key set
+  included, since each block's read derives its own `bucket_id` inside
+  `page_chain_read`, so a set spanning buckets needs no partitioning by the
+  caller. Whole-fork and cross-fork operations fan out over all six. One
+  bucket per *read* is forced — `RangeRead::new_range` binds one value per
+  key column and the shim's `range_values` ABI has no set form.
 - The CHECK never fires on the hot path — thin-client writes go
   straight to DocDB and never reach it. A mis-computed bucket is worse
   than in `pending_gc` (a missed candidate): the row lands outside the key
@@ -417,10 +424,10 @@ slices *envelope* bytes — decode in the client instead.
    (payload returned directly, no walredo).
 2. Scattered single-block relation reads are bucketed by
    (spcnode, dbnode, relnode, forknum); a bucket of ≥2 keys is fetched
-   in ONE multi-key query (`scan_scattered_set`, `unnest`-driven) —
-   one YB round trip instead of a per-block loop. Contiguous ranges use
-   `scan_range`; a lone single block (the getpage hot path) dispatches
-   to `read_chain`.
+   by ONE `scan_scattered_set` — its per-block reads ride one `Perform`,
+   so the fold costs one round trip (plus any paging round) rather than a
+   per-block loop. Contiguous ranges use `scan_range`; a lone single block
+   (the getpage hot path) dispatches to `read_chain`.
 3. Each per-key chain comes back LSN-descending, pre-truncated at the
    first `will_init=true` row. The bottom row is the anchor — image →
    walredo base, `will_init` delta → first record.
@@ -444,10 +451,9 @@ then fails in `chain_to_value_reconstruct_state`, which bumps
 `CORRECTNESS_ERRORS{read_unanchored_chain}` rather than fold deltas onto
 a zero page.
 
-The remaining YSQL readers (the cross-forknum range scan and
-`scan_scattered_set`) express that anchor as a scalar subquery with
-`COALESCE(..., 0)` as the lower bound, so both ends of the LSN range push
-into a single DocDB scan:
+The one YSQL `pages` reader left, the cross-forknum range scan, expresses
+that anchor as a scalar subquery with `COALESCE(..., 0)` as the lower bound, so
+both ends of the LSN range push into a single DocDB scan:
 
 ```sql
 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum,
@@ -463,13 +469,11 @@ WHERE <key_filter>
 ORDER BY p.lsn DESC, p.will_init DESC;
 ```
 
-The YSQL multi-block scans that remain (`build_scan_one_fork_scattered_sql`,
-`build_scan_cross_fork_sql`) wrap the same per-block anchor in a
-`CROSS JOIN LATERAL` driven by either `unnest($6::bigint[])` (scattered set)
-or a `SELECT DISTINCT` CTE (cross-forknum range), so each block gets the
-pushdown individually. The cross-forknum variant keys the LATERAL on the
-full (spcnode, dbnode, relnode, forknum, blknum) tuple; it fans out across
-all buckets and is rare in practice.
+`build_scan_cross_fork_sql` wraps that per-block anchor in a
+`CROSS JOIN LATERAL` driven by a `SELECT DISTINCT` CTE, so each block gets
+the pushdown individually, and keys the LATERAL on the full (spcnode,
+dbnode, relnode, forknum, blknum) tuple. It fans out across all buckets and
+is rare in practice.
 
 On the direct-RPC lane, the single-key readers —
 `read_chain`, `read_slru_chain`, `read_meta` — run as paged clustered
@@ -479,9 +483,11 @@ ties into the SQL result order (`lsn DESC, will_init DESC`, base
 first). It relies
 on the `lsn DESC` clustering, so a forward scan surfaces the newest
 version first — `read_meta` takes just `limit(1)`, and the chain readers
-truncate at the first `will_init` anchor. One-forknum multi-block scans
-issue one bound single-block read per block, batched onto one `Perform`,
-so each stops at its own anchor (`ChainCollector`); the paging
+truncate at the first `will_init` anchor. The one-forknum multi-block
+scans — a contiguous `scan_range` and a scattered `scan_scattered_set`
+alike, which share `scan_one_fork_thin` — issue one bound single-block read
+per block, batched onto one `Perform`, so each stops at its own anchor
+(`ChainCollector`); the paging
 envelope pins every continuation to the first page's snapshot (`read_time_ht`), and paging
 must run until a reader signals stop or the range is exhausted — a scan
 cut short mid-chain drops the base image and reconstructs a partial page
@@ -1202,7 +1208,7 @@ The compute opens libpq connections to the pageserver per backend
 - `compute/pageserver/src/page_server/timeline/walreceiver/` —
   safekeeper connection management and interpreted-WAL ingest.
 - `compute/pageserver/src/bin/pageserver.rs` — process wiring:
-  config load, listeners, the two PageStore pools, synchronous open.
+  config load, listeners, the three PageStore pools, synchronous open.
 - `compute/libs/pageserver_api/src/config.rs` — `ConfigToml`,
   `YbPageWriterConfig`, `TimelineInitConfig`, `scale_factor` helpers.
 - `compute/libs/utils/src/payload_codec.rs` — the tagged compression

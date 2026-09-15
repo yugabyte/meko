@@ -198,15 +198,15 @@ pub(crate) static LAYERS_PER_READ_AMORTIZED_GLOBAL: Lazy<Histogram> = Lazy::new(
     .expect("failed to define a metric")
 });
 
-/// Number of scattered single-block keys folded into one multi-key
-/// `scan_scattered_set` YB query (the batched-reads fold size). Only recorded
+/// Number of scattered single-block keys folded into one
+/// `scan_scattered_set` batch (the batched-reads fold size). Only recorded
 /// for genuine folds (≥2 keys); a lone scattered block takes the single-key
-/// path. Higher = more per-query batching = fewer YB round trips. Lets us
+/// path. Higher = more per-batch folding = fewer YB round trips. Lets us
 /// confirm in prod that scattered folding engages and how large the folds are.
 pub(crate) static SCATTERED_SET_KEYS_GLOBAL: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "pageserver_scattered_set_keys_global",
-        "Scattered single-block keys folded into one multi-key scan_scattered_set YB query (batched-reads fold size; only folds of >=2 keys are recorded).",
+        "Scattered single-block keys folded into one scan_scattered_set batch (batched-reads fold size; only folds of >=2 keys are recorded).",
         vec![2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
     )
     .expect("failed to define a metric")

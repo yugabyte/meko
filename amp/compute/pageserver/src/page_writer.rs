@@ -1217,12 +1217,14 @@ impl PageWriter {
     }
 
     /// Multi-key ("scattered") variant of [`Self::scan_range`]: fetch
-    /// chains for a SET of same-fork relation-page keys in ONE YB query
-    /// (`PageStore::scan_scattered_set_lineage`) instead of one per block, then
+    /// chains for a SET of same-fork relation-page keys in one batched read
+    /// per lineage segment (`PageStore::scan_scattered_set_lineage` — one
+    /// thin-lane read per block, all riding one `Perform`, paged until every
+    /// block reaches its anchor) instead of a round trip per block, then
     /// blend with the in-RAM UnifiedPages exactly as `scan_range` does.
-    /// Correctness (image-anchor, dedup, will_init trim, read-side
-    /// materialize trigger) is identical to `scan_range`; only the
-    /// number of YB queries differs. Caller must pass same-fork keys.
+    /// Correctness (will_init anchor, dedup, trim, read-side materialize
+    /// trigger) is identical to `scan_range`; only the batching differs.
+    /// Caller must pass same-fork keys.
     pub async fn scan_scattered_set(
         &self,
         keys: &[Key],

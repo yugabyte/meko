@@ -1070,11 +1070,12 @@ impl Timeline {
         // Meta keys go straight into the results map — no walredo.
         let mut meta_results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = BTreeMap::new();
         // batched-reads: gather scattered single-block rel-page reads,
-        // bucketed by fork, so a same-fork scattered set is fetched in
-        // ONE multi-key query (`scan_scattered_set`) — one YB round trip —
-        // rather than a serial per-block read loop. Contiguous (multi-block)
-        // ranges keep the range path, and an isolated single block (the getpage
-        // hot path) still uses the single-key `scan_range` → `read_chain` fast path.
+        // bucketed by fork, so a same-fork scattered set is fetched by ONE
+        // `scan_scattered_set` — a thin-lane read per block, all riding one
+        // `Perform`, so one round trip — rather than a serial read loop.
+        // Contiguous (multi-block) ranges keep the range path, and an isolated
+        // single block (the getpage hot path) still uses the single-key
+        // `scan_range` → `read_chain` fast path.
         let mut scattered: std::collections::HashMap<(u32, u32, u32, u8), Vec<Key>> =
             std::collections::HashMap::new();
 
@@ -1156,15 +1157,16 @@ impl Timeline {
             }
         }
 
-        // batched-reads: flush the scattered single-block buckets. A
-        // bucket with ≥2 keys becomes ONE multi-key `scan_scattered_set` (all keys
-        // share a fork by construction). A 1-key bucket (e.g. the getpage
-        // hot path) uses the single-key range path (`scan_range` →
-        // `read_chain` fast path). chains_by_key is order-independent.
+        // batched-reads: flush the scattered single-block buckets. A bucket
+        // with ≥2 keys becomes ONE `scan_scattered_set`, whose per-block reads
+        // ride one `Perform` (all keys share a fork by construction). A 1-key
+        // bucket (e.g. the getpage hot path) uses the single-key range path
+        // (`scan_range` → `read_chain` fast path). chains_by_key is
+        // order-independent.
         for (_fork, keys) in scattered {
             if keys.len() >= 2 {
                 // Fold size (batched-reads observability): keys collapsed into
-                // this one multi-key query.
+                // this one batched read.
                 crate::metrics::SCATTERED_SET_KEYS_GLOBAL.observe(keys.len() as f64);
                 let scan = page_writer
                     .scan_scattered_set(&keys, target_lsn)

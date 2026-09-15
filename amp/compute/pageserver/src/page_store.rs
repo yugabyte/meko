@@ -38,12 +38,13 @@
 //! Because the bucket is `(… + blknum / PAGE_BUCKET_STRIDE) % PAGE_BUCKETS`,
 //! a read whose blknum is known binds the whole key prefix and touches one
 //! tablet, while a blknum *range* scan touches one bucket per 2MB stretch it
-//! spans, capped at `PAGE_BUCKETS`. The thin-lane per-fork scan takes the
-//! first shape — one bound read per block, so each stops at its own anchor
-//! (#1054). Every query here
-//! binds bucket_id as a single VALUE and callers that span buckets loop —
+//! spans, capped at `PAGE_BUCKETS`. The thin-lane one-fork scans take the
+//! first shape — a contiguous range and a scattered key set alike, one bound
+//! read per block, so each stops at its own anchor (#1054) and each binds its
+//! own bucket. A bucket bind is one VALUE, never a set —
 //! [`yb_thin_client::RangeRead::new_range`] binds one value per key column,
-//! and the shim's `range_values` ABI has no set form.
+//! and the shim's `range_values` ABI has no set form — so the readers that
+//! cannot name their blocks (whole-fork and cross-fork) loop over buckets.
 //!
 //! The trailing `will_init` breaks `lsn` ties; it is DESC so the stored
 //! order matches the read-path `ORDER BY lsn DESC, will_init DESC`
@@ -606,6 +607,31 @@ enum ScanStop {
     /// "nothing yet", not "nothing" — the tserver ran out of scan budget
     /// (tombstones, deadline) before the first match — so it is followed.
     FirstRound,
+}
+
+/// Which caller a [`PageStore::scan_one_fork_thin`] read belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OneForkRead {
+    Range,
+    ScatteredSet,
+}
+
+impl OneForkRead {
+    /// Labels the read in [`crate::metrics::YB_STORE_OP_SECONDS`].
+    fn op_label(self) -> &'static str {
+        match self {
+            OneForkRead::Range => "scan_range",
+            OneForkRead::ScatteredSet => "scan_scattered_set",
+        }
+    }
+    /// Names the caller in chain assembly. The `_thin` suffix keeps a panic
+    /// or decode error here from reading as the YSQL cross-fork arm's.
+    fn caller_label(self) -> &'static str {
+        match self {
+            OneForkRead::Range => "scan_range_thin",
+            OneForkRead::ScatteredSet => "scan_scattered_set_thin",
+        }
+    }
 }
 
 /// How much of each block's version chain an SLRU range read returns.
@@ -1217,77 +1243,6 @@ pub(crate) fn key_to_bytes(key: &Key) -> Vec<u8> {
 /// missing.
 pub use pageserver_api::pages_bucket::{PAGE_BUCKET_STRIDE, PAGE_BUCKETS, page_bucket_id};
 
-/// Shared body of the one-fork block-chain scan, used by the scattered set
-/// scan ([`build_scan_one_fork_scattered_sql`]). For each `b(blknum)` row the
-/// `driver` produces, a CROSS JOIN LATERAL resolves that block's chain: rows
-/// from the newest **base** at-or-below `lsn` onward, newest-first (the
-/// per-block InitPlan anchor is a pushable lower bound, so both ends of the
-/// lsn range push into the DocDB scan). Results are ordered by blknum then
-/// lsn.
-///
-/// `will_init`, not `is_image`, so the anchor is the *nearest* base: an
-/// image is only a base whose payload is already a page, and every version
-/// under a newer init record is shadowed (#1171).
-///
-/// - `prefix`: any leading `WITH` clause the driver needs (empty for the set).
-/// - `driver`: the `FROM` source yielding `b(blknum)` — `unnest($6::bigint[])`.
-/// - `lsn`: the placeholder holding target_lsn (`$7`).
-/// - `bucket`: the placeholder holding this query's single `bucket_id` (`$8`).
-///
-/// One `bucket_id` per query, bound as a VALUE: the caller runs this once per
-/// bucket its blknum span touches and merges.
-fn build_scan_one_fork_lateral_sql(
-    schema: &str,
-    prefix: &str,
-    driver: &str,
-    lsn: &str,
-    bucket: &str,
-) -> String {
-    format!(
-        "{prefix}\
-         SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                p.lsn, p.is_image, p.will_init, p.payload \
-         FROM {driver} \
-         CROSS JOIN LATERAL ( \
-             SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                    p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".pages p \
-             WHERE p.bucket_id={bucket} AND p.branch_id=$1 \
-               AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4 \
-               AND p.forknum=$5 AND p.blknum = b.blknum \
-               AND p.lsn <= {lsn} \
-               AND p.lsn >= COALESCE(( \
-                     SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.bucket_id={bucket} AND a.branch_id=$1 \
-                       AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
-                       AND a.forknum=$5 AND a.blknum = b.blknum \
-                       AND a.will_init AND a.lsn <= {lsn} \
-                     ORDER BY a.lsn DESC LIMIT 1), 0) \
-             ORDER BY p.lsn DESC, p.will_init DESC \
-         ) p \
-         ORDER BY p.blknum, p.lsn DESC, p.will_init DESC"
-    )
-}
-
-/// Multi-key ("scattered") one-fork scan (`scan_scattered_set`), driven from
-/// the caller-supplied blknum array via `unnest`. `$1`=branch_id; `$2..$5`=
-/// spcnode, dbnode, relnode, forknum; `$6`=blknum bigint[]; `$7`=target_lsn;
-/// `$8`=bucket_id.
-///
-/// We already know the blocks, so we do NOT re-scan pages with a
-/// `SELECT DISTINCT ... blknum = ANY(...)` (that would bet on YB skip-scanning
-/// the `= ANY` on the range column). `unnest` makes every tablet touch below a
-/// single-blknum point seek (bucket `=` + the rest of the key prefix `=`). A
-/// blknum absent from the table yields an empty LATERAL → CROSS JOIN drops it
-/// (no row), same as the old DISTINCT-CTE excluding it.
-///
-/// The caller partitions its blknums by [`page_bucket_id`] and issues one
-/// query per bucket with only that bucket's blknums in `$6`, so `$8` is a
-/// single value and every point seek stays pruned.
-fn build_scan_one_fork_scattered_sql(schema: &str) -> String {
-    build_scan_one_fork_lateral_sql(schema, "", "unnest($6::bigint[]) AS b(blknum)", "$7", "$8")
-}
-
 /// Cross-fork range scan (`scan_range`), for ONE bucket. `$1`=branch_id;
 /// `$2..$12` = (spc,db,rel,fork,blk)_lo, (spc,db,rel,fork,blk)_hi,
 /// target_lsn; `$13`=bucket_id.
@@ -1342,8 +1297,8 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
 /// block (per the scan `ORDER BY`); each chain is truncated at the first
 /// `will_init` row, since older rows are shadowed by that anchor (the image
 /// row for blocks with an image, else the latest will_init delta). `label`
-/// names the caller for the ordering assertion. Shared tail of
-/// [`PageStore::scan_range`] and [`PageStore::scan_scattered_set`].
+/// names the caller for the ordering assertion. The tail of the one YSQL
+/// page reader left, [`PageStore::scan_range`]'s cross-fork branch.
 fn group_page_rows_by_key(
     rows: Vec<tokio_postgres::Row>,
     label: &str,
@@ -1639,6 +1594,14 @@ impl PageStore {
         assemble_page_chain(key, raw, 0, "read_chain_thin")
     }
 
+    /// One bound single-block chain read per entry of `blks`, all riding one
+    /// `Perform`. Shared by the contiguous range ([`Self::scan_range`]) and
+    /// the scattered key set ([`Self::scan_scattered_set`]), which differ only
+    /// in how they choose the blocks.
+    ///
+    /// `read` names the caller and supplies both labels. The observation
+    /// lives here rather than at the call sites so a caller cannot take this
+    /// lane without metering it — the omission #1025 was filed for.
     #[allow(clippy::too_many_arguments)]
     async fn scan_one_fork_thin(
         &self,
@@ -1648,19 +1611,21 @@ impl PageStore {
         db: i64,
         rel: i64,
         fork: i16,
-        blk_lo: i64,
-        blk_hi: i64,
+        blks: &[i64],
         target: i64,
+        read: OneForkRead,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
         use yb_thin_client::{BindValue, CondOp, RangeRead};
+        let started = std::time::Instant::now();
         let pages = &p.pages;
 
         // One read per block, for the reason `scan_slru_range_thin` is (#1042):
         // the anchor is per block, and the early stop halts the whole scan. The
         // reads ride one `Perform`, so the fan-out resolves at one read point.
         let branch_b = branch_id.to_bytes();
-        let block_reads = (blk_lo..blk_hi)
-            .map(|blk| -> Result<(i64, RangeRead)> {
+        let block_reads = blks
+            .iter()
+            .map(|&blk| -> Result<(i64, RangeRead)> {
                 Ok((
                     blk,
                     page_chain_read(pages, &branch_b, sp, db, rel, fork, blk)?
@@ -1687,11 +1652,14 @@ impl PageStore {
         let mut by_key = HashMap::with_capacity(chains.len());
         for (&(blk, _), raw) in block_reads.iter().zip(chains) {
             let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
-            let chain = assemble_page_chain(key, raw, 1, "scan_range_thin")?;
+            let chain = assemble_page_chain(key, raw, 1, read.caller_label())?;
             if !chain.is_empty() {
                 by_key.insert(key, chain);
             }
         }
+        crate::metrics::YB_STORE_OP_SECONDS
+            .with_label_values(&[read.op_label(), "yb_thin_client"])
+            .observe(started.elapsed().as_secs_f64());
         Ok(by_key)
     }
 
@@ -1703,19 +1671,21 @@ impl PageStore {
     /// (image OR init-delta) — older rows are shadowed by that anchor.
     ///
     /// Implementation: detects the range shape and picks the most
-    /// tablet-local SQL.
+    /// tablet-local read.
     ///
     /// - **Single-key range** (`range.end == range.start.next()`) →
     ///   delegates to `read_chain`. This is the getpage hot path —
     ///   every compute getpage RPC ends up here, so the dispatch
     ///   matters. No `GROUP BY` / `LEFT JOIN` overhead.
     /// - **One-fork range** (start and end share spcnode/dbnode/relnode
-    ///   /forknum, differ only in blknum) → single-tablet hash-pinned
-    ///   range scan on `blknum`. Used by basebackup, image-layer
-    ///   creation, multi-block vectored gets.
+    ///   /forknum, differ only in blknum) → [`Self::scan_one_fork_thin`]:
+    ///   one hash-pinned thin-lane read per block, all riding one
+    ///   `Perform`. Used by basebackup, image-layer creation, multi-block
+    ///   vectored gets.
     /// - **Cross-fork range** (start and end differ in some pre-blknum
-    ///   field) → multi-column row comparison; scatters across hash
-    ///   tablets. Rare in practice; we accept the cost.
+    ///   field) → the one YSQL arm left here: multi-column row
+    ///   comparison, fanned out over every bucket because the bounds
+    ///   cannot name one. Rare in practice; we accept the cost.
     ///
     /// Non-page-key ranges (any Key with `field1 != 0` in the range)
     /// are rejected — callers must filter those out via
@@ -1759,79 +1729,81 @@ impl PageStore {
         // `read_chain` (ancestor timelines hit this path).
         let target = target_lsn.0 as i64;
 
-        // Per-block anchor: for each block in the range, find the newest
-        // base at or below target_lsn and return only rows from there
-        // onward. A block with no base below the target yields its full
-        // chain, which `group_page_rows_by_key` truncates anyway.
-        let rows = if one_fork {
-            // Hash-pinned single-tablet scan.
+        // Per-block anchor: for each block, the newest base at or below
+        // target_lsn, returning only rows from there onward. The thin arm
+        // stops there via `ScanStop::Anchor`, the cross-fork arm via its CTE
+        // plus `group_page_rows_by_key`. A block with no base below the
+        // target yields its full chain.
+        if one_fork {
             let sp = range.start.field2 as i64;
             let db = range.start.field3 as i64;
             let rel = range.start.field4 as i64;
             let fork = range.start.field5 as i16;
-            let blk_lo = range.start.field6 as i64;
-            let blk_hi = range.end.field6 as i64;
+            let blks: Vec<i64> = (range.start.field6 as i64..range.end.field6 as i64).collect();
             let p = self.thinclient.current().await;
-            let started = std::time::Instant::now();
-            let by_key = self
-                .scan_one_fork_thin(&p, branch_id, sp, db, rel, fork, blk_lo, blk_hi, target)
-                .await?;
-            crate::metrics::YB_STORE_OP_SECONDS
-                .with_label_values(&["scan_range", "yb_thin_client"])
-                .observe(started.elapsed().as_secs_f64());
-            return Ok(by_key);
-        } else {
-            // Cross-fork range. Same shape, with row-comparison
-            // predicates. Joining the CTE on the full (spcnode, dbnode,
-            // relnode, forknum, blknum) tuple keeps anchors paired with
-            // the right block when a range crosses forks.
-            let sp_lo = range.start.field2 as i64;
-            let db_lo = range.start.field3 as i64;
-            let rel_lo = range.start.field4 as i64;
-            let fork_lo = range.start.field5 as i16;
-            let blk_lo = range.start.field6 as i64;
-            let sp_hi = range.end.field2 as i64;
-            let db_hi = range.end.field3 as i64;
-            let rel_hi = range.end.field4 as i64;
-            let fork_hi = range.end.field5 as i16;
-            let blk_hi = range.end.field6 as i64;
-            // Cross-fork variant of the DISTINCT-driven LATERAL (memoized,
-            // ids baked — see `build_scan_cross_fork_sql`), keyed on the
-            // full (spcnode, dbnode, relnode, forknum, blknum) tuple so
-            // anchors stay paired with the right block.
-            let sql = build_scan_cross_fork_sql(&self.schema);
-            // A cross-fork range spans relations, so its buckets can't be
-            // derived from the bounds — fan out over all of them. Still an
-            // improvement: with the old hash key this query bound no hash
-            // column at all and seq-scanned the whole table.
-            let mut acc = Vec::new();
-            for bucket in 0..PAGE_BUCKETS as i16 {
-                let mut got = self
-                    .ysql_client
-                    .query(
-                        &sql,
-                        &[
-                            &branch_id, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
-                            &rel_hi, &fork_hi, &blk_hi, &target, &bucket,
-                        ],
-                    )
-                    .await
-                    .context("scan_range cross-fork")?;
-                acc.append(&mut got);
-            }
-            acc
-        };
+            return self
+                .scan_one_fork_thin(
+                    &p,
+                    branch_id,
+                    sp,
+                    db,
+                    rel,
+                    fork,
+                    &blks,
+                    target,
+                    OneForkRead::Range,
+                )
+                .await;
+        }
 
-        group_page_rows_by_key(rows, "scan_range")
+        // Cross-fork range. Same shape, with row-comparison
+        // predicates. Joining the CTE on the full (spcnode, dbnode,
+        // relnode, forknum, blknum) tuple keeps anchors paired with
+        // the right block when a range crosses forks.
+        let sp_lo = range.start.field2 as i64;
+        let db_lo = range.start.field3 as i64;
+        let rel_lo = range.start.field4 as i64;
+        let fork_lo = range.start.field5 as i16;
+        let blk_lo = range.start.field6 as i64;
+        let sp_hi = range.end.field2 as i64;
+        let db_hi = range.end.field3 as i64;
+        let rel_hi = range.end.field4 as i64;
+        let fork_hi = range.end.field5 as i16;
+        let blk_hi = range.end.field6 as i64;
+        // Cross-fork variant of the DISTINCT-driven LATERAL (memoized,
+        // ids baked — see `build_scan_cross_fork_sql`), keyed on the
+        // full (spcnode, dbnode, relnode, forknum, blknum) tuple so
+        // anchors stay paired with the right block.
+        let sql = build_scan_cross_fork_sql(&self.schema);
+        // A cross-fork range spans relations, so its buckets can't be
+        // derived from the bounds — fan out over all of them. Still an
+        // improvement: with the old hash key this query bound no hash
+        // column at all and seq-scanned the whole table.
+        let mut acc = Vec::new();
+        for bucket in 0..PAGE_BUCKETS as i16 {
+            let mut got = self
+                .ysql_client
+                .query(
+                    &sql,
+                    &[
+                        &branch_id, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
+                        &rel_hi, &fork_hi, &blk_hi, &target, &bucket,
+                    ],
+                )
+                .await
+                .context("scan_range cross-fork")?;
+            acc.append(&mut got);
+        }
+
+        group_page_rows_by_key(acc, "scan_range")
     }
 
-    /// Multi-key ("scattered") variant of [`Self::scan_range`]: fetch
-    /// the chains for an arbitrary SET of same-fork relation-page keys
-    /// in ONE query (`unnest($6::bigint[])`) instead of one query per
-    /// block. All keys must share (spcnode, dbnode, relnode, forknum) —
-    /// the caller buckets by fork. Per-block `will_init` anchor and trim
-    /// semantics are identical to `scan_range` (the SQL body is the
-    /// same LATERAL, only the block-selection driver differs).
+    /// Multi-key ("scattered") variant of [`Self::scan_range`]: fetch the
+    /// chains for an arbitrary SET of same-fork relation-page keys in one
+    /// batch instead of a round trip per block. All keys must share
+    /// (spcnode, dbnode, relnode, forknum) — the caller buckets by fork.
+    /// Per-block `will_init` anchor and trim semantics are `scan_range`'s,
+    /// via the shared [`Self::scan_one_fork_thin`].
     pub async fn scan_scattered_set(
         &self,
         branch_id: BranchId,
@@ -1854,44 +1826,29 @@ impl PageStore {
             }
             blknums.push(blk);
         }
-        // Distinct blknums only: a repeated key would emit a duplicate
-        // `unnest` row → a duplicate chain entry (this path doesn't dedup by
-        // lsn). Callers pass disjoint keys today, but harden here and hand YB
-        // a clean array.
+        // Distinct blknums only: a repeated key would issue that block's read
+        // twice in the same `Perform`, and the second chain would merely
+        // overwrite the first in the result map. Callers pass disjoint keys
+        // today, but harden here rather than pay for the redundant read.
         blknums.sort_unstable();
         blknums.dedup();
 
-        // `branch_id` stays bound ($1), NOT baked — same lineage reason
-        // as `read_chain`/`scan_range` (ancestor timelines hit this).
+        // `branch_id` is bound per call, never fixed — same lineage reason
+        // as `read_chain`/`scan_range` (ancestor branches hit this path).
         let target = target_lsn.0 as i64;
-        let sql = build_scan_one_fork_scattered_sql(&self.schema);
-        // Partition the blknums by bucket and send each group to its own
-        // bucket-pinned query. Indexed by bucket rather than a map so the
-        // order of the queries is deterministic; `blknums` is already sorted,
-        // so each group stays sorted and each query's `ORDER BY blknum` still
-        // means something.
-        let mut by_bucket: Vec<Vec<i64>> = vec![Vec::new(); PAGE_BUCKETS as usize];
-        for blk in blknums {
-            by_bucket[page_bucket_id(rel, blk) as usize].push(blk);
-        }
-        let mut rows = Vec::new();
-        for (bucket, blks) in by_bucket.iter().enumerate() {
-            if blks.is_empty() {
-                continue;
-            }
-            let bucket = bucket as i16;
-            let mut got = self
-                .ysql_client
-                .query(
-                    &sql,
-                    &[&branch_id, &sp, &db, &rel, &fork, blks, &target, &bucket],
-                )
-                .await
-                .context("scan_scattered_set one-fork")?;
-            rows.append(&mut got);
-        }
-
-        group_page_rows_by_key(rows, "scan_scattered_set")
+        let p = self.thinclient.current().await;
+        self.scan_one_fork_thin(
+            &p,
+            branch_id,
+            sp,
+            db,
+            rel,
+            fork,
+            &blknums,
+            target,
+            OneForkRead::ScatteredSet,
+        )
+        .await
     }
 
     // ------------------- slru_pages ---------------------------------------
@@ -4717,7 +4674,7 @@ mod tests {
     /// Core correctness of the batched-reads change: `scan_scattered_set` on a
     /// set of non-contiguous same-fork keys must return byte-identical chains
     /// to reading each key on its own (same image anchor, same `will_init`
-    /// trim, same order). The multi-key `unnest` query is purely a batching
+    /// trim, same order). Folding the keys into one batch is purely an
     /// optimization — it must not change what a read returns. Also covers the
     /// edge cases: an absent block is simply missing from the result, a
     /// repeated key is de-duplicated, and keys spanning forks are rejected.
@@ -5301,6 +5258,7 @@ mod tests {
             "put_slru_pages",
             "read_chain",
             "scan_range",
+            "scan_scattered_set",
             "read_slru_chain",
             "scan_slru_range",
             "put_meta",
@@ -5360,6 +5318,20 @@ mod tests {
             let got: Vec<&[u8]> = chain.iter().map(|r| r.payload.as_ref()).collect();
             assert_eq!(&got, payloads, "scan_range key={k:?} target={target}");
         }
+
+        // The same fork minus the middle block: the non-contiguous >=2-key
+        // fold `get_vectored` routes to the scattered path. Chain equivalence
+        // is `scan_scattered_set_matches_per_key_reads`' job; here it only has
+        // to reach the lane (#1025).
+        let scattered = store
+            .scan_scattered_set(
+                branch,
+                &[Key::from_slice(&k0), Key::from_slice(&k2)],
+                Lsn(1000),
+            )
+            .await
+            .unwrap();
+        assert_eq!(scattered.len(), 2);
 
         // SLRU: put through the lane, then chain + range scan.
         let slru_row =

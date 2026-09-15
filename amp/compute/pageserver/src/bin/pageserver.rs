@@ -464,10 +464,10 @@ fn start_pageserver(
 
     // Set up remote storage client
     let remote_storage = BACKGROUND_RUNTIME.block_on(create_remote_storage_client(conf))?;
-    // Two dedicated PageStore connections: compute-facing reads
-    // (GetPage hot path) and internal traffic (walreceiver flush +
-    // materialiser). Compute reads stay off the conn that walreceiver
-    // / materialiser writes pile onto, and vice versa.
+    // Three dedicated PageStore connections: compute-facing reads
+    // (GetPage hot path), internal traffic (walreceiver flush +
+    // materialiser), and the GC drain. Compute reads stay off the conn
+    // that walreceiver / materialiser writes pile onto, and vice versa.
     let compute_page_store = BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
     let hot_path_page_store = BACKGROUND_RUNTIME.block_on(create_hot_path_page_store(conf))?;
     let gc_page_store = BACKGROUND_RUNTIME.block_on(create_gc_page_store(conf))?;
@@ -726,15 +726,17 @@ async fn create_page_store_with_app_name(
 /// exists — we hit it once at startup before the other connection
 /// opens, so this one carries the DDL.
 ///
-/// Pool size 2: compute-side Postgres backends issue prefetch reads in
-/// parallel (`effective_io_concurrency` + the PG18 read_stream API +
-/// pg_neon's prefetch ring), and the pageserver page_service handler
-/// dispatches each one as a concurrent gRPC stream. A single YSQL
-/// connection would serialise them on the YB side (Postgres processes
-/// one statement per backend at a time). With 2 conns + the
-/// prepared-statement cache + the LATERAL→GROUP BY rewrite, two
-/// prefetches overlap on YB instead of queueing; raise `scale_factor`
-/// to widen the fan-out on hosts that can absorb it.
+/// Pool size 2: a single YSQL connection would serialise concurrent
+/// readers on the YB side (Postgres processes one statement per backend at
+/// a time), so 2 conns + the prepared-statement cache let two overlap
+/// instead of queueing; raise `scale_factor` to widen the fan-out on hosts
+/// that can absorb it. The per-block page readers no longer size this:
+/// `read_chain`, the one-fork `scan_range` and `scan_scattered_set` are all
+/// on the thin lane (#1025). What is left on this YSQL pool is the reads with
+/// no lane of their own — the cross-forknum `scan_range`, the multi-key
+/// `scan_meta_range`, and the `branch_state` reads (`get_branch_state`,
+/// `get_branch_seed`, and `load_lineage`'s walk up the ancestry) — and the
+/// size is due a re-look against that set.
 async fn create_compute_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
@@ -761,7 +763,13 @@ async fn create_compute_page_store(
 /// RPC + Raft replicate. The `put_*` writes that set this size have since
 /// moved to the thin-client lane, whose own `tsclient_read_sessions` /
 /// `tsclient_write_sessions` default to the same `scale_count(2, …)`; the
-/// YSQL pool keeps it for the lineage and meta-range reads left on it.
+/// YSQL pool keeps it for the `branch_state` traffic left on it:
+/// `advance_consistent_lsn` once per flush window,
+/// `update_branch_initial_state` at bootstrap, and the `get_branch_state`
+/// read `create_branch_row` makes at branch creation. The lineage and meta-range
+/// reads never ran here: `load_lineage` and `scan_meta_range` are
+/// `compute_page_store`'s, and the materialiser's durable chain reads take
+/// the thin lane.
 async fn create_hot_path_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
@@ -774,8 +782,7 @@ async fn create_hot_path_page_store(
     // depended on `yb_enable_upsert_mode = true` to skip read-before-write on
     // partial-chunk retries. Those writes are on the thin-client lane now
     // (which upserts natively), so what is left on these connections is the
-    // lineage/meta SELECTs and the branch-state UPDATEs; the GUC no longer
-    // does anything here.
+    // branch-state UPDATEs; the GUC no longer does anything here.
     let store =
         create_page_store_with_app_name(conf, "pageserver:hot_path", pool_size, true).await?;
     info!(pool_size, "Internal PageStore connected");

@@ -334,9 +334,10 @@ validates `anc.consistent_lsn >= ancestor_lsn`, and copies the ancestor's
 - Lineage reads (below).
 
 **Ancestor reads go through the page store, not process memory.** A
-pageserver hosts one branch; the ancestor's data is reached by SQL. The
-branch's `LineageSegment` chain (`compute/pageserver/src/page_store.rs`)
-lists `(branch_id, cap_lsn)` pairs from self (cap `Lsn::MAX`) up the
+pageserver hosts one branch; the ancestor's data is reached by its own
+read to YB. The branch's `LineageSegment` chain
+(`compute/pageserver/src/page_store.rs`) lists `(branch_id, cap_lsn)` pairs
+from self (cap `Lsn::MAX`) up the
 ancestry; the lineage-aware queries (`read_chain_lineage`,
 `scan_range_lineage`, `scan_scattered_set_lineage`) read each segment's
 rows capped at `min(target_lsn, seg.cap_lsn)` and stop at the first segment
@@ -358,7 +359,7 @@ non-base).
 
 **Read path:** `PageWriter::scan_range` / `read_chain` /
 `scan_scattered_set` blend `UnifiedPages` (unflushed buffer + read cache)
-with the lineage-aware `PageStore` SQL. Rel and SLRU pages are
+with the lineage-aware `PageStore` reads. Rel and SLRU pages are
 base-anchored chains truncated at the newest `will_init=true` row; `meta`
 reads take the latest row at `lsn ≤ target_lsn` (full overwrite semantics).
 
