@@ -1232,7 +1232,8 @@ report:
 chaos:
   # actions restricts the loop to these action names (empty → every registered
   # action, in a stable order). Names: pod_delete, process_kill, process_restart,
-  # node_restart, network_partition, network_slowdown, packet_loss, node_stop.
+  # node_restart, network_partition, network_slowdown, packet_loss, node_stop,
+  # process_stall, pod_freeze.
   actions: []
   # owner_prefix guards which resources may be targeted: a pod whose namespace
   # does not CONTAIN this marker is refused (the loop will not start). Contains,
@@ -1250,6 +1251,15 @@ chaos:
   process_pattern: "yb-tserver"
   service_unit: "yb-tserver"
   node_units: ["yb-master", "yb-tserver"]
+  stall:
+    # pattern matches the process process_stall SIGSTOPs and SIGCONTs (pkill -f).
+    # The endpoint supervisor is the default: stalling it leaves postgres and the
+    # storage daemons running with nobody renewing the branch's write lease.
+    pattern: "endpoint-supervisor"
+  freeze:
+    # helper_image is the privileged hostPID pod pod_freeze writes the target's
+    # cgroup.freeze from (a frozen pod cannot be exec-ed into). It needs nsenter.
+    helper_image: "nicolaka/netshoot:v0.13"
   # hold_min/max bound how long a fault stays applied; gap_min/max the quiet
   # interval between recovery and the next injection.
   hold_min: "15s"
@@ -1481,6 +1491,32 @@ stress:
     fence_within: "45s"
     settle_timeout: "10m"
     resume_duration: "30s"
+    payload_bytes: 256
+  # fence_stall: stalls the writer of a branch past its write lease and resumes
+  # it, without taking anything away. stress/fence_stall freezes the whole
+  # endpoint pod through cgroup v2, stress/fence_stall_supervisor SIGSTOPs the
+  # supervisor alone so postgres keeps running with nobody renewing the lease.
+  fence_stall:
+    # lease_ttl and skew_grace are the product's numbers (compute/architecture/
+    # compute-fencing.md): a 15s token renewed every 5s, and the 500ms a
+    # replacement waits out because two PG clocks disagree. Retune them here to
+    # match a branch whose write_token_settings were changed.
+    lease_ttl: "15s"
+    skew_grace: "500ms"
+    # freeze is how long the writer stays stalled. It MUST exceed
+    # lease_ttl + skew_grace, or the lease never lapses, and fence_deadline, or
+    # the window closes before a late acknowledgement could be seen.
+    freeze: "90s"
+    # fence_deadline is how long after the stall began a commit may still be
+    # acknowledged, and how long after the resume the safekeeper that ran before
+    # it may still be running.
+    fence_deadline: "60s"
+    baseline_duration: "20s"
+    resume_duration: "30s"
+    # stall_limit bounds one INSERT; on the stalled endpoint a hang is the
+    # expected outcome and only journaled.
+    stall_limit: "60s"
+    settle_timeout: "10m"
     payload_bytes: 256
   # bulk_load_kill: deletes a tenant's endpoint compute pod while ONE large
   # write is streaming into it, and holds that write to all-or-nothing. Sizes

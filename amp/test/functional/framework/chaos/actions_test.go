@@ -266,3 +266,90 @@ func TestNodeStopRequiresCloud(t *testing.T) {
 		t.Fatalf("recover no-op: %v", err)
 	}
 }
+
+func TestProcessStallStopsAndContinues(t *testing.T) {
+	fe := &fakeExec{}
+	tgt := chaos.NewHostTarget("node-1", fe)
+	a := build(t, chaos.ActionProcessStall)
+
+	if err := a.Inject(context.Background(), tgt); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if err := a.Recover(context.Background(), tgt); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	cmds := fe.recorded()
+	if !containsSubstr(cmds, "pkill -STOP -f '[e]ndpoint-supervisor'") {
+		t.Errorf("expected a bracketed SIGSTOP pkill, got %v", cmds)
+	}
+	if !containsSubstr(cmds, "pkill -CONT -f '[e]ndpoint-supervisor'") {
+		t.Errorf("expected a bracketed SIGCONT pkill, got %v", cmds)
+	}
+	for _, c := range cmds {
+		if strings.Contains(c, "-f 'endpoint-supervisor'") {
+			t.Errorf("pkill would match its own shell: %q", c)
+		}
+	}
+}
+
+func TestPodFreezeRejectsHostTarget(t *testing.T) {
+	a := build(t, chaos.ActionPodFreeze)
+	if err := a.Inject(context.Background(), chaos.NewHostTarget("node-1", &fakeExec{})); err == nil {
+		t.Fatal("pod_freeze on a host target should fail")
+	}
+}
+
+type freezeKube struct {
+	kubeRecorder
+	written string
+}
+
+func (f *freezeKube) run(ctx context.Context, r io.Reader, argv []string) (execpkg.Result, error) {
+	joined := strings.Join(argv, " ")
+	switch {
+	case strings.Contains(joined, "{.spec.nodeName}"):
+		return execpkg.Result{Stdout: "node-1"}, nil
+	case strings.Contains(joined, "{.metadata.uid}"):
+		return execpkg.Result{Stdout: "11112222-3333-4444-5555-666677778888"}, nil
+	case strings.Contains(joined, "cgroup.freeze"):
+		f.mu.Lock()
+		if i := strings.Index(joined, "echo 1 > "); i >= 0 {
+			f.written = "1"
+		} else if i := strings.Index(joined, "echo 0 > "); i >= 0 {
+			f.written = "0"
+		}
+		out := f.written
+		f.mu.Unlock()
+		f.kubeRecorder.run(ctx, r, argv)
+		return execpkg.Result{Stdout: out}, nil
+	}
+	return f.kubeRecorder.run(ctx, r, argv)
+}
+
+func TestPodFreezeInjectRecover(t *testing.T) {
+	fk := &freezeKube{}
+	kube := k8s.New(k8s.Config{Namespace: "ampqa-run1"}).WithRunner(fk.run)
+	tgt := chaos.NewPodTarget("yb-ep-1", kube, "yb-ep-1", "")
+	a := build(t, chaos.ActionPodFreeze)
+
+	if err := a.Inject(context.Background(), tgt); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if err := a.Recover(context.Background(), tgt); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	// A second Recover must be a no-op: the loop always calls it.
+	if err := a.Recover(context.Background(), tgt); err != nil {
+		t.Fatalf("second recover: %v", err)
+	}
+	calls := fk.joined()
+	if !containsSubstr(calls, "ampqa-freeze-111122223333-") {
+		t.Errorf("expected a helper pod named after the target uid, got %v", calls)
+	}
+	if !containsSubstr(calls, "nsenter -t 1 -m -C") {
+		t.Errorf("expected the cgroup write to enter the host mount and cgroup namespaces, got %v", calls)
+	}
+	if !containsSubstr(calls, "delete pod ampqa-freeze-111122223333-") {
+		t.Errorf("expected the helper pod to be deleted on recover, got %v", calls)
+	}
+}

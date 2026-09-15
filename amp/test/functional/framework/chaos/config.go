@@ -54,6 +54,11 @@ type Config struct {
 	// NodeUnits are the systemd units NodeRestart restarts on a host.
 	NodeUnits []string
 
+	// StallPattern matches the process ProcessStall SIGSTOPs (pkill -f).
+	StallPattern string
+	// FreezeHelperImage needs nsenter (util-linux).
+	FreezeHelperImage string
+
 	// HoldMin/HoldMax bound how long a fault stays applied before recovery.
 	HoldMin, HoldMax time.Duration
 	// GapMin/GapMax bound the quiet interval between recovery and the next
@@ -76,20 +81,22 @@ type Config struct {
 // permanently wedging it.
 func DefaultConfig() Config {
 	return Config{
-		OwnerPrefix:    "ampqa-",
-		NetDevice:      "eth0",
-		PartitionPorts: []int{7100, 9100, 5433, 9042},
-		DelayMs:        200,
-		LossPercent:    30,
-		ProcessPattern: "yb-tserver",
-		ServiceUnit:    "yb-tserver",
-		NodeUnits:      []string{"yb-master", "yb-tserver"},
-		HoldMin:        15 * time.Second,
-		HoldMax:        45 * time.Second,
-		GapMin:         20 * time.Second,
-		GapMax:         60 * time.Second,
-		WaitTimeout:    3 * time.Minute,
-		RecoverTimeout: 2 * time.Minute,
+		OwnerPrefix:       "ampqa-",
+		NetDevice:         "eth0",
+		PartitionPorts:    []int{7100, 9100, 5433, 9042},
+		DelayMs:           200,
+		LossPercent:       30,
+		ProcessPattern:    "yb-tserver",
+		ServiceUnit:       "yb-tserver",
+		NodeUnits:         []string{"yb-master", "yb-tserver"},
+		StallPattern:      "endpoint-supervisor",
+		FreezeHelperImage: "nicolaka/netshoot:v0.13",
+		HoldMin:           15 * time.Second,
+		HoldMax:           45 * time.Second,
+		GapMin:            20 * time.Second,
+		GapMax:            60 * time.Second,
+		WaitTimeout:       3 * time.Minute,
+		RecoverTimeout:    2 * time.Minute,
 	}
 }
 
@@ -109,21 +116,23 @@ type Getter interface {
 func FromConfig(get Getter) Config {
 	d := DefaultConfig()
 	return Config{
-		Actions:        get.GetStringSlice("chaos.actions", nil),
-		OwnerPrefix:    get.GetString("chaos.owner_prefix", d.OwnerPrefix),
-		NetDevice:      get.GetString("chaos.net_device", d.NetDevice),
-		PartitionPorts: getIntSlice(get, "chaos.partition_ports", d.PartitionPorts),
-		DelayMs:        get.GetInt("chaos.delay_ms", d.DelayMs),
-		LossPercent:    get.GetInt("chaos.loss_percent", d.LossPercent),
-		ProcessPattern: get.GetString("chaos.process_pattern", d.ProcessPattern),
-		ServiceUnit:    get.GetString("chaos.service_unit", d.ServiceUnit),
-		NodeUnits:      get.GetStringSlice("chaos.node_units", d.NodeUnits),
-		HoldMin:        get.GetDuration("chaos.hold_min", d.HoldMin),
-		HoldMax:        get.GetDuration("chaos.hold_max", d.HoldMax),
-		GapMin:         get.GetDuration("chaos.gap_min", d.GapMin),
-		GapMax:         get.GetDuration("chaos.gap_max", d.GapMax),
-		WaitTimeout:    get.GetDuration("chaos.wait_timeout", d.WaitTimeout),
-		RecoverTimeout: get.GetDuration("chaos.recover_timeout", d.RecoverTimeout),
+		Actions:           get.GetStringSlice("chaos.actions", nil),
+		OwnerPrefix:       get.GetString("chaos.owner_prefix", d.OwnerPrefix),
+		NetDevice:         get.GetString("chaos.net_device", d.NetDevice),
+		PartitionPorts:    getIntSlice(get, "chaos.partition_ports", d.PartitionPorts),
+		DelayMs:           get.GetInt("chaos.delay_ms", d.DelayMs),
+		LossPercent:       get.GetInt("chaos.loss_percent", d.LossPercent),
+		ProcessPattern:    get.GetString("chaos.process_pattern", d.ProcessPattern),
+		ServiceUnit:       get.GetString("chaos.service_unit", d.ServiceUnit),
+		NodeUnits:         get.GetStringSlice("chaos.node_units", d.NodeUnits),
+		StallPattern:      get.GetString("chaos.stall.pattern", d.StallPattern),
+		FreezeHelperImage: get.GetString("chaos.freeze.helper_image", d.FreezeHelperImage),
+		HoldMin:           get.GetDuration("chaos.hold_min", d.HoldMin),
+		HoldMax:           get.GetDuration("chaos.hold_max", d.HoldMax),
+		GapMin:            get.GetDuration("chaos.gap_min", d.GapMin),
+		GapMax:            get.GetDuration("chaos.gap_max", d.GapMax),
+		WaitTimeout:       get.GetDuration("chaos.wait_timeout", d.WaitTimeout),
+		RecoverTimeout:    get.GetDuration("chaos.recover_timeout", d.RecoverTimeout),
 	}
 }
 
@@ -172,6 +181,12 @@ func (c Config) withDefaults() Config {
 	}
 	if len(c.NodeUnits) == 0 {
 		c.NodeUnits = d.NodeUnits
+	}
+	if c.StallPattern == "" {
+		c.StallPattern = d.StallPattern
+	}
+	if c.FreezeHelperImage == "" {
+		c.FreezeHelperImage = d.FreezeHelperImage
 	}
 	if c.HoldMin == 0 {
 		c.HoldMin = d.HoldMin

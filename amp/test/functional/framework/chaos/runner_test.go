@@ -226,6 +226,7 @@ func TestDefaultRegistryHasAllActions(t *testing.T) {
 		chaos.ActionNetworkPartition, chaos.ActionNetworkSlowdown, chaos.ActionNodeRestart,
 		chaos.ActionNodeStop, chaos.ActionPacketLoss, chaos.ActionPodDelete,
 		chaos.ActionProcessKill, chaos.ActionProcessRestart,
+		chaos.ActionProcessStall, chaos.ActionPodFreeze,
 	}
 	got := map[string]bool{}
 	for _, n := range names {

@@ -6,7 +6,7 @@ untagged and run on demand — see the Perf bullet):
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — all seventeen `suites/stress` scenarios: `load_sustain` (workloadgen
+- **`stress`** — all nineteen `suites/stress` scenarios: `load_sustain` (workloadgen
   soak), `combined_load` (four parallel workloads under chaos on a co-located YB
   backing), `backing_maintenance` (workloads through a rolling restart, a gflag
   change, a data move and a YugabyteDB upgrade), `backing_backup_restore`
@@ -17,9 +17,11 @@ untagged and run on demand — see the Perf bullet):
   `wal_tail_nemesis`, `control_plane_nemesis`,
   `commit_durability`, `backing_node_partition`, `endpoint_backing_partition`,
   `backing_unreachable_api`),
+  `fence_stall` and `fence_stall_supervisor` (the writer stalled past its write
+  lease and resumed),
   `bulk_load_kill` (one large write killed mid-flight) and
   `backing_disk_full` (the backing's data disks filled, every INSERT held to an
-  answer, then freed), plus the two `suites/features` tests below: nineteen in all.
+  answer, then freed), plus the two `suites/features` tests below: twenty-one in all.
   Every `suites/stress` test that drives amp runs on a stack of its own
   (`Shape: DedicatedStack`: its own YugabyteDB and amp control plane, torn
   down with the test), so a fault one injects, or a wedge it leaves behind,
@@ -116,9 +118,12 @@ tests need (a single run would demand every cloud credential at once):
   held to fencing itself, coming back, and every acknowledged id in storage) and `bulk_load_kill`, which deletes an endpoint's compute
   pod — gracefully and by killing the container outright — in the middle of one
   large COPY / INSERT ... SELECT / batched-insert transaction / million-row
-  UPDATE and holds it to all-or-nothing. The tier also carries the two
-  `suites/features` failed-create reclaim tests, which are here for their
-  runtime rather than for any fault they inject.
+  UPDATE and holds it to all-or-nothing. `fence_stall` and
+  `fence_stall_supervisor` take nothing away: they stall the writer of a branch
+  past its write lease (the whole pod through cgroup v2, or the supervisor alone
+  under SIGSTOP), attempt a second writer while it is stalled, and resume it.
+  The tier also carries the two `suites/features` failed-create reclaim tests,
+  which are here for their runtime rather than for any fault they inject.
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
   each gated against a LIVE baseline by default (`perf.baseline.live`): a second
   set of stacks on the prior release runs the same workload concurrently, and

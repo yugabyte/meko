@@ -78,5 +78,11 @@ func DefaultRegistry() *Registry {
 	r.Register(ActionNodeStop, func(c Config) ChaosAction {
 		return nodeStop{waitTimeout: c.WaitTimeout}
 	})
+	r.Register(ActionProcessStall, func(c Config) ChaosAction {
+		return processStall{pattern: c.StallPattern}
+	})
+	r.Register(ActionPodFreeze, func(c Config) ChaosAction {
+		return newPodFreeze(c.FreezeHelperImage, c.WaitTimeout)
+	})
 	return r
 }

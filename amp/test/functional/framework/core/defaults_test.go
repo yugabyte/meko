@@ -1139,6 +1139,12 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if chCfg.ProcessPattern != chDefault.ProcessPattern || chCfg.ServiceUnit != chDefault.ServiceUnit {
 		t.Errorf("chaos process_pattern/service_unit = %q/%q, want %q/%q", chCfg.ProcessPattern, chCfg.ServiceUnit, chDefault.ProcessPattern, chDefault.ServiceUnit)
 	}
+	if chCfg.StallPattern != chDefault.StallPattern {
+		t.Errorf("chaos stall.pattern = %q, want %q", chCfg.StallPattern, chDefault.StallPattern)
+	}
+	if chCfg.FreezeHelperImage != chDefault.FreezeHelperImage {
+		t.Errorf("chaos freeze.helper_image = %q, want %q", chCfg.FreezeHelperImage, chDefault.FreezeHelperImage)
+	}
 	if strings.Join(chCfg.NodeUnits, ",") != strings.Join(chDefault.NodeUnits, ",") {
 		t.Errorf("chaos node_units = %v, want %v", chCfg.NodeUnits, chDefault.NodeUnits)
 	}
@@ -1222,6 +1228,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.endpoint_backing_partition.tenants":       2,
 		"stress.endpoint_backing_partition.rounds":        2,
 		"stress.endpoint_backing_partition.payload_bytes": 256,
+		"stress.fence_stall.payload_bytes":                256,
 		"stress.bulk_load_kill.baseline_rows":             4_000_000,
 		"stress.bulk_load_kill.batch_rows":                1_500_000,
 		"stress.bulk_load_kill.update_rows":               500_000,
@@ -1294,6 +1301,15 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.endpoint_backing_partition.fence_within":      45 * time.Second,
 		"stress.endpoint_backing_partition.settle_timeout":    10 * time.Minute,
 		"stress.endpoint_backing_partition.resume_duration":   30 * time.Second,
+
+		"stress.fence_stall.lease_ttl":         15 * time.Second,
+		"stress.fence_stall.skew_grace":        500 * time.Millisecond,
+		"stress.fence_stall.freeze":            90 * time.Second,
+		"stress.fence_stall.fence_deadline":    60 * time.Second,
+		"stress.fence_stall.baseline_duration": 20 * time.Second,
+		"stress.fence_stall.resume_duration":   30 * time.Second,
+		"stress.fence_stall.stall_limit":       60 * time.Second,
+		"stress.fence_stall.settle_timeout":    10 * time.Minute,
 
 		"stress.bulk_load_kill.kill_delay_min": 2 * time.Second,
 		"stress.bulk_load_kill.kill_delay_max": 2 * time.Minute,
