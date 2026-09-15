@@ -86,10 +86,13 @@ branch's `extensions` (opted in per branch — seeded at create, inherited on fo
 the default branch's set is also mirrored on the cluster); a branch's `fork_lsn`,
 `parent_branch_id`,
 `is_default`; and an endpoint's `role`, `address`, `tailnet_address`, `cpu`,
-`memory`, `connectivity_mode` and `connectivity_allowed_cidrs`. A branch and an
+`memory`, `connectivity_mode` and `connectivity_allowed_cidrs`. A branch also
+reports its `pg_settings` and `write_token_settings`, an endpoint its
+`pg_settings`, `pageserver_settings`, `safekeeper_settings` and
+`extended_config` — see [below](#settings-are-reported-whole). A branch and an
 endpoint also report `applied_generation` — see below.
 The connectivity pair is the observed counterpart of the create-time field
-[endpoints cannot converge](#endpoints-converge-resources-and-nothing-else).
+[endpoints cannot converge](#what-an-endpoint-spec-can-declare-and-not-get).
 `connectivity_mode` is emitted by every agent at this release or later, and is
 **resolved** — an endpoint predating the field reports none and behaves as
 `cluster_ip` — so the inventory records the exposure that was *asked* for, which
@@ -112,6 +115,30 @@ A branch's `id`
 pairs with a fork's `parent_branch_id` so a console can rebuild the fork tree
 (the containment tree is already derivable from `ID`/`Parent`). The controller
 exposes no live/head LSN, so the only LSN reported is the branch fork point.
+
+## Settings are reported whole
+
+Each settings surface is one attr holding a JSON **object**, keys sorted, not one
+attr per setting.
+
+Whole because that is the unit desired state replaces. [A declared surface owns the
+map](#settings-are-replaced-not-merged), so anything editing settings must render
+what is stored before it writes — and the inventory is the only place it can read
+that. `applied_generation` cannot stand in: it says an update landed, not what it
+landed on, so it cannot separate "converged on the map I sent" from "converged,
+having dropped three keys I could not see". Flattening to `pg_settings.work_mem`
+reads better in a table but loses the surface as a unit.
+
+An empty surface and one never set are both `{}` — the controller's GET omits both,
+so nothing on the wire tells them apart, and both say no key is stored. The skew
+rule of `connectivity_mode` holds here too: an **absent** key means the agent
+predates the release that added these, never that the surface is empty. Read as
+empty, it is a blank editor for a resource full of settings and every one of them
+deleted on save.
+
+`extended_config` is reported although the settings PATCH cannot write it. It is
+declarable at endpoint create, so a spec that disagrees is permanent drift, and this
+is the only way to see what it disagrees with.
 
 ## The applied generation
 

@@ -200,8 +200,25 @@ type ResourceStatus struct {
 	// a branch's fork_lsn, parent_branch_id
 	// (pairs with a branch's id to rebuild the fork tree), is_default, and an
 	// endpoint's role, address, tailnet_address, cpu, memory,
-	// connectivity_mode and connectivity_allowed_cidrs. Empty when the
+	// connectivity_mode and connectivity_allowed_cidrs. A branch also reports its
+	// pg_settings and write_token_settings, an endpoint its pg_settings,
+	// pageserver_settings, safekeeper_settings and extended_config. Empty when the
 	// backend has none.
+	//
+	// Each settings surface is one JSON OBJECT, keys sorted, written whole rather
+	// than flattened per setting. Whole because that is the unit desired state
+	// replaces: a declared surface owns the map, so an editor has to see what it
+	// is about to overwrite or its first write silently drops every key it never
+	// rendered. An empty or unset surface is "{}" — the controller's GET omits
+	// both, so nothing distinguishes them, and both mean nothing is stored.
+	// extended_config is reported although desired state cannot converge it:
+	// it is declarable at endpoint create, so a spec that disagrees is permanent
+	// drift, and this is the only way to see what it disagrees with.
+	//
+	// The same skew rule as connectivity below: an ABSENT settings key means the
+	// agent predates the release that added these, never that the surface is
+	// empty. Reading absence as empty is the destructive save they exist to
+	// prevent.
 	//
 	// connectivity_mode is reported resolved: an endpoint predating the field
 	// behaves as cluster_ip. connectivity_allowed_cidrs is present only under an

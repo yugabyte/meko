@@ -35,7 +35,9 @@
 #      ONLY settings still gets its generation stamped (the settings PATCH is
 #      synchronous, so the handler stamps it — nothing else could), a key dropped
 #      from a declared surface is removed from the row (desired state owns the whole
-#      map), and none of it restarts the endpoint pod;
+#      map), and none of it restarts the endpoint pod. Then reads the same settings
+#      back out of the INVENTORY, which is the only place a console can see the map
+#      it is about to replace (meko#1295);
 #   7. (SMOKE_EXTENSIONS=1) enables an extension on the branch by editing its
 #      spec — the only path an operator has for a branch that already exists —
 #      and asserts the agent applies it: the branch reports it in
@@ -252,14 +254,16 @@ fi
 # here are that the values actually reach the controller's rows, and that the
 # generation is claimed only when they did.
 #
-# Read back from the amp API rather than the inventory, because the agent does not
-# report settings in attrs — the row is the durable answer and the controller is
-# the only thing that can show it. That is a READ; the environment is still driven
-# entirely through desired state.
+# Read back from the amp API, because the controller's row is the durable answer and
+# the only thing that can show what actually landed. That is a READ; the environment
+# is still driven entirely through desired state. The inventory's own copy of those
+# settings is asserted separately below, against the same rows.
 hdr "branch and endpoint settings converge from desired state"
 
 AMP="http://127.0.0.1:${AMP_PF_PORT}/api/v1"
-inv_attr() { # inv_attr <kind> <name> <attr>
+# <name> is the LEAF, not the hierarchical path the desired-state document uses:
+# the agent reports ResourceStatus.Name as leaf(key.Name) (cmd/reconcile-agent).
+inv_attr() { # inv_attr <kind> <leaf name> <attr>
   env_json | jq -r --arg k "$1" --arg n "$2" --arg a "$3" \
     '.resources[]?|select(.kind==$k and .name==$n)|.attrs[$a] // empty' 2>/dev/null | head -1
 }
@@ -347,6 +351,41 @@ else
     && ok "endpoint row did not absorb the branch's statement_timeout" \
     || bad "endpoint pg_settings='${eset}' contains the branch's key — the rows were merged"
 
+  # --- the same settings, read out of the inventory (meko#1295) ---
+  #
+  # A declared surface owns the whole map, so a console that cannot see what is
+  # stored deletes every key it never rendered on its first write. The inventory is
+  # the only place it can look: it has no second credentialed client against the
+  # controller, and applied_generation says an update landed, not what it landed on.
+  hdr "the inventory reports branch and endpoint settings"
+  bsattr=""; esattr=""
+  for ((i=0; i<36; i++)); do
+    bsattr=$(inv_attr branch "$BRANCH_NAME" pg_settings)
+    esattr=$(inv_attr endpoint "$EP_NAME" pg_settings)
+    [ "$(printf '%s' "$bsattr" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] \
+      && [ "$(printf '%s' "$esattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] && break
+    sleep 5
+  done
+  [ "$(printf '%s' "$bsattr" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] \
+    && [ "$(printf '%s' "$bsattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
+    && ok "branch attrs.pg_settings matches the row (${bsattr})" \
+    || bad "branch attrs.pg_settings='${bsattr:-none}', want statement_timeout=30s and work_mem=16MB"
+  [ "$(printf '%s' "$esattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] \
+    && ok "endpoint attrs.pg_settings matches the row (${esattr})" \
+    || bad "endpoint attrs.pg_settings='${esattr:-none}', want work_mem=64MB"
+
+  # A surface nothing ever declared is present and empty, never absent: absence is
+  # reserved for an agent too old to report settings at all, and a console reading
+  # it as empty is the destructive save above.
+  v=$(inv_attr branch "$BRANCH_NAME" write_token_settings)
+  [ "$v" = "{}" ] && ok "branch attrs.write_token_settings is present and empty" \
+    || bad "branch attrs.write_token_settings='${v:-absent}', want {} — an undeclared surface must not be omitted"
+  for a in pageserver_settings safekeeper_settings extended_config; do
+    v=$(inv_attr endpoint "$EP_NAME" "$a")
+    [ "$v" = "{}" ] && ok "endpoint attrs.$a is present and empty" \
+      || bad "endpoint attrs.$a='${v:-absent}', want {} — an undeclared surface must not be omitted"
+  done
+
   # --- a declared surface owns the whole map ---
   #
   # The operator-facing half of #1246: desired state says what pg_settings IS, so
@@ -369,6 +408,19 @@ else
     && [ "$(printf '%s' "$bset2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
     && ok "branch pg_settings is now exactly what the spec declares (${bset2})" \
     || bad "branch pg_settings='${bset2:-none}', want only work_mem=16MB — the dropped key was not removed"
+
+  # The removal has to reach the inventory too, or a console re-reading it would
+  # declare the stale key back on its next save.
+  bsattr2=""
+  for ((i=0; i<36; i++)); do
+    bsattr2=$(inv_attr branch "$BRANCH_NAME" pg_settings)
+    [ "$(printf '%s' "$bsattr2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] && break
+    sleep 5
+  done
+  [ "$(printf '%s' "$bsattr2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] \
+    && [ "$(printf '%s' "$bsattr2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
+    && ok "branch attrs.pg_settings dropped the key too (${bsattr2})" \
+    || bad "branch attrs.pg_settings='${bsattr2:-none}', want only work_mem=16MB"
 
   # The other end of SET_UID_BEFORE, now that every settings edit has landed.
   if [ -n "$SET_UID_BEFORE" ]; then

@@ -244,6 +244,94 @@ func TestListReportsEndpointConnectivity(t *testing.T) {
 	}
 }
 
+// The read-back half of the settings PATCHes (meko#1295). A declared surface owns
+// the whole map, so an editor that cannot see what is stored deletes every key it
+// never saw on its first write — the settings have to come back out of the
+// inventory, not out of a second credentialed client against the controller.
+func TestListReportsSettingsSurfaces(t *testing.T) {
+	g := &genServer{
+		branchSettings: `,"pg_settings":{"work_mem":"16MB","statement_timeout":"30s"}` +
+			`,"write_token_settings":{"ttl_ms":90000,"renew_seconds":30}`,
+		endpointSettings: `,"pg_settings":{"work_mem":"64MB"}` +
+			`,"pageserver_settings":{"tenant_config.pitr_interval":"7 days","tenant_config.enable_gc":true}` +
+			`,"safekeeper_settings":{}` +
+			`,"extended_config":{"foo":"bar"}`,
+	}
+	b := g.start(t)
+
+	actuals, err := b.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byKind := map[string]map[string]string{}
+	for _, a := range actuals {
+		byKind[a.Key.Kind] = a.Attrs
+	}
+
+	// One JSON object per surface, keys sorted by the encoder, so the value is
+	// stable tick to tick and a consumer parses the surface whole — the unit the
+	// PATCH replaces.
+	for attr, want := range map[string]string{
+		"pg_settings":          `{"statement_timeout":"30s","work_mem":"16MB"}`,
+		"write_token_settings": `{"renew_seconds":30,"ttl_ms":90000}`,
+	} {
+		if got := byKind[KindBranch][attr]; got != want {
+			t.Errorf("branch %s = %q, want %q", attr, got, want)
+		}
+	}
+	for attr, want := range map[string]string{
+		"pg_settings":         `{"work_mem":"64MB"}`,
+		"pageserver_settings": `{"tenant_config.enable_gc":true,"tenant_config.pitr_interval":"7 days"}`,
+		// Explicitly `{}` on the row, which must read the same as an absent one:
+		// nothing is stored.
+		"safekeeper_settings": `{}`,
+		// Reported even though the settings PATCH cannot write it — a spec that
+		// disagrees is permanent drift with nothing to show what it disagrees with.
+		"extended_config": `{"foo":"bar"}`,
+	} {
+		if got := byKind[KindEndpoint][attr]; got != want {
+			t.Errorf("endpoint %s = %q, want %q", attr, got, want)
+		}
+	}
+}
+
+// Skew, the rule meko#1252 set for connectivity: an absent key means the agent does
+// not report this surface, never that the surface is empty. So every surface is
+// written on every tick, and a row carrying none reports "{}" rather than dropping
+// the key — a consumer reading absence as empty is the destructive save this whole
+// read-back exists to prevent.
+func TestListReportsUnsetSettingsAsEmptyObject(t *testing.T) {
+	g := &genServer{}
+	b := g.start(t)
+
+	actuals, err := b.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	byKind := map[string]map[string]string{}
+	for _, a := range actuals {
+		byKind[a.Key.Kind] = a.Attrs
+	}
+
+	for kind, attrs := range map[string][]string{
+		KindBranch:   {"pg_settings", "write_token_settings"},
+		KindEndpoint: {"pg_settings", "pageserver_settings", "safekeeper_settings", "extended_config"},
+	} {
+		for _, attr := range attrs {
+			// Comma-ok, not a bare comparison: an absent key also reads as "" and
+			// would pass a value check against the empty string.
+			got, ok := byKind[kind][attr]
+			if !ok {
+				t.Errorf("%s %s absent, want %q — absence is reserved for an agent that does not report settings", kind, attr, "{}")
+				continue
+			}
+			if got != "{}" {
+				t.Errorf("%s %s = %q, want %q", kind, attr, got, "{}")
+			}
+		}
+	}
+}
+
 // A 400 says the controller refuses the spec as declared — an endpoint memory
 // quantity with no unit is the case that prompted this — so the same body would
 // be rejected on every retry. It must come back as a permanent error the engine

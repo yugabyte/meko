@@ -30,7 +30,9 @@
 // endpoint's pg_settings/pageserver_settings/safekeeper_settings converge through
 // the two settings PATCHes, and a declared surface owns the whole map: what the
 // spec says the surface IS is what the row is set to, so a key stored there and
-// not declared is removed. Omitting a surface leaves it unmanaged.
+// not declared is removed. Omitting a surface leaves it unmanaged. Each is
+// reported back in Attrs as JSON, because a caller that cannot see the map it is
+// about to replace cannot declare one without deleting keys it never saw.
 package ampbackend
 
 import (
@@ -188,6 +190,30 @@ func attrSet(m map[string]string, k, v string) map[string]string {
 	return m
 }
 
+// attrPutSettings reports one settings surface as its canonical JSON — whole, not
+// flattened per setting, because the PATCH replaces a named surface and the map is
+// what a consumer has to see before it can safely declare one.
+//
+// The key is written UNCONDITIONALLY, as "{}" for a surface the controller reports
+// absent or empty: its GET omits both, so nothing tells them apart on the wire, and
+// both say no key is stored. An ABSENT attr therefore means the agent predates this
+// release, never that the surface is empty — read as empty it is a blank editor for
+// a resource full of settings and every key deleted on save (meko#1295).
+func attrPutSettings[T any](m map[string]string, k string, reported *map[string]T) map[string]string {
+	surface := map[string]T{}
+	if reported != nil {
+		surface = *reported
+	}
+	b, err := json.Marshal(surface)
+	if err != nil {
+		// Unreachable: the surface was decoded from the controller's own JSON.
+		// Omitting the key reports it as unknown, which is the safe reading — "{}"
+		// would claim it is empty and invite exactly the destructive save above.
+		return m
+	}
+	return attrSet(m, k, string(b))
+}
+
 // observedGen reads the controller's echoed ycp_generation. A NULL column means
 // no YCP update has been applied to the row, which is generation 0. Only the kinds
 // in updateFuncs echo one; the rest report 0 and rely on the engine's cache.
@@ -208,10 +234,10 @@ func attrPutInt(m map[string]string, k string, v int) map[string]string {
 }
 
 // branchAttrs reports a branch's amp id and durable details: pg version, the
-// LSN it was forked at, its lineage, and its externalized-extension set. The id
-// pairs with a fork's parent_branch_id so a UI can rebuild the fork tree. The
-// extension set is per branch — seeded from the cluster, inherited on fork, and
-// added to later — so each branch reports its own.
+// LSN it was forked at, its lineage, its externalized-extension set, and the two
+// settings surfaces. The id pairs with a fork's parent_branch_id so a UI can
+// rebuild the fork tree. The extension set is per branch — seeded from the
+// cluster, inherited on fork, and added to later — so each branch reports its own.
 func branchAttrs(br ampclient.Branch) map[string]string {
 	var m map[string]string
 	m = attrPut(m, "id", br.BranchId.String())
@@ -228,6 +254,8 @@ func branchAttrs(br ampclient.Branch) map[string]string {
 	if br.Extensions != nil && len(*br.Extensions) > 0 {
 		m = attrPut(m, "extensions", strings.Join(*br.Extensions, ","))
 	}
+	m = attrPutSettings(m, "pg_settings", br.PgSettings)
+	m = attrPutSettings(m, "write_token_settings", (*map[string]interface{})(br.WriteTokenSettings))
 	m = attrPutAppliedGen(m, br.YcpGeneration)
 	return m
 }
@@ -244,7 +272,7 @@ func attrPutAppliedGen(m map[string]string, echoed *int64) map[string]string {
 }
 
 // endpointAttrs reports a compute endpoint's amp id, role, connection addresses,
-// client reachability, and reserved compute.
+// client reachability, reserved compute, and its settings surfaces.
 //
 // The mode is reported resolved and unconditionally, because an endpoint created
 // before connectivity was configurable reports none and behaves as cluster_ip. It
@@ -281,6 +309,13 @@ func endpointAttrs(ep ampclient.Endpoint) map[string]string {
 			m = attrPut(m, "memory", *ep.Resources.Memory)
 		}
 	}
+	m = attrPutSettings(m, "pg_settings", ep.PgSettings)
+	m = attrPutSettings(m, "pageserver_settings", (*map[string]interface{})(ep.PageserverSettings))
+	m = attrPutSettings(m, "safekeeper_settings", (*map[string]interface{})(ep.SafekeeperSettings))
+	// Reported although updateEndpointSettings cannot write it: extended_config is
+	// declarable at create, so a spec disagreeing with the row is permanent drift,
+	// and without this there is nothing to see what it disagrees with.
+	m = attrPutSettings(m, "extended_config", ep.ExtendedConfig)
 	m = attrPutAppliedGen(m, ep.YcpGeneration)
 	return m
 }
