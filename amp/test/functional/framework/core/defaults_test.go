@@ -1699,6 +1699,39 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 
+	// --- perf/client_window (perf.client_window.*) ---
+	if got := cfg.GetInt("perf.client_window.rate_tps", -1); got != perf.DefaultClientWindowRateTPS {
+		t.Errorf("perf.client_window.rate_tps = %d, want %d", got, perf.DefaultClientWindowRateTPS)
+	}
+	if got := cfg.GetBool("perf.client_window.java_client", false); got != perf.DefaultClientWindowJavaClient {
+		t.Errorf("perf.client_window.java_client = %v, want %v", got, perf.DefaultClientWindowJavaClient)
+	}
+	if got := cfg.GetStringSlice("perf.client_window.operations", nil); !slices.Equal(got, perf.DefaultClientWindowOperations) {
+		t.Errorf("perf.client_window.operations = %v, want %v", got, perf.DefaultClientWindowOperations)
+	}
+	for key, want := range map[string]time.Duration{
+		"perf.client_window.grace":              perf.DefaultClientWindowGrace,
+		"perf.client_window.sample_interval":    perf.DefaultClientWindowSampleInterval,
+		"perf.client_window.statement_timeout":  perf.DefaultClientWindowStatementTimeout,
+		"perf.client_window.hold":               perf.DefaultClientWindowHold,
+		"perf.client_window.recover_timeout":    perf.DefaultClientWindowRecoverTimeout,
+		"perf.client_window.backing_roll_sleep": perf.DefaultClientWindowBackingRollSleep,
+		"perf.client_window.backing_settle":     perf.DefaultClientWindowBackingSettle,
+	} {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+	for key, want := range map[string]string{
+		"perf.client_window.endpoint_cpu":    perf.DefaultClientWindowEndpointCPU,
+		"perf.client_window.endpoint_memory": perf.DefaultClientWindowEndpointMem,
+		"perf.client_window.resize_cpu":      perf.DefaultClientWindowResizeCPU,
+		"perf.client_window.resize_memory":   perf.DefaultClientWindowResizeMem,
+	} {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
 	// --- perf.bench.* (the multi-iteration benchmark harness) ---
 	if got := cfg.GetInt("perf.bench.iterations", -1); got != perf.DefaultBenchIterations {
 		t.Errorf("perf.bench.iterations = %d, want %d", got, perf.DefaultBenchIterations)

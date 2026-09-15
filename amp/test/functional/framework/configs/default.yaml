@@ -2208,6 +2208,57 @@ perf:
     settle: 1m
     endpoint_cpu: "2"
     endpoint_memory: "4Gi"
+  # client_window is perf/client_window: what a client sees while each amp
+  # operation runs. One tenant, a pgx pool, a pinned pgx session carrying a
+  # prepared statement and an idle transaction, and the Java sample app in a
+  # client pod, all driving the endpoint while the operation happens. The
+  # window of an operation the controller runs as a task (resize, the upgrade
+  # rolls, pause/resume) is timed from that task's own created_at; the rest
+  # (compute_restart, settings_update, backing_roll) from when the harness
+  # issued the call.
+  client_window:
+    # operations is the set to measure, in this order. upgrade_roll also rolls
+    # BACK, measured as its own upgrade_roll_back window. pause_resume skips
+    # itself until perf.lifecycle.pause_resume turns it on (meko#518).
+    operations: ["compute_restart", "resize", "settings_update", "upgrade_roll", "pause_resume", "backing_roll"]
+    # rate_tps is how often each pgx client issues a statement. Low on purpose:
+    # the question is when the endpoint answers, not how much it can take, and
+    # the endpoint tunnel already adds ~29ms to every statement.
+    rate_tps: 10
+    # grace is what separates "the endpoint came back" from "it flickered": the
+    # window closes at the first success the pooled client got that was followed
+    # by this much unbroken service, and an error after that fails the test. 0
+    # closes the window at the very first success, which is the red proof.
+    grace: "5s"
+    # sample_interval is how often the Java client prints a progress window.
+    sample_interval: "1s"
+    # statement_timeout bounds one probe. A statement that has not answered in
+    # this long is recorded as a timeout, not as a hang of the whole test.
+    statement_timeout: "15s"
+    # hold is the quiet time watched either side of an operation, which is what
+    # makes "no error outside the window" a claim about an observed interval.
+    hold: "30s"
+    # recover_timeout bounds the wait for a replaced compute pod. Sized from the
+    # cold endpoint create budget (10 to 19 minutes).
+    recover_timeout: "20m"
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+    # The shape the resize operation moves to. Down, not up: a bigger shape can
+    # wait for a node and measure the autoscaler instead of the operation.
+    resize_cpu: "1"
+    resize_memory: "2Gi"
+    # java_client runs the JDBC client. It needs the private sample-app jar, so
+    # a deployment without that secret falls back to the two pgx clients alone.
+    java_client: true
+    # backing_roll_sleep is YBA's pause after each node comes back before it
+    # takes the next one.
+    backing_roll_sleep: "30s"
+    # backing_settle keeps the backing roll's window open past the moment YBA
+    # calls the restart done: YugabyteDB goes on electing tablet leaders for
+    # minutes after the last tserver is back, and a statement that stalls in
+    # that tail is the roll's cost, not an error outside the window. Only the
+    # backing roll uses it.
+    backing_settle: "2m"
   # scale is the shape every ladder shares: ONE tenant (one cluster, one
   # branch, one endpoint) that keeps getting more concurrent drivers —
   # perf/scale_tpcc, scale_ycsb, scale_pgbench escalate copies of one workload,
