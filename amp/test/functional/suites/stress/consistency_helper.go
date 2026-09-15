@@ -8,6 +8,7 @@ package stress
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -302,14 +303,10 @@ func reconcileHeapAndIndex(ctx context.Context, conn *pg.Client, tbl string) err
 	}); err != nil {
 		return fmt.Errorf("force the index plan for %s: %w", tbl, err)
 	}
-	pkIndex, err := sess.QueryString(ctx, "SELECT quote_ident(c.relname) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = $1::regclass AND i.indisprimary", tbl)
-	if err != nil {
-		return fmt.Errorf("resolve the primary key index of %s: %w", tbl, err)
-	}
 	countSQL := "SELECT count(*) FROM " + tbl
 	// enable_seqscan = off is a cost penalty, not a prohibition: without this
 	// the leg can take the same sequential path and agree by construction.
-	if err := requireSessionPlanUses(ctx, sess, countSQL, pkIndex); err != nil {
+	if err := requireSessionPlanUsesAnIndex(ctx, sess, countSQL); err != nil {
 		return err
 	}
 	viaIndex, err := sess.QueryInt(ctx, countSQL)
@@ -317,20 +314,58 @@ func reconcileHeapAndIndex(ctx context.Context, conn *pg.Client, tbl string) err
 		return fmt.Errorf("index count of %s: %w", tbl, err)
 	}
 	if heap != viaIndex {
-		return fmt.Errorf("%s holds %d row(s) by a sequential scan and %d through its primary key in one snapshot: the heap and the index disagree about what is stored", tbl, heap, viaIndex)
+		return fmt.Errorf("%s holds %d row(s) by a sequential scan and %d through an index in one snapshot: the heap and the index disagree about what is stored", tbl, heap, viaIndex)
 	}
 	return nil
 }
 
-func requireSessionPlanUses(ctx context.Context, sess pg.Session, sql, index string) error {
+// Any index will do; which one the planner picks is its business, and pinning
+// the primary key fails the moment the workload adds a second index the
+// index-only scan prefers (result 4303c440).
+func requireSessionPlanUsesAnIndex(ctx context.Context, sess pg.Session, sql string) error {
 	plan, err := sess.QueryString(ctx, "EXPLAIN (FORMAT JSON) "+sql)
 	if err != nil {
 		return fmt.Errorf("explain %q: %w", sql, err)
 	}
-	if !strings.Contains(plan, index) {
-		return fmt.Errorf("the count meant to read %s does not use it, so this leg would agree with the heap without touching the index:\nquery: %s\nplan:\n%s", index, sql, plan)
+	indexed, seq, err := planScanKinds(plan)
+	if err != nil {
+		return fmt.Errorf("read the plan of %q: %w: %s", sql, err, plan)
+	}
+	if !indexed || seq {
+		return fmt.Errorf("the count meant to read an index does not use one, so this leg would agree with the heap without touching the index:\nquery: %s\nplan:\n%s", sql, plan)
 	}
 	return nil
+}
+
+// planScanKinds walks an EXPLAIN (FORMAT JSON) tree for the two facts the leg
+// turns on. Decoded rather than matched as text: nothing makes EXPLAIN's
+// spacing part of the contract.
+func planScanKinds(plan string) (indexed, seq bool, err error) {
+	var tree any
+	if err := json.Unmarshal([]byte(plan), &tree); err != nil {
+		return false, false, err
+	}
+	var walk func(any)
+	walk = func(n any) {
+		switch v := n.(type) {
+		case map[string]any:
+			if s, ok := v["Index Name"].(string); ok && s != "" {
+				indexed = true
+			}
+			if s, ok := v["Node Type"].(string); ok && s == "Seq Scan" {
+				seq = true
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	walk(tree)
+	return indexed, seq, nil
 }
 
 func setLocal(ctx context.Context, sess pg.Session, gucs map[string]string) error {
