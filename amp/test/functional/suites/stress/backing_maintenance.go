@@ -1,7 +1,7 @@
-// Runs planned maintenance (gflag change, data move, upgrade) on the YBA
-// universe backing amp, asserting commits keep flowing through each operation
-// and every acknowledged row reads back after. Skips unless the env's backing
-// is a YBA universe. backing_nemesis covers the ungraceful case (killing pods).
+// Planned maintenance and topology change on the YBA universe backing amp,
+// with commits flowing throughout and every acknowledged row read back after.
+// Skips unless the backing is a YBA universe. backing_nemesis covers the
+// ungraceful case.
 package stress
 
 import (
@@ -43,7 +43,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Put the YugabyteDB under amp through planned maintenance — rolling restart, gflag change, data move, software upgrade — while amp tenants write through their endpoints, then assert commits kept flowing through every operation and no acknowledged row was lost.",
+		Description: "Put the YugabyteDB under amp through planned maintenance and topology change - gflag change, rolling restart, data move, software upgrade, tablet leader stepdowns, a tablet split, master leader changes, a tserver added and drained, a slow replica - while amp tenants write through their endpoints, then assert commits kept flowing through every operation, no acknowledged row was lost, and the write path never stalled past the resume deadline.",
 		Params:      []string{"stress.backing_maintenance", "stress.consistency"},
 		Timeout:     4 * time.Hour,
 		Run:         runBackingMaintenance,
@@ -474,13 +474,31 @@ func (r *maintenanceRun) buildOps() []maintenanceOp {
 	for _, name := range r.cfg.Operations {
 		switch name {
 		case OpRollingRestart:
-			ops = append(ops, maintenanceOp{name, r.rollingRestart})
+			ops = append(ops, maintenanceOp{name: name, run: r.rollingRestart})
 		case OpGflagChange:
-			ops = append(ops, maintenanceOp{name, r.gflagChange})
+			ops = append(ops, maintenanceOp{name: name, run: r.gflagChange})
 		case OpDataMove:
-			ops = append(ops, maintenanceOp{name, r.dataMove})
+			ops = append(ops, maintenanceOp{name: name, run: r.dataMove})
 		case OpSoftwareUpgrade:
-			ops = append(ops, maintenanceOp{name, r.softwareUpgrade})
+			ops = append(ops, maintenanceOp{name: name, run: r.softwareUpgrade})
+		case OpLeaderStepdown:
+			ops = append(ops, r.adminOp(name, r.leaderStepdown))
+		case OpTabletSplit:
+			ops = append(ops, r.adminOp(name, r.tabletSplit))
+		case OpMasterLeaderChange:
+			ops = append(ops, r.adminOp(name, r.masterLeaderChange))
+		case OpAddRemoveTServer:
+			op := maintenanceOp{name: name, run: r.addRemoveTServer}
+			if _, ok := r.target.(*ybaTarget); !ok {
+				op.skip = r.target.Describe() + " is not a YBA universe, and only YBA can edit a universe's node count"
+			}
+			ops = append(ops, op)
+		case OpDiskLatency:
+			op := maintenanceOp{name: name, run: r.diskLatency}
+			if r.kube() == nil {
+				op.skip = r.target.Describe() + " is not a kubernetes universe, so there is no pod network namespace to delay in"
+			}
+			ops = append(ops, op)
 		}
 	}
 	return ops
@@ -524,6 +542,16 @@ func (r *maintenanceRun) runRolling(ctx context.Context, name string, fn func() 
 			name, obs.MaxOut, obs.Expected, r.cfg.MaxNodesOutAtOnce, obs)
 	}
 	return nil
+}
+
+// The three yb-admin operations are on by default, so a backing with nowhere
+// in-cluster to run yb-admin has to skip them rather than fail the run.
+func (r *maintenanceRun) adminOp(name string, run func(context.Context) error) maintenanceOp {
+	op := maintenanceOp{name: name, run: run}
+	if mover, ok := r.target.(dataMover); !ok || !mover.SupportsDataMove() {
+		op.skip = r.target.Describe() + " has nowhere in-cluster to run yb-admin"
+	}
+	return op
 }
 
 func (r *maintenanceRun) kube() *k8s.Kubectl {

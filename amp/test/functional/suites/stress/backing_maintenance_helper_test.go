@@ -3,6 +3,7 @@ package stress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,8 +91,8 @@ func TestPlanRunsEveryOperationInOrder(t *testing.T) {
 	commits := int64(0)
 	p := &maintenancePlan{
 		ops: []maintenanceOp{
-			{"one", func(context.Context) error { order = append(order, "one"); commits += 5; return nil }},
-			{"two", func(context.Context) error { order = append(order, "two"); commits += 7; return nil }},
+			{name: "one", run: func(context.Context) error { order = append(order, "one"); commits += 5; return nil }},
+			{name: "two", run: func(context.Context) error { order = append(order, "two"); commits += 7; return nil }},
 		},
 		progress:    func() int64 { return commits },
 		minProgress: 1,
@@ -108,8 +109,8 @@ func TestPlanFailsWhenNoCommitLandsDuringAnOperation(t *testing.T) {
 	commits := int64(0)
 	p := &maintenancePlan{
 		ops: []maintenanceOp{
-			{"rolling_restart", func(context.Context) error { commits += 9; return nil }},
-			{"software_upgrade", func(context.Context) error { return nil }},
+			{name: "rolling_restart", run: func(context.Context) error { commits += 9; return nil }},
+			{name: "software_upgrade", run: func(context.Context) error { return nil }},
 		},
 		progress:    func() int64 { return commits },
 		minProgress: 1,
@@ -128,8 +129,8 @@ func TestPlanReportsCommitsPerOperation(t *testing.T) {
 	seen := map[string]int64{}
 	p := &maintenancePlan{
 		ops: []maintenanceOp{
-			{"one", func(context.Context) error { commits += 4; return nil }},
-			{"two", func(context.Context) error { commits += 11; return nil }},
+			{name: "one", run: func(context.Context) error { commits += 4; return nil }},
+			{name: "two", run: func(context.Context) error { commits += 11; return nil }},
 		},
 		progress:    func() int64 { return commits },
 		minProgress: 1,
@@ -147,8 +148,8 @@ func TestPlanReportsEachOperationAsAStep(t *testing.T) {
 	var steps []string
 	p := &maintenancePlan{
 		ops: []maintenanceOp{
-			{"one", func(context.Context) error { return nil }},
-			{"two", func(context.Context) error { return nil }},
+			{name: "one", run: func(context.Context) error { return nil }},
+			{name: "two", run: func(context.Context) error { return nil }},
 		},
 		progress:    func() int64 { return 1 },
 		minProgress: 0,
@@ -169,8 +170,8 @@ func TestPlanStopsAtTheFirstFailedOperation(t *testing.T) {
 	ran := false
 	p := &maintenancePlan{
 		ops: []maintenanceOp{
-			{"one", func(context.Context) error { return errors.New("upgrade task failed") }},
-			{"two", func(context.Context) error { ran = true; return nil }},
+			{name: "one", run: func(context.Context) error { return errors.New("upgrade task failed") }},
+			{name: "two", run: func(context.Context) error { ran = true; return nil }},
 		},
 		progress:    func() int64 { return 1 },
 		minProgress: 0,
@@ -241,5 +242,39 @@ func TestEnoughTServersRejectsTheRF1Backing(t *testing.T) {
 func TestEnoughTServersAcceptsRF3(t *testing.T) {
 	if reason, ok := enoughTServers(universeWithTServers(3), 3); !ok {
 		t.Fatalf("3 tservers is the shape this scenario asks for: %s", reason)
+	}
+}
+
+func TestPlanReportsASkippedOperationWithoutRunningIt(t *testing.T) {
+	ran := false
+	var logged []string
+	p := &maintenancePlan{
+		ops: []maintenanceOp{
+			{name: "add_remove_tserver", run: func(context.Context) error { ran = true; return nil }, skip: "not a YBA universe"},
+			{name: "gflag_change", run: func(context.Context) error { return nil }},
+		},
+		progress:    func() int64 { return 1 },
+		minProgress: 0,
+		logf:        func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
+	}
+	if err := p.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if ran {
+		t.Error("a skipped operation must not run")
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "not a YBA universe") {
+		t.Errorf("log = %v, want the skip reason recorded", logged)
+	}
+}
+
+func TestGateRejectsAnUnknownTopologyOperation(t *testing.T) {
+	cfg := maintenanceConfig{Enabled: true, RF: 3, Tenants: 1, Operations: []string{"leader_stepdown", "tablet_shuffle"}}
+	reason, ok := gateOperations(cfg)
+	if ok {
+		t.Fatal("an operation name nothing implements must not pass the gate")
+	}
+	if !strings.Contains(reason, "tablet_shuffle") {
+		t.Errorf("reason = %q, want it to name the unknown operation", reason)
 	}
 }

@@ -284,13 +284,13 @@ func (r *backupRestoreRun) buildBackupOps() []maintenanceOp {
 	for _, name := range r.bcfg.Operations {
 		switch name {
 		case OpBackup:
-			ops = append(ops, maintenanceOp{name, r.opBackup})
+			ops = append(ops, maintenanceOp{name: name, run: r.opBackup})
 		case OpRestore:
-			ops = append(ops, maintenanceOp{name, r.opRestore})
+			ops = append(ops, maintenanceOp{name: name, run: r.opRestore})
 		case OpPitr:
-			ops = append(ops, maintenanceOp{name, r.opPitr})
+			ops = append(ops, maintenanceOp{name: name, run: r.opPitr})
 		case OpScheduledBackup:
-			ops = append(ops, maintenanceOp{name, r.opScheduledBackup})
+			ops = append(ops, maintenanceOp{name: name, run: r.opScheduledBackup})
 		}
 	}
 	return ops

@@ -1411,6 +1411,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.backing_maintenance.benchbase_warehouses":   1,
 		"stress.backing_maintenance.benchbase_terminals":    2,
 		"stress.backing_maintenance.bank_accounts":          200,
+		"stress.backing_maintenance.master_stepdowns":       3,
 	}
 	for key, want := range maintInts {
 		if got := cfg.GetInt(key, -1); got != want {
@@ -1450,14 +1451,25 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.backing_maintenance.rolling_sample_interval": 5 * time.Second,
 		"stress.backing_maintenance.workload_run_time":       4 * time.Hour,
 		"stress.backing_maintenance.benchbase_start_grace":   30 * time.Second,
+		"stress.backing_maintenance.stepdown_interval":       10 * time.Second,
+		"stress.backing_maintenance.stepdown_duration":       3 * time.Minute,
+		"stress.backing_maintenance.resume_deadline":         2 * time.Minute,
+		"stress.backing_maintenance.stall_sample_interval":   time.Second,
+		"stress.backing_maintenance.split_timeout":           10 * time.Minute,
+		"stress.backing_maintenance.edit_timeout":            45 * time.Minute,
+		"stress.backing_maintenance.disk_latency":            200 * time.Millisecond,
+		"stress.backing_maintenance.disk_latency_duration":   3 * time.Minute,
 	}
 	for key, want := range maintDurs {
 		if got := cfg.GetDuration(key, -1); got != want {
 			t.Errorf("%s = %s, want %s", key, got, want)
 		}
 	}
-	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change" {
+	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change,leader_stepdown,tablet_split,master_leader_change" {
 		t.Errorf("stress.backing_maintenance.operations = %v", ops)
+	}
+	if tables := cfg.GetStringSlice("stress.backing_maintenance.tablet_tables", nil); strings.Join(tables, ",") != "wals,pages" {
+		t.Errorf("stress.backing_maintenance.tablet_tables = %v", tables)
 	}
 
 	// --- stress/backing_backup_restore ---

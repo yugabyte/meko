@@ -211,3 +211,88 @@ func TestWaitLoadBalancerIdleStreakResetsOnAnError(t *testing.T) {
 		t.Errorf("polled %d times, want 5", len(ex.cmds))
 	}
 }
+
+const tableListing = `yb_storage.pages [ysql_schema=amp_storage] [000033e8000030008000000000004003] 000033e8000030008000000000004003
+yb_storage.wals [ysql_schema=amp_storage] [000033e8000030008000000000004007] 000033e8000030008000000000004007
+system_platform.sql_stats 000033e8000030008000000000004100`
+
+const tabletListing = `Tablet-UUID                       Range                                                      Leader-IP        Leader-UUID
+a1b2c3d4e5f60718293a4b5c6d7e8f90  partition_key_start: "" partition_key_end: "\177\377"       10.4.0.11:9100   c9a3b1de4f5061728394a5b6c7d8e9f0
+b1b2c3d4e5f60718293a4b5c6d7e8f91  partition_key_start: "\177\377" partition_key_end: ""      10.4.0.12:9100   d9a3b1de4f5061728394a5b6c7d8e9f1`
+
+func TestFindTableResolvesTheIDInsideANonPublicSchema(t *testing.T) {
+	c := New(&scriptedExec{results: []exec.Result{ok(tableListing)}}, "m:7100")
+	tbl, err := c.FindTable(context.Background(), "yb_storage", "pages")
+	if err != nil {
+		t.Fatalf("find table: %v", err)
+	}
+	if tbl.ID != "000033e8000030008000000000004003" || tbl.Keyspace != "yb_storage.amp_storage" {
+		t.Errorf("table = %+v, want the amp_storage.pages row of yb_storage", tbl)
+	}
+}
+
+func TestFindTableIgnoresASameNamedTableInAnotherDatabase(t *testing.T) {
+	c := New(&scriptedExec{results: []exec.Result{ok(tableListing)}}, "m:7100")
+	if _, err := c.FindTable(context.Background(), "other_db", "pages"); err == nil {
+		t.Fatal("a table in a different database must not answer for this one")
+	}
+}
+
+func TestListTabletsAddressesTheTableByIDAndReadsTheLeaders(t *testing.T) {
+	ex := &scriptedExec{results: []exec.Result{ok(tabletListing)}}
+	c := New(ex, "m:7100")
+	tablets, err := c.ListTablets(context.Background(), "000033e8000030008000000000004003", 50)
+	if err != nil {
+		t.Fatalf("list tablets: %v", err)
+	}
+	if len(tablets) != 2 {
+		t.Fatalf("tablets = %+v, want 2 (the header is not one)", tablets)
+	}
+	if tablets[0].ID != "a1b2c3d4e5f60718293a4b5c6d7e8f90" || tablets[0].Leader != "10.4.0.11:9100" {
+		t.Errorf("first tablet = %+v, want its id and leader host:port", tablets[0])
+	}
+	if !strings.Contains(ex.cmds[0], "tableid.000033e8000030008000000000004003 50") {
+		t.Errorf("command = %q, want the table addressed by id", ex.cmds[0])
+	}
+}
+
+func TestLeaderStepdownAndSplitNameTheTablet(t *testing.T) {
+	ex := &scriptedExec{results: []exec.Result{ok("")}}
+	c := New(ex, "m:7100")
+	if err := c.LeaderStepdown(context.Background(), "tab1abcdef"); err != nil {
+		t.Fatalf("leader stepdown: %v", err)
+	}
+	if err := c.SplitTablet(context.Background(), "tab1abcdef"); err != nil {
+		t.Fatalf("split tablet: %v", err)
+	}
+	if !strings.Contains(ex.cmds[0], "leader_stepdown tab1abcdef") || !strings.Contains(ex.cmds[1], "split_tablet tab1abcdef") {
+		t.Errorf("commands = %v", ex.cmds)
+	}
+}
+
+// Some versions print the id dashed and add a type column, so the shape of the
+// id, not its position, is what finds it.
+const tableListingDashedWithType = `yb_storage.pages 000033e8-0000-3000-8000-000000004003
+yb_storage.wals 000033e8-0000-3000-8000-000000004007`
+
+func TestFindTableReadsADashedIDAndATrailingTypeColumn(t *testing.T) {
+	c := New(&scriptedExec{results: []exec.Result{ok(tableListingDashedWithType)}}, "m:7100")
+	tbl, err := c.FindTable(context.Background(), "yb_storage", "wals")
+	if err != nil {
+		t.Fatalf("find table: %v", err)
+	}
+	if tbl.ID != "000033e8-0000-3000-8000-000000004007" {
+		t.Errorf("table = %+v, want the dashed id of the wals row", tbl)
+	}
+}
+
+func TestFindTableShowsWhatItCouldNotRead(t *testing.T) {
+	c := New(&scriptedExec{results: []exec.Result{ok("something yb-admin prints that this does not parse")}}, "m:7100")
+	_, err := c.FindTable(context.Background(), "yb_storage", "pages")
+	if err == nil {
+		t.Fatal("an unparsable listing must be an error")
+	}
+	if !strings.Contains(err.Error(), "something yb-admin prints") {
+		t.Errorf("error = %v, want the raw output in it", err)
+	}
+}

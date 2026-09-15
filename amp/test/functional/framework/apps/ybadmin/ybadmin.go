@@ -266,3 +266,145 @@ func truncate(s string) string {
 	}
 	return s[:400] + "…"
 }
+
+// Keyspace is whatever yb-admin printed before the final dot, which varies by
+// version and flags, so callers match on it by substring, not by equality.
+type Table struct {
+	Keyspace string
+	Name     string
+	ID       string
+}
+
+type Tablet struct {
+	ID     string
+	Leader string
+}
+
+// The raw output comes back too: the listing's shape has moved across versions,
+// so a parse that finds nothing has to show what it could not read.
+func (c *Client) ListTables(ctx context.Context) ([]Table, string, error) {
+	out, err := c.Run(ctx, "list_tables", "include_table_id")
+	if err != nil {
+		return nil, out, err
+	}
+	return parseTables(out), out, nil
+}
+
+func (c *Client) FindTable(ctx context.Context, database, name string) (Table, error) {
+	tables, raw, err := c.ListTables(ctx)
+	if err != nil {
+		return Table{}, err
+	}
+	for _, t := range tables {
+		if t.Name == name && strings.Contains(t.Keyspace, database) {
+			return t, nil
+		}
+	}
+	return Table{}, fmt.Errorf("no table %q in a keyspace naming %q among the %d tables yb-admin lists (output: %s)",
+		name, database, len(tables), strings.TrimSpace(truncate(raw)))
+}
+
+// By id: yb-admin's keyspace.table form cannot name a table outside the public
+// schema, and amp's live in yb_storage.
+func (c *Client) ListTablets(ctx context.Context, tableID string, max int) ([]Tablet, error) {
+	if tableID == "" {
+		return nil, fmt.Errorf("ybadmin: list_tablets needs a table id")
+	}
+	if max <= 0 {
+		max = DefaultMaxTablets
+	}
+	out, err := c.Run(ctx, "list_tablets", "tableid."+tableID, strconv.Itoa(max))
+	if err != nil {
+		return nil, err
+	}
+	tablets := parseTablets(out)
+	if len(tablets) == 0 {
+		return nil, fmt.Errorf("no tablet in yb-admin's listing for table %s (output: %s)", tableID, strings.TrimSpace(truncate(out)))
+	}
+	return tablets, nil
+}
+
+// yb-admin defaults to 10, which hides most of a table's tablets.
+const DefaultMaxTablets = 1000
+
+func (c *Client) LeaderStepdown(ctx context.Context, tabletID string) error {
+	if tabletID == "" {
+		return fmt.Errorf("ybadmin: leader_stepdown needs a tablet id")
+	}
+	c.log("yb-admin leader_stepdown %s", tabletID)
+	_, err := c.Run(ctx, "leader_stepdown", tabletID)
+	return err
+}
+
+// Refused for a tablet with too little data to split, which is a property of
+// the tablet rather than a broken call: callers try another.
+func (c *Client) SplitTablet(ctx context.Context, tabletID string) error {
+	if tabletID == "" {
+		return fmt.Errorf("ybadmin: split_tablet needs a tablet id")
+	}
+	c.log("yb-admin split_tablet %s", tabletID)
+	_, err := c.Run(ctx, "split_tablet", tabletID)
+	return err
+}
+
+// One list_tables row is "<db>.<table> [ysql_schema=<schema>] [<id>] <id>":
+// the dotted name leads, the schema rides in a bracket token, and the id is
+// last. The schema is folded into Keyspace so a caller can match on either.
+func parseTables(out string) []Table {
+	var tables []Table
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !looksLikeID(fields[len(fields)-1]) {
+			continue
+		}
+		full := fields[0]
+		i := strings.LastIndex(full, ".")
+		if i < 0 {
+			continue
+		}
+		t := Table{Keyspace: full[:i], Name: full[i+1:], ID: fields[len(fields)-1]}
+		for _, f := range fields[1:] {
+			if schema, ok := strings.CutPrefix(strings.Trim(f, "[]"), "ysql_schema="); ok && schema != "" {
+				t.Keyspace += "." + schema
+			}
+		}
+		tables = append(tables, t)
+	}
+	return tables
+}
+
+// The range column carries spaces and quotes, so the leader is found by shape.
+func parseTablets(out string) []Tablet {
+	var tablets []Tablet
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !looksLikeID(fields[0]) {
+			continue
+		}
+		t := Tablet{ID: fields[0]}
+		for _, f := range fields[1:] {
+			if host, port, ok := strings.Cut(f, ":"); ok && host != "" && isDigits(port) {
+				t.Leader = f
+				break
+			}
+		}
+		tablets = append(tablets, t)
+	}
+	return tablets
+}
+
+func looksLikeID(s string) bool {
+	return isHex(strings.ReplaceAll(s, "-", "")) && len(strings.ReplaceAll(s, "-", "")) >= 16
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}

@@ -312,3 +312,80 @@ func PreviousReleaseTrain(version string) string {
 	}
 	return fmt.Sprintf("%d.2", year-1)
 }
+
+// The configure-then-edit flow is required: a hand-built payload that skips
+// /universe_configure leaves placementInfo stale, and YBA then either rejects
+// the edit or moves the wrong node.
+func (c *Client) EditUniverseNodes(ctx context.Context, universeID string, numNodes int) (TaskRef, error) {
+	if numNodes <= 0 {
+		return TaskRef{}, fmt.Errorf("edit universe %s: num nodes must be positive, got %d", universeID, numNodes)
+	}
+	var raw struct {
+		UniverseDetails map[string]any `json:"universeDetails"`
+	}
+	if _, err := c.doJSON(ctx, http.MethodGet, c.custURL("/universes/"+universeID), nil, &raw); err != nil {
+		return TaskRef{}, fmt.Errorf("read universe %s: %w", universeID, err)
+	}
+	params := raw.UniverseDetails
+	if params == nil {
+		return TaskRef{}, fmt.Errorf("universe %s reports no universeDetails", universeID)
+	}
+	if err := setPrimaryNumNodes(params, numNodes); err != nil {
+		return TaskRef{}, fmt.Errorf("edit universe %s: %w", universeID, err)
+	}
+	params["universeUUID"] = universeID
+	params["clusterOperation"] = "EDIT"
+	params["currentClusterType"] = "PRIMARY"
+	// -1 skips YBA's optimistic-concurrency check, which a universe being
+	// written to by a live workload can lose to its own background updates.
+	params["expectedUniverseVersion"] = -1
+
+	var configured map[string]any
+	if _, err := c.doJSON(ctx, http.MethodPost, c.custURL("/universe_configure"), params, &configured); err != nil {
+		return TaskRef{}, fmt.Errorf("configure universe %s for %d nodes: %w", universeID, numNodes, err)
+	}
+	var out TaskRef
+	if _, err := c.doJSON(ctx, http.MethodPut, c.custURL("/universes/"+universeID), configured, &out); err != nil {
+		return TaskRef{}, fmt.Errorf("edit universe %s to %d nodes: %w", universeID, numNodes, err)
+	}
+	c.log("yba: editing universe %s to %d nodes (task %s)", universeID, numNodes, out.TaskUUID)
+	return out, nil
+}
+
+// Waits for the universe to be ready, not just for the task to end: an add is
+// done once the new node serves, a remove once the drained one is gone.
+func (c *Client) EditUniverseNodesAndWait(ctx context.Context, universeID string, numNodes int, timeout time.Duration) error {
+	ref, err := c.EditUniverseNodes(ctx, universeID, numNodes)
+	if err != nil {
+		return err
+	}
+	if err := c.waitUpgradeTask(ctx, fmt.Sprintf("edit to %d nodes", numNodes), ref); err != nil {
+		return err
+	}
+	return c.WaitUniverseReady(ctx, universeID, timeout)
+}
+
+// The primary cluster is the one carrying the tservers amp writes through. An
+// async read replica has its own count and must not be touched.
+func setPrimaryNumNodes(params map[string]any, numNodes int) error {
+	clusters, ok := params["clusters"].([]any)
+	if !ok || len(clusters) == 0 {
+		return fmt.Errorf("no clusters in the universe details")
+	}
+	for _, raw := range clusters {
+		cl, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := cl["clusterType"].(string); t != "" && !strings.EqualFold(t, "PRIMARY") {
+			continue
+		}
+		ui, ok := cl["userIntent"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("the primary cluster has no userIntent")
+		}
+		ui["numNodes"] = numNodes
+		return nil
+	}
+	return fmt.Errorf("no primary cluster among the %d clusters", len(clusters))
+}

@@ -26,6 +26,7 @@ type fakeYBAMaintainer struct {
 	appVersionErr error
 	ensured       []string
 	ensureErr     error
+	nodeEdits     []int
 }
 
 func (f *fakeYBAMaintainer) RestartUniverseAndWait(_ context.Context, _ string, opt yba.UpgradeOption, _ time.Duration) error {
@@ -43,6 +44,11 @@ func (f *fakeYBAMaintainer) UpgradeGflagsAndWait(_ context.Context, _ string, _,
 func (f *fakeYBAMaintainer) UpgradeSoftwareAndWait(_ context.Context, _, version string, opt yba.UpgradeOption, _ time.Duration) error {
 	f.upgraded = append(f.upgraded, version)
 	f.options = append(f.options, opt)
+	return f.actionErr
+}
+
+func (f *fakeYBAMaintainer) EditUniverseNodesAndWait(_ context.Context, _ string, numNodes int, _ time.Duration) error {
+	f.nodeEdits = append(f.nodeEdits, numNodes)
 	return f.actionErr
 }
 

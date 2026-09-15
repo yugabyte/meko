@@ -16,6 +16,12 @@ const (
 	OpGflagChange     = "gflag_change"
 	OpDataMove        = "data_move"
 	OpSoftwareUpgrade = "software_upgrade"
+
+	OpLeaderStepdown     = "leader_stepdown"
+	OpTabletSplit        = "tablet_split"
+	OpMasterLeaderChange = "master_leader_change"
+	OpAddRemoveTServer   = "add_remove_tserver"
+	OpDiskLatency        = "disk_latency"
 )
 
 // Defaults (framework/core/defaults_test.go asserts default.yaml agrees).
@@ -43,14 +49,27 @@ const (
 	DefaultMaintenanceNodeRestartSleep = 180 * time.Second
 	DefaultMaintenanceMoveTimeout      = 30 * time.Minute
 	DefaultMaintenanceSettleTimeout    = 10 * time.Minute
+	DefaultMaintenanceStepdownInterval = 10 * time.Second
+	DefaultMaintenanceStepdownDuration = 3 * time.Minute
+	DefaultMaintenanceMasterStepdowns  = 3
+	DefaultMaintenanceResumeDeadline   = 2 * time.Minute
+	DefaultMaintenanceStallSample      = time.Second
+	DefaultMaintenanceSplitTimeout     = 10 * time.Minute
+	DefaultMaintenanceEditTimeout      = 45 * time.Minute
+	DefaultMaintenanceDiskLatency      = 200 * time.Millisecond
+	DefaultMaintenanceDiskLatencyFor   = 3 * time.Minute
 )
+
+// The WAL the writes land in and the pages they are materialized into.
+var DefaultMaintenanceTabletTables = []string{"wals", "pages"}
 
 // rolling_restart, data_move and software_upgrade stay selectable but are off
 // by default: the first proves strictly less than gflag_change, the second
 // needs more nodes than the default universe's RF gives it, and the third needs
 // the universe created a train behind the target, which a sweep on the current
-// release is not.
-var DefaultMaintenanceOperations = []string{OpGflagChange}
+// release is not. add_remove_tserver and disk_latency are off until they have
+// three green runs.
+var DefaultMaintenanceOperations = []string{OpGflagChange, OpLeaderStepdown, OpTabletSplit, OpMasterLeaderChange}
 
 var DefaultMaintenanceWorkloads = []string{"SqlInserts", "SqlTransactions", "SqlBankTransfer"}
 
@@ -85,6 +104,16 @@ type maintenanceConfig struct {
 	NodeRestartSleep      time.Duration
 	MoveTimeout           time.Duration
 	SettleTimeout         time.Duration
+	TabletTables          []string
+	StepdownInterval      time.Duration
+	StepdownDuration      time.Duration
+	MasterStepdowns       int
+	ResumeDeadline        time.Duration
+	StallSampleInterval   time.Duration
+	SplitTimeout          time.Duration
+	EditTimeout           time.Duration
+	DiskLatency           time.Duration
+	DiskLatencyDuration   time.Duration
 }
 
 func maintenanceFromConfig(c *core.Config) maintenanceConfig {
@@ -101,6 +130,16 @@ func maintenanceFromConfig(c *core.Config) maintenanceConfig {
 	cfg.RollingSampleInterval = c.GetDuration(p+"rolling_sample_interval", DefaultRollingSampleInterval)
 	cfg.NodeRestartSleep = c.GetDuration(p+"node_restart_sleep", DefaultMaintenanceNodeRestartSleep)
 	cfg.MoveTimeout = c.GetDuration(p+"move_timeout", DefaultMaintenanceMoveTimeout)
+	cfg.TabletTables = c.GetStringSlice(p+"tablet_tables", DefaultMaintenanceTabletTables)
+	cfg.StepdownInterval = c.GetDuration(p+"stepdown_interval", DefaultMaintenanceStepdownInterval)
+	cfg.StepdownDuration = c.GetDuration(p+"stepdown_duration", DefaultMaintenanceStepdownDuration)
+	cfg.MasterStepdowns = c.GetInt(p+"master_stepdowns", DefaultMaintenanceMasterStepdowns)
+	cfg.ResumeDeadline = c.GetDuration(p+"resume_deadline", DefaultMaintenanceResumeDeadline)
+	cfg.StallSampleInterval = c.GetDuration(p+"stall_sample_interval", DefaultMaintenanceStallSample)
+	cfg.SplitTimeout = c.GetDuration(p+"split_timeout", DefaultMaintenanceSplitTimeout)
+	cfg.EditTimeout = c.GetDuration(p+"edit_timeout", DefaultMaintenanceEditTimeout)
+	cfg.DiskLatency = c.GetDuration(p+"disk_latency", DefaultMaintenanceDiskLatency)
+	cfg.DiskLatencyDuration = c.GetDuration(p+"disk_latency_duration", DefaultMaintenanceDiskLatencyFor)
 	if cfg.UpgradeImageTag == "" {
 		cfg.UpgradeImageTag = cfg.UpgradeTo
 	}
@@ -158,12 +197,8 @@ func maintenanceGate(c *core.Config, cfg maintenanceConfig) (string, bool) {
 	if len(cfg.Operations) == 0 {
 		return "stress.backing_maintenance.operations is empty: there is no maintenance to run", false
 	}
-	for _, op := range cfg.Operations {
-		switch op {
-		case OpRollingRestart, OpGflagChange, OpDataMove, OpSoftwareUpgrade:
-		default:
-			return fmt.Sprintf("unknown maintenance operation %q in stress.backing_maintenance.operations", op), false
-		}
+	if reason, ok := gateOperations(cfg); !ok {
+		return reason, false
 	}
 	// Below RF=3 a node going out stops the writes for a legitimate reason, so
 	// the run would measure the wrong thing rather than find a bug.
@@ -185,11 +220,26 @@ func maintenanceGate(c *core.Config, cfg maintenanceConfig) (string, bool) {
 	return "", true
 }
 
+func gateOperations(cfg maintenanceConfig) (string, bool) {
+	for _, op := range cfg.Operations {
+		switch op {
+		case OpRollingRestart, OpGflagChange, OpDataMove, OpSoftwareUpgrade,
+			OpLeaderStepdown, OpTabletSplit, OpMasterLeaderChange, OpAddRemoveTServer, OpDiskLatency:
+		default:
+			return fmt.Sprintf("unknown maintenance operation %q in stress.backing_maintenance.operations", op), false
+		}
+	}
+	return "", true
+}
+
 // --- the orchestrator (pure; unit-tested with fakes) ---
 
 type maintenanceOp struct {
 	name string
 	run  func(context.Context) error
+	// skip, when set, is why this backing cannot run the operation. The op is
+	// reported and passed over rather than failing a run it never applied to.
+	skip string
 }
 
 // Runs each op in order while the workloads keep writing, asserting after each
@@ -211,6 +261,12 @@ func (p *maintenancePlan) run(ctx context.Context) (err error) {
 	}
 
 	for _, op := range p.ops {
+		if op.skip != "" {
+			if p.logf != nil {
+				p.logf("maintenance %s skipped: %s", op.name, op.skip)
+			}
+			continue
+		}
 		before := p.progress()
 		run := func() error { return op.run(ctx) }
 		if p.step != nil {

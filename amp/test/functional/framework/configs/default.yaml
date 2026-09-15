@@ -1635,7 +1635,12 @@ stress:
     # release would go red on configuration, not on a bug. All three stay
     # selectable; add software_upgrade together with a pinned
     # apps.yba.universe.yb_version.
-    operations: ["gflag_change"]
+    # The topology operations (leader_stepdown, tablet_split,
+    # master_leader_change) move where the data or its leadership lives while
+    # the tenants write, which is the class of bug meko#811, #1048 and #1119
+    # came from. add_remove_tserver and disk_latency are selectable but off
+    # until they have three green runs.
+    operations: ["gflag_change", "leader_stepdown", "tablet_split", "master_leader_change"]
     # Each tenant gets its own amp cluster, endpoint, journaled writer and a
     # distinct workload: 0 SqlTransactions, 1 SqlBankTransfer, 2 TPC-C, then
     # repeating. Below 3 tenants some workloads do not run.
@@ -1699,6 +1704,36 @@ stress:
     # settle_timeout bounds endpoints coming back once the maintenance ends.
     move_timeout: "30m"
     settle_timeout: "10m"
+    # tablet_tables are the tables in amp's storage database (yb_storage) the
+    # topology operations move: the WAL the writes land in and the pages they
+    # are materialized into.
+    # tablet_split takes the LAST of them, the one that grows fastest under the
+    # workloads and therefore the one YB will accept a split on.
+    tablet_tables: ["wals", "pages"]
+    # stepdown_interval paces leader_stepdown and master_leader_change;
+    # stepdown_duration bounds the whole leader_stepdown walk, which would
+    # otherwise run as long as the table has tablets.
+    stepdown_interval: "10s"
+    stepdown_duration: "3m"
+    master_stepdowns: 3
+    # resume_deadline is the product statement every topology operation is
+    # judged by: amp rides a leader change, a split or a node edit out, so the
+    # tenants must never go longer than this without an acknowledged commit
+    # while one runs. stall_sample_interval is how finely that span is measured
+    # (the acknowledged-commit counter is sampled, not each INSERT timed).
+    resume_deadline: "2m"
+    stall_sample_interval: "1s"
+    # split_timeout bounds the new tablets appearing and the rebalance after
+    # them; edit_timeout bounds a YBA node add or drain, which provisions or
+    # removes a whole node.
+    split_timeout: "10m"
+    edit_timeout: "45m"
+    # disk_latency delays one tserver's traffic to its peers' RPC port for
+    # disk_latency_duration: a slow replica, not a cut one. tc cannot slow a
+    # disk from outside the pod, and the replication path is where the
+    # slowness shows up anyway.
+    disk_latency: "200ms"
+    disk_latency_duration: "3m"
   # backing_backup_restore: amp tenants write THROUGH their endpoints while the
   # YugabyteDB under amp runs YBA's data-protection operations — full backup,
   # restore, PITR rewind, a recurring backup schedule. Restores only ever roll

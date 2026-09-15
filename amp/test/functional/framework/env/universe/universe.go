@@ -1361,6 +1361,7 @@ type YBAMaintainer interface {
 	// artifact the universe needs (helm chart for k8s, el8 tarball for VMs)
 	// when the YBA's catalog does not already carry it.
 	EnsureReleaseAvailable(ctx context.Context, version, arch string, k8s bool) error
+	EditUniverseNodesAndWait(ctx context.Context, universeID string, numNodes int, timeout time.Duration) error
 }
 
 // YBAUniverse exposes the YBA control plane behind this env and the universe it

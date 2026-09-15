@@ -444,3 +444,102 @@ func partitionWriters(ctx context.Context, env ampTenantEnv, tenants []tenant, j
 	wg.Wait()
 	return st
 }
+
+type podSlowdown struct {
+	helper *netnsHelper
+	pod    string
+	dev    string
+	healed bool
+}
+
+// Egress to port on every peer only, so the rest of the pod's traffic keeps the
+// default prio band: a tserver that is up and answering, just late.
+func slowPodToPeers(t *core.T, kube *k8s.Kubectl, pod, suffix string, port int, delay time.Duration) (*podSlowdown, error) {
+	if delay <= 0 {
+		return nil, fmt.Errorf("slow pod %s: the delay must be positive, got %s", pod, delay)
+	}
+	h, err := attachNetns(t, kube, pod, suffix)
+	if err != nil {
+		return nil, err
+	}
+	dev, err := h.defaultDev(t.Context)
+	if err != nil {
+		h.Close(t.Context)
+		return nil, err
+	}
+	p := &podSlowdown{helper: h, pod: pod, dev: dev}
+	for _, cmd := range []string{
+		fmt.Sprintf("tc qdisc add dev %s root handle 1: prio", dev),
+		fmt.Sprintf("tc qdisc add dev %s parent 1:3 handle 30: netem delay %dms", dev, delay.Milliseconds()),
+		fmt.Sprintf("tc filter add dev %s protocol ip parent 1:0 prio 3 u32 match ip dport %d 0xffff flowid 1:3", dev, port),
+	} {
+		if err := h.inNetns(t.Context, cmd); err != nil {
+			_ = p.Heal(t.Context)
+			return nil, fmt.Errorf("slow pod %s toward port %d: %w", pod, port, err)
+		}
+	}
+	// A qdisc the kernel accepted but did not install would slow nothing, and
+	// the operation would then pass on a fault that never happened.
+	out, err := h.outputInNetns(t.Context, "tc qdisc show dev "+dev)
+	if err != nil {
+		_ = p.Heal(t.Context)
+		return nil, err
+	}
+	if !strings.Contains(out, "netem") {
+		_ = p.Heal(t.Context)
+		return nil, fmt.Errorf("no netem qdisc on %s in pod %s after adding one: %s", dev, pod, strings.TrimSpace(out))
+	}
+	return p, nil
+}
+
+// Heal removes the qdisc and the helper pod. Idempotent. The helper goes even
+// when the qdisc delete fails: nothing retries Heal, so keeping it would only
+// strand a privileged pod on the cluster.
+func (p *podSlowdown) Heal(ctx context.Context) error {
+	if p == nil || p.healed {
+		return nil
+	}
+	p.healed = true
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	err := p.helper.inNetns(ctx, "tc qdisc del dev "+p.dev+" root")
+	if errors.Is(err, errNoPodProcess) {
+		err = nil
+	}
+	p.helper.Close(ctx)
+	return err
+}
+
+func (h *netnsHelper) defaultDev(ctx context.Context) (string, error) {
+	out, err := h.outputInNetns(ctx, "ip -o -4 route show default")
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	for i, f := range fields {
+		if f == "dev" && i+1 < len(fields) {
+			return fields[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("pod %s has no default route to slow (%q)", h.pod, strings.TrimSpace(out))
+}
+
+func (h *netnsHelper) inNetns(ctx context.Context, cmd string) error {
+	_, err := h.outputInNetns(ctx, cmd)
+	return err
+}
+
+func (h *netnsHelper) outputInNetns(ctx context.Context, cmd string) (string, error) {
+	pid, err := h.podPID(ctx)
+	if err != nil {
+		return "", err
+	}
+	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s'", pid, cmd))
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return res.Stdout, fmt.Errorf("%q in pod %s's netns exited %d: %s", cmd, h.pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return res.Stdout, nil
+}
