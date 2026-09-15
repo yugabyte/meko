@@ -41,7 +41,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Roll two named endpoints through POST /endpoint-upgrades onto the previous release's endpoint image and back, max_parallel 1, and assert each roll's parent task succeeds with one upgraded line and one succeeded upgrade_endpoint subtask per endpoint, both compute pods are replaced and run the target image, each endpoint records the target version and serves its seeded rows intact; a second roll while one is in flight is refused 409, an empty version and an out-of-range max_parallel are refused 400, and a roll naming an unknown endpoint reports it skipped rather than failing.",
+		Description: "Roll two named endpoints through POST /endpoint-upgrades onto the previous release's endpoint image and back, max_parallel 1, and assert each roll's parent task succeeds with one upgraded line and one succeeded upgrade_endpoint subtask per endpoint, both compute pods are replaced and run the target image, each endpoint records the target version and serves its seeded rows intact; a second roll while one is in flight is refused 409, an empty version and an out-of-range max_parallel are refused 400, and a roll naming an unknown endpoint reports it skipped rather than failing. Writers run on the base endpoint through both rolls: every acknowledged id must still be served with its value, the bank total must be unchanged, and the longest stretch with no acknowledged write is recorded as upgrade.write_gap_seconds.",
 		Params:      []string{"functional", "functional.upgrade", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     40 * time.Minute,
 		Run:         runAmpEndpointUpgradeRoll,
@@ -54,9 +54,11 @@ func runAmpEndpointUpgradeRoll(t *core.T) error {
 		return []phase{
 			{"seed_endpoints", r.seed},
 			{"resolve_previous_release", r.resolvePrevious},
+			{"start_write_load", r.startLoad},
 			{"roll_refusals", r.refusals},
 			{"roll_to_previous_release", func(ctx context.Context) error { return r.roll(ctx, r.previous, true) }},
 			{"roll_back_to_current", func(ctx context.Context) error { return r.roll(ctx, r.version, false) }},
+			{"verify_write_load", r.verifyLoad},
 			{"roll_unknown_endpoint_is_skipped", r.unknownSkipped},
 		}
 	})
@@ -67,6 +69,7 @@ type rollRun struct {
 	cl *controller.Client
 
 	eps      []controller.Endpoint
+	load     *upgradeLoad
 	pods     map[string]string
 	version  string
 	previous string
@@ -207,6 +210,48 @@ func (r *rollRun) resolvePrevious(ctx context.Context) error {
 	}
 	r.a.f.logf("rolling %s -> %s -> %s", r.version, r.previous, r.version)
 	return nil
+}
+
+func (r *rollRun) startLoad(ctx context.Context) error {
+	if r.version == "" {
+		return nil
+	}
+	f := r.a.f
+	r.load = newUpgradeLoad(loadTablePrefix("roll", f.suffix()), upgradeLoadConfigFrom(f.t.Options),
+		f.t.Seed.Fork("roll-load").Value(), r.dialBaseEndpoint, f.logf)
+	if err := r.load.Setup(ctx); err != nil {
+		return err
+	}
+	f.register("stop the write load", func(context.Context) error { r.load.Stop(); return nil })
+	r.load.Start(ctx)
+	r.load.ResetGap()
+	return nil
+}
+
+func (r *rollRun) dialBaseEndpoint(ctx context.Context) (sqlConn, error) {
+	ep := r.eps[0]
+	if got, err := r.cl.GetEndpoint(ctx, r.a.proj.poolID, r.a.proj.projID, ep.BranchID, ep.ID); err == nil {
+		ep = got
+	}
+	return r.a.f.endpointSQL(ctx, ep)
+}
+
+func (r *rollRun) verifyLoad(ctx context.Context) error {
+	if r.load == nil {
+		return nil
+	}
+	gap := r.load.MaxGap()
+	r.load.Stop()
+	c := r.load.Counts()
+	r.a.f.logf("write load across both rolls: acked %d, unknown %d, transfers %d, redials %d, longest gap %s",
+		c.Acked, c.Unknown, r.load.Transfers(), r.load.Redials(), gap.Round(time.Second))
+	r.a.f.t.Datapoint(core.Datapoint{Name: "upgrade.write_gap_seconds", Value: gap.Seconds(), Unit: "s", Direction: core.LowerIsBetter})
+	conn, err := r.dialBaseEndpoint(ctx)
+	if err != nil {
+		return fmt.Errorf("connect endpoint %s to verify the write load after both rolls: %w", r.eps[0].ID, err)
+	}
+	defer conn.Close()
+	return r.load.Verify(ctx, conn)
 }
 
 // refusals: the request-level 400s. A 501 means no endpoint deployer, which is

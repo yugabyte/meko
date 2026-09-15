@@ -531,6 +531,45 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 
+	loadDefaults := map[string]int{
+		"functional.upgrade.load.writers":  features.DefaultLoadWriters,
+		"functional.upgrade.load.accounts": features.DefaultLoadAccounts,
+		"functional.upgrade.load.initial":  features.DefaultLoadInitial,
+	}
+	for k, want := range loadDefaults {
+		if got := cfg.GetInt(k, -1); got != want {
+			t.Errorf("%s = %d, want %d", k, got, want)
+		}
+	}
+	formatCompatInts := map[string]int{
+		"functional.format_compat.trains_back":   features.DefaultFormatCompatTrainsBack,
+		"functional.format_compat.rows":          features.DefaultFormatCompatRows,
+		"functional.format_compat.toast_rows":    features.DefaultFormatCompatToastRows,
+		"functional.format_compat.chain_updates": features.DefaultFormatCompatChainUpdates,
+	}
+	for k, want := range formatCompatInts {
+		if got := cfg.GetInt(k, -1); got != want {
+			t.Errorf("%s = %d, want %d", k, got, want)
+		}
+	}
+	if got := cfg.GetDuration("functional.format_compat.gc_timeout", -1); got != features.DefaultFormatCompatGCTimeout {
+		t.Errorf("functional.format_compat.gc_timeout = %s, want %s", got, features.DefaultFormatCompatGCTimeout)
+	}
+	if got := cfg.GetString("functional.format_compat.from_image", "unset"); got != "" {
+		t.Errorf("functional.format_compat.from_image = %q, want the empty default", got)
+	}
+	mixedDefaults := map[string]time.Duration{
+		"functional.mixed_versions.hold":          features.DefaultMixedVersionsHold,
+		"functional.mixed_versions.poll_interval": features.DefaultMixedVersionsPoll,
+		"functional.mixed_versions.max_hold_gap":  features.DefaultMixedVersionsHoldGap,
+		"functional.mixed_versions.max_roll_gap":  features.DefaultMixedVersionsRollGap,
+	}
+	for k, want := range mixedDefaults {
+		if got := cfg.GetDuration(k, -1); got != want {
+			t.Errorf("%s = %s, want %s", k, got, want)
+		}
+	}
+
 	// --- apps.yba ---
 	uspec := yba.BuildUniverseSpec(cfg)
 	if uspec.NamePrefix != yba.DefaultUniverseNamePrefix {

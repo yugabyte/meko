@@ -61,7 +61,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression", "upgrade"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "In-place control-plane upgrade on its own backing and control plane, apart from the shared environment: resolve the previous release from the report portal (or functional.upgrade.from_*_image), deploy it, seed checksummed data through an endpoint, upgrade the controller image to the release under test, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, a whole-fleet POST /endpoint-upgrades rolls that endpoint onto the new endpoint image with its data intact, and a new endpoint gets the post-upgrade image.",
+		Description: "In-place control-plane upgrade on its own backing and control plane, apart from the shared environment: resolve the previous release from the report portal (or functional.upgrade.from_*_image), deploy it, seed checksummed data through an endpoint, upgrade the controller image to the release under test, then assert the controller pod runs the new image, the upgraded controller serves and forks pre-upgrade rows, the seeded endpoint still returns its data exactly, a whole-fleet POST /endpoint-upgrades rolls that endpoint onto the new endpoint image with its data intact, and a new endpoint gets the post-upgrade image. Writers run on the seeded endpoint throughout: every id the endpoint acknowledged must still be there with its value, the bank total must be unchanged, and the longest stretch with no acknowledged write is recorded as upgrade.write_gap_seconds.",
 		Params:      []string{"functional", "functional.upgrade", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     45 * time.Minute,
 		Run:         runAmpUpgrade,
@@ -79,6 +79,7 @@ type upgradeRun struct {
 	toEndpoint     string
 	rows           int
 	portalURL      string
+	trainsBack     int
 
 	fromVersion string
 
@@ -87,6 +88,7 @@ type upgradeRun struct {
 	forkBranchID string
 	forkLSN      string
 	ep           controller.Endpoint
+	load         *upgradeLoad
 	prePod       string
 	preImages    string
 }
@@ -127,7 +129,6 @@ func gateUpgradeBacking(ctx context.Context, env core.Environment) (string, bool
 }
 
 func runAmpUpgrade(t *core.T) error {
-	cfg := FromConfig(t.Options)
 	acfg := ampstack.FromConfig(t.Options)
 	u := &upgradeRun{
 		fromController: strings.TrimSpace(t.Options.GetString("functional.upgrade.from_controller_image", "")),
@@ -140,11 +141,38 @@ func runAmpUpgrade(t *core.T) error {
 	if u.rows < 1 {
 		return fmt.Errorf("functional.upgrade.rows is %d: the seed verification would pass on an empty table and prove nothing about the pre-upgrade data, so at least 1 row is required", u.rows)
 	}
+	ok, err := u.setup(t)
+	if err != nil || !ok {
+		return err
+	}
+	step := u.stepper()
+	if err := u.resolveStep(); err != nil {
+		return err
+	}
+	f := u.f
+	phases := []phase{
+		{"provision_backing", f.provisionBacking},
+		{"wait_backing_ready", f.waitBackingReady},
+		{"deploy_amp_from", u.deployAmpFrom},
+		{"seed", u.seed},
+		{"start_write_load", u.startLoad},
+		{"upgrade_control_plane", u.upgradeControlPlane},
+		{"controller_runs_new_image", u.controllerRunsNewImage},
+		{"controller_serves_new_version", u.controllerServesNewVersion},
+		{"existing_endpoint_survives", u.existingEndpointSurvives},
+		{"roll_endpoints_to_new_version", u.rollEndpoints},
+		{"verify_write_load", u.verifyLoad},
+		{"new_endpoint_uses_new_image", u.newEndpointUsesNewImage},
+	}
+	return runLifecycle(t.Context, step, f.td, phases, f.logf, f.collectDiagnostics, f.onTeardownDone)
+}
+
+func (u *upgradeRun) setup(t *core.T) (bool, error) {
+	cfg := FromConfig(t.Options)
 	if reason, ok := gateUpgradeBacking(t.Context, t.Env); !ok {
 		t.Skip(reason)
-		return nil
+		return false, nil
 	}
-
 	ybaReason, ybaOK := cfg.gateYBAProvisioned(t.Options)
 	k8sReason, k8sOK := cfg.gateYBK8s(t.Options)
 	flowLogf, rlog := newFlowLog(t.Masker())
@@ -157,46 +185,36 @@ func runAmpUpgrade(t *core.T) error {
 		f.prov = cfg.provisionYBK8s
 	default:
 		t.Skip(ybaReason + "; ybk8s fallback also unavailable: " + k8sReason)
-		return nil
+		return false, nil
 	}
 	if reason, ok := gateNoDoubleProvision(t.Env); !ok {
 		t.Skip(reason)
-		return nil
+		return false, nil
 	}
 	f.reg = openRunReapRegistry(f.logf)
 	u.f = f
+	return true, nil
+}
 
-	// Resolved before any infrastructure is stood up: a portal that names no
-	// previous release must not cost a universe first.
-	var fromErr error
-	_ = t.Step("resolve_from_release", func(h *core.StepHandle) error {
-		u.step = h
-		fromErr = u.resolveFrom(t.Context)
-		return fromErr
-	})
-	if fromErr != nil {
-		return fromErr
-	}
-
-	step := func(name string, fn func() error) error {
-		return t.Step(name, func(h *core.StepHandle) error {
+func (u *upgradeRun) stepper() func(string, func() error) error {
+	return func(name string, fn func() error) error {
+		return u.f.t.Step(name, func(h *core.StepHandle) error {
 			u.step = h
 			return fn()
 		})
 	}
-	phases := []phase{
-		{"provision_backing", f.provisionBacking},
-		{"wait_backing_ready", f.waitBackingReady},
-		{"deploy_amp_from", u.deployAmpFrom},
-		{"seed", u.seed},
-		{"upgrade_control_plane", u.upgradeControlPlane},
-		{"controller_runs_new_image", u.controllerRunsNewImage},
-		{"controller_serves_new_version", u.controllerServesNewVersion},
-		{"existing_endpoint_survives", u.existingEndpointSurvives},
-		{"roll_endpoints_to_new_version", u.rollEndpoints},
-		{"new_endpoint_uses_new_image", u.newEndpointUsesNewImage},
-	}
-	return runLifecycle(t.Context, step, f.td, phases, f.logf, f.collectDiagnostics, f.onTeardownDone)
+}
+
+// Resolved before any infrastructure is stood up: a portal that names no such
+// release must not cost a universe first.
+func (u *upgradeRun) resolveStep() error {
+	var resolveErr error
+	_ = u.f.t.Step("resolve_from_release", func(h *core.StepHandle) error {
+		u.step = h
+		resolveErr = u.resolveFrom(u.f.t.Context)
+		return resolveErr
+	})
+	return resolveErr
 }
 
 // upgradePortalURL is the portal the previous release is read from: this test's
@@ -225,9 +243,13 @@ func (u *upgradeRun) resolveFrom(ctx context.Context) error {
 		if err != nil {
 			return core.AsEnvFailure(fmt.Errorf("read the release list from the report portal %q: %w. Set functional.upgrade.from_controller_image and from_endpoint_image to name the previous release when the portal cannot be reached", u.portalURL, err))
 		}
-		prev, err := previousRelease(list, u.toController)
+		prev, back, err := releaseNBack(list, u.toController, u.trainsBack)
 		if err != nil {
 			return core.AsEnvFailure(err)
+		}
+		u.set("from_release_trains_back", back)
+		if u.trainsBack > 1 && back < u.trainsBack {
+			u.f.logf("upgrade: the portal lists only %d release(s) older than %s, so the from-release is %d train(s) back, not %d", back, u.toController, back, u.trainsBack)
 		}
 		if u.fromController == "" {
 			u.fromController = prev.ControllerImage()
@@ -246,6 +268,22 @@ func (u *upgradeRun) resolveFrom(ctx context.Context) error {
 // upgradeReleaseListLimit leaves room for a run pinned to an older release.
 const upgradeReleaseListLimit = 20
 
+// Falls back to the oldest release there is, reporting the train it landed on.
+func releaseNBack(list []releases.Release, toImage string, n int) (releases.Release, int, error) {
+	if n < 1 {
+		n = 1
+	}
+	older, err := olderReleases(list, toImage)
+	if err != nil {
+		return releases.Release{}, 0, err
+	}
+	i := n - 1
+	if i >= len(older) {
+		i = len(older) - 1
+	}
+	return older[i], i + 1, nil
+}
+
 // previousRelease picks, from a newest-first release list, the release to
 // upgrade FROM when upgrading TO toImage.
 //
@@ -253,11 +291,20 @@ const upgradeReleaseListLimit = 20
 // other tag (custom-<sha>, br-<topic>-<sha>) is a branch build ahead of every
 // release, so the previous release is the newest one the portal has.
 func previousRelease(list []releases.Release, toImage string) (releases.Release, error) {
+	older, err := olderReleases(list, toImage)
+	if err != nil {
+		return releases.Release{}, err
+	}
+	return older[0], nil
+}
+
+func olderReleases(list []releases.Release, toImage string) ([]releases.Release, error) {
 	toTag := toImage
 	if i := strings.LastIndex(toImage, ":"); i >= 0 {
 		toTag = toImage[i+1:]
 	}
 	toVersion, _, isRelease := releases.ParseTag(toTag)
+	var older []releases.Release
 	for _, r := range list {
 		if r.Tag == toTag {
 			continue
@@ -265,12 +312,15 @@ func previousRelease(list []releases.Release, toImage string) (releases.Release,
 		if isRelease && releases.Compare(r.Version, toVersion) >= 0 {
 			continue
 		}
-		return r, nil
+		older = append(older, r)
+	}
+	if len(older) > 0 {
+		return older, nil
 	}
 	if isRelease {
-		return releases.Release{}, fmt.Errorf("the report portal lists %d release(s) and none is older than %s, the release under test, so there is no previous release to upgrade from; set functional.upgrade.from_controller_image and from_endpoint_image to name one", len(list), toTag)
+		return nil, fmt.Errorf("the report portal lists %d release(s) and none is older than %s, the release under test, so there is no previous release to upgrade from; set functional.upgrade.from_controller_image and from_endpoint_image to name one", len(list), toTag)
 	}
-	return releases.Release{}, fmt.Errorf("the report portal lists no release other than %s to upgrade from; set functional.upgrade.from_controller_image and from_endpoint_image to name one", toTag)
+	return nil, fmt.Errorf("the report portal lists no release other than %s to upgrade from; set functional.upgrade.from_controller_image and from_endpoint_image to name one", toTag)
 }
 
 // checkUpgradeIsReal rejects an identical from/to image pair: re-applying the
@@ -419,6 +469,9 @@ func (u *upgradeRun) seed(ctx context.Context) error {
 // images. A controller that cannot come up on the new image (a dirty migration,
 // a crash loop) fails here.
 func (u *upgradeRun) upgradeControlPlane(ctx context.Context) error {
+	if u.load != nil {
+		u.load.ResetGap()
+	}
 	u.set("to_controller_image", u.toController)
 	u.set("to_endpoint_image", u.toEndpoint)
 	if err := u.f.ampApp.UpgradeImages(ctx, u.toController, u.toEndpoint); err != nil {
@@ -578,6 +631,46 @@ func (u *upgradeRun) rollEndpoints(ctx context.Context) error {
 	}
 	defer conn.Close()
 	return verifyUpgradeSeed(ctx, conn, u.rows, "the endpoint rolled onto the new version")
+}
+
+func (u *upgradeRun) startLoad(ctx context.Context) error {
+	f := u.f
+	u.load = newUpgradeLoad(loadTablePrefix("upg", f.suffix()), upgradeLoadConfigFrom(f.t.Options),
+		f.t.Seed.Fork("upgrade-load").Value(), u.dialSeededEndpoint, f.logf)
+	if err := u.load.Setup(ctx); err != nil {
+		return err
+	}
+	f.register("stop the write load", func(context.Context) error { u.load.Stop(); return nil })
+	u.load.Start(ctx)
+	return nil
+}
+
+// Re-read before every dial: a roll replaces the compute and republishes the address.
+func (u *upgradeRun) dialSeededEndpoint(ctx context.Context) (sqlConn, error) {
+	ep := u.ep
+	if cl, err := u.f.controllerClient(ctx); err == nil {
+		if got, gerr := cl.GetEndpoint(ctx, u.proj.poolID, u.proj.projID, u.seedBranchID, u.ep.ID); gerr == nil {
+			ep = got
+		}
+	}
+	return u.f.endpointSQL(ctx, ep)
+}
+
+func (u *upgradeRun) verifyLoad(ctx context.Context) error {
+	gap := u.load.MaxGap()
+	u.load.Stop()
+	u.load.record(u.set, gap)
+	u.f.t.Datapoint(core.Datapoint{Name: "upgrade.write_gap_seconds", Value: gap.Seconds(), Unit: "s", Direction: core.LowerIsBetter})
+	conn, err := u.dialSeededEndpoint(ctx)
+	if err != nil {
+		return fmt.Errorf("connect the rolled endpoint %s to verify the write load: %w", u.ep.ID, err)
+	}
+	defer conn.Close()
+	return u.load.Verify(ctx, conn)
+}
+
+func loadTablePrefix(kind, suffix string) string {
+	return kind + "_" + strings.ReplaceAll(suffix, "-", "_")
 }
 
 // imageTag is the tag of an image ref (the whole ref when it carries none).

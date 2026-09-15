@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
@@ -188,6 +189,8 @@ type forwardedConn struct {
 	sqlConn
 	pf *k8s.PortForward
 }
+
+func (c forwardedConn) Pool() *pgxpool.Pool { return poolOf(c.sqlConn) }
 
 func (c forwardedConn) Close() {
 	c.sqlConn.Close()

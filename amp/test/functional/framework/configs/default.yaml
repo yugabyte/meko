@@ -492,6 +492,39 @@ functional:
     from_endpoint_image: ""
     portal_url: ""
     rows: 2000
+    # load: the writers features/amp_upgrade, amp_endpoint_upgrade_roll and
+    # amp_mixed_versions keep on an endpoint across the upgrade. writers insert
+    # into a journal every acknowledged id is checked against afterwards;
+    # accounts/initial seed a bank whose total no upgrade may change.
+    load:
+      writers: 2
+      accounts: 20
+      initial: 1000
+  # features/amp_format_compat: data written by an older release, read by the
+  # current one. trains_back is how many releases back the stack is deployed at
+  # (2 = two trains back); the previous release is used instead when the portal
+  # lists no older one, and the train that was used is recorded on the result.
+  # from_image overrides the lookup with a release tag (or a full image ref, the
+  # tag is taken from it) and names both the controller and the endpoint image.
+  # gc_timeout bounds the drain of a table the older release dropped.
+  format_compat:
+    from_image: ""
+    trains_back: 2
+    rows: 2000
+    toast_rows: 50
+    chain_updates: 2000
+    gc_timeout: "8m"
+  # features/amp_mixed_versions: a new controller over old endpoints. hold is how
+  # long the pair is held there under load before the fleet roll closes the
+  # window, poll_interval how often the new controller's task feed and the
+  # endpoint image are read. max_hold_gap is the longest a write may go
+  # unacknowledged while nothing is being upgraded; max_roll_gap the same across
+  # the roll, where the compute is replaced and a client has to reconnect.
+  mixed_versions:
+    hold: "10m"
+    poll_interval: "30s"
+    max_hold_gap: "60s"
+    max_roll_gap: "15m"
   # features/amp_upgrade_chain: rolling upgrades across REAL releases.
   # hops upgrades in a row, so hops+1 releases are installed and walked, oldest
   # first. The releases come from the report portal's /releases (the ones
