@@ -3,6 +3,49 @@
 What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
+## 2026-09-14 - two of our own rules were wrong
+
+Both found while assessing the LRUs after a quiet weekend, both ours rather than
+amp's.
+
+**`checkpoint_write_busy_ratio` measured a constant.** It read 0.9037 on three
+LRUs with completely different workloads, identical to four decimal places. The
+endpoints run stock `checkpoint_completion_target` 0.9 and `checkpoint_timeout`
+300s, so Postgres spreads a timed checkpoint's writes over 270 of every 300
+seconds by design and `pg_stat_checkpointer.write_time` counts that whole window,
+sleeps included. The rule warned above 0.5, so every healthy endpoint warned
+forever - three of the five warnings on the board. Removed. `checkpoints_forced_ratio`
+is the rule that discriminates: 54% on transferwise during the 11 Sep incident,
+0% everywhere now. The `pgstats` metric stays, because it documents what amp's
+default spread does.
+
+**A 24h comparison cannot see a decay slower than 24h.** `latency_vs_24h_ago`
+read 1.21 on transferwise while write latency had gone 10.4 -> 21.4 ms over four
+days. Added `latency_vs_7d_baseline`: current latency against
+`quantile_over_time(0.1, ...[7d:1h])`. It read 1.93 immediately.
+
+The baseline is a low percentile at hourly steps rather than the minimum at ten
+minute steps, for two reasons found in review. An absolute minimum is a noise
+floor, and it showed: solidgate read 1.22 against its minimum and 1.07 against
+its tenth percentile, the difference being one outlier sample. And a 7d/10m
+subquery is 1008 evaluations of the inner expression - over small_temporal's
+1,720-series `persistence_latency_bucket` that already took 5.2s against `q()`'s
+20s timeout, growing with retained history. Hourly steps cost 2.9s. The rule also
+carries its own `try/except`, because `loop()` turns any uncaught failure into
+`{"checker": ERR}` and drops every other rule with it.
+
+Comparing with the best rather than with a fixed offset matters twice. It needs
+no data at any particular age, so a young LRU gets the rule on day one instead of
+day eight - three of the four had no 7d history at all when this was written. And
+it is not fooled by a window that happens to land inside a previous incident:
+transferwise's 72h offset read 0.85, better than now, because three days ago it
+was in the pool-starvation dip.
+
+**Latency only.** The same rule on throughput punishes any deliberate rate change
+for a week - solidgate reads 0.09 of its best purely because its concurrency was
+cut. Throughput keeps the 24h comparison, which is the right shape for a step
+change.
+
 ## 2026-09-12 - the driver spends a third of every cycle in ANALYZE
 
 Mark read the amp-time chart as "the wise workload stopped". It had not. It was
@@ -193,8 +236,10 @@ The mechanism is write-side, and it is the endpoint's configuration meeting a
 dataset that outgrew it:
 
 - `pg_stat_checkpointer` after 28 hours: 170 timed checkpoints and **203 forced**
-  by `max_wal_size`, one every 4.7 minutes, with **25.4 hours of checkpoint write
-  time inside a 28.3 hour run**. The checkpointer has effectively never idled.
+  by `max_wal_size`, one every 4.7 minutes. (The "25.4 hours of checkpoint write
+  time inside a 28.3 hour run" originally cited here is 0.897, which is
+  `checkpoint_completion_target` and not evidence of anything - see the 14 Sep
+  entry. The forced-vs-timed count is the part that stood up.)
 - `max_wal_size` is **1 GiB** and this workload writes ~2 MB/s of WAL, so it
   fills in about eight minutes. `pg_wal` sat at exactly 100% of the limit for
   twenty straight hours.

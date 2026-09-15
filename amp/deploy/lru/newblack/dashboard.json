@@ -1832,7 +1832,7 @@
   {
    "id": 37,
    "type": "timeseries",
-   "title": "Checkpoint seconds per second of wall clock",
+   "title": "Checkpoint write/sync seconds per second (spread, not load)",
    "datasource": {
     "type": "prometheus",
     "uid": "lru-prom"
@@ -1848,27 +1848,7 @@
      "unit": "percentunit",
      "custom": {
       "lineWidth": 1,
-      "fillOpacity": 8,
-      "thresholdsStyle": {
-       "mode": "dashed"
-      }
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "orange",
-        "value": 0.5
-       },
-       {
-        "color": "red",
-        "value": 0.9
-       }
-      ]
+      "fillOpacity": 8
      }
     },
     "overrides": []
@@ -1893,7 +1873,8 @@
      },
      "legendFormat": "{{phase}}"
     }
-   ]
+   ],
+   "description": "Postgres spreads a timed checkpoint over checkpoint_completion_target (0.9) of checkpoint_timeout (300s), so write sits near 0.90 on a healthy endpoint whatever the load. Read checkpoints_forced_ratio for pressure."
   },
   {
    "id": 38,

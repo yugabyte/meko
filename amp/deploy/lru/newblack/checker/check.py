@@ -160,13 +160,8 @@ def check_all():
         rules[f"{lane}_mean_latency_s"] = (v, band(v, warn, fail))
 
     # --- drift against this LRU's own past -----------------------------------
-    # The rules above are absolute floors picked on day one. transferwise lost
-    # 44% of its throughput and doubled its write latency over fourteen hours
-    # while every one of them stayed green, because 9,400 qps clears a floor of
-    # 200 just as easily as 17,000 does. Slow decay as data accumulates is the
-    # failure an LRU exists to find, and only a comparison with yesterday sees
-    # it. `offset` needs the series to exist that far back, so a young LRU
-    # simply has no drift rule rather than a failing one.
+    # The rules above are absolute floors, which a slow decay clears all the way
+    # down. A young LRU has no rule rather than a failing one. See FINDINGS.
     prev = q(f"last_over_time(({THROUGHPUT})[10m:1m] offset 24h)")
     now_v = q(THROUGHPUT)
     if prev and prev > 0 and now_v is not None:
@@ -179,6 +174,24 @@ def check_all():
     now_v = q(LATENCY)
     if prev and prev > 0 and now_v is not None:
         rules["latency_vs_24h_ago"] = (now_v / prev, advisory(band(now_v / prev, 1.5, 3.0)))
+
+    # Against a week's own baseline, not a fixed offset: 24h cannot see a slower
+    # decay, and an offset can land inside a past incident. Latency only - the
+    # same rule on throughput flags every deliberate rate cut.
+    #
+    # Its own try/except because this is the one expensive query here: a 7d
+    # subquery over small_temporal's 1,720-series histogram already takes 5s and
+    # grows with retention. A failure has to cost this rule, not the verdict.
+    try:
+        base = q(f"quantile_over_time(0.1, ({LATENCY})[7d:1h])")
+        now_v = q(LATENCY)
+        if base and base > 0 and now_v is not None:
+            rules["latency_vs_7d_baseline"] = (
+                now_v / base,
+                advisory(band(now_v / base, 1.5, 3.0)),
+            )
+    except Exception as e:
+        print("latency_vs_7d_baseline skipped:", e, flush=True)
 
     if not endpoint:
         # Nothing below can be scoped to one endpoint yet. Say so rather than
@@ -253,12 +266,6 @@ def check_all():
     )
     if v is not None:
         rules["checkpoints_forced_ratio"] = (v, advisory(band(v, 0.5, 0.9)))
-
-    # Seconds of checkpoint write per second of wall clock. Near 1 means the
-    # checkpointer is the workload.
-    v = q(f'sum(rate(lru_pg_checkpoint_seconds_total{{{lru},phase="write"}}[1h]))')
-    if v is not None:
-        rules["checkpoint_write_busy_ratio"] = (v, advisory(band(v, 0.5, 0.9)))
 
     return rules
 

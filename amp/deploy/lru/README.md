@@ -90,8 +90,13 @@ So every LRU also carries:
   is a parse error rather than a comparison.
 - `logical_size_vs_file_cache` and `days_until_file_cache_full`, because
   capacity wants an answer in days rather than in bytes.
-- `checkpoints_forced_ratio` and `checkpoint_write_busy_ratio`, the mechanism
-  behind a write-side slide.
+- `latency_vs_7d_baseline`, latency against `quantile_over_time(0.1, ...[7d:1h])`.
+  A 24h comparison cannot see a decay slower than a day, and unlike an offset a
+  baseline needs no history at a particular age.
+- `checkpoints_forced_ratio`, the mechanism behind a write-side slide. Forced
+  against timed, never checkpoint write time: Postgres spreads a timed
+  checkpoint over `checkpoint_completion_target`, so write time is that constant
+  and says nothing about load.
 
 All of these are **advisory**: capped at WARN by `advisory()`, never FAIL. They
 cannot tell a regression from a change somebody made on purpose - solidgate's

@@ -9,9 +9,10 @@ told the story, so they are metrics now.
     lru_pg_checkpoints_total{kind}              timed vs requested; requested
                                                 climbing means max_wal_size is
                                                 being hit rather than the timeout
-    lru_pg_checkpoint_seconds_total{phase}      write and sync time. Approaching
-                                                wall-clock means the checkpointer
-                                                never rests.
+    lru_pg_checkpoint_seconds_total{phase}      write and sync time. Write sits
+                                                near checkpoint_completion_target
+                                                by design, so read the forced
+                                                ratio above for pressure.
     lru_pg_checkpoint_buffers_written_total
     lru_pg_table_bytes{table,kind}              heap, index and total per table
     lru_pg_table_rows{table}
