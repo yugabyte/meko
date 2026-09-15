@@ -375,6 +375,40 @@ functional:
   # gc-interval (5m).
   failed_create_reclaim:
     sweep_timeout: "45m"
+  # redpath: the features/amp_task_redpath_* family, which injects one fault per
+  # test and asserts the same five things about the task it breaks.
+  #   inject: off runs the test with NO fault, so the task succeeds and the test
+  #     must fail. That is the red proof for every assertion in the family; it is
+  #     a debug knob, never a lane setting.
+  #   wedge_deadline: how long a task whose fault has been removed may stay
+  #     non-terminal before it counts as wedged (meko#1007).
+  #   retry_wait: the settle before the same request is retried once the fault is
+  #     gone.
+  #   api_deadline: how long a read the controller cannot serve may take to say
+  #     so (meko#1242 reports about two minutes).
+  #   orphan_timeout: the sweeper budget for compute left behind by a failed
+  #     task. The controller leaves an orphan alone for gc-grace (30m), then
+  #     sweeps every gc-interval (5m).
+  #   quota_headroom: how many more Deployments the injected ResourceQuota allows
+  #     beyond what the namespace already has. 0 leaves room for none. It caps
+  #     Deployments and not pods because a pod cap also denies the controller its
+  #     own replacement pod.
+  #   fault_hold: how long a fault injected mid-task is held before removal.
+  #   task_start_timeout: the wait for the task a mid-task fault lands on to be
+  #     past pending.
+  #   helper_image: the privileged hostPID pod that enters the controller pod's
+  #     network namespace to drop its route to the backing (iptables and nsenter
+  #     are in neither the controller nor the YugabyteDB image).
+  redpath:
+    inject: true
+    wedge_deadline: "20m"
+    retry_wait: "60s"
+    api_deadline: "10s"
+    orphan_timeout: "45m"
+    quota_headroom: 0
+    fault_hold: "90s"
+    task_start_timeout: "5m"
+    helper_image: "nicolaka/netshoot:v0.13"
   # mcp: the chart's MCP Service (ac-mcp.md) the amp_mcp_tools test port-forwards.
   mcp:
     service: "amp-controller-mcp"

@@ -352,6 +352,9 @@ func dropRaceCleanup(ctx context.Context, cl ampCtl, proj ampCluster, branchID s
 // with an empty BRANCH_ID cannot shift every later row onto the wrong branch.
 func (f *flow) branchComputePods(ctx context.Context, branchID string) (map[string]string, error) {
 	kube := f.ampKube()
+	if kube == nil {
+		return nil, fmt.Errorf("no kubectl for the amp namespace, so compute pods cannot be listed")
+	}
 	const endpointSelector = "app.kubernetes.io/name=yb-amp-endpoint"
 	cms, err := kube.GetSelector(ctx, "configmap", endpointSelector,
 		`{range .items[*]}{.metadata.name}={.data.BRANCH_ID}{"\n"}{end}`)

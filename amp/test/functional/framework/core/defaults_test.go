@@ -1385,6 +1385,27 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetDuration("functional.failed_create_reclaim.sweep_timeout", -1); got != 45*time.Minute {
 		t.Errorf("functional.failed_create_reclaim.sweep_timeout = %s, want 45m", got)
 	}
+	if !cfg.GetBool("functional.redpath.inject", false) {
+		t.Error("functional.redpath.inject = false: every red-path test would run with no fault and assert nothing")
+	}
+	for key, want := range map[string]time.Duration{
+		"functional.redpath.wedge_deadline":     features.DefaultRedpathWedgeDeadline,
+		"functional.redpath.retry_wait":         features.DefaultRedpathRetryWait,
+		"functional.redpath.api_deadline":       features.DefaultRedpathAPIDeadline,
+		"functional.redpath.orphan_timeout":     features.DefaultRedpathOrphanTimeout,
+		"functional.redpath.fault_hold":         features.DefaultRedpathFaultHold,
+		"functional.redpath.task_start_timeout": features.DefaultRedpathTaskStart,
+	} {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+	if got := cfg.GetInt("functional.redpath.quota_headroom", -1); got != features.DefaultRedpathQuotaHeadroom {
+		t.Errorf("functional.redpath.quota_headroom = %d, want %d", got, features.DefaultRedpathQuotaHeadroom)
+	}
+	if got := cfg.GetString("functional.redpath.helper_image", ""); got != features.DefaultRedpathHelperImage {
+		t.Errorf("functional.redpath.helper_image = %q, want %q", got, features.DefaultRedpathHelperImage)
+	}
 	if got := cfg.GetString("functional.mcp.service", ""); got != "amp-controller-mcp" {
 		t.Errorf("functional.mcp.service = %q, want amp-controller-mcp", got)
 	}
