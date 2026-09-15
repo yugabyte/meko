@@ -159,8 +159,13 @@ func runStorageProcNemesis(t *core.T) error {
 	}
 
 	var kills []killRecord
+	var gate *settleGate
 
 	if err := t.Step("kill_storage_daemons", func(s *core.StepHandle) error {
+		gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+		if err != nil {
+			return err
+		}
 		kills, err = killStorageDaemons(t, s, env, kube, fleet, journals, params, logf)
 		return err
 	}); err != nil {
@@ -168,7 +173,10 @@ func runStorageProcNemesis(t *core.T) error {
 	}
 
 	if err := t.Step("daemons_restarted", func(s *core.StepHandle) error {
-		return assertDaemonsRestarted(t, s, kube, kills, params)
+		if err := assertDaemonsRestarted(t, s, kube, kills, params); err != nil {
+			return err
+		}
+		return gate.attestNonTarget(t, s, fleetEndpointTargets(fleet.Tenants)...)
 	}); err != nil {
 		return err
 	}

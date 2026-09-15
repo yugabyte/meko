@@ -156,8 +156,13 @@ func runEndpointBackingPartition(t *core.T) error {
 		ten := &fleet.Tenants[k]
 		var pod, podUID, restartsBefore string
 		var ex *k8s.Kubectl
+		var gate *settleGate
 
 		if err := t.Step(fmt.Sprintf("cut_endpoint_%d", r), func(s *core.StepHandle) error {
+			gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+			if err != nil {
+				return err
+			}
 			pod, err = endpointPodFor(t, kube, ten.Endpoint)
 			if err != nil {
 				return err
@@ -261,7 +266,7 @@ func runEndpointBackingPartition(t *core.T) error {
 			}
 			s.Set("reachable_after", took.Round(time.Second).String())
 			s.Set("cut_lasted", time.Since(cutAt).Round(time.Second).String())
-			return nil
+			return gate.attestNonTarget(t, s, pod)
 		}); err != nil {
 			return err
 		}

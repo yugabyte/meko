@@ -154,9 +154,14 @@ func runBackingNodePartition(t *core.T) error {
 		}
 		probe := newControlPlaneProbe(fleet.cl, fleet.poolID)
 
+		var gate *settleGate
 		if err := t.Step(fmt.Sprintf("partition_node_%d", r), func(s *core.StepHandle) error {
 			s.Set("pod", victim)
 			s.Set("peer", peer)
+			gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+			if err != nil {
+				return err
+			}
 			ex := bkube.ForPod(victim, "")
 			open, err := tcpOpen(t.Context, ex, peerIP, tserverRPCPort)
 			if err != nil {
@@ -231,7 +236,7 @@ func runBackingNodePartition(t *core.T) error {
 				return fmt.Errorf("the controller kept answering errors for %s after the partition of %s was lifted, over the %s allowed (meko#961)",
 					cpRecovery.Round(time.Second), victim, params.ControlPlaneRecoveryMax)
 			}
-			return nil
+			return gate.attestNonTarget(t, s, victim)
 		}); err != nil {
 			return err
 		}

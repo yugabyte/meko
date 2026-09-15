@@ -191,6 +191,11 @@ func commitDurabilityChaos(t *core.T, s *core.StepHandle, env ampTenantEnv, ampE
 	params commitDurabilityParams, logf func(string, ...any)) error {
 	ampKube, backingKube := ampEnv.AmpKube(), backingEnv.BackingKube()
 
+	gate, err := awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+	if err != nil {
+		return err
+	}
+
 	epPods, err := endpointPods(t, ampKube, fleet)
 	if err != nil {
 		return err
@@ -245,6 +250,10 @@ func commitDurabilityChaos(t *core.T, s *core.StepHandle, env ampTenantEnv, ampE
 	runJournaledWriters(t.Context, env, fleet.Tenants, journals,
 		t.Seed.Fork("chaos-writers"), params.Duration, params, cancels)
 	runner.Stop()
+
+	if err := gate.attestNonTarget(t, s, names...); err != nil {
+		return err
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

@@ -360,10 +360,15 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 	var batch sync.WaitGroup
 	inFlight := make(chan struct{}, s.perEnv) // co-tenant concurrency within this env
 
+	// Every co-tenant reports the shared provision's duration: they all waited
+	// for it, and the portal wants the distribution per test.
+	runOpts := s.opts.RunOptions
 	for i := range queue {
 		if !provided {
 			provided = true
+			start := time.Now()
 			lease, env, provErr = s.provisionShared(ctx, envN, s.tests[i].Env)
+			runOpts.ProvisionDuration = time.Since(start)
 		}
 		if env == nil {
 			var shape *core.UnsupportedShapeError
@@ -395,11 +400,11 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 				return core.RunOneOnEnv(c, t, env, o)
 			}
 			if !s.acquireSlot(ctx) {
-				s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], s.opts.RunOptions, onEnv)
+				s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], runOpts, onEnv)
 				return
 			}
 			defer s.releaseSlot()
-			s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], s.opts.RunOptions, onEnv)
+			s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], runOpts, onEnv)
 		}(i)
 	}
 	batch.Wait()

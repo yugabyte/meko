@@ -121,7 +121,13 @@ func runWalTailNemesis(t *core.T) error {
 			return err
 		}
 
+		var gate *settleGate
+		var degraded string
 		if err := t.Step(fmt.Sprintf("degrade_backing_%d", r), func(s *core.StepHandle) error {
+			gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+			if err != nil {
+				return err
+			}
 			bkube := backingEnv.BackingKube()
 			pods, err := backingPods(t, bkube)
 			if err != nil {
@@ -135,6 +141,7 @@ func runWalTailNemesis(t *core.T) error {
 				return fmt.Errorf("force-delete backing pod %s: %w", pod, err)
 			}
 			s.Set("backing_pod", pod)
+			degraded = pod
 			return nil
 		}); err != nil {
 			return err
@@ -181,7 +188,7 @@ func runWalTailNemesis(t *core.T) error {
 				return err
 			}
 			s.Set("ready_after", waited.Round(time.Second).String())
-			return nil
+			return gate.attestNonTarget(t, s, append(fleetEndpointTargets(fleet.Tenants), degraded)...)
 		}); err != nil {
 			return err
 		}

@@ -517,16 +517,20 @@ func (k *Kubectl) Events(ctx context.Context) (string, error) {
 
 // PodState is a pod's coarse lifecycle state, enough to decide whether it is
 // worth describing (a pod that is not Running-and-Ready is the interesting one).
+//
+// UID and Restarts identify the pod ACROSS a window: a deleted pod comes back
+// with Restarts reset to zero, and under a StatefulSet with the same name too,
+// so only the UID separates "it was replaced" from "it never moved".
 type PodState struct {
-	Name  string
-	Phase string
-	Ready bool
+	Name     string
+	Phase    string
+	Ready    bool
+	UID      string
+	Restarts int
 }
 
-// PodStates returns every pod's name, phase, and Ready-condition status in one
-// call, for diagnostics triage.
 func (k *Kubectl) PodStates(ctx context.Context) ([]PodState, error) {
-	const jsonpath = `{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}`
+	const jsonpath = `{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\t"}{.metadata.uid}{"\t"}{range .status.containerStatuses[*]}{.restartCount}{","}{end}{"\n"}{end}`
 	res, err := k.exec(ctx, nil, "get", "pods", "-o", "jsonpath="+jsonpath)
 	if err != nil {
 		return nil, err
@@ -544,6 +548,16 @@ func (k *Kubectl) PodStates(ctx context.Context) ([]PodState, error) {
 		}
 		if len(fields) > 2 {
 			st.Ready = strings.EqualFold(strings.TrimSpace(fields[2]), "True")
+		}
+		if len(fields) > 3 {
+			st.UID = strings.TrimSpace(fields[3])
+		}
+		if len(fields) > 4 {
+			for _, n := range strings.Split(fields[4], ",") {
+				if v, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+					st.Restarts += v
+				}
+			}
 		}
 		if st.Name != "" {
 			states = append(states, st)

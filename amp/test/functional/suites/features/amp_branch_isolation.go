@@ -155,7 +155,7 @@ func (f *flow) endpointSQL(ctx context.Context, ep controller.Endpoint) (sqlConn
 	// kubectl port-forward exits the instant the Service has no ready backing
 	// pod, so the workload is waited on first: a start-up race becomes a bounded
 	// wait, and a compute that never comes up a clear failure.
-	if err := ampstack.WaitEndpointWorkloadReady(ctx, kube, ep.ID, endpointReadyTimeout); err != nil {
+	if err := ampstack.WaitEndpointWorkloadReady(ctx, kube, ep.ID, endpointReadyTimeout(f.t)); err != nil {
 		return nil, fmt.Errorf("endpoint %s compute never became ready: %w", ep.ID, err)
 	}
 	pf, err := kube.PortForward(ctx, "svc/"+ampstack.EndpointWorkloadName(ep.ID), 0, ci.Port)

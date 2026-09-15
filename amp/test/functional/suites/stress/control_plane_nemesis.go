@@ -183,7 +183,13 @@ func runControlPlaneNemesis(t *core.T) error {
 			return err
 		}
 
+		var gate *settleGate
+		var killed []string
 		if err := t.Step(fmt.Sprintf("kill_controller_%d", r), func(s *core.StepHandle) error {
+			gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+			if err != nil {
+				return err
+			}
 			names, err := kube.GetSelector(t.Context, "pod", controllerSelector, "{.items[*].metadata.name}")
 			if err != nil {
 				return fmt.Errorf("list controller pods (%s) in %q: %w", controllerSelector, kube.Namespace(), err)
@@ -198,6 +204,7 @@ func runControlPlaneNemesis(t *core.T) error {
 				}
 			}
 			s.Set("killed", strings.Join(pods, ","))
+			killed = pods
 			return nil
 		}); err != nil {
 			return err
@@ -209,7 +216,7 @@ func runControlPlaneNemesis(t *core.T) error {
 				return err
 			}
 			s.Set("ready_after", waited.Round(time.Second).String())
-			return nil
+			return gate.attestNonTarget(t, s, killed...)
 		}); err != nil {
 			return err
 		}

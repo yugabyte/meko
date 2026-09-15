@@ -23,10 +23,14 @@ import (
 const pgReadyTimeout = 5 * time.Minute
 
 // endpointReadyTimeout bounds the wait for a self-provisioned endpoint's compute
-// workload before its Service is port-forwarded. A cold endpoint waits on a
-// freshly autoscaled node (10 to 19 minutes observed on amp-dev, meko#698)
-// against a warm median of seconds.
-const endpointReadyTimeout = 20 * time.Minute
+// workload before its Service is port-forwarded: timeouts.endpoint_create,
+// scaled by timeouts.provision_multiplier.
+func endpointReadyTimeout(t *core.T) time.Duration {
+	if t == nil {
+		return core.DefaultEndpointCreateTimeout
+	}
+	return core.ResolveEndpointCreateTimeout(t.Options)
+}
 
 // backingProvisioner stands up the backing YugabyteDB cluster, registers its
 // teardown (cluster destroy + host terminate / universe delete) on td, and

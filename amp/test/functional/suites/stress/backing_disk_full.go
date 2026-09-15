@@ -176,7 +176,15 @@ func runBackingDiskFull(t *core.T) error {
 		return err
 	}
 
+	var gate *settleGate
 	if err := t.Step("fill_backing_disks", func(s *core.StepHandle) error {
+		// A cascade out of a full backing is this test's subject, so a pod it
+		// never filled going down is a product failure here, not env damage.
+		gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+		if err != nil {
+			return err
+		}
+		gate.asProductFailure(t.Options)
 		pods, err = backingPods(t, kube)
 		if err != nil {
 			return err
@@ -240,7 +248,7 @@ func runBackingDiskFull(t *core.T) error {
 			return err
 		}
 		s.Set("ready_after", waited.Round(time.Second).String())
-		return nil
+		return gate.attestNonTarget(t, s, pods...)
 	}); err != nil {
 		return err
 	}

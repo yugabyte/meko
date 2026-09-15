@@ -48,6 +48,11 @@ func chaosOnPods(t *core.T, s *core.StepHandle, env ampTenantEnv, fleet *tenantF
 	logf func(string, ...any)) error {
 	s.Set("targets", strings.Join(pods, ","))
 
+	gate, err := awaitSteadyState(t, s, env, fleet.Tenants, nil, payloadBytes, 0)
+	if err != nil {
+		return err
+	}
+
 	targets := make([]*chaos.Target, 0, len(pods))
 	for _, pod := range pods {
 		targets = append(targets, chaos.NewPodTarget(pod, kube, pod, ""))
@@ -83,15 +88,17 @@ func chaosOnPods(t *core.T, s *core.StepHandle, env ampTenantEnv, fleet *tenantF
 	runner.Stop()
 
 	mu.Lock()
-	defer mu.Unlock()
 	s.Set("injects", injects)
 	if len(recoverErrs) > 0 {
 		s.Set("recover_errors", strings.Join(recoverErrs, "; "))
 	}
-	if injects == 0 {
+	fired := injects
+	mu.Unlock()
+
+	if fired == 0 {
 		return fmt.Errorf("the chaos loop injected no fault in %s, so this run proves nothing", d)
 	}
-	return nil
+	return gate.attestNonTarget(t, s, pods...)
 }
 
 // verifyTenantData reads each tenant's table back over a FRESH connection:

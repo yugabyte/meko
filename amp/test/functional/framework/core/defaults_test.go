@@ -94,6 +94,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"timeouts.collect":      core.DefaultCollectTimeout,
 
 		"timeouts.provision_dedicated": core.DefaultDedicatedProvisionTimeout,
+		"timeouts.endpoint_create":     core.DefaultEndpointCreateTimeout,
 	}
 	for key, want := range timeouts {
 		if got := cfg.GetDuration(key, -1); got != want {
@@ -108,6 +109,21 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if got := core.ResolveProvisionTimeout(cfg); got != core.DefaultProvisionTimeout {
 		t.Errorf("ResolveProvisionTimeout(defaults) = %s, want %s", got, core.DefaultProvisionTimeout)
+	}
+	if got := core.ResolveProvisionMultiplier(cfg); got != 1 {
+		t.Errorf("timeouts.provision_multiplier = %v, want 1 (the shipped default must not scale anything)", got)
+	}
+	if got := cfg.GetDuration("stress.settle.duration", -1); got != 20*time.Second {
+		t.Errorf("stress.settle.duration = %s, want 20s", got)
+	}
+	if got := cfg.GetDuration("stress.settle.pod_ready_timeout", -1); got != 5*time.Minute {
+		t.Errorf("stress.settle.pod_ready_timeout = %s, want 5m", got)
+	}
+	if got := cfg.GetFloat("stress.settle.min_tps", -1); got != 1.0 {
+		t.Errorf("stress.settle.min_tps = %v, want 1", got)
+	}
+	if cfg.GetBool("stress.settle.non_target_restart_is_failure", true) {
+		t.Errorf("stress.settle.non_target_restart_is_failure = true, want false (a pod nobody targeted is env damage)")
 	}
 
 	// And through the resolution helpers actually used by lifecycle/scheduler.

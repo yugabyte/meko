@@ -28,6 +28,9 @@ type RunOptions struct {
 	ProviderUnavailableReason string
 	// Attempt places this execution in a retry chain; zero → newResult stamps 1.
 	Attempt AttemptInfo
+	// Set by whoever provisioned: RunOne for an exclusive environment, the
+	// scheduler for a shared one. Zero means not recorded.
+	ProvisionDuration time.Duration
 }
 
 // RunTests drives tests through the per-test lifecycle across a worker pool of
@@ -169,8 +172,10 @@ func RunOne(ctx context.Context, test Test, opts RunOptions) *Result {
 		provisionTimeout = ResolveProvisionTimeoutFor(opts.Config, test.Env)
 	}
 	pctx, pcancel := context.WithTimeout(ctx, provisionTimeout)
+	provisionStart := time.Now()
 	env, err := opts.Provider.Provision(pctx, test.Env, seed.Fork("env"))
 	pcancel()
+	opts.ProvisionDuration = time.Since(provisionStart)
 	if err != nil {
 		// A shape the provider cannot serve is a capability gap: skipping keeps
 		// the mismatch visible without failing the run, and refusing (rather
@@ -342,6 +347,9 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 	defer bcancel()
 
 	t := newT(bctx, env, seed, opts.Config, opts.Masker, result, sinkEmitter{sink: opts.Sink, testName: test.Name})
+	if opts.ProvisionDuration > 0 {
+		t.Metric("env.provision_seconds", opts.ProvisionDuration.Seconds(), "s")
+	}
 	// A setup-capable test runs its provision-and-prepare Setup before the body
 	// (the body may consume the result via t.Standing); the Setup's teardown is
 	// captured and run after collect below, so `run` leaves nothing standing —

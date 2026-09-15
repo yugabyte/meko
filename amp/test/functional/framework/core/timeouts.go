@@ -31,7 +31,35 @@ const (
 	// DefaultSharedInfraProbeTimeout bounds the post-fault shared-stack probe; it
 	// must outlast the provider's own recovery budget, not the test's body.
 	DefaultSharedInfraProbeTimeout = 16 * time.Minute
+	// A cold create waits on a freshly autoscaled node and a multi-GB image
+	// pull: 10 to 19 minutes observed on amp-dev (meko#698). The ceiling is the
+	// controller's own 35m deploy budget (apps.ampstack.deploy_timeout).
+	DefaultEndpointCreateTimeout = 20 * time.Minute
 )
+
+// The factor every provisioning wait is scaled by, so a contended cluster buys
+// headroom in one place instead of thirteen constants. At or below zero is 1.0.
+func ResolveProvisionMultiplier(cfg *Config) float64 {
+	if cfg == nil {
+		return 1
+	}
+	m := cfg.GetFloat("timeouts.provision_multiplier", 1)
+	if m <= 0 {
+		return 1
+	}
+	return m
+}
+
+func scaleProvision(cfg *Config, d time.Duration) time.Duration {
+	return time.Duration(float64(d) * ResolveProvisionMultiplier(cfg))
+}
+
+func ResolveEndpointCreateTimeout(cfg *Config) time.Duration {
+	if cfg == nil {
+		return DefaultEndpointCreateTimeout
+	}
+	return scaleProvision(cfg, cfg.GetDuration("timeouts.endpoint_create", DefaultEndpointCreateTimeout))
+}
 
 // CategoryDefaultTimeout is the hard-coded fallback test timeout for a
 // category, used when cfg is nil or carries no timeouts.* override. Prefer
@@ -88,16 +116,16 @@ func ResolveProvisionTimeout(cfg *Config) time.Duration {
 	}
 	const unset = time.Duration(-1)
 	if d := cfg.GetDuration("timeouts.provision", unset); d != unset {
-		return d
+		return scaleProvision(cfg, d)
 	}
 	base := DefaultProvisionTimeout
 	if cfg.GetString("env.yb_deploy", "") != "yb_k8s" {
-		return base
+		return scaleProvision(cfg, base)
 	}
 	rf := cfg.GetInt("apps.ybk8s.replication_factor", 1)
 	nodes := max(cfg.GetInt("apps.ybk8s.tserver_replicas", 0),
 		cfg.GetInt("apps.ybk8s.master_replicas", 0), rf, 1)
-	return base + time.Duration(nodes-1)*ProvisionPerExtraNode
+	return scaleProvision(cfg, base+time.Duration(nodes-1)*ProvisionPerExtraNode)
 }
 
 // ResolveProvisionTimeoutFor is ResolveProvisionTimeout for one test's shape: a
@@ -110,7 +138,7 @@ func ResolveProvisionTimeoutFor(cfg *Config, spec EnvSpec) time.Duration {
 	if cfg == nil {
 		return DefaultDedicatedProvisionTimeout
 	}
-	return cfg.GetDuration("timeouts.provision_dedicated", DefaultDedicatedProvisionTimeout)
+	return scaleProvision(cfg, cfg.GetDuration("timeouts.provision_dedicated", DefaultDedicatedProvisionTimeout))
 }
 
 // ResolveTeardownTimeout resolves timeouts.teardown from cfg, else
