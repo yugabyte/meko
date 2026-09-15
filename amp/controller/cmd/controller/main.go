@@ -27,6 +27,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	"github.com/yugabyte/amp/controller/internal/gc"
+	"github.com/yugabyte/amp/controller/internal/ingress"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 	"github.com/yugabyte/amp/controller/internal/metrics"
 	"github.com/yugabyte/amp/controller/internal/node"
@@ -37,6 +38,19 @@ import (
 	voyagermigrations "github.com/yugabyte/amp/controller/internal/voyager/migrations"
 	"github.com/yugabyte/amp/controller/internal/ycp"
 )
+
+// The kubernetes deployer is what reads a shard's load-balancer address. Asserted
+// at compile time as well as at the type switch below, so a change to either side
+// of the interface fails the build rather than turning into a startup error on
+// somebody's cluster.
+var _ ingress.AddressLookup = (*deploy.KubernetesDeployer)(nil)
+
+// ingressReconcileInterval is how often a building ingress shard is re-checked
+// for its load-balancer address. Cloud provisioning takes minutes, so this is
+// paced for "not yet" being the common answer rather than for latency: nothing
+// is waiting on a shard at startup, and the chart that installs the first
+// shard's release lands later in this series.
+const ingressReconcileInterval = 15 * time.Second
 
 func main() {
 	args := os.Args[1:]
@@ -401,6 +415,74 @@ func runServe(args []string) error {
 		defer wg.Done()
 		reaper.Run(ctx)
 	}()
+
+	// Shared ingress: register the first shard of each configured family and wait
+	// for the cloud to give its load balancer an address. Only then is it
+	// allocatable — an endpoint placed on a shard with no address would publish a
+	// DNS record pointing nowhere (controller/architecture/ac-ingress.md).
+	//
+	// Keyed on the switch, not on the zones. Zones set with the switch off is a
+	// valid configuration — validateIngress checks the knobs whether or not
+	// ingress is on, precisely so they can sit there until somebody flips it —
+	// and registering a shard for such a deployment would poll a Service nothing
+	// installed, every 15s, forever.
+	//
+	// Both steps are idempotent, because a controller restart is the ordinary
+	// case: EnsureShard writes nothing onto an existing row and MarkReady only
+	// promotes a shard still building.
+	zones := ingress.Zones{
+		Internal: cfg.Deploy.IngressZoneInternal,
+		External: cfg.Deploy.IngressZoneExternal,
+	}
+	lookup, canLookUp := prov.Deployer.(ingress.AddressLookup)
+	switch {
+	case !cfg.Deploy.IngressEnabled:
+		// Off, which is every deployment today.
+	case !canLookUp:
+		// A config the API already handles per request with a 400, so refusing to
+		// start would be a harsher answer to the same mistake — and with --deploy
+		// off there is no deployer at all. Skipped and said out loud instead.
+		logger.Warn("shared ingress is enabled but this deploy driver cannot address a shard; "+
+			"no shard will be registered and the ingress_* modes stay refused",
+			"driver", cfg.Deploy.Driver)
+	default:
+		alloc := ingress.New(pool, zones, cfg.Deploy.IngressQuarantine,
+			ingress.Placement(cfg.Deploy.IngressPlacement))
+		// One shard per family that has somewhere to publish. Registering the
+		// internal family unconditionally would leave an external-only deployment
+		// with a shard Allocate refuses and no shard for the family it does serve.
+		for _, f := range []ingress.Family{ingress.FamilyInternal, ingress.FamilyExternal} {
+			if zones.For(f) == "" {
+				continue
+			}
+			if err := alloc.EnsureShard(ctx, ingress.Shard{
+				Name:   ingress.FirstShardNameFor(f),
+				Family: f,
+				PortLo: cfg.Deploy.IngressPortLo,
+				PortHi: cfg.Deploy.IngressPortHi,
+			}); err != nil {
+				stop()
+				wg.Wait()
+				return err
+			}
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(ingressReconcileInterval)
+			defer ticker.Stop()
+			for {
+				if err := alloc.ReconcileShards(ctx, lookup, logger); err != nil {
+					logger.Warn("ingress shard reconcile", "err", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+	}
 
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.Start() }()

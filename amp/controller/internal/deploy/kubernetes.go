@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -400,30 +401,46 @@ func (k *KubernetesDeployer) tailnetAddress(release string) string {
 	return fmt.Sprintf("%s.%s:%d", device, k.cfg.TailnetSuffix, k.cfg.ComputePort)
 }
 
+// errNotInCluster is returned when there is no in-cluster API to talk to.
+var errNotInCluster = errors.New("not running in-cluster")
+
 // k8sAPIGet does an authenticated GET against the in-cluster Kubernetes API and
 // returns the response body, or (nil, false) when not running in-cluster or on
 // any error (callers fall back to a static address).
+//
+// Use k8sAPIGetErr where the caller has to tell a missing object or a denied
+// request from an empty answer; this shape collapses them all to false.
 func (k *KubernetesDeployer) k8sAPIGet(ctx context.Context, path string) ([]byte, bool) {
+	body, err := k.k8sAPIGetErr(ctx, path)
+	return body, err == nil
+}
+
+// k8sAPIGetErr is k8sAPIGet with the reason kept. A 404 and a 403 are ordinary
+// results here — a Service that was never installed, or a ServiceAccount missing
+// the RBAC to read it — and both are indistinguishable from "no address yet"
+// once they are flattened to a bool, which is how a shard sits in `building`
+// forever with nothing in the log to say why.
+func (k *KubernetesDeployer) k8sAPIGetErr(ctx context.Context, path string) ([]byte, error) {
 	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
 	if host == "" || port == "" {
-		return nil, false // not in-cluster
+		return nil, errNotInCluster
 	}
 	const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 	token, err := os.ReadFile(saDir + "/token")
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("read service account token: %w", err)
 	}
 	caPEM, err := os.ReadFile(saDir + "/ca.crt")
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("read service account CA: %w", err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, false
+		return nil, fmt.Errorf("service account CA is not valid PEM")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://%s:%s%s", host, port, path), nil)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	req.Header.Set("Accept", "application/json")
@@ -434,17 +451,17 @@ func (k *KubernetesDeployer) k8sAPIGet(ctx context.Context, path string) ([]byte
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, false
+		return nil, fmt.Errorf("GET %s: %s", path, resp.Status)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	return body, true
+	return body, nil
 }
 
 // k8sAPIPatch does an authenticated PATCH against the in-cluster Kubernetes API
@@ -514,6 +531,59 @@ func (k *KubernetesDeployer) podClientAddress(ctx context.Context, release strin
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", out.Items[0].Status.PodIP, k.cfg.ComputePort)
+}
+
+// ShardAddress reports where an ingress shard's load balancer answers, and
+// whether that is a hostname or an address — which is what decides whether each
+// endpoint on the shard publishes a CNAME or an A record.
+//
+// One shot, unlike serviceLBAddress: the caller is a reconcile loop with its own
+// cadence, and a shard that is not ready yet is an ordinary state to report
+// rather than something to block on. `ok` is false while the cloud has not
+// assigned anything.
+// ShardAddress reads where a shard's load balancer answers, satisfying
+// ingress.AddressLookup.
+//
+// The three outcomes are kept apart deliberately. A real error means the lookup
+// itself failed — a Service that was never installed, a ServiceAccount without
+// the RBAC to read it, a transport failure. `addressed` false with no error
+// means the Service is there and the cloud simply has not given it an address
+// yet, which is the ordinary case while a shard builds. Collapsing those two
+// into one boolean is how a shard sits in `building` forever with nothing in the
+// log to say which it was.
+//
+// Returned as plain values rather than a shared type so this package keeps
+// satisfying ingress.AddressLookup structurally, without importing it.
+func (k *KubernetesDeployer) ShardAddress(ctx context.Context, release string) (host string, isHostname, addressed bool, err error) {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s", k.cfg.Namespace, release)
+	body, err := k.k8sAPIGetErr(ctx, path)
+	if err != nil {
+		return "", false, false, fmt.Errorf("read shard service %s: %w", release, err)
+	}
+	var out struct {
+		Status struct {
+			LoadBalancer struct {
+				Ingress []struct {
+					IP       string `json:"ip"`
+					Hostname string `json:"hostname"`
+				} `json:"ingress"`
+			} `json:"loadBalancer"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", false, false, fmt.Errorf("parse shard service %s: %w", release, err)
+	}
+	if len(out.Status.LoadBalancer.Ingress) == 0 {
+		return "", false, false, nil
+	}
+	ing := out.Status.LoadBalancer.Ingress[0]
+	switch {
+	case ing.Hostname != "":
+		return ing.Hostname, true, true, nil
+	case ing.IP != "":
+		return ing.IP, false, true, nil
+	}
+	return "", false, false, nil
 }
 
 // serviceLBAddress returns "<externalIP>:<computePort>" once the endpoint's
