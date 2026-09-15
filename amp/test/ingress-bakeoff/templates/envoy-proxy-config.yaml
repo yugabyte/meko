@@ -1,0 +1,11 @@
+# ClusterIP rather than the default LoadBalancer: a bakeoff must not provision an
+# NLB on a shared dev cluster.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata: { name: bakeoff-clusterip }
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService: { type: ClusterIP }
+      envoyDeployment: { replicas: 2 }

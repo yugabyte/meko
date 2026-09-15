@@ -1,0 +1,85 @@
+# A stand-in for the cloud load balancer: prepends a PROXY protocol v2 header
+# claiming ${CLAIM_IP} as the client, then splices. Lets the allowlist be tested
+# against an address the relay does NOT itself hold, which is the only way to
+# prove Traefik filters on the PROXY-declared client rather than the TCP peer.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pp-relay
+data:
+  relay.py: |
+    import os, socket, struct, threading
+    CLAIM = os.environ["CLAIM_IP"]; UP_H = os.environ["UPSTREAM_HOST"]
+    UP_P = int(os.environ["UPSTREAM_PORT"]); LISTEN = int(os.environ.get("LISTEN_PORT", "5432"))
+
+    def header(src_ip, dst_ip, src_port, dst_port):
+        sig = b"\r\n\r\n\x00\r\nQUIT\n"
+        # 0x21 = version 2, PROXY command. 0x11 = AF_INET over STREAM.
+        return (sig + b"\x21\x11" + struct.pack("!H", 12)
+                + socket.inet_aton(src_ip) + socket.inet_aton(dst_ip)
+                + struct.pack("!HH", src_port, dst_port))
+
+    def pipe(a, b):
+        try:
+            while True:
+                d = a.recv(65536)
+                if not d: break
+                b.sendall(d)
+        except OSError:
+            pass
+        finally:
+            for s in (a, b):
+                try: s.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+
+    def serve(client):
+        up = socket.create_connection((UP_H, UP_P))
+        # The header describes the CLIENT's original connection — to us, on
+        # LISTEN — not our onward one. A load balancer reports where the client
+        # actually connected, and a filter reading the destination would
+        # otherwise see the wrong port entirely.
+        up.sendall(header(CLAIM, "127.0.0.1", 12345, LISTEN))
+        threading.Thread(target=pipe, args=(client, up), daemon=True).start()
+        pipe(up, client)
+
+    srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", LISTEN)); srv.listen(64)
+    print(f"relay :{LISTEN} -> {UP_H}:{UP_P}, claiming {CLAIM}", flush=True)
+    while True:
+        c, _ = srv.accept()
+        threading.Thread(target=serve, args=(c,), daemon=True).start()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pp-relay
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pp-relay } }
+  template:
+    metadata:
+      labels: { app: pp-relay }
+    spec:
+      containers:
+        - name: relay
+          image: python:3.12-alpine
+          command: ["python", "/app/relay.py"]
+          env:
+            - { name: CLAIM_IP, value: "${CLAIM_IP}" }
+            - { name: UPSTREAM_HOST, value: "${UPSTREAM_HOST}" }
+            - { name: UPSTREAM_PORT, value: "${UPSTREAM_PORT}" }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts: [{ name: app, mountPath: /app }]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        - { name: app, configMap: { name: pp-relay } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pp-relay
+spec:
+  selector: { app: pp-relay }
+  ports: [{ name: pg, port: 5432, targetPort: 5432 }]

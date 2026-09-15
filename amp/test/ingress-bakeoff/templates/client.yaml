@@ -1,0 +1,18 @@
+# The client runs inside the cluster so tests hit ClusterIP services directly and
+# no run ever provisions a cloud load balancer.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bakeoff-client
+  labels: { bakeoff: client }
+spec:
+  containers:
+    - name: psql
+      image: postgres:18-alpine
+      command: ["sleep","infinity"]
+      volumeMounts: [{ name: ca, mountPath: /ca }]
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits:   { cpu: 500m, memory: 256Mi }
+  volumes:
+    - { name: ca, secret: { secretName: bakeoff-ca } }

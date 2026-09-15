@@ -1,0 +1,23 @@
+# Per-endpoint source-IP allowlist: a TCP middleware referenced from this
+# endpoint's own route, so the CIDR set is per endpoint even though the load
+# balancer in front is shared. Lives in the endpoint's release, like the route.
+apiVersion: traefik.io/v1alpha1
+kind: MiddlewareTCP
+metadata:
+  name: allow-${BK_NAME}
+  labels: { bakeoff: middleware, tier: traefik }
+spec:
+  ipAllowList:
+    sourceRange: [${CIDRS}]
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: ${BK_NAME}-guarded-${PORT}
+  labels: { bakeoff: route, tier: traefik }
+spec:
+  entryPoints: [p${PORT}]
+  routes:
+    - match: HostSNI(`*`)
+      services: [{ name: ${BK_NAME}, port: 5432 }]
+      middlewares: [{ name: allow-${BK_NAME} }]

@@ -1,0 +1,9 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TCPRoute
+metadata:
+  name: route-${GW}-${PORT}
+  labels: { bakeoff: route, tier: envoy }
+spec:
+  parentRefs: [{ name: ${GW}, sectionName: port-${PORT} }]
+  rules:
+    - backendRefs: [{ name: ${BK_NAME}, port: 5432 }]

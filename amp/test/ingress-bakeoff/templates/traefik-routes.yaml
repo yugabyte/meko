@@ -1,0 +1,29 @@
+# Both schemes for one backend, on the same Traefik pods.
+#
+# The port route needs no TLS block: a non-TLS TCP router in Traefik may only
+# match HostSNI(`*`), because the PORT is the discriminator.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: ${BK_NAME}-port-${PORT}
+  labels: { bakeoff: route, tier: traefik }
+spec:
+  entryPoints: [p${PORT}]
+  routes:
+    - match: HostSNI(`*`)
+      services: [{ name: ${BK_NAME}, port: 5432 }]
+---
+# The SNI route matches a real name and passes TLS through untouched, so the
+# certificate the client validates is the backend's own.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: ${BK_NAME}-sni-${PORT}
+  labels: { bakeoff: route, tier: traefik }
+spec:
+  entryPoints: [pgsni]
+  routes:
+    - match: HostSNI(`${SNI}`)
+      services: [{ name: ${BK_NAME}, port: 5432 }]
+  tls:
+    passthrough: true

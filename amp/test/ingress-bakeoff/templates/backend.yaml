@@ -1,0 +1,66 @@
+# One TLS-serving Postgres, standing in for a compute pod. `cluster_name` is the
+# marker the routing tests assert on: it is a server-side GUC, so a client that
+# reads it back has proved which backend it actually reached.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${BK_NAME}
+  labels: { app: ${BK_NAME}, bakeoff: backend }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ${BK_NAME} } }
+  template:
+    metadata:
+      labels: { app: ${BK_NAME}, bakeoff: backend }
+    spec:
+      # Postgres refuses a key that is group- or world-readable AND one it does
+      # not own, and a Secret mount can be neither chmodded nor chowned in place,
+      # so copy it to an emptyDir first. uid 70 is the postgres user in the
+      # ALPINE image (the Debian variant uses 999) — mismatch here is a startup
+      # crash loop with "private key file must be owned by the database user".
+      initContainers:
+        - name: fix-key-perms
+          image: busybox:1.36
+          command: ["sh","-c","cp /src/* /tls/ && chmod 600 /tls/server.key && chown 70:70 /tls/server.key /tls/server.crt"]
+          volumeMounts:
+            - { name: tls-src, mountPath: /src }
+            - { name: tls, mountPath: /tls }
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          args:
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/tls/server.crt
+            - -c
+            - ssl_key_file=/tls/server.key
+            - -c
+            - cluster_name=${BK_NAME}
+          env:
+            - { name: POSTGRES_PASSWORD, value: bakeoff }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ name: pg, containerPort: 5432 }]
+          volumeMounts:
+            - { name: tls, mountPath: /tls }
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: ["pg_isready","-U","postgres"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+      volumes:
+        - { name: tls-src, secret: { secretName: ${BK_NAME}-tls } }
+        - { name: tls, emptyDir: {} }
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${BK_NAME}
+  labels: { bakeoff: backend }
+spec:
+  selector: { app: ${BK_NAME} }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]
