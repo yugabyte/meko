@@ -44,6 +44,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/sched"
 	"github.com/yugabyte/amp/test/functional/suites/features"
 	"github.com/yugabyte/amp/test/functional/suites/perf"
+	"github.com/yugabyte/amp/test/functional/suites/stress"
 )
 
 // TestEmbeddedDefaultsSupplyEveryKnownKey is the every-key-present registry:
@@ -1249,6 +1250,14 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.bulk_load_kill.load_chunk_rows":           50_000,
 		"stress.bulk_load_kill.verify_chunk_rows":         500_000,
 		"stress.consistency.max_relations":                0,
+		"stress.soak.tenants":                             stress.DefaultSoakTenants,
+		"stress.soak.payload_bytes":                       stress.DefaultSoakPayloadBytes,
+		"stress.soak.max_samples":                         stress.DefaultSoakMaxSamples,
+		"stress.soak.max_tasks":                           stress.DefaultSoakMaxTasks,
+		"stress.soak.workload_threads_read":               stress.DefaultSoakThreadsRead,
+		"stress.soak.workload_threads_write":              stress.DefaultSoakThreadsWrite,
+		"stress.soak.bank_accounts":                       stress.DefaultSoakBankAccounts,
+		"stress.soak.min_fit_samples":                     stress.DefaultSoakMinFitSamples,
 	}
 	for key, want := range stressInts {
 		if got := cfg.GetInt(key, -1); got != want {
@@ -1261,6 +1270,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.combined.client_image":          "eclipse-temurin:21-jdk",
 		"stress.combined.remote_dir":            "/opt/ampqa",
 		"stress.combined.jar_secret":            "gh_package",
+		"stress.soak.client_image":              stress.DefaultSoakClientImage,
+		"stress.soak.remote_dir":                stress.DefaultSoakRemoteDir,
+		"stress.soak.jar_secret":                stress.DefaultSoakJarSecret,
 		"stress.partition.helper_image":         "nicolaka/netshoot:v0.13",
 		"stress.linearizable_bank.isolation":    "read committed",
 	}
@@ -1277,7 +1289,38 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetString("stress.consistency.probe_sql", "__MISSING__"); got != "" {
 		t.Errorf("stress.consistency.probe_sql = %q, want present and empty", got)
 	}
+	soakFloats := map[string]float64{
+		"stress.soak.rss_slope_mib_per_hour": stress.DefaultSoakRSSSlopeMiB,
+		"stress.soak.rss_fit_fraction":       stress.DefaultSoakRSSFitFraction,
+		"stress.soak.wals_growth_factor":     stress.DefaultSoakWalsGrowthFactor,
+		"stress.soak.chain_limit":            stress.DefaultSoakChainLimit,
+		"stress.soak.chain_limit_slack":      stress.DefaultSoakChainSlack,
+		"stress.soak.chain_sample_fraction":  stress.DefaultSoakChainFraction,
+		"stress.soak.latency_growth_factor":  stress.DefaultSoakLatencyFactor,
+	}
+	for key, want := range soakFloats {
+		if got := cfg.GetFloat(key, -1); got != want {
+			t.Errorf("%s = %v, want %v", key, got, want)
+		}
+	}
+	if got := cfg.GetString("stress.soak.client_pull_secret", "__MISSING__"); got != "" {
+		t.Errorf("stress.soak.client_pull_secret = %q, want present and empty", got)
+	}
+	if !cfg.GetBool("stress.soak.enabled", false) {
+		t.Errorf("stress.soak.enabled = false, want true")
+	}
+
 	stressDurs := map[string]time.Duration{
+		"stress.soak.duration":               stress.DefaultSoakDuration,
+		"stress.soak.churn_interval":         stress.DefaultSoakChurnInterval,
+		"stress.soak.sample_interval":        stress.DefaultSoakSampleInterval,
+		"stress.soak.wals_baseline_after":    stress.DefaultSoakWalsBaselineAt,
+		"stress.soak.gc_lag_monotonic_limit": stress.DefaultSoakGCLagMonotonic,
+		"stress.soak.latency_bucket":         stress.DefaultSoakLatencyBucket,
+		"stress.soak.latency_probe_interval": stress.DefaultSoakLatencyProbe,
+		"stress.soak.settle_timeout":         stress.DefaultSoakSettleTimeout,
+		"stress.soak.rss_warmup":             stress.DefaultSoakRSSWarmup,
+
 		"stress.combined.run_time":       3 * time.Minute,
 		"stress.combined.ready_timeout":  5 * time.Minute,
 		"stress.combined.verify_timeout": 5 * time.Minute,

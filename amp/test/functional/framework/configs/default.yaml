@@ -1895,6 +1895,73 @@ stress:
     benchbase_start_grace: "30s"
     settle_timeout: "10m"
 
+  # soak: the hours-long lane (stress/soak). Untagged, selected by name from a
+  # schedule. Three tenants — steady OLTP, bank, and one forking and dropping a
+  # branch every churn_interval — run for duration while a sampler reads the
+  # tenants' pageservers, amp_storage.wals and the controller task table, and
+  # six trends are asserted over the sampled series at the end.
+  soak:
+    # enabled gates the whole scenario.
+    enabled: true
+    # duration is the soak itself. The registered test Timeout is 14h, so a
+    # duration past ~13h leaves no room for tenant creation and verification.
+    # A review run uses 30m.
+    duration: "8h"
+    # Tenant 0 is the steady OLTP tenant (SqlTransactions), tenant 1 the bank
+    # (SqlBankTransfer, whose conserved total a lost write breaks), the LAST one
+    # churns branches. Below 3 the test skips.
+    tenants: 3
+    payload_bytes: 256
+    churn_interval: "10m"
+    # sample_interval paces both the soak's own probes and the per-tenant
+    # endpoint metrics samplers; max_samples is the per-line ring that keeps a
+    # 14h run's heap flat (4000 at 30s covers 33h).
+    sample_interval: "30s"
+    max_samples: 4000
+    # rss_slope_mib_per_hour is the leak gate: a least-squares fit of pageserver
+    # RSS over the last rss_fit_fraction of the run, per endpoint pod, after
+    # rss_warmup is dropped. A pageserver filling its caches climbs as fast as a
+    # leaking one, so a run leaving fewer than min_fit_samples past the warm-up
+    # reports the slope as a datapoint and asserts nothing.
+    rss_slope_mib_per_hour: 50.0
+    rss_fit_fraction: 0.75
+    rss_warmup: "30m"
+    # amp_storage.wals must not end past wals_growth_factor times what it held
+    # wals_baseline_after into the run.
+    wals_growth_factor: 2.0
+    wals_baseline_after: "1h"
+    # gc_lag_monotonic_limit is how long the GC drain lag may rise without once
+    # falling before the drain counts as not keeping up.
+    gc_lag_monotonic_limit: "30m"
+    # chain_limit mirrors the pageserver's own image_chain_limit (20); the test
+    # allows chain_limit + chain_limit_slack for chain_sample_fraction of the
+    # samples. Raise chain_limit with the product setting, never to hide drift.
+    chain_limit: 20.0
+    chain_limit_slack: 5.0
+    chain_sample_fraction: 0.95
+    # The steady tenant's p99 point-read latency is bucketed by latency_bucket;
+    # the last bucket may not exceed latency_growth_factor times the first.
+    latency_growth_factor: 2.0
+    latency_bucket: "10m"
+    latency_probe_interval: "1s"
+    # max_tasks bounds the controller task table at the end of the run.
+    max_tasks: 20000
+    # min_fit_samples is what a slope or a percentile needs before it is
+    # asserted rather than merely published.
+    min_fit_samples: 10
+    # The two sample-app workloads run in a client pod beside the endpoints.
+    # client_image MUST carry java, sh, coreutils, procps, curl and tar;
+    # jar_secret authenticates the PRIVATE sample-app jar fetch.
+    workload_threads_read: 1
+    workload_threads_write: 2
+    bank_accounts: 200
+    client_image: "eclipse-temurin:21-jdk"
+    client_pull_secret: ""
+    remote_dir: "/opt/ampqa"
+    jar_secret: "gh_package"
+    # settle_timeout bounds every endpoint answering SQL again once the load stops.
+    settle_timeout: "10m"
+
 # --- Perf suite (suites/perf) ---
 # perf/tpcc, perf/pgbench, perf/sysbench: provision a co-located RF3
 # YugabyteDB-in-k8s cluster, stand an amp control plane + ONE compute endpoint on
