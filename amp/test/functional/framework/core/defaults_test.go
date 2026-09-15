@@ -1218,6 +1218,14 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.combined.verify_rows":                     500,
 		"stress.commit_durability.tenants":                3,
 		"stress.commit_durability.payload_bytes":          256,
+		"stress.linearizable_bank.tenants":                3,
+		"stress.linearizable_bank.accounts":               10,
+		"stress.linearizable_bank.skew_pairs":             4,
+		"stress.linearizable_bank.writers":                4,
+		"stress.linearizable_bank.readers":                2,
+		"stress.linearizable_bank.initial_balance":        2000,
+		"stress.linearizable_bank.max_amount":             500,
+		"stress.linearizable_bank.flush_ops":              200,
 		"stress.storage_proc_nemesis.tenants":             2,
 		"stress.storage_proc_nemesis.kills_per_daemon":    1,
 		"stress.storage_proc_nemesis.payload_bytes":       256,
@@ -1254,6 +1262,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.combined.remote_dir":            "/opt/ampqa",
 		"stress.combined.jar_secret":            "gh_package",
 		"stress.partition.helper_image":         "nicolaka/netshoot:v0.13",
+		"stress.linearizable_bank.isolation":    "read committed",
 	}
 	for key, want := range stressStrs {
 		if got := cfg.GetString(key, "__MISSING__"); got != want {
@@ -1281,6 +1290,12 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.commit_durability.settle_timeout":    10 * time.Minute,
 		"stress.commit_durability.resume_duration":   30 * time.Second,
 		"stress.commit_durability.cancel_delay_max":  50 * time.Millisecond,
+
+		"stress.linearizable_bank.read_interval":     200 * time.Millisecond,
+		"stress.linearizable_bank.baseline_duration": 20 * time.Second,
+		"stress.linearizable_bank.duration":          3 * time.Minute,
+		"stress.linearizable_bank.settle_timeout":    10 * time.Minute,
+		"stress.linearizable_bank.resume_duration":   30 * time.Second,
 
 		"stress.storage_proc_nemesis.baseline_duration": 20 * time.Second,
 		"stress.storage_proc_nemesis.fault_duration":    90 * time.Second,
@@ -1323,6 +1338,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if got := cfg.GetFloat("stress.commit_durability.cancel_probability", -1); got != 0.1 {
 		t.Errorf("stress.commit_durability.cancel_probability = %v, want 0.1", got)
+	}
+	if cfg.GetBool("stress.linearizable_bank.unguarded", true) {
+		t.Errorf("stress.linearizable_bank.unguarded = true, want false")
 	}
 	for _, key := range []string{
 		"stress.bulk_load_kill.secondary_index",
