@@ -42,6 +42,7 @@ import { DB_ENGINES, EngineField, engineExtensions } from "@/components/ui/engin
 import { ExtensionsField, useExtensionOptions } from "@/components/ui/extensions-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
 import { isValidMemory } from "@/lib/compute";
+import { dataBranchingMessages as msg } from "@/lib/messages";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY, type StoragePool } from "@/lib/api/types";
 
 const STEPS = ["Cluster", "Extensions", "Compute", "Review"];
@@ -67,6 +68,8 @@ export function CreateClusterWizard({
     memory: DEFAULT_ENDPOINT_MEMORY,
   });
   const [connectivity, setConnectivity] = useState<Connectivity>(DEFAULT_CONNECTIVITY);
+  // The password for the writer's compute user. Required.
+  const [password, setPassword] = useState("");
 
   const navigate = useNavigate();
   const createCluster = useCreateClusterWithWriter();
@@ -81,6 +84,7 @@ export function CreateClusterWizard({
       setExtensions([]);
       setSize({ cpu: DEFAULT_ENDPOINT_CPU, memory: DEFAULT_ENDPOINT_MEMORY });
       setConnectivity(DEFAULT_CONNECTIVITY);
+      setPassword("");
     }
   }, [open]);
 
@@ -98,7 +102,7 @@ export function CreateClusterWizard({
     step === 0
       ? Boolean(trimmedName && poolId)
       : step === 2
-        ? Boolean(size.cpu.trim()) && isValidMemory(size.memory)
+        ? Boolean(size.cpu.trim()) && isValidMemory(size.memory) && password.length > 0
         : true;
 
   function create() {
@@ -115,6 +119,9 @@ export function CreateClusterWizard({
         allowedCidrs: parseCidrs(connectivity.allowedCidrs),
         engine,
         extensions,
+        // Required, and the Compute step will not advance without one, so it is
+        // always a real value here.
+        password,
       },
       {
         onSuccess: () => {
@@ -224,6 +231,21 @@ export function CreateClusterWizard({
                 <ConnectivityField value={connectivity} onChange={setConnectivity} />
                 <ConnectivityWarning value={connectivity} />
               </div>
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div className="space-y-1.5">
+                  <Label htmlFor="wiz-password">Password</Label>
+                  <Input
+                    id="wiz-password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="required"
+                    aria-invalid={password.length === 0}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[11px] text-muted-foreground">{msg.passwordHint}</p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -238,6 +260,7 @@ export function CreateClusterWizard({
                 mono={allExtensions.length > 0}
               />
               <ReviewRow k="Writer compute" v={`${size.cpu} vCPU · ${size.memory}`} mono />
+              <ReviewRow k="Password" v="Provided — not stored" />
               <ReviewRow
                 k="Connectivity"
                 v={

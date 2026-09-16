@@ -19,7 +19,10 @@ The chart renders:
   `dbname`, `sslmode`, …) plus endpoint/compute settings and the internal
   service ports. Consumed by the pod via `envFrom`.
 - **Secret** — the YB password (only when `yugabyte.password` is set and no
-  `yugabyte.existingSecret` is given). Injected as the `YB_PASSWORD` env var.
+  `yugabyte.existingSecret` is given), injected as the `YB_PASSWORD` env var,
+  and the compute default user's password (`endpoint.password`), injected as
+  `COMPUTE_PASSWORD`. The chart renders it when either is set, so the compute
+  password still gets a Secret alongside a `yugabyte.existingSecret`.
 - **Deployment** — one container running the supervisor + 5 services, plus (by
   default) a `postgres_exporter` sidecar for Postgres metrics. PGDATA is
   ephemeral and durable state lives in YugabyteDB, so `/data` is an `emptyDir`

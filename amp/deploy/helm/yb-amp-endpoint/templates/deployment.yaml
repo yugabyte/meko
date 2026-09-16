@@ -75,7 +75,7 @@ spec:
           {{- $_ := set $extEnv $k (printf "%s/%s" $mount $v) }}
           {{- end }}
           {{- end }}
-          {{- if or (include "yb-amp-endpoint.hasPassword" .) .Values.controller.url $extEnv }}
+          {{- if or (include "yb-amp-endpoint.hasPassword" .) .Values.controller.url $extEnv .Values.endpoint.password }}
           env:
           {{- if $extEnv }}
           # Data directories an externalized extension's libraries read at
@@ -93,6 +93,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "yb-amp-endpoint.secretName" . }}
                   key: {{ include "yb-amp-endpoint.secretKey" . }}
+          {{- end }}
+          {{- if .Values.endpoint.password }}
+            # The compute's default-user password. Always the chart-managed
+            # Secret, never yugabyte.existingSecret: that one belongs to whoever
+            # runs the YB universe and holds only the YB password.
+            - name: COMPUTE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yb-amp-endpoint.fullname" . }}
+                  key: computePassword
           {{- end }}
           {{- if .Values.controller.url }}
             # The address the controller dials back to reach this

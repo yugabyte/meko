@@ -132,15 +132,21 @@ hdr "pick pool owner id (agent materializes the user)"
 UID_=$(cat /proc/sys/kernel/random/uuid)
 [ -n "$UID_" ] && ok "owner id ($UID_)" || bad "generate owner id"
 
+# The writer's compute password. Required by the controller, so YCP desired
+# state has to carry one for an endpoint it declares.
+EP_PASSWORD="${EP_PASSWORD:-ycp-smoke-pw-1}"
+
 # --- desired state: the full tree ---
 hdr "POST desired state (pool -> cluster -> branch -> endpoint)"
 DESIRED=$(jq -nc \
   --arg pool "$POOL_NAME" --arg cluster "$CLUSTER_NAME" \
-  --arg branch "$BRANCH_NAME" --arg ep "$EP_NAME" --arg uid "$UID_" '
+  --arg branch "$BRANCH_NAME" --arg ep "$EP_NAME" --arg uid "$UID_" \
+  --arg eppw "$EP_PASSWORD" '
   [ {kind:"storage-pool", name:$pool,                                 spec:{owner_user_id:$uid}},
     {kind:"cluster",      name:($pool+"/"+$cluster),                  spec:{}},
     {kind:"branch",       name:($pool+"/"+$cluster+"/"+$branch),      spec:{}},
-    {kind:"endpoint",     name:($pool+"/"+$cluster+"/"+$branch+"/"+$ep), spec:{role:"read_write"}} ]')
+    {kind:"endpoint",     name:($pool+"/"+$cluster+"/"+$branch+"/"+$ep),
+      spec:{role:"read_write", password:$eppw}} ]')
 set_desired "$DESIRED" && ok "desired state accepted" || bad "POST desired failed"
 
 # --- wait for the agent to converge + report ---

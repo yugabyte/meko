@@ -269,10 +269,13 @@ class ControllerClient:
         pg_settings: Optional[dict[str, str]] = None,
         pageserver_settings: Optional[dict[str, Any]] = None,
         safekeeper_settings: Optional[dict[str, Any]] = None,
+        password: Optional[str] = None,
     ) -> dict:
         body: dict[str, Any] = {}
         if role is not None:
             body["role"] = role
+        if password is not None:
+            body["password"] = password
         if disk_type is not None:
             body["disk_type"] = disk_type
         resources: dict[str, Any] = {}

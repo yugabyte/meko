@@ -77,6 +77,26 @@ same branch is rejected with `conflict`. Provision additional compute as
 `network` (`local` is not yet supported and is rejected with
 `unsupported_disk_type`).
 
+## The endpoint's password is required, and you never see it again
+
+`create_endpoint` sets `password` on the compute's default Postgres user
+(`cloud_admin`), which is who clients connect as. **It is required — the
+controller generates none.** Ask the user for the password; do not invent one on
+their behalf, and do not echo it back in your reply.
+
+Nothing stores it, and no call can recover it — a user who loses it has to reset
+the role themselves over SQL, or create a new cluster.
+
+A `read_only` endpoint takes no password (passing one is a `400`): the user lives
+in the branch's catalog, which all of its endpoints share, so a replica already
+answers to whatever its branch's writer set — and setting a password there would
+rotate the credential the writer's clients are using.
+
+`password` is 8-128 characters with no control characters. A malformed one — or
+a writer with no password at all — is a `400` before any endpoint exists.
+
+The username is not selectable yet; that is yugabyte/meko#1354.
+
 ## Settings: dotted keys reach the nested ones
 
 `create_endpoint` takes three settings maps. They can also be changed

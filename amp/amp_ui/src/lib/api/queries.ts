@@ -240,6 +240,7 @@ export function useCreateClusterWithWriter() {
       extensions?: string[];
       connectivity?: EndpointConnectivityMode;
       allowedCidrs?: string[];
+      password?: string;
     }) =>
       createClusterWithWriter(input.poolId, {
         name: input.name,
@@ -249,6 +250,7 @@ export function useCreateClusterWithWriter() {
         allowedCidrs: input.allowedCidrs,
         engine: input.engine,
         extensions: input.extensions,
+        password: input.password,
       }),
     onSuccess: (_task, input) => {
       qc.invalidateQueries({ queryKey: qk.clusters(input.poolId) });

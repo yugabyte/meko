@@ -27,7 +27,7 @@ func TestCreateClusterEngine(t *testing.T) {
 
 	aidb := api.Aidb
 	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
-		Name: "brain", Engine: &aidb, WithWriter: &withWriter,
+		Name: "brain", Engine: &aidb, WithWriter: &withWriter, Password: strptr(testPassword),
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster(aidb): %v", err)
@@ -97,7 +97,7 @@ func TestCreateClusterEngineUnionsWithExtensions(t *testing.T) {
 	extra := []string{"pgvector"}
 	withWriter := true
 	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
-		Name: "both", Engine: &oracle, Extensions: &extra, WithWriter: &withWriter,
+		Name: "both", Engine: &oracle, Extensions: &extra, WithWriter: &withWriter, Password: strptr(testPassword),
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster(oracle+pgvector): %v", err)

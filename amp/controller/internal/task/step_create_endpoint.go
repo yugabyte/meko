@@ -30,6 +30,15 @@ type CreateEndpointArgs struct {
 	// Name is the caller's handle for the endpoint, unique among its branch's
 	// endpoints. Empty means unnamed.
 	Name string `json:"name,omitempty"`
+	// PasswordMD5 is the password for the compute's default user, in `pg_authid`'s
+	// form (see core.MD5PasswordVerifier). Empty leaves the supervisor's default,
+	// which is what a pre-credentials endpoint's replay renders.
+	//
+	// The verifier is the one credential-shaped thing the control plane holds, and
+	// it is held here — on the step, which no API route projects — rather than on
+	// the task input, which GET /tasks returns as `params`. The plaintext is never
+	// persisted anywhere.
+	PasswordMD5 string `json:"password_md5,omitempty"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities,
 	// e.g. "2" / "4Gi"), applied as request == limit for Guaranteed QoS. Carried
 	// in the args so a reclaim/replay deploys the same size. Empty falls back to
@@ -127,6 +136,9 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		Connectivity: s.Connectivity,
 		AllowedCIDRs: s.AllowedCIDRs,
 	}, s.yb, s.scURL, exts)
+	// The create is the only deploy that carries a verifier; EndpointSpecFrom
+	// cannot supply one because nothing stores it.
+	spec.PasswordMD5 = s.PasswordMD5
 
 	// Record the endpoint row first: it claims the single-writer slot (a second
 	// writer is rejected here) and gives the deploy a stable id, before any

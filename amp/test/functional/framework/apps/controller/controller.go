@@ -217,6 +217,12 @@ type CreateClusterRequest struct {
 	// Connectivity is the writer's client reachability. Only meaningful with
 	// WithWriter: the controller rejects it with 400 otherwise.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
+	// Username / Password are the writer's client role, required by the
+	// controller whenever WithWriter is set and refused without it. CreateCluster
+	// fills Password in with DefaultEndpointPassword when WithWriter is set and
+	// the caller named none.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // Endpoint connectivity modes: how clients reach the Postgres port.
@@ -295,6 +301,14 @@ const (
 type CreateEndpointRequest struct {
 	Role     string `json:"role,omitempty"`
 	DiskType string `json:"disk_type,omitempty"`
+	// Username / Password are the endpoint's Postgres client role. The controller
+	// REQUIRES a password on a read_write create and refuses one on a read_only
+	// create. Leave Password empty and CreateEndpoint fills in
+	// DefaultEndpointPassword for a writer, so a suite that does not care about
+	// the credential does not have to carry one; set it to assert something about
+	// the credential itself.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 	// Resources is the compute reservation to create the endpoint with. Omitted
 	// (nil) leaves the controller's create-time defaults in place.
 	Resources *EndpointResources `json:"resources,omitempty"`
@@ -591,6 +605,9 @@ func (c *Client) DeleteStoragePool(ctx context.Context, poolID string) error {
 // CreateCluster plans an async cluster create (202). Returns the Task and the
 // Location header value.
 func (c *Client) CreateCluster(ctx context.Context, poolID string, req CreateClusterRequest) (Task, string, error) {
+	if req.WithWriter && req.Password == "" {
+		req.Password = DefaultEndpointPassword
+	}
 	return c.async(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+poolID+"/clusters", req)
 }
 
@@ -680,8 +697,28 @@ func (c *Client) endpointsPath(poolID, clusterID, branchID string) string {
 
 // CreateEndpoint plans an async endpoint deploy (202).
 func (c *Client) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID string, req CreateEndpointRequest) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID), req)
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID), withEndpointPassword(req))
 }
+
+// DefaultEndpointPassword is what the harness creates writers with when a suite
+// names no password. Fixed and in the clear on purpose: these endpoints are
+// throwaway, and what the suites assert is the API's behaviour, not secrecy.
+const DefaultEndpointPassword = "functional-suite-pw-1"
+
+// withEndpointPassword fills in the writer's password when the caller left it
+// empty. A read_only endpoint creates no role and the controller rejects a
+// password on one, so it is left exactly as the caller wrote it.
+func withEndpointPassword(req CreateEndpointRequest) CreateEndpointRequest {
+	if req.Password == "" && req.Role != roleReadOnly {
+		req.Password = DefaultEndpointPassword
+	}
+	return req
+}
+
+// roleReadOnly is the endpoint_role the controller calls a replica. Named here
+// because withEndpointPassword is the one place the framework has to tell the
+// two roles apart.
+const roleReadOnly = "read_only"
 
 // GetEndpoint reads an endpoint.
 func (c *Client) GetEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Endpoint, error) {

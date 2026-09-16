@@ -541,3 +541,45 @@ tests:
           content:
             name: PROJ_DATA
             value: /extensions/vector/share/proj
+
+  # The compute password is injected from the chart-managed Secret, never from
+  # yugabyte.existingSecret: that one is the YB operator's and holds only the YB
+  # password, so pointing at it would make the pod fail to start on a missing key.
+  - it: injects the compute password from the chart-managed Secret
+    template: templates/deployment.yaml
+    set:
+      yugabyte.existingSecret: my-yb-secret
+      endpoint:
+        password: md50123456789abcdef0123456789abcdef
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: COMPUTE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-yb-amp-endpoint
+                key: computePassword
+
+  # A redeploy renders no password (nothing stores the verifier), and so does a
+  # pre-credentials endpoint. Either way the env var must be absent rather than
+  # referencing a Secret key that is not there — the supervisor then keeps its
+  # own default.
+  - it: omits the compute password when none is set
+    template: templates/deployment.yaml
+    # controller.url only so an `env:` block renders at all — the assertion is
+    # that the password is absent from one that exists, not that nothing does.
+    set:
+      controller:
+        url: http://amp-controller:50051
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLLER_REACHABLE_HOST
+            value: RELEASE-NAME-yb-amp-endpoint.NAMESPACE.svc.cluster.local
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: COMPUTE_PASSWORD
+          any: true

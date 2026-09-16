@@ -231,8 +231,12 @@ PROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r --arg n "$PROJ_NAME
 DEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -r '.default_branch.branch_id')
 [ -n "$PROJ" ] && [ -n "$DEF" ] && ok "materialized proj=$PROJ default_branch=$DEF" || bad "cluster not materialized"
 
+# A writer needs a client-role password; the controller generates none.
+# Fixed for the run: this asserts the API contract, not secrecy.
+EP_PASSWORD="${EP_PASSWORD:-smoke-test-pw-1}"
+
 hdr "createEndpoint (read_write on default branch) -> task succeeded -> address + pod Ready"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" '{"role":"read_write"}')
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createEndpoint code=$code"
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint succeeded" || bad "create_endpoint task=$st"
 EP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" | jq -r '.endpoints[0].id')
@@ -376,7 +380,7 @@ if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
   [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext cluster materialized ($EPROJ / $EDEF)" || bad "ext cluster not materialized"
 
   # The endpoint mounts the cluster's set without any per-endpoint opt-in.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write"}')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(ext) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
   EEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
@@ -438,7 +442,7 @@ SQL
   [ -n "$CPROJ" ] && [ -n "$CDEF" ] && ok "pg_cron cluster materialized ($CPROJ / $CDEF)" || bad "pg_cron cluster not materialized"
 
   # The endpoint mounts the cluster's pg_cron without any per-endpoint opt-in.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" '{"role":"read_write"}')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(pg_cron) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(pg_cron) succeeded" || bad "create_endpoint(pg_cron) task=$st"
   CEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" | jq -r '.endpoints[0].id')
@@ -517,7 +521,7 @@ SQL
   [ -n "$HPROJ" ] && [ -n "$HDEF" ] && ok "hexabridge cluster materialized ($HPROJ / $HDEF)" || bad "hexabridge cluster not materialized"
 
   # The endpoint mounts the cluster's hexabridge without any per-endpoint opt-in.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" '{"role":"read_write"}')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(hexabridge) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge) succeeded" || bad "create_endpoint(hexabridge) task=$st"
   HEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" | jq -r '.endpoints[0].id')
@@ -703,7 +707,7 @@ SQL
     || bad "fork extensions=$fexts (want age,pg_cron,pgvector)"
 
   # A fresh endpoint on the fork mounts the inherited set with no opt-in.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" '{"role":"read_write"}')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "fork createEndpoint 202" || bad "fork createEndpoint code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
   FEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')

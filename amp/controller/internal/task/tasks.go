@@ -165,6 +165,13 @@ type CreateClusterInput struct {
 	// refuses that combination rather than letting it reach here.
 	Connectivity string   `json:"connectivity,omitempty"`
 	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	// PasswordMD5 is the writer's compute-user password in pg_authid's form.
+	// Ignored when WithWriter is false, for the same reason Connectivity is.
+	// `json:"-"` is
+	// load-bearing: this input is stored as the task's params and GET /tasks
+	// returns it, so the verifier must not be part of it. It reaches the pod on
+	// the create_endpoint step's own args instead.
+	PasswordMD5 string `json:"-"`
 	// Engine is the named extension bundle to provision as ("postgres", "aidb",
 	// "oracle"). The handler validates it and folds its bundle into Extensions;
 	// this records what the cluster was created as. Empty means the default.
@@ -213,6 +220,7 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Ta
 			Memory:       in.Memory,
 			Connectivity: in.Connectivity,
 			AllowedCIDRs: in.AllowedCIDRs,
+			PasswordMD5:  in.PasswordMD5,
 		}))
 	}
 	// TargetRef is the new default branch: the UI pre-selects it once the task
@@ -319,6 +327,12 @@ type CreateEndpointInput struct {
 	// reach an nlb_* endpoint's load balancer. Both are validated by the API.
 	Connectivity string   `json:"connectivity,omitempty"`
 	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	// PasswordMD5 is the compute default user's password in pg_authid's form.
+	// `json:"-"` is
+	// load-bearing: this input is stored as the task's params and GET /tasks
+	// returns it, so the verifier must not be part of it. It reaches the pod on
+	// the create_endpoint step's own args instead.
+	PasswordMD5 string `json:"-"`
 }
 
 // CreateEndpoint records a create_endpoint task: a single create_endpoint step on
@@ -345,6 +359,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			SafekeeperSettings: in.SafekeeperSettings,
 			Connectivity:       in.Connectivity,
 			AllowedCIDRs:       in.AllowedCIDRs,
+			PasswordMD5:        in.PasswordMD5,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ClusterID, endpointID.String(), steps)

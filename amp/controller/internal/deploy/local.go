@@ -35,6 +35,12 @@ func (LocalDeployer) CreateEndpoint(_ context.Context, spec EndpointSpec) (Endpo
 	return Endpoint{ID: spec.Name, Version: spec.Version}, nil
 }
 
+// AppliesComputePassword is false: the compute this driver records is started by
+// its owner from a spec it rendered itself, which makes the supervisor skip
+// remote_auth — so nothing would apply the password and the API must not insist
+// on one.
+func (LocalDeployer) AppliesComputePassword() bool { return false }
+
 // DeleteEndpoint retires nothing; the record's owner stops its own process. The
 // delete_endpoint step drops the row after this returns.
 func (LocalDeployer) DeleteEndpoint(_ context.Context, _ string) error { return nil }

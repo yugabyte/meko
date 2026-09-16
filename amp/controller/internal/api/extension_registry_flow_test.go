@@ -96,6 +96,7 @@ func TestRegisteredExtensionMountsOnABranch(t *testing.T) {
 	withWriter := true
 	created, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name: "gis", Extensions: &[]string{"postgis"}, WithWriter: &withWriter,
+		Password: strptr(testPassword),
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
@@ -237,6 +238,7 @@ func TestDeregisterExtensionRefusedWhileABranchUsesIt(t *testing.T) {
 	withWriter := true
 	if _, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name: "gis", Extensions: &[]string{"postgis"}, WithWriter: &withWriter,
+		Password: strptr(testPassword),
 	}); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}

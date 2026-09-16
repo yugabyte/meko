@@ -214,6 +214,7 @@ def create_endpoint(
     pg_settings: Optional[dict[str, str]] = None,
     pageserver_settings: Optional[dict[str, Any]] = None,
     safekeeper_settings: Optional[dict[str, Any]] = None,
+    password: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create and deploy an endpoint (compute) on a branch. ASYNCHRONOUS.
 
@@ -228,6 +229,15 @@ def create_endpoint(
     `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then call
     `get_endpoint` to read its `address` (and `tailnet_address`, if the endpoint
     is exposed on the tailnet).
+
+    A `read_write` endpoint comes up with `password` set on the compute's
+    default Postgres user (`cloud_admin`), and it is **required** — the
+    controller generates none. Ask the user for one rather than inventing it
+    silently, and do not echo it back in your reply. Nothing stores it and no
+    call can recover it. A `read_only` endpoint shares its branch's roles, so
+    passing a password with one is a 400.
+
+    The user is not selectable yet (yugabyte/meko#1354).
 
     Three optional settings maps configure what runs inside the pod. To change
     one later use `update_endpoint_settings` — the endpoint restarts the
@@ -254,7 +264,7 @@ def create_endpoint(
     """
     return controller_client.create_endpoint(
         pool_id, cluster_id, branch_id, role, disk_type, cpu, memory,
-        pg_settings, pageserver_settings, safekeeper_settings
+        pg_settings, pageserver_settings, safekeeper_settings, password
     )
 
 

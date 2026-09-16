@@ -88,6 +88,20 @@ endpoint:
   # pageserver_settings / safekeeper_settings) from the registry at start. Empty
   # => no override lookup, derived defaults only.
   endpointId: ""
+  # -- Password for the compute's default user (`cloud_admin`, the superuser
+  # initdb created), set by the supervisor once Postgres answers so clients
+  # arriving from outside the pod can authenticate. Rendered into the release's
+  # Secret and delivered as COMPUTE_PASSWORD.
+  #
+  # Given as the verifier `pg_authid` stores, not the plaintext — `md5` followed
+  # by md5(password + user). Postgres stores a value of that shape verbatim
+  # instead of hashing it again, so the control plane never has to hand the pod
+  # a password it could read back. A plaintext value also works (Postgres hashes
+  # it), which is what the supervisor's own default falls back to.
+  #
+  # Empty leaves the supervisor's default in place, which is the well-known
+  # `cloud_admin` — what every endpoint deployed before this had.
+  password: ""
   # -- Postgres shared_preload_libraries for the compute. Extensions with
   # `preload: true` below are appended to this automatically.
   # `pg_stat_statements` (contrib, in the image) is preloaded by default because a

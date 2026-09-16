@@ -34,7 +34,7 @@ func TestCreateClusterCarriesConnectivityToTheWriter(t *testing.T) {
 	cidrs := []string{"10.0.0.0/16"}
 	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "exposed",
-		WithWriter: &withWriter,
+		WithWriter: &withWriter, Password: strptr(testPassword),
 		Connectivity: &api.EndpointConnectivity{
 			Mode:         &mode,
 			AllowedCidrs: &cidrs,
@@ -75,7 +75,7 @@ func TestCreateClusterWithoutConnectivityLeavesTheDeployerDefault(t *testing.T) 
 
 	withWriter := true
 	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
-		Name: "plain", WithWriter: &withWriter,
+		Name: "plain", WithWriter: &withWriter, Password: strptr(testPassword),
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
@@ -142,7 +142,7 @@ func TestCreateClusterValidatesConnectivity(t *testing.T) {
 		{"CIDR with no prefix length", api.EndpointConnectivity{Mode: &external, AllowedCidrs: &bare}},
 	} {
 		got, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
-			Name: "c-" + tc.name, WithWriter: &withWriter, Connectivity: &tc.conn,
+			Name: "c-" + tc.name, WithWriter: &withWriter, Password: strptr(testPassword), Connectivity: &tc.conn,
 		})
 		if err != nil {
 			t.Fatalf("%s: CreateCluster: %v", tc.name, err)

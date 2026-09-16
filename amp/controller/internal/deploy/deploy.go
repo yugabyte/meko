@@ -103,6 +103,11 @@ type EndpointSpec struct {
 	// modes only. Allocated before the deploy rather than discovered after it,
 	// which is what lets the address be known up front instead of waited for.
 	Ingress IngressSlot
+	// PasswordMD5 is the password for the compute's default user, as `pg_authid`
+	// stores it (see core.MD5PasswordVerifier). Set on the create path only: the
+	// plaintext is never persisted and the verifier is never read back, so a
+	// REDEPLOY renders it empty and the supervisor leaves the password alone.
+	PasswordMD5 string
 	// Extensions are the externalized PostgreSQL extensions to mount into the
 	// endpoint as read-only ImageVolumes (compute/architecture/extensions.md).
 	// The Kubernetes deployer renders one volume per entry and derives
@@ -266,6 +271,9 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 			RecordType: e.IngressRecordType,
 		},
 		Extensions: mounts,
+		// No PasswordMD5: there is nowhere to read one from. The password is
+		// already set in the branch's catalog, and re-rendering an empty verifier
+		// is what stops a redeploy resetting it.
 		// No pg_settings here: the endpoint's supervisor reads the branch's and
 		// the endpoint's straight from amp_registry and merges them itself, so a
 		// change is a registry write rather than a redeploy. EndpointID above is
@@ -376,6 +384,28 @@ type IngressSupporter interface {
 // them rather than on a date.
 type IngressPlacer interface {
 	PlacesIngress() bool
+}
+
+// ComputePasswordApplier is implemented by a Deployer whose endpoints do NOT
+// apply the compute password, so the API can stop demanding one. Opt-OUT, unlike
+// ConnectivitySupporter: a deployer that does not implement it does apply it,
+// which is what the Docker and Kubernetes runtimes do.
+//
+// LocalDeployer is the case this exists for. A yb_amp_local compute is reached
+// over loopback with a caller-rendered spec, which makes the supervisor skip
+// remote_auth entirely (see Prerender in endpoint_supervisor), so the password
+// would never be set — and requiring one would be demanding a credential nothing
+// consumes and nobody can use.
+type ComputePasswordApplier interface {
+	AppliesComputePassword() bool
+}
+
+// AppliesComputePassword reports whether endpoints placed by dep actually set
+// the compute password the create request carries. True for a deployer that says
+// nothing, since that is every runtime whose supervisor runs remote_auth.
+func AppliesComputePassword(dep Deployer) bool {
+	p, ok := dep.(ComputePasswordApplier)
+	return !ok || p.AppliesComputePassword()
 }
 
 // Deployer places and removes compute endpoints on a runtime. CreateEndpoint

@@ -28,6 +28,7 @@ import { isValidMemory } from "@/lib/compute";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeInstance } from "./ComputeInstance";
 
+
 export function EndpointsSection({
   poolId,
   clusterId,
@@ -52,10 +53,16 @@ export function EndpointsSection({
   // How clients reach this compute. The nlb_* modes each provision their own
   // cloud load balancer, so they are opt-in rather than the default.
   const [connectivity, setConnectivity] = useState<Connectivity>(DEFAULT_CONNECTIVITY);
+  // The password for the compute's default user. Required for a writer.
+  const [password, setPassword] = useState("");
   const createEndpoint = useCreateEndpoint();
   // The controller rejects a memory quantity with no unit; block the click
   // instead of sending one and reporting the 400 back as a toast.
   const memoryValid = isValidMemory(memory);
+  // The controller requires a password for a writer and refuses one for a
+  // replica, so the button follows the same rule rather than sending a 400.
+  const needsPassword = role === "read_write";
+  const passwordValid = !needsPassword || password.length > 0;
 
   // A branch admits at most one read-write compute (multiple read-only are
   // fine). Once a read-write exists, disable that option and force the
@@ -77,10 +84,15 @@ export function EndpointsSection({
         memory: memory.trim(),
         connectivity: connectivity.mode,
         allowedCidrs: parseCidrs(connectivity.allowedCidrs),
+        // Branch-wide, so only the writer may set it; sending one on a
+        // read-only endpoint is a 400.
+        ...(role === "read_write" ? { password } : {}),
       },
       {
-        onSuccess: (ep) =>
-          toast.success(msg.provisionSuccess(ep.role.replace("_", "-"))),
+        onSuccess: (endpoint) => {
+          toast.success(msg.provisionSuccess(endpoint.role.replace("_", "-")));
+          setPassword("");
+        },
         onError: (err) =>
           toast.error(err instanceof Error ? err.message : msg.provisionError),
       },
@@ -150,12 +162,32 @@ export function EndpointsSection({
             className="h-8 w-24 font-mono text-xs"
           />
         </div>
+{/* Roles live in the branch's catalog, which every endpoint on it shares,
+            so only the writer creates one — the controller rejects these on a
+            read-only endpoint rather than rotating the writer's credential. */}
+        {role === "read_write" && (
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="ep-password" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Password
+              </Label>
+              <Input
+                id="ep-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="required"
+                title={msg.passwordHint}
+                aria-invalid={!passwordValid}
+                className="h-8 w-32 font-mono text-xs"
+              />
+            </div>
+        )}
         <ConnectivityField value={connectivity} onChange={setConnectivity} layout="row" />
         <Button
           variant="outline"
           size="sm"
           onClick={provision}
-          disabled={createEndpoint.isPending || !memoryValid}
+          disabled={createEndpoint.isPending || !memoryValid || !passwordValid}
         >
           {createEndpoint.isPending ? "Provisioning…" : "Provision compute"}
         </Button>
@@ -165,6 +197,9 @@ export function EndpointsSection({
         <p id="ep-memory-hint" className="mt-1.5 text-[11px] text-destructive">
           {msg.memoryNeedsUnit}
         </p>
+      )}
+      {!passwordValid && (
+        <p className="mt-1.5 text-[11px] text-destructive">{msg.passwordRequired}</p>
       )}
       {hasReadWrite && (
         <p className="mt-1.5 text-[11px] text-muted-foreground">

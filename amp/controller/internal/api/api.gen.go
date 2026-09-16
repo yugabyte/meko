@@ -520,6 +520,11 @@ type CreateClusterRequest struct {
 	// Name Cluster (database) name; unique within the pool. The cluster's default branch is always named "main".
 	Name string `json:"name"`
 
+	// Password The writer's compute password, as `createEndpoint`'s `password`:
+	// **required** whenever `with_writer` is set, and refused without it
+	// for the same reason `connectivity` is.
+	Password *string `json:"password,omitempty"`
+
 	// PgVersion Postgres major version for the cluster's default branch. Defaults to 18.
 	PgVersion *int `json:"pg_version,omitempty"`
 
@@ -625,6 +630,26 @@ type CreateEndpointRequest struct {
 	// Applied at pod start, so a change takes effect on the endpoint's next
 	// start — there is no live-reload path today.
 	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
+
+	// Password Password for the compute's default Postgres user (`cloud_admin`, the
+	// superuser `initdb` created) — who clients connect to `address` as.
+	// **Required** when creating a `read_write` endpoint; the controller
+	// mints none. What it keeps is the verifier Postgres itself stores,
+	// never the plaintext, so a password it generated could only be
+	// returned on this one response, and a caller that did not read it
+	// would own an endpoint nobody can log into. Requiring it means the
+	// credential only ever exists where its owner already has it.
+	//
+	// Not marked `required` in this schema because a `read_only` endpoint
+	// must NOT carry one: the user lives in the branch's catalog, which all
+	// of its endpoints share, so a replica already answers to whatever its
+	// branch's writer set — sending this with one is a 400 rather than a
+	// rotation of the credential in use. Omitting it on a `read_write`
+	// create is a 400 too.
+	//
+	// The user itself is not selectable yet; that needs the compute's
+	// maintenance role to stop being hardcoded (yugabyte/meko#1354).
+	Password *string `json:"password,omitempty"`
 
 	// PgSettings Extra PostgreSQL settings for THIS endpoint, as `{name: value}`.
 	// They merge over the branch's `pg_settings` and win on a key both

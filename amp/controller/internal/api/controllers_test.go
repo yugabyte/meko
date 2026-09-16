@@ -450,8 +450,8 @@ func TestCreateClusterWithWriter(t *testing.T) {
 	cpu, mem := "4", "32Gi"
 	cp, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "shop",
-		WithWriter: &withWriter,
-		Resources:  &api.EndpointResources{Cpu: &cpu, Memory: &mem},
+		WithWriter: &withWriter, Password: strptr(testPassword),
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster(with_writer): %v", err)
@@ -479,8 +479,8 @@ func TestCreateClusterWithWriter(t *testing.T) {
 	badCPU := "not-a-quantity"
 	bad, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "shop2",
-		WithWriter: &withWriter,
-		Resources:  &api.EndpointResources{Cpu: &badCPU},
+		WithWriter: &withWriter, Password: strptr(testPassword),
+		Resources: &api.EndpointResources{Cpu: &badCPU},
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster(bad resources): %v", err)
@@ -597,7 +597,7 @@ func TestCreateEndpointDeployFailure(t *testing.T) {
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestCreateEndpointAddressRecordFailure(t *testing.T) {
 	mem.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -870,7 +870,7 @@ func TestCreateEndpointReturnsTask(t *testing.T) {
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -1202,8 +1202,8 @@ func TestCreateClusterWithWriterIsHeldToTheFloor(t *testing.T) {
 	cpu, thin := "4", "8Gi"
 	bad, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "thin",
-		WithWriter: &withWriter,
-		Resources:  &api.EndpointResources{Cpu: &cpu, Memory: &thin},
+		WithWriter: &withWriter, Password: strptr(testPassword),
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin},
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster(thin writer): %v", err)
@@ -1217,8 +1217,8 @@ func TestCreateClusterWithWriterIsHeldToTheFloor(t *testing.T) {
 	only := "8"
 	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "sized",
-		WithWriter: &withWriter,
-		Resources:  &api.EndpointResources{Cpu: &only},
+		WithWriter: &withWriter, Password: strptr(testPassword),
+		Resources: &api.EndpointResources{Cpu: &only},
 	})
 	if err != nil || ok.StatusCode() != http.StatusAccepted {
 		t.Fatalf("CreateCluster(cpu only): status = %d, err = %v; body = %s", ok.StatusCode(), err, ok.Body)

@@ -20,6 +20,12 @@ export const dataBranchingMessages = {
   readWriteAlreadyExists:
     "This branch already has a read-write compute — additional compute must be read-only.",
 
+  // Per-endpoint credentials. The caller supplies the password; nothing
+  // generates or stores one, so it is never shown back.
+  passwordHint:
+    "Required, for the compute's cloud_admin user. 8-128 characters. Not stored — keep your own copy.",
+  passwordRequired: "A password is required for read-write compute.",
+
   // Resize
   resizeCompleted: (size: string) => `Resized in place to ${size}`,
   resizePending: (size: string) => `Resize to ${size} accepted — applying shortly`,

@@ -280,6 +280,15 @@ The supervisor materializes the branch itself:
   waits for that log line as the readiness signal
   (`remote_auth::READY_MARKER`).
 
+  The password is `COMPUTE_PASSWORD`, and from the control plane it
+  arrives already hashed — the form `pg_authid` stores under the spec's
+  `password_encryption = md5`. Postgres keeps a value of that shape
+  verbatim rather than hashing it again, which is how a caller-supplied
+  password reaches the role without the control plane ever holding
+  something it could read back. Nothing here changes for that: the
+  supervisor sets whatever it is given, and its own `cloud_admin`
+  default is what an endpoint gets when the control plane sends none.
+
 ## Fencing is the supervisor's, not the pageserver's
 
 The supervisor holds the lease for the whole endpoint and every service

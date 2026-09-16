@@ -264,7 +264,7 @@ func TestListEndpoints(t *testing.T) {
 	// 202; drive the create_endpoint task, then it shows up in the list with its
 	// deployed address.
 	rw := api.CreateEndpointRequestRoleReadWrite
-	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, cluster.Id, branchID, api.CreateEndpointRequest{Role: &rw})
+	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, cluster.Id, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}

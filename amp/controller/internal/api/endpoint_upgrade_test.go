@@ -151,8 +151,13 @@ func TestUpgradeEndpointsRoll(t *testing.T) {
 	rw := api.CreateEndpointRequestRoleReadWrite
 	ro := api.CreateEndpointRequestRoleReadOnly
 	for _, role := range []api.CreateEndpointRequestRole{rw, ro} {
-		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID,
-			api.CreateEndpointRequest{Role: &role}); err != nil {
+		// Only the writer creates a client role, so only the writer carries a
+		// password; sending one on the replica is a 400.
+		body := api.CreateEndpointRequest{Role: &role}
+		if role == rw {
+			body.Password = strptr(testPassword)
+		}
+		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, body); err != nil {
 			t.Fatalf("CreateEndpoint(%s): %v", role, err)
 		}
 	}

@@ -545,10 +545,20 @@ The deploy is **demo-grade**. What it currently takes for granted:
 - **No authentication.** The control-plane API + UI are unauthenticated. Mitigated only by **internal
   LoadBalancers** (private VPC IPs, GKE `…/load-balancer-type: Internal`) — not by
   any authn/authz. Do not expose publicly.
-- **Shared, well-known endpoint credentials.** Every endpoint's compute uses the
-  same `cloud_admin` / `cloud_admin` superuser (the `COMPUTE_PASSWORD` default);
-  there is no per-endpoint credential generation or cluster isolation at the SQL
-  layer.
+- **`cloud_admin` is no longer well-known, but it is still shared.** An endpoint
+  created through the API comes up with `cloud_admin`'s password set to one the
+  caller supplied, delivered as `COMPUTE_PASSWORD`; only an endpoint created
+  before this (or one whose create named no password) keeps the `cloud_admin` /
+  `cloud_admin` default. What has not changed is that it is ONE superuser per
+  branch, shared by every endpoint on it and inherited by forks — there is still
+  no cluster isolation at the SQL layer, and no way for a customer to choose the
+  user's name (yugabyte/meko#1354).
+
+  The control plane stores no password and generates none: what travels to the
+  pod (and sits in the release Secret and the create task's step row) is the
+  verifier `pg_authid` itself holds — md5 today, which is its own problem
+  (yugabyte/meko#1351). The plaintext exists only in the request that set it,
+  which is why the caller has to bring one.
 - **Postgres v18 only.** create-cluster rejects any other `pg_version`.
 - **One pageserver+safekeeper per endpoint pod**, registered with a **unique SC
   node id derived from the branch id** (a 31-bit hash). Collision-resistant, not

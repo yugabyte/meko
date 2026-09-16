@@ -1324,6 +1324,11 @@ type endpointValues struct {
 	// amp_registry.endpoints and read its override columns. Omitted => no
 	// override lookup, derived defaults only.
 	EndpointId string `json:"endpointId,omitempty"`
+	// Password is the compute default user's password in pg_authid's form,
+	// rendered into the release's Secret. Omitted (a pre-credentials endpoint, or
+	// any REDEPLOY, which has no verifier to render) leaves the supervisor's own
+	// default in place.
+	Password string `json:"password,omitempty"`
 	// Resources is the pod's CPU + memory reservation. The chart renders each
 	// value as both a request and a limit, so the pod gets Guaranteed QoS.
 	Resources resourceValues `json:"resources"`
@@ -1406,6 +1411,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			ComputePort: k.cfg.ComputePort,
 			BranchId:    branchIDValue(spec.BranchID),
 			EndpointId:  spec.EndpointID,
+			Password:    spec.PasswordMD5,
 			Resources:   resourceValues{CPU: cpu, Memory: memory},
 			Extensions:  extensionValuesFor(spec.Extensions),
 		},

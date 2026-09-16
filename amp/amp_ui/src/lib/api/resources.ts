@@ -191,9 +191,13 @@ export function createClusterWithWriter(
     extensions?: string[];
     connectivity?: EndpointConnectivityMode;
     allowedCidrs?: string[];
+    password?: string;
   },
 ): Promise<Task> {
   const body: Record<string, unknown> = { name: input.name, with_writer: true };
+  // The writer's compute password. Required by the controller, so a create
+  // without one is a 400 — the wizard is what stops that reaching here.
+  if (input.password) body.password = input.password;
   if (input.cpu || input.memory) {
     body.resources = { cpu: input.cpu || undefined, memory: input.memory || undefined };
   }

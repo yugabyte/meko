@@ -33,7 +33,7 @@ func TestResizeRecordsAppliedGenerationOnlyOnSuccess(t *testing.T) {
 	})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil || created.StatusCode() != http.StatusAccepted {
 		t.Fatalf("CreateEndpoint: status=%d err=%v", created.StatusCode(), err)
 	}
@@ -105,7 +105,7 @@ func TestResizeWithoutAGenerationRecordsNothing(t *testing.T) {
 		ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
 	})
 	rw := api.CreateEndpointRequestRoleReadWrite
-	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)}); err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 	drainTasks(t, store, backend, prov)

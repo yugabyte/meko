@@ -49,7 +49,7 @@ func TestEndpointFlow(t *testing.T) {
 	ro := api.CreateEndpointRequestRoleReadOnly
 
 	// Create a read_write endpoint -> 202 + a create_endpoint Task.
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestEndpointFlow(t *testing.T) {
 	// the async contract this is no longer a synchronous 409 — the create is
 	// accepted (202) and the conflict surfaces as a FAILED task when its step's
 	// EnsureEndpointRecord hits the single-writer index.
-	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(dup writer): %v", err)
 	}
@@ -158,7 +158,7 @@ func TestEndpointErrors(t *testing.T) {
 	rw := api.CreateEndpointRequestRoleReadWrite
 
 	// Create against a branch that does not exist -> 404.
-	missing, err := client.CreateEndpointWithResponse(ctx, pool.Id, uuid.New(), uuid.New(), api.CreateEndpointRequest{Role: &rw})
+	missing, err := client.CreateEndpointWithResponse(ctx, pool.Id, uuid.New(), uuid.New(), api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(missing branch): %v", err)
 	}
@@ -198,7 +198,7 @@ func TestEndpointDiskType(t *testing.T) {
 	local := api.Local
 
 	// disk_type=local -> 400 (cheap validation), and no endpoint exists.
-	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &local})
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &local, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(local): %v", err)
 	}
@@ -214,7 +214,7 @@ func TestEndpointDiskType(t *testing.T) {
 	}
 
 	// disk_type=network -> 202 (the default disk); drive it, then it deployed.
-	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &network})
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &network, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(network): %v", err)
 	}
@@ -265,7 +265,7 @@ func TestClusterExtensions(t *testing.T) {
 	// dropped field if losing it is distinguishable from the deployer's defaults.
 	cpu, mem := "4", "32Gi" // non-default, and at the 8 GiB per vCPU this control plane requires
 	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
-		Name: "shop", Extensions: &want, WithWriter: &withWriter,
+		Name: "shop", Extensions: &want, WithWriter: &withWriter, Password: strptr(testPassword),
 		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
 	})
 	if err != nil {
@@ -438,7 +438,7 @@ func TestEndpointResources(t *testing.T) {
 
 	// (1) omitted resources -> the 2-core default, and the memory its cores are
 	// owed at 8 GiB each, reach the deployer.
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(default resources): %v", err)
 	}
@@ -460,8 +460,7 @@ func TestEndpointResources(t *testing.T) {
 	cpu, mem := "8", "64Gi"
 	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{
 		Role:      &rw,
-		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
-	})
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem}, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(explicit resources): %v", err)
 	}
@@ -478,7 +477,7 @@ func TestEndpointResources(t *testing.T) {
 	// being accepted and only failing later in the worker's helm run.
 	badCPU, badMem := "2x", "4Gii"
 	for _, res := range []*api.EndpointResources{{Cpu: &badCPU}, {Memory: &badMem}} {
-		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{Role: &rw, Resources: res})
+		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{Role: &rw, Resources: res, Password: strptr(testPassword)})
 		if err != nil {
 			t.Fatalf("CreateEndpoint(invalid resources): %v", err)
 		}
@@ -528,8 +527,7 @@ func TestEndpointMemoryRequiresUnit(t *testing.T) {
 	for _, mem := range memoryNoUnit {
 		m := mem
 		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
-			Role: &rw, Resources: &api.EndpointResources{Memory: &m},
-		})
+			Role: &rw, Resources: &api.EndpointResources{Memory: &m}, Password: strptr(testPassword)})
 		if err != nil {
 			t.Fatalf("CreateEndpoint(memory %q): %v", m, err)
 		}
@@ -550,8 +548,7 @@ func TestEndpointMemoryRequiresUnit(t *testing.T) {
 	mem := memoryWithUnit[0]
 	unitCPU := memoryUnitCPU
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
-		Role: &rw, Resources: &api.EndpointResources{Cpu: &unitCPU, Memory: &mem},
-	})
+		Role: &rw, Resources: &api.EndpointResources{Cpu: &unitCPU, Memory: &mem}, Password: strptr(testPassword)})
 	if err != nil || created.StatusCode() != http.StatusAccepted {
 		t.Fatalf("create with memory %q: status = %d, err = %v; body = %s", mem, created.StatusCode(), err, created.Body)
 	}
@@ -637,7 +634,7 @@ func TestEndpointResize(t *testing.T) {
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -744,7 +741,7 @@ func TestEndpointResizeParallel(t *testing.T) {
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)}); err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 	drainTasks(t, store, backend, prov)
@@ -864,7 +861,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 		clusterID, branchID := uuid.New(), uuid.New()
 		backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 		rw := api.CreateEndpointRequestRoleReadWrite
-		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)}); err != nil {
 			t.Fatalf("CreateEndpoint: %v", err)
 		}
 		drainTasks(t, store, backend, prov)
@@ -969,7 +966,7 @@ func TestEndpointDeployDisabled(t *testing.T) {
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -1014,7 +1011,7 @@ func TestEndpointLocalDeployer(t *testing.T) {
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID,
-		api.CreateEndpointRequest{Role: &rw})
+		api.CreateEndpointRequest{Role: &rw, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -1092,7 +1089,7 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 	name := "primary"
 	epSettings := map[string]string{"work_mem": "64MB", "jit": "off"}
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID,
-		api.CreateEndpointRequest{Role: &rw, Name: &name, PgSettings: &epSettings})
+		api.CreateEndpointRequest{Role: &rw, Name: &name, PgSettings: &epSettings, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -1171,8 +1168,7 @@ func TestEndpointShapeFloor(t *testing.T) {
 	cpu, thin := "4", "8Gi"
 	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
 		Role:      &rw,
-		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin},
-	})
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin}, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(thin): %v", err)
 	}
@@ -1190,8 +1186,7 @@ func TestEndpointShapeFloor(t *testing.T) {
 	big := "8"
 	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
 		Role:      &rw,
-		Resources: &api.EndpointResources{Cpu: &big},
-	})
+		Resources: &api.EndpointResources{Cpu: &big}, Password: strptr(testPassword)})
 	if err != nil || ok.StatusCode() != http.StatusAccepted {
 		t.Fatalf("CreateEndpoint(cpu only): status = %d, err = %v; body = %s", ok.StatusCode(), err, ok.Body)
 	}
@@ -1237,8 +1232,7 @@ func TestEndpointShapeFloorIsConfigurable(t *testing.T) {
 	cpu, mem := "4", "16Gi"
 	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{
 		Role:      &rw,
-		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
-	})
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem}, Password: strptr(testPassword)})
 	if err != nil || ok.StatusCode() != http.StatusAccepted {
 		t.Fatalf("a shape meeting the configured floor was refused: status = %d, err = %v; body = %s", ok.StatusCode(), err, ok.Body)
 	}
@@ -1250,8 +1244,7 @@ func TestEndpointShapeFloorIsConfigurable(t *testing.T) {
 	only := "8"
 	ok2, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{
 		Role:      &rw,
-		Resources: &api.EndpointResources{Cpu: &only},
-	})
+		Resources: &api.EndpointResources{Cpu: &only}, Password: strptr(testPassword)})
 	if err != nil || ok2.StatusCode() != http.StatusAccepted {
 		t.Fatalf("CreateEndpoint(cpu only): status = %d, err = %v", ok2.StatusCode(), err)
 	}
@@ -1265,8 +1258,7 @@ func TestEndpointShapeFloorIsConfigurable(t *testing.T) {
 	thin := "8Gi"
 	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, uuid.New(), api.CreateEndpointRequest{
 		Role:      &rw,
-		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin},
-	})
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &thin}, Password: strptr(testPassword)})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(under the configured floor): %v", err)
 	}
@@ -1295,7 +1287,7 @@ func TestCreateEndpointRawBodyWithOnlyCPU(t *testing.T) {
 	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	url := fmt.Sprintf("%s/storage-pools/%s/clusters/%s/branches/%s/endpoints", base, pool.Id, clusterID, branchID)
-	body := `{"role":"read_write","resources":{"cpu":"4"}}`
+	body := `{"role":"read_write","resources":{"cpu":"4"},"password":"hunter2hunter2"}`
 	resp, err := http.Post(url, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -1463,8 +1455,14 @@ func TestCreateEndpointChunkedEmptyBody(t *testing.T) {
 		t.Fatalf("POST endpoints: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 202 (a nil body is the default-everything create), body = %s", resp.StatusCode, body)
+	body, _ := io.ReadAll(resp.Body)
+	// 400, not 202: a writer needs a password, and an empty body carries none.
+	// What is under test is that echo BOUND the empty body instead of failing on
+	// it — so the reply has to be the validation error, not a bind error.
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (the empty body binds, then fails validation), body = %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "password is required") {
+		t.Errorf("body = %s, want the password validation error — anything else means the empty body did not bind", body)
 	}
 }

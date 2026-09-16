@@ -347,10 +347,16 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			"connectivity applies to the writer created by with_writer; set with_writer, or create the endpoint separately"))}, nil
 	}
-	var cpu, memory, connectivity string
+	// Same reasoning for the password: one on a writerless create sets a
+	// credential on an endpoint that will not exist.
+	if !withWriter && request.Body.Password != nil {
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"password applies to the writer created by with_writer; set with_writer, or create the endpoint separately"))}, nil
+	}
+	var cpu, memory, connectivity, verifier string
 	var allowedCIDRs []string
+	var apiErr *Error
 	if withWriter {
-		var apiErr *Error
 		if connectivity, allowedCIDRs, apiErr = endpointConnectivity(request.Body.Connectivity, c.prov.Deployer); apiErr != nil {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
 		}
@@ -365,6 +371,13 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		// deployer an empty memory for a request that named only CPU.
 		if cpu, memory, errMsg = deploy.ResolveEndpointShape(oCPU, oMem, c.memoryFloorGiBPerVCPU()); errMsg != "" {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", errMsg))}, nil
+		}
+		// Resolved exactly as `createEndpoint` resolves it, so the one-call
+		// onboarding path's writer is credentialed like any other endpoint —
+		// including requiring a password.
+		if verifier, apiErr = endpointCredentials(request.Body.Password,
+			deploy.AppliesComputePassword(c.prov.Deployer)); apiErr != nil {
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
 		}
 	}
 
@@ -383,6 +396,7 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		AllowedCIDRs: allowedCIDRs,
 		Engine:       engine,
 		Extensions:   exts,
+		PasswordMD5:  verifier,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create cluster task: %w", err)
@@ -867,6 +881,48 @@ func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
 	return cpu, memory, ""
 }
 
+// endpointCredentials turns the caller's password into the verifier the pod
+// gets, which is all anything downstream ever sees — the plaintext is used to
+// compute it and then dropped.
+//
+// The password is REQUIRED. The controller does not mint one: a generated
+// password has to be handed back on the 202 to be usable at all, and that is a
+// credential delivered through a response body nobody may have read — the
+// create-cluster wizard discarded it, and a YCP-driven create has no reader at
+// all. Making the caller supply it means the credential only ever exists
+// somewhere its owner already has it.
+// endpointCredentials turns the caller's password into the verifier the pod
+// gets. The plaintext is used to compute that and then dropped — it is never
+// persisted, and no response reports it.
+//
+// The password is REQUIRED. The controller mints none: a generated password has
+// to be handed back on the 202 to be usable at all, and that is a credential
+// delivered through a response body nobody may have read — the create-cluster
+// wizard discarded it, and a YCP-driven create has no reader at all. Making the
+// caller supply it means the credential only ever exists somewhere its owner
+// already has it.
+//
+// required says whether this deployer's endpoints actually apply it. They all do
+// except the local driver — see deploy.ComputePasswordApplier.
+func endpointCredentials(password *string, required bool) (verifier string, apiErr *Error) {
+	if password == nil {
+		if !required {
+			// Nothing will apply it, so there is nothing to set.
+			return "", nil
+		}
+		e := apiError("invalid_request", "password is required for a read_write endpoint")
+		return "", &e
+	}
+	// NOT trimmed: a password is bytes the caller chose, and quietly altering
+	// them yields a credential that does not authenticate.
+	plain := *password
+	if err := core.ValidateEndpointPassword(plain); err != nil {
+		e := apiError("invalid_argument", err.Error())
+		return "", &e
+	}
+	return core.MD5PasswordVerifier(plain, core.ComputeDefaultUser), nil
+}
+
 func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error) {
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
@@ -989,6 +1045,26 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
 	}
 
+	// Only a writer sets the password. The compute's default user lives in the
+	// branch's catalog, which every endpoint on the branch shares, so a read_only
+	// endpoint setting it would rotate the credential the writer's clients are
+	// already using.
+	var reqPassword *string
+	if request.Body != nil {
+		reqPassword = request.Body.Password
+	}
+	var verifier string
+	if role == core.RoleReadWrite {
+		var apiErr *Error
+		if verifier, apiErr = endpointCredentials(reqPassword,
+			deploy.AppliesComputePassword(c.prov.Deployer)); apiErr != nil {
+			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
+		}
+	} else if reqPassword != nil {
+		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"password belongs to the branch's read_write endpoint; a read_only endpoint shares the roles already in the branch"))}, nil
+	}
+
 	// Plan the work as an async task and return 202 + the Task. The endpoint row,
 	// its deploy, and the address record are all created by the worker's
 	// create_endpoint step; the single-writer rule (a duplicate read_write
@@ -1007,6 +1083,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		SafekeeperSettings: safekeeperSettings,
 		Connectivity:       connectivity,
 		AllowedCIDRs:       allowedCIDRs,
+		PasswordMD5:        verifier,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -1087,10 +1164,15 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 	}}, nil
 }
 
+// endpointScanLimit bounds the branch-wide endpoint read the create path makes
+// for its name-collision check. A branch has a writer and a handful of replicas,
+// so it is a ceiling, not a page size.
+const endpointScanLimit = 1000
+
 // endpointNameTaken reports whether the branch already has an endpoint by this
-// name. A generous page covers any realistic per-branch endpoint count.
+// name.
 func (c *Controllers) endpointNameTaken(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string) (bool, error) {
-	eps, _, err := c.backend.ListEndpoints(ctx, poolID, clusterID, branchID, 1000, 0)
+	eps, _, err := c.backend.ListEndpoints(ctx, poolID, clusterID, branchID, endpointScanLimit, 0)
 	if err != nil {
 		return false, fmt.Errorf("list endpoints: %w", err)
 	}

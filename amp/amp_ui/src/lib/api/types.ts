@@ -211,6 +211,10 @@ export type CreateEndpointInput = {
   role?: EndpointRole;
   disk_type?: "network" | "local";
   resources?: EndpointResources;
+  /** Password for the compute's default user (`cloud_admin`). REQUIRED for a
+   *  read_write endpoint — the controller mints none — and refused on a
+   *  read_only one, which shares its branch's roles. */
+  password?: string;
 };
 
 /** Change an existing endpoint's compute reservation. cpu/memory are applied

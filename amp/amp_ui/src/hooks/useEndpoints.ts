@@ -57,9 +57,13 @@ export function useCreateEndpoint() {
       memory?: string;
       connectivity?: EndpointConnectivityMode;
       allowedCidrs?: string[];
+      password?: string;
     }): Promise<Endpoint> =>
       createEndpoint(input.poolId, input.clusterId, input.branchId, {
         role: input.role,
+        // Omitted unless the user typed one: "" would be a 400 rather than a
+        // request for a default.
+        ...(input.password ? { password: input.password } : {}),
         // Same rule as resources: only send the block when the caller chose
         // something, so an omitted one takes the controller's cluster_ip default.
         ...(input.connectivity && input.connectivity !== "cluster_ip"

@@ -102,6 +102,11 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 	if spec.EndpointID != "" {
 		env["ENDPOINT_ID"] = spec.EndpointID
 	}
+	// The compute default user's password. Empty leaves the supervisor's own
+	// default, which is what a redeploy (and any pre-credentials endpoint) renders.
+	if spec.PasswordMD5 != "" {
+		env["COMPUTE_PASSWORD"] = spec.PasswordMD5
+	}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
 	}
