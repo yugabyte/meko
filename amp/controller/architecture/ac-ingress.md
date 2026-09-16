@@ -30,7 +30,8 @@ Four properties, each a deliberate choice rather than a consequence:
   range when it is built, so creating an endpoint allocates a port and renders
   routes — all inside the cluster. Nothing mutates a load balancer that live
   connections are sitting behind, and no create waits minutes for one.
-- **Every endpoint has its own DNS name**, not a shared one. That keeps the shard
+- **Every endpoint has its own DNS name** where there is a zone to publish it in,
+  not a shared one. That keeps the shard
   an implementation detail: an endpoint can be moved between shards by
   re-pointing a record, without reissuing anyone's address. The name derives from
   the endpoint's **id**, never from its name or its cluster's or pool's — those
@@ -61,6 +62,24 @@ Traefik can do the hostname version *without* terminating (verified: see
 `amp/test/ingress-bakeoff/`), which is why it is the tier. That path would put
 every endpoint on 5432 and make shard moves invisible to clients, but it is not
 built: cancellation has no SNI to route on, and TLS would stop being optional.
+
+### When there is no DNS
+
+A zone is optional, and separate from the feature switch, because they answer
+different questions: whether this deployment routes through shards, and whether
+it has somewhere to publish names. A kind or CI cluster answers yes and no.
+
+With no zone, an endpoint's address is its **shard's own host and port**. Nothing
+about the routing changes — the route, the allowlist and the pod are identical,
+and the endpoint answers in exactly the same place. What is given up is the
+indirection: the shard stops being invisible, so moving an endpoint between
+shards would change the address a client holds. On a cluster where nothing moves
+that is worth nothing, and it is the difference between the functional suite
+running on kind and not.
+
+The name is still allocated and still unique — only unpublished — so a deployment
+that later gets a zone has one ready rather than having to mint addresses for a
+fleet that already exists.
 
 ## Allocation
 
@@ -125,26 +144,30 @@ deployment that has not opted in, and the `ingress_*` modes are refused with
 `400` rather than falling back to a dedicated load balancer — a fallback would
 reinstate the per-endpoint bill without anyone choosing it.
 
-Enabling it needs at least one zone. An endpoint's address **is** its published
-name — `Allocation.Address()` is `dns_name:port` — so a family with no zone has
-nothing to hand a client, and the allocator refuses it with `ErrNotConfigured`.
-Startup refuses the combination outright rather than letting it fail on every
-endpoint create.
+The zones are independent of that switch, because they answer a different
+question: whether there is DNS to publish names in. A kind or CI cluster routes
+through shards happily and has none, and then an endpoint's address is its
+shard's own `host:port` — the name is still allocated and still unique, just
+unpublished.
 
-Addressing an endpoint by its shard's own `host:port` instead, so a kind or CI
-cluster with no external-dns can route identically, is **not yet built** — see
-the section below. Until it lands, the switch and "has a zone" are not separable.
+A name minted without a zone is **unqualified** (`ep-abc12345`), and that shape
+is what records the decision: publishability is read from the stored name on
+every path, so a redeploy cannot reach a different answer than the create did.
+The consequence worth knowing is that setting a zone on an existing fleet does
+NOT retroactively publish it — those rows keep their unqualified names, and
+giving them published ones means reissuing addresses. That is a migration, not a
+config change.
 
-There are two zones rather than one because external-dns is pinned to a zone with
-`--zone-id-filter`, and the point of the internal family is that its names do not
-resolve publicly. The name an endpoint is issued is stored on its allocation row,
-so pointing both families at one zone is not a mistake a later config change can
-correct — it means reissuing addresses customers already hold.
+There are two zone flags rather than one because external-dns is pinned to a zone
+with `--zone-id-filter`, and the point of the internal family is that its names do
+not resolve publicly. The name an endpoint is issued is stored on its allocation
+row, so pointing both families at one zone is not a mistake a later config change
+can correct — it means reissuing addresses customers already hold.
 
 | Flag | Effect |
 |---|---|
 | `--deploy-ingress-enabled` | The opt-in. Off = the `ingress_*` modes are refused. |
-| `--deploy-ingress-zone-internal` | DNS zone for internal endpoint names. Empty = that family cannot be allocated; at least one zone is required. |
+| `--deploy-ingress-zone-internal` | DNS zone for internal endpoint names. Optional: empty = names unpublished, addresses are `shard:port`. |
 | `--deploy-ingress-zone-external` | DNS zone for external endpoint names. Must differ from the internal zone, so an internal name can never reach a public one. |
 | `--deploy-ingress-port-range` | Range each shard provisions in full; its width is how many endpoints a shard holds. |
 | `--deploy-ingress-headroom` | Free ports kept per family before another shard is built. Measured across the family's ready shards, so it may exceed one shard's width; refused only if above what `--deploy-ingress-max-shards` shards can hold. |
@@ -165,13 +188,15 @@ correct — it means reissuing addresses customers already hold.
   `ingress_*` endpoint release fails at apply with `no matches for kind
   IngressRouteTCP` — after its slot has been allocated. `deploy/controller/redeploy.sh`
   applies them before installing a shard.
-- **external-dns** publishes the per-endpoint records from the `DNSEndpoint`
+- **external-dns**, *only when a zone is configured*, publishes the per-endpoint records from the `DNSEndpoint`
   objects each endpoint release renders. It needs its **CRD source** enabled
   (`--source=crd`) or those objects are inert, and `policy=sync` rather than
   `upsert-only` or retiring an endpoint leaks its name forever.
-- **A DNS zone per family**, so external-dns can be pinned per zone with
-  `--zone-id-filter` and an internal endpoint's name can never be published to a
-  public zone.
+- **A DNS zone per family**, *when names are published at all*, so external-dns
+  can be pinned per zone with `--zone-id-filter` and an internal endpoint's name
+  can never be published to a public zone. A deployment with no zone publishes
+  nothing and addresses endpoints by their shard, so it needs neither this nor
+  external-dns.
 
 On `meko-dev-eks` the first is healthy and the second is not: external-dns is
 deployed but holds no AWS credentials by any mechanism and has failed every
@@ -187,9 +212,7 @@ is published under, and `sslmode=verify-full` against that name therefore fails.
 an internet-facing endpoint that cannot be verified by name is a real limitation
 rather than a detail; `verify-full` needs a certificate per endpoint name.
 
-Also outstanding: the capacity reconciler's watermark and ceiling,
-**addressing an endpoint by its shard's `host:port` where there is no DNS zone**
-(until then a zone is required, see Config), and per-listener source-IP
-filtering. `allowed_cidrs` is refused on the `ingress_*`
+Also outstanding: the capacity reconciler's watermark and ceiling, and
+per-listener source-IP filtering. `allowed_cidrs` is refused on the `ingress_*`
 modes until that last one lands; `nlb_*` remains the mode for an endpoint that
 needs an allowlist today.

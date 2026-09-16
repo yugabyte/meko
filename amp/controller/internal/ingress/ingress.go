@@ -44,10 +44,11 @@ import (
 // invisibly.
 var ErrNoCapacity = errors.New("no ingress capacity")
 
-// ErrNotConfigured is returned when this deployment has no ingress zone for the
-// family asked for. Separate from ErrNoCapacity because the two want opposite
-// handling: capacity arrives on its own once a shard is built, whereas this is a
-// misconfiguration and the intended surface is a 400 rather than a retry.
+// ErrNotConfigured is returned when this deployment does not route endpoints
+// through shards at all (--deploy-ingress-enabled is off). Separate from
+// ErrNoCapacity because the two want opposite handling: capacity arrives on its
+// own once a shard is built, whereas this is a misconfiguration and the intended
+// surface is a 400 rather than a retry.
 var ErrNotConfigured = errors.New("shared ingress is not configured")
 
 // ErrNotAllocated is returned when an endpoint has no live allocation.
@@ -106,8 +107,10 @@ const (
 // (0018 stores it on the row), so correcting that later means reissuing
 // addresses customers already hold, not a config change.
 //
-// Either may be empty. A family with no zone has no ingress, and Allocate says
-// so rather than minting `ep-xxxxxxxx.` with nothing after the dot.
+// Either may be empty. A family with no zone still gets a name allocated — an
+// unqualified one, `ep-xxxxxxxx` — which is simply never published; clients are
+// given the shard's own address instead. The name's SHAPE is what records that
+// decision, durably, so a redeploy cannot reach a different conclusion.
 type Zones struct {
 	Internal string
 	External string
@@ -120,8 +123,6 @@ func (z Zones) For(f Family) string {
 	}
 	return z.Internal
 }
-
-func (z Zones) configured() bool { return z.Internal != "" || z.External != "" }
 
 // Allocation is one endpoint's place on a shard: the port it answers on and the
 // name published for it.
@@ -136,17 +137,40 @@ type Allocation struct {
 	// DNS record from one read rather than looking the shard up again.
 	ShardHost  string
 	RecordType string
-	CreatedAt  time.Time
+	// Publish reports whether DNSName should be published and handed to clients.
+	// False when this endpoint's family has no DNS zone — a kind or CI cluster
+	// with no external-dns, say — where the honest address is the shard's own.
+	Publish   bool
+	CreatedAt time.Time
 }
 
-// Address is what a client connects to.
-func (a Allocation) Address() string { return fmt.Sprintf("%s:%d", a.DNSName, a.Port) }
+// Address is what a client connects to: the endpoint's published name where
+// there is DNS to publish it, and the shard's own address where there is not.
+//
+// The fallback is not a degraded mode so much as a plainer one. It gives up the
+// property that the shard is invisible — moving an endpoint between shards would
+// change this address — which is worth nothing on a cluster where nothing moves,
+// and it is the difference between routing identically on a kind or CI cluster
+// and not running there at all.
+func (a Allocation) Address() string {
+	host := a.ShardHost
+	if a.Publish && a.DNSName != "" {
+		host = a.DNSName
+	}
+	return fmt.Sprintf("%s:%d", host, a.Port)
+}
 
 // Allocator hands out and reclaims slots.
 type Allocator struct {
 	pool *db.Pool
+	// enabled is the feature switch. Separate from the zones because the two are
+	// different questions: whether this deployment routes through shards at all,
+	// and whether it has DNS to publish the names in. A CI cluster answers yes
+	// and no.
+	enabled bool
 	// zones are the DNS zones endpoint names are published under, one per family.
-	// None configured means this deployment has no ingress, and Allocate refuses.
+	// A family with no zone still gets a name allocated — just not published, and
+	// its clients are handed the shard's own address.
 	zones Zones
 	// quarantine is how long a released slot stays out of the pool. It exists so
 	// a client holding a cached address cannot land on whichever database next
@@ -156,23 +180,35 @@ type Allocator struct {
 	placement Placement
 }
 
-// New builds an allocator. A deployment with no zone configured has no ingress;
-// Allocate returns ErrNotConfigured rather than inventing a name nothing
-// resolves. Placement defaults to spread when unset.
-func New(pool *db.Pool, zones Zones, quarantine time.Duration, placement Placement) *Allocator {
+// New builds an allocator. A deployment with ingress disabled refuses to
+// allocate; one with no zone for a family allocates the name but does not
+// publish it. Placement defaults to spread when unset.
+func New(pool *db.Pool, enabled bool, zones Zones, quarantine time.Duration, placement Placement) *Allocator {
 	if placement == "" {
 		placement = PlacementSpread
 	}
-	return &Allocator{pool: pool, zones: zones, quarantine: quarantine, placement: placement}
+	return &Allocator{pool: pool, enabled: enabled, zones: zones, quarantine: quarantine, placement: placement}
 }
 
-// Enabled reports whether this deployment has ingress configured at all.
+// Enabled reports whether this deployment routes endpoints through shards at
+// all.
 //
 // Meant for the API layer to refuse the ingress connectivity modes up front, so
 // a caller gets a 400 rather than an endpoint that deploys and then cannot be
-// reached. That wiring is not in the tree yet — nothing imports this package —
-// so this is the intended contract rather than a description of a live caller.
-func (a *Allocator) Enabled() bool { return a.zones.configured() }
+// reached. Nothing calls it yet — the API refuses on the config flag instead
+// (handlers.go) — so this is the intended contract, not a live caller.
+func (a *Allocator) Enabled() bool { return a.enabled }
+
+// PublishesDNS reports whether this family has a zone to publish its names in.
+// False leaves the names allocated but unpublished.
+func (a *Allocator) PublishesDNS(family Family) bool { return a.zones.For(family) != "" }
+
+// publishable reports whether a STORED name can be handed to a client. A name
+// minted without a zone is unqualified, and stays that way: recomputing this
+// from the current zones would make every pre-existing row look publishable the
+// day somebody sets one, handing external-dns records outside the zone it is
+// pinned to. Giving an existing fleet published names means reissuing them.
+func publishable(dnsName string) bool { return strings.Contains(dnsName, ".") }
 
 // dnsNameFor derives the published name from the endpoint's id.
 //
@@ -187,7 +223,14 @@ func (a *Allocator) dnsNameFor(endpointID uuid.UUID, family Family, attempt int)
 	if attempt > 0 {
 		n = len(hex)
 	}
-	return fmt.Sprintf("ep-%s.%s", hex[:n], a.zones.For(family))
+	// Still allocated, and still unique, when there is no zone to publish it in:
+	// the column and its uniqueness index do not change shape just because this
+	// deployment has no DNS, and the name is then ready the day it gets one.
+	zone := a.zones.For(family)
+	if zone == "" {
+		return fmt.Sprintf("ep-%s", hex[:n])
+	}
+	return fmt.Sprintf("ep-%s.%s", hex[:n], zone)
 }
 
 // allocateSQLTemplate takes the lowest free port on whichever ready shard of the
@@ -267,9 +310,8 @@ RETURNING id, endpoint_id, shard, port, dns_name, created_at,
 // both pass it, and the live-per-endpoint index is what actually stops the
 // second — whose retry then re-reads, finds the winner's row, and returns it.
 func (a *Allocator) Allocate(ctx context.Context, endpointID uuid.UUID, family Family) (Allocation, error) {
-	if a.zones.For(family) == "" {
-		return Allocation{}, fmt.Errorf("allocate ingress slot for %s: %w (family %s has no DNS zone)",
-			endpointID, ErrNotConfigured, family)
+	if !a.Enabled() {
+		return Allocation{}, fmt.Errorf("allocate ingress slot for %s: %w", endpointID, ErrNotConfigured)
 	}
 	switch existing, err := a.Get(ctx, endpointID); {
 	case err == nil:
@@ -370,13 +412,27 @@ func (a *Allocator) allocateOnce(ctx context.Context, endpointID uuid.UUID, fami
 		endpointID.String(), dnsName, string(family), a.quarantine.Seconds(),
 	).Scan(&alloc.ID, &alloc.EndpointID, &alloc.Shard, &alloc.Port, &alloc.DNSName, &alloc.CreatedAt,
 		&alloc.ShardHost, &alloc.RecordType)
+	alloc.Publish = publishable(alloc.DNSName)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		// The INSERT ... SELECT matched no slot. That covers a family with no ready
-		// shard at all — none registered yet, or all of them still building — as
-		// much as one whose every port is taken or still in quarantine. Distinct
-		// from an error either way: the query did what it was told.
-		return Allocation{}, fmt.Errorf("allocate ingress slot for %s: %w in family %s",
+		// The INSERT ... SELECT matched no slot. Still ErrNoCapacity either way —
+		// the caller's move is the same, and "no shard yet" and "a shard is still
+		// building" are genuinely indistinguishable from here — but the MESSAGE
+		// says which, because they are not the same thing to an operator. A family
+		// with no shard registered at all on a deployment that serves the other
+		// one is a configuration answer, not a wait.
+		var shards int
+		if cerr := a.pool.QueryRow(ctx,
+			`SELECT count(*) FROM amp_registry.ingress_shards
+			  WHERE family = $1::amp_registry.ingress_family`,
+			string(family)).Scan(&shards); cerr != nil || shards == 0 {
+			return Allocation{}, fmt.Errorf(
+				"allocate ingress slot for %s: %w — no shard is registered for family %s on this "+
+					"deployment, so none will become free; a shard for that family has to be installed",
+				endpointID, ErrNoCapacity, family)
+		}
+		return Allocation{}, fmt.Errorf("allocate ingress slot for %s: %w in family %s "+
+			"(every ready shard is full, quarantined, or still building)",
 			endpointID, ErrNoCapacity, family)
 	case err != nil:
 		return Allocation{}, err
@@ -414,16 +470,20 @@ func (a *Allocator) Release(ctx context.Context, endpointID uuid.UUID) error {
 
 // Get returns the endpoint's live allocation, or ErrNotAllocated.
 func (a *Allocator) Get(ctx context.Context, endpointID uuid.UUID) (Allocation, error) {
-	var alloc Allocation
+	var (
+		alloc  Allocation
+		family string
+	)
 	err := a.pool.QueryRow(ctx,
 		`SELECT e.id, e.endpoint_id, e.shard, e.port, e.dns_name, e.created_at,
-		        s.hostname, s.record_type::text
+		        s.hostname, s.record_type::text, s.family::text
 		   FROM amp_registry.ingress_allocations e
 		   JOIN amp_registry.ingress_shards s ON s.name = e.shard
 		  WHERE e.endpoint_id = $1::uuid AND e.released_at IS NULL`,
 		endpointID.String(),
 	).Scan(&alloc.ID, &alloc.EndpointID, &alloc.Shard, &alloc.Port, &alloc.DNSName, &alloc.CreatedAt,
-		&alloc.ShardHost, &alloc.RecordType)
+		&alloc.ShardHost, &alloc.RecordType, &family)
+	alloc.Publish = publishable(alloc.DNSName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Allocation{}, fmt.Errorf("get ingress slot for %s: %w", endpointID, ErrNotAllocated)
 	}

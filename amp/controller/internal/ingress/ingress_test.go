@@ -63,12 +63,13 @@ func TestAllocator(t *testing.T) {
 	t.Run("ZonePerFamily", func(t *testing.T) { testZonePerFamily(ctx, t, pool, zones) })
 	t.Run("NameCollisionWidens", func(t *testing.T) { testNameCollisionWidens(ctx, t, pool, zones) })
 	t.Run("ConcurrentAllocation", func(t *testing.T) { testConcurrentAllocation(ctx, t, pool, zones) })
+	t.Run("EnabledWithoutZone", func(t *testing.T) { testEnabledWithoutZone(ctx, t, pool) })
 }
 
 func testRoundTrip(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
 	reset(ctx, t, pool)
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20009)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	ep := uuid.New()
 	alloc, err := a.Allocate(ctx, ep, FamilyInternal)
@@ -82,6 +83,9 @@ func testRoundTrip(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones
 	if want := shortName(ep, zones.Internal); alloc.DNSName != want {
 		t.Errorf("dns name = %q, want %q", alloc.DNSName, want)
 	}
+	if !alloc.Publish {
+		t.Error("Publish = false with a zone configured; clients would be handed the shard's address")
+	}
 	if want := fmt.Sprintf("%s:%d", alloc.DNSName, alloc.Port); alloc.Address() != want {
 		t.Errorf("Address() = %q, want %q", alloc.Address(), want)
 	}
@@ -91,6 +95,14 @@ func testRoundTrip(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones
 	}
 	if got.ID != alloc.ID || got.Port != alloc.Port || got.DNSName != alloc.DNSName {
 		t.Errorf("Get returned %+v, want the row Allocate issued (%+v)", got, alloc)
+	}
+	// ShardHost and Publish are carried on the allocation so the caller renders
+	// DNS from one read; both have to survive Get, not just INSERT ... RETURNING.
+	if got.ShardHost != "lb-pgin-0.example" {
+		t.Errorf("Get ShardHost = %q, want the shard's hostname", got.ShardHost)
+	}
+	if got.Publish != alloc.Publish {
+		t.Errorf("Get Publish = %v, want %v", got.Publish, alloc.Publish)
 	}
 
 	if err := a.Release(ctx, ep); err != nil {
@@ -113,7 +125,7 @@ func testRoundTrip(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones
 func testAllocateIsIdempotent(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
 	reset(ctx, t, pool)
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20009)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	ep := uuid.New()
 	first, err := a.Allocate(ctx, ep, FamilyInternal)
@@ -146,7 +158,7 @@ func testZonePerFamily(ctx context.Context, t *testing.T, pool *db.Pool, zones Z
 	reset(ctx, t, pool)
 	seedShard(ctx, t, pool, "pgin-int", FamilyInternal, "ready", 20000, 20009)
 	seedShard(ctx, t, pool, "pgin-ext", FamilyExternal, "ready", 21000, 21009)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	in, err := a.Allocate(ctx, uuid.New(), FamilyInternal)
 	if err != nil {
@@ -163,14 +175,23 @@ func testZonePerFamily(ctx context.Context, t *testing.T, pool *db.Pool, zones Z
 		t.Errorf("external name %q is not in the external zone %q", ext.DNSName, zones.External)
 	}
 
-	// A family with no zone has no ingress, and must refuse rather than mint
-	// "ep-xxxxxxxx." with nothing after the dot.
-	half := New(pool, Zones{Internal: zones.Internal}, time.Hour, PlacementSpread)
-	if _, err := half.Allocate(ctx, uuid.New(), FamilyExternal); !errors.Is(err, ErrNotConfigured) {
-		t.Errorf("allocate external with no external zone = %v, want ErrNotConfigured", err)
+	// A family with no zone still allocates — the name is minted unqualified and
+	// simply not published, which is what a cluster with no external-dns gets.
+	// The other family's zone must not leak into it.
+	half := New(pool, true, Zones{Internal: zones.Internal}, time.Hour, PlacementSpread)
+	if half.PublishesDNS(FamilyExternal) {
+		t.Error("PublishesDNS(external) = true with no external zone")
 	}
-	if _, err := half.Allocate(ctx, uuid.New(), FamilyInternal); err != nil {
-		t.Errorf("allocate internal with an internal zone = %v, want success", err)
+	unpublished, err := half.Allocate(ctx, uuid.New(), FamilyExternal)
+	if err != nil {
+		t.Fatalf("allocate external with no external zone = %v, want an unpublished name", err)
+	}
+	if strings.Contains(unpublished.DNSName, ".") {
+		t.Errorf("external name %q is qualified; with no external zone it must be bare, and it "+
+			"must never borrow the internal zone", unpublished.DNSName)
+	}
+	if unpublished.Publish {
+		t.Error("Publish = true for a family with no zone")
 	}
 }
 
@@ -183,7 +204,7 @@ func testQuarantine(ctx context.Context, t *testing.T, pool *db.Pool, zones Zone
 	// Exactly one port, so a reissue is the only way a second allocate succeeds.
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20000)
 
-	held := New(pool, zones, time.Hour, PlacementSpread)
+	held := New(pool, true, zones, time.Hour, PlacementSpread)
 	first := uuid.New()
 	if _, err := held.Allocate(ctx, first, FamilyInternal); err != nil {
 		t.Fatalf("first allocate: %v", err)
@@ -198,7 +219,7 @@ func testQuarantine(ctx context.Context, t *testing.T, pool *db.Pool, zones Zone
 
 	// Same row, same state — only the window differs, which is what proves the
 	// quarantine is what refused above rather than some other emptiness.
-	expired := New(pool, zones, 0, PlacementSpread)
+	expired := New(pool, true, zones, 0, PlacementSpread)
 	alloc, err := expired.Allocate(ctx, uuid.New(), FamilyInternal)
 	if err != nil {
 		t.Fatalf("allocate after the window = %v, want success: the port must come back", err)
@@ -214,7 +235,7 @@ func testQuarantine(ctx context.Context, t *testing.T, pool *db.Pool, zones Zone
 func testCapacity(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
 	reset(ctx, t, pool)
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20003)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	assertCapacity := func(when string, wantFree, wantTotal int) {
 		t.Helper()
@@ -239,7 +260,7 @@ func testCapacity(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones)
 	}
 	assertCapacity("with one quarantined", 3, 4)
 
-	free, _, err := New(pool, zones, 0, PlacementSpread).Capacity(ctx, FamilyInternal)
+	free, _, err := New(pool, true, zones, 0, PlacementSpread).Capacity(ctx, FamilyInternal)
 	if err != nil {
 		t.Fatalf("capacity after the window: %v", err)
 	}
@@ -259,7 +280,7 @@ func testPlacement(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones
 	seedAllocation(ctx, t, pool, "pgin-a", 20000)
 	seedAllocation(ctx, t, pool, "pgin-a", 20001)
 
-	spread, err := New(pool, zones, time.Hour, PlacementSpread).Allocate(ctx, uuid.New(), FamilyInternal)
+	spread, err := New(pool, true, zones, time.Hour, PlacementSpread).Allocate(ctx, uuid.New(), FamilyInternal)
 	if err != nil {
 		t.Fatalf("spread allocate: %v", err)
 	}
@@ -267,7 +288,7 @@ func testPlacement(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones
 		t.Errorf("spread landed on %s, want pgin-b — the emptiest shard", spread.Shard)
 	}
 
-	pack, err := New(pool, zones, time.Hour, PlacementPack).Allocate(ctx, uuid.New(), FamilyInternal)
+	pack, err := New(pool, true, zones, time.Hour, PlacementPack).Allocate(ctx, uuid.New(), FamilyInternal)
 	if err != nil {
 		t.Fatalf("pack allocate: %v", err)
 	}
@@ -276,7 +297,7 @@ func testPlacement(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones
 	}
 
 	// An unset placement must not render an empty ORDER BY.
-	if _, err := New(pool, zones, time.Hour, "").Allocate(ctx, uuid.New(), FamilyInternal); err != nil {
+	if _, err := New(pool, true, zones, time.Hour, "").Allocate(ctx, uuid.New(), FamilyInternal); err != nil {
 		t.Errorf("allocate with placement unset = %v, want the spread default", err)
 	}
 }
@@ -289,7 +310,7 @@ func testNoCapacity(ctx context.Context, t *testing.T, pool *db.Pool, zones Zone
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20000)
 	seedShard(ctx, t, pool, "pgin-drain", FamilyInternal, "draining", 20100, 20199)
 	seedShard(ctx, t, pool, "pgin-ext", FamilyExternal, "ready", 20200, 20299)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	if _, err := a.Allocate(ctx, uuid.New(), FamilyInternal); err != nil {
 		t.Fatalf("allocate the only internal slot: %v", err)
@@ -312,14 +333,14 @@ func testNoCapacity(ctx context.Context, t *testing.T, pool *db.Pool, zones Zone
 	// A deployment with no zone has no ingress at all, and says so up front rather
 	// than inventing a name nothing resolves — so the API can answer 400 instead of
 	// deploying an endpoint that cannot be reached.
-	off := New(pool, Zones{}, time.Hour, PlacementSpread)
+	off := New(pool, false, zones, time.Hour, PlacementSpread)
 	if off.Enabled() {
-		t.Error("Enabled() = true with no zone configured")
+		t.Error("Enabled() = true with ingress disabled")
 	}
 	// A misconfiguration, not exhaustion: the two want opposite handling, so they
 	// must not share a sentinel.
 	if _, err := off.Allocate(ctx, uuid.New(), FamilyInternal); !errors.Is(err, ErrNotConfigured) {
-		t.Errorf("allocate with no zone = %v, want ErrNotConfigured", err)
+		t.Errorf("allocate with ingress disabled = %v, want ErrNotConfigured", err)
 	}
 }
 
@@ -328,7 +349,7 @@ func testNoCapacity(ctx context.Context, t *testing.T, pool *db.Pool, zones Zone
 func testNameCollisionWidens(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
 	reset(ctx, t, pool)
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20009)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	first := uuid.New()
 	twin := twinOf(t, first)
@@ -361,7 +382,7 @@ func testConcurrentAllocation(ctx context.Context, t *testing.T, pool *db.Pool, 
 	reset(ctx, t, pool)
 	const n = 8
 	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20000+n-1)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	type result struct {
 		endpoint uuid.UUID
@@ -407,6 +428,38 @@ func testConcurrentAllocation(ctx context.Context, t *testing.T, pool *db.Pool, 
 	}
 	if succeeded == 0 {
 		t.Fatal("every concurrent allocation failed; the retry does not converge")
+	}
+}
+
+// Enabled and zones are different questions, and a kind or CI cluster answers
+// yes and no: it routes through shards but has no external-dns. The name is
+// still allocated and still unique — the column and its index do not change
+// shape just because there is no DNS — but clients are handed the shard's own
+// address rather than a name nothing resolves.
+func testEnabledWithoutZone(ctx context.Context, t *testing.T, pool *db.Pool) {
+	reset(ctx, t, pool)
+	seedShard(ctx, t, pool, "pgin-0", FamilyInternal, "ready", 20000, 20009)
+	a := New(pool, true, Zones{}, time.Hour, PlacementSpread)
+
+	if !a.Enabled() {
+		t.Error("Enabled() = false; a deployment with no zone still routes through shards")
+	}
+	if a.PublishesDNS(FamilyInternal) {
+		t.Error("PublishesDNS(internal) = true with no zone")
+	}
+	ep := uuid.New()
+	alloc, err := a.Allocate(ctx, ep, FamilyInternal)
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if want := fmt.Sprintf("ep-%s", hexOf(ep)[:8]); alloc.DNSName != want {
+		t.Errorf("dns name = %q, want the unqualified %q", alloc.DNSName, want)
+	}
+	if alloc.Publish {
+		t.Error("Publish = true with no zone; clients would be given a name nothing resolves")
+	}
+	if want := fmt.Sprintf("lb-pgin-0.example:%d", alloc.Port); alloc.Address() != want {
+		t.Errorf("Address() = %q, want the shard's own address %q", alloc.Address(), want)
 	}
 }
 

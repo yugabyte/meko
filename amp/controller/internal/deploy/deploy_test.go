@@ -933,3 +933,54 @@ func TestEntryPointNameMatchesTheShardChart(t *testing.T) {
 		t.Errorf("EntryPointName(20007) = %q, want pg-20007 to match the chart's pg-{{ $p }}", got)
 	}
 }
+
+// Publishability is decided by the stored name, not by the caller, because the
+// caller differs: a create passes what the allocator returned, while every
+// redeploy assembles the spec from the allocation row. When only the create path
+// blanked an unpublished name, a resize or extension roll of a zone-less
+// endpoint took the bare name as its address and SetEndpointAddress overwrote a
+// working <shardHost>:<port> with one that resolves nowhere.
+func TestPublishableDNSName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"ep-abc12345.int.pg.example", true},
+		{"ep-abc12345", false}, // minted where the family had no zone
+		{"", false},
+	} {
+		if got := PublishableDNSName(tc.name); got != tc.want {
+			t.Errorf("PublishableDNSName(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The redeploy path is the one that was broken: it renders from the allocation
+// row, which stores the bare name, so it must reach the same answer as a create.
+func TestIngressValuesAndAddressAgreeOnAnUnpublishedName(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+
+	spec := testEndpointSpec()
+	spec.Connectivity = ConnectivityIngressInternal
+	spec.Ingress = IngressSlot{
+		Shard: "pgin-0", Port: 20007,
+		DNSName:   "ep-abc12345", // what the row holds on a zone-less deployment
+		ShardHost: "lb.example", RecordType: "CNAME",
+	}
+
+	// The chart must render no DNS record for a name nothing resolves.
+	v := k.values(spec, "yb-ep-1")
+	if v.Service.Ingress == nil {
+		t.Fatal("service.ingress is nil for an ingress mode")
+	}
+	if got := v.Service.Ingress.DNSName; got != "" {
+		t.Errorf("service.ingress.dnsName = %q, want empty: rendering a DNSEndpoint for an "+
+			"unqualified name hands external-dns a record outside any zone", got)
+	}
+
+	// And a published name survives untouched.
+	spec.Ingress.DNSName = "ep-abc12345.int.pg.example"
+	if got := k.values(spec, "yb-ep-1").Service.Ingress.DNSName; got != "ep-abc12345.int.pg.example" {
+		t.Errorf("published dnsName = %q, want it carried through", got)
+	}
+}

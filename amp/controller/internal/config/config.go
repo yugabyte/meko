@@ -127,23 +127,15 @@ type DeployConfig struct {
 	// (controller/architecture/ac-ingress.md).
 	IngressEnabled bool
 	// IngressZoneInternal/External are the DNS zones endpoint names are published
-	// under. A family with no zone cannot be allocated: ingress.Allocate refuses
-	// it with ErrNotConfigured, because an endpoint's address IS its published
-	// name (Allocation.Address is dns_name:port) and there is nothing else to
-	// hand a client. Enabling ingress therefore requires at least one zone, which
-	// validateIngress enforces so the failure lands at startup rather than on
-	// every endpoint create.
+	// under. OPTIONAL, and independent of the switch above: a family with no zone
+	// still gets a name allocated, it is simply not published, and an endpoint's
+	// address is its shard's own host:port instead. That is what a cluster with
+	// no external-dns (kind, CI) gets, and it routes identically.
 	//
-	// Addressing an endpoint by its shard's own host:port instead — what a kind
-	// or CI cluster with no external-dns would want — is a later change in this
-	// series; until it lands, "enabled" and "has a zone" are not yet separable.
-	//
-	// One zone per family rather than one for both, because external-dns is
-	// pinned to a zone with --zone-id-filter and the point of the internal family
-	// is that its names do not resolve publicly. The allocator stores the name it
-	// mints on the allocation row, so pointing both at a single zone is not
-	// something a later config change can undo — it means reissuing addresses
-	// customers already hold.
+	// Two zones rather than one because external-dns is pinned to a zone with
+	// --zone-id-filter, and the point of the internal family is that its names do
+	// not resolve publicly. The allocator stores the name it mints, so pointing
+	// both at one zone is not something a later config change can undo.
 	IngressZoneInternal string
 	IngressZoneExternal string
 	// IngressPortRange is the listener range every shard provisions in full at
@@ -371,7 +363,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&nodeSelectorRaw, "deploy-node-selector", env("AMP_DEPLOY_NODE_SELECTOR", ""), "k8s: comma-separated key=value node labels endpoint pods must schedule onto, e.g. a local-NVMe-SSD ephemeral pool (values cannot contain commas)")
 	fs.StringVar(&d.TailnetSuffix, "deploy-tailnet-suffix", env("AMP_DEPLOY_TAILNET_SUFFIX", ""), "k8s: Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each endpoint's tailnet address when its Service is tailnet-exposed (tailscale.com/expose=true); empty = disabled")
 	fs.BoolVar(&d.IngressEnabled, "deploy-ingress-enabled", envBool("AMP_DEPLOY_INGRESS_ENABLED", false), "k8s: route endpoints through shared ingress shards. Off (the default) = the ingress_* connectivity modes are refused")
-	fs.StringVar(&d.IngressZoneInternal, "deploy-ingress-zone-internal", env("AMP_DEPLOY_INGRESS_ZONE_INTERNAL", ""), "k8s: DNS zone INTERNAL shared-ingress endpoint names are published under, e.g. internal.pg.example.com. Empty = the internal family cannot be allocated; enabling ingress needs at least one zone")
+	fs.StringVar(&d.IngressZoneInternal, "deploy-ingress-zone-internal", env("AMP_DEPLOY_INGRESS_ZONE_INTERNAL", ""), "k8s: DNS zone INTERNAL shared-ingress endpoint names are published under, e.g. internal.pg.example.com. Empty = that family's names are allocated but not published, and an endpoint's address is its shard's host:port — what a cluster with no external-dns (kind, CI) gets")
 	fs.StringVar(&d.IngressZoneExternal, "deploy-ingress-zone-external", env("AMP_DEPLOY_INGRESS_ZONE_EXTERNAL", ""), "k8s: DNS zone EXTERNAL shared-ingress endpoint names are published under, e.g. external.pg.example.com. Must differ from the internal zone, so external-dns can be pinned to each with --zone-id-filter and an internal name is never published publicly")
 	fs.StringVar(&d.IngressPortRange, "deploy-ingress-port-range", env("AMP_DEPLOY_INGRESS_PORT_RANGE", "20000-20049"), "k8s: listener range each ingress shard provisions in full, \"lo-hi\"; its width is how many endpoints one shard holds")
 	fs.IntVar(&d.IngressHeadroom, "deploy-ingress-headroom", envInt("AMP_DEPLOY_INGRESS_HEADROOM", 10), "k8s: free ports kept per family before another ingress shard is built, so a slow shard build never lands on an endpoint create")
@@ -757,14 +749,6 @@ func (d *DeployConfig) validateIngress() error {
 			"published in the external zone, and the allocator stores each name it mints, so this "+
 			"cannot be corrected later without reissuing addresses customers already hold",
 			d.IngressZoneInternal)
-	}
-	// Ingress with nowhere to publish cannot allocate anything: Allocate refuses a
-	// family whose zone is empty, and an endpoint's address is its published name.
-	// Refused here so it fails at startup rather than on every endpoint create.
-	if d.IngressEnabled && d.IngressZoneInternal == "" && d.IngressZoneExternal == "" {
-		return fmt.Errorf("deploy ingress is enabled but neither zone is set; an endpoint's address " +
-			"is its published DNS name, so at least one of --deploy-ingress-zone-internal or " +
-			"--deploy-ingress-zone-external is required")
 	}
 	if d.IngressQuarantine < 0 {
 		return fmt.Errorf("deploy ingress quarantine %s cannot be negative", d.IngressQuarantine)

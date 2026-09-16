@@ -24,17 +24,41 @@ tests:
       - failedTemplate:
           errorMessage: "service.ingress.shard is empty: the controller allocates it, so an empty value means the endpoint was rendered without a slot and would not be routable"
 
-  - it: refuses an ingress mode with no published name
+  # No zone is a supported shape, not an error: a cluster with no external-dns
+  # (kind, CI) routes identically and is addressed by its shard instead. The
+  # route must still render; only the DNS record goes away.
+  - it: renders the route but no DNS record when there is no name to publish
     set:
       service.connectivity: ingress_internal
       service.ingress:
         shard: pgin-0
         entryPoint: pg-20007
         port: 20007
-        shardHost: lb-0.example
+        shardHost: 10.0.5.20
     asserts:
-      - failedTemplate:
-          errorMessage: "service.ingress.dnsName is empty: without it the endpoint has no published address"
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: IngressRouteTCP
+      - equal:
+          path: spec.entryPoints[0]
+          value: pg-20007
+
+  - it: still renders the allowlist with no zone, since filtering is not DNS
+    set:
+      service.connectivity: ingress_internal
+      service.allowedCidrs: ["10.0.0.0/8"]
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        shardHost: 10.0.5.20
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: MiddlewareTCP
+        documentIndex: 1
 
   - it: binds the route to this endpoint's own entryPoint and pod
     set:

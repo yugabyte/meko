@@ -213,13 +213,19 @@ func (s *createEndpointStep) ingressSlot(ctx context.Context) (deploy.IngressSlo
 }
 
 func slotFrom(a ingress.Allocation) deploy.IngressSlot {
-	return deploy.IngressSlot{
+	slot := deploy.IngressSlot{
 		Shard:      a.Shard,
 		Port:       a.Port,
 		DNSName:    a.DNSName,
 		ShardHost:  a.ShardHost,
 		RecordType: a.RecordType,
 	}
+	// Deliberately NOT blanked here for an unpublished name. Doing that encoded
+	// the decision in this one caller, and every redeploy assembles the spec from
+	// the allocation row instead — so the bare name reached the deployer anyway
+	// and overwrote a working address. deploy.PublishableDNSName decides, from
+	// the stored name, on every path.
+	return slot
 }
 
 // endpointConfig is the spec stored on the endpoint row for (re)creation. The

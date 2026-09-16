@@ -69,23 +69,29 @@
 # as the controller (CONTROLLER_EXPOSE). Toggle with UI_ENABLED; image via
 # UI_IMAGE_REPO / UI_TAG (defaults alongside the controller image).
 #
-# Shared ingress: set INGRESS_ENABLED=true to put endpoints on a port of a
-# SHARED load balancer instead of one each. It installs the first shard of each
-# configured family beside the controller, so capacity exists as soon as the
-# controller is up. Off (the default) installs no shard and leaves the ingress_*
-# modes refused.
-#   INGRESS_ENABLED         true to route endpoints through shared shards
+# Shared ingress: set INGRESS_ENABLED to put endpoints on a port of a SHARED
+# load balancer instead of one each. It installs the baseline shard (pgin-0)
+# beside the controller, so capacity exists as soon as the controller is up. Off
+# (the default) installs no shard and leaves the ingress_* modes refused.
+#   INGRESS_ENABLED         true to route endpoints through shards (implied by
+#                           either zone below)
 #   INGRESS_ZONE_INTERNAL   DNS zone internal endpoint names are published under
-#   INGRESS_ZONE_EXTERNAL   DNS zone external endpoint names are published under;
-#                           kept separate so an internal name never reaches a
-#                           public zone
+#   INGRESS_ZONE_EXTERNAL   DNS zone external endpoint names are published under.
+#                           Separate zones so external-dns can be pinned to each
+#                           with --zone-id-filter and an internal name can never
+#                           reach a public zone. Omit both on a cluster with no
+#                           external-dns and endpoints are addressed as
+#                           <shard-host>:<port> instead
 #   INGRESS_PORT_RANGE      "lo-hi" the shard serves (default 20000-20049)
 #   INGRESS_CLOUD           aws|gcp|azure; required, the shard will not guess
 #   INGRESS_PROXY_PROTOCOL  true to trust PROXY protocol from the load balancer,
 #                           without which per-endpoint allowlists see the LB
 #   INGRESS_ALLOWED_CIDRS   "cidr,cidr" coarse gate on the shard's LB
-# It also needs external-dns with its CRD source on, or the DNS records each
-# endpoint renders are inert. See controller/architecture/ac-ingress.md.
+# With either zone set it also needs external-dns with its CRD source on, or the
+# DNS records each endpoint renders are inert. With no zone none are rendered —
+# on a create or a redeploy, because publishability is decided from the stored
+# name's own shape rather than by the caller. See
+# controller/architecture/ac-ingress.md.
 #
 # To stand up the prerequisites (namespace, pull secret, single-node YugabyteDB)
 # from scratch and then deploy the controller, use deploy/up.sh instead.
@@ -125,9 +131,19 @@ TLS_MODE="${TLS_MODE:-verify-full}"
 # YSQL role endpoints connect as; with TLS it is also the CN of their certificate.
 ENDPOINT_YB_USER="${ENDPOINT_YB_USER:-yugabyte}"
 # Shared ingress (controller/architecture/ac-ingress.md). INGRESS_ENABLED is the
-# whole opt-in: off (the default) installs no shard and leaves the controller
-# refusing the ingress_* connectivity modes, which is every deployment today.
-# The zones are separate and optional; a family with one gets published names.
+# opt-in; off (the default) installs no shard and leaves the controller refusing
+# the ingress_* connectivity modes, which is every deployment today. Setting
+# either zone implies it, so the common case stays one variable.
+#
+# The zones are OPTIONAL and separate: with no zone the endpoint names are
+# allocated but not published, and an endpoint's address is its shard's host:port.
+# That is what a cluster with no external-dns (kind, CI) gets, and it routes the
+# same — it only gives up being able to move an endpoint without changing its
+# address.
+#
+# One per family, because external-dns is pinned to a zone and the point of the
+# internal family is that its names do not resolve publicly. The allocator stores
+# the name it mints, so pointing both at one zone is not undoable by config.
 INGRESS_ZONE_INTERNAL="${INGRESS_ZONE_INTERNAL:-}"
 INGRESS_ZONE_EXTERNAL="${INGRESS_ZONE_EXTERNAL:-}"
 INGRESS_ENABLED="${INGRESS_ENABLED:-$([ -n "${INGRESS_ZONE_INTERNAL}${INGRESS_ZONE_EXTERNAL}" ] && echo true || echo false)}"
@@ -412,13 +428,6 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
       echo "   instead of the NLB this design needs." >&2
       exit 1 ;;
   esac
-  if [ -z "${INGRESS_ZONE_INTERNAL}${INGRESS_ZONE_EXTERNAL}" ]; then
-    echo "!! INGRESS_ENABLED=true needs at least one of INGRESS_ZONE_INTERNAL or" >&2
-    echo "   INGRESS_ZONE_EXTERNAL. An endpoint's address is its published name, so" >&2
-    echo "   the controller refuses to start without one and would crashloop." >&2
-    exit 1
-  fi
-
   # The Traefik CRDs, before any shard. The shard chart renders Traefik directly
   # rather than through its upstream chart, which is what used to install these —
   # so they are a prerequisite now, and their absence is quiet in the worst way:
@@ -458,6 +467,11 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
   INGRESS_FAMILIES=()
   [ -n "${INGRESS_ZONE_INTERNAL}" ] && INGRESS_FAMILIES+=("internal:pgin-0")
   [ -n "${INGRESS_ZONE_EXTERNAL}" ] && INGRESS_FAMILIES+=("external:pgin-0-ext")
+  # No zone at all is the kind/CI case: the controller registers the internal
+  # family (main.go), so this has to install the release that row joins to, or
+  # the row sits `building` forever waiting on a Service nothing created and
+  # every ingress_* create fails ErrNoCapacity.
+  [ ${#INGRESS_FAMILIES[@]} -eq 0 ] && INGRESS_FAMILIES=("internal:pgin-0")
 
   for _fam in "${INGRESS_FAMILIES[@]}"; do
     _family="${_fam%%:*}"

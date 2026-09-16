@@ -366,7 +366,9 @@ func runServe(args []string) error {
 	// handlers.go; a nil here only means the steps have no allocator to reach,
 	// which is why each one checks (controller/architecture/ac-ingress.md).
 	//
-	// A zone per family, so external-dns can be pinned to each and an internal
+	// The zones are separate from the switch: a kind or CI cluster routes through
+	// shards and has no DNS at all, and then names are allocated but unpublished.
+	// One per family so external-dns can be pinned to each and an internal
 	// endpoint's name is never published to a public zone.
 	ingressZones := ingress.Zones{
 		Internal: cfg.Deploy.IngressZoneInternal,
@@ -374,7 +376,7 @@ func runServe(args []string) error {
 	}
 	var ingressAlloc *ingress.Allocator
 	if cfg.Deploy.IngressEnabled {
-		ingressAlloc = ingress.New(pool, ingressZones, cfg.Deploy.IngressQuarantine,
+		ingressAlloc = ingress.New(pool, true, ingressZones, cfg.Deploy.IngressQuarantine,
 			ingress.Placement(cfg.Deploy.IngressPlacement))
 	}
 
@@ -489,13 +491,26 @@ func runServe(args []string) error {
 			"driver", cfg.Deploy.Driver)
 	default:
 		alloc := ingressAlloc
-		// One shard per family that has somewhere to publish. Registering the
-		// internal family unconditionally would leave an external-only deployment
-		// with a shard Allocate refuses and no shard for the family it does serve.
+		// One shard per family the deployment actually serves. A shard is a cloud
+		// load balancer, so this follows stated intent rather than registering
+		// both: the zones are that intent, and registering the internal family
+		// unconditionally would leave an external-only deployment holding a shard
+		// it does not want and none for the family it does.
+		//
+		// With no zone at all — a kind or CI cluster, where endpoints are
+		// addressed by their shard — there is no intent to read, so the internal
+		// family is the default. An external shard on such a cluster would be an
+		// internet-facing load balancer nobody asked for.
+		families := []ingress.Family{}
 		for _, f := range []ingress.Family{ingress.FamilyInternal, ingress.FamilyExternal} {
-			if ingressZones.For(f) == "" {
-				continue
+			if ingressZones.For(f) != "" {
+				families = append(families, f)
 			}
+		}
+		if len(families) == 0 {
+			families = []ingress.Family{ingress.FamilyInternal}
+		}
+		for _, f := range families {
 			if err := alloc.EnsureShard(ctx, ingress.Shard{
 				Name:   ingress.FirstShardNameFor(f),
 				Family: f,

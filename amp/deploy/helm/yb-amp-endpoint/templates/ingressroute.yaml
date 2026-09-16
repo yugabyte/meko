@@ -4,10 +4,15 @@ This endpoint's place on a SHARED ingress shard — one load balancer and a Trae
 deployment fronting many endpoints — instead of a load balancer of its own
 (controller/architecture/ac-ingress.md).
 
-Three objects, all in THIS endpoint's release: the route, its allowlist
+Up to three objects, all in THIS endpoint's release: the route, its allowlist
 middleware, and its DNS record. That is the property the whole design leans on —
 retiring the endpoint is still one `helm uninstall` and nothing is orphaned
 behind it, exactly as for the ClusterIP and nlb_* modes.
+
+Only the route is unconditional. The middleware appears with an allowlist, and
+the DNS record only where the deployment has a zone to publish in — without one
+(kind, CI, anywhere with no external-dns) the endpoint is addressed by its
+shard's host and port, which is where it answers regardless.
 
 The controller allocates the shard and port before the deploy and passes them in;
 nothing here chooses either, because two endpoints choosing the same port is a
@@ -15,7 +20,6 @@ connection reaching another customer's database.
 */}}
 {{- $ing := required "service.ingress is required for the ingress_* connectivity modes" .Values.service.ingress }}
 {{- if not $ing.shard }}{{ fail "service.ingress.shard is empty: the controller allocates it, so an empty value means the endpoint was rendered without a slot and would not be routable" }}{{ end }}
-{{- if not $ing.dnsName }}{{ fail "service.ingress.dnsName is empty: without it the endpoint has no published address" }}{{ end }}
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
@@ -86,12 +90,25 @@ spec:
     sourceRange:
       {{- toYaml . | nindent 6 }}
 {{- end }}
+{{- /*
+Rendered only for a name that can actually be published. The controller passes
+an empty dnsName for one minted where its family had no zone (an unqualified
+`ep-xxxxxxxx`), on a create and on a redeploy alike — publishability is read from
+the stored name's shape, not decided by the caller. A record for an unqualified
+name would be one external-dns cannot place in the zone it is pinned to.
+*/}}
+{{- if $ing.dnsName }}
 ---
 {{- /*
 The endpoint's own DNS name, stated outright as a DNSEndpoint rather than
 inferred by external-dns from an annotation on some other object. Stating it
 keeps the record independent of what external-dns can read out of a Traefik CRD,
 and makes retire withdraw it with the rest of the release.
+
+Rendered only when there is a name to publish. A deployment with no DNS zone —
+kind, CI, anywhere without external-dns — still routes perfectly well; its
+endpoints are simply addressed by their shard's host and port instead, which is
+where they answer anyway.
 
 recordType follows the cloud: a CNAME where the load balancer has a hostname
 (AWS), an A where it has an address (GCP, Azure). The controller reads which off
@@ -118,4 +135,5 @@ spec:
       holding an address that has moved on.
       */}}
       recordTTL: 60
+{{- end }}
 {{- end }}

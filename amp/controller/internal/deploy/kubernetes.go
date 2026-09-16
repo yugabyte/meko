@@ -312,7 +312,19 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		if err := k.verifyReady(ctx, release); err != nil {
 			return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
 		}
-		addr := fmt.Sprintf("%s:%d", spec.Ingress.DNSName, spec.Ingress.Port)
+		// An unpublishable name means there was no zone to mint it in, so the
+		// honest address is the shard's own. The endpoint is equally reachable
+		// either way; what the name buys is the freedom to move it later.
+		//
+		// Decided from the name rather than from its emptiness, because only the
+		// create path ever blanked it — every redeploy assembles the spec from the
+		// allocation row, which stores the bare name, and would otherwise publish
+		// `ep-abc12345:20007` over a working address.
+		host := spec.Ingress.DNSName
+		if !PublishableDNSName(host) {
+			host = spec.Ingress.ShardHost
+		}
+		addr := fmt.Sprintf("%s:%d", host, spec.Ingress.Port)
 		k.logger.Info("endpoint ready", "endpoint", release, "address", addr,
 			"connectivity", spec.Connectivity, "shard", spec.Ingress.Shard)
 		return Endpoint{ID: release, Address: addr, TailnetAddress: k.tailnetAddress(release), Version: vals.Image.Tag}, nil
@@ -1464,11 +1476,18 @@ func ingressValuesFor(spec EndpointSpec) *ingressValues {
 	if !IsIngress(spec.Connectivity) {
 		return nil
 	}
+	// An unpublishable name is not passed to the chart at all, so no DNSEndpoint
+	// is rendered for it — on a create or a redeploy alike. The name stays on the
+	// allocation row either way.
+	dnsName := spec.Ingress.DNSName
+	if !PublishableDNSName(dnsName) {
+		dnsName = ""
+	}
 	return &ingressValues{
 		Shard:      spec.Ingress.Shard,
 		EntryPoint: EntryPointName(spec.Ingress.Port),
 		Port:       spec.Ingress.Port,
-		DNSName:    spec.Ingress.DNSName,
+		DNSName:    dnsName,
 		ShardHost:  spec.Ingress.ShardHost,
 		RecordType: spec.Ingress.RecordType,
 	}

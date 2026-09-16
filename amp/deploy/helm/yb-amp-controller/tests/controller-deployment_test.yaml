@@ -329,12 +329,21 @@ tests:
             name: AMP_DEPLOY_INGRESS_ENABLED
             value: "false"
 
-  # The controller exits at startup when ingress is on with neither zone, so an
-  # unchecked values file would CrashLoopBackOff the control plane. Failing the
-  # render turns that into a helm error the operator sees immediately.
-  - it: refuses ingress enabled with neither zone
+  # A cluster with no external-dns runs ingress with neither zone: the names are
+  # allocated but unpublished and an endpoint is addressed by its shard. Pinned
+  # because it used to be refused, and the refusal is what this change removes.
+  - it: allows ingress enabled with neither zone
     set:
       controller.endpoint.ingress.enabled: true
     asserts:
-      - failedTemplate:
-          errorMessage: "controller.endpoint.ingress.enabled needs zoneInternal or zoneExternal: an endpoint's address is its published name, so the controller refuses to start without one"
+      - notFailedTemplate: {}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_ZONE_INTERNAL
+            value: ""

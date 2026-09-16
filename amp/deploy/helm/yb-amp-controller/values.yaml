@@ -155,19 +155,26 @@ controller:
     # -- StorageClass for each endpoint's /data PVC; empty => emptyDir (AMP_DEPLOY_STORAGE_CLASS).
     # -- Shared ingress: put endpoints on a port of a shared load balancer
     # instead of one each (controller/architecture/ac-ingress.md). `enabled` is
-    # the whole opt-in — off (the default) means this deployment has no shards
-    # and the ingress_* connectivity modes are refused with 400 rather than
-    # falling back to a dedicated load balancer, which would reinstate the
-    # per-endpoint cost without anyone choosing it.
+    # the opt-in — off (the default) means this deployment has no shards and the
+    # ingress_* connectivity modes are refused with 400 rather than falling back
+    # to a dedicated load balancer, which would reinstate the per-endpoint cost
+    # without anyone choosing it.
     ingress:
-      # -- Route endpoints through shared ingress shards.
+      # -- Route endpoints through shared ingress shards. Off (the default) means
+      # the ingress_* connectivity modes are refused.
       enabled: false
       # -- DNS zone INTERNAL endpoint names are published under, e.g.
-      # internal.byoc.example.com. Separate from the switch, and one per family
-      # so external-dns can be pinned to each with --zone-id-filter and an
-      # internal endpoint's name can never be published to a public zone.
+      # internal.byoc.example.com. OPTIONAL and separate from `enabled`: with no
+      # zone the names are allocated but not published, and an endpoint's address
+      # is its shard's host:port. That is what a cluster with no external-dns
+      # (kind, CI) gets, and it routes identically.
       zoneInternal: ""
-      # -- DNS zone EXTERNAL endpoint names are published under.
+      # -- DNS zone EXTERNAL endpoint names are published under, e.g.
+      # external.byoc.example.com. Kept separate from the internal zone so
+      # external-dns can be pinned to each with --zone-id-filter, and an internal
+      # endpoint's name can never be published to a public zone. The allocator
+      # stores the name it mints, so pointing both at one zone is not something a
+      # later config change can undo.
       zoneExternal: ""
       # -- Listener range each shard provisions in full at build; its width is
       # how many endpoints one shard holds.

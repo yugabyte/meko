@@ -793,21 +793,24 @@ func TestDeployIngressAcceptsHeadroomWiderThanOneShard(t *testing.T) {
 	}
 }
 
-// Enabling ingress with nowhere to publish is refused at startup rather than on
-// every endpoint create: an endpoint's address IS its published name
-// (Allocation.Address is dns_name:port), so ingress.Allocate refuses a family
-// whose zone is empty. Addressing an endpoint by its shard's host:port instead
-// is a later change in this series, and this expectation flips when it lands.
-func TestDeployIngressEnabledNeedsAZone(t *testing.T) {
-	_, err := Load(append(kubernetesDeployArgs(t), "--deploy-ingress-enabled"))
-	if err == nil {
-		t.Fatal("Load accepted ingress enabled with neither zone set; every endpoint create would " +
-			"then fail with ErrNotConfigured instead of the config failing at startup")
+// Enabling ingress with no zone at all is valid: the names are still allocated
+// and still unique, they are simply not published, and an endpoint's address is
+// its shard's own host:port. That is what a kind or CI cluster with no
+// external-dns gets, and it routes identically — which is the whole point of
+// keeping the switch and the zones independent.
+func TestDeployIngressEnabledWithoutZone(t *testing.T) {
+	c, err := Load(append(kubernetesDeployArgs(t), "--deploy-ingress-enabled"))
+	if err != nil {
+		t.Fatalf("Load rejected ingress enabled with no zone: %v", err)
 	}
-	if !strings.Contains(err.Error(), "zone") {
-		t.Errorf("error %q does not point at the missing zone", err)
+	if !c.Deploy.IngressEnabled {
+		t.Error("IngressEnabled = false")
 	}
-	// One zone is enough: that family is allocatable and the other simply is not.
+	if c.Deploy.IngressZoneInternal != "" || c.Deploy.IngressZoneExternal != "" {
+		t.Errorf("zones = %q/%q, want both empty", c.Deploy.IngressZoneInternal, c.Deploy.IngressZoneExternal)
+	}
+	// One zone configured and the other not is equally valid: that family
+	// publishes, the other is addressed by its shard.
 	if _, err := Load(append(kubernetesDeployArgs(t),
 		"--deploy-ingress-enabled",
 		"--deploy-ingress-zone-internal", "internal.pg.example",

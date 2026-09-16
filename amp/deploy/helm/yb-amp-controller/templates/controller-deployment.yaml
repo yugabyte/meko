@@ -120,20 +120,15 @@ spec:
             # modes rather than deploying an endpoint into a deployment that has
             # no shards (controller/architecture/ac-ingress.md).
             #
-            # Guarded for the same reason `cloud` is above: the controller
-            # validates this pair at startup and EXITS when ingress is on with
-            # neither zone set, so an unchecked values file installs cleanly and
-            # then CrashLoopBackOffs the whole control plane.
-            {{- if and .Values.controller.endpoint.ingress.enabled
-                  (not .Values.controller.endpoint.ingress.zoneInternal)
-                  (not .Values.controller.endpoint.ingress.zoneExternal) }}
-            {{- fail "controller.endpoint.ingress.enabled needs zoneInternal or zoneExternal: an endpoint's address is its published name, so the controller refuses to start without one" }}
-            {{- end }}
+            # No zone is required. A cluster with no external-dns (kind, CI) runs
+            # ingress with neither set: names are allocated but unpublished, and
+            # an endpoint's address is its shard's own host:port.
             - name: AMP_DEPLOY_INGRESS_ENABLED
               value: {{ .Values.controller.endpoint.ingress.enabled | quote }}
-            # Optional, and separate from the switch: one zone per family so
-            # external-dns can be pinned to each and an internal endpoint's name
-            # is never published to a public zone.
+            # Optional, and separate from the switch above: with no zone the
+            # names are allocated but not published, and an endpoint's address is
+            # its shard's host:port. One zone per family so external-dns can be
+            # pinned per zone and an internal name never reaches a public one.
             - name: AMP_DEPLOY_INGRESS_ZONE_INTERNAL
               value: {{ .Values.controller.endpoint.ingress.zoneInternal | quote }}
             - name: AMP_DEPLOY_INGRESS_ZONE_EXTERNAL

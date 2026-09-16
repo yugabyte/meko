@@ -55,7 +55,7 @@ func TestShards(t *testing.T) {
 // reconcile pass.
 func testEnsureShardConverges(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
 	reset(ctx, t, pool)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	s := Shard{Name: FirstShardName, Family: FamilyInternal, PortLo: 20000, PortHi: 20049}
 	if err := a.EnsureShard(ctx, s); err != nil {
@@ -98,7 +98,7 @@ func testEnsureShardConverges(ctx context.Context, t *testing.T, pool *db.Pool, 
 // mismatch is refused rather than applied.
 func testEnsureShardRefusesRangeChange(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
 	reset(ctx, t, pool)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	if err := a.EnsureShard(ctx, Shard{
 		Name: FirstShardName, Family: FamilyInternal, PortLo: 20000, PortHi: 20049,
@@ -139,7 +139,7 @@ func testMarkReadyOnlyPromotesBuilding(ctx context.Context, t *testing.T, pool *
 	reset(ctx, t, pool)
 	seedShard(ctx, t, pool, "pgin-ready", FamilyInternal, "ready", 20000, 20049)
 	seedShard(ctx, t, pool, "pgin-drain", FamilyInternal, "draining", 21000, 21049)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	if err := a.MarkReady(ctx, "pgin-ready", "moved.example", "CNAME"); err != nil {
 		t.Fatalf("mark ready: %v", err)
@@ -207,7 +207,7 @@ func testReconcileShards(ctx context.Context, t *testing.T, pool *db.Pool, zones
 	seedShard(ctx, t, pool, "pgin-waiting", FamilyInternal, "building", 21000, 21049)
 	seedShard(ctx, t, pool, "pgin-broken", FamilyInternal, "building", 22000, 22049)
 	seedShard(ctx, t, pool, "pgin-ip", FamilyExternal, "building", 23000, 23049)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	look := fakeLookup{
 		"pgin-addressed": {host: "lb.example", isHostname: true, addressed: true,
@@ -268,7 +268,7 @@ func testReconcileRefusesADivergentRelease(ctx context.Context, t *testing.T, po
 	seedShard(ctx, t, pool, "pgin-narrow", FamilyInternal, "building", 20000, 20049)
 	seedShard(ctx, t, pool, "pgin-wrongfam", FamilyInternal, "building", 21000, 21049)
 	seedShard(ctx, t, pool, "pgin-good", FamilyInternal, "building", 22000, 22049)
-	a := New(pool, zones, time.Hour, PlacementSpread)
+	a := New(pool, true, zones, time.Hour, PlacementSpread)
 
 	look := fakeLookup{
 		// Installed with a narrower range than it is registered for.

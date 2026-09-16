@@ -8,6 +8,7 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -138,6 +139,28 @@ type IngressSlot struct {
 // route naming an entryPoint that does not exist and then never serves it, which
 // looks like a routing bug rather than a typo.
 func EntryPointName(port int) string { return fmt.Sprintf("pg-%d", port) }
+
+// PublishableDNSName reports whether an endpoint's allocated name can be handed
+// to a client, which is decided by the NAME ITSELF rather than by current config.
+//
+// A name minted where its family had no zone is unqualified (`ep-abc12345`); one
+// minted with a zone carries it (`ep-abc12345.int.example`). That distinction is
+// durable, and it has to be, because the decision is remade on every redeploy:
+// a spec assembled from the allocation row has only the stored name to go on, so
+// anything derived from today's zones would differ from what was actually
+// published. Two failures that rules out — both silent:
+//
+//   - A redeploy of a zone-less endpoint would take the bare name as its address
+//     and SetEndpointAddress would overwrite a working <shardHost>:<port> with
+//     `ep-abc12345:20007`, which resolves nowhere.
+//   - Adding a zone to an existing fleet would make every pre-existing row look
+//     publishable while its stored name is still unqualified, so external-dns
+//     would be handed records outside the zone it is pinned to.
+//
+// Giving an existing fleet published names therefore means reissuing them, which
+// is a migration rather than a config change. Said here because the alternative
+// is discovering it the first time somebody sets a zone.
+func PublishableDNSName(name string) bool { return strings.Contains(name, ".") }
 
 // Client reachability modes for EndpointSpec.Connectivity. These strings are
 // also the chart's `service.connectivity` values and the API's enum, so one
