@@ -1,0 +1,32 @@
+{{- if .Values.tls.enabled }}
+# The client certificate this endpoint presents to YugabyteDB on both the YSQL
+# and the tserver RPC lane. CN is the YB role, so a `cert` HBA rule logs the
+# endpoint in; the Service DNS name rides along as a SAN for audit. cert-manager
+# renews it at renewBefore and rewrites the Secret in place; the daemons pick
+# the new files up from the volume mount.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "yb-amp-endpoint.fullname" . }}-yb-client
+  labels:
+    {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "yb-amp-endpoint.tlsSecretName" . }}
+  commonName: {{ .Values.yugabyte.user | quote }}
+  dnsNames:
+    - {{ include "yb-amp-endpoint.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  usages:
+    - client auth
+  duration: {{ .Values.tls.certificate.duration | quote }}
+  renewBefore: {{ .Values.tls.certificate.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.tls.certificate.algorithm }}
+    size: {{ .Values.tls.certificate.size }}
+    rotationPolicy: Always
+  issuerRef:
+    kind: {{ .Values.tls.issuerRef.kind }}
+    name: {{ .Values.tls.issuerRef.name }}
+    {{- with .Values.tls.issuerRef.group }}
+    group: {{ . }}
+    {{- end }}
+{{- end }}

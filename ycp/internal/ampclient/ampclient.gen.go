@@ -1408,6 +1408,22 @@ type RegisterExtensionRequest struct {
 	Version *string          `json:"version,omitempty"`
 }
 
+// RerenderEndpointsRequest Request to re-render endpoints against the controller's current
+// configuration. Every field is optional: the empty body rolls the whole
+// fleet at the default parallelism.
+type RerenderEndpointsRequest struct {
+	// EndpointIds The endpoints to re-render. Absent or empty means the whole fleet.
+	// Repeated ids are collapsed.
+	EndpointIds *[]openapi_types.UUID `json:"endpoint_ids,omitempty"`
+
+	// MaxParallel How many endpoints to re-render at once. A re-render replaces the pod
+	// when anything changed, so this is how much of the fleet is down at a
+	// time. It is also the only bound on a roll's concurrency — the children
+	// run in-process off the parent's single execution slot, so
+	// `--task-max-concurrent` does not apply to them. Defaults to 4.
+	MaxParallel *int `json:"max_parallel,omitempty"`
+}
+
 // ResizeEndpointRequest Request to change an existing endpoint's compute reservation. cpu/memory
 // are applied as request == limit, so the pod keeps its Guaranteed QoS class
 // (a prerequisite for in-place resize).
@@ -1978,6 +1994,9 @@ type ListUsersParams struct {
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// RerenderEndpointsJSONRequestBody defines body for RerenderEndpoints for application/json ContentType.
+type RerenderEndpointsJSONRequestBody = RerenderEndpointsRequest
+
 // UpgradeEndpointsJSONRequestBody defines body for UpgradeEndpoints for application/json ContentType.
 type UpgradeEndpointsJSONRequestBody = UpgradeEndpointsRequest
 
@@ -2227,6 +2246,11 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// RerenderEndpointsWithBody request with any body
+	RerenderEndpointsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RerenderEndpoints(ctx context.Context, body RerenderEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// UpgradeEndpointsWithBody request with any body
 	UpgradeEndpointsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2381,6 +2405,30 @@ type ClientInterface interface {
 
 	// GetVersion request
 	GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) RerenderEndpointsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRerenderEndpointsRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RerenderEndpoints(ctx context.Context, body RerenderEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRerenderEndpointsRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) UpgradeEndpointsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -3065,6 +3113,46 @@ func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewRerenderEndpointsRequest calls the generic RerenderEndpoints builder with application/json body
+func NewRerenderEndpointsRequest(server string, body RerenderEndpointsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRerenderEndpointsRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewRerenderEndpointsRequestWithBody generates requests for RerenderEndpoints with any type of body
+func NewRerenderEndpointsRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/endpoint-rerenders")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewUpgradeEndpointsRequest calls the generic UpgradeEndpoints builder with application/json body
@@ -5210,6 +5298,11 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// RerenderEndpointsWithBodyWithResponse request with any body
+	RerenderEndpointsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RerenderEndpointsResponse, error)
+
+	RerenderEndpointsWithResponse(ctx context.Context, body RerenderEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*RerenderEndpointsResponse, error)
+
 	// UpgradeEndpointsWithBodyWithResponse request with any body
 	UpgradeEndpointsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error)
 
@@ -5364,6 +5457,40 @@ type ClientWithResponsesInterface interface {
 
 	// GetVersionWithResponse request
 	GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
+}
+
+type RerenderEndpointsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r RerenderEndpointsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RerenderEndpointsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RerenderEndpointsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type UpgradeEndpointsResponse struct {
@@ -6749,6 +6876,23 @@ func (r GetVersionResponse) ContentType() string {
 	return ""
 }
 
+// RerenderEndpointsWithBodyWithResponse request with arbitrary body returning *RerenderEndpointsResponse
+func (c *ClientWithResponses) RerenderEndpointsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RerenderEndpointsResponse, error) {
+	rsp, err := c.RerenderEndpointsWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRerenderEndpointsResponse(rsp)
+}
+
+func (c *ClientWithResponses) RerenderEndpointsWithResponse(ctx context.Context, body RerenderEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*RerenderEndpointsResponse, error) {
+	rsp, err := c.RerenderEndpoints(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRerenderEndpointsResponse(rsp)
+}
+
 // UpgradeEndpointsWithBodyWithResponse request with arbitrary body returning *UpgradeEndpointsResponse
 func (c *ClientWithResponses) UpgradeEndpointsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error) {
 	rsp, err := c.UpgradeEndpointsWithBody(ctx, contentType, body, reqEditors...)
@@ -7244,6 +7388,60 @@ func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParseGetVersionResponse(rsp)
+}
+
+// ParseRerenderEndpointsResponse parses an HTTP response from a RerenderEndpointsWithResponse call
+func ParseRerenderEndpointsResponse(rsp *http.Response) (*RerenderEndpointsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RerenderEndpointsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseUpgradeEndpointsResponse parses an HTTP response from a UpgradeEndpointsWithResponse call

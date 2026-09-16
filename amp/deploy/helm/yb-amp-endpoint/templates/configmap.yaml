@@ -11,6 +11,12 @@ data:
   YB_DBNAME: {{ .Values.yugabyte.dbname | quote }}
   YB_SSLMODE: {{ .Values.yugabyte.sslmode | quote }}
   YB_SSLROOTCERT: {{ .Values.yugabyte.sslrootcert | quote }}
+  {{- with .Values.yugabyte.sslcert }}
+  YB_SSLCERT: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.yugabyte.sslkey }}
+  YB_SSLKEY: {{ . | quote }}
+  {{- end }}
   {{- if include "yb-amp-endpoint.hasPassword" . }}
   # Name of the env var carrying the YB password (injected from a Secret).
   YB_PASSWORD_ENV: "YB_PASSWORD"

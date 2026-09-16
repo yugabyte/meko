@@ -249,6 +249,46 @@ func TestKubernetesValuesExistingSecret(t *testing.T) {
 	}
 }
 
+// TestKubernetesValuesTLS asserts the TLS mode turns into the chart's tls block
+// plus a connection block naming the chart's fixed mount paths, and that a
+// plaintext config emits neither.
+func TestKubernetesValuesTLS(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.TLS != nil || v.Yugabyte.Sslmode != "" || v.Yugabyte.Sslcert != "" {
+		t.Errorf("plaintext config rendered TLS values: %+v %+v", v.TLS, v.Yugabyte)
+	}
+
+	cfg := testKubernetesConfig()
+	cfg.BackingYBTLSMode = "verify-full"
+	cfg.BackingYBTLSIssuerKind = "ClusterIssuer"
+	cfg.BackingYBTLSIssuerName = "amp-ca"
+	cfg.BackingYBTLSIssuerGroup = "cert-manager.io"
+	cfg.BackingYBTLSCABundleConfigMap = "amp-ca-bundle"
+	cfg.BackingYBTLSCertDuration = "720h"
+	cfg.BackingYBTLSCertRenewBefore = "240h"
+	v = NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "yb-ep-rel")
+	if v.TLS == nil || !v.TLS.Enabled {
+		t.Fatalf("TLS block not rendered: %+v", v.TLS)
+	}
+	if v.TLS.IssuerRef != (issuerRefValues{Kind: "ClusterIssuer", Name: "amp-ca", Group: "cert-manager.io"}) {
+		t.Errorf("IssuerRef = %+v", v.TLS.IssuerRef)
+	}
+	if v.TLS.CABundleConfigMap != "amp-ca-bundle" || v.TLS.Certificate != (certificateValue{Duration: "720h", RenewBefore: "240h"}) {
+		t.Errorf("TLS = %+v", v.TLS)
+	}
+	want := yugabyteValues{
+		Sslmode:     "verify-full",
+		Sslrootcert: endpointTLSCAPath,
+		Sslcert:     endpointTLSCertPath,
+		Sslkey:      endpointTLSKeyPath,
+	}
+	got := yugabyteValues{Sslmode: v.Yugabyte.Sslmode, Sslrootcert: v.Yugabyte.Sslrootcert, Sslcert: v.Yugabyte.Sslcert, Sslkey: v.Yugabyte.Sslkey}
+	if got != want {
+		t.Errorf("connection TLS fields = %+v, want %+v", got, want)
+	}
+}
+
 func TestKubernetesValuesNoPullSecret(t *testing.T) {
 	cfg := testKubernetesConfig() // PullSecret left empty
 	k := NewKubernetesDeployer(cfg, nil)

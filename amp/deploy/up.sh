@@ -132,9 +132,6 @@ CTX="$(kubectl config current-context 2>/dev/null || true)"
 aws sts get-caller-identity >/dev/null 2>&1 || die "no usable AWS credentials (needed for ECR login)"
 case "${TLS}" in 0|1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
 case "${TLS_PERMISSIVE}" in 0|1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
-if [ "${TLS}" = "1" ] && [ "${TLS_PERMISSIVE}" = "0" ]; then
-  die "TLS_PERMISSIVE=0 is not supported yet: the controller does not present a certificate"
-fi
 echo "   kube-context : ${CTX}"
 echo "   namespace    : ${NS}"
 echo "   registry     : ${ECR}  (region ${REGION})"
@@ -299,7 +296,20 @@ fi
 
 # --- 6. the amp controller ---
 say "amp controller (controller=${CONTROLLER_IMAGE_REPO}:${CONTROLLER_TAG}  endpoint=${ENDPOINT_IMAGE_REPO}:${ENDPOINT_TAG})"
+# With TLS the controller authenticates with the client certificate the chart
+# mounts (CN = yugabyte), and endpoints connect as the storage role.
+DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable"
+ENDPOINT_YB_USER="yugabyte"
+if [ "${TLS}" = "1" ]; then
+  DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=verify-full&sslrootcert=/etc/amp/tls/ca/ca.crt&sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key"
+  ENDPOINT_YB_USER="${YB_STORAGE_ROLE}"
+fi
 NS="${NS}" \
+TLS="${TLS}" \
+TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" \
+TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}" \
+TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
+ENDPOINT_YB_USER="${ENDPOINT_YB_USER}" \
 PULL_SECRET="${PULL_SECRET}" \
 ECR="${ECR}" \
 REGION="${REGION}" \
@@ -308,7 +318,7 @@ ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO}" \
 CONTROLLER_TAG="${CONTROLLER_TAG}" \
 ENDPOINT_TAG="${ENDPOINT_TAG}" \
 YB_HOST_PORTS="${YB_FQDN}:5433" \
-DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable" \
+DB_URL="${DB_URL}" \
 CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE}" \
 ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE}" \
 ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS}" \

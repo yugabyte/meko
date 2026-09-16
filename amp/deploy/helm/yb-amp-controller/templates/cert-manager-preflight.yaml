@@ -1,0 +1,24 @@
+{{- /*
+cert-manager is installed by deploy/tls/trust-root.sh, not by this chart. When
+it is absent the Certificate below would be a kind the API server does not know,
+and Helm's own error for that names a resource mapping rather than the thing to
+fix. Worse, a chart that skipped the Certificate silently would leave the
+Deployment mounting a Secret nobody creates, and the pod would sit in
+FailedMount forever.
+
+.Capabilities.APIVersions is the cluster's real API surface on install and
+upgrade. Under `helm template` there is no cluster to ask, so a caller that
+renders offline passes --api-versions (the QA framework does, from the CRDs it
+finds).
+*/ -}}
+{{- /*
+Either knob needs cert-manager: tls.enabled is this pod's own certificate, and
+controller.endpoint.ybTlsMode makes the controller render a Certificate into
+every endpoint release. An install that set only the second used to pass here
+and then fail one endpoint deploy task at a time.
+*/ -}}
+{{- if or .Values.tls.enabled .Values.controller.endpoint.ybTlsMode }}
+{{- if not (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
+{{- fail (printf "tls.enabled or controller.endpoint.ybTlsMode is set but cert-manager is not installed on this cluster (no cert-manager.io/v1). Install it with `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions cert-manager.io/v1.") }}
+{{- end }}
+{{- end }}

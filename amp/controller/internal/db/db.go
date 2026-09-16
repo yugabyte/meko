@@ -123,6 +123,9 @@ func Connect(ctx context.Context, url, schema string) (*Pool, error) {
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
 	applyPoolBounds(cfg)
+	if err := installClientCertReload(cfg, url); err != nil {
+		return nil, err
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

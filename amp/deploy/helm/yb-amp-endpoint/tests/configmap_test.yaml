@@ -104,6 +104,28 @@ tests:
           path: data.YB_SSLROOTCERT
           value: "/etc/ssl/yb/ca.crt"
 
+  - it: carries the client certificate paths only when set
+    asserts:
+      - notExists:
+          path: data.YB_SSLCERT
+      - notExists:
+          path: data.YB_SSLKEY
+
+  - it: carries the client certificate paths when set
+    set:
+      yugabyte:
+        sslmode: verify-full
+        sslrootcert: /etc/amp/tls/ca/ca.crt
+        sslcert: /etc/amp/tls/client/tls.crt
+        sslkey: /etc/amp/tls/client/tls.key
+    asserts:
+      - equal:
+          path: data.YB_SSLCERT
+          value: "/etc/amp/tls/client/tls.crt"
+      - equal:
+          path: data.YB_SSLKEY
+          value: "/etc/amp/tls/client/tls.key"
+
   - it: sets YB_PASSWORD_ENV only when a password is configured
     set:
       yugabyte.password: hunter2

@@ -19,6 +19,72 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: amp-controller
+      # The image runs as uid/gid 1000; without this group a 0440 Secret mount
+      # (the TLS client key) is unreadable and the controller fails at boot.
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 1000
+
+  - it: renders no TLS env or mounts by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_TLS_MODE
+          any: true
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: hands the endpoint TLS mode and issuer to the controller
+    set:
+      controller.endpoint.ybTlsMode: verify-full
+      tls.issuerRef.name: corp-ca
+      tls.caBundleConfigMap: corp-bundle
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_TLS_MODE
+            value: verify-full
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_TLS_ISSUER_NAME
+            value: corp-ca
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_TLS_CA_CONFIGMAP
+            value: corp-bundle
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_TLS_CERT_DURATION
+            value: "720h"
+
+  - it: mounts the controller's own certificate and the CA bundle when TLS is on
+    set:
+      tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-client-tls
+            secret:
+              secretName: amp-controller-db-tls
+              defaultMode: 0440
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-bundle
+            configMap:
+              name: amp-ca-bundle
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: db-client-tls
+            mountPath: /etc/amp/tls/client
+            readOnly: true
 
   - it: defaults the controller image tag to the chart appVersion
     asserts:

@@ -1,12 +1,9 @@
 # ac — Certificate trust between endpoints and YugabyteDB (cert-manager)
 
-**Status:** In progress — decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)); one open.
-Phase 1 (compute client certificates) and phase 2 (trust root, chart-deployed
-YugabyteDB, `deploy/tls/`) are implemented; the operator side is
-[`runbooks/tls.md`](../../runbooks/tls.md).
-**Last updated:** 2026-09-04
+**Status:** Phases 1 to 3 of the [delivery plan](#delivery-plan) implemented; decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)), one open.
+The operator side is [`runbooks/tls.md`](../../runbooks/tls.md).
+**Last updated:** 2026-09-08
 **Tracks:** [#1114](https://github.com/yugabyte/meko/issues/1114)
-**Baseline:** `main` at 0fccf8f7d
 
 One cluster-wide certificate authority issues every certificate the stack uses: the
 YugabyteDB masters and tservers, the AMP controller, and one client certificate per
@@ -239,7 +236,7 @@ the release, and reuses the crash-safe `recoverPending` path.
 | **Endpoint chart** | New `templates/certificate.yaml` gated on `tls.enabled`: `secretName: <release>-yb-client-tls`, `commonName` from `yugabyte.user`, `dnsNames: [<release>.<ns>.svc.cluster.local]`, `usages: [client auth]`, `privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}`. The Deployment mounts the Secret at `/etc/amp/tls/client` and the bundle ConfigMap at `/etc/amp/tls/ca` as whole-directory mounts, never `subPath`, because subPath mounts do not receive Secret updates. The ConfigMap gains `YB_SSLCERT` and `YB_SSLKEY`; `YB_PASSWORD_ENV` is omitted in cert mode. |
 | **Ordering** | Helm applies the Certificate and Deployment together. The kubelet holds the pod in ContainerCreating until the Secret exists, cert-manager issues within seconds, and the existing `helm --wait` plus the `verifyReady` round trip to the safekeeper's status endpoint cover the rest. No new wait logic. |
 | **RBAC** | The namespaced Role adds `cert-manager.io/certificates` with get, list, watch, create, update, patch and delete. Reading the resulting Secret already works (`secrets: *`). A `ClusterIssuer` is referenced by name and needs no grant. |
-| **Existing endpoints** | Switching a deployment to TLS mode is a re-render of every live release, the same shape as `add_branch_extensions`: a helm upgrade that adds volumes recreates the pod (Recreate strategy), so the address is re-recorded. This ships as an explicit task rather than a side effect, and takes the endpoint lock that [meko#976](https://github.com/yugabyte/meko/issues/976) notes `add_branch_extensions` skips. |
+| **Existing endpoints** | Switching a deployment to TLS mode is a re-render of every live release: a helm upgrade that adds volumes recreates the pod (Recreate strategy), so the address is re-recorded. It ships as `rerender_endpoints`, a fan-out over the subtask machinery the version upgrade introduced (`ac-endpoint-upgrade.md` §5) — one parent holding `fleet:endpoints` and a `rerender_endpoint` child per endpoint holding that endpoint's own lock, which is the protection [meko#976](https://github.com/yugabyte/meko/issues/976) notes `add_branch_extensions` still lacks. Collapsing the two near-identical rolls into one parameterised pair is [meko#1202](https://github.com/yugabyte/meko/issues/1202). |
 | **Version skew** | `YbConnConfig` is `deny_unknown_fields`, so a controller that emits `sslcert` to an endpoint image that predates the field breaks that endpoint at boot. TLS mode therefore requires a minimum endpoint image tag, checked in config validation. |
 | **Own connection** | pgx loads `sslcert` and `sslkey` once at `ParseConfig`. Either set `tls.Config.GetClientCertificate` to read the files per handshake, or accept that the controller restarts on its own cert renewal; it is stateless and its leases are fail-fast, so the restart is cheap. |
 
@@ -395,10 +392,10 @@ story.
 ## Enabling TLS on an existing deployment
 
 This is the procedure a running deployment follows to move from plaintext to mTLS
-without recreating the database or the endpoint records; the operator copy is
-[`runbooks/tls.md`](../../runbooks/tls.md). Each endpoint pod is recreated exactly
-once, and nothing is refused until the final tightening step, which is the only one to
-schedule.
+without recreating the database or the endpoint records; the operator copy, with the
+commands, is [`runbooks/tls.md`](../../runbooks/tls.md). Each endpoint pod is recreated
+exactly once, and nothing is refused until the final tightening step, which is the only
+one to schedule.
 
 The mechanism is YugabyteDB's permissive transition flags. With
 `allow_insecure_connections=true`, a TLS-enabled tserver still accepts plaintext RPC, so
@@ -484,11 +481,16 @@ against a locally issued CA without waiting for the deployment work.
    `amp_storage` role. YBA path: TLS fields in the QA universe request, gflag overrides,
    provider issuer settings. Runbook for both paths.
 3. **Controller and charts** (`amp/controller`, helm). Config flags, `yugabyteValues` TLS
-   fields, endpoint chart Certificate and mounts, controller chart Certificate and DSN,
-   RBAC, the re-render task for existing endpoints, the minimum-image check. Chart unit
-   tests for both charts; a controller integration test that creates an endpoint against
-   a TLS yugabyted and asserts the thin lane is active through the safekeeper status
-   endpoint. `amp/runbooks/tls.md` landed with phase 2 and gains this phase's flags here.
+   fields, endpoint chart Certificate and mounts, controller chart Certificate and DSN
+   (with the client certificate re-read on every new connection), RBAC, the
+   `rerender_endpoints` roll and `POST /api/v1/endpoint-rerenders` for existing
+   endpoints, `TLS=1` on `redeploy.sh`/`up.sh`/`up-gke.sh` and a `tls` input on the GKE
+   workflow. Chart unit tests for both charts. There is no minimum-image check: an
+   endpoint image without the TLS fields refuses the `sslcert` key at boot, which is
+   the same failure earlier and louder. Deferred to the phase 4 test work: a
+   controller integration test that creates an endpoint against a TLS yugabyted and
+   asserts the thin lane through the safekeeper status endpoint. `amp/runbooks/tls.md`
+   landed with phase 2 and gains this phase's flags here.
 4. **Hot reload in endpoint processes** (`amp/compute`, `amp/controller`). Shared cert
    watcher, swappable YSQL connector, `recycle_now` on the thin pool, controller
    `GetClientCertificate`. Integration test: `cmctl renew` against a live endpoint, then

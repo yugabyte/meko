@@ -143,8 +143,28 @@ type KubernetesConfig struct {
 	BackingYBExistingSecret    string
 	BackingYBExistingSecretKey string
 
+	// TLS to the backing YugabyteDB. Empty or "disable" = off. Otherwise every
+	// release carries a cert-manager Certificate (CN = the YB user) from the
+	// issuer below, mounted with the CA bundle ConfigMap; the chart fixes the
+	// paths, so the connection block only needs the mode.
+	BackingYBTLSMode              string
+	BackingYBTLSIssuerKind        string
+	BackingYBTLSIssuerName        string
+	BackingYBTLSIssuerGroup       string
+	BackingYBTLSCABundleConfigMap string
+	BackingYBTLSCertDuration      string
+	BackingYBTLSCertRenewBefore   string
+
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait)
 }
+
+// Where the endpoint chart mounts the TLS material; the connection block
+// names these paths and the chart's deployment template mounts them.
+const (
+	endpointTLSCAPath   = "/etc/amp/tls/ca/ca.crt"
+	endpointTLSCertPath = "/etc/amp/tls/client/tls.crt"
+	endpointTLSKeyPath  = "/etc/amp/tls/client/tls.key"
+)
 
 // KubernetesDeployer is the Helm-backed Deployer: one Helm release (one pod) per
 // endpoint (amp-controller.md §5.4, "one pod per endpoint"). It is the
@@ -1036,6 +1056,9 @@ type chartValues struct {
 	Endpoint         endpointValues      `json:"endpoint"`
 	Controller       controllerValues    `json:"controller"`
 	Service          serviceValues       `json:"service"`
+	// TLS is nil (omitted) for a plaintext deployment; set when the endpoints
+	// present a certificate to YugabyteDB.
+	TLS *tlsValues `json:"tls,omitempty"`
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
 	Persistence *persistenceValues `json:"persistence,omitempty"`
@@ -1165,6 +1188,30 @@ type yugabyteValues struct {
 	Password          string `json:"password,omitempty"`
 	ExistingSecret    string `json:"existingSecret,omitempty"`
 	ExistingSecretKey string `json:"existingSecretKey,omitempty"`
+	Sslmode           string `json:"sslmode,omitempty"`
+	Sslrootcert       string `json:"sslrootcert,omitempty"`
+	Sslcert           string `json:"sslcert,omitempty"`
+	Sslkey            string `json:"sslkey,omitempty"`
+}
+
+// tlsValues mirrors the chart's `tls` block: the per-release Certificate the
+// chart renders and the CA bundle it mounts beside it.
+type tlsValues struct {
+	Enabled           bool             `json:"enabled"`
+	IssuerRef         issuerRefValues  `json:"issuerRef"`
+	CABundleConfigMap string           `json:"caBundleConfigMap"`
+	Certificate       certificateValue `json:"certificate"`
+}
+
+type issuerRefValues struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Group string `json:"group,omitempty"`
+}
+
+type certificateValue struct {
+	Duration    string `json:"duration"`
+	RenewBefore string `json:"renewBefore"`
 }
 
 type endpointValues struct {
@@ -1279,6 +1326,29 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 		v.Yugabyte.ExistingSecretKey = k.cfg.BackingYBExistingSecretKey
 	} else {
 		v.Yugabyte.Password = spec.YB.Password
+	}
+	// TLS: the chart renders a Certificate for this release and mounts its
+	// Secret and the CA bundle at fixed paths, which the connection block names.
+	// A password, if one is configured, still travels: whether the login is the
+	// certificate or the password is the server's HBA rule to decide.
+	if k.cfg.BackingYBTLSMode != "" && k.cfg.BackingYBTLSMode != "disable" {
+		v.Yugabyte.Sslmode = k.cfg.BackingYBTLSMode
+		v.Yugabyte.Sslrootcert = endpointTLSCAPath
+		v.Yugabyte.Sslcert = endpointTLSCertPath
+		v.Yugabyte.Sslkey = endpointTLSKeyPath
+		v.TLS = &tlsValues{
+			Enabled: true,
+			IssuerRef: issuerRefValues{
+				Kind:  k.cfg.BackingYBTLSIssuerKind,
+				Name:  k.cfg.BackingYBTLSIssuerName,
+				Group: k.cfg.BackingYBTLSIssuerGroup,
+			},
+			CABundleConfigMap: k.cfg.BackingYBTLSCABundleConfigMap,
+			Certificate: certificateValue{
+				Duration:    k.cfg.BackingYBTLSCertDuration,
+				RenewBefore: k.cfg.BackingYBTLSCertRenewBefore,
+			},
+		}
 	}
 	if k.cfg.PullSecret != "" {
 		v.ImagePullSecrets = []map[string]string{{"name": k.cfg.PullSecret}}

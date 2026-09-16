@@ -32,6 +32,11 @@ rules:
   - apiGroups: ["batch"]
     resources: [jobs]
     verbs: ["*"]
+  # Each TLS-mode endpoint release carries a cert-manager Certificate, applied
+  # by helm under this ServiceAccount. Harmless where cert-manager is absent.
+  - apiGroups: ["cert-manager.io"]
+    resources: [certificates]
+    verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

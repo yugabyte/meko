@@ -1148,6 +1148,9 @@ var chartCapabilityCRDs = []struct {
 	group string
 }{
 	{crd: "opentelemetrycollectors.opentelemetry.io", group: "opentelemetry.io"},
+	// Not a document gate but a precondition: with TLS on and the chart not
+	// installing cert-manager, the render fails unless the CRD is declared.
+	{crd: "certificates.cert-manager.io", group: "cert-manager.io"},
 }
 
 // renderAPIVersions returns the group/versions to declare to `helm template` so
@@ -1178,6 +1181,9 @@ func (a *App) renderAPIVersions(ctx context.Context) []string {
 
 // helmTemplate renders the controller chart to a manifest string.
 func (a *App) helmTemplate(ctx context.Context) (string, error) {
+	if err := a.helmDependencyBuild(ctx); err != nil {
+		return "", err
+	}
 	argv := a.helmTemplateArgs(a.renderAPIVersions(ctx))
 	if a.logf != nil {
 		a.logf("exec: %s", k8s.CmdString(argv))
@@ -1193,6 +1199,24 @@ func (a *App) helmTemplate(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("helm template exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return res.Stdout, nil
+}
+
+// helmDependencyBuild fetches the chart's subcharts. The controller chart
+// declares cert-manager, and helm refuses to render a chart whose declared
+// dependency is missing from charts/ even when its condition is false.
+func (a *App) helmDependencyBuild(ctx context.Context) error {
+	argv := []string{"helm", "dependency", "build", a.cfg.ControllerChart}
+	if a.logf != nil {
+		a.logf("exec: %s", k8s.CmdString(argv))
+	}
+	res, err := a.helmRun(ctx, nil, argv)
+	if err != nil {
+		return fmt.Errorf("helm dependency build: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("helm dependency build exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return nil
 }
 
 // helmTemplateArgs builds the `helm template` argv mirroring the --set flags
@@ -1218,6 +1242,10 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 		"controller.service.type":              a.cfg.ControllerExpose,
 		"mcp.enabled":                          boolStr(a.cfg.MCPEnabled),
 		"ui.enabled":                           boolStr(a.cfg.UIEnabled),
+		// cert-manager belongs to the cluster, not to this release: a run
+		// deploys many stacks onto one, and two owners collide on its
+		// cluster-scoped objects.
+		"certManager.install": "false",
 	}
 	if a.cfg.MCPEnabled && a.cfg.MCPImage != "" {
 		r, t := splitImageRef(withRegistry(a.cfg.MCPImage, prefix))

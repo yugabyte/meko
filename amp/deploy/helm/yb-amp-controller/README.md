@@ -8,12 +8,28 @@ in [`deploy/controller/redeploy.sh`](../../controller/redeploy.sh).
 
 ## Install
 
+Fetch the subcharts first. The chart declares cert-manager, `charts/*.tgz` is
+gitignored, and Helm refuses to render a chart whose declared dependency is
+missing even when its condition is false:
+
+```sh
+```
+
 ```sh
 helm install yb-amp-controller deploy/helm/yb-amp-controller -n amp \
   --set-string imageTag=custom-7f195e43e51f \
   --set 'imagePullSecrets[0].name=pull-secret' \
   --set-string controller.databaseUrl='postgres://yugabyte@yb-tserver.amp.svc.cluster.local:5433/yb_storage?sslmode=disable'
 ```
+
+The TLS mode needs **cert-manager** to issue the controller's and the endpoints'
+certificates, but this chart does not install it — `deploy/tls/trust-root.sh`
+does, along with trust-manager and the `amp-ca` issuer, and `up.sh`, `up-gke.sh`
+and `controller/redeploy.sh` all run it. Installing it here as a subchart would
+make `helm dependency build` a precondition for everyone who renders this chart,
+including callers that only paste the `helm upgrade` line above. With
+`tls.enabled` set and no cert-manager on the cluster, the chart refuses to render
+and says to run that script.
 
 `imageTag` covers all four amp images and the reconcile-agent; `imageRegistry`
 (default `quay.io/yugabyte`) supplies the host. Move the whole set with
@@ -126,6 +142,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | Value | Default | Meaning |
 |---|---|---|
 | `imagePullSecrets` | `[]` | pull secrets for both images; `[0].name` also becomes `AMP_DEPLOY_PULL_SECRET` |
+| `podSecurityContext` | `{fsGroup: 1000}` | controller pod security context; the gid is the image's, so a 0440 Secret mount (the TLS client key) is readable |
 | `imageRegistry` | `quay.io/yugabyte` | prefixed onto any image repository below that names no registry host of its own |
 | `imageTag` | _(empty)_ | tag for every image that sets none of its own; empty ⇒ chart appVersion, which is **not published** — a real deploy sets this |
 | `rbac.nodeRead` | `true` | create a read-only cluster-scoped ClusterRole for `nodes get, list`. What lets the controller detect the cloud (for the `nlb_*` endpoint connectivity modes) and resolve NodePort node IPs. Set `false` only where the install may hold no cluster-scoped binding — then `controller.endpoint.cloud` is required for `nlb_internal` |
@@ -141,6 +158,13 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `controller.endpoint.image.repository` / `.tag` | `amp-endpoint` / `imageTag` ⇒ appVersion | `AMP_ENDPOINT_IMAGE_REPO` / `AMP_ENDPOINT_IMAGE_TAG` |
 | `controller.endpoint.ybHostPorts` | `yb-tserver:5433` | `AMP_DEPLOY_YB_HOST_PORTS` |
 | `controller.endpoint.ybUser` / `.ybDbname` | `yugabyte` / `yb_storage` | `AMP_DEPLOY_YB_USER` / `AMP_DEPLOY_YB_DBNAME` |
+| `controller.endpoint.ybTlsMode` | _(empty)_ | `AMP_DEPLOY_YB_TLS_MODE` — `require` \| `verify-ca` \| `verify-full`. Set ⇒ every endpoint gets a cert-manager `Certificate` (CN = `ybUser`, from `tls.issuerRef`) and the `tls.caBundleConfigMap` CA mounted, and connects with them. Empty ⇒ plaintext |
+| `controller.endpoint.ybTlsCertDuration` / `.ybTlsCertRenewBefore` | `720h` / `240h` | `AMP_DEPLOY_YB_TLS_CERT_DURATION` / `AMP_DEPLOY_YB_TLS_CERT_RENEW_BEFORE` — endpoint certificate lifetime and renewal lead |
+| `tls.enabled` | `false` | mount a cert-manager client certificate (`Certificate <controller>-db`, CN = `tls.controllerUser`) and the CA bundle into the controller at `/etc/amp/tls/{client,ca}`; `controller.databaseUrl` must then name them (`sslmode=verify-full&sslrootcert=/etc/amp/tls/ca/ca.crt&sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key`) |
+| `tls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer for the controller's and (via `AMP_DEPLOY_YB_TLS_ISSUER_*`) every endpoint's certificate |
+| `tls.caBundleConfigMap` | `amp-ca-bundle` | ConfigMap (key `ca.crt`) with the trusted roots, kept in the namespace by trust-manager |
+| `tls.controllerUser` | `yugabyte` | CN of the controller's certificate, the YSQL role it logs in as |
+| `tls.certificate.duration` / `.renewBefore` | `720h` / `240h` | controller certificate lifetime and renewal lead |
 | `controller.endpoint.storageClass` | _(empty)_ | `AMP_DEPLOY_STORAGE_CLASS` (empty ⇒ emptyDir) |
 | `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` (a **floor**; the size itself is 20 GiB × the endpoint's vCPU) |
 | `controller.endpoint.memoryGiBPerVCPU` | `0` | `AMP_DEPLOY_MEMORY_GIB_PER_VCPU` — GiB of memory per endpoint vCPU. Fills in the memory when a create names only CPU, and is the **floor** every request is held to (a pair below it is a `400`). `0` ⇒ the built-in 8. Lower it only for a cluster whose nodes cannot back that shape |

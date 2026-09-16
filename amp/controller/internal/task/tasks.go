@@ -70,7 +70,10 @@ var (
 	// A fleet roll has no target_ref, so a partial unique index cannot constrain it
 	// — NULLs are distinct. Store.ActiveByKind is the plan-time gate instead, and
 	// the no-wait fleet lock is what actually decides.
-	KindUpgradeEndpoints    = Kind{"upgrade_endpoints", "", "", nil}
+	KindUpgradeEndpoints = Kind{"upgrade_endpoints", "", "", nil}
+	// Fleet-scoped like the upgrade, and gated by the same fleet lock, so the two
+	// kinds queue behind each other rather than helm-upgrading one release twice.
+	KindRerenderEndpoints   = Kind{"rerender_endpoints", "", "", nil}
 	KindDeleteEndpoint      = Kind{"delete_endpoint", "", "", nil}
 	KindDeleteBranch        = Kind{"delete_branch", "", "", nil}
 	KindDeleteCluster       = Kind{"delete_cluster", "", "", nil}
@@ -86,6 +89,7 @@ var allKinds = []Kind{
 	KindCreateEndpoint,
 	KindResizeEndpoint,
 	KindUpgradeEndpoints,
+	KindRerenderEndpoints,
 	KindDeleteEndpoint,
 	KindDeleteBranch,
 	KindDeleteCluster,
@@ -397,13 +401,25 @@ type UpgradeEndpointsInput struct {
 // The in-flight check is a fast path for the API's 409 — two requests can both
 // read a clean table — and the parent step's no-wait fleet lock is what actually
 // decides.
-func (s *Service) UpgradeEndpoints(ctx context.Context, in UpgradeEndpointsInput) (*Task, error) {
-	active, err := s.store.ActiveByKind(ctx, KindUpgradeEndpoints.String())
-	if err != nil {
-		return nil, fmt.Errorf("look for an in-flight fleet roll: %w", err)
+// noFleetRollInFlight refuses when a roll of either kind is already running.
+// Both take the same no-wait fleet lock, so without this the second caller gets
+// a 202 and a task that dies in the worker instead of a 409.
+func (s *Service) noFleetRollInFlight(ctx context.Context) error {
+	for _, kind := range []Kind{KindUpgradeEndpoints, KindRerenderEndpoints} {
+		active, err := s.store.ActiveByKind(ctx, kind.String())
+		if err != nil {
+			return fmt.Errorf("look for an in-flight fleet roll: %w", err)
+		}
+		if active != nil {
+			return fmt.Errorf("%w: task %s", ErrFleetRollInProgress, active.ID)
+		}
 	}
-	if active != nil {
-		return nil, fmt.Errorf("%w: task %s", ErrFleetRollInProgress, active.ID)
+	return nil
+}
+
+func (s *Service) UpgradeEndpoints(ctx context.Context, in UpgradeEndpointsInput) (*Task, error) {
+	if err := s.noFleetRollInFlight(ctx); err != nil {
+		return nil, err
 	}
 	steps := []StepSpec{
 		stepSpec(StepPlanEndpointUpgrades, PlanEndpointUpgradesArgs{
@@ -413,6 +429,35 @@ func (s *Service) UpgradeEndpoints(ctx context.Context, in UpgradeEndpointsInput
 		}),
 	}
 	return s.create(ctx, KindUpgradeEndpoints, in, uuid.Nil, "", steps)
+}
+
+// RerenderEndpointsInput is the request for a rerender_endpoints task.
+// EndpointIDs empty means the whole fleet.
+type RerenderEndpointsInput struct {
+	EndpointIDs []uuid.UUID `json:"endpoint_ids,omitempty"`
+	MaxParallel int         `json:"max_parallel"`
+}
+
+// RerenderEndpoints records a rerender_endpoints task: one
+// plan_endpoint_rerenders step that enumerates the targets at Execute time and
+// runs a rerender_endpoint child per endpoint. It is how deployer-level
+// configuration — TLS above all — reaches endpoints rendered before it
+// (architecture/ac-endpoint-tls.md).
+//
+// The in-flight check mirrors the upgrade's: a fast path for the API's 409,
+// with the parent step's no-wait fleet lock the thing that actually decides. It
+// covers both roll kinds, since they contend for the same lock.
+func (s *Service) RerenderEndpoints(ctx context.Context, in RerenderEndpointsInput) (*Task, error) {
+	if err := s.noFleetRollInFlight(ctx); err != nil {
+		return nil, err
+	}
+	steps := []StepSpec{
+		stepSpec(StepPlanEndpointRerenders, PlanEndpointRerendersArgs{
+			EndpointIDs: in.EndpointIDs,
+			MaxParallel: in.MaxParallel,
+		}),
+	}
+	return s.create(ctx, KindRerenderEndpoints, in, uuid.Nil, "", steps)
 }
 
 // DeleteEndpointInput is the request for a delete_endpoint (scale-down) task.

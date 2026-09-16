@@ -70,6 +70,13 @@ password
 {{- end }}
 
 {{/*
+Name of the Secret cert-manager fills with this endpoint's YB client certificate.
+*/}}
+{{- define "yb-amp-endpoint.tlsSecretName" -}}
+{{- include "yb-amp-endpoint.fullname" . }}-yb-client-tls
+{{- end }}
+
+{{/*
 Whether a YB password is configured at all (inline or via an existing secret).
 */}}
 {{- define "yb-amp-endpoint.hasPassword" -}}

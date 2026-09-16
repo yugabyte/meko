@@ -1,0 +1,65 @@
+suite: certificate
+templates:
+  - templates/certificate.yaml
+tests:
+  - it: renders nothing when TLS is off
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a client-auth Certificate for the YB role from the configured issuer
+    set:
+      tls.enabled: true
+      tls.issuerRef.kind: ClusterIssuer
+      tls.issuerRef.name: amp-ca
+      yugabyte.user: amp_storage
+    release:
+      name: yb-ep-abc
+      namespace: amp
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: yb-ep-abc-yb-amp-endpoint-yb-client
+      - equal:
+          path: spec.secretName
+          value: yb-ep-abc-yb-amp-endpoint-yb-client-tls
+      - equal:
+          path: spec.commonName
+          value: amp_storage
+      - contains:
+          path: spec.dnsNames
+          content: yb-ep-abc-yb-amp-endpoint.amp.svc.cluster.local
+      - equal:
+          path: spec.usages
+          value: [client auth]
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.duration
+          value: "720h"
+      - equal:
+          path: spec.renewBefore
+          value: "240h"
+      - equal:
+          path: spec.issuerRef
+          value:
+            kind: ClusterIssuer
+            name: amp-ca
+            group: cert-manager.io
+
+  - it: passes an external issuer group through
+    set:
+      tls.enabled: true
+      tls.issuerRef.kind: AWSPCAClusterIssuer
+      tls.issuerRef.name: corp
+      tls.issuerRef.group: awspca.cert-manager.io
+    asserts:
+      - equal:
+          path: spec.issuerRef.group
+          value: awspca.cert-manager.io

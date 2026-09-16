@@ -1245,12 +1245,12 @@ func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpo
 	// validator middleware, so an out-of-range value has to be rejected here or it
 	// reaches the step and fails the task instead of the request. Absent means the
 	// default; 0 is an out-of-range value like any other, never "unbounded".
-	maxParallel := task.DefaultUpgradeParallel
+	maxParallel := task.DefaultRollParallel
 	if request.Body.MaxParallel != nil {
 		maxParallel = *request.Body.MaxParallel
-		if maxParallel < 1 || maxParallel > task.MaxUpgradeParallel {
+		if maxParallel < 1 || maxParallel > task.MaxRollParallel {
 			return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
-				fmt.Sprintf("max_parallel must be between 1 and %d", task.MaxUpgradeParallel)))}, nil
+				fmt.Sprintf("max_parallel must be between 1 and %d", task.MaxRollParallel)))}, nil
 		}
 	}
 	var endpointIDs []uuid.UUID

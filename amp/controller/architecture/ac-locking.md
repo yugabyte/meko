@@ -19,7 +19,7 @@ with `409` by `tasks_one_active_resize_per_endpoint`, and turning that into a
 |---|---|---|---|
 | **task execution** | `task:<task-id>` | the controller *process* | a second controller instance executing the same task |
 | **endpoint** | `endpoint:<endpoint-id>` | the *unit of work* — a task, or one of a parent's subtasks | anything else blocking on that endpoint, whichever process owns it |
-| **endpoint fleet** | `fleet:endpoints` | the fleet roll's parent task | a second fleet roll, which is **refused** rather than made to wait (the one exception to "contention waits") |
+| **endpoint fleet** | `fleet:endpoints` | a fleet roll's parent task — `plan_endpoint_upgrades` or `plan_endpoint_rerenders` | a second fleet roll **of either kind**, which is **refused** rather than made to wait (the one exception to "contention waits") |
 
 No new table and no new migration: the compute write fence keys the same table as
 `branch:<id>`, so the four namespaces coexist. Sharing 0006 is also what keeps
@@ -216,10 +216,18 @@ wrapper the queueing path uses rather than a sentence about fleet upgrades.
 
 ## Lock 3 — the endpoint fleet
 
-`plan_endpoint_upgrades` declares `fleet:endpoints`: a third namespace in
-`resource_token`, disjoint from `endpoint:<id>` and `task:<id>` as they are from
-the compute fence's `branch:<id>`. No migration, no index, no classifier — the
-existing `lockFor` takes it like any other resource lock.
+`plan_endpoint_upgrades` and `plan_endpoint_rerenders` both declare
+`fleet:endpoints`: a third namespace in `resource_token`, disjoint from
+`endpoint:<id>` and `task:<id>` as they are from the compute fence's
+`branch:<id>`. No migration, no index, no classifier — the existing `lockFor`
+takes it like any other resource lock.
+
+Two declarers, one lease, and the lease is `NoWait`: the second roll's step
+fails rather than queueing. That is deliberate — two rolls naming different
+versions would flip the fleet twice — but it means the refusal a caller should
+see has to come earlier, so `Service.UpgradeEndpoints` and
+`Service.RerenderEndpoints` both call `noFleetRollInFlight` at plan time and
+return `ErrFleetRollInProgress` (the API's 409) for either kind.
 
 It is what makes it **one fleet roll at a time**, and it is `NoWait`: a second
 roll is **refused**, not queued. Queueing would let two rolls naming different

@@ -29,6 +29,11 @@ yugabyte:
   sslmode: ""
   # -- Path (inside the container) to a PEM CA bundle, for verify-ca/verify-full.
   sslrootcert: ""
+  # -- Paths (inside the container) to the PEM client certificate and key the
+  # daemons present on both lanes; both or neither. The controller sets them to
+  # the `tls` mounts below.
+  sslcert: ""
+  sslkey: ""
   # Password delivery. Either set `password` (rendered into a chart-managed
   # Secret) or point `existingSecret`/`existingSecretKey` at your own Secret.
   # -- Inline password (dev/test only). Rendered into a Secret.
@@ -37,6 +42,27 @@ yugabyte:
   existingSecret: ""
   # -- Key within `existingSecret` holding the password.
   existingSecretKey: "password"
+
+# Certificate authentication to YugabyteDB (controller/architecture/ac-endpoint-tls.md).
+# When enabled the chart renders a cert-manager Certificate for this release
+# (CN = yugabyte.user, client auth) and mounts its Secret at /etc/amp/tls/client
+# and the CA bundle ConfigMap at /etc/amp/tls/ca, whole-directory mounts so
+# renewals reach the pod. Point yugabyte.sslrootcert/sslcert/sslkey at those
+# paths. Needs cert-manager and an issuer in the cluster (deploy/tls/trust-root.sh).
+tls:
+  enabled: false
+  issuerRef:
+    kind: ClusterIssuer
+    name: amp-ca
+    group: cert-manager.io
+  # -- ConfigMap in the release namespace holding the CA bundle under key ca.crt
+  # (trust-manager keeps it current).
+  caBundleConfigMap: amp-ca-bundle
+  certificate:
+    duration: 720h
+    renewBefore: 240h
+    algorithm: ECDSA
+    size: 256
 
 # Endpoint / compute settings.
 # Distributed tracing for the compute's OTLP span exporter.

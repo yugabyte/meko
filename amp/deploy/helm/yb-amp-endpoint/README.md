@@ -81,6 +81,11 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `yugabyte.hostPorts` | `yb-tserver:5433` | CSV of YB tservers `host:port[,...]` |
 | `yugabyte.user` / `yugabyte.dbname` | `yugabyte` / `yb_storage` | YB role / database |
 | `yugabyte.sslmode` / `yugabyte.sslrootcert` | _(empty)_ | TLS mode / CA bundle path |
+| `yugabyte.sslcert` / `yugabyte.sslkey` | _(empty)_ | client certificate and key paths, for certificate (`cert` HBA) authentication as `yugabyte.user` |
+| `tls.enabled` | `false` | render a cert-manager `Certificate` (CN = `yugabyte.user`, from `tls.issuerRef`) and mount its Secret at `/etc/amp/tls/client` and `tls.caBundleConfigMap` at `/etc/amp/tls/ca`; the controller sets it together with the four `yugabyte.ssl*` values |
+| `tls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer of the certificate |
+| `tls.caBundleConfigMap` | `amp-ca-bundle` | ConfigMap (key `ca.crt`) holding the trusted roots |
+| `tls.certificate.duration` / `.renewBefore` | `720h` / `240h` | certificate lifetime and renewal lead |
 | `yugabyte.password` | _(empty)_ | inline password → chart-managed Secret |
 | `yugabyte.existingSecret` / `existingSecretKey` | _(empty)_ / `password` | use an existing Secret instead |
 | `endpoint.pgVersion` | `18` | compute Postgres version (the image ships v18 only) |

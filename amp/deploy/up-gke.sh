@@ -108,11 +108,14 @@ YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
 #     rather than the yugabyted StatefulSet: TLS on YSQL and on the tserver RPC
 #     port, client certificates required on RPC, and certificate authentication
 #     for the storage role (`hostssl ... cert`).
-#   - TLS_PERMISSIVE=1 (the default until the controller and endpoints present
-#     certificates themselves) keeps plaintext accepted beside TLS
+#   - The controller and every endpoint it deploys present certificates of their
+#     own (CN = their YB role), issued by the same issuer and verified against the
+#     same CA bundle, so no password travels.
+#   - TLS_PERMISSIVE=1 (default) keeps plaintext accepted beside TLS
 #     (allow_insecure_connections=true, a trailing `host all all all trust` HBA
-#     rule), which is the transition shape controller/architecture/ac-endpoint-tls.md
-#     describes. TLS_PERMISSIVE=0 refuses plaintext.
+#     rule): the transition shape controller/architecture/ac-endpoint-tls.md
+#     describes, for a deployment whose endpoints have not all been re-rendered.
+#     TLS_PERMISSIVE=0 refuses plaintext.
 TLS="${TLS:-0}"
 TLS_PERMISSIVE="${TLS_PERMISSIVE:-1}"
 TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
@@ -204,11 +207,6 @@ if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" != "yugabyted" ]; then
   # deploy/tls/ replaces the yugabyted StatefulSet with the upstream chart; the
   # operator-managed universe carries its own certificate configuration.
   die "TLS=1 needs FOUNDATION=yugabyted, got '${FOUNDATION}'"
-fi
-if [ "${TLS}" = "1" ] && [ "${TLS_PERMISSIVE}" = "0" ]; then
-  # The controller still connects over plaintext; refusing plaintext at the
-  # database would leave it unable to start.
-  die "TLS_PERMISSIVE=0 is not supported yet: the controller does not present a certificate"
 fi
 if [ "${BUILD}" = "1" ] && [ -z "${TAG}" ]; then TAG="$(date +%Y%m%d-%H%M%S)"; fi
 TAG="${TAG:-latest}"
@@ -323,11 +321,10 @@ elif [ "${TLS}" = "1" ]; then
   YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_RELEASE="${YB_RELEASE}" TLS_PERMISSIVE="${TLS_PERMISSIVE}" \
   TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
     "${SCRIPT_DIR}/tls/yugabyte-tls.sh"
-  # Plaintext even here: the controller does not present a certificate yet and
-  # the permissive HBA admits it. Its half of the TLS mode lands with the
-  # yb-amp-controller chart's tls block.
+  # The chart mounts the controller's certificate and the CA bundle at these
+  # paths; the endpoints get the storage role and a certificate each.
   YB_HOST_PORTS="${YB_FQDN}:5433"
-  DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable"
+  DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=verify-full&sslrootcert=/etc/amp/tls/ca/ca.crt&sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key"
 else
 # The yugabyted body below is deliberately left unindented: its manifest is a
 # heredoc whose YAML terminator must sit at column 0, so indenting the branch
@@ -448,8 +445,14 @@ fi
 
 # --- 6. the amp controller (+ MCP + UI) via Helm ---
 say "amp controller (Helm: controller=${REGISTRY}/${CONTROLLER_IMAGE_REPO}:${TAG})"
+if [ "${TLS}" = "1" ]; then
+  ENDPOINT_YB_USER="${YB_STORAGE_ROLE}"
+else
+  ENDPOINT_YB_USER="yugabyte"
+fi
 
 HELM_SET=(
+  "controller.endpoint.ybUser=${ENDPOINT_YB_USER}"
   "controller.image.repository=${REGISTRY}/${CONTROLLER_IMAGE_REPO}"
   "controller.image.tag=${TAG}"
   "controller.endpoint.image.repository=${REGISTRY}/${ENDPOINT_IMAGE_REPO}"
@@ -461,6 +464,9 @@ HELM_SET=(
   "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
   "controller.endpoint.memoryGiBPerVCPU=${ENDPOINT_MEMORY_GIB_PER_VCPU}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
+  # cert-manager is owned outside this chart: deploy/tls/trust-root.sh installs
+  # it in TLS mode, and a plaintext deploy needs none. Leaving the chart default
+  # on would make the release a second owner and collide with an existing install.
   "mcp.enabled=${MCP_ENABLED}"
   "mcp.image.repository=${REGISTRY}/${MCP_IMAGE_REPO}"
   "mcp.image.tag=${TAG}"
@@ -471,6 +477,16 @@ HELM_SET=(
   "otel.environmentId=${METRICS_ENV_ID}"
 )
 [ -n "${PULL_SECRET}" ] && HELM_SET+=("imagePullSecrets[0].name=${PULL_SECRET}")
+if [ "${TLS}" = "1" ]; then
+  HELM_SET+=(
+    "tls.enabled=true"
+    "tls.issuerRef.kind=${TLS_ISSUER_KIND}"
+    "tls.issuerRef.name=${TLS_ISSUER_NAME:-amp-ca}"
+    "tls.issuerRef.group=${TLS_ISSUER_GROUP}"
+    "tls.caBundleConfigMap=amp-ca-bundle"
+    "controller.endpoint.ybTlsMode=verify-full"
+  )
+fi
 
 # YCP reconciliation (off by default). When YCP_ENABLED=1, deploy the
 # reconcile-agent: it enrolls with the control plane at YCP_URL as environment
@@ -506,6 +522,10 @@ if [ "${YCP_ENABLED}" = "1" ]; then
     "agent.apiKeySecret.name=${YCP_AGENT_SECRET}"
   )
 fi
+
+# The chart declares cert-manager as a subchart, and helm refuses to render a
+# chart whose declared dependency is not in charts/ even when its condition is
+# false. Chart.lock pins the version; this fetches it.
 
 # Commas escaped: helm's --set-string splits on them, so a multi-host DSN would
 # arrive as separate fragments and fail the install.

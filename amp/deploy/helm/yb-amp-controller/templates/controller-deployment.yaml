@@ -26,6 +26,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: controller
           image: {{ include "yb-amp-controller.controllerImage" . }}
@@ -66,6 +70,24 @@ spec:
               value: {{ .Values.controller.endpoint.ybUser | quote }}
             - name: AMP_DEPLOY_YB_DBNAME
               value: {{ .Values.controller.endpoint.ybDbname | quote }}
+            {{- if .Values.controller.endpoint.ybTlsMode }}
+            # Endpoints reach YB over TLS with a per-release client certificate
+            # from this issuer, verified against this CA bundle.
+            - name: AMP_DEPLOY_YB_TLS_MODE
+              value: {{ .Values.controller.endpoint.ybTlsMode | quote }}
+            - name: AMP_DEPLOY_YB_TLS_ISSUER_KIND
+              value: {{ .Values.tls.issuerRef.kind | quote }}
+            - name: AMP_DEPLOY_YB_TLS_ISSUER_NAME
+              value: {{ .Values.tls.issuerRef.name | quote }}
+            - name: AMP_DEPLOY_YB_TLS_ISSUER_GROUP
+              value: {{ .Values.tls.issuerRef.group | default "cert-manager.io" | quote }}
+            - name: AMP_DEPLOY_YB_TLS_CA_CONFIGMAP
+              value: {{ .Values.tls.caBundleConfigMap | quote }}
+            - name: AMP_DEPLOY_YB_TLS_CERT_DURATION
+              value: {{ .Values.controller.endpoint.ybTlsCertDuration | quote }}
+            - name: AMP_DEPLOY_YB_TLS_CERT_RENEW_BEFORE
+              value: {{ .Values.controller.endpoint.ybTlsCertRenewBefore | quote }}
+            {{- end }}
             # The in-cluster URL endpoints use to reach this controller's storage-layer surface.
             - name: AMP_DEPLOY_CONTROLLER_URL
               value: {{ include "yb-amp-controller.endpointControllerUrl" . | quote }}
@@ -127,6 +149,27 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if .Values.tls.enabled }}
+          # Whole-directory mounts (no subPath) so a renewed certificate reaches
+          # the pod; the DSN names the files by these paths.
+          volumeMounts:
+            - name: db-client-tls
+              mountPath: /etc/amp/tls/client
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/amp/tls/ca
+              readOnly: true
+          {{- end }}
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: db-client-tls
+          secret:
+            secretName: {{ include "yb-amp-controller.controllerName" . }}-db-tls
+            defaultMode: 0440
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.tls.caBundleConfigMap }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

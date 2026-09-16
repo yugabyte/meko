@@ -1030,6 +1030,55 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /endpoint-rerenders:
+    post:
+      tags: [endpoints]
+      operationId: rerenderEndpoints
+      summary: Re-render endpoints against the controller's current configuration
+      description: |
+        Plans an asynchronous `rerender_endpoints` task that redeploys every live
+        endpoint — or the subset named by `endpoint_ids` — from its stored record,
+        unchanged, so that deployer-level configuration reaches releases rendered
+        before it. Returns `202` + the `Task` with a `Location` header.
+
+        TLS is what this exists for: the mode, issuer and CA bundle live on the
+        controller rather than on the endpoint, so an endpoint created before TLS
+        was enabled keeps connecting without a certificate until it is re-rendered
+        (`controller/architecture/ac-endpoint-tls.md`).
+
+        Mechanically identical to `POST /endpoint-rerenders`'s sibling
+        `/endpoint-upgrades`: one parent owning a child per endpoint, run at most
+        `max_parallel` at a time, fail-fast on the first child failure, one line
+        per endpoint on the task result (`rerendered` / `skipped` / `failed` /
+        `unattempted`) and each child's own status under
+        `GET /tasks/{taskId}/subtasks`. The pod is replaced, so each endpoint is
+        briefly down.
+
+        Nothing is skipped: the endpoint row does not record which configuration
+        it was rendered with, so every target gets a child. A re-render of an
+        endpoint already carrying the current values is a no-op Helm upgrade that
+        does not recreate the pod. The two roll kinds share one fleet lock, so a
+        re-render while an upgrade is in flight (or the reverse) is refused with
+        `409`. `400` for an out-of-range `max_parallel`. Requires the endpoint
+        deployer (`--deploy`); returns `501` otherwise.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RerenderEndpointsRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /tasks:
     get:
       tags: [tasks]
@@ -2564,6 +2613,33 @@ components:
             parent's single execution slot, so `--task-max-concurrent` does not
             apply to them. Defaults to 4; 0 is rejected rather than read as
             unbounded.
+
+    RerenderEndpointsRequest:
+      type: object
+      description: |
+        Request to re-render endpoints against the controller's current
+        configuration. Every field is optional: the empty body rolls the whole
+        fleet at the default parallelism.
+      properties:
+        endpoint_ids:
+          type: array
+          description: |
+            The endpoints to re-render. Absent or empty means the whole fleet.
+            Repeated ids are collapsed.
+          items:
+            type: string
+            format: uuid
+        max_parallel:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 4
+          description: |
+            How many endpoints to re-render at once. A re-render replaces the pod
+            when anything changed, so this is how much of the fleet is down at a
+            time. It is also the only bound on a roll's concurrency — the children
+            run in-process off the parent's single execution slot, so
+            `--task-max-concurrent` does not apply to them. Defaults to 4.
 
     Task:
       type: object

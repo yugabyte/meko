@@ -76,6 +76,18 @@ tests:
           name: amp-controller
         documentIndex: 2
 
+  - it: lets the controller manage the cert-manager Certificates its endpoint releases carry
+    release:
+      namespace: amp
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cert-manager.io"]
+            resources: [certificates]
+            verbs: [get, list, watch, create, update, patch, delete]
+
   - it: grants the namespaced workload access the controller deploys with
     release:
       namespace: amp

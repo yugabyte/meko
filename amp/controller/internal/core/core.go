@@ -226,6 +226,8 @@ type Endpoint struct {
 // endpoint id, the branch it serves, and its pinned pg version + compute size
 // (read back from the stored config). It is a core type so *PgBackend can return
 // it while task.StateStore stays free of the domain layer.
+// No cluster id: branch_id is the primary key of what a render needs, and the
+// two enumerations that build this record join through the branch.
 type EndpointDeploy struct {
 	ID        uuid.UUID
 	BranchID  uuid.UUID
@@ -385,6 +387,10 @@ type Backend interface {
 	// and the total number of endpoints for the branch (ignoring limit/offset).
 	// Returns ErrNotFound if the pool, cluster, or branch does not exist.
 	ListEndpoints(ctx context.Context, poolID, clusterID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
+	// AllEndpointDeploys returns the redeploy record of every live endpoint
+	// across clusters and branches: what a rerender_endpoints task is planned
+	// over.
+	AllEndpointDeploys(ctx context.Context) ([]EndpointDeploy, error)
 
 	// SetEndpointAddress records an endpoint's client address and its tailnet
 	// address (tailnetAddress is "" when not tailnet-exposed). Idempotent

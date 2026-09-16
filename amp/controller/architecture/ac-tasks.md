@@ -195,11 +195,14 @@ double-apply or error.
 | `delete_branch` | cluster, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
 | `delete_cluster` | cluster id | Cascade-delete a cluster: enumerate **all** the cluster's endpoints, retire each (instance + record), then delete the cluster — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForCluster`). Cascade order is **endpoints → branches → cluster**; `DeleteCluster` nulls the branches' in-cluster parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
 | `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy the endpoints whose recorded mount set is behind it** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. **First-writer-wins lock**: `tasks_one_active_ext_add_per_branch` (migration 0014) admits at most one non-terminal `add_branch_extensions` per branch (`target_ref`); a concurrent one is `ErrBranchExtensionsInProgress` → `409`. Needed because two concurrent adds would redeploy overlapping endpoint sets — concurrent helm upgrades of the same release. |
+| `plan_endpoint_rerenders` | endpoint ids (optional), max_parallel | The re-render roll: enumerate the fleet (or the named subset) and own a `rerender_endpoint` **subtask** per endpoint, run through the same bounded pool `plan_endpoint_upgrades` uses (`internal/task/endpointroll.go`). What an operator runs after enabling TLS (`ac-endpoint-tls.md`). | Self-contained and re-enumerating, like the upgrade roll. Holds `fleet:endpoints`, which is `NoWait` — so one fleet roll of either kind at a time, and the plan-time `noFleetRollInFlight` check is what turns the second into a 409 rather than a task that fails in the worker; each child holds its own endpoint lock. Nothing is filtered — the endpoint row does not record which configuration it was rendered with — and a re-render of a converged endpoint is a no-op Helm upgrade. |
+| `rerender_endpoint` | endpoint id | *(a subtask, not a task step)* Redeploy one endpoint from its stored record, unchanged, so deployer-level configuration (TLS mode, CA bundle, image) reaches a release rendered before it (`internal/task/step_rerender_endpoint.go`). Re-records the address. | `upgrade_endpoint` with no mutation, and the same create-or-upgrade keyed by the endpoint's stable name, so a replay converges. An endpoint deleted since planning is a skipped success rather than a fail-fast trip. |
 
-`delete_branch`, `delete_cluster` and `plan_endpoint_upgrades` are **single
-self-contained steps**, not a planned per-endpoint fan-out, because the worker has
-no dynamic sub-step expansion: the set of endpoints isn't known until Execute
-time, so the one step enumerates it itself. All three require a deployer. The
+`delete_branch`, `delete_cluster`, `plan_endpoint_upgrades` and
+`plan_endpoint_rerenders` are **single self-contained steps**, not a planned
+per-endpoint fan-out, because the worker has no dynamic sub-step expansion: the
+set of endpoints isn't known until Execute time, so the one step enumerates it
+itself. All four require a deployer. The
 difference is what they do with the set — the cascades act on it inline, while the
 roll records a `subtasks` row per endpoint and runs those, so each endpoint has a
 durable status of its own and takes its own endpoint lock.
@@ -304,13 +307,14 @@ which persists the task + steps and returns the `Task` to surface to the user.
 | `delete_branch` | `Service.DeleteBranch` | `delete_branch`. |
 | `delete_cluster` | `Service.DeleteCluster` | `delete_cluster`. |
 | `add_branch_extensions` | `Service.AddBranchExtensions` | `add_branch_extensions`. |
+| `rerender_endpoints` | `Service.RerenderEndpoints` | `plan_endpoint_rerenders`, which fans out to a `rerender_endpoint` subtask per endpoint. |
 
 The kind constants (`KindCreateCluster`, `KindBranch`, `KindCreateEndpoint`,
 `KindDeleteEndpoint`, `KindDeleteBranch`, `KindDeleteCluster`,
-`KindAddBranchExtensions`) are the
+`KindAddBranchExtensions`, `KindRerenderEndpoints`) are the
 `task.kind` values the API exposes and `listTasks` filters on.
 
-`create_endpoint` appearing in three of the seven tasks is the point: it is one
+`create_endpoint` appearing in three of the eight tasks is the point: it is one
 step, reused, not three copies (§8). Branch fork-point resolution (the default
 "latest LSN") is a *read* done before the builder runs, so the fork LSN reaches it
 already resolved — building a task performs no I/O of its own. The two cascade

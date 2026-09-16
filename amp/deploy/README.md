@@ -236,16 +236,26 @@ root:
   `amp-ca` ClusterIssuer unless `TLS_ISSUER_KIND` / `TLS_ISSUER_NAME` /
   `TLS_ISSUER_GROUP` name one you already have, and distributes the CA as ConfigMap
   `amp-ca-bundle` into every namespace labelled `amp.yugabyte.com/trust=true`.
+  It is the only installer of cert-manager: the controller chart declares no
+  subchart for it and refuses to render with `tls.enabled` on a cluster that has
+  none, naming this script.
 - [`tls/yugabyte-tls.sh`](tls/yugabyte-tls.sh) installs the chart (`YB_CHART_VERSION`,
   `YB_STORAGE_CLASS`) with TLS on YSQL and on the tserver RPC port, client
   certificates required on RPC, and an HBA that logs the storage role
   (`YB_STORAGE_ROLE`, default `amp_storage`) in by certificate CN; then creates
   `yb_storage` and that role.
 
-`TLS_PERMISSIVE=1` (the default, and the only mode until the controller and
-endpoints present certificates) keeps plaintext accepted beside TLS. Operating it,
-checking it, and rotating certificates: [`../runbooks/tls.md`](../runbooks/tls.md);
-the design: [`../controller/architecture/ac-endpoint-tls.md`](../controller/architecture/ac-endpoint-tls.md).
+The controller then gets a cert-manager certificate of its own (chart values
+`tls.*`) and logs in with it, and renders one into every endpoint
+(`controller.endpoint.ybTlsMode=verify-full`), which connects as `YB_STORAGE_ROLE`.
+Endpoints that predate a TLS change are brought onto it with
+`POST /api/v1/endpoint-rerenders`.
+
+`TLS_PERMISSIVE=1` (the default) keeps plaintext accepted beside TLS; once
+`pg_stat_ssl` shows every amp connection on a certificate, redeploy with
+`TLS_PERMISSIVE=0`. Operating it, checking it, and rotating certificates:
+[`../runbooks/tls.md`](../runbooks/tls.md); the design:
+[`../controller/architecture/ac-endpoint-tls.md`](../controller/architecture/ac-endpoint-tls.md).
 
 ### Running in CI (itest-dev)
 
@@ -269,6 +279,10 @@ every push while it is present. Fork PRs are always skipped (no secrets). It:
   secret in a per-PR namespace (`ci-pr-<n>`), deploys with `CONTROLLER_EXPOSE=none`
   / `ENDPOINT_SERVICE_TYPE=ClusterIP`, runs the smoke test (which port-forwards),
   and **always** tears the namespace down.
+
+A manual dispatch takes two more inputs: `tls` runs the deploy with `TLS=1`, and
+`namespace` deploys into a standing namespace instead of `ci-pr-<run>` and skips the
+teardown, which is how a branch is rehearsed on itest-dev before it merges.
 
 A superset directive, **`/ci amp_deploy_gke_ycp`**, additionally proves the amp↔YCP
 integration end to end. On top of the plain deploy it builds + pushes the YCP

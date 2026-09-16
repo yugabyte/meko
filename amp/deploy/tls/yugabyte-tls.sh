@@ -138,11 +138,13 @@ say "database yb_storage and role ${YB_STORAGE_ROLE}"
 kubectl -n "${NS}" exec -i yb-tserver-0 -- bash -s -- "${YB_FQDN}" "${YB_STORAGE_ROLE}" <<'REMOTE'
 set -euo pipefail
 H="$1"; ROLE="$2"
+# The chart image keeps the binaries under /home/yugabyte/tserver/bin, on PATH.
+YSQLSH="$(command -v ysqlsh || echo /home/yugabyte/tserver/bin/ysqlsh)"
 CONN="host=$H port=5433 user=yugabyte dbname=yugabyte sslmode=verify-full sslrootcert=/root/.yugabytedb/root.crt sslcert=/root/.yugabytedb/yugabytedb.crt sslkey=/root/.yugabytedb/yugabytedb.key"
-exists="$(bin/ysqlsh "$CONN" -tAc "SELECT 1 FROM pg_database WHERE datname='yb_storage'")"
+exists="$("$YSQLSH" "$CONN" -tAc "SELECT 1 FROM pg_database WHERE datname='yb_storage'")"
 if [ "$exists" = "1" ]; then
   echo "   yb_storage already exists"
-elif out="$(bin/ysqlsh "$CONN" -c "CREATE DATABASE yb_storage" 2>&1)"; then
+elif out="$("$YSQLSH" "$CONN" -c "CREATE DATABASE yb_storage" 2>&1)"; then
   echo "   created yb_storage"
 elif printf '%s' "$out" | grep -q "already exists"; then
   echo "   yb_storage already exists"
@@ -150,12 +152,12 @@ else
   printf '   CREATE DATABASE yb_storage failed: %s\n' "$out" >&2
   exit 1
 fi
-has_role="$(bin/ysqlsh "$CONN" -tAc "SELECT 1 FROM pg_roles WHERE rolname='$ROLE'")"
+has_role="$("$YSQLSH" "$CONN" -tAc "SELECT 1 FROM pg_roles WHERE rolname='$ROLE'")"
 if [ "$has_role" = "1" ]; then
   echo "   role $ROLE already exists"
 else
-  bin/ysqlsh "$CONN" -c "CREATE ROLE \"$ROLE\" LOGIN" >/dev/null
-  bin/ysqlsh "$CONN" -c "GRANT yugabyte TO \"$ROLE\"" >/dev/null
+  "$YSQLSH" "$CONN" -c "CREATE ROLE \"$ROLE\" LOGIN" >/dev/null
+  "$YSQLSH" "$CONN" -c "GRANT yugabyte TO \"$ROLE\"" >/dev/null
   echo "   created role $ROLE (member of yugabyte)"
 fi
 REMOTE

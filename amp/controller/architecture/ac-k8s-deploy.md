@@ -397,6 +397,10 @@ Kubernetes driver:
 | `--deploy-disk-gib-per-vcpu` | GiB of `/data` per endpoint vCPU (`0` = the built-in 20; for a pool built to a different disk-per-core shape) |
 | `--deploy-memory-gib-per-vcpu` | GiB of memory per endpoint vCPU (`0` = the built-in 8). Fills in the memory when a request names only CPU, and is the floor every request is held to — a pair below it is a `400`. The escape hatch for a pool whose nodes cannot back 8 GiB/core |
 | `--deploy-disk-size-override` | flat `/data` size for **every** endpoint whatever its CPU, bypassing the ratio and the floor; empty (default) = CPU-proportional. Test clusters only |
+| `--deploy-yb-tls-mode` | `require` \| `verify-ca` \| `verify-full`: render a cert-manager `Certificate` (CN = `--deploy-yb-user`) and the CA bundle into every endpoint and connect with them; empty (default) = plaintext. Endpoints created before it is set are brought onto it by `POST /api/v1/endpoint-rerenders` |
+| `--deploy-yb-tls-issuer-kind` / `-name` / `-group` | issuer the endpoint certificates come from (default `ClusterIssuer` / `amp-ca` / `cert-manager.io`) |
+| `--deploy-yb-tls-ca-configmap` | ConfigMap (key `ca.crt`) holding the trusted roots, mounted as the endpoints' `sslrootcert` (default `amp-ca-bundle`) |
+| `--deploy-yb-tls-cert-duration` / `-renew-before` | endpoint certificate lifetime and renewal lead (default `720h` / `240h`) |
 
 `--deploy-service-type` and `--deploy-service-annotations` above are the
 deployment-wide default. **Client reachability is also a per-endpoint choice**,

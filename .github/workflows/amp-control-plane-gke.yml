@@ -18,7 +18,9 @@ name: Amp control-plane GKE (itest-dev)
 # deploy), so it deliberately does NOT run on every PR. It fires only:
 #   * nightly on main (schedule) — against the default-branch head. Same 07:17 UTC
 #     slot as the slow integration suite (on-demand-checks.yml);
-#   * on manual dispatch (workflow_dispatch);
+#   * on manual dispatch (workflow_dispatch). `tls` deploys the stack on
+#     cert-manager certificates (up-gke.sh TLS=1); `namespace` deploys into a
+#     standing namespace instead of a throwaway one and skips the teardown;
 #   * on a PR that opts in with a `/ci amp_deploy_gke` line in the PR description.
 #     The rule is literally the same code on-demand-checks.yml runs —
 #     .github/actions/ci-directives, see docs/ci-directives.md: the line deploys on
@@ -67,6 +69,14 @@ on:
         description: 'Also build+push the YCP control-plane image and run the register + endpoint-inventory assertion'
         type: boolean
         default: false
+      tls:
+        description: 'Deploy YugabyteDB on cert-manager TLS (TLS=1) and have the controller and endpoints authenticate with certificates'
+        type: boolean
+        default: false
+      namespace:
+        description: 'Deploy into this namespace instead of a throwaway ci-pr-<run> one, and leave it up afterwards'
+        type: string
+        default: ''
   pull_request:
     branches: [main]
     # No paths filter: the `/ci amp_deploy_gke` directive in the body (resolved by the
@@ -291,7 +301,11 @@ jobs:
       group: cp-gke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     env:
-      NS: ci-pr-${{ github.event.pull_request.number || github.run_id }}
+      NS: ${{ inputs.namespace || format('ci-pr-{0}', github.event.pull_request.number || github.run_id) }}
+      # A named namespace is a standing deployment (an operator's TLS rehearsal,
+      # say): it is not torn down at the end.
+      KEEP_NS: ${{ inputs.namespace != '' && '1' || '0' }}
+      TLS: ${{ inputs.tls && '1' || '0' }}
       PULL_SECRET: quay-pull-secret
       TAG: ${{ needs.images.outputs.tag }}
       # '1' for the amp_deploy_gke_ycp superset (directive or manual push_ycp),
@@ -370,6 +384,7 @@ jobs:
           ENDPOINT_SERVICE_TYPE=ClusterIP \
           OTEL_ENABLED=true \
           YCP_ENABLED="$YCP" \
+          TLS="$TLS" \
           amp/deploy/up-gke.sh
 
       # Plain amp_deploy_gke (+extensions): the API-driven smoke. Skipped in YCP
@@ -427,7 +442,7 @@ jobs:
           fi
 
       - name: Teardown
-        if: always()
+        if: always() && env.KEEP_NS != '1'
         run: |
           helm -n "$NS" uninstall yb-amp-controller || true
           kubectl delete ns "$NS" --wait=false || true

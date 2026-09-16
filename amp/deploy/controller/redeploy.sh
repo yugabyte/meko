@@ -94,6 +94,18 @@ ENDPOINT_TAG="${ENDPOINT_TAG:-${_VERSION_TAG}}"       # amp/endpoint image tag e
 # Backing YugabyteDB (reused; not created here).
 YB_HOST_PORTS="${YB_HOST_PORTS:-yb-tserver.${NS}.svc.cluster.local:5433}"
 DB_URL="${DB_URL:-postgres://yugabyte@yb-tserver.${NS}.svc.cluster.local:5433/yb_storage?sslmode=disable}"
+# TLS=1 mounts a cert-manager client certificate into the controller (tls.*) and
+# has it render one into every endpoint (controller.endpoint.ybTlsMode). The
+# issuer and CA bundle ConfigMap come from deploy/tls/trust-root.sh; DB_URL must
+# then carry the matching sslmode/sslrootcert/sslcert/sslkey (see up-gke.sh).
+TLS="${TLS:-0}"
+TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
+TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}"
+TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
+TLS_CA_CONFIGMAP="${TLS_CA_CONFIGMAP:-amp-ca-bundle}"
+TLS_MODE="${TLS_MODE:-verify-full}"
+# YSQL role endpoints connect as; with TLS it is also the CN of their certificate.
+ENDPOINT_YB_USER="${ENDPOINT_YB_USER:-yugabyte}"
 # Internal-LB annotations (GKE: a private VPC IP). Applied to the controller LB
 # when CONTROLLER_EXPOSE=internal-lb, and to endpoints via ENDPOINT_SERVICE_ANNOTATIONS.
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
@@ -216,7 +228,11 @@ HELM_SET=(
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
   "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
   "controller.endpoint.memoryGiBPerVCPU=${ENDPOINT_MEMORY_GIB_PER_VCPU}"
+  "controller.endpoint.ybUser=${ENDPOINT_YB_USER}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
+  # cert-manager is owned outside this chart: deploy/tls/trust-root.sh installs
+  # it in TLS mode, and a plaintext deploy needs none. Leaving the chart default
+  # on would make the release a second owner and collide with an existing install.
   "controller.service.nodePortValue=${CONTROLLER_NODEPORT}"
   "mcp.enabled=${MCP_ENABLED}"
   "mcp.image.repository=${MCP_IMAGE_REPOSITORY}"
@@ -225,6 +241,16 @@ HELM_SET=(
   "ui.image.repository=${UI_IMAGE_REPOSITORY}"
   "ui.image.tag=${UI_TAG}"
 )
+if [ "${TLS}" = "1" ]; then
+  HELM_SET+=(
+    "tls.enabled=true"
+    "tls.issuerRef.kind=${TLS_ISSUER_KIND}"
+    "tls.issuerRef.name=${TLS_ISSUER_NAME}"
+    "tls.issuerRef.group=${TLS_ISSUER_GROUP}"
+    "tls.caBundleConfigMap=${TLS_CA_CONFIGMAP}"
+    "controller.endpoint.ybTlsMode=${TLS_MODE}"
+  )
+fi
 
 # --set-string for the DSN ('?' + '=' would be mis-tokenized by --set). The
 # Service annotation lists go via the values file below.
@@ -283,6 +309,10 @@ if [ -n "${CTRL_ANNOTATIONS}" ] || [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ] || [
     fi
   } >"${HELM_VALUES_FILE}"
 fi
+
+# The chart declares cert-manager as a subchart, and helm refuses to render a
+# chart whose declared dependency is not in charts/ even when its condition is
+# false. Chart.lock pins the version; this fetches it.
 
 HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}")
 for s in "${HELM_SET[@]}"; do HELM_ARGS+=(--set "${s}"); done

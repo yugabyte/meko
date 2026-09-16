@@ -226,7 +226,26 @@ type DeployConfig struct {
 	BackingYBExistingSecretKey string
 	BackingYBPassword          string
 
+	// TLS to the backing YugabyteDB (k8s only). BackingYBTLSMode is the libpq
+	// sslmode the endpoints use; empty or "disable" leaves TLS off. Any other
+	// mode makes every endpoint release carry a cert-manager Certificate issued
+	// by BackingYBTLSIssuer* (CN = BackingYBUser, so a `cert` HBA rule logs the
+	// endpoint in), mounted beside the CA bundle ConfigMap
+	// BackingYBTLSCABundleConfigMap that trust-manager keeps in the namespace.
+	BackingYBTLSMode              string
+	BackingYBTLSIssuerKind        string
+	BackingYBTLSIssuerName        string
+	BackingYBTLSIssuerGroup       string
+	BackingYBTLSCABundleConfigMap string
+	BackingYBTLSCertDuration      string // cert-manager duration, e.g. 720h
+	BackingYBTLSCertRenewBefore   string // cert-manager duration, e.g. 240h
+
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait / container ready)
+}
+
+// BackingYBTLS reports whether the endpoints connect to YugabyteDB over TLS.
+func (d *DeployConfig) BackingYBTLS() bool {
+	return d.BackingYBTLSMode != "" && d.BackingYBTLSMode != "disable"
 }
 
 // VoyagerConfig configures the optional Voyager database-migration feature
@@ -370,6 +389,13 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.BackingYBExistingSecret, "deploy-yb-existing-secret", env("AMP_DEPLOY_YB_EXISTING_SECRET", ""), "name of a pre-existing Secret holding the backing YugabyteDB password (preferred over --deploy-yb-password)")
 	fs.StringVar(&d.BackingYBExistingSecretKey, "deploy-yb-existing-secret-key", env("AMP_DEPLOY_YB_EXISTING_SECRET_KEY", "password"), "key within --deploy-yb-existing-secret holding the password")
 	fs.StringVar(&d.BackingYBPassword, "deploy-yb-password", env("AMP_DEPLOY_YB_PASSWORD", ""), "backing YugabyteDB password, inline (dev/test; prefer --deploy-yb-existing-secret). Empty = passwordless/trust auth")
+	fs.StringVar(&d.BackingYBTLSMode, "deploy-yb-tls-mode", env("AMP_DEPLOY_YB_TLS_MODE", ""), "k8s: libpq sslmode endpoints use to reach YugabyteDB (disable | require | verify-ca | verify-full); anything but disable gives every endpoint a cert-manager client certificate (CN = --deploy-yb-user). Empty = disable")
+	fs.StringVar(&d.BackingYBTLSIssuerKind, "deploy-yb-tls-issuer-kind", env("AMP_DEPLOY_YB_TLS_ISSUER_KIND", "ClusterIssuer"), "k8s: cert-manager issuer kind for endpoint certificates")
+	fs.StringVar(&d.BackingYBTLSIssuerName, "deploy-yb-tls-issuer-name", env("AMP_DEPLOY_YB_TLS_ISSUER_NAME", "amp-ca"), "k8s: cert-manager issuer name for endpoint certificates")
+	fs.StringVar(&d.BackingYBTLSIssuerGroup, "deploy-yb-tls-issuer-group", env("AMP_DEPLOY_YB_TLS_ISSUER_GROUP", "cert-manager.io"), "k8s: cert-manager issuer API group for endpoint certificates")
+	fs.StringVar(&d.BackingYBTLSCABundleConfigMap, "deploy-yb-tls-ca-configmap", env("AMP_DEPLOY_YB_TLS_CA_CONFIGMAP", "amp-ca-bundle"), "k8s: ConfigMap (key ca.crt) in the deploy namespace holding the CA bundle endpoints verify YugabyteDB against")
+	fs.StringVar(&d.BackingYBTLSCertDuration, "deploy-yb-tls-cert-duration", env("AMP_DEPLOY_YB_TLS_CERT_DURATION", "720h"), "k8s: lifetime of each endpoint's client certificate (a cert-manager duration)")
+	fs.StringVar(&d.BackingYBTLSCertRenewBefore, "deploy-yb-tls-cert-renew-before", env("AMP_DEPLOY_YB_TLS_CERT_RENEW_BEFORE", "240h"), "k8s: how long before expiry cert-manager renews each endpoint's client certificate")
 	fs.DurationVar(&d.Timeout, "deploy-timeout", envDuration("AMP_DEPLOY_TIMEOUT", 10*time.Minute), "how long to wait for a deploy/retire to converge")
 	// Docker driver (--deploy-driver docker).
 	fs.StringVar(&d.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-amp/neon-endpoint:dev"), "docker: single-container endpoint image to run")
@@ -596,6 +622,27 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	// has to fail startup rather than silently fall back to the ratio.
 	if d.DiskSizeOverride != "" && !byteQuantityRe.MatchString(d.DiskSizeOverride) {
 		return fmt.Errorf("invalid deploy disk size override %q (want a k8s quantity, e.g. 10Gi)", d.DiskSizeOverride)
+	}
+	switch d.BackingYBTLSMode {
+	case "", "disable", "require", "verify-ca", "verify-full":
+	default:
+		return fmt.Errorf(`invalid deploy YB TLS mode %q (want disable, require, verify-ca or verify-full)`, d.BackingYBTLSMode)
+	}
+	if d.BackingYBTLS() {
+		if d.BackingYBTLSIssuerName == "" || d.BackingYBTLSIssuerKind == "" {
+			return fmt.Errorf("deploy YB TLS needs a cert-manager issuer kind and name")
+		}
+		if d.BackingYBTLSCABundleConfigMap == "" {
+			return fmt.Errorf("deploy YB TLS needs the CA bundle ConfigMap name")
+		}
+		for _, f := range []struct{ name, val string }{
+			{"cert duration", d.BackingYBTLSCertDuration},
+			{"cert renew-before", d.BackingYBTLSCertRenewBefore},
+		} {
+			if _, err := time.ParseDuration(f.val); err != nil {
+				return fmt.Errorf("invalid deploy YB TLS %s %q: %w", f.name, f.val, err)
+			}
+		}
 	}
 	return nil
 }

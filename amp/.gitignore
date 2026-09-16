@@ -48,3 +48,7 @@ local_proxy.json
 .VSCodeCounter/
 /controller/target/
 /compute/tmp_check/
+
+# Helm subchart archives. Chart.lock pins the versions; `helm dependency build`
+# fetches them, which every deploy path does before installing.
+/deploy/helm/*/charts/*.tgz

@@ -599,6 +599,12 @@ jobs:
           version: v3.18.6
       - run: helm plugin install https://github.com/helm-unittest/helm-unittest.git
 
+      # The controller chart declares cert-manager as a subchart. Helm refuses to
+      # render a chart whose declared dependency is absent from charts/ even when
+      # its condition is false, and charts/*.tgz is gitignored, so fetch it first.
+      - name: helm dependency build (controller chart)
+        run: helm dependency build deploy/helm/yb-amp-controller
+
       # helm lint + helm-unittest render templates and assert output; nothing here
       # deploys — this validates the charts without a cluster. yq (v4, mikefarah)
       # for the Guaranteed-QoS guardrail is preinstalled on ubuntu runners.

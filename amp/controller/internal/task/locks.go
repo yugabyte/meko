@@ -355,12 +355,22 @@ func (s *resizeEndpointStep) Lock() ResourceLock  { return EndpointLock(s.Endpoi
 func (s *upgradeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
 func (s *deleteEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 
-func (s *planEndpointUpgradesStep) Lock() ResourceLock { return FleetEndpointsLock() }
+func (s *rerenderEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
+
+// Both fan-out parents take the same fleet lock, so a re-render and an upgrade
+// cannot race two Helm upgrades over one release. The lock is NoWait, so the
+// second one fails rather than queueing — the plan-time checks in
+// Service.UpgradeEndpoints / RerenderEndpoints are what turn that into a 409
+// for a caller instead of a failed task.
+func (s *planEndpointUpgradesStep) Lock() ResourceLock  { return FleetEndpointsLock() }
+func (s *planEndpointRerendersStep) Lock() ResourceLock { return FleetEndpointsLock() }
 
 var (
 	_ Locking = (*createEndpointStep)(nil)
 	_ Locking = (*resizeEndpointStep)(nil)
 	_ Locking = (*upgradeEndpointStep)(nil)
+	_ Locking = (*rerenderEndpointStep)(nil)
+	_ Locking = (*planEndpointRerendersStep)(nil)
 	_ Locking = (*deleteEndpointStep)(nil)
 	_ Locking = (*planEndpointUpgradesStep)(nil)
 )

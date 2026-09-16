@@ -1,0 +1,69 @@
+suite: cert-manager preflight
+templates:
+  - templates/cert-manager-preflight.yaml
+  - templates/controller-certificate.yaml
+chart:
+  appVersion: "1.2.3"
+tests:
+  # The preflight renders nothing itself; it exists to stop an install that
+  # would produce a Certificate the API server cannot accept.
+  - it: is silent with TLS off, whoever owns cert-manager
+    set:
+      tls.enabled: false
+    template: templates/cert-manager-preflight.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: is silent when cert-manager is present
+    set:
+      tls.enabled: true
+    capabilities:
+      apiVersions:
+        - cert-manager.io/v1
+    template: templates/cert-manager-preflight.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The case the check is for: TLS is on and the cluster has no cert-manager,
+  # so the Certificate below would be unappliable.
+  - it: refuses the render when cert-manager is absent
+    set:
+      tls.enabled: true
+    template: templates/cert-manager-preflight.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            tls.enabled or controller.endpoint.ybTlsMode is set but cert-manager is not
+            installed on this cluster (no cert-manager.io/v1). Install it with
+            `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions
+            cert-manager.io/v1.
+
+  # The endpoint mode alone also needs it: the controller renders a Certificate
+  # into every endpoint release from this install's issuerRef.
+  - it: refuses the render when only the endpoint TLS mode is set
+    set:
+      tls.enabled: false
+      controller.endpoint.ybTlsMode: verify-full
+    template: templates/cert-manager-preflight.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            tls.enabled or controller.endpoint.ybTlsMode is set but cert-manager is not
+            installed on this cluster (no cert-manager.io/v1). Install it with
+            `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions
+            cert-manager.io/v1.
+
+  - it: renders the controller certificate when cert-manager is present
+    set:
+      tls.enabled: true
+    capabilities:
+      apiVersions:
+        - cert-manager.io/v1
+    template: templates/controller-certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Certificate

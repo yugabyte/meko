@@ -3,10 +3,9 @@ package task
 import (
 	"context"
 	"encoding/json"
-	"errors"
+
 	"fmt"
 	"sort"
-	"sync"
 
 	"github.com/google/uuid"
 
@@ -19,26 +18,9 @@ import (
 // step — the fan-out parent of a fleet roll.
 const StepPlanEndpointUpgrades = "plan_endpoint_upgrades"
 
-const (
-	// DefaultUpgradeParallel is how many endpoints a roll moves at once when the
-	// caller does not say. Small on purpose: an upgrade replaces the pod, so this
-	// is how much of the fleet is down at a time.
-	DefaultUpgradeParallel = 4
-
-	// MaxUpgradeParallel bounds it. Children run in-process off ONE execution
-	// slot, so this is the only cap on a roll's concurrency.
-	MaxUpgradeParallel = 50
-)
-
-// The outcome of one endpoint in a roll, as reported on the step result.
-const (
-	rollUpgraded = "upgraded"
-	rollSkipped  = "skipped"
-	rollFailed   = "failed"
-	// rollUnattempted is work the roll did not do and does not claim failed: a
-	// child halted by fail-fast, and one whose endpoint lock was held (§5.4).
-	rollUnattempted = "unattempted"
-)
+// rollUpgraded is this roll's success word; the rest of the outcomes, the
+// report line and the bounded pool are shared (endpointroll.go).
+const rollUpgraded = "upgraded"
 
 // PlanEndpointUpgradesArgs are the inputs to the plan_endpoint_upgrades step.
 // EndpointIDs empty means the whole fleet; MaxParallel is validated rather than
@@ -47,16 +29,6 @@ type PlanEndpointUpgradesArgs struct {
 	Version     string      `json:"version"`
 	EndpointIDs []uuid.UUID `json:"endpoint_ids,omitempty"`
 	MaxParallel int         `json:"max_parallel"`
-}
-
-// endpointRoll is one line of the roll's report.
-type endpointRoll struct {
-	EndpointID string `json:"endpoint_id"`
-	Outcome    string `json:"outcome"`
-	Reason     string `json:"reason,omitempty"`
-	// SubtaskID names the `subtasks` row the child ran as — the id in the lease
-	// owner that held the endpoint. Empty when no child was created.
-	SubtaskID string `json:"subtask_id,omitempty"`
 }
 
 // planEndpointUpgradesStep is the fleet roll: one self-contained step that owns N
@@ -107,9 +79,9 @@ func (s *planEndpointUpgradesStep) Execute(ctx context.Context) StepResult {
 	if s.Version == "" {
 		return Fail(fmt.Errorf("plan_endpoint_upgrades step requires a target version, but none was given"))
 	}
-	if s.MaxParallel < 1 || s.MaxParallel > MaxUpgradeParallel {
+	if s.MaxParallel < 1 || s.MaxParallel > MaxRollParallel {
 		return Fail(fmt.Errorf("plan_endpoint_upgrades max_parallel is %d, want 1..%d",
-			s.MaxParallel, MaxUpgradeParallel))
+			s.MaxParallel, MaxRollParallel))
 	}
 	// Children hang off the parent's task id and run under the owner every task
 	// write is fenced on. A reclaimed parent re-stamps them with the NEW owner,
@@ -124,7 +96,7 @@ func (s *planEndpointUpgradesStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(err)
 	}
-	lines := append(done, s.roll(ctx, run.owner, subs)...)
+	lines := append(done, rollSubtasks(ctx, s.subtasks, run.owner, subs, s.MaxParallel, rollUpgraded)...)
 	sort.Slice(lines, func(i, j int) bool { return lines[i].EndpointID < lines[j].EndpointID })
 
 	report, counts := rollReport(s.Version, lines)
@@ -235,121 +207,9 @@ func (s *planEndpointUpgradesStep) plan(ctx context.Context, taskID uuid.UUID) (
 	return subs, done, nil
 }
 
-// roll runs the children through a bounded pool and returns a line for each.
-//
-// A pool, not waves: a child starts as soon as a slot frees, which is what lets
-// fail-fast halt precisely (§5.4).
-//
-// FAIL-FAST: the first real failure stops NEW children from starting; the ones
-// already running finish, because killing a child mid-`helm --wait` leaves a
-// release the next roll has to clean up. A child refused its endpoint lock is not
-// a real failure — ErrLockHeld says somebody else holds the endpoint, not that
-// the upgrade would fail.
-func (s *planEndpointUpgradesStep) roll(ctx context.Context, owner string, subs []*Subtask) []*endpointRoll {
-	out := make(chan *endpointRoll, len(subs))
-	sem := make(chan struct{}, s.MaxParallel)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	halted := false
-
-	// rest reports the children from i on, which never started. abandon says whether
-	// their subtask ROWS must also be closed: only on an exit that makes the parent
-	// terminal, since a terminal parent is never reclaimed and a pending row under
-	// one is work nothing will ever run. An interrupted parent stays reclaimable, so
-	// its children are left for the replay.
-	rest := func(i int, reason string, abandon bool) {
-		for _, sub := range subs[i:] {
-			out <- &endpointRoll{
-				EndpointID: endpointOf(sub), Outcome: rollUnattempted,
-				Reason: reason, SubtaskID: sub.ID.String(),
-			}
-			if !abandon {
-				continue
-			}
-			if err := s.subtasks.Abandon(ctx, sub, owner, reason); err != nil {
-				applog.FromContext(ctx).Warn("closing an unattempted subtask",
-					applog.KeySubtaskID, sub.ID.String(), "error", err)
-			}
-		}
-	}
-
-	for i := range subs {
-		// Take a slot BEFORE reading `halted`, so the check happens as late as it
-		// can: a slot frees only when a child finishes, and a failing child records
-		// its outcome before releasing.
-		took := false
-		select {
-		case sem <- struct{}{}:
-			took = true
-		case <-ctx.Done():
-		}
-		if ctx.Err() != nil {
-			// Both cases can be ready at once, so give the slot back before leaving —
-			// as the halted branch below does. Only when one was actually taken: the
-			// ctx branch leaves the channel empty, and a receive on it would block.
-			if took {
-				<-sem
-			}
-			rest(i, "not started: the roll was interrupted", false)
-			break
-		}
-		mu.Lock()
-		stop := halted
-		mu.Unlock()
-		if stop {
-			<-sem
-			rest(i, "not started: the roll stopped after an earlier failure", true)
-			break
-		}
-
-		wg.Add(1)
-		go func(sub *Subtask) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			line := &endpointRoll{EndpointID: endpointOf(sub), SubtaskID: sub.ID.String()}
-			err := s.subtasks.Run(ctx, sub, owner)
-			mu.Lock()
-			switch {
-			case err == nil:
-				line.Outcome = rollUpgraded
-			case errors.Is(err, ErrLockHeld):
-				line.Outcome = rollUnattempted
-				line.Reason = "the endpoint lock was held by another task: " + err.Error()
-			default:
-				line.Outcome = rollFailed
-				line.Reason = err.Error()
-				halted = true
-			}
-			mu.Unlock()
-			out <- line
-		}(subs[i])
-	}
-	wg.Wait()
-	close(out)
-
-	lines := make([]*endpointRoll, 0, len(subs))
-	for line := range out {
-		lines = append(lines, line)
-	}
-	return lines
-}
-
-// endpointOf reads the endpoint a child was created for back out of its args, so
-// a report line names the endpoint rather than only the child.
-func endpointOf(sub *Subtask) string {
-	var args UpgradeEndpointArgs
-	if err := json.Unmarshal(sub.Args, &args); err != nil {
-		return ""
-	}
-	return args.EndpointID.String()
-}
-
 // rollReport marshals the per-endpoint report and tallies the outcomes.
 func rollReport(version string, lines []*endpointRoll) (json.RawMessage, map[string]int) {
-	counts := map[string]int{rollUpgraded: 0, rollSkipped: 0, rollFailed: 0, rollUnattempted: 0}
-	for _, l := range lines {
-		counts[l.Outcome]++
-	}
+	counts := rollTally(lines, rollUpgraded)
 	return mustResult(map[string]any{
 		"version":     version,
 		"endpoints":   lines,

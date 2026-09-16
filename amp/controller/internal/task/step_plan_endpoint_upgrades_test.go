@@ -578,7 +578,7 @@ func TestFleetRollWaitsForInFlightChildren(t *testing.T) {
 // unbounded, which would fire the whole fleet at once.
 func TestFleetRollRejectsAnOutOfRangeMaxParallel(t *testing.T) {
 	f := newRollFixture(t, newRollControl(), nil, ep1)
-	for _, n := range []int{0, -1, MaxUpgradeParallel + 1} {
+	for _, n := range []int{0, -1, MaxRollParallel + 1} {
 		res := f.execute(t, PlanEndpointUpgradesArgs{Version: "v2", MaxParallel: n})
 		if !res.Failed() {
 			t.Errorf("max_parallel %d was accepted, want a failure", n)

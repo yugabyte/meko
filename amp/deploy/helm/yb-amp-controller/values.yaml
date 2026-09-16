@@ -47,6 +47,32 @@ rbac:
   # otel.podMetrics false.
   clusterScoped: false
 
+# Certificate trust to the backing YugabyteDB (controller/architecture/ac-endpoint-tls.md).
+# The issuer and CA bundle here are what the controller's own certificate and
+# every endpoint's certificate (controller.endpoint.ybTlsMode) are issued from
+# and verified against. deploy/tls/trust-root.sh stands both up.
+# cert-manager is what issues the controller's and the endpoints' certificates.
+
+tls:
+  # -- Give the controller its own client certificate (CN = tls.controllerUser)
+  # and mount it with the CA bundle at /etc/amp/tls/client and /etc/amp/tls/ca.
+  # controller.databaseUrl must then carry sslmode and those three paths.
+  enabled: false
+  issuerRef:
+    kind: ClusterIssuer
+    name: amp-ca
+    group: cert-manager.io
+  # -- ConfigMap in the release namespace holding the CA bundle under key ca.crt
+  # (trust-manager keeps it current).
+  caBundleConfigMap: amp-ca-bundle
+  # -- The YB role the controller connects as; the certificate's CN.
+  controllerUser: yugabyte
+  certificate:
+    duration: 720h
+    renewBefore: 240h
+    algorithm: ECDSA
+    size: 256
+
 controller:
   # -- Number of controller pods. The controller holds in-pod state (its managed
   # controller subprocess), so keep this at 1.
@@ -107,6 +133,14 @@ controller:
     ybUser: "yugabyte"
     # -- YB database endpoints use (AMP_DEPLOY_YB_DBNAME).
     ybDbname: "yb_storage"
+    # -- libpq sslmode endpoints use to reach YB (AMP_DEPLOY_YB_TLS_MODE). Empty
+    # or disable = plaintext. Anything else gives every endpoint release a
+    # cert-manager Certificate (CN = ybUser, from tls.issuerRef) mounted with
+    # the CA bundle (tls.caBundleConfigMap), so a `cert` HBA rule logs it in.
+    ybTlsMode: ""
+    # -- Lifetime and renewal lead of each endpoint's client certificate.
+    ybTlsCertDuration: "720h"
+    ybTlsCertRenewBefore: "240h"
     # -- StorageClass for each endpoint's /data PVC; empty => emptyDir (AMP_DEPLOY_STORAGE_CLASS).
     storageClass: ""
     # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
@@ -318,6 +352,11 @@ ui:
       - "networking.gke.io/load-balancer-type=Internal"
       - "networking.gke.io/internal-load-balancer-allow-global-access=true"
 
+# Pod-level security context. fsGroup is the controller image's "yugabyte" gid
+# (uid/gid 1000): Secret volumes mount root-owned at 0440, and this gid is what
+# lets the non-root process read the TLS client key under tls.enabled.
+podSecurityContext:
+  fsGroup: 1000
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

@@ -1,0 +1,29 @@
+{{- if .Values.tls.enabled }}
+# The controller's own client certificate for its yb_storage pool. CN is the
+# role it connects as, so a `cert` HBA rule logs it in.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}-db
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+spec:
+  secretName: {{ include "yb-amp-controller.controllerName" . }}-db-tls
+  commonName: {{ .Values.tls.controllerUser | quote }}
+  dnsNames:
+    - {{ include "yb-amp-controller.controllerName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  usages:
+    - client auth
+  duration: {{ .Values.tls.certificate.duration | quote }}
+  renewBefore: {{ .Values.tls.certificate.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.tls.certificate.algorithm }}
+    size: {{ .Values.tls.certificate.size }}
+    rotationPolicy: Always
+  issuerRef:
+    kind: {{ .Values.tls.issuerRef.kind }}
+    name: {{ .Values.tls.issuerRef.name }}
+    {{- with .Values.tls.issuerRef.group }}
+    group: {{ . }}
+    {{- end }}
+{{- end }}

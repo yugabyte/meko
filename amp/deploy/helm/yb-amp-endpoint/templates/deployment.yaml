@@ -197,6 +197,16 @@ spec:
           volumeMounts:
             - name: run
               mountPath: /data
+            {{- if .Values.tls.enabled }}
+            # Whole-directory mounts (no subPath): the kubelet only propagates a
+            # renewed Secret or ConfigMap into a directory mount.
+            - name: yb-client-tls
+              mountPath: /etc/amp/tls/client
+              readOnly: true
+            - name: yb-ca-bundle
+              mountPath: /etc/amp/tls/ca
+              readOnly: true
+            {{- end }}
             {{- range .Values.endpoint.extensions }}
             # Extension ImageVolume: read-only tree with share/ (control+SQL)
             # and lib/ (the .so). extension_control_path / dynamic_library_path
@@ -258,6 +268,15 @@ spec:
         {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.runDir.sizeLimit }}
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: yb-client-tls
+          secret:
+            secretName: {{ include "yb-amp-endpoint.tlsSecretName" . }}
+            defaultMode: 0440
+        - name: yb-ca-bundle
+          configMap:
+            name: {{ .Values.tls.caBundleConfigMap }}
         {{- end }}
         {{- range .Values.endpoint.extensions }}
         # OCI ImageVolume (k8s 1.33+ beta, feature gate ImageVolume): mounts the

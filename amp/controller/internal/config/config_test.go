@@ -297,6 +297,51 @@ func TestDeployCloud(t *testing.T) {
 	}
 }
 
+// TestDeployYBTLS asserts the TLS mode is validated (a libpq sslmode), that TLS
+// demands an issuer and a CA bundle, and that the cert lifetimes parse.
+func TestDeployYBTLS(t *testing.T) {
+	chart := t.TempDir()
+	base := func() []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+		}
+	}
+	c, err := Load(base())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.BackingYBTLS() {
+		t.Errorf("TLS on by default: mode %q", c.Deploy.BackingYBTLSMode)
+	}
+
+	c, err = Load(append(base(), "--deploy-yb-tls-mode", "verify-full"))
+	if err != nil {
+		t.Fatalf("Load(tls): %v", err)
+	}
+	if !c.Deploy.BackingYBTLS() || c.Deploy.BackingYBTLSIssuerName != "amp-ca" || c.Deploy.BackingYBTLSCABundleConfigMap != "amp-ca-bundle" {
+		t.Errorf("TLS defaults not applied: %+v", c.Deploy)
+	}
+	if _, err := Load(append(base(), "--deploy-yb-tls-mode", "sometimes")); err == nil {
+		t.Error("expected error for an unknown TLS mode")
+	}
+	if _, err := Load(append(base(), "--deploy-yb-tls-mode", "verify-full", "--deploy-yb-tls-issuer-name", "")); err == nil {
+		t.Error("expected error when TLS is on without an issuer name")
+	}
+	if _, err := Load(append(base(), "--deploy-yb-tls-mode", "verify-full", "--deploy-yb-tls-cert-duration", "30d")); err == nil {
+		t.Error("expected error for a cert duration Go cannot parse")
+	}
+	// disable is TLS off, so the issuer is not required.
+	if _, err := Load(append(base(), "--deploy-yb-tls-mode", "disable", "--deploy-yb-tls-issuer-name", "")); err != nil {
+		t.Errorf("disable with no issuer: %v", err)
+	}
+}
+
 func TestDeployStorageClass(t *testing.T) {
 	chart := t.TempDir()
 	base := func() []string {

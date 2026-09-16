@@ -37,6 +37,52 @@ tests:
           path: spec.template.spec.containers[0].image
           value: registry.example.com/yb/endpoint:1.2.3
 
+  - it: mounts no TLS material by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: yb-client-tls
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: yb-ca-bundle
+          any: true
+
+  - it: mounts the client certificate Secret and the CA bundle as directories when TLS is on
+    template: templates/deployment.yaml
+    set:
+      tls.enabled: true
+      tls.caBundleConfigMap: amp-ca-bundle
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: yb-client-tls
+            secret:
+              secretName: RELEASE-NAME-yb-amp-endpoint-yb-client-tls
+              defaultMode: 0440
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: yb-ca-bundle
+            configMap:
+              name: amp-ca-bundle
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: yb-client-tls
+            mountPath: /etc/amp/tls/client
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: yb-ca-bundle
+            mountPath: /etc/amp/tls/ca
+            readOnly: true
+
   - it: injects the YB password from a Secret when configured
     template: templates/deployment.yaml
     set:
