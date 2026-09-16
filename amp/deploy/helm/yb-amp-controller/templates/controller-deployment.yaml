@@ -115,6 +115,39 @@ spec:
             # empty disables tailnet address reporting.
             - name: AMP_DEPLOY_TAILNET_SUFFIX
               value: {{ .Values.controller.endpoint.tailnetSuffix | quote }}
+            # Shared ingress. `enabled` is the off switch and the default, not the
+            # zones: with it off the controller refuses the ingress_* connectivity
+            # modes rather than deploying an endpoint into a deployment that has
+            # no shards (controller/architecture/ac-ingress.md).
+            #
+            # Guarded for the same reason `cloud` is above: the controller
+            # validates this pair at startup and EXITS when ingress is on with
+            # neither zone set, so an unchecked values file installs cleanly and
+            # then CrashLoopBackOffs the whole control plane.
+            {{- if and .Values.controller.endpoint.ingress.enabled
+                  (not .Values.controller.endpoint.ingress.zoneInternal)
+                  (not .Values.controller.endpoint.ingress.zoneExternal) }}
+            {{- fail "controller.endpoint.ingress.enabled needs zoneInternal or zoneExternal: an endpoint's address is its published name, so the controller refuses to start without one" }}
+            {{- end }}
+            - name: AMP_DEPLOY_INGRESS_ENABLED
+              value: {{ .Values.controller.endpoint.ingress.enabled | quote }}
+            # Optional, and separate from the switch: one zone per family so
+            # external-dns can be pinned to each and an internal endpoint's name
+            # is never published to a public zone.
+            - name: AMP_DEPLOY_INGRESS_ZONE_INTERNAL
+              value: {{ .Values.controller.endpoint.ingress.zoneInternal | quote }}
+            - name: AMP_DEPLOY_INGRESS_ZONE_EXTERNAL
+              value: {{ .Values.controller.endpoint.ingress.zoneExternal | quote }}
+            - name: AMP_DEPLOY_INGRESS_PORT_RANGE
+              value: {{ .Values.controller.endpoint.ingress.portRange | quote }}
+            - name: AMP_DEPLOY_INGRESS_HEADROOM
+              value: {{ .Values.controller.endpoint.ingress.headroom | quote }}
+            - name: AMP_DEPLOY_INGRESS_MAX_SHARDS
+              value: {{ .Values.controller.endpoint.ingress.maxShards | quote }}
+            - name: AMP_DEPLOY_INGRESS_QUARANTINE
+              value: {{ .Values.controller.endpoint.ingress.quarantine | quote }}
+            - name: AMP_DEPLOY_INGRESS_PLACEMENT
+              value: {{ .Values.controller.endpoint.ingress.placement | quote }}
             # Endpoint data volume: a PVC of this storage class (empty => emptyDir).
             - name: AMP_DEPLOY_STORAGE_CLASS
               value: {{ .Values.controller.endpoint.storageClass | quote }}

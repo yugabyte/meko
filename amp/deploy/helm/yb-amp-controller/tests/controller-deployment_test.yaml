@@ -264,3 +264,77 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: controller.endpoint.cloud must be one of aws|gcp|azure (or empty to detect it), got "GCP"
+
+  # A typo in any of these names is SILENT: envBool/env fall back to the default,
+  # so the feature just stays off and nothing says why. That is what the env
+  # assertions in this file exist to catch, so the ingress set gets the same
+  # treatment as the rest.
+  - it: passes the whole shared-ingress knob set through
+    set:
+      controller.endpoint.ingress.enabled: true
+      controller.endpoint.ingress.zoneInternal: internal.pg.example
+      controller.endpoint.ingress.zoneExternal: external.pg.example
+      controller.endpoint.ingress.portRange: 20000-20049
+      controller.endpoint.ingress.headroom: 10
+      controller.endpoint.ingress.maxShards: 24
+      controller.endpoint.ingress.quarantine: 10m
+      controller.endpoint.ingress.placement: spread
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_ZONE_INTERNAL
+            value: "internal.pg.example"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_ZONE_EXTERNAL
+            value: "external.pg.example"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_PORT_RANGE
+            value: "20000-20049"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_HEADROOM
+            value: "10"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_MAX_SHARDS
+            value: "24"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_QUARANTINE
+            value: "10m"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_PLACEMENT
+            value: "spread"
+
+  - it: ships ingress off, so an existing deployment is unaffected
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_INGRESS_ENABLED
+            value: "false"
+
+  # The controller exits at startup when ingress is on with neither zone, so an
+  # unchecked values file would CrashLoopBackOff the control plane. Failing the
+  # render turns that into a helm error the operator sees immediately.
+  - it: refuses ingress enabled with neither zone
+    set:
+      controller.endpoint.ingress.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "controller.endpoint.ingress.enabled needs zoneInternal or zoneExternal: an endpoint's address is its published name, so the controller refuses to start without one"

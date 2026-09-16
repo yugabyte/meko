@@ -69,6 +69,24 @@
 # as the controller (CONTROLLER_EXPOSE). Toggle with UI_ENABLED; image via
 # UI_IMAGE_REPO / UI_TAG (defaults alongside the controller image).
 #
+# Shared ingress: set INGRESS_ENABLED=true to put endpoints on a port of a
+# SHARED load balancer instead of one each. It installs the first shard of each
+# configured family beside the controller, so capacity exists as soon as the
+# controller is up. Off (the default) installs no shard and leaves the ingress_*
+# modes refused.
+#   INGRESS_ENABLED         true to route endpoints through shared shards
+#   INGRESS_ZONE_INTERNAL   DNS zone internal endpoint names are published under
+#   INGRESS_ZONE_EXTERNAL   DNS zone external endpoint names are published under;
+#                           kept separate so an internal name never reaches a
+#                           public zone
+#   INGRESS_PORT_RANGE      "lo-hi" the shard serves (default 20000-20049)
+#   INGRESS_CLOUD           aws|gcp|azure; required, the shard will not guess
+#   INGRESS_PROXY_PROTOCOL  true to trust PROXY protocol from the load balancer,
+#                           without which per-endpoint allowlists see the LB
+#   INGRESS_ALLOWED_CIDRS   "cidr,cidr" coarse gate on the shard's LB
+# It also needs external-dns with its CRD source on, or the DNS records each
+# endpoint renders are inert. See controller/architecture/ac-ingress.md.
+#
 # To stand up the prerequisites (namespace, pull secret, single-node YugabyteDB)
 # from scratch and then deploy the controller, use deploy/up.sh instead.
 set -euo pipefail
@@ -106,6 +124,38 @@ TLS_CA_CONFIGMAP="${TLS_CA_CONFIGMAP:-amp-ca-bundle}"
 TLS_MODE="${TLS_MODE:-verify-full}"
 # YSQL role endpoints connect as; with TLS it is also the CN of their certificate.
 ENDPOINT_YB_USER="${ENDPOINT_YB_USER:-yugabyte}"
+# Shared ingress (controller/architecture/ac-ingress.md). INGRESS_ENABLED is the
+# whole opt-in: off (the default) installs no shard and leaves the controller
+# refusing the ingress_* connectivity modes, which is every deployment today.
+# The zones are separate and optional; a family with one gets published names.
+INGRESS_ZONE_INTERNAL="${INGRESS_ZONE_INTERNAL:-}"
+INGRESS_ZONE_EXTERNAL="${INGRESS_ZONE_EXTERNAL:-}"
+INGRESS_ENABLED="${INGRESS_ENABLED:-$([ -n "${INGRESS_ZONE_INTERNAL}${INGRESS_ZONE_EXTERNAL}" ] && echo true || echo false)}"
+INGRESS_PORT_RANGE="${INGRESS_PORT_RANGE:-20000-20049}"
+# The cloud whose load-balancer annotations the shard renders. Required for an
+# internal shard: every provider defaults a LoadBalancer Service to
+# internet-facing, so the chart refuses to guess.
+INGRESS_CLOUD="${INGRESS_CLOUD:-}"
+# Trust PROXY protocol on the shard's Postgres entryPoints. Needed behind a load
+# balancer that preserves the client address that way. Note that per-endpoint
+# allowlists are NOT yet available on the ingress_* modes — the API refuses
+# allowed_cidrs there — so INGRESS_ALLOWED_CIDRS below is currently the only
+# source filter on a shard, and it applies to every endpoint on it.
+INGRESS_PROXY_PROTOCOL="${INGRESS_PROXY_PROTOCOL:-false}"
+# Who may assert a client address. The load balancer's own range and nothing
+# wider — anything in this list can claim to be any client, walking past every
+# per-endpoint allowlist on the shard. The chart refuses to render PROXY protocol
+# without it, so there is no accidental trust-everything default.
+INGRESS_PROXY_TRUSTED_IPS="${INGRESS_PROXY_TRUSTED_IPS:-}"
+# Mirror of the Traefik image, for a cluster that pulls only from its own
+# registry. Empty uses the chart's default (Docker Hub), which is anonymous and
+# rate-limited for a proxy in every endpoint's connection path.
+INGRESS_TRAEFIK_REPO="${INGRESS_TRAEFIK_REPO:-}"
+# Coarse outer gate on the shard's load balancer, comma-separated CIDRs. Per
+# endpoint filtering is done by each endpoint's own middleware; this is the union
+# the shard should ever serve.
+INGRESS_ALLOWED_CIDRS="${INGRESS_ALLOWED_CIDRS:-}"
+
 # Internal-LB annotations (GKE: a private VPC IP). Applied to the controller LB
 # when CONTROLLER_EXPOSE=internal-lb, and to endpoints via ENDPOINT_SERVICE_ANNOTATIONS.
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
@@ -229,6 +279,10 @@ HELM_SET=(
   "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
   "controller.endpoint.memoryGiBPerVCPU=${ENDPOINT_MEMORY_GIB_PER_VCPU}"
   "controller.endpoint.ybUser=${ENDPOINT_YB_USER}"
+  "controller.endpoint.ingress.enabled=${INGRESS_ENABLED}"
+  "controller.endpoint.ingress.zoneInternal=${INGRESS_ZONE_INTERNAL}"
+  "controller.endpoint.ingress.zoneExternal=${INGRESS_ZONE_EXTERNAL}"
+  "controller.endpoint.ingress.portRange=${INGRESS_PORT_RANGE}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
   # cert-manager is owned outside this chart: deploy/tls/trust-root.sh installs
   # it in TLS mode, and a plaintext deploy needs none. Leaving the chart default
@@ -329,6 +383,138 @@ if [ "${MCP_ENABLED}" = "true" ]; then
 fi
 if [ "${UI_ENABLED}" = "true" ]; then
   kubectl -n "${NS}" rollout status deploy/amp-controller-ui --timeout=180s
+fi
+
+# The baseline ingress shard, installed alongside the control plane rather than
+# built by the controller on demand. A deployment with ingress enabled therefore
+# is not left cold: the load-balancer build starts at deploy time rather than on
+# the first endpoint create, which is what would otherwise block a create for
+# minutes.
+#
+# It is NOT ready the moment the controller is: EnsureShard writes the row
+# `building`, and the controller's 15s reconcile promotes it once the cloud has
+# given the Service an address. Until then an ingress_* create fails with
+# ErrNoCapacity, by design.
+#
+# The controller registers the matching ingress_shards row at startup and marks
+# it ready once this Service has an address — the shard name is the join between
+# the two, which is why it is fixed rather than generated.
+if [ "${INGRESS_ENABLED}" = "true" ]; then
+  # Checked here rather than at the shard install, which happens AFTER the
+  # controller has been upgraded with ingress on — failing there leaves a
+  # deployment whose API accepts the ingress_* modes with no shard to place them.
+  case "${INGRESS_CLOUD}" in
+    aws|gcp|azure) ;;
+    *)
+      echo "!! INGRESS_ENABLED=true needs INGRESS_CLOUD=aws|gcp|azure (got '${INGRESS_CLOUD}')." >&2
+      echo "   Required for BOTH families: internal would otherwise default to" >&2
+      echo "   internet-facing, and external would get a classic load balancer" >&2
+      echo "   instead of the NLB this design needs." >&2
+      exit 1 ;;
+  esac
+  if [ -z "${INGRESS_ZONE_INTERNAL}${INGRESS_ZONE_EXTERNAL}" ]; then
+    echo "!! INGRESS_ENABLED=true needs at least one of INGRESS_ZONE_INTERNAL or" >&2
+    echo "   INGRESS_ZONE_EXTERNAL. An endpoint's address is its published name, so" >&2
+    echo "   the controller refuses to start without one and would crashloop." >&2
+    exit 1
+  fi
+
+  # The Traefik CRDs, before any shard. The shard chart renders Traefik directly
+  # rather than through its upstream chart, which is what used to install these —
+  # so they are a prerequisite now, and their absence is quiet in the worst way:
+  # the shard comes up healthy and its provider serves nothing, while every
+  # ingress_* endpoint release fails at apply with "no matches for kind
+  # IngressRouteTCP", after its slot has already been allocated.
+  #
+  # Pinned separately from the image, because they are different version series:
+  # traefik/traefik-helm-chart is tagged by CHART version (v34.x, v37.x…), while
+  # traefik.image.tag in our values is the proxy's own version (v3.7.13). Reading
+  # one from the other gives a ref that does not resolve, so this is its own knob
+  # and has to be bumped alongside the image.
+  #
+  # --force-conflicts because a cluster that once ran the upstream traefik chart
+  # has CRDs owned by that release's field manager; without it server-side apply
+  # refuses them and the deploy stops on exactly the clusters most likely to have
+  # them.
+  TRAEFIK_CHART_VERSION="${TRAEFIK_CHART_VERSION:-v37.1.2}"
+  echo ">> installing the Traefik CRDs (chart ${TRAEFIK_CHART_VERSION})"
+  if ! kubectl apply --server-side --force-conflicts -k \
+    "https://github.com/traefik/traefik-helm-chart/traefik/crds/?ref=${TRAEFIK_CHART_VERSION}"; then
+    echo "!! could not install the Traefik CRDs. Without them the shard installs and serves" >&2
+    echo "   nothing, and every ingress_* endpoint create fails at apply. Check that" >&2
+    echo "   TRAEFIK_CHART_VERSION (${TRAEFIK_CHART_VERSION}) is a real tag of" >&2
+    echo "   traefik/traefik-helm-chart — it is the CHART version, not the image version." >&2
+    exit 1
+  fi
+
+  # One shard per family that has a zone, matching what the controller registers
+  # at startup — the shard NAME is the join between the row and this release, so
+  # installing pgin-0 while the controller registered pgin-0-ext would leave both
+  # halves waiting on each other forever.
+  #
+  # With no zone at all (a kind or CI cluster, where endpoints are addressed by
+  # their shard) the internal family is the default: an external shard there
+  # would be an internet-facing load balancer nobody asked for.
+  INGRESS_FAMILIES=()
+  [ -n "${INGRESS_ZONE_INTERNAL}" ] && INGRESS_FAMILIES+=("internal:pgin-0")
+  [ -n "${INGRESS_ZONE_EXTERNAL}" ] && INGRESS_FAMILIES+=("external:pgin-0-ext")
+
+  for _fam in "${INGRESS_FAMILIES[@]}"; do
+    _family="${_fam%%:*}"
+    _shard="${_fam##*:}"
+    echo ">> installing ingress shard ${_shard} (${_family}, ${INGRESS_PORT_RANGE})"
+    INGRESS_SET=(
+      "shardName=${_shard}"
+      "family=${_family}"
+      "cloud=${INGRESS_CLOUD}"
+      "ports.lo=${INGRESS_PORT_RANGE%%-*}"
+      "ports.hi=${INGRESS_PORT_RANGE##*-}"
+      "proxyProtocol.enabled=${INGRESS_PROXY_PROTOCOL}"
+      # The chart's pull-secret hook: the Traefik image is the only public-registry
+      # image in amp/deploy, so a cluster that mirrors it needs the same secret
+      # every other release here gets.
+      "imagePullSecrets[0].name=${PULL_SECRET}"
+    )
+    if [ -n "${INGRESS_TRAEFIK_REPO}" ]; then
+      INGRESS_SET+=("traefik.image.repository=${INGRESS_TRAEFIK_REPO}")
+    fi
+    if [ -n "${INGRESS_PROXY_TRUSTED_IPS}" ]; then
+      _t=0
+      # shellcheck disable=SC2001
+      for _ip in $(echo "${INGRESS_PROXY_TRUSTED_IPS}" | tr ',' ' '); do
+        INGRESS_SET+=("proxyProtocol.trustedIPs[${_t}]=${_ip}")
+        _t=$((_t + 1))
+      done
+    fi
+    if [ -n "${INGRESS_ALLOWED_CIDRS}" ]; then
+      _i=0
+      # shellcheck disable=SC2001
+      for _cidr in $(echo "${INGRESS_ALLOWED_CIDRS}" | tr ',' ' '); do
+        INGRESS_SET+=("allowedCidrs[${_i}]=${_cidr}")
+        _i=$((_i + 1))
+      done
+    fi
+    _ingress_args=()
+    for _s in "${INGRESS_SET[@]}"; do _ingress_args+=(--set "${_s}"); done
+    # No --wait: helm counts a type=LoadBalancer Service as unready until the
+    # cloud populates .status.loadBalancer.ingress, so waiting turns a normal
+    # multi-minute LB build into a failed deploy — the very cold start this
+    # design exists to keep off the endpoint path. The controller converges the
+    # shard on its own (ReconcileShards promotes it once it has an address), so
+    # the rollout below is the only readiness worth blocking on.
+    helm upgrade --install "${_shard}" "${SCRIPT_DIR}/../helm/yb-amp-ingress" \
+      -n "${NS}" "${_ingress_args[@]}" --timeout 5m
+    kubectl -n "${NS}" rollout status "deploy/${_shard}" --timeout=180s
+    SHARD_ADDR="$(kubectl -n "${NS}" get svc "${_shard}" \
+      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+    if [ -n "${SHARD_ADDR}" ]; then
+      echo "   shard ${_shard} at ${SHARD_ADDR}, ports ${INGRESS_PORT_RANGE}"
+    else
+      echo "   shard ${_shard} installed; its load balancer is still provisioning."
+      echo "   The controller marks it ready once it has an address — until then"
+      echo "   an ingress_* create fails with 'no ingress capacity', by design."
+    fi
+  done
 fi
 
 echo ">> amp controller is up. Access (UI at /, API under /api/v1):"
