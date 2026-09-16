@@ -172,7 +172,8 @@ reconcile since it was installed, so it has never published a record.
 
 ## Not yet built
 
-Charts, the endpoint lifecycle wiring, per-endpoint certificates (so
+Charts (the endpoint's route and the shard's own release), per-endpoint
+certificates (so
 `sslmode=verify-full` works against an endpoint's own name — a prerequisite for
 `ingress_external`), the capacity reconciler's watermark and ceiling,
 **addressing an endpoint by its shard's `host:port` where there is no DNS zone**

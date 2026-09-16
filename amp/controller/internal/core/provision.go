@@ -269,13 +269,27 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // column. The branch enumeration
 // and the by-id read share it (and scanEndpointDeploy) so the two cannot render
 // from different state; each adds its own WHERE.
+//
+// The ingress slot is LEFT JOINed from the live allocation rather than stored on
+// the endpoint's config, because the allocation row is the record of where an
+// endpoint answers and a copy on the endpoint could drift from it. It has to be
+// projected here at all because a controller-driven redeploy re-renders the
+// whole spec from this record: without it an ingress endpoint redeploys with a
+// zero slot, the deployer formats its address as ":0", and SetEndpointAddress
+// overwrites the address clients are using. LEFT, because every non-ingress
+// endpoint has no allocation and must still project.
 const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.pg_version,
 	        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
 	        COALESCE(e.version, ''),
 	        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs',
-	        e.config->'extensions'
+	        e.config->'extensions',
+	        COALESCE(ia.shard, ''), COALESCE(ia.port, 0), COALESCE(ia.dns_name, ''),
+	        COALESCE(ish.hostname, ''), COALESCE(ish.record_type::text, '')
 	   FROM amp_registry.endpoints e
-	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
+	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
+	   LEFT JOIN amp_registry.ingress_allocations ia
+	          ON ia.endpoint_id = e.id AND ia.released_at IS NULL
+	   LEFT JOIN amp_registry.ingress_shards ish ON ish.name = ia.shard`
 
 func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) {
 	var (
@@ -284,7 +298,8 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 		extsRaw      []byte
 		d            EndpointDeploy
 	)
-	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Connectivity, &cidrsRaw, &extsRaw); err != nil {
+	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Connectivity, &cidrsRaw, &extsRaw,
+		&d.IngressShard, &d.IngressPort, &d.IngressDNSName, &d.IngressShardHost, &d.IngressRecordType); err != nil {
 		return EndpointDeploy{}, err
 	}
 	// Same tolerance as scanEndpoint: a malformed allowed_cidrs must not fail the

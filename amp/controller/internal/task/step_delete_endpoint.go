@@ -26,11 +26,12 @@ type deleteEndpointStep struct {
 	DeleteEndpointArgs
 	state    StateStore
 	deployer deploy.Deployer
+	ingress  IngressAllocator
 }
 
 // NewDeleteEndpointStep binds delete_endpoint args + its deps into an executable step.
 func NewDeleteEndpointStep(args DeleteEndpointArgs, deps Deps) Step {
-	return &deleteEndpointStep{DeleteEndpointArgs: args, state: deps.State, deployer: deps.Deployer}
+	return &deleteEndpointStep{DeleteEndpointArgs: args, state: deps.State, deployer: deps.Deployer, ingress: deps.Ingress}
 }
 
 func buildDeleteEndpointStep(raw json.RawMessage, deps Deps) (Step, error) {
@@ -49,6 +50,23 @@ func (s *deleteEndpointStep) Execute(ctx context.Context) StepResult {
 	}
 	if err := s.deployer.DeleteEndpoint(ctx, EndpointDeployName(s.EndpointID)); err != nil {
 		return Fail(fmt.Errorf("retire endpoint instance: %w", err))
+	}
+	// Release AFTER the deployer has torn the release down, so the slot cannot be
+	// reissued while a route still points at the old pod. Idempotent, and not
+	// keyed on connectivity — an endpoint with no allocation is already released
+	// — so a mode change or a row predating ingress cannot strand a slot.
+	//
+	// It IS skipped when the controller has no allocator (--deploy-ingress-enabled
+	// off). Retiring an endpoint that holds a slot on such a controller therefore
+	// leaves the row live, and since endpoints are hard-deleted and the reclaim
+	// sweep only ages released rows, that slot stays held. Failing the teardown
+	// instead would be worse — it would block deleting an endpoint over capacity
+	// nothing is using — so the trade is deliberate, and the reclaim sweep will
+	// need a way to find allocations whose endpoint is gone.
+	if s.ingress != nil {
+		if err := s.ingress.Release(ctx, s.EndpointID); err != nil {
+			return Fail(fmt.Errorf("release ingress slot: %w", err))
+		}
 	}
 	if err := s.state.DeleteEndpoint(ctx, s.EndpointID); err != nil {
 		return Fail(fmt.Errorf("delete endpoint record: %w", err))

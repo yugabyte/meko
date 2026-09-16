@@ -610,6 +610,14 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, _, branchID uuid.UUI
 // endpointDeploy renders one endpoint's desired state. All four projections below
 // go through it, so MemBackend cannot disagree with itself the way four hand-built
 // literals could — the property PgBackend gets from sharing endpointDeploySelect.
+//
+// It projects no ingress slot, and cannot: allocations live in Postgres and the
+// allocator is built on a pool, so a MemBackend deployment has no allocator at
+// all, Deps.Ingress is nil, and the ingress_* modes are refused before an
+// endpoint can hold a slot. PgBackend LEFT JOINs the live allocation for the
+// same reason this does not need to. If MemBackend ever grows an allocator, this
+// has to grow the five fields with it — the deployer refuses a zero slot on an
+// ingress endpoint, so the failure would be loud rather than a ":0" address.
 func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) EndpointDeploy {
 	return EndpointDeploy{
 		ID:           id,

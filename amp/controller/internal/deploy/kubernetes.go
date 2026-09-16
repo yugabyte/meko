@@ -196,6 +196,19 @@ func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnable
 // fullnameOverride, so the address is a pure function of the name and config.
 func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error) {
 	release := spec.Name
+	// Checked before anything is installed. A zero slot means the spec was
+	// rendered from a record that lost it — a redeploy projecting no allocation,
+	// say — and deploying anyway would report ":0" as the endpoint's address,
+	// which SetEndpointAddress then writes over the address clients are using.
+	// That unpublishes a live endpoint with no error anywhere. Refusing up front
+	// leaves it exactly as it was.
+	if IsIngress(spec.Connectivity) &&
+		(spec.Ingress.Port == 0 || (spec.Ingress.DNSName == "" && spec.Ingress.ShardHost == "")) {
+		return Endpoint{}, fmt.Errorf(
+			"endpoint %s is %s but its spec carries no ingress slot (shard %q, port %d); "+
+				"deploying would publish an address nothing answers on",
+			release, spec.Connectivity, spec.Ingress.Shard, spec.Ingress.Port)
+	}
 	// The data volume's size is proportional to the endpoint's CPU.
 	vals := k.values(spec, release)
 	// Only needed for the load-balanced modes, and it costs a node list — so it is
@@ -235,6 +248,21 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	// redeploy renders service.connectivity empty, helm prunes the -lb Service and
 	// the load balancer is deleted. Checked before the Service-type switch because
 	// it is a per-endpoint choice, not the controller-wide default.
+	// A shared-ingress endpoint's address was decided before this deploy started:
+	// the allocator picked the shard and port, and the name is derived from the
+	// endpoint's id. So there is nothing to poll for — no cloud resource is being
+	// provisioned by this create at all, which is the point of the design and the
+	// reason an ingress create does not pay the ~2 minutes serviceLBAddress can
+	// spend below.
+	if IsIngress(spec.Connectivity) {
+		if err := k.verifyReady(ctx, release); err != nil {
+			return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
+		}
+		addr := fmt.Sprintf("%s:%d", spec.Ingress.DNSName, spec.Ingress.Port)
+		k.logger.Info("endpoint ready", "endpoint", release, "address", addr,
+			"connectivity", spec.Connectivity, "shard", spec.Ingress.Shard)
+		return Endpoint{ID: release, Address: addr, TailnetAddress: k.tailnetAddress(release), Version: vals.Image.Tag}, nil
+	}
 	if IsDedicatedLB(spec.Connectivity) {
 		if lb := k.serviceLBAddress(ctx, release+"-lb"); lb != "" {
 			if err := k.verifyReady(ctx, release); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
+	"github.com/yugabyte/amp/controller/internal/ingress"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 )
 
@@ -73,6 +74,7 @@ type createEndpointStep struct {
 	CreateEndpointArgs
 	state      StateStore
 	deployer   deploy.Deployer
+	ingress    IngressAllocator
 	yb         deploy.YBConn
 	scURL      string
 	extensions *extensions.Service
@@ -82,6 +84,7 @@ type createEndpointStep struct {
 func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
 	return &createEndpointStep{
 		CreateEndpointArgs: args,
+		ingress:            deps.Ingress,
 		state:              deps.State,
 		deployer:           deps.Deployer,
 		yb:                 deps.EndpointYB,
@@ -149,6 +152,15 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
 
+	if deploy.IsIngress(s.Connectivity) {
+		slot, err := s.ingressSlot(ctx)
+		if err != nil {
+			return Fail(err)
+		}
+		spec.Ingress = slot
+		logger.Info("ingress slot", "shard", slot.Shard, "port", slot.Port, "dns_name", slot.DNSName)
+	}
+
 	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
 	if err != nil {
 		return Fail(fmt.Errorf("deploy endpoint: %w", err))
@@ -169,6 +181,45 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 
 	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress, "version", deployed.Version)
 	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
+}
+
+// ingressSlot resolves this endpoint's place on a shard.
+//
+// The allocation row is the record of where an endpoint answers, so nothing is
+// carried in the step's args that could drift from it. A replay therefore
+// redeploys the SAME address, which matters because issuing a second port would
+// leave the first held until its quarantine expired and change an address a
+// client may already hold.
+//
+// That replay-safety lives in Allocate, which returns the endpoint's existing
+// live allocation rather than a new one — a step is the unit of re-run, so an
+// allocator that answered a replay with an error would make this step fail
+// permanently the second time it ran. There is deliberately no Get-then-Allocate
+// guard here: a rule the caller has to remember is one the next caller forgets.
+func (s *createEndpointStep) ingressSlot(ctx context.Context) (deploy.IngressSlot, error) {
+	if s.ingress == nil {
+		return deploy.IngressSlot{}, fmt.Errorf(
+			"connectivity %s needs a shared ingress, but none is configured on this controller", s.Connectivity)
+	}
+	family := ingress.FamilyInternal
+	if s.Connectivity == deploy.ConnectivityIngressExternal {
+		family = ingress.FamilyExternal
+	}
+	alloc, err := s.ingress.Allocate(ctx, s.EndpointID, family)
+	if err != nil {
+		return deploy.IngressSlot{}, err
+	}
+	return slotFrom(alloc), nil
+}
+
+func slotFrom(a ingress.Allocation) deploy.IngressSlot {
+	return deploy.IngressSlot{
+		Shard:      a.Shard,
+		Port:       a.Port,
+		DNSName:    a.DNSName,
+		ShardHost:  a.ShardHost,
+		RecordType: a.RecordType,
+	}
 }
 
 // endpointConfig is the spec stored on the endpoint row for (re)creation. The

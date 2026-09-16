@@ -1,7 +1,9 @@
 package deploy
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -23,6 +25,8 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 		ID: epID, BranchID: branchID, PgVersion: 18,
 		CPU: "8", Memory: "16Gi", Version: "ep-v7.7.7",
 		Connectivity: ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.0/16"},
+		IngressShard: "pgin-0", IngressPort: 20007, IngressDNSName: "ep-abc.pg.example",
+		IngressShardHost: "lb-0.example", IngressRecordType: "CNAME",
 	}, yb, "http://sc:50051", mounts)
 
 	if spec.Name != EndpointName(epID) {
@@ -33,6 +37,12 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	}
 	if spec.BranchID != branchID {
 		t.Errorf("BranchID = %v, want %v (the storage branch id verbatim)", spec.BranchID, branchID)
+	}
+	if spec.Ingress.Shard != "pgin-0" || spec.Ingress.Port != 20007 ||
+		spec.Ingress.DNSName != "ep-abc.pg.example" || spec.Ingress.ShardHost != "lb-0.example" ||
+		spec.Ingress.RecordType != "CNAME" {
+		t.Errorf("Ingress = %+v, want the slot from the deploy record: dropping any of it "+
+			"unpublishes the endpoint's route or its name on the next redeploy", spec.Ingress)
 	}
 	if spec.PgVersion != 18 {
 		t.Errorf("PgVersion = %d, want 18", spec.PgVersion)
@@ -77,5 +87,25 @@ func TestEndpointSpecFromWithoutMounts(t *testing.T) {
 	spec := EndpointSpecFrom(core.EndpointDeploy{ID: uuid.New(), BranchID: uuid.New()}, YBConn{}, "", nil)
 	if spec.Extensions != nil {
 		t.Errorf("Extensions = %+v, want nil", spec.Extensions)
+	}
+}
+
+// A spec rendered from a record that lost its slot must not deploy. Reporting
+// ":0" would send SetEndpointAddress over the address clients are using, which
+// unpublishes a live endpoint with no error anywhere — the failure mode the
+// projection of the slot onto EndpointDeploy exists to prevent, caught here too
+// because a deploy path is the last place it can still be stopped.
+func TestCreateEndpointRefusesAnIngressSpecWithNoSlot(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	spec := testEndpointSpec()
+	spec.Connectivity = ConnectivityIngressInternal
+	spec.Ingress = IngressSlot{} // what a redeploy from a slotless record renders
+
+	_, err := k.CreateEndpoint(context.Background(), spec)
+	if err == nil {
+		t.Fatal("deploying an ingress endpoint with no slot must fail, not publish \":0\"")
+	}
+	if !strings.Contains(err.Error(), "no ingress slot") {
+		t.Errorf("err = %v, want it to name the missing slot", err)
 	}
 }

@@ -131,6 +131,11 @@ type Allocation struct {
 	Shard      string
 	Port       int
 	DNSName    string
+	// ShardHost and RecordType are the shard's load-balancer address and how to
+	// publish it — carried on the allocation so the caller renders the endpoint's
+	// DNS record from one read rather than looking the shard up again.
+	ShardHost  string
+	RecordType string
 	CreatedAt  time.Time
 }
 
@@ -208,14 +213,14 @@ func (a *Allocator) dnsNameFor(endpointID uuid.UUID, family Family, attempt int)
 // it is not one to discover has stopped holding on a different engine.
 const allocateSQLTemplate = `
 WITH ready AS (
-    SELECT s.name, s.port_lo, s.port_hi,
+    SELECT s.name, s.port_lo, s.port_hi, s.hostname, s.record_type,
            (SELECT count(*) FROM amp_registry.ingress_allocations l
              WHERE l.shard = s.name AND l.released_at IS NULL) AS used
       FROM amp_registry.ingress_shards s
      WHERE s.family = $3::amp_registry.ingress_family
        AND s.state = 'ready'
 ), slot AS (
-    SELECT r.name, p.port
+    SELECT r.name, p.port, r.hostname, r.record_type
       FROM ready r
       CROSS JOIN LATERAL generate_series(r.port_lo, r.port_hi) AS p(port)
      WHERE NOT EXISTS (
@@ -227,7 +232,8 @@ WITH ready AS (
 )
 INSERT INTO amp_registry.ingress_allocations (endpoint_id, shard, port, dns_name)
 SELECT $1::uuid, slot.name, slot.port, $2 FROM slot
-RETURNING id, endpoint_id, shard, port, dns_name, created_at`
+RETURNING id, endpoint_id, shard, port, dns_name, created_at,
+          (SELECT hostname FROM slot), (SELECT record_type::text FROM slot)`
 
 // Allocate gives the endpoint a slot on a shard of the requested family.
 //
@@ -362,7 +368,8 @@ func (a *Allocator) allocateOnce(ctx context.Context, endpointID uuid.UUID, fami
 	var alloc Allocation
 	err := a.pool.QueryRow(ctx, fmt.Sprintf(allocateSQLTemplate, a.placement.orderBy()),
 		endpointID.String(), dnsName, string(family), a.quarantine.Seconds(),
-	).Scan(&alloc.ID, &alloc.EndpointID, &alloc.Shard, &alloc.Port, &alloc.DNSName, &alloc.CreatedAt)
+	).Scan(&alloc.ID, &alloc.EndpointID, &alloc.Shard, &alloc.Port, &alloc.DNSName, &alloc.CreatedAt,
+		&alloc.ShardHost, &alloc.RecordType)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// The INSERT ... SELECT matched no slot. That covers a family with no ready
@@ -383,11 +390,14 @@ func (a *Allocator) allocateOnce(ctx context.Context, endpointID uuid.UUID, fami
 // endpoints, which are hard-deleted.
 //
 // It does NOT clear the copy of the address that lives on the endpoint row
-// (endpoints.address, written by core's SetEndpointAddress). Nothing writes an
-// ingress address there yet, so there is no stale copy to clear today — but the
-// lifecycle wiring that starts writing it must clear it here in the same breath,
-// or the endpoint keeps advertising a host:port that this quarantine is counting
-// down to hand to somebody else.
+// (endpoints.address, written by core's SetEndpointAddress). As of the lifecycle
+// wiring, create_endpoint DOES write an ingress address there, so there is a
+// copy that could go stale — and this stays safe only because every caller
+// deletes the endpoint row in the next breath: delete_endpoint, and the
+// delete_cluster and delete_branch cascades. A caller that releases WITHOUT
+// deleting the endpoint, which a connectivity-mode change or a shard move would,
+// has to clear it here too, or the endpoint keeps advertising a host:port that
+// this quarantine is counting down to hand to somebody else.
 //
 // Idempotent: an endpoint with nothing live is already released.
 func (a *Allocator) Release(ctx context.Context, endpointID uuid.UUID) error {
@@ -406,11 +416,14 @@ func (a *Allocator) Release(ctx context.Context, endpointID uuid.UUID) error {
 func (a *Allocator) Get(ctx context.Context, endpointID uuid.UUID) (Allocation, error) {
 	var alloc Allocation
 	err := a.pool.QueryRow(ctx,
-		`SELECT id, endpoint_id, shard, port, dns_name, created_at
-		   FROM amp_registry.ingress_allocations
-		  WHERE endpoint_id = $1::uuid AND released_at IS NULL`,
+		`SELECT e.id, e.endpoint_id, e.shard, e.port, e.dns_name, e.created_at,
+		        s.hostname, s.record_type::text
+		   FROM amp_registry.ingress_allocations e
+		   JOIN amp_registry.ingress_shards s ON s.name = e.shard
+		  WHERE e.endpoint_id = $1::uuid AND e.released_at IS NULL`,
 		endpointID.String(),
-	).Scan(&alloc.ID, &alloc.EndpointID, &alloc.Shard, &alloc.Port, &alloc.DNSName, &alloc.CreatedAt)
+	).Scan(&alloc.ID, &alloc.EndpointID, &alloc.Shard, &alloc.Port, &alloc.DNSName, &alloc.CreatedAt,
+		&alloc.ShardHost, &alloc.RecordType)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Allocation{}, fmt.Errorf("get ingress slot for %s: %w", endpointID, ErrNotAllocated)
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
+	"github.com/yugabyte/amp/controller/internal/ingress"
 	"github.com/yugabyte/amp/controller/internal/voyager/migration"
 )
 
@@ -233,6 +234,19 @@ type VoyagerMigrationEndpointLookup interface {
 	EndpointAddress(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (string, error)
 }
 
+// IngressAllocator is the slice of internal/ingress the endpoint steps use.
+// Declared here, at the consumer, so the steps can be tested with a fake and so
+// this package depends on the behaviour rather than the implementation.
+type IngressAllocator interface {
+	// Allocate takes a free slot on a ready shard of the family, or returns the
+	// one this endpoint already holds. That idempotency is what makes it safe in
+	// a step, which is the unit of re-run — so there is no separate Get here for
+	// a caller to remember.
+	Allocate(ctx context.Context, endpointID uuid.UUID, family ingress.Family) (ingress.Allocation, error)
+	// Release starts the slot's quarantine on retire.
+	Release(ctx context.Context, endpointID uuid.UUID) error
+}
+
 // Deps bundles the collaborators the production steps need. The Registry holds
 // one Deps and binds it into each step it builds (registry.go); a step then keeps
 // only the specific ports it uses. Recipes and Deployer may be nil when the
@@ -253,6 +267,16 @@ type Deps struct {
 	VoyagerMigrations         migration.Store
 	VoyagerMigrationEndpoints VoyagerMigrationEndpointLookup
 	VoyagerRunner             deploy.VoyagerJobRunner
+	// Ingress allocates a shared-ingress slot for an endpoint created with an
+	// ingress_* mode, and releases it on retire. Nil when --deploy-ingress-enabled
+	// is off, which is the default.
+	//
+	// A step CAN reach a nil here, so every caller checks. The API refuses the
+	// ingress_* modes on such a deployment, but a task queued before the
+	// controller was reconfigured still runs: create_endpoint fails rather than
+	// deploying an endpoint that answers nowhere, and the retire paths skip the
+	// release rather than failing a teardown over a slot they cannot reach.
+	Ingress IngressAllocator
 	// Extensions is the externalized-extension catalog the create_endpoint step
 	// resolves a branch's extension set against (names -> pinned images). Nil
 	// disables externalized extensions (the endpoint ships only image-baked ones),

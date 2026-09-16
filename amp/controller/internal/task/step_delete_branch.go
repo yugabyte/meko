@@ -31,11 +31,12 @@ type deleteBranchStep struct {
 	DeleteBranchArgs
 	state    StateStore
 	deployer deploy.Deployer
+	ingress  IngressAllocator
 }
 
 // NewDeleteBranchStep binds delete_branch args + its deps into an executable step.
 func NewDeleteBranchStep(args DeleteBranchArgs, deps Deps) Step {
-	return &deleteBranchStep{DeleteBranchArgs: args, state: deps.State, deployer: deps.Deployer}
+	return &deleteBranchStep{DeleteBranchArgs: args, state: deps.State, deployer: deps.Deployer, ingress: deps.Ingress}
 }
 
 func buildDeleteBranchStep(raw json.RawMessage, deps Deps) (Step, error) {
@@ -81,6 +82,15 @@ func (s *deleteBranchStep) Execute(ctx context.Context) StepResult {
 	for _, id := range epIDs {
 		if err := s.deployer.DeleteEndpoint(ctx, EndpointDeployName(id)); err != nil {
 			return Fail(fmt.Errorf("retire endpoint instance %s: %w", id, err))
+		}
+		// Release with the same reasoning as delete_endpoint: after the release is
+		// torn down, and before the row goes. An endpoint is hard-deleted and the
+		// reclaim sweep only ages RELEASED rows, so skipping this here strands the
+		// slot and its name forever — a cascade is exactly where that goes unnoticed.
+		if s.ingress != nil {
+			if err := s.ingress.Release(ctx, id); err != nil {
+				return Fail(fmt.Errorf("release ingress slot for endpoint %s: %w", id, err))
+			}
 		}
 		if err := s.state.DeleteEndpoint(ctx, id); err != nil {
 			return Fail(fmt.Errorf("delete endpoint record %s: %w", id, err))

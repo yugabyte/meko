@@ -249,6 +249,16 @@ type EndpointDeploy struct {
 	// fields above it is not rendered onto the spec — the branch's resolved set is
 	// — it is read to decide whether a redeploy would change anything at all.
 	Extensions []string
+	// IngressShard/Port/DNSName are the slot an ingress_* endpoint holds, and
+	// ShardHost/RecordType what its DNS record points at. Carried on the deploy
+	// record for the same reason Connectivity is: a controller-driven redeploy
+	// re-renders from this, and a dropped field silently unpublishes the
+	// endpoint's route or its name.
+	IngressShard      string
+	IngressPort       int
+	IngressDNSName    string
+	IngressShardHost  string
+	IngressRecordType string
 }
 
 // DefaultBranchName is the name given to a cluster's default (root) branch. The

@@ -350,6 +350,27 @@ func runServe(args []string) error {
 		prov.VoyagerMigrationService = migration.NewService(prov.VoyagerMigrations, prov.VoyagerRunner)
 	}
 
+	// Shared ingress: nil unless this deployment opted in with
+	// --deploy-ingress-enabled, not on whether a zone is set — the sibling block
+	// below is keyed the same way.
+	//
+	// What makes the ingress_* modes refusable at the API is the DEPLOYER
+	// (SupportsIngress, and PlacesIngress once a route can be rendered), read in
+	// handlers.go; a nil here only means the steps have no allocator to reach,
+	// which is why each one checks (controller/architecture/ac-ingress.md).
+	//
+	// A zone per family, so external-dns can be pinned to each and an internal
+	// endpoint's name is never published to a public zone.
+	ingressZones := ingress.Zones{
+		Internal: cfg.Deploy.IngressZoneInternal,
+		External: cfg.Deploy.IngressZoneExternal,
+	}
+	var ingressAlloc *ingress.Allocator
+	if cfg.Deploy.IngressEnabled {
+		ingressAlloc = ingress.New(pool, ingressZones, cfg.Deploy.IngressQuarantine,
+			ingress.Placement(cfg.Deploy.IngressPlacement))
+	}
+
 	deps := task.Deps{
 		State:         backend,
 		Deployer:      prov.Deployer,
@@ -362,6 +383,11 @@ func runServe(args []string) error {
 		VoyagerMigrations:         prov.VoyagerMigrations,
 		VoyagerMigrationEndpoints: migrationEndpointLookup{backend: backend},
 		VoyagerRunner:             prov.VoyagerRunner,
+	}
+	// Typed nil in an interface is not nil, so only assign when there is one —
+	// otherwise the steps' `if s.ingress != nil` guard would pass and dereference.
+	if ingressAlloc != nil {
+		deps.Ingress = ingressAlloc
 	}
 	// Prometheus instrumentation: one registry, shared by the worker (task
 	// metrics) and the HTTP server (request + runtime metrics, and the /metrics
@@ -443,13 +469,9 @@ func runServe(args []string) error {
 	// Both steps are idempotent, because a controller restart is the ordinary
 	// case: EnsureShard writes nothing onto an existing row and MarkReady only
 	// promotes a shard still building.
-	zones := ingress.Zones{
-		Internal: cfg.Deploy.IngressZoneInternal,
-		External: cfg.Deploy.IngressZoneExternal,
-	}
 	lookup, canLookUp := prov.Deployer.(ingress.AddressLookup)
 	switch {
-	case !cfg.Deploy.IngressEnabled:
+	case ingressAlloc == nil:
 		// Off, which is every deployment today.
 	case !canLookUp:
 		// A config the API already handles per request with a 400, so refusing to
@@ -459,13 +481,12 @@ func runServe(args []string) error {
 			"no shard will be registered and the ingress_* modes stay refused",
 			"driver", cfg.Deploy.Driver)
 	default:
-		alloc := ingress.New(pool, zones, cfg.Deploy.IngressQuarantine,
-			ingress.Placement(cfg.Deploy.IngressPlacement))
+		alloc := ingressAlloc
 		// One shard per family that has somewhere to publish. Registering the
 		// internal family unconditionally would leave an external-only deployment
 		// with a shard Allocate refuses and no shard for the family it does serve.
 		for _, f := range []ingress.Family{ingress.FamilyInternal, ingress.FamilyExternal} {
-			if zones.For(f) == "" {
+			if ingressZones.For(f) == "" {
 				continue
 			}
 			if err := alloc.EnsureShard(ctx, ingress.Shard{

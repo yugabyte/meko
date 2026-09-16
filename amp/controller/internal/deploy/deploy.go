@@ -97,6 +97,10 @@ type EndpointSpec struct {
 	// ConnectivityNLBExternal means Postgres is reachable from the internet
 	// behind password auth alone.
 	AllowedCIDRs []string
+	// Ingress carries the shard slot this endpoint holds, for the ingress_*
+	// modes only. Allocated before the deploy rather than discovered after it,
+	// which is what lets the address be known up front instead of waited for.
+	Ingress IngressSlot
 	// Extensions are the externalized PostgreSQL extensions to mount into the
 	// endpoint as read-only ImageVolumes (compute/architecture/extensions.md).
 	// The Kubernetes deployer renders one volume per entry and derives
@@ -104,6 +108,22 @@ type EndpointSpec struct {
 	// for Preload entries) from them; the Docker deployer does not support
 	// ImageVolumes and ignores this.
 	Extensions []Extension
+}
+
+// IngressSlot is an endpoint's place on a shared ingress shard: which shard,
+// which port on it, and the name published for the endpoint. Zero for every mode
+// but ingress_*.
+type IngressSlot struct {
+	Shard string
+	Port  int
+	// DNSName is the endpoint's own published name. With the port it is the
+	// whole client-facing address, and unlike a load balancer's IP it survives
+	// the shard being replaced.
+	DNSName string
+	// ShardHost and RecordType are what the endpoint's DNS record points at:
+	// a CNAME to the shard's load-balancer hostname, or an A to its address.
+	ShardHost  string
+	RecordType string
 }
 
 // Client reachability modes for EndpointSpec.Connectivity. These strings are
@@ -202,7 +222,14 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 		Version:       e.Version,
 		Connectivity:  e.Connectivity,
 		AllowedCIDRs:  e.AllowedCIDRs,
-		Extensions:    mounts,
+		Ingress: IngressSlot{
+			Shard:      e.IngressShard,
+			Port:       e.IngressPort,
+			DNSName:    e.IngressDNSName,
+			ShardHost:  e.IngressShardHost,
+			RecordType: e.IngressRecordType,
+		},
+		Extensions: mounts,
 		// No pg_settings here: the endpoint's supervisor reads the branch's and
 		// the endpoint's straight from amp_registry and merges them itself, so a
 		// change is a registry write rather than a redeploy. EndpointID above is
