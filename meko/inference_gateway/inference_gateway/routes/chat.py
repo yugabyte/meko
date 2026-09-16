@@ -15,7 +15,7 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..chain import run_chat_turn
+from ..chain import _parse_json, _truncate, run_chat_turn
 from ..config import AppConfig
 from ..mcp_client import build_mcp_tools
 from ..session_store import InMemorySessionStore
@@ -408,7 +408,8 @@ async def index_conversation(req: IndexConversationRequest, request: Request) ->
         logger.exception("index-conversation failed")
         raise HTTPException(status_code=502, detail=f"index failed: {exc}") from exc
 
-    payload = raw if isinstance(raw, dict) else (json.loads(raw) if isinstance(raw, str) and raw.strip() else {})
+    parsed = _parse_json(raw)
+    payload = parsed if isinstance(parsed, dict) else {}
     err = payload.get("error")
     if err == "already_indexed":
         # Conversation-level guard on the MCP side: re-indexing would only
@@ -464,11 +465,63 @@ async def memory_add(req: MemoryAddRequest, request: Request) -> MemoryAddRespon
     if tool is None:
         raise HTTPException(status_code=502, detail="memory_add tool unavailable")
 
+    # memory_add requires conversation_id (it's the Langfuse trace anchor for
+    # this call, not a chat history entry) -- mint a fresh one the same way
+    # chain.py's _create_conversation does for a new chat, since this add
+    # isn't routed through an existing conversation.
+    convo_tool = tools.get("conversation_create")
+    if convo_tool is None:
+        raise HTTPException(status_code=502, detail="conversation_create tool unavailable")
+    convo_args: Dict[str, Any] = {
+        "scope": "write",
+        "agent_id": cfg.agent_id,
+        "title": _truncate(req.text, 80),
+        "datapack_id": req.datapack_id,
+    }
+    try:
+        convo_raw = await convo_tool.ainvoke(convo_args)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("memory_add: conversation_create failed")
+        raise HTTPException(status_code=502, detail=f"conversation_create failed: {exc}") from exc
+    # _parse_json (not a bare dict-or-json.loads check) matters here:
+    # langchain-mcp-adapters returns a direct .ainvoke() call's result as
+    # [{"type": "text", "text": "<json>"}], not the bare dict/string a naive
+    # check expects -- confirmed live against conversation_create, whose own
+    # real payload key is "id", not "conversation_id".
+    convo_payload = _parse_json(convo_raw)
+    if isinstance(convo_payload, dict) and convo_payload.get("error"):
+        # A tool-reported failure (invalid_title/invalid_metadata/create_failed
+        # -- see meko-mcp-server's conversation_create) has no id key, so
+        # without this check it falls through to the generic "did not return
+        # an id" 502 below with a raw payload repr instead of a clean detail,
+        # same class of gap index_conversation's own error check avoids.
+        raise HTTPException(
+            status_code=502,
+            detail=str(convo_payload.get("detail") or convo_payload["error"]),
+        )
+    conversation_id = (
+        next(
+            (
+                convo_payload.get(key)
+                for key in ("conversation_id", "id", "uuid", "session_id")
+                if isinstance(convo_payload.get(key), str) and convo_payload.get(key)
+            ),
+            None,
+        )
+        if isinstance(convo_payload, dict)
+        else None
+    )
+    if not conversation_id:
+        raise HTTPException(
+            status_code=502, detail=f"conversation_create did not return an id: {convo_payload!r}"
+        )
+
     args: Dict[str, Any] = {
         "text": req.text,
         "agent_id": cfg.agent_id,
+        "conversation_id": conversation_id,
         "datapack_id": req.datapack_id,
-        "metadata": {"source": "labs-memory-lesson"},
+        "metadata": json.dumps({"source": "labs-memory-lesson"}),
     }
     try:
         raw = await tool.ainvoke(args)
@@ -476,12 +529,8 @@ async def memory_add(req: MemoryAddRequest, request: Request) -> MemoryAddRespon
         logger.exception("memory_add failed")
         raise HTTPException(status_code=502, detail=f"memory add failed: {exc}") from exc
 
-    if isinstance(raw, dict):
-        payload = raw
-    elif isinstance(raw, str) and raw.strip():
-        payload = json.loads(raw)
-    else:
-        payload = {}
+    parsed = _parse_json(raw)
+    payload = parsed if isinstance(parsed, dict) else {}
     err = payload.get("error")
     if err:
         raise HTTPException(status_code=502, detail=str(payload.get("detail") or err))
