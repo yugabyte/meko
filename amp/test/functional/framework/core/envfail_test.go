@@ -7,6 +7,7 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/fake"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 func TestEnvFailWrapsAndStaysTransparent(t *testing.T) {
@@ -75,6 +76,10 @@ func TestSchedulingReasonMatchesCapacityFailures(t *testing.T) {
 		{"0/10 nodes are available: 4 Insufficient cpu, 6 node(s) didn't match PersistentVolume's node affinity.",
 			"pod unschedulable (insufficient cpu)"},
 		{"pod yugaware-0 is Unschedulable", "pod unschedulable"},
+		{"port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: Unable to connect to the server: dial tcp 10.150.8.6:443: i/o timeout)",
+			"kube api server unreachable"},
+		{"port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: The connection to the server 10.150.8.6:443 was refused - did you specify the right host or port?)",
+			"kube api server unreachable"},
 		{"0/10 nodes are available: 6 node(s) didn't match PersistentVolume's node affinity",
 			"pod unschedulable (persistentvolume node affinity)"},
 		{"0/12 nodes are available: 12 Insufficient memory.", "pod unschedulable (insufficient memory)"},
@@ -114,9 +119,36 @@ func TestSchedulingReasonRejectsNonCapacityFailures(t *testing.T) {
 		`controller: yba task 5643 (Edit Universe) ended Failure: ConfigureUniverse`,
 		// An unattested conn drop is a product signal; only the attestation retries.
 		"copy into mt_0: unexpected EOF",
+		// The phrase quoted by a workload, not emitted by our own kubectl.
+		"consistency verify failed: log line: Unable to connect to the server",
 	} {
 		if reason, ok := core.SchedulingReason(msg); ok {
 			t.Errorf("SchedulingReason(%q) matched %q, want no match", msg, reason)
+		}
+	}
+}
+
+func TestKubeAPIUnreachableIsTypedAndSole(t *testing.T) {
+	kube := &k8s.APIServerUnreachableError{
+		Err: errors.New("port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: Unable to connect to the server: dial tcp 10.150.8.6:443: i/o timeout)"),
+	}
+	product := errors.New("amcheck: heap tuple is not in the index")
+
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"typed", kube, true},
+		{"wrapped", fmt.Errorf("connect the fork's endpoint: %w", kube), true},
+		{"joined with itself", errors.Join(kube, kube), true},
+		{"nil", nil, false},
+		{"text only", errors.New("log line: Unable to connect to the server: i/o timeout"), false},
+		{"joined with a finding", errors.Join(kube, product), false},
+		{"a wrapped join carrying a finding", fmt.Errorf("check target: %w", errors.Join(kube, product)), false},
+	} {
+		if got := core.KubeAPIUnreachable(c.err); got != c.want {
+			t.Errorf("%s: KubeAPIUnreachable = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

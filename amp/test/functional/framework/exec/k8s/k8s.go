@@ -631,7 +631,11 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 	case err := <-ready:
 		if err != nil {
 			pf.Close()
-			return nil, fmt.Errorf("port-forward %s not ready: %w%s", target, err, pf.outputSuffix())
+			werr := fmt.Errorf("port-forward %s not ready: %w%s", target, err, pf.outputSuffix())
+			if apiServerUnreachable(pf.Output()) {
+				return nil, &APIServerUnreachableError{Err: werr}
+			}
+			return nil, werr
 		}
 		// An ephemeral request whose bound port could not be read leaves the handle
 		// pointing at port 0. Callers would dial it and get a failure that names

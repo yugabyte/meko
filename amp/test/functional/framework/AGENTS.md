@@ -92,7 +92,9 @@ quietly.
   timed_out. Report faithfully. A mid-statement connection drop the env can
   attest as harness transport (compute pod, restarts, and postmaster all
   unchanged, postgres answering) also lands env_failed — see
-  `core/conndrop.go`; an unattested one stays failed.
+  `core/conndrop.go`; an unattested one stays failed. So does a failure that is
+  only our own kubectl never reaching the API server
+  (`k8s.APIServerUnreachableError`), which observed nothing of the product.
 - Every test execution gets a **seed** driving all randomness (workloads, nemesis
   sequence/timing/targets). It is recorded; `--seed` replays exactly. Chaos and
   workloads must derive their randomness from the seed, never from wall-clock or

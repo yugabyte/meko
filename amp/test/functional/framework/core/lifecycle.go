@@ -440,7 +440,7 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 			// A Setup failure, or a body error marked core.EnvFail, is not a product signal.
 			result.Status = StatusFailed
 			result.ErrorSummary = wd.err.Error()
-			if setupFailed || IsEnvFailure(wd.err) {
+			if setupFailed || IsEnvFailure(wd.err) || KubeAPIUnreachable(wd.err) {
 				result.Status = StatusEnvFailed
 			} else if reason, ok := attestConnDrop(env, wd.err); ok {
 				result.Status = StatusEnvFailed
@@ -453,6 +453,8 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 				if reason, ok := attestConnDrop(env, failErr); ok {
 					result.Status = StatusEnvFailed
 					result.ErrorSummary += " [" + reason + "]"
+				} else if KubeAPIUnreachable(failErr) {
+					result.Status = StatusEnvFailed
 				}
 			}
 		default:

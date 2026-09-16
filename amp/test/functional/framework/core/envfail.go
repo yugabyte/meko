@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Env-failure marking for tests that provision their OWN backing inside the
@@ -63,6 +65,8 @@ var schedulingSignals = []struct {
 	// Only sharedk8s' conn-drop attestation emits this, and only after proving
 	// the pod, its restart count and its postmaster all survived the drop.
 	{"attested harness port-forward drop", []string{"harness port-forward drop, not a product failure"}},
+	{"kube api server unreachable", []string{"kubectl: unable to connect to the server"}},
+	{"kube api server unreachable", []string{"kubectl: the connection to the server", "was refused"}},
 	{"pod unschedulable (insufficient cpu)", []string{"insufficient cpu"}},
 	{"pod unschedulable (insufficient memory)", []string{"insufficient memory"}},
 	{"pod unschedulable (persistentvolume node affinity)", []string{"persistentvolume's node affinity"}},
@@ -73,6 +77,45 @@ var schedulingSignals = []struct {
 	{"readiness wait timed out", []string{"timed out waiting for the condition"}},
 	{"readiness wait timed out", []string{"never became ready"}},
 	{"readiness wait timed out", []string{"not ready before"}},
+}
+
+// KubeAPIUnreachable is true only when an unreachable API server is the WHOLE failure, never one branch of a join.
+func KubeAPIUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		branches := joined.Unwrap()
+		if len(branches) == 0 {
+			return false
+		}
+		for _, b := range branches {
+			if !KubeAPIUnreachable(b) {
+				return false
+			}
+		}
+		return true
+	}
+	var ae *k8s.APIServerUnreachableError
+	if errors.As(err, &ae) {
+		return !hasJoin(err)
+	}
+	return false
+}
+
+// errors.As walks past a join, so a wrapped one has to be rejected explicitly.
+func hasJoin(err error) bool {
+	for err != nil {
+		if _, ok := err.(interface{ Unwrap() []error }); ok {
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
 }
 
 // SchedulingReason: narrow by design — product, auth and image errors must not match.

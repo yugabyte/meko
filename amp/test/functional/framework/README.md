@@ -135,14 +135,16 @@ connection (`pg.TransportError`) is reclassified `env_failed` when the env
 attests the compute survived it — same pod uid, no container restarts, same
 postmaster, postgres answering again (`core/conndrop.go`,
 `env/sharedk8s/conndrop.go`); anything short of full attestation stays
-`failed`.
+`failed`. A third: a failure that is ONLY our own kubectl failing to reach the
+API server (`k8s.APIServerUnreachableError`) never observed the product, so it
+lands `env_failed` too — joined with any other error it stays `failed`.
 
 **Env-failure retries** (`core/retry.go`). A test whose environment failed for a
 SCHEDULING-CLASS reason — pod unschedulable, insufficient cpu/memory,
 PersistentVolume node affinity, a readiness or `helm install --wait` deadline —
 or on a YBA create-universe task failure during our own `provision_yba`
-backing, or on an attested harness port-forward drop, is retried
-`sched.env_retries` times (default 1) after `sched.env_retry_backoff`
+backing, or on an attested harness port-forward drop, or on an unreachable kube
+API server, is retried `sched.env_retries` times (default 1) after `sched.env_retry_backoff`
 (default 60s). The port-forward case re-runs the whole body, so a retried long
 test costs its budget twice. Nothing else retries. Every attempt is reported as its OWN
 result carrying `retry_group`, `attempt` (1-based) and, from attempt 2 on,
