@@ -12,8 +12,10 @@ pub(super) fn test_yb_config() -> YbConnConfig {
         user: std::env::var("YB_TEST_USER").unwrap_or_else(|_| "yugabyte".to_string()),
         password_env: None,
         dbname: std::env::var("YB_TEST_DB").unwrap_or_else(|_| "yb_storage".to_string()),
-        sslmode: None,
-        sslrootcert: None,
+        sslmode: std::env::var("YB_TEST_SSLMODE").ok(),
+        sslrootcert: std::env::var("YB_TEST_SSLROOTCERT").ok(),
+        sslcert: std::env::var("YB_TEST_SSLCERT").ok(),
+        sslkey: std::env::var("YB_TEST_SSLKEY").ok(),
         disable_transactional_writes: false,
         tserver_rpc_addrs: Some(
             std::env::var("YB_TEST_TSERVER_RPC")

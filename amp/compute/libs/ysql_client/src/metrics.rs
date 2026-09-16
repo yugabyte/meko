@@ -1,5 +1,20 @@
-use metrics::{HistogramVec, IntCounterVec, register_histogram_vec, register_int_counter_vec};
+use metrics::{
+    HistogramVec, IntCounterVec, IntGauge, register_histogram_vec, register_int_counter_vec,
+    register_int_gauge,
+};
 use once_cell::sync::Lazy;
+
+/// `notAfter` of the client certificate the process presents to YugabyteDB,
+/// as Unix seconds; `0` until a connection block with `sslcert` has been
+/// opened. One value per process, since every pool in it shares the mounted
+/// certificate. Alert on it well before it reaches `time()`.
+pub static YB_CLIENT_CERT_NOT_AFTER_SECONDS: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "yb_client_cert_not_after_seconds",
+        "notAfter of the client certificate presented to YugabyteDB, as Unix seconds (0 = none)",
+    )
+    .expect("register yb_client_cert_not_after_seconds")
+});
 
 /// Counts YugabyteDB client errors observed by `YsqlClient`, after
 /// classification. Labels:

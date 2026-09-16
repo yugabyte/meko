@@ -357,6 +357,23 @@ pub struct TlsOpts {
     pub key_path: Option<String>,
 }
 
+impl TlsOpts {
+    /// TLS against `ca_cert_path`, authenticating with the `(cert, key)`
+    /// client identity when one is given. The shim reads all three files at
+    /// [`TsClient::connect`], so a recycled client picks up renewed files.
+    pub fn from_paths(ca_cert_path: String, client: Option<(String, String)>) -> Self {
+        let (cert_path, key_path) = match client {
+            Some((cert, key)) => (Some(cert), Some(key)),
+            None => (None, None),
+        };
+        TlsOpts {
+            ca_cert_path: Some(ca_cert_path),
+            cert_path,
+            key_path,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TsClientConfig {
     pub tserver_addrs: Vec<String>,

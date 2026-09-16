@@ -36,7 +36,9 @@ type SafekeeperTimelineCreateRequest struct {
 }
 
 // SafekeeperStatus is the GET /v1/status body (safekeeper_api::models::
-// SafekeeperStatus) — an empty object; the endpoint is a liveness check.
+// SafekeeperStatus). The launcher uses it as a liveness check and reads
+// nothing out of it; `yb_tls` is there for an operator inspecting the
+// endpoint by hand.
 type SafekeeperStatus struct{}
 
 // SafekeeperTimelineStatus is the minimal slice of safekeeper_api::models::

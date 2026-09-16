@@ -737,11 +737,17 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
   `amp_storage.wals` — same DB, two tables; the WAL table name is not
   configurable. Setting it is what puts the safekeeper in YB-WAL mode
   (`SafeKeeperConf::is_yb_wal_mode`); the deployment always sets it.
-- `sslmode` / `sslrootcert` in that block select TLS for the YB connections:
-  `disable` → plain TCP; `require` (no root cert) → rustls with an
-  accept-all verifier (suitable for YBA universes with self-signed
-  per-universe CAs, which default to TLS-mandatory `hostssl` rules);
-  `verify-ca` + `sslrootcert` → verification against the supplied CA bundle.
+- `sslmode` / `sslrootcert` / `sslcert` / `sslkey` in that block select TLS
+  for both YB lanes. `disable` → plain TCP. `require` without a root cert →
+  the YSQL lane runs rustls with an accept-all verifier, but the thin-client
+  lane refuses to start: the shim always verifies the tserver, so TLS there
+  needs `sslrootcert`. `verify-ca` / `verify-full` + `sslrootcert` → strict
+  verification on both lanes. `sslcert` + `sslkey` (both or neither) is the
+  client certificate presented on both lanes; with no `password_env` its CN
+  must equal `user`, since a `cert` HBA rule logs the CN in. The files are
+  checked at startup (parse, validity window, CN) and reported under
+  `yb_tls` in `GET /v1/status`; `yb_client_cert_not_after_seconds` carries
+  the expiry.
 - `branch_id` bakes the single-branch identity (see
   [Timeline lifecycle](#timeline-lifecycle)); yb_amp_local stamps it at
   provision time (`allocate_safekeeper_conf`).

@@ -17,6 +17,7 @@ neon.iml
 /.yb_amp-*
 /.claude/worktrees/
 /.integration-tests
+/.yb-local-tls
 /integration_tests/.yb_amp
 compaction-suite-results.*
 docker-compose/docker-compose-parallel.yml

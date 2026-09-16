@@ -185,9 +185,12 @@ func TestSupervisorEnvNamesOnlyThisEndpointsSafekeeper(t *testing.T) {
 // operator's settings. Every field of the configured connection has to travel.
 func TestSupervisorEnvCarriesTheWholeYbConnection(t *testing.T) {
 	env, le := envWithProvisionedEndpoint()
-	mode, cert, pwEnv := "require", "/etc/ssl/yb.pem", "YB_TEST_PASSWORD"
+	mode, ca, pwEnv := "verify-full", "/etc/ssl/yb.pem", "YB_TEST_PASSWORD"
+	clientCert, clientKey := "/etc/ssl/client.crt", "/etc/ssl/client.key"
 	env.Controller.Yb.Sslmode = &mode
-	env.Controller.Yb.Sslrootcert = &cert
+	env.Controller.Yb.Sslrootcert = &ca
+	env.Controller.Yb.Sslcert = &clientCert
+	env.Controller.Yb.Sslkey = &clientKey
 	env.Controller.Yb.PasswordEnv = &pwEnv
 	t.Setenv(pwEnv, "s3cret")
 
@@ -196,8 +199,13 @@ func TestSupervisorEnvCarriesTheWholeYbConnection(t *testing.T) {
 		t.Fatalf("supervisorEnv: %v", err)
 	}
 	for k, want := range map[string]string{
-		"YB_SSLMODE":      mode,
-		"YB_SSLROOTCERT":  cert,
+		"YB_SSLMODE":     mode,
+		"YB_SSLROOTCERT": ca,
+		// Without these the supervisor's own connection — the write fence and
+		// the amp_registry pg_settings read — has no client identity, which a
+		// `cert` HBA rule refuses while the daemon tomls it writes connect fine.
+		"YB_SSLCERT":      clientCert,
+		"YB_SSLKEY":       clientKey,
 		"YB_PASSWORD_ENV": pwEnv,
 		// The named variable itself, or the supervisor reads an empty password:
 		// proc scrubs the environment it does not pass explicitly.

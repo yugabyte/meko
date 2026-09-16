@@ -144,6 +144,8 @@ pub struct Env {
     yb_dbname: String,
     yb_sslmode: Option<String>,
     yb_sslrootcert: Option<String>,
+    yb_sslcert: Option<String>,
+    yb_sslkey: Option<String>,
     yb_password_env: Option<String>,
     endpoint_id: Option<String>,
     compute_password: String,
@@ -322,6 +324,8 @@ impl Env {
             yb_dbname: env_or("YB_DBNAME", "yb_storage"),
             yb_sslmode: env_opt("YB_SSLMODE"),
             yb_sslrootcert: env_opt("YB_SSLROOTCERT"),
+            yb_sslcert: env_opt("YB_SSLCERT"),
+            yb_sslkey: env_opt("YB_SSLKEY"),
             yb_password_env: env_opt("YB_PASSWORD_ENV"),
             endpoint_id,
             compute_password: env_or("COMPUTE_PASSWORD", "cloud_admin"),
@@ -342,8 +346,12 @@ impl Env {
             &self.yb_host_ports,
             &self.yb_user,
             &self.yb_dbname,
-            self.yb_sslmode.as_deref(),
-            self.yb_sslrootcert.as_deref(),
+            boot::YbTls {
+                sslmode: self.yb_sslmode.as_deref(),
+                sslrootcert: self.yb_sslrootcert.as_deref(),
+                sslcert: self.yb_sslcert.as_deref(),
+                sslkey: self.yb_sslkey.as_deref(),
+            },
             self.yb_password_env.as_deref(),
         )
     }
@@ -362,6 +370,8 @@ impl Env {
             ("password_env", &self.yb_password_env),
             ("sslmode", &self.yb_sslmode),
             ("sslrootcert", &self.yb_sslrootcert),
+            ("sslcert", &self.yb_sslcert),
+            ("sslkey", &self.yb_sslkey),
         ] {
             if let Some(v) = v {
                 map.insert(k.into(), v.clone().into());
@@ -1314,6 +1324,8 @@ mod tests {
             yb_dbname: "yb_storage".into(),
             yb_sslmode: None,
             yb_sslrootcert: None,
+            yb_sslcert: None,
+            yb_sslkey: None,
             yb_password_env: None,
             endpoint_id: None,
             compute_password: "cloud_admin".into(),

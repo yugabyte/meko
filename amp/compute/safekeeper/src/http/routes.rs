@@ -30,7 +30,12 @@ use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
 /// Healthcheck handler.
 async fn status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
-    let status = SafekeeperStatus {};
+    let status = SafekeeperStatus {
+        yb_tls: get_conf(&request)
+            .yb_storage_conn
+            .as_ref()
+            .map(|yb| yb.tls_status()),
+    };
     json_response(StatusCode::OK, status)
 }
 

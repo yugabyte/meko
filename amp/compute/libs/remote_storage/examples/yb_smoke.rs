@@ -42,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
             dbname,
             sslmode,
             sslrootcert: None,
+            sslcert: None,
+            sslkey: None,
             disable_transactional_writes: false,
             tserver_rpc_addrs: None,
             tsclient_read_sessions: None,

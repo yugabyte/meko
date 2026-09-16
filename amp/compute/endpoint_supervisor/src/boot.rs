@@ -120,13 +120,21 @@ impl Layout {
     }
 }
 
+/// The TLS half of the YB connection block, as libpq names the keys.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct YbTls<'a> {
+    pub sslmode: Option<&'a str>,
+    pub sslrootcert: Option<&'a str>,
+    pub sslcert: Option<&'a str>,
+    pub sslkey: Option<&'a str>,
+}
+
 /// The YB connection as the inline toml table both daemons expect.
 pub fn yb_conn_inline(
     host_ports: &str,
     user: &str,
     dbname: &str,
-    sslmode: Option<&str>,
-    sslrootcert: Option<&str>,
+    tls: YbTls<'_>,
     password_env: Option<&str>,
 ) -> Value {
     let mut t = InlineTable::new();
@@ -135,8 +143,10 @@ pub fn yb_conn_inline(
     t.insert("dbname", dbname.into());
     for (k, v) in [
         ("password_env", password_env),
-        ("sslmode", sslmode),
-        ("sslrootcert", sslrootcert),
+        ("sslmode", tls.sslmode),
+        ("sslrootcert", tls.sslrootcert),
+        ("sslcert", tls.sslcert),
+        ("sslkey", tls.sslkey),
     ] {
         if let Some(v) = v {
             t.insert(k, v.into());
@@ -591,20 +601,26 @@ mod tests {
 
     #[test]
     fn the_yb_conn_table_omits_absent_optionals() {
-        let v = yb_conn_inline("h:5433", "yugabyte", "yb_storage", None, None, None);
+        let v = yb_conn_inline("h:5433", "yugabyte", "yb_storage", YbTls::default(), None);
         let s = v.to_string();
         assert!(s.contains("host_ports = \"h:5433\""), "{s}");
-        assert!(!s.contains("sslmode"), "{s}");
+        assert!(!s.contains("ssl"), "{s}");
         let v = yb_conn_inline(
             "h:5433",
-            "yugabyte",
+            "amp_storage",
             "yb_storage",
-            Some("require"),
-            Some("/ca.crt"),
+            YbTls {
+                sslmode: Some("verify-full"),
+                sslrootcert: Some("/ca.crt"),
+                sslcert: Some("/tls/tls.crt"),
+                sslkey: Some("/tls/tls.key"),
+            },
             Some("YB_PASSWORD"),
         );
         let s = v.to_string();
-        assert!(s.contains("sslmode = \"require\""), "{s}");
+        assert!(s.contains("sslmode = \"verify-full\""), "{s}");
+        assert!(s.contains("sslcert = \"/tls/tls.crt\""), "{s}");
+        assert!(s.contains("sslkey = \"/tls/tls.key\""), "{s}");
         assert!(s.contains("password_env = \"YB_PASSWORD\""), "{s}");
     }
 

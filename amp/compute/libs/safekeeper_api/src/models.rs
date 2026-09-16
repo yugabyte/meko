@@ -13,7 +13,12 @@ use utils::pageserver_feedback::PageserverFeedback;
 use crate::ServerInfo;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SafekeeperStatus {}
+pub struct SafekeeperStatus {
+    /// TLS posture of the YugabyteDB connection block; absent outside YB-WAL
+    /// mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yb_tls: Option<ysql_client::TlsStatus>,
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineCreateRequest {

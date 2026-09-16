@@ -369,7 +369,8 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         // These modules open the hot-path lane now, so they need the tserver
         // RPC endpoint too — without it they fall back to 127.0.0.1:9100 and
         // the whole selection fails against a non-local YB.
-        .env("YB_TEST_TSERVER_RPC", format!("{}:9100", c.yb_host()));
+        .env("YB_TEST_TSERVER_RPC", c.yb_rpc_addr())
+        .envs(c.yb_tls().env_with_prefix("YB_TEST_"));
     run_cargo_test(ps_sk, "pageserver/safekeeper unit tests").await?;
 
     // The endpoint supervisor's registry override read, against this run's
@@ -402,9 +403,20 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
     let mut thinclient = cargo_test_cmd();
     thinclient.args(["-p", "yb_thin_client", "--test", "live", "--", "--ignored"]);
     thinclient
-        .env("YB_LIVE_TSERVERS", format!("{}:9100", c.yb_host()))
+        .env("YB_LIVE_TSERVERS", c.yb_rpc_addr())
         .env("YB_LIVE_YSQL", format!("{}:{}", c.yb_host(), c.yb_port()))
         .env("YB_LIVE_DB", c.db_name());
+    let tls = c.yb_tls();
+    for (var, value) in [
+        ("YB_LIVE_YSQL_SSLMODE", &tls.sslmode),
+        ("YB_LIVE_TLS_CA", &tls.sslrootcert),
+        ("YB_LIVE_TLS_CERT", &tls.sslcert),
+        ("YB_LIVE_TLS_KEY", &tls.sslkey),
+    ] {
+        if let Some(value) = value {
+            thinclient.env(var, value);
+        }
+    }
     run_cargo_test(thinclient, "yb_thin_client live tests").await
 }
 

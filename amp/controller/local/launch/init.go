@@ -45,12 +45,21 @@ const (
 // InitArgs are the flags of `yb_amp_local init` (the default, no-`--config`
 // path — the only one the harness uses).
 type InitArgs struct {
-	YbDbname       string
-	YbHost         string
-	YbPort         uint16
-	PortBase       *uint16
-	NumPageservers uint16 // default 1; only the single-PS path is supported
-	Force          InitForceMode
+	YbDbname      string
+	YbHost        string
+	YbPort        uint16
+	YbUser        string
+	YbPasswordEnv string
+	YbSslmode     string
+	YbSslrootcert string
+	YbSslcert     string
+	YbSslkey      string
+	// YbTserverRPCAddrs pins the direct-RPC endpoints (CSV) when the tservers
+	// are not on the host_ports hosts at 9100.
+	YbTserverRPCAddrs string
+	PortBase          *uint16
+	NumPageservers    uint16 // default 1; only the single-PS path is supported
+	Force             InitForceMode
 }
 
 // ybInlineTOML renders the shared [*.yb] connection block as the inline-table
@@ -66,6 +75,21 @@ func ybInlineTOML(c *config.YbConnConfig) string {
 		"host_ports = " + q(c.HostPorts),
 		"user = " + q(c.User),
 		"dbname = " + q(c.Dbname),
+	}
+	for _, kv := range []struct {
+		key string
+		val *string
+	}{
+		{"password_env", c.PasswordEnv},
+		{"sslmode", c.Sslmode},
+		{"sslrootcert", c.Sslrootcert},
+		{"sslcert", c.Sslcert},
+		{"sslkey", c.Sslkey},
+		{"tserver_rpc_addrs", c.TserverRPCAddrs},
+	} {
+		if kv.val != nil {
+			parts = append(parts, kv.key+" = "+q(*kv.val))
+		}
 	}
 	return "{ " + strings.Join(parts, ", ") + " }"
 }
@@ -230,12 +254,31 @@ func defaultYbConn(args InitArgs) config.YbConnConfig {
 	if dbname == "" {
 		dbname = defaultYbDbname
 	}
+	user := args.YbUser
+	if user == "" {
+		user = defaultYbUser
+	}
 	c := config.YbConnConfig{
-		HostPorts: fmt.Sprintf("%s:%d", host, port),
-		User:      defaultYbUser,
-		Dbname:    dbname,
+		HostPorts:   fmt.Sprintf("%s:%d", host, port),
+		User:        user,
+		Dbname:      dbname,
+		PasswordEnv: optString(args.YbPasswordEnv),
+		Sslmode:     optString(args.YbSslmode),
+		Sslrootcert: optString(args.YbSslrootcert),
+		Sslcert:     optString(args.YbSslcert),
+		Sslkey:      optString(args.YbSslkey),
+
+		TserverRPCAddrs: optString(args.YbTserverRPCAddrs),
 	}
 	return c
+}
+
+// optString is nil for "", so an unset flag stays out of the TOML.
+func optString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // prepareBaseDir applies the force policy to a possibly-existing repo dir,

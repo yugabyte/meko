@@ -910,7 +910,12 @@ mod throttle_config_tests {
 }
 
 #[derive(Serialize)]
-pub struct StatusResponse {}
+pub struct StatusResponse {
+    /// TLS posture of the YugabyteDB connection block; absent when no store
+    /// is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yb_tls: Option<ysql_client::TlsStatus>,
+}
 
 /// See [`BranchState::attachment_status`] and the OpenAPI docs for context.
 #[derive(Serialize, Deserialize, Clone)]

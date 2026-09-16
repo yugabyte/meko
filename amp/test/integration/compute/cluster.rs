@@ -156,6 +156,58 @@ fn copy_into(dir: &Path, file: &Path) {
     }
 }
 
+/// The TLS half of the daemons' YugabyteDB connection block, as libpq names
+/// it. Every field is optional so a plaintext run carries nothing.
+#[derive(Clone, Debug, Default)]
+pub struct YbTls {
+    pub sslmode: Option<String>,
+    pub sslrootcert: Option<String>,
+    pub sslcert: Option<String>,
+    pub sslkey: Option<String>,
+}
+
+impl YbTls {
+    fn from_env() -> Self {
+        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        YbTls {
+            sslmode: get("YB_SSLMODE"),
+            sslrootcert: get("YB_SSLROOTCERT"),
+            sslcert: get("YB_SSLCERT"),
+            sslkey: get("YB_SSLKEY"),
+        }
+    }
+
+    fn pairs(&self) -> [(&'static str, Option<&str>); 4] {
+        [
+            ("sslmode", self.sslmode.as_deref()),
+            ("sslrootcert", self.sslrootcert.as_deref()),
+            ("sslcert", self.sslcert.as_deref()),
+            ("sslkey", self.sslkey.as_deref()),
+        ]
+    }
+
+    /// `--yb-<key> <value>` for `yb_amp_local init`.
+    fn init_args(&self) -> Vec<String> {
+        self.pairs()
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|v| [format!("--yb-{k}"), v.to_string()]))
+            .flatten()
+            .collect()
+    }
+
+    /// The same settings as the `<PREFIX>SSLMODE`, `<PREFIX>SSLROOTCERT`,
+    /// `<PREFIX>SSLCERT` and `<PREFIX>SSLKEY` env vars the live unit suites
+    /// read (`YB_TEST_` for the daemons' modules).
+    pub fn env_with_prefix(&self, prefix: &str) -> Vec<(String, String)> {
+        self.pairs()
+            .into_iter()
+            .filter_map(|(k, v)| {
+                v.map(|v| (format!("{prefix}{}", k.to_uppercase()), v.to_string()))
+            })
+            .collect()
+    }
+}
+
 pub struct Cluster {
     /// Path to the `yb_amp_local` binary.
     yb_amp: PathBuf,
@@ -167,6 +219,12 @@ pub struct Cluster {
     db_name: String,
     yb_host: String,
     yb_port: u16,
+    /// tserver RPC port for the direct lane (`YB_RPC_PORT`, default 9100).
+    yb_rpc_port: u16,
+    /// TLS for the daemons' YugabyteDB connections, from `YB_SSLMODE`,
+    /// `YB_SSLROOTCERT`, `YB_SSLCERT` and `YB_SSLKEY`. Empty for a plaintext
+    /// run. `scripts/yb-local.sh` with `YB_TLS=1` produces the files.
+    yb_tls: YbTls,
     /// Free port-block base for this run (`init --port-base`), relocating
     /// the whole cluster off the defaults so concurrent runs (and a
     /// developer's local cluster) never collide. Auto-picked free, or
@@ -206,6 +264,10 @@ impl Cluster {
     pub fn compute_port(&self) -> u16 {
         self.compute_port
     }
+    /// TLS the daemons connect to YugabyteDB with; empty for a plaintext run.
+    pub fn yb_tls(&self) -> &YbTls {
+        &self.yb_tls
+    }
     /// HTTP port of pageserver node 1 (`port_base + 400`; node *i* adds
     /// *i*). Use this instead of hardcoding the old default 9989 — under
     /// the relocated port block that port is dead.
@@ -240,6 +302,10 @@ impl Cluster {
     }
     pub fn yb_port(&self) -> u16 {
         self.yb_port
+    }
+    /// `host:port` of the tserver RPC endpoint the direct lane dials.
+    pub fn yb_rpc_addr(&self) -> String {
+        format!("{}:{}", self.yb_host, self.yb_rpc_port)
     }
 
     /// Build the fixture and bring the cluster up from scratch:
@@ -286,6 +352,9 @@ impl Cluster {
 
         let yb_host = env_or(&["YB_HOST"], "127.0.0.1");
         let yb_port: u16 = env_or(&["YB_PORT"], "5433").parse().context("YB_PORT")?;
+        let yb_rpc_port: u16 = env_or(&["YB_RPC_PORT"], "9100")
+            .parse()
+            .context("YB_RPC_PORT")?;
 
         let db_name = match std::env::var("YB_DBNAME") {
             Ok(d) if !d.is_empty() => d,
@@ -316,6 +385,10 @@ impl Cluster {
             );
         }
 
+        let yb_tls = YbTls::from_env();
+        if yb_tls.sslmode.is_some() {
+            println!("YugabyteDB TLS for the daemons: {yb_tls:?}");
+        }
         let mut cluster = Cluster {
             yb_amp,
             repo,
@@ -323,6 +396,8 @@ impl Cluster {
             db_name,
             yb_host,
             yb_port,
+            yb_rpc_port,
+            yb_tls,
             port_base: 0,
             compute_port: 0,
             branch: String::new(),
@@ -373,7 +448,9 @@ impl Cluster {
         step(&format!("yb_amp_local init + start (db={})", self.db_name));
         let yb_port = self.yb_port.to_string();
         let port_base = self.port_base.to_string();
-        let init_args = [
+        let tls_args = self.yb_tls.init_args();
+        let rpc_addr = self.yb_rpc_addr();
+        let mut init_args = vec![
             "init",
             "--yb-dbname",
             &self.db_name,
@@ -381,11 +458,14 @@ impl Cluster {
             &self.yb_host,
             "--yb-port",
             &yb_port,
+            "--yb-tserver-rpc-addrs",
+            &rpc_addr,
             // Relocate the whole cluster into a free port block so concurrent
             // runs (and a developer's local cluster) never collide.
             "--port-base",
             &port_base,
         ];
+        init_args.extend(tls_args.iter().map(String::as_str));
         self.yb(&init_args)?;
         self.yb(&["start"])?;
 

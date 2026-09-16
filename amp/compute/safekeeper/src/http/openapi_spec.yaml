@@ -141,6 +141,44 @@ components:
 
     SafekeeperStatus:
       type: object
+      properties:
+        yb_tls:
+          $ref: '#/components/schemas/YbTlsStatus'
+
+    YbTlsStatus:
+      description: TLS posture of the YugabyteDB connection block; absent outside YB-WAL mode.
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+        sslmode:
+          type: string
+        sslrootcert:
+          type: string
+        client_cert:
+          type: object
+          required:
+            - serial
+            - not_before_unix
+            - not_after_unix
+          properties:
+            common_name:
+              type: string
+              nullable: true
+            serial:
+              description: Hex, as `openssl x509 -serial` prints it.
+              type: string
+            not_before_unix:
+              type: integer
+              format: int64
+            not_after_unix:
+              type: integer
+              format: int64
+        client_cert_error:
+          description: Why client_cert is absent although sslcert is set.
+          type: string
 
     TimelineStatus:
       type: object

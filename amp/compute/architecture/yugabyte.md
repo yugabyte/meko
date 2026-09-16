@@ -231,6 +231,11 @@ fails leaves the existing connection serving and is retried no more than
 once every 10s (`RECYCLE_RETRY_COOLDOWN`), logged at WARN and counted by
 `yb_client_connection_recycles_total{outcome="failed"}`.
 
+When the connection block names a client certificate (`sslcert`/`sslkey`),
+`yb_client_cert_not_after_seconds` carries its `notAfter` as Unix seconds so
+expiry can be alerted on; the same files are what the thin-client lane
+presents on RPC 9100 (`YbConnConfig::thin_client_tls`).
+
 At startup each daemon resolves its hot tables' DocDB ids via a one-time
 catalog lookup over YSQL (`lookup_table_oids`), failing hard if any
 table is missing — a daemon never runs with a partially-enabled direct

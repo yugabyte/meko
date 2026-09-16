@@ -303,8 +303,22 @@ impl YbWalConn {
         let sessions_per_conn = yb.tsclient_sessions_per_conn.unwrap_or(4);
         let tserver_addrs = yb.effective_tserver_rpc_addrs();
         let tserver_count = tserver_addrs.len();
+        let tls = yb
+            .thin_client_tls()
+            .context("TLS for the thin-client lane")?;
+        let tls_desc = match &tls {
+            None => "plaintext".to_string(),
+            Some(t) if t.client.is_some() => "mTLS".to_string(),
+            Some(_) => "TLS".to_string(),
+        };
         let config = yb_thin_client::TsClientConfig {
             tserver_addrs,
+            tls: tls.map(|t| {
+                yb_thin_client::TlsOpts::from_paths(
+                    t.ca_cert_path,
+                    t.client.map(|c| (c.cert_path, c.key_path)),
+                )
+            }),
             read_sessions: read_sessions as u32,
             write_sessions: write_sessions as u32,
             sessions_per_conn: sessions_per_conn as u32,
@@ -330,7 +344,7 @@ impl YbWalConn {
         tracing::info!(
             "thin-client (yb_thin_client) hot path ready: {WALS_TABLE} opened \
              ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
-             connection, across {tserver_count} configured tserver(s))",
+             connection, across {tserver_count} configured tserver(s), {tls_desc})",
         );
         Ok(pool)
     }
@@ -3218,8 +3232,18 @@ mod tests {
     fn thin_client() -> Arc<yb_thin_client::TsClient> {
         let tserver =
             std::env::var("YB_TEST_TSERVER_RPC").unwrap_or_else(|_| "127.0.0.1:9100".into());
+        // Reads the same `YB_TEST_SSL*` variables as the pageserver's
+        // `test_yb_config`, but here the CA is what turns TLS on — the shim
+        // has no sslmode, and no accept-all verifier to fall back to.
+        let tls = std::env::var("YB_TEST_SSLROOTCERT").ok().map(|ca| {
+            let client = std::env::var("YB_TEST_SSLCERT")
+                .ok()
+                .zip(std::env::var("YB_TEST_SSLKEY").ok());
+            yb_thin_client::TlsOpts::from_paths(ca, client)
+        });
         yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
             tserver_addrs: vec![tserver],
+            tls,
             ..Default::default()
         })
         .expect("connect thin lane to dev YB; set YB_TEST_TSERVER_RPC to override")

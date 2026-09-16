@@ -16,4 +16,5 @@ postgres_versioninfo.workspace = true
 pq_proto.workspace = true
 tokio.workspace = true
 utils.workspace = true
+ysql_client.workspace = true
 pageserver_api.workspace = true

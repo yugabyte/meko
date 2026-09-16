@@ -36,6 +36,23 @@ fn tserver_addrs() -> Vec<String> {
         .collect()
 }
 
+/// The thin-client config every live test connects with: the tservers from
+/// `YB_LIVE_TSERVERS`, over TLS when `YB_LIVE_TLS_CA` names a CA (and with the
+/// `YB_LIVE_TLS_CERT` / `YB_LIVE_TLS_KEY` client identity when both are set).
+fn ts_config() -> TsClientConfig {
+    let tls = std::env::var("YB_LIVE_TLS_CA").ok().map(|ca| {
+        let client = std::env::var("YB_LIVE_TLS_CERT")
+            .ok()
+            .zip(std::env::var("YB_LIVE_TLS_KEY").ok());
+        yb_thin_client::TlsOpts::from_paths(ca, client)
+    });
+    TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        tls,
+        ..Default::default()
+    }
+}
+
 async fn ysql() -> YsqlClient {
     let conf = YbConnConfig {
         host_ports: env_or("YB_LIVE_YSQL", "127.0.0.1:5433")
@@ -45,7 +62,9 @@ async fn ysql() -> YsqlClient {
         dbname: env_or("YB_LIVE_DB", "yugabyte"),
         password_env: std::env::var("YB_LIVE_YSQL_PASSWORD_ENV").ok(),
         sslmode: std::env::var("YB_LIVE_YSQL_SSLMODE").ok(),
-        sslrootcert: None,
+        sslrootcert: std::env::var("YB_LIVE_TLS_CA").ok(),
+        sslcert: std::env::var("YB_LIVE_TLS_CERT").ok(),
+        sslkey: std::env::var("YB_LIVE_TLS_KEY").ok(),
         disable_transactional_writes: false,
         tserver_rpc_addrs: None,
         tsclient_read_sessions: None,
@@ -174,11 +193,7 @@ async fn smoke_connect_open_upsert_read() {
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
 
     // connect — loads the shim, does a Heartbeat, opens a server session.
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("thin-client connect");
+    let client = TsClient::connect(&ts_config()).expect("thin-client connect");
 
     // open_table — fetches the schema; the four columns must come back.
     let table = client.open_table(db_oid, table_oid).expect("open_table");
@@ -305,11 +320,7 @@ async fn uuid_key_column_binds_as_bytea() {
     .await;
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
 
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("thin-client connect");
+    let client = TsClient::connect(&ts_config()).expect("thin-client connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     let col = table
@@ -413,11 +424,7 @@ async fn repro_desc_pk_limit1_newest() {
     .await
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     // Forward scan, lsn <= 100, limit 1 — EXACTLY read_meta's shape. Must be lsn=30.
@@ -482,10 +489,9 @@ async fn repro_concurrent_multikey_reads() {
     ).await.unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
     let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
         read_sessions: 4,
         write_sessions: 4,
-        ..Default::default()
+        ..ts_config()
     })
     .expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
@@ -588,11 +594,7 @@ async fn repro_real_ckpt_read() {
     .await
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
     let mut ck = vec![0u8; 18];
     ck[0] = 0x03;
@@ -657,11 +659,7 @@ async fn repro_desc_pk_capped_limit1() {
     .await
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
     // lsns 100..1600; cap at 850 → newest <=850 is 800.
     let read = RangeRead::new(&table, vec![BindValue::Text("m".into())])
@@ -716,11 +714,7 @@ async fn repro_cross_client_visibility() {
     .await;
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
     // Client A = the "ancestor's" writer (like main's pageserver).
-    let a = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect A");
+    let a = TsClient::connect(&ts_config()).expect("connect A");
     let ta = a.open_table(db_oid, table_oid).expect("open A");
     let kbytes = Bytes::from_static(&[0x03, 0xab, 0xcd, 0x01]);
     // A writes 16 ascending versions (like the checkpoint's nextXid rewrites).
@@ -740,11 +734,7 @@ async fn repro_cross_client_visibility() {
 
     // Client B = a FRESH client (like the branch's newly-started pageserver),
     // reads the newest version — read_meta's exact pattern.
-    let b = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect B");
+    let b = TsClient::connect(&ts_config()).expect("connect B");
     let tb = b.open_table(db_oid, table_oid).expect("open B");
     let read = RangeRead::new(&tb, vec![BindValue::Text("m".into())])
         .unwrap()
@@ -815,11 +805,7 @@ async fn repro_meta_bytea_limit1_newest() {
     .await
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     // EXACTLY read_meta_thin's read: hash (branch_id), key = Eq cond,
@@ -887,10 +873,9 @@ async fn repro_concurrent_read_write() {
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
     // One client, 1 read + 1 write session (matches the safekeeper).
     let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
         read_sessions: 1,
         write_sessions: 1,
-        ..Default::default()
+        ..ts_config()
     })
     .expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
@@ -988,11 +973,7 @@ async fn repro_wals_covering_read() {
     .await
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     // Covering arm: highest chunk_offset < 250 → expect 200.
@@ -1074,10 +1055,9 @@ async fn repro_wals_covering_read() {
     // dedicated 1-write-session client (like the safekeeper) and round-trip a
     // ~409 KB chunk through the thin client.
     let wclient = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
         write_sessions: 1,
         read_sessions: 1,
-        ..Default::default()
+        ..ts_config()
     })
     .expect("connect (1 write session)");
     let wtable = wclient.open_table(db_oid, table_oid).expect("open_table w");
@@ -1187,11 +1167,7 @@ async fn repro_pages_multipage_scan() {
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
 
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     assert_eq!(
@@ -1415,10 +1391,9 @@ async fn repro_read_after_write_visibility() {
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
     // One client, 1 read + 1 write session — the safekeeper's exact config.
     let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
         read_sessions: 1,
         write_sessions: 1,
-        ..Default::default()
+        ..ts_config()
     })
     .expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
@@ -1462,10 +1437,9 @@ async fn repro_read_after_write_visibility() {
                     let (same_i, ht_i) = visible!(&client, &table, i);
                     let (same_0, _) = visible!(&client, &table, 0);
                     let fresh = TsClient::connect(&TsClientConfig {
-                        tserver_addrs: tserver_addrs(),
                         read_sessions: 1,
                         write_sessions: 1,
-                        ..Default::default()
+                        ..ts_config()
                     })
                     .expect("fresh connect");
                     let ftable = fresh.open_table(db_oid, table_oid).expect("fresh open");
@@ -1577,11 +1551,7 @@ async fn repro_wals_range_sharded() {
     .await
     .unwrap();
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     // The shim must report every key column as RANGE and none as HASH —
@@ -1889,11 +1859,7 @@ async fn repro_range_scan_walks_past_its_key_range() {
     .unwrap();
 
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
-    let client = TsClient::connect(&TsClientConfig {
-        tserver_addrs: tserver_addrs(),
-        ..Default::default()
-    })
-    .expect("connect");
+    let client = TsClient::connect(&ts_config()).expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
     // Page a read by hand rather than through `read_scan`, so a scan that

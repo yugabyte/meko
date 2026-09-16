@@ -258,7 +258,14 @@ async fn status_handler(
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
-    json_response(StatusCode::OK, StatusResponse {})
+    let yb_tls = get_state(&request)
+        .conf
+        .remote_storage_config
+        .as_ref()
+        .map(|c| match &c.storage {
+            remote_storage::RemoteStorageKind::YbStore(yb) => yb.tls_status(),
+        });
+    json_response(StatusCode::OK, StatusResponse { yb_tls })
 }
 
 /// Accept a write token from the endpoint supervisor.

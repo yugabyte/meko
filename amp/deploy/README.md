@@ -491,6 +491,8 @@ a ConfigMap + Secret):
 | `YB_DBNAME` | `yb_storage` | YB database |
 | `YB_SSLMODE` | _(unset)_ | `disable`/`require`/`verify-ca`/`verify-full` |
 | `YB_SSLROOTCERT` | _(unset)_ | CA bundle path (for verify modes) |
+| `YB_SSLCERT` | _(unset)_ | client certificate presented to YugabyteDB; set with `YB_SSLKEY` |
+| `YB_SSLKEY` | _(unset)_ | its private key |
 | `YB_PASSWORD` | _(unset)_ | YB password (from a Secret) |
 | `ENDPOINT_PG_VERSION` | `18` | compute Postgres major version; locates `pg_install/v{N}` (the image ships v18 only) |
 | `COMPUTE_PORT` | `55433` | compute Postgres port |

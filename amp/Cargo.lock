@@ -3210,6 +3210,7 @@ dependencies = [
  "tracing",
  "tracing-utils",
  "utils",
+ "ysql_client",
 ]
 
 [[package]]
@@ -4587,6 +4588,7 @@ dependencies = [
  "tokio",
  "toml",
  "utils",
+ "ysql_client",
 ]
 
 [[package]]
@@ -6763,6 +6765,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "x509-cert",
  "yb-postgres-rustls",
  "yb-tokio-postgres",
 ]

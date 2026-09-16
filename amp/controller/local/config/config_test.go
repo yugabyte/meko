@@ -221,6 +221,17 @@ func TestYbConnConfigToDatabaseURL(t *testing.T) {
 		t.Errorf("got %q want %q", url, want)
 	}
 
+	// client certificate, matching Rust `client_cert_is_rendered_in_url_and_toml`
+	c = &YbConnConfig{HostPorts: "h:5433", User: "yugabyte", Dbname: "yb_storage",
+		Sslmode: strPtr("verify-full"), Sslrootcert: strPtr("/tls/ca/ca.crt"),
+		Sslcert: strPtr("/tls/client/tls.crt"), Sslkey: strPtr("/tls/client/tls.key")}
+	url, _ = c.ToDatabaseURL()
+	want = "postgresql://yugabyte@h:5433/yb_storage?sslmode=verify-full" +
+		"&sslrootcert=%2Ftls%2Fca%2Fca.crt&sslcert=%2Ftls%2Fclient%2Ftls.crt&sslkey=%2Ftls%2Fclient%2Ftls.key"
+	if url != want {
+		t.Errorf("got %q want %q", url, want)
+	}
+
 	// password_env resolved + percent-encoded
 	t.Setenv("YB_URL_TEST_PW", "Yugabyte!1")
 	c = &YbConnConfig{HostPorts: "h:5433", User: "yugabyte", Dbname: "yb_storage", PasswordEnv: strPtr("YB_URL_TEST_PW")}

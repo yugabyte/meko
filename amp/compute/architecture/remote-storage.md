@@ -389,6 +389,8 @@ pub struct YbConnConfig {
     pub password_env: Option<String>,      // name of env var holding the password
     pub sslmode: Option<String>,           // None / "disable" => NoTls; else rustls
     pub sslrootcert: Option<String>,       // PEM CA bundle for verify-ca / verify-full
+    pub sslcert: Option<String>,           // PEM client certificate (with sslkey)
+    pub sslkey: Option<String>,            // its private key
     pub disable_transactional_writes: bool,// write-connection GUC; default false
     pub tserver_rpc_addrs: Option<HostPorts>,
 }
@@ -409,7 +411,20 @@ Selected by `sslmode` and dispatched inside `YsqlClient`:
   YBA-managed universes whose per-universe self-signed CA is not in the host
   trust store.
 - a strict mode (`verify-ca` / `verify-full`) with `sslrootcert` → rustls
-  verifying against the supplied PEM CA bundle.
+  verifying against the supplied PEM CA bundle. Without `sslrootcert` these
+  modes are rejected by `YbConnConfig::validate` before a connection is
+  attempted.
+- `sslcert` + `sslkey` → the client certificate rustls presents, so the
+  server can authenticate the connection by certificate (`cert` HBA rule:
+  CN = role). Both or neither; `inspect_client_certificate` checks the files
+  at connect time (parse, validity window, CN against `user` when there is
+  no password) and errors name the offending path.
+
+The thin-client lane (`yb_thin_client`) takes the same block through
+`YbConnConfig::thin_client_tls`: TLS is on whenever `sslmode` is, the shim
+verifies the tserver against `sslrootcert` unconditionally, and presents
+`sslcert`/`sslkey` when set. TLS without `sslrootcert` is a configuration
+error on that lane rather than a handshake failure.
 
 ### Connection handling (`YsqlClient`)
 

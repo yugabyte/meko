@@ -142,7 +142,7 @@ dump-wals  --host-ports <host:port> --sslmode require --password-env PGPASSWORD 
 
 All three default to a local `yb_amp_local` cluster (`127.0.0.1:5433`,
 `yugabyte`/`yb_storage`, no TLS) and accept the shared
-`--host-ports`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`
+`--host-ports`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`/`--sslcert`/`--sslkey`
 overrides for remote clusters.
 
 ## Operational runbooks

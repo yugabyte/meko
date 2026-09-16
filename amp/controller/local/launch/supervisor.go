@@ -256,6 +256,12 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 		if yb.Sslrootcert != nil {
 			out["YB_SSLROOTCERT"] = *yb.Sslrootcert
 		}
+		if yb.Sslcert != nil {
+			out["YB_SSLCERT"] = *yb.Sslcert
+		}
+		if yb.Sslkey != nil {
+			out["YB_SSLKEY"] = *yb.Sslkey
+		}
 		if yb.PasswordEnv != nil {
 			// The name, and the value it names: proc scrubs the environment, so
 			// the variable the supervisor is told to read has to travel with it.

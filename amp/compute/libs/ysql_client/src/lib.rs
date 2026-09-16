@@ -57,7 +57,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use metrics::{YB_CLIENT_ERRORS, YB_CONNECTION_RECYCLES, YB_QUERY_SECONDS, YB_RETRIES_EXHAUSTED};
+use metrics::{
+    YB_CLIENT_CERT_NOT_AFTER_SECONDS, YB_CLIENT_ERRORS, YB_CONNECTION_RECYCLES, YB_QUERY_SECONDS,
+    YB_RETRIES_EXHAUSTED,
+};
 use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
 
@@ -152,9 +155,21 @@ pub struct YbConnConfig {
     pub sslmode: Option<String>,
     /// Path to a PEM-encoded CA bundle. Required when `sslmode` calls
     /// for strict verification (`verify-ca` / `verify-full`); when
-    /// `None` the verifier falls back to AcceptAll (logged).
+    /// `None` the verifier falls back to AcceptAll (logged). The thin-client
+    /// lane has no AcceptAll mode, so daemons that open it require this
+    /// whenever `sslmode` enables TLS (see [`Self::thin_client_tls`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sslrootcert: Option<String>,
+    /// Path to the PEM-encoded client certificate (chain) presented to the
+    /// server, as libpq's `sslcert`. Set together with [`Self::sslkey`]; with
+    /// a `cert` HBA rule the certificate's CN is the login, so it must equal
+    /// [`Self::user`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sslcert: Option<String>,
+    /// Path to the PEM-encoded private key for [`Self::sslcert`], as libpq's
+    /// `sslkey`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sslkey: Option<String>,
     /// Whether fast-path-upsert connections also run
     /// `SET yb_disable_transactional_writes = true` (see
     /// [`set_fast_path_upsert_gucs`]). Only honored on the write
@@ -387,6 +402,12 @@ impl YbConnConfig {
         if let Some(cert) = &self.sslrootcert {
             params.push(format!("sslrootcert={}", percent_encode(cert)));
         }
+        if let Some(cert) = &self.sslcert {
+            params.push(format!("sslcert={}", percent_encode(cert)));
+        }
+        if let Some(key) = &self.sslkey {
+            params.push(format!("sslkey={}", percent_encode(key)));
+        }
         if !params.is_empty() {
             url.push('?');
             url.push_str(&params.join("&"));
@@ -416,6 +437,12 @@ impl YbConnConfig {
         }
         if let Some(c) = &self.sslrootcert {
             parts.push(format!("sslrootcert = {}", q(c)));
+        }
+        if let Some(c) = &self.sslcert {
+            parts.push(format!("sslcert = {}", q(c)));
+        }
+        if let Some(k) = &self.sslkey {
+            parts.push(format!("sslkey = {}", q(k)));
         }
         if self.disable_transactional_writes {
             parts.push("disable_transactional_writes = true".to_string());
@@ -454,6 +481,245 @@ impl YbConnConfig {
             ));
         }
         format!("{{ {} }}", parts.join(", "))
+    }
+}
+
+/// The client identity a connection presents to YugabyteDB: libpq's `sslcert`
+/// and `sslkey`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientIdentity {
+    pub cert_path: String,
+    pub key_path: String,
+}
+
+/// The files the thin-client lane hands the shim. The shim always verifies
+/// the tserver against `ca_cert_path`, and authenticates with `client` when
+/// it is set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlsFiles {
+    pub ca_cert_path: String,
+    pub client: Option<ClientIdentity>,
+}
+
+/// What the client certificate on disk says about itself.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ClientCertInfo {
+    pub common_name: Option<String>,
+    /// Hex, as `openssl x509 -serial` prints it.
+    pub serial: String,
+    pub not_before_unix: u64,
+    pub not_after_unix: u64,
+}
+
+/// The TLS posture of a connection block, as the daemons' status endpoints
+/// report it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TlsStatus {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sslmode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sslrootcert: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_cert: Option<ClientCertInfo>,
+    /// Why `client_cert` is absent although `sslcert` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_cert_error: Option<String>,
+}
+
+const CN_OID: x509_cert::der::oid::ObjectIdentifier =
+    x509_cert::der::oid::ObjectIdentifier::new_unwrap("2.5.4.3");
+
+impl YbConnConfig {
+    /// Whether `sslmode` selects TLS at all (`None` and `disable` do not).
+    pub fn tls_enabled(&self) -> bool {
+        !matches!(self.sslmode.as_deref(), None | Some("disable"))
+    }
+
+    fn verifies_server(&self) -> bool {
+        matches!(
+            self.sslmode.as_deref(),
+            Some("verify-ca") | Some("verify-full")
+        )
+    }
+
+    /// `sslcert` and `sslkey` as one identity. Both or neither.
+    pub fn client_identity(&self) -> anyhow::Result<Option<ClientIdentity>> {
+        match (&self.sslcert, &self.sslkey) {
+            (None, None) => Ok(None),
+            (Some(cert), Some(key)) => Ok(Some(ClientIdentity {
+                cert_path: cert.clone(),
+                key_path: key.clone(),
+            })),
+            (Some(_), None) => {
+                anyhow::bail!("sslcert is set but sslkey is not; a client certificate needs both")
+            }
+            (None, Some(_)) => {
+                anyhow::bail!("sslkey is set but sslcert is not; a client certificate needs both")
+            }
+        }
+    }
+
+    /// Reject combinations that would otherwise fail later, in a less legible
+    /// place: a client certificate without TLS, or a verifying `sslmode` with
+    /// nothing to verify against.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let identity = self.client_identity()?;
+        if !self.tls_enabled() {
+            anyhow::ensure!(
+                identity.is_none(),
+                "sslcert/sslkey are set but sslmode is {:?}; a client certificate is only \
+                 presented over TLS",
+                self.sslmode
+            );
+            return Ok(());
+        }
+        if self.verifies_server() {
+            anyhow::ensure!(
+                self.sslrootcert.is_some(),
+                "sslmode={} requires sslrootcert",
+                self.sslmode.as_deref().unwrap_or_default()
+            );
+        }
+        // A client certificate identifies this process to whoever answers. On
+        // an `sslmode` that does not verify the server, that is any peer on
+        // the address, so refuse the pair rather than hand the identity out.
+        anyhow::ensure!(
+            identity.is_none() || self.sslrootcert.is_some(),
+            "sslcert/sslkey are set but sslrootcert is not; a client certificate is only \
+             presented to a server this process can verify"
+        );
+        Ok(())
+    }
+
+    /// TLS for the thin-client lane, or `None` when TLS is off.
+    ///
+    /// The shim verifies the tserver unconditionally and has no accept-all
+    /// mode, so TLS without a CA cannot work there; it is reported here, as
+    /// configuration, rather than as a handshake failure.
+    pub fn thin_client_tls(&self) -> anyhow::Result<Option<TlsFiles>> {
+        self.validate()?;
+        if !self.tls_enabled() {
+            return Ok(None);
+        }
+        let ca_cert_path = self.sslrootcert.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "sslmode={} enables TLS but sslrootcert is unset; the thin-client lane needs \
+                 the CA to verify the tserver",
+                self.sslmode.as_deref().unwrap_or_default()
+            )
+        })?;
+        Ok(Some(TlsFiles {
+            ca_cert_path,
+            client: self.client_identity()?,
+        }))
+    }
+
+    /// Read and check the client certificate, when one is configured.
+    ///
+    /// The key must parse, the certificate must be inside its validity
+    /// window, and without a password its CN must equal `user`, since a
+    /// `cert` HBA rule logs the CN in and nothing else could. Errors name the
+    /// file so a bad mount reads as a bad mount, not as an RPC failure.
+    pub fn inspect_client_certificate(&self) -> anyhow::Result<Option<ClientCertInfo>> {
+        use x509_cert::Certificate;
+        use x509_cert::der::asn1::{PrintableStringRef, Utf8StringRef};
+
+        let Some(id) = self.client_identity()? else {
+            return Ok(None);
+        };
+        let pem = std::fs::read(&id.cert_path)
+            .with_context(|| format!("reading sslcert `{}`", id.cert_path))?;
+        let chain = Certificate::load_pem_chain(&pem)
+            .with_context(|| format!("parsing sslcert `{}`", id.cert_path))?;
+        let leaf = chain.first().ok_or_else(|| {
+            anyhow::anyhow!(
+                "sslcert `{}` contains no PEM CERTIFICATE blocks",
+                id.cert_path
+            )
+        })?;
+        let key_pem = std::fs::read(&id.key_path)
+            .with_context(|| format!("reading sslkey `{}`", id.key_path))?;
+        rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
+            .with_context(|| format!("parsing sslkey `{}`", id.key_path))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("sslkey `{}` contains no PEM private key", id.key_path)
+            })?;
+
+        let tbs = &leaf.tbs_certificate;
+        let common_name = tbs
+            .subject
+            .0
+            .iter()
+            .flat_map(|rdn| rdn.0.iter())
+            .find(|atv| atv.oid == CN_OID)
+            .and_then(|atv| {
+                Utf8StringRef::try_from(&atv.value)
+                    .map(|s| s.as_str().to_string())
+                    .or_else(|_| {
+                        PrintableStringRef::try_from(&atv.value).map(|s| s.as_str().to_string())
+                    })
+                    .ok()
+            });
+        let info = ClientCertInfo {
+            common_name,
+            serial: tbs
+                .serial_number
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect(),
+            not_before_unix: tbs.validity.not_before.to_unix_duration().as_secs(),
+            not_after_unix: tbs.validity.not_after.to_unix_duration().as_secs(),
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        anyhow::ensure!(
+            now >= info.not_before_unix,
+            "sslcert `{}` is not valid yet (not_before={} now={now})",
+            id.cert_path,
+            info.not_before_unix
+        );
+        anyhow::ensure!(
+            now <= info.not_after_unix,
+            "sslcert `{}` expired (not_after={} now={now})",
+            id.cert_path,
+            info.not_after_unix
+        );
+        if info.common_name.as_deref() != Some(self.user.as_str()) {
+            let msg = format!(
+                "sslcert `{}` has CN {:?} but the connection logs in as user `{}`",
+                id.cert_path, info.common_name, self.user
+            );
+            if self.password_env.is_none() {
+                anyhow::bail!(
+                    "{msg}; with no password the certificate is the login, so its CN must match"
+                );
+            }
+            tracing::warn!(
+                "{msg}; the server will accept it only if the HBA rule does not check the CN"
+            );
+        }
+        Ok(Some(info))
+    }
+
+    /// The status endpoints' view of this block. Never fails: a certificate
+    /// that cannot be read is reported as such instead.
+    pub fn tls_status(&self) -> TlsStatus {
+        let (client_cert, client_cert_error) = match self.inspect_client_certificate() {
+            Ok(info) => (info, None),
+            Err(e) => (None, Some(format!("{e:#}"))),
+        };
+        TlsStatus {
+            enabled: self.tls_enabled(),
+            sslmode: self.sslmode.clone(),
+            sslrootcert: self.sslrootcert.clone(),
+            client_cert,
+            client_cert_error,
+        }
     }
 }
 
@@ -573,6 +839,12 @@ pub struct YbConnArgs {
     /// encrypt-without-verify (`require`).
     #[arg(long)]
     pub sslrootcert: Option<String>,
+    /// PEM client certificate presented to the server (with `--sslkey`).
+    #[arg(long, requires = "sslkey")]
+    pub sslcert: Option<String>,
+    /// PEM private key for `--sslcert`.
+    #[arg(long, requires = "sslcert")]
+    pub sslkey: Option<String>,
 }
 
 #[cfg(feature = "cli")]
@@ -586,6 +858,8 @@ impl YbConnArgs {
             password_env: self.password_env.clone(),
             sslmode: self.sslmode.clone(),
             sslrootcert: self.sslrootcert.clone(),
+            sslcert: self.sslcert.clone(),
+            sslkey: self.sslkey.clone(),
             // Diagnostic tools open read-only connections (no fast-path
             // upsert), so the GUC is never set regardless; keep the default.
             disable_transactional_writes: false,
@@ -625,6 +899,8 @@ mod cli_tests {
             password_env: Some("PW".into()),
             sslmode: None,
             sslrootcert: None,
+            sslcert: None,
+            sslkey: None,
         }
     }
 
@@ -665,6 +941,21 @@ mod cli_tests {
         assert_eq!(tls.sslmode.as_deref(), Some("require"));
         assert_eq!(tls.sslrootcert.as_deref(), Some("/etc/ca.pem"));
     }
+
+    #[test]
+    fn client_cert_flags_pass_through() {
+        let c = YbConnArgs {
+            sslmode: Some("verify-full".into()),
+            sslrootcert: Some("/tls/ca.crt".into()),
+            sslcert: Some("/tls/tls.crt".into()),
+            sslkey: Some("/tls/tls.key".into()),
+            ..args()
+        }
+        .into_config();
+        assert_eq!(c.sslcert.as_deref(), Some("/tls/tls.crt"));
+        assert_eq!(c.sslkey.as_deref(), Some("/tls/tls.key"));
+        c.validate().unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -679,6 +970,8 @@ mod database_url_tests {
             password_env: None,
             sslmode: None,
             sslrootcert: None,
+            sslcert: None,
+            sslkey: None,
             disable_transactional_writes: false,
             tserver_rpc_addrs: None,
             tsclient_read_sessions: None,
@@ -689,6 +982,120 @@ mod database_url_tests {
             tcp_user_timeout_ms: 0,
             connection_lifetime_ms: super::DEFAULT_CONNECTION_LIFETIME_MS,
         }
+    }
+
+    fn mtls_cfg() -> YbConnConfig {
+        let mut c = cfg("h:5433");
+        c.sslmode = Some("verify-full".into());
+        c.sslrootcert = Some("/tls/ca/ca.crt".into());
+        c.sslcert = Some("/tls/client/tls.crt".into());
+        c.sslkey = Some("/tls/client/tls.key".into());
+        c
+    }
+
+    #[test]
+    fn client_cert_is_rendered_in_url_and_toml() {
+        let c = mtls_cfg();
+        assert_eq!(
+            c.to_database_url().unwrap(),
+            "postgresql://yugabyte@h:5433/yb_storage?sslmode=verify-full\
+             &sslrootcert=%2Ftls%2Fca%2Fca.crt&sslcert=%2Ftls%2Fclient%2Ftls.crt\
+             &sslkey=%2Ftls%2Fclient%2Ftls.key"
+        );
+        let toml = c.to_inline_toml();
+        assert!(toml.contains("sslcert = \"/tls/client/tls.crt\""), "{toml}");
+        assert!(toml.contains("sslkey = \"/tls/client/tls.key\""), "{toml}");
+        let back: YbConnConfig = toml::from_str(&format!("c = {toml}"))
+            .map(|t: toml::Table| t["c"].clone().try_into().unwrap())
+            .unwrap();
+        assert_eq!(back, c);
+    }
+
+    #[test]
+    fn a_client_certificate_needs_both_halves() {
+        let mut c = mtls_cfg();
+        c.sslkey = None;
+        assert!(c.validate().unwrap_err().to_string().contains("sslkey"));
+        let mut c = mtls_cfg();
+        c.sslcert = None;
+        assert!(c.validate().unwrap_err().to_string().contains("sslcert"));
+    }
+
+    #[test]
+    fn a_client_certificate_without_tls_is_refused() {
+        let mut c = mtls_cfg();
+        c.sslmode = None;
+        assert!(c.validate().is_err());
+        c.sslmode = Some("disable".into());
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn a_client_certificate_needs_a_verified_server() {
+        // `require` does not verify the tserver, so presenting an identity to
+        // it would hand that identity to anyone on the address.
+        let mut c = mtls_cfg();
+        c.sslmode = Some("require".into());
+        c.sslrootcert = None;
+        assert!(
+            c.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("sslrootcert")
+        );
+        c.sslrootcert = Some("/ca.crt".into());
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn verifying_modes_need_a_root_cert() {
+        for mode in ["verify-ca", "verify-full"] {
+            let mut c = cfg("h:5433");
+            c.sslmode = Some(mode.into());
+            assert!(c.validate().is_err(), "{mode}");
+            c.sslrootcert = Some("/ca.crt".into());
+            c.validate().unwrap();
+        }
+        // `require` keeps its accept-all behaviour on the YSQL lane.
+        let mut c = cfg("h:5433");
+        c.sslmode = Some("require".into());
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn thin_client_tls_follows_sslmode_and_demands_a_ca() {
+        assert_eq!(cfg("h:5433").thin_client_tls().unwrap(), None);
+        let t = mtls_cfg().thin_client_tls().unwrap().unwrap();
+        assert_eq!(t.ca_cert_path, "/tls/ca/ca.crt");
+        assert_eq!(
+            t.client.unwrap(),
+            super::ClientIdentity {
+                cert_path: "/tls/client/tls.crt".into(),
+                key_path: "/tls/client/tls.key".into(),
+            }
+        );
+        // The shim has no accept-all mode, so TLS without a CA is a config
+        // error here rather than a handshake failure later.
+        let mut c = cfg("h:5433");
+        c.sslmode = Some("require".into());
+        let err = c.thin_client_tls().unwrap_err().to_string();
+        assert!(err.contains("sslrootcert"), "{err}");
+    }
+
+    #[test]
+    fn missing_client_cert_files_are_named() {
+        let c = mtls_cfg();
+        let err = c.inspect_client_certificate().unwrap_err().to_string();
+        assert!(err.contains("/tls/client/tls.crt"), "{err}");
+        let status = c.tls_status();
+        assert!(status.enabled);
+        assert!(status.client_cert.is_none());
+        assert!(
+            status
+                .client_cert_error
+                .unwrap()
+                .contains("/tls/client/tls.crt")
+        );
     }
 
     #[test]
@@ -1204,6 +1611,10 @@ impl YsqlClient {
         pool_size: usize,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
+        cfg.validate()?;
+        if let Some(info) = cfg.inspect_client_certificate()? {
+            YB_CLIENT_CERT_NOT_AFTER_SECONDS.set(info.not_after_unix as i64);
+        }
         let pg_config = build_pg_config(cfg, application_name)?;
         let disable_transactional_writes = cfg.disable_transactional_writes;
         let client = match cfg.sslmode.as_deref() {
@@ -1217,7 +1628,10 @@ impl YsqlClient {
                 .await?
             }
             Some(_mode) => {
-                let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
+                let tls = build_yb_rustls_connector(
+                    cfg.sslrootcert.as_deref(),
+                    cfg.client_identity()?.as_ref(),
+                )?;
                 Self::connect_rustls_pooled(
                     pg_config,
                     tls,
@@ -1750,10 +2164,34 @@ async fn sleep_with_jitter(base: Duration) {
 /// the diagnosis.
 pub fn build_yb_rustls_connector(
     sslrootcert: Option<&str>,
+    identity: Option<&ClientIdentity>,
 ) -> anyhow::Result<yb_postgres_rustls::MakeRustlsConnect> {
     use rustls::client::WebPkiServerVerifier;
     use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
     use rustls::crypto::ring;
+
+    let client_auth = identity
+        .map(|id| -> anyhow::Result<_> {
+            let pem = std::fs::read(&id.cert_path)
+                .with_context(|| format!("reading sslcert file `{}`", id.cert_path))?;
+            let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(pem))
+                .collect::<Result<Vec<_>, _>>()
+                .with_context(|| format!("parsing PEM certs in `{}`", id.cert_path))?;
+            anyhow::ensure!(
+                !certs.is_empty(),
+                "sslcert `{}` contains no PEM CERTIFICATE blocks",
+                id.cert_path
+            );
+            let pem = std::fs::read(&id.key_path)
+                .with_context(|| format!("reading sslkey file `{}`", id.key_path))?;
+            let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(pem))
+                .with_context(|| format!("parsing PEM key in `{}`", id.key_path))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("sslkey `{}` contains no PEM private key", id.key_path)
+                })?;
+            Ok((certs, key))
+        })
+        .transpose()?;
 
     let roots = if let Some(path) = sslrootcert {
         let pem =
@@ -1786,7 +2224,13 @@ pub fn build_yb_rustls_connector(
 
     let client_config = if sslrootcert.is_some() {
         // Strict verification against the supplied CA bundle.
-        builder.with_root_certificates(roots).with_no_client_auth()
+        let builder = builder.with_root_certificates(roots);
+        match client_auth {
+            Some((certs, key)) => builder
+                .with_client_auth_cert(certs, key)
+                .context("loading the client certificate into rustls")?,
+            None => builder.with_no_client_auth(),
+        }
     } else {
         // AcceptAll: log validation failures and proceed. Mirrors the
         // the controller's existing behaviour and matches the
@@ -1841,10 +2285,15 @@ pub fn build_yb_rustls_connector(
         let verifier = Arc::new(AcceptAll(
             WebPkiServerVerifier::builder_with_provider(roots, provider).build()?,
         ));
-        builder
+        let builder = builder
             .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth()
+            .with_custom_certificate_verifier(verifier);
+        match client_auth {
+            Some((certs, key)) => builder
+                .with_client_auth_cert(certs, key)
+                .context("loading the client certificate into rustls")?,
+            None => builder.with_no_client_auth(),
+        }
     };
 
     Ok(yb_postgres_rustls::MakeRustlsConnect::new(client_config))

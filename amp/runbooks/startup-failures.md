@@ -117,6 +117,10 @@ supply the password env — add `"sslmode":"require"` and
 (`pageserver.toml yb_storage_conn`, safekeeper `yb_storage_conn`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.
 
+On the **pageserver and safekeeper**, `sslmode` alone is not enough: they open the thin
+lane at boot, and the shim has no accept-all verifier, so any TLS `sslmode` without
+`sslrootcert` fails at startup with `enables TLS but sslrootcert is unset`. Set both.
+
 > Separately: some builds **cannot** do TLS to YB at all due to a rustls→OpenSSL switch
 > (`open_tls … (openssl)` / `SSL_connect` failures). That's a build defect, not a config fix —
 > see the memory note on `448dd1618/e2c2a2e80 YB TLS connect fail`; vet the build with

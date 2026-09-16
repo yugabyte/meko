@@ -53,6 +53,9 @@ Options:
 
 Honoured env vars (passed through): INTEGRATION_REGEN_EXPECTED, TEST_DIR,
 YB_AMP_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, COMPUTE_PORT,
+YB_SSLMODE, YB_SSLROOTCERT, YB_SSLCERT, YB_SSLKEY (the daemons' TLS to YB;
+scripts/yb-local.sh with YB_TLS=1 produces the files), YB_RPC_PORT (tserver
+RPC for the thin lane, default 9100; yb-local.sh prints the offset one),
 SOAK_SECS, PS_HTTP_TIMEOUT, ENDPOINT_START_TIMEOUT,
 YB_PS_VERIFY_WAL_ROUNDTRIP, YB_AMP, INTEGRATION_PORT_BASE.
 

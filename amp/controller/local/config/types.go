@@ -111,6 +111,11 @@ type YbConnConfig struct {
 	Sslmode *string `toml:"sslmode,omitempty"`
 	// Sslrootcert is a PEM CA bundle path for strict TLS verification.
 	Sslrootcert *string `toml:"sslrootcert,omitempty"`
+	// Sslcert is the PEM client certificate presented to the server; set
+	// together with Sslkey. With a `cert` HBA rule its CN is the login.
+	Sslcert *string `toml:"sslcert,omitempty"`
+	// Sslkey is the PEM private key for Sslcert.
+	Sslkey *string `toml:"sslkey,omitempty"`
 	// DisableTransactionalWrites toggles the fast-path-upsert GUC.
 	DisableTransactionalWrites bool `toml:"disable_transactional_writes,omitempty"`
 	// TserverRPCAddrs overrides the direct-RPC tserver endpoints (CSV).
@@ -167,6 +172,12 @@ func (c *YbConnConfig) ToDatabaseURL() (string, error) {
 	}
 	if c.Sslrootcert != nil {
 		params = append(params, "sslrootcert="+percentEncode(*c.Sslrootcert))
+	}
+	if c.Sslcert != nil {
+		params = append(params, "sslcert="+percentEncode(*c.Sslcert))
+	}
+	if c.Sslkey != nil {
+		params = append(params, "sslkey="+percentEncode(*c.Sslkey))
 	}
 	if len(params) > 0 {
 		sb.WriteByte('?')

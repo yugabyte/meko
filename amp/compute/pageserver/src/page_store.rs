@@ -1140,8 +1140,22 @@ impl ThinClientTables {
         .await?;
         let tserver_addrs = yb.effective_tserver_rpc_addrs();
         let tserver_count = tserver_addrs.len();
+        let tls = yb
+            .thin_client_tls()
+            .context("TLS for the thin-client lane")?;
+        let tls_desc = match &tls {
+            None => "plaintext",
+            Some(t) if t.client.is_some() => "mTLS",
+            Some(_) => "TLS",
+        };
         let config = yb_thin_client::TsClientConfig {
             tserver_addrs,
+            tls: tls.map(|t| {
+                yb_thin_client::TlsOpts::from_paths(
+                    t.ca_cert_path,
+                    t.client.map(|c| (c.cert_path, c.key_path)),
+                )
+            }),
             read_sessions: read_sessions as u32,
             write_sessions: write_sessions as u32,
             sessions_per_conn: sessions_per_conn as u32,
@@ -1174,7 +1188,7 @@ impl ThinClientTables {
         tracing::info!(
             "yb_thin_client hot path ready: {schema}.pages/slru_pages/meta/pending_gc opened \
              ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
-             connection, across {tserver_count} configured tserver(s))",
+             connection, across {tserver_count} configured tserver(s), {tls_desc})",
         );
         Ok(pool)
     }
