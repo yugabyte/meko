@@ -3,32 +3,58 @@
 // names. Options that are already enabled render checked and locked (the API
 // unions, and there is no removal path).
 //
-// The catalog is bundled rather than fetched: the controller exposes no list
-// endpoint. It is GENERATED from deploy/extensions/extensions.yaml (the build
-// manifest, and the source of truth for which extensions exist at what version)
-// by scripts/gen-extensions.py, so the picker cannot drift from what is built —
-// run `npm run gen:extensions` after editing the manifest.
+// The catalog comes from the controller (GET /extensions, via useExtensionOptions
+// below), which is what makes an image an admin registered selectable without
+// shipping a new UI. The bundled list generated from the build manifest
+// (scripts/gen-extensions.py) is kept only as the first paint and the fallback
+// when that request has not landed or failed — it can only ever contain the
+// built-ins, so a registered extension would be missing from it.
 
 import { Check } from "lucide-react";
 import catalog from "@/config/extensions.json";
+import { useExtensions } from "@/lib/api/queries";
 import { cn } from "@/lib/utils";
 
 export type ExtensionOption = {
   /** Catalog name — what the API takes. */
   name: string;
-  version: string;
-  description: string;
+  /** Both optional: the controller reports them only when the entry carries
+   *  them, and a registered extension need not declare either. */
+  version?: string;
+  description?: string;
   /** Needs shared_preload_libraries, so enabling it restarts the postmaster. */
   preload?: boolean;
+  /** False for an image an admin registered. Undefined in the bundled list,
+   *  which predates the distinction and holds only built-ins. */
+  builtin?: boolean;
 };
 
-export const AMP_EXTENSIONS: ExtensionOption[] = catalog.extensions;
+/** The extensions this UI was built against. Not the catalog — a controller
+ *  serves more than this as soon as an admin registers anything. */
+export const BUNDLED_EXTENSIONS: ExtensionOption[] = catalog.extensions;
+
+/** The catalog to offer, live from the controller, falling back to the bundled
+ *  built-ins while the request is in flight or if it fails. Returned alongside
+ *  the query state so a caller can say "catalog unavailable" rather than
+ *  silently offering a short list. */
+export function useExtensionOptions(): {
+  options: ExtensionOption[];
+  isLoading: boolean;
+  isError: boolean;
+} {
+  const { data, isLoading, isError } = useExtensions();
+  return {
+    options: data && data.length > 0 ? data : BUNDLED_EXTENSIONS,
+    isLoading,
+    isError,
+  };
+}
 
 export function ExtensionsField({
   value,
   onChange,
   enabled = [],
-  options = AMP_EXTENSIONS,
+  options = BUNDLED_EXTENSIONS,
   showRestartTag = true,
   className,
 }: {
@@ -36,6 +62,8 @@ export function ExtensionsField({
   onChange: (names: string[]) => void;
   /** Already enabled on the target — shown checked and not togglable. */
   enabled?: string[];
+  /** The catalog to offer. Callers pass useExtensionOptions().options so a
+   *  registered extension shows up; the default is the bundled built-ins. */
   options?: ExtensionOption[];
   /** Flag the preload extensions as restarting the compute. Off where there is
    *  no compute yet to restart (creating a cluster). */
@@ -43,9 +71,7 @@ export function ExtensionsField({
   className?: string;
 }) {
   function toggle(name: string) {
-    onChange(
-      value.includes(name) ? value.filter((n) => n !== name) : [...value, name],
-    );
+    onChange(value.includes(name) ? value.filter((n) => n !== name) : [...value, name]);
   }
 
   return (

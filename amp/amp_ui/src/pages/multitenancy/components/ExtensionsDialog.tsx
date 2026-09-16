@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ExtensionsField } from "@/components/ui/extensions-field";
+import { ExtensionsField, useExtensionOptions } from "@/components/ui/extensions-field";
 import { useAddBranchExtensions } from "@/lib/api/queries";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 
@@ -37,6 +37,8 @@ export function ExtensionsDialog({
 }) {
   const [picked, setPicked] = useState<string[]>([]);
   const add = useAddBranchExtensions();
+  // Live catalog, so an image an admin registered is selectable here.
+  const extCatalog = useExtensionOptions();
 
   useEffect(() => {
     if (open) setPicked([]);
@@ -50,8 +52,7 @@ export function ExtensionsDialog({
           toast.success(msg.extensionsAdded(picked.join(", ")));
           onOpenChange(false);
         },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : msg.extensionsError),
+        onError: (err) => toast.error(err instanceof Error ? err.message : msg.extensionsError),
       },
     );
   }
@@ -64,7 +65,12 @@ export function ExtensionsDialog({
           <DialogDescription>{msg.extensionsDescription}</DialogDescription>
         </DialogHeader>
 
-        <ExtensionsField value={picked} onChange={setPicked} enabled={enabled} />
+        <ExtensionsField
+          value={picked}
+          onChange={setPicked}
+          enabled={enabled}
+          options={extCatalog.options}
+        />
 
         <p className="text-xs text-muted-foreground">{msg.extensionsRedeployWarning}</p>
 

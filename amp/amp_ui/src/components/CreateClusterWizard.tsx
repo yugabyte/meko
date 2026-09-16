@@ -39,14 +39,10 @@ import {
   type Connectivity,
 } from "@/components/ui/connectivity-field";
 import { DB_ENGINES, EngineField, engineExtensions } from "@/components/ui/engine-field";
-import { ExtensionsField } from "@/components/ui/extensions-field";
+import { ExtensionsField, useExtensionOptions } from "@/components/ui/extensions-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
 import { isValidMemory } from "@/lib/compute";
-import {
-  DEFAULT_ENDPOINT_CPU,
-  DEFAULT_ENDPOINT_MEMORY,
-  type StoragePool,
-} from "@/lib/api/types";
+import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY, type StoragePool } from "@/lib/api/types";
 
 const STEPS = ["Cluster", "Extensions", "Compute", "Review"];
 
@@ -64,6 +60,8 @@ export function CreateClusterWizard({
   const [name, setName] = useState("");
   const [poolId, setPoolId] = useState("");
   const [extensions, setExtensions] = useState<string[]>([]);
+  // Live catalog, so an image an admin registered is selectable here.
+  const extCatalog = useExtensionOptions();
   const [size, setSize] = useState<ComputeSize>({
     cpu: DEFAULT_ENDPOINT_CPU,
     memory: DEFAULT_ENDPOINT_MEMORY,
@@ -127,9 +125,7 @@ export function CreateClusterWizard({
           navigate("/tasks");
         },
         onError: (err) =>
-          toast.error(
-            err instanceof Error ? err.message : "Couldn't start cluster creation",
-          ),
+          toast.error(err instanceof Error ? err.message : "Couldn't start cluster creation"),
       },
     );
   }
@@ -146,8 +142,8 @@ export function CreateClusterWizard({
         <DialogHeader>
           <DialogTitle>Create cluster</DialogTitle>
           <DialogDescription>
-            A cluster is one Postgres database on branchable storage, with a{" "}
-            <code>main</code> branch and a write endpoint.
+            A cluster is one Postgres database on branchable storage, with a <code>main</code>{" "}
+            branch and a write endpoint.
           </DialogDescription>
         </DialogHeader>
 
@@ -194,19 +190,25 @@ export function CreateClusterWizard({
           {step === 1 && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                Enabled on the cluster's <code>main</code> branch — every compute on it
-                mounts them. You can add more later from a branch's Extensions dialog.
+                Enabled on the cluster's <code>main</code> branch — every compute on it mounts them.
+                You can add more later from a branch's Extensions dialog.
               </p>
               {fromEngine.length > 0 && (
                 <p className="text-sm text-muted-foreground">
-                  {engineLabel} includes{" "}
-                  <span className="font-mono">{fromEngine.join(", ")}</span>.
+                  {engineLabel} includes <span className="font-mono">{fromEngine.join(", ")}</span>.
+                </p>
+              )}
+              {extCatalog.isError && (
+                <p className="text-sm text-destructive">
+                  Could not load the extension catalog; showing the built-in set only. Anything an
+                  admin registered is missing from this list.
                 </p>
               )}
               <ExtensionsField
                 value={extensions}
                 onChange={setExtensions}
                 enabled={fromEngine}
+                options={extCatalog.options}
                 showRestartTag={false}
               />
             </div>

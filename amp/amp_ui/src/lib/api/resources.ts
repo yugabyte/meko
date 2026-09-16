@@ -30,6 +30,9 @@ import type {
   User,
   UserList,
   Version,
+  Extension,
+  ExtensionList,
+  RegisterExtensionInput,
 } from "./types";
 
 /* ---- Tasks (the mutating create endpoints are async: 202 + a Task) ---- */
@@ -116,9 +119,7 @@ export function listStoragePools(): Promise<StoragePoolList> {
   });
 }
 
-export function createStoragePool(
-  input: CreateStoragePoolInput,
-): Promise<StoragePool> {
+export function createStoragePool(input: CreateStoragePoolInput): Promise<StoragePool> {
   return apiRequest<StoragePool>("/storage-pools", {
     method: "POST",
     body: input,
@@ -162,10 +163,7 @@ export function getCluster(poolId: string, clusterId: string): Promise<Cluster> 
 
 // Async: POST records a create_cluster task; poll it, then read the materialized
 // cluster back (the task stamps the new cluster's id as cluster_id).
-export async function createCluster(
-  poolId: string,
-  input: CreateClusterInput,
-): Promise<Cluster> {
+export async function createCluster(poolId: string, input: CreateClusterInput): Promise<Cluster> {
   const task = await apiRequest<Task>(`/storage-pools/${poolId}/clusters`, {
     method: "POST",
     body: input,
@@ -227,37 +225,23 @@ export function createClusterWithWriter(
 // drops its branches, then drops the cluster row); poll to completion so the
 // caller only sees success once the whole cascade has finished. 404 up front if
 // the pool or cluster is already gone.
-export async function deleteCluster(
-  poolId: string,
-  clusterId: string,
-): Promise<void> {
-  const task = await apiRequest<Task>(
-    `/storage-pools/${poolId}/clusters/${clusterId}`,
-    { method: "DELETE" },
-  );
+export async function deleteCluster(poolId: string, clusterId: string): Promise<void> {
+  const task = await apiRequest<Task>(`/storage-pools/${poolId}/clusters/${clusterId}`, {
+    method: "DELETE",
+  });
   await pollTask(task.id);
 }
 
 /* ---- Branches (timelines / forks) ---- */
 
-export function listBranches(
-  poolId: string,
-  clusterId: string,
-): Promise<BranchList> {
-  return apiRequest<BranchList>(
-    `/storage-pools/${poolId}/clusters/${clusterId}/branches`,
-    { query: { limit: LIST_LIMIT } },
-  );
+export function listBranches(poolId: string, clusterId: string): Promise<BranchList> {
+  return apiRequest<BranchList>(`/storage-pools/${poolId}/clusters/${clusterId}/branches`, {
+    query: { limit: LIST_LIMIT },
+  });
 }
 
-export function getBranch(
-  poolId: string,
-  clusterId: string,
-  branchId: string,
-): Promise<Branch> {
-  return apiRequest<Branch>(
-    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}`,
-  );
+export function getBranch(poolId: string, clusterId: string, branchId: string): Promise<Branch> {
+  return apiRequest<Branch>(`/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}`);
 }
 
 // Async: POST records a branch task; poll it, then read the new branch back
@@ -267,10 +251,10 @@ export async function createBranch(
   clusterId: string,
   input: CreateBranchInput,
 ): Promise<Branch> {
-  const task = await apiRequest<Task>(
-    `/storage-pools/${poolId}/clusters/${clusterId}/branches`,
-    { method: "POST", body: input },
-  );
+  const task = await apiRequest<Task>(`/storage-pools/${poolId}/clusters/${clusterId}/branches`, {
+    method: "POST",
+    body: input,
+  });
   const done = await pollTask(task.id);
   if (!done.target_ref) {
     throw new ApiError("branch task reported no branch id", 500);
@@ -435,4 +419,38 @@ export async function deleteEndpoint(
     { method: "DELETE" },
   );
   await pollTask(task.id);
+}
+
+/* ====================================================================
+ * Extension catalog
+ * ====================================================================
+ * The controller serves the catalog, so the picker no longer has to ship a
+ * bundled copy: this returns both halves — the extensions this controller was
+ * built with (`builtin: true`) and the images an admin registered.
+ *
+ * Registering is admin-only and the caller names itself with `user_id`, the same
+ * placeholder-for-auth the rest of the API uses. All three are synchronous: no
+ * task, because nothing is deployed. A branch opting in is what mounts an image.
+ */
+
+export async function listExtensions(): Promise<ExtensionList> {
+  return apiRequest<ExtensionList>(`/extensions`);
+}
+
+export async function registerExtension(
+  name: string,
+  userId: string,
+  input: RegisterExtensionInput,
+): Promise<Extension> {
+  return apiRequest<Extension>(
+    `/extensions/${encodeURIComponent(name)}?user_id=${encodeURIComponent(userId)}`,
+    { method: "PUT", body: input },
+  );
+}
+
+export async function deregisterExtension(name: string, userId: string): Promise<void> {
+  await apiRequest<void>(
+    `/extensions/${encodeURIComponent(name)}?user_id=${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
+  );
 }

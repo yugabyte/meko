@@ -8,6 +8,7 @@ import {
   Crosshair,
   Globe,
   Home,
+  Puzzle,
   // Layers, // used only by the Foundations tab, which is commented out below
   ListChecks,
   Server,
@@ -36,6 +37,7 @@ export const WORKSPACE_NAV: NavItem[] = [
   { label: "Shared pools", to: "/shared-pools", icon: Boxes },
   { label: "Cluster", to: "/multitenancy", icon: Globe },
   { label: "Fleet", to: "/fleet", icon: Server },
+  { label: "Extensions", to: "/extensions", icon: Puzzle },
   { label: "Tasks", to: "/tasks", icon: ListChecks },
 ];
 
@@ -50,9 +52,7 @@ export const AGENT_NAV: NavItem[] = [
 
 /** Nav targets that map to a route (used to build the router so routes
  *  can't fall out of sync with the sidebar). Panel-only items excluded. */
-export const ROUTABLE_NAV: NavItem[] = [...WORKSPACE_NAV, ...AGENT_NAV].filter(
-  (item) => item.to,
-);
+export const ROUTABLE_NAV: NavItem[] = [...WORKSPACE_NAV, ...AGENT_NAV].filter((item) => item.to);
 
 /* ====================================================================
  * Agent side panels
@@ -96,10 +96,10 @@ export const AGENT_PANELS: Record<AgentPanelId, AgentPanelConfig> = {
     labelClass: "text-teal-600 dark:text-teal-400",
     description: (
       <>
-        I migrate data &amp; databases <Hl>in bulk</Hl> into a shared pool —
-        Oracle (via <Hl>HexaBridge</Hl>), SQL Server (via <Hl>Babelfish</Hl>),
-        MySQL or Postgres. I assess each source, flag incompatibilities, run
-        low-downtime cutovers, and track the detail of every migration.
+        I migrate data &amp; databases <Hl>in bulk</Hl> into a shared pool — Oracle (via{" "}
+        <Hl>HexaBridge</Hl>), SQL Server (via <Hl>Babelfish</Hl>), MySQL or Postgres. I assess each
+        source, flag incompatibilities, run low-downtime cutovers, and track the detail of every
+        migration.
       </>
     ),
     cta: "Start bulk migration",
@@ -129,10 +129,9 @@ export const AGENT_PANELS: Record<AgentPanelId, AgentPanelConfig> = {
     labelClass: "text-green-600 dark:text-green-400",
     description: (
       <>
-        I design how this platform plugs into your wider ecosystem —
-        connectors, event streams, BI tools and downstream apps. Tell me the
-        systems you run and I&apos;ll propose the integration architecture (all
-        wired over MCP / API).
+        I design how this platform plugs into your wider ecosystem — connectors, event streams, BI
+        tools and downstream apps. Tell me the systems you run and I&apos;ll propose the integration
+        architecture (all wired over MCP / API).
       </>
     ),
     cta: "Draft integration plan",

@@ -22,6 +22,7 @@ import SharedPoolsPage from "@/pages/SharedPoolsPage";
 import FleetPage from "@/pages/FleetPage";
 import MultitenancyPage from "@/pages/MultitenancyPage";
 import TasksPage from "@/pages/TasksPage";
+import ExtensionsPage from "@/pages/ExtensionsPage";
 
 /** Routes that now have a real, API-backed page (replacing the placeholder). */
 const PAGE_OVERRIDES: Record<string, ReactNode> = {
@@ -29,6 +30,7 @@ const PAGE_OVERRIDES: Record<string, ReactNode> = {
   "/fleet": <FleetPage />,
   "/multitenancy": <MultitenancyPage />,
   "/tasks": <TasksPage />,
+  "/extensions": <ExtensionsPage />,
 };
 
 const queryClient = new QueryClient({
@@ -81,17 +83,12 @@ function AppRoutes() {
           <Route
             key={item.to}
             path={item.to}
-            element={
-              PAGE_OVERRIDES[item.to!] ?? <PlaceholderPage title={item.label} />
-            }
+            element={PAGE_OVERRIDES[item.to!] ?? <PlaceholderPage title={item.label} />}
           />
         ))}
       </Route>
 
-      <Route
-        path="*"
-        element={<Navigate to={isAuthenticated ? "/home" : "/signin"} replace />}
-      />
+      <Route path="*" element={<Navigate to={isAuthenticated ? "/home" : "/signin"} replace />} />
     </Routes>
   );
 }

@@ -42,6 +42,50 @@ export type Branch = {
 
 /** A cluster — AMP's "Cluster". Created inside a pool; ships with a
  *  default branch (`main`). */
+/** One entry of the controller's extension catalog (GET /extensions). */
+export type Extension = {
+  /** Catalog name — what a branch opts in by, and the mount subdir. */
+  name: string;
+  /** The image actually mounted. Derived for a built-in; as registered otherwise. */
+  image: string;
+  version?: string;
+  description?: string;
+  /** Shared-library basename when it differs from `name`. */
+  library?: string;
+  /** Needs shared_preload_libraries, so enabling it restarts the postmaster. */
+  preload: boolean;
+  /** Shipped with this controller and built by deploy/extensions. A built-in
+   *  cannot be replaced or removed; everything else was registered by an admin. */
+  builtin: boolean;
+  layout?: ExtensionLayout;
+  abi_extra_exempt?: string[];
+};
+
+/** Where a registered image keeps its pieces, relative to /extensions/<name>. */
+export type ExtensionLayout = {
+  share_path?: string;
+  lib_path?: string;
+  library_path?: string[];
+  env_paths?: Record<string, string>;
+};
+
+export type ExtensionList = {
+  extensions: Extension[];
+  total: number;
+  count: number;
+};
+
+/** Body of PUT /extensions/{name}. The name travels in the path. */
+export type RegisterExtensionInput = {
+  image: string;
+  version?: string;
+  description?: string;
+  library?: string;
+  preload?: boolean;
+  layout?: ExtensionLayout;
+  abi_extra_exempt?: string[];
+};
+
 export type Cluster = {
   id: string;
   name: string;
@@ -64,10 +108,7 @@ export type EndpointRole = "read_write" | "read_only";
  *  the cloud's L4 load balancer — internal (reachable from the surrounding
  *  VPC/VNet) or internet-facing. Works on EKS, GKE and AKS; the controller
  *  renders the right provider's annotations. */
-export type EndpointConnectivityMode =
-  | "cluster_ip"
-  | "nlb_internal"
-  | "nlb_external";
+export type EndpointConnectivityMode = "cluster_ip" | "nlb_internal" | "nlb_external";
 export type EndpointConnectivity = {
   mode?: EndpointConnectivityMode;
   /** Sources allowed to reach the load balancer, as CIDRs. Empty is
@@ -244,8 +285,7 @@ export type ResizeOutcome = "completed" | "pending" | "infeasible" | "unsupporte
 export const DEFAULT_ENDPOINT_CPU = "2";
 export const DEFAULT_ENDPOINT_MEMORY = "16Gi";
 /** Matches the controller/chart default: in-cluster only, no load balancer. */
-export const DEFAULT_ENDPOINT_CONNECTIVITY: EndpointConnectivityMode =
-  "cluster_ip";
+export const DEFAULT_ENDPOINT_CONNECTIVITY: EndpointConnectivityMode = "cluster_ip";
 
 export type CreateBranchInput = {
   name: string;

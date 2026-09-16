@@ -428,7 +428,8 @@ The engine table lives in three places, and two generated checks keep them in
 step: [`extensions.yaml`](../../deploy/extensions/extensions.yaml) is the source
 of truth, `TestEngineTableMatchesManifest` asserts
 [`engines.go`](../../controller/internal/extensions/engines.go) matches it, and
-the UI's picker is generated from it (see "Adding a new extension" below).
+and the UI's bundled fallback catalog is generated from it (see "Adding a new
+extension" below).
 
 ## Storage and fork behaviour
 
@@ -485,12 +486,15 @@ audit / recreate.
    extension registers a background worker or needs shared memory (its `_PG_init`
    requires `shared_preload_libraries`), keeping it in step with the manifest's
    `preload:`.
-3. Give the manifest row a one-line `description:` (step 1) and regenerate the
-   UI catalog: `cd amp_ui && npm run gen:extensions`, committing the resulting
-   `src/config/extensions.json`. The controller exposes no catalog endpoint, so
-   the picker ships the list; generating it from the manifest keeps the two from
-   drifting, and `src/config/extensions.test.ts` fails if the checked-in file is
-   stale. To add or change an **engine**, edit the manifest's `engines:` block and
+3. Give the manifest row a one-line `description:` (step 1), copy it onto the
+   catalog entry in step 2, and regenerate the UI's bundled catalog:
+   `cd amp_ui && npm run gen:extensions`, committing the resulting
+   `src/config/extensions.json`. The picker reads `GET /extensions` at runtime —
+   that is how a registered image reaches it at all — and falls back to the
+   bundled list for first paint and when the request fails, so the two must
+   agree: a built-in the controller serves without a description renders a blank
+   card. `src/config/extensions.test.ts` fails if the checked-in file is stale,
+   and `TestBuiltinsAllCarryADescription` fails if a catalog entry lacks one. To add or change an **engine**, edit the manifest's `engines:` block and
    [`engines.go`](../../controller/internal/extensions/engines.go) together, then
    regenerate — `TestEngineTableMatchesManifest` fails if they disagree, and the
    openapi `engine` enum has its own check (`TestEngineEnumMatchesCatalog`).
@@ -596,9 +600,15 @@ example.
 - UI: [`amp_ui/src/components/ui/extensions-field.tsx`](../../amp_ui/src/components/ui/extensions-field.tsx)
   (the picker), offered by the create-cluster wizard and
   [`ExtensionsDialog.tsx`](../../amp_ui/src/pages/multitenancy/components/ExtensionsDialog.tsx)
-  on a branch; its catalog is generated from the manifest by
-  [`gen-extensions.py`](../../amp_ui/scripts/gen-extensions.py) into
-  `amp_ui/src/config/extensions.json`.
+  on a branch. It takes its options from `GET /extensions` (`useExtensionOptions`),
+  which is what makes a registered image selectable; the list generated from the
+  manifest by [`gen-extensions.py`](../../amp_ui/scripts/gen-extensions.py) into
+  `amp_ui/src/config/extensions.json` remains as first paint and fallback, and
+  holds built-ins only.
+  [`ExtensionsPage.tsx`](../../amp_ui/src/pages/ExtensionsPage.tsx) is the admin
+  surface: it lists the registered images and imports one (`useAdminUser` supplies
+  the acting identity — deliberately not `useCurrentUser`, which is the pool owner
+  elsewhere).
 - Engines: [`controller/internal/extensions/engines.go`](../../controller/internal/extensions/engines.go)
   (the bundles), `engine` on `CreateClusterRequest` / `Cluster` in
   [`openapi_spec.yaml`](../../controller/internal/api/openapi_spec.yaml),

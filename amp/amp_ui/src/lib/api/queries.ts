@@ -3,12 +3,7 @@
 // consistent. Mutations invalidate the lists they affect so the UI stays live
 // after a create.
 
-import {
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addBranchExtensions,
   createBranch,
@@ -28,6 +23,9 @@ import {
   pollTask,
   updateBranchSettings,
   updateStoragePool,
+  listExtensions,
+  registerExtension,
+  deregisterExtension,
 } from "./resources";
 import type {
   Branch,
@@ -39,20 +37,22 @@ import type {
   Task,
   UpdateBranchSettingsInput,
   User,
+  RegisterExtensionInput,
 } from "./types";
 
 /** Centralised query keys — every hook + invalidation references these. */
 export const qk = {
   version: ["version"] as const,
   currentUser: ["current-user"] as const,
+  adminUser: ["admin-user"] as const,
   users: ["users"] as const,
   storagePools: ["storage-pools"] as const,
   clusters: (poolId: string) => ["clusters", poolId] as const,
-  branches: (poolId: string, clusterId: string) =>
-    ["branches", poolId, clusterId] as const,
+  branches: (poolId: string, clusterId: string) => ["branches", poolId, clusterId] as const,
   endpoints: (poolId: string, clusterId: string, branchId: string) =>
     ["endpoints", poolId, clusterId, branchId] as const,
   tasks: (params: TaskListParams) => ["tasks", params] as const,
+  extensions: ["extensions"] as const,
 };
 
 /** The controller's build identity (GET /version). Effectively static for the
@@ -70,7 +70,10 @@ export function useVersion() {
  * ====================================================================
  * AMP's login is still a stub, so we map "the current user" onto the
  * controller's user list: take users[0], or auto-create one if none
- * exist. Every owner-scoped action (pool ownership, etc.) hangs off this.
+ * exist. Every owner-scoped action (pool ownership, the Home page's
+ * owner filter) hangs off this, so it must stay the SAME identity
+ * across renders and deployments — see useAdminUser below for why it is
+ * not simply "the most capable user".
  */
 export function useCurrentUser() {
   return useQuery({
@@ -80,6 +83,26 @@ export function useCurrentUser() {
       const { users } = await listUsers();
       if (users.length > 0) return users[0];
       return createUser({ is_admin: false });
+    },
+  });
+}
+
+/** An admin identity to act as, for the admin-only APIs (registering an
+ *  extension image). Deliberately NOT folded into useCurrentUser: that one is
+ *  the pool owner on create and the Home page's owner filter, so preferring an
+ *  admin there would re-own new pools and empty a dashboard whose existing
+ *  pools were created under the bootstrap identity.
+ *
+ *  Returns undefined when the deployment has no admin, which is what the
+ *  Extensions page reports rather than hiding its controls unexplained. A real
+ *  login replaces this: the principal is then the caller, not a search. */
+export function useAdminUser() {
+  return useQuery({
+    queryKey: qk.adminUser,
+    staleTime: Infinity,
+    queryFn: async (): Promise<User | null> => {
+      const { users } = await listUsers();
+      return users.find((u) => u.is_admin) ?? null;
     },
   });
 }
@@ -170,10 +193,7 @@ export type FleetRow = { cluster: Cluster; pool: StoragePool };
 /** Fan out across every pool to assemble the org-wide cluster fleet.
  *  includeFailed surfaces failed-creation orphans (an operator's fleet view, so
  *  they can be seen and deleted); the default keeps counts/pickers clean. */
-export function useFleet(
-  pools: StoragePool[] | undefined,
-  includeFailed = false,
-) {
+export function useFleet(pools: StoragePool[] | undefined, includeFailed = false) {
   const list = pools ?? [];
   return useQueries({
     queries: list.map((pool) => ({
@@ -256,10 +276,7 @@ export function useDeleteCluster() {
 
 /* ---- Branches (timelines / forks) ---- */
 
-export function useBranches(
-  poolId: string | undefined,
-  clusterId: string | undefined,
-) {
+export function useBranches(poolId: string | undefined, clusterId: string | undefined) {
   return useQuery({
     queryKey: qk.branches(poolId ?? "", clusterId ?? ""),
     enabled: !!poolId && !!clusterId,
@@ -275,8 +292,7 @@ export function useCreateBranch() {
       poolId: string;
       clusterId: string;
       body: CreateBranchInput;
-    }): Promise<Branch> =>
-      createBranch(input.poolId, input.clusterId, input.body),
+    }): Promise<Branch> => createBranch(input.poolId, input.clusterId, input.body),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
         queryKey: qk.branches(input.poolId, input.clusterId),
@@ -400,6 +416,51 @@ export function useTasks(params: TaskListParams) {
         prev.kind === params.kind &&
         prev.clusterId === params.clusterId;
       return sameFilter ? previousData : undefined;
+    },
+  });
+}
+
+/* ====================================================================
+ * Extension catalog
+ * ==================================================================== */
+
+/** The controller's extension catalog: built-ins plus whatever an admin
+ *  registered. The picker reads this rather than a bundled list, which is what
+ *  makes a newly registered image selectable without shipping a new UI. */
+export function useExtensions() {
+  return useQuery({
+    queryKey: qk.extensions,
+    queryFn: listExtensions,
+    select: (data) => data.extensions,
+  });
+}
+
+/** Register (or replace) an extension image. Admin-only server-side; the caller
+ *  passes its own user id, which the controller checks for `is_admin`. */
+export function useRegisterExtension(userId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, input }: { name: string; input: RegisterExtensionInput }) => {
+      if (!userId) throw new Error("no acting user");
+      return registerExtension(name, userId, input);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.extensions });
+    },
+  });
+}
+
+/** Remove a registered extension. The controller refuses (409) while any branch
+ *  still opts into it, so the error is worth surfacing verbatim. */
+export function useDeregisterExtension(userId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => {
+      if (!userId) throw new Error("no acting user");
+      return deregisterExtension(name, userId);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.extensions });
     },
   });
 }

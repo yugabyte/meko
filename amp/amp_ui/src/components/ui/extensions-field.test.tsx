@@ -1,17 +1,23 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { ExtensionsField, AMP_EXTENSIONS } from "@/components/ui/extensions-field";
+import {
+  ExtensionsField,
+  BUNDLED_EXTENSIONS,
+} from "@/components/ui/extensions-field";
 
-// ExtensionsField is a multi-select over a hard-coded catalog, with one twist:
-// what is already enabled on the target is locked, because the API unions and
-// offers no removal. These guard the toggle contract and that locking.
+// ExtensionsField is a multi-select over whatever catalog it is handed, with one
+// twist: what is already enabled on the target is locked, because the API unions
+// and offers no removal. These guard the toggle contract and that locking.
+//
+// The component stays presentation-only — the live catalog is fetched by its
+// callers (useExtensionOptions), so these render it bare with no query client.
 afterEach(cleanup);
 
 describe("ExtensionsField", () => {
   it("renders every catalog extension as an unchecked checkbox by default", () => {
     render(<ExtensionsField value={[]} onChange={vi.fn()} />);
     const boxes = screen.getAllByRole("checkbox");
-    expect(boxes).toHaveLength(AMP_EXTENSIONS.length);
+    expect(boxes).toHaveLength(BUNDLED_EXTENSIONS.length);
     for (const b of boxes) expect(b.getAttribute("aria-checked")).toBe("false");
   });
 
@@ -56,5 +62,24 @@ describe("ExtensionsField", () => {
   it("drops the restart tag when showRestartTag is off", () => {
     render(<ExtensionsField value={[]} onChange={vi.fn()} showRestartTag={false} />);
     expect(screen.queryByText(/needs restart/i)).toBeNull();
+  });
+
+  // The point of fetching the catalog: an image an admin registered is not in
+  // the bundled list, and must still be offered.
+  it("renders a registered extension the bundled list does not contain", () => {
+    const onChange = vi.fn();
+    render(
+      <ExtensionsField
+        value={[]}
+        onChange={onChange}
+        options={[
+          { name: "postgis", version: "3.6.2", description: "Spatial types", builtin: false },
+        ]}
+      />,
+    );
+    const gis = screen.getByRole("checkbox", { name: "postgis" });
+    expect(gis).toBeTruthy();
+    fireEvent.click(gis);
+    expect(onChange).toHaveBeenCalledWith(["postgis"]);
   });
 });
