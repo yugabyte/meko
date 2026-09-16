@@ -1157,12 +1157,20 @@ type endpointValues struct {
 }
 
 // extensionValues mirrors an entry of the chart's endpoint.extensions list: the
-// mount name/subdir, the OCI image reference, and whether it needs a
-// shared_preload_libraries entry.
+// mount name/subdir, the OCI image reference, whether it needs a
+// shared_preload_libraries entry, and — for a third-party image — where its
+// tree keeps its pieces relative to the mount root. Every layout field is
+// omitempty so an amp-built extension renders exactly the values it always did.
 type extensionValues struct {
-	Name    string `json:"name"`
-	Image   string `json:"image"`
-	Preload bool   `json:"preload"`
+	Name           string            `json:"name"`
+	Image          string            `json:"image"`
+	Preload        bool              `json:"preload"`
+	Library        string            `json:"library,omitempty"`
+	SharePath      string            `json:"sharePath,omitempty"`
+	LibPath        string            `json:"libPath,omitempty"`
+	LibraryPath    []string          `json:"libraryPath,omitempty"`
+	EnvPaths       map[string]string `json:"envPaths,omitempty"`
+	ABIExtraExempt []string          `json:"abiExtraExempt,omitempty"`
 }
 
 // resourceValues is the endpoint container's reservation. cpu and memory are
@@ -1269,7 +1277,17 @@ func extensionValuesFor(exts []Extension) []extensionValues {
 	}
 	out := make([]extensionValues, len(exts))
 	for i, e := range exts {
-		out[i] = extensionValues{Name: e.Name, Image: e.Image, Preload: e.Preload}
+		out[i] = extensionValues{
+			Name:           e.Name,
+			Image:          e.Image,
+			Preload:        e.Preload,
+			Library:        e.Library,
+			SharePath:      e.SharePath,
+			LibPath:        e.LibPath,
+			LibraryPath:    e.LibraryPath,
+			EnvPaths:       e.EnvPaths,
+			ABIExtraExempt: e.ABIExtraExempt,
+		}
 	}
 	return out
 }

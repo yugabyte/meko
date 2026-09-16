@@ -15,10 +15,14 @@ name: Amp on-demand checks
 #                       pr-build.yml, so this + that == full coverage.
 #   amp_generate_image    — build the controller container image (deploy/controller)
 #   amp_extensions_local  — the local-deploy extension end-to-end test
-#                       (test/integration/compute/extensions.sh --regress): builds
-#                       the real extension docker image and runs each extension's
-#                       own upstream regression suite (#608) against a yb_amp_local
-#                       cluster. Also automatic when the diff touches
+#                       (test/integration/compute/extensions.sh): builds the real
+#                       extension docker image and runs each extension's own
+#                       upstream regression suite (#608) against a yb_amp_local
+#                       cluster. A REGISTERED third-party image is covered by
+#                       amp_deploy_gke_extensions instead, on the real endpoint
+#                       image with real ImageVolumes — a bookworm-built image
+#                       cannot be faithfully loaded on an ubuntu runner. Also
+#                       automatic when the diff touches
 #                       deploy/extensions/ (the pipeline it exercises), and nightly on
 #                       main; the GKE twin is amp_deploy_gke_extensions over in
 #                       amp-control-plane-gke.yml.
@@ -404,7 +408,6 @@ jobs:
         env:
           INTEGRATION_PORT_BASE: "21000"
         run: test/integration/compute/extensions.sh --ext age --regress ${{ steps.quay.outputs.cache }}
-
       - name: Upload run logs
         if: failure()
         uses: actions/upload-artifact@v7

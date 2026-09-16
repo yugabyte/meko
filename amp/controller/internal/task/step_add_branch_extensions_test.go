@@ -17,7 +17,7 @@ import (
 func TestAddBranchExtensionsStepUnionsAndRedeploys(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
@@ -62,7 +62,7 @@ func TestAddBranchExtensionsStepUnionsAndRedeploys(t *testing.T) {
 func TestAddBranchExtensionsStepRedeploysEachEndpointAsItIs(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID)
@@ -108,7 +108,7 @@ func TestAddBranchExtensionsStepReadsTheBranchSetOnce(t *testing.T) {
 	state := &recordingExtStore{fakeStateStore: newFakeStateStore(), err: errors.New("boom"), okReads: 1}
 	dep := &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
@@ -143,7 +143,7 @@ func TestAddBranchExtensionsStepRecordsTheDeployedVersion(t *testing.T) {
 	state := newFakeStateStore()
 	dep := &fakeDeployer{reportVersion: "ep-2026.08.1"}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID)
@@ -162,7 +162,7 @@ func TestAddBranchExtensionsStepRecordsTheDeployedVersion(t *testing.T) {
 	// the spec's version back, and this endpoint asks for none.
 	silent := newFakeStateStore()
 	quiet := endpointDeps(silent, nil, &fakeDeployer{})
-	quiet.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	quiet.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	silent.seedBranchExtensions(clusterID, branchID)
 	ep := uuid.New()
 	silent.seedEndpointDeploy(clusterID, core.EndpointDeploy{ID: ep, BranchID: branchID, PgVersion: 18})
@@ -182,7 +182,7 @@ func TestAddBranchExtensionsStepReadFailureDeploysNothing(t *testing.T) {
 	state := &recordingExtStore{fakeStateStore: newFakeStateStore(), err: errors.New("boom")}
 	dep := &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
@@ -205,7 +205,7 @@ func TestAddBranchExtensionsStepRequiresDeployerAndCatalog(t *testing.T) {
 	clusterID, branchID := uuid.New(), uuid.New()
 
 	noDeployer := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pgvector"}},
-		Deps{State: newFakeStateStore(), Extensions: extensions.NewCatalog("r")})
+		Deps{State: newFakeStateStore(), Extensions: extensions.NewService(extensions.NewCatalog("r"), nil)})
 	if res := noDeployer.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded with no deployer, want a failure")
 	}
@@ -225,7 +225,7 @@ func TestAddBranchExtensionsStepRequiresDeployerAndCatalog(t *testing.T) {
 func TestAddBranchExtensionsStepPreservesConnectivity(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	nlb, plain := uuid.New(), uuid.New()
@@ -275,7 +275,7 @@ func TestAddBranchExtensionsStepPreservesConnectivity(t *testing.T) {
 func TestAddBranchExtensionsStepSkipsEndpointsAlreadyCurrent(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
@@ -309,7 +309,7 @@ func TestAddBranchExtensionsStepSkipsEndpointsAlreadyCurrent(t *testing.T) {
 func TestAddBranchExtensionsStepIgnoresRecordedOrder(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, nil, dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
@@ -345,7 +345,7 @@ func TestAddBranchExtensionsStepReplayRedeploysOnlyWhatItMissed(t *testing.T) {
 	failing := &fakeDeployer{}
 	failing.createErrAfter = 1
 	deps := endpointDeps(state, nil, failing)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	step := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
 		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"}}, deps)
 	if res := step.Execute(t.Context()); !res.Failed() {
@@ -359,7 +359,7 @@ func TestAddBranchExtensionsStepReplayRedeploysOnlyWhatItMissed(t *testing.T) {
 	// Replay. The row already carries the union, so nothing else would re-drive it.
 	replay := &fakeDeployer{}
 	deps2 := endpointDeps(state, nil, replay)
-	deps2.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps2.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	step2 := NewAddBranchExtensionsStep(AddBranchExtensionsArgs{
 		ClusterID: clusterID, BranchID: branchID, Extensions: []string{"pg_cron"}}, deps2)
 	if res := step2.Execute(t.Context()); res.Failed() {

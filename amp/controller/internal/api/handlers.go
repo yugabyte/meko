@@ -47,7 +47,7 @@ type Provisioning struct {
 	// Extensions is the externalized-extension catalog the create_endpoint step
 	// resolves a branch's extension set against. Wired only for the Kubernetes
 	// driver (ImageVolumes); nil for Docker / when the feature is off.
-	Extensions *extensions.Catalog
+	Extensions *extensions.Service
 
 	// VoyagerMigrations, VoyagerMigrationService, and VoyagerRunner back the
 	// Voyager migration APIs. They are all nil when the migration feature is not
@@ -303,7 +303,10 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	var exts []string
 	if request.Body.Extensions != nil {
 		var errMsg string
-		if exts, errMsg = c.validateExtensions(*request.Body.Extensions); errMsg != "" {
+		var err error
+		if exts, errMsg, err = c.validateExtensions(ctx, *request.Body.Extensions); err != nil {
+			return nil, err
+		} else if errMsg != "" {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
 		}
 	}
@@ -322,7 +325,10 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", err.Error()))}, nil
 	}
 	if len(engineExts) > 0 {
-		cleaned, errMsg := c.validateExtensions(engineExts)
+		cleaned, errMsg, err := c.validateExtensions(ctx, engineExts)
+		if err != nil {
+			return nil, err
+		}
 		if errMsg != "" {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
 		}
@@ -473,7 +479,10 @@ func (c *Controllers) AddBranchExtensions(ctx context.Context, request AddBranch
 	// Validate names against the catalog (unknown => 400, catalog unavailable =>
 	// 400) and drop blanks. An empty effective set is a 400: the caller asked to
 	// enable something.
-	exts, errMsg := c.validateExtensions(request.Body.Extensions)
+	exts, errMsg, err := c.validateExtensions(ctx, request.Body.Extensions)
+	if err != nil {
+		return nil, err
+	}
 	if errMsg != "" {
 		return AddBranchExtensions400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
 	}
@@ -1388,24 +1397,30 @@ func poolToAPI(p core.StoragePool) StoragePool {
 // driver / feature off) or a name is unknown — an unknown opt-in is an error, not
 // a silent drop. An empty/absent input is valid (no extensions), returning
 // (nil, "").
-func (c *Controllers) validateExtensions(names []string) (cleaned []string, errMsg string) {
+func (c *Controllers) validateExtensions(ctx context.Context, names []string) (cleaned []string, errMsg string, err error) {
 	if len(names) == 0 {
-		return nil, ""
+		return nil, "", nil
 	}
 	if c.prov.Extensions == nil {
-		return nil, "externalized extensions are not supported on this controller"
+		return nil, "externalized extensions are not supported on this controller", nil
 	}
 	for _, raw := range names {
 		name := strings.TrimSpace(raw)
 		if name == "" {
 			continue
 		}
-		if !c.prov.Extensions.Has(name) {
-			return nil, fmt.Sprintf("unknown extension %q", name)
+		// Registered extensions live in the database, so this is a read that can
+		// fail — distinct from "unknown name", which is the caller's 400.
+		ok, err := c.prov.Extensions.Has(ctx, name)
+		if err != nil {
+			return nil, "", err
+		}
+		if !ok {
+			return nil, fmt.Sprintf("unknown extension %q", name), nil
 		}
 		cleaned = append(cleaned, name)
 	}
-	return cleaned, ""
+	return cleaned, "", nil
 }
 
 // unionExtensions appends names from `add` that `base` does not already carry,

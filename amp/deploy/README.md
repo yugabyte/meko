@@ -470,7 +470,10 @@ deploy/extensions/build.sh --push pgvector   # build + push just pgvector
 The chart mounts them via `endpoint.extensions` (`{ name, image, preload }`),
 rendering one read-only ImageVolume per entry at `/extensions/<name>` and
 deriving `extension_control_path` / `dynamic_library_path` (and any preload
-entry for `SHARED_PRELOAD_LIBRARIES`) from the list.
+entry for `SHARED_PRELOAD_LIBRARIES`) from the list. An image amp does **not**
+build is not listed here at all: an operator registers it through
+`PUT /extensions/{name}`, and the entry then also carries the layout, loader and
+ABI-waiver fields the arch doc covers under "Registering an extension image".
 
 On an **Apple Silicon Mac** the default qemu emulation crashes the Rust compile;
 see [`building-images-apple-silicon.md`](building-images-apple-silicon.md) to build
@@ -493,6 +496,7 @@ a ConfigMap + Secret):
 | `COMPUTE_PORT` | `55433` | compute Postgres port |
 | `COMPUTE_PASSWORD` | `cloud_admin` | password for the `cloud_admin` role |
 | `SHARED_PRELOAD_LIBRARIES` | `yb_amp,pg_stat_statements` | compute `shared_preload_libraries` |
+| `EXTENSION_LIBRARY_PATH` | _(unset)_ | colon-separated dirs of system shared libraries a registered extension bundles (e.g. `/extensions/postgis/system`); appended to `LD_LIBRARY_PATH` for every child |
 | `TENANT_ID` / `TIMELINE_ID` | _(unset)_ | serve an existing tenant; unset ⇒ bootstrap a fresh one |
 
 Internal ports (`PAGESERVER_PG_PORT`, `PAGESERVER_HTTP_PORT`,

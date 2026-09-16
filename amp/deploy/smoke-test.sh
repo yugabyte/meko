@@ -34,6 +34,10 @@
 # path: a cluster with extensions:["pg_cron"], assert the ImageVolume mounted at
 # /extensions/pg_cron, pg_cron is in shared_preload_libraries, `CREATE EXTENSION
 # pg_cron`, and a scheduled job runs to success. Then a private-source extension:
+# the extension registry: an admin registers the CloudNativePG PostGIS image
+# through PUT /extensions/postgis (the product catalog names no third-party image
+# at all; this one lives in a test fixture), a cluster opts into it, and
+# the pod mounts it with the registered layout, bundled libraries and ABI waiver;
 # a cluster with extensions:["hexabridge"], assert the ImageVolume mounted at
 # /extensions/hexabridge, `CREATE EXTENSION hexabridge` (superuser-only), and an
 # Oracle-compat function returns its expected value. Then the other half of the
@@ -545,6 +549,96 @@ SQL
   else
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$HPROJ")
     st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster cascade deleted" || bad "hexabridge cluster delete task=$st"
+  fi
+
+  hdr "extension registry: an admin registers a third-party image, a branch mounts it"
+
+  # The registration API end to end, against the real ImageVolume path. Nothing
+  # in the product knows this image — it reaches amp only because we PUT it here,
+  # from test/integration/compute/ext_fixtures/postgis.json. The reference lives
+  # in test fixtures and docs, never in the product catalog.
+  #
+  # It exercises three things no built-in extension does: a non-amp in-image
+  # layout (share + lib, not share/postgresql + lib/postgresql), the bundled
+  # geos/proj/gdal reaching the loader via EXTENSION_LIBRARY_PATH, and the
+  # FMGR_ABI_EXTRA waiver without which a stock-PG18 build refuses to load.
+  GISFIX="$(dirname "$0")/../test/integration/compute/ext_fixtures/postgis.json"
+  if [ ! -f "$GISFIX" ]; then
+    bad "postgis fixture missing at $GISFIX"
+  else
+    # $USER was created with {} — not an admin — so it is exactly the caller that
+    # must be refused: registration decides what image runs inside an endpoint pod
+    # and can waive the server's ABI check.
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
+      --data-binary "@$GISFIX" "$BASE/extensions/postgis?user_id=$USER")
+    [ "$code" = 403 ] && ok "registerExtension as non-admin -> 403" || bad "non-admin register code=$code (want 403)"
+
+    post_id GISADMIN "$BASE/users" '{"is_admin":true}'
+    [ -n "$GISADMIN" ] && ok "createUser(admin) 201 ($GISADMIN)" || bad "createUser(admin) $LAST_ERR"
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
+      --data-binary "@$GISFIX" "$BASE/extensions/postgis?user_id=$GISADMIN")
+    [ "$code" = 200 ] && ok "registerExtension as admin -> 200" || bad "admin register code=$code (want 200)"
+
+    # It shows up in the catalog, marked as not built-in, with the image we sent.
+    # Read the expected reference back out of the fixture rather than repeating
+    # it: the fixture is meant to be the only place in the repo that names a
+    # third-party extension image.
+    GISIMG=$(jq -r .image "$GISFIX")
+    gis=$(curl -sf "$BASE/extensions" | jq -r '.extensions[]|select(.name=="postgis")|"\(.builtin)|\(.image)"')
+    [ "$gis" = "false|$GISIMG" ] \
+      && ok "listExtensions reports postgis as registered ($gis)" || bad "listExtensions postgis=$gis"
+
+    # And a cluster may now opt into it by name, exactly like a built-in.
+    IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"gisproj","extensions":["postgis"]}')
+    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "cluster created with the registered extension" || bad "gis cluster task=$st"
+    GPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="gisproj")|.id')
+    GDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$GPROJ" | jq -r '.default_branch.branch_id')
+
+    IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" '{"role":"read_write"}')
+    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(postgis) succeeded" || bad "create_endpoint(postgis) task=$st"
+    GEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" | jq -r '.endpoints[0].id')
+    GPOD=$(wait_ready_pod "$GEP")
+    [ -n "$GPOD" ] && ok "postgis endpoint pod Ready ($GPOD)" || bad "postgis endpoint pod not Ready"
+
+    # The registered layout reached the pod: the CNPG tree is share/extension,
+    # not share/postgresql/extension, and the bundled libs and PROJ database are
+    # things the endpoint image does not carry.
+    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/share/extension/postgis.control \
+      && ok "postgis ImageVolume mounted with the registered layout" || bad "postgis ImageVolume not mounted"
+    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/system/libgeos_c.so.1 \
+      && ok "bundled system libraries mounted (/extensions/postgis/system)" || bad "postgis system libs not mounted"
+    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/share/proj/proj.db \
+      && ok "PROJ database mounted (/extensions/postgis/share/proj)" || bad "postgis PROJ database not mounted"
+
+    # CREATE EXTENSION is the ABI-waiver assertion: reaching any geometry
+    # function proves the stock-PG18 .so loaded. ST_Transform is the PROJ_DATA
+    # assertion — 4326 -> 3857 sends longitude 180 to x = 20037508.34.
+    out=$(psql_pod "$GPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS postgis;
+SELECT 'VERSION:'||extversion FROM pg_extension WHERE extname='postgis';
+SELECT 'AREA:'||round(ST_Area(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))::numeric, 3);
+SELECT 'MERCX:'||round(ST_X(ST_Transform(ST_SetSRID(ST_MakePoint(180, 0), 4326), 3857))::numeric, 2);
+SQL
+)
+    { echo "$out" | grep -q '^VERSION:3.6.2$' && echo "$out" | grep -q '^AREA:1.000$' \
+      && echo "$out" | grep -q '^MERCX:20037508.34$'; } \
+      && ok "postgis CREATE EXTENSION (v3.6.2) + ST_Area=1 + ST_Transform x=20037508.34" \
+      || bad "postgis checks failed (got: $(echo "$out" | tr '\n' ' '))"
+
+    # Deregistering it now must be refused: the branch above still opts in, and
+    # dropping the row would strip the mount on its next deploy.
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/extensions/postgis?user_id=$GISADMIN")
+    [ "$code" = 409 ] && ok "deregisterExtension while a branch uses it -> 409" || bad "in-use deregister code=$code (want 409)"
+
+    if [ "$KEEP" = "1" ]; then
+      echo "  KEEP set: leaving postgis cluster $GPROJ (endpoint pod $GPOD) up for inspection"
+    else
+      IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$GPROJ")
+      st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "postgis cluster cascade deleted" || bad "postgis cluster delete task=$st"
+      # With nothing referencing it, the registration goes.
+      code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/extensions/postgis?user_id=$GISADMIN")
+      [ "$code" = 204 ] && ok "deregisterExtension once unused -> 204" || bad "deregister code=$code (want 204)"
+    fi
   fi
 
   hdr "externalized extensions: addBranchExtensions unions the set + redeploys the branch's live endpoints"

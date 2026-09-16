@@ -68,8 +68,25 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "yb-amp-endpoint.fullname" . }}
-          {{- if or (include "yb-amp-endpoint.hasPassword" .) .Values.controller.url }}
+          {{- $extEnv := dict }}
+          {{- range .Values.endpoint.extensions }}
+          {{- $mount := printf "/extensions/%s" .name }}
+          {{- range $k, $v := .envPaths }}
+          {{- $_ := set $extEnv $k (printf "%s/%s" $mount $v) }}
+          {{- end }}
+          {{- end }}
+          {{- if or (include "yb-amp-endpoint.hasPassword" .) .Values.controller.url $extEnv }}
           env:
+          {{- if $extEnv }}
+          # Data directories an externalized extension's libraries read at
+          # runtime, each resolved against that extension's ImageVolume mount
+          # (e.g. PROJ_DATA for PostGIS's coordinate database). Set here rather
+          # than in the ConfigMap because these are process environment, not GUCs.
+          {{- end }}
+          {{- range $k, $v := $extEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+          {{- end }}
           {{- if include "yb-amp-endpoint.hasPassword" . }}
             - name: YB_PASSWORD
               valueFrom:

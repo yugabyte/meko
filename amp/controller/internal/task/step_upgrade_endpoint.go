@@ -38,7 +38,7 @@ type upgradeEndpointStep struct {
 	deployer   deploy.Deployer
 	yb         deploy.YBConn
 	scURL      string
-	extensions *extensions.Catalog
+	extensions *extensions.Service
 }
 
 // NewUpgradeEndpointStep binds upgrade_endpoint args + its deps into an executable step.

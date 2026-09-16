@@ -18,7 +18,7 @@ import (
 // the mounts have to resolve the way they do in production.
 func upgradeDeps(state StateStore, dep *fakeDeployer) Deps {
 	d := endpointDeps(state, nil, dep)
-	d.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	d.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	return d
 }
 

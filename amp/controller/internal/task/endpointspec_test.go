@@ -15,7 +15,7 @@ import (
 // resolveWithCatalog resolves the way a step does: a real catalog, so the names
 // map to the pinned images production would mount.
 func resolveWithCatalog(ctx context.Context, state StateStore, branchID uuid.UUID) ([]deploy.Extension, error) {
-	return resolveBranchExtensions(ctx, extensions.NewCatalog("quay.io/yugabyte"), state, branchID)
+	return resolveBranchExtensions(ctx, extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil), state, branchID)
 }
 
 // The mounts are the branch's set resolved through the catalog — pinned images,

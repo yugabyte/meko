@@ -434,7 +434,8 @@ and sample invocations.
 
 [`runbooks/`](runbooks/) holds incident-time playbooks ("symptom → quick
 diagnosis → fix") for a running AMP deployment — component startup failures,
-throughput troubleshooting, and broader performance investigation. See
+throughput troubleshooting, broader performance investigation, and the
+procedure for adding PostGIS. See
 [`compute/README.md`](compute/README.md#operational-runbooks) for the index.
 
 ## Cleanup

@@ -15,7 +15,7 @@ import (
 // image references. With no catalog it returns nil — the endpoint ships only
 // image-baked extensions (Docker driver / feature off). Unknown names are dropped
 // by the catalog, so a stale entry can't wedge the deploy.
-func resolveBranchExtensions(ctx context.Context, catalog *extensions.Catalog, state StateStore, branchID uuid.UUID) ([]deploy.Extension, error) {
+func resolveBranchExtensions(ctx context.Context, catalog *extensions.Service, state StateStore, branchID uuid.UUID) ([]deploy.Extension, error) {
 	if catalog == nil {
 		return nil, nil
 	}
@@ -25,9 +25,25 @@ func resolveBranchExtensions(ctx context.Context, catalog *extensions.Catalog, s
 	if err != nil {
 		return nil, fmt.Errorf("read branch extensions: %w", err)
 	}
+	resolved, err := catalog.Resolve(ctx, unionStrings(catalog.DefaultNames(), opted))
+	if err != nil {
+		return nil, fmt.Errorf("resolve extensions: %w", err)
+	}
 	var specs []deploy.Extension
-	for _, x := range catalog.Resolve(unionStrings(catalog.DefaultNames(), opted)) {
-		specs = append(specs, deploy.Extension{Name: x.Name, Image: x.Image, Preload: x.Preload})
+	for _, x := range resolved {
+		specs = append(specs, deploy.Extension{
+			Name:    x.Name,
+			Image:   x.Image,
+			Preload: x.Preload,
+			Library: x.Library,
+			// Layout/ABI fields are empty for an amp-built extension and set only
+			// by a third-party image (postgis, from CloudNativePG).
+			SharePath:      x.Layout.SharePath,
+			LibPath:        x.Layout.LibPath,
+			LibraryPath:    x.Layout.LibraryPath,
+			EnvPaths:       x.Layout.EnvPaths,
+			ABIExtraExempt: x.ABIExtraExempt,
+		})
 	}
 	return specs, nil
 }

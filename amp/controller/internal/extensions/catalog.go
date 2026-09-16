@@ -5,9 +5,12 @@
 // pinned version, load requirements, and default-ness, and resolves a set of
 // names to concrete image references the deployer threads into the endpoint spec.
 //
-// It is a pure, code-defined lookup table (no I/O): the built-in set is small
-// and versioned in-tree so image tags and controller stay in lockstep. A future
-// iteration can source it from config or a table without changing callers.
+// Catalog itself is a pure, code-defined lookup table (no I/O): the built-in set
+// is small and versioned in-tree so image tags and controller stay in lockstep.
+// Extensions an operator REGISTERS through the API live in the database instead;
+// [Service] unions the two and is what callers resolve against. Nothing in this
+// package hardcodes a third-party image reference — a third-party image reaches
+// amp only by being registered.
 package extensions
 
 import "fmt"
@@ -27,15 +30,60 @@ type Extension struct {
 	// Default => mounted on every endpoint out of the box (the "batteries
 	// included" set), without the branch having to opt in.
 	Default bool
+
+	// Description is a one-line human summary, shown by listExtensions.
+	Description string
+	// Library is the shared-library basename when it differs from Name — the
+	// shared_preload_libraries entry for a Preload extension. Empty means Name.
+	Library string
+
+	// ImageRef pins a complete image reference instead of deriving the amp-built
+	// <registry>/amp-ext-<Name>:<Version> one. Every REGISTERED extension sets it
+	// (that reference is the whole point of registering); a built-in entry leaves
+	// it empty and is derived from the extension registry flag.
+	ImageRef string
+	// Layout describes where the image keeps its pieces. The zero value is the
+	// layout deploy/extensions produces, which is what every built-in wants; a
+	// registered image declares its own.
+	Layout Layout
+	// ABIExtraExempt lists the modules in the image (bare file names, no
+	// extension) allowed to differ from the server in FMGR_ABI_EXTRA. Needed
+	// only for an image built against stock PostgreSQL; every other magic-block
+	// field is still enforced by the server. See yb_amp_abi_extra_exempt_libraries in
+	// the forked Postgres. Waiving it wrongly can crash the postmaster, which is
+	// why registering an extension is an admin-only API.
+	ABIExtraExempt []string
+}
+
+// Layout is where an extension image keeps its pieces, relative to the mount
+// root the endpoint gives it (/extensions/<name>). Empty fields take the
+// deploy/extensions defaults, so an amp-built entry declares nothing.
+type Layout struct {
+	// SharePath is the sharedir BASE appended to extension_control_path — PG18
+	// appends "/extension" itself. Default "share/postgresql".
+	SharePath string
+	// LibPath is appended to dynamic_library_path. Default "lib/postgresql".
+	LibPath string
+	// LibraryPath are dirs holding system shared libraries the extension's .so
+	// links but the endpoint image does not carry (PostGIS's geos/proj/gdal).
+	// The supervisor appends them to LD_LIBRARY_PATH.
+	LibraryPath []string
+	// EnvPaths are data dirs the extension reads at runtime, by environment
+	// variable name (PROJ_DATA, GDAL_DATA). The chart prefixes the mount root.
+	EnvPaths map[string]string
 }
 
 // Resolved is a catalog entry paired with its concrete image reference, ready
 // for the endpoint spec / Helm values. Preload is carried through so the chart
-// can extend shared_preload_libraries.
+// can extend shared_preload_libraries, and the layout/ABI fields so it can
+// render a third-party image's paths.
 type Resolved struct {
-	Name    string
-	Image   string
-	Preload bool
+	Name           string
+	Image          string
+	Preload        bool
+	Library        string
+	Layout         Layout
+	ABIExtraExempt []string
 }
 
 // Catalog is the fixed set of known extensions plus the registry their images
@@ -46,22 +94,28 @@ type Catalog struct {
 	order    []string // insertion order, for stable DefaultNames/Resolve output
 }
 
-// builtin is the in-tree extension set. Keep versions in lockstep with
-// deploy/extensions/extensions.yaml (the build manifest).
+// builtin is the in-tree extension set. Keep versions AND descriptions in
+// lockstep with deploy/extensions/extensions.yaml (the build manifest).
+//
+// The description is not decoration: listExtensions is the catalog a picker
+// renders, so an entry without one shows a blank card. The manifest's own
+// generator refuses a row that lacks it for exactly that reason.
 var builtin = []Extension{
 	// pgvector: known/available but NOT a default — opting in is per branch
 	// (seeded on the default branch by extensions[] on createCluster, extended by
 	// addBranchExtensions), persisted on amp_registry.branches.extensions (a fork
 	// inherits it) so every endpoint on the branch mounts it. No preload needed.
 	// The image ships vector.control / vector*.sql (the SQL name is "vector").
-	{Name: "pgvector", Version: "0.8.2", Default: false, Preload: false},
+	{Name: "pgvector", Version: "0.8.2", Default: false, Preload: false,
+		Description: "Vector similarity search"},
 	// pg_cron: a background-worker job scheduler. Opt-in per branch like
 	// pgvector, but Preload: true — its library must be in
 	// shared_preload_libraries (the chart appends it), so an endpoint that opts
 	// in needs a postmaster restart. Its scheduler binds to one database via the
 	// cron.database_name GUC (default "postgres", which every endpoint serves);
 	// a non-default database is set through the endpoint's pg_settings.
-	{Name: "pg_cron", Version: "1.6.7", Default: false, Preload: true},
+	{Name: "pg_cron", Version: "1.6.7", Default: false, Preload: true,
+		Description: "Cron-style job scheduler"},
 	// hexabridge: HexaCluster's Oracle-compatibility layer. Opt-in per branch
 	// like the others and NOT a default. Preload: true — its _PG_init registers a
 	// dbms_scheduler background worker and dbms_alert/dbms_pipe shared memory, so
@@ -69,14 +123,16 @@ var builtin = []Extension{
 	// endpoint needs a postmaster restart (like pg_cron). The SQL name equals the
 	// catalog name (CREATE EXTENSION hexabridge); its source is fetched from a
 	// private repo at build time (see deploy/extensions).
-	{Name: "hexabridge", Version: "0.1", Default: false, Preload: true},
+	{Name: "hexabridge", Version: "0.1", Default: false, Preload: true,
+		Description: "Oracle compatibility (DBMS_*/UTL_* packages)"},
 	// age: Apache AGE, the openCypher graph extension. Opt-in per branch like the
 	// others and NOT a default. Preload: false — AGE loads per session via
 	// `LOAD 'age'` and does not require shared_preload_libraries (like pgvector),
 	// so opting in on a live endpoint is a mount, not a restart. The SQL name
 	// equals the catalog name (CREATE EXTENSION age; schema ag_catalog). v1.8.0
 	// is AGE's PG18 release line.
-	{Name: "age", Version: "1.8.0", Default: false, Preload: false},
+	{Name: "age", Version: "1.8.0", Default: false, Preload: false,
+		Description: "Apache AGE — openCypher graph"},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.
@@ -95,13 +151,32 @@ func NewCatalog(registry string) *Catalog {
 }
 
 // image builds an entry's full image reference: <registry>/amp-ext-<name>:<version>,
-// or "amp-ext-<name>:<version>" when the registry is empty.
-func (c *Catalog) image(e Extension) string {
+// or "amp-ext-<name>:<version>" when the registry is empty. An entry carrying an
+// ImageRef (every registered one) is used verbatim — the amp registry flag says
+// where WE publish and nothing about where someone else does.
+func image(e Extension, registry string) string {
+	if e.ImageRef != "" {
+		return e.ImageRef
+	}
 	ref := fmt.Sprintf("amp-ext-%s:%s", e.Name, e.Version)
-	if c.registry == "" {
+	if registry == "" {
 		return ref
 	}
-	return c.registry + "/" + ref
+	return registry + "/" + ref
+}
+
+// resolve pairs an entry with its concrete image reference. Shared by the
+// built-in catalog and [Service], so a registered extension reaches the deployer
+// through exactly the same shape as a built-in one.
+func resolve(e Extension, registry string) Resolved {
+	return Resolved{
+		Name:           e.Name,
+		Image:          image(e, registry),
+		Preload:        e.Preload,
+		Library:        e.Library,
+		Layout:         e.Layout,
+		ABIExtraExempt: e.ABIExtraExempt,
+	}
 }
 
 // Has reports whether name is a known catalog extension — the
@@ -140,7 +215,7 @@ func (c *Catalog) Resolve(names []string) []Resolved {
 			continue
 		}
 		seen[n] = struct{}{}
-		out = append(out, Resolved{Name: e.Name, Image: c.image(e), Preload: e.Preload})
+		out = append(out, resolve(e, c.registry))
 	}
 	return out
 }

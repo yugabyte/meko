@@ -292,3 +292,69 @@ func TestSupervisorEnvRefusesAnUnprovisionedEndpoint(t *testing.T) {
 		t.Fatal("want an error when no pageserver serves the branch")
 	}
 }
+
+// An externalized extension mounted from an image needs two things from the
+// environment that the Helm chart supplies in a pod. supervisorEnv builds an
+// explicit environment rather than inheriting one, so without forwarding these
+// the compute cannot resolve the libraries the image bundles — and the failure
+// is a dlopen error naming a library that is present on disk.
+func TestSupervisorEnvForwardsAnExtensionsEnvironment(t *testing.T) {
+	t.Setenv("EXTENSION_LIBRARY_PATH", "/extensions/postgis/system")
+	t.Setenv("EXTENSION_ENV", "PROJ_DATA, GDAL_DATA ,")
+	t.Setenv("PROJ_DATA", "/extensions/postgis/share/proj")
+	t.Setenv("GDAL_DATA", "/extensions/postgis/share/gdal")
+
+	env, le := envWithProvisionedEndpoint()
+	got, err := supervisorEnv(env, le)
+	if err != nil {
+		t.Fatalf("supervisorEnv: %v", err)
+	}
+	for k, want := range map[string]string{
+		"EXTENSION_LIBRARY_PATH": "/extensions/postgis/system",
+		"PROJ_DATA":              "/extensions/postgis/share/proj",
+		"GDAL_DATA":              "/extensions/postgis/share/gdal",
+	} {
+		if got[k] != want {
+			t.Errorf("%s = %q, want %q", k, got[k], want)
+		}
+	}
+	// LD_LIBRARY_PATH stays the Postgres lib dir: pgLibEnv owns it, and the
+	// supervisor is what appends EXTENSION_LIBRARY_PATH to it later. Merging
+	// here would overwrite the value the daemons need.
+	if strings.Contains(got["LD_LIBRARY_PATH"], "/extensions/") {
+		t.Errorf("LD_LIBRARY_PATH carries an extension dir: %q", got["LD_LIBRARY_PATH"])
+	}
+}
+
+// Unset in ordinary local use, and then nothing extra is forwarded.
+func TestSupervisorEnvForwardsNoExtensionEnvByDefault(t *testing.T) {
+	env, le := envWithProvisionedEndpoint()
+	got, err := supervisorEnv(env, le)
+	if err != nil {
+		t.Fatalf("supervisorEnv: %v", err)
+	}
+	for _, k := range []string{"EXTENSION_LIBRARY_PATH", "EXTENSION_ENV", "PROJ_DATA"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("%s forwarded when unset", k)
+		}
+	}
+}
+
+// A name in EXTENSION_ENV that is not itself set must not appear as an empty
+// value — an empty PROJ_DATA is worse than none, since libproj then looks in a
+// path that does not exist instead of falling back.
+func TestSupervisorEnvSkipsAnUnsetExtensionVariable(t *testing.T) {
+	t.Setenv("EXTENSION_ENV", "PROJ_DATA,NOT_SET_ANYWHERE")
+	t.Setenv("PROJ_DATA", "/extensions/postgis/share/proj")
+	env, le := envWithProvisionedEndpoint()
+	got, err := supervisorEnv(env, le)
+	if err != nil {
+		t.Fatalf("supervisorEnv: %v", err)
+	}
+	if _, ok := got["NOT_SET_ANYWHERE"]; ok {
+		t.Error("an unset name in EXTENSION_ENV was forwarded")
+	}
+	if got["PROJ_DATA"] == "" {
+		t.Error("PROJ_DATA was not forwarded")
+	}
+}

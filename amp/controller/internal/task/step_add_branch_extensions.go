@@ -38,7 +38,7 @@ type addBranchExtensionsStep struct {
 	deployer   deploy.Deployer
 	yb         deploy.YBConn
 	scURL      string
-	extensions *extensions.Catalog
+	extensions *extensions.Service
 }
 
 // NewAddBranchExtensionsStep binds add_branch_extensions args + its deps into an

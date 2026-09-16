@@ -17,7 +17,7 @@ import (
 // carrying it, and the cluster row giving it back.
 func TestCreateClusterEngine(t *testing.T) {
 	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
+	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 
@@ -86,7 +86,7 @@ func TestCreateClusterEngine(t *testing.T) {
 // behaviour, and the reason the handler unions instead of assigning.
 func TestCreateClusterEngineUnionsWithExtensions(t *testing.T) {
 	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
+	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 
@@ -120,7 +120,7 @@ func TestCreateClusterEngineUnionsWithExtensions(t *testing.T) {
 // An unknown engine is refused before any task is planned, the same as an
 // unknown extension — the spec promises a 400 rather than a silent fallback.
 func TestCreateClusterUnknownEngine(t *testing.T) {
-	prov := api.Provisioning{Deployer: &fakeDeployer{}, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
+	prov := api.Provisioning{Deployer: &fakeDeployer{}, Extensions: extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)}
 	client, _, _ := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 

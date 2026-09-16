@@ -257,7 +257,7 @@ type Deps struct {
 	// resolves a branch's extension set against (names -> pinned images). Nil
 	// disables externalized extensions (the endpoint ships only image-baked ones),
 	// e.g. under the Docker driver or when the feature is off.
-	Extensions *extensions.Catalog
+	Extensions *extensions.Service
 
 	// Subtasks runs the children a fan-out parent owns (subtask_runner.go). Unlike
 	// every other field it is not filled in by the caller building this struct: a

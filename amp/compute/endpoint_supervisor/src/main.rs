@@ -493,6 +493,13 @@ fn run() -> Result<std::process::ExitCode> {
 
     // The daemons and the compute load the bundled Postgres libraries.
     prepend_ld_library_path(&l.pg_lib());
+    // An externalized extension may ship the system libraries its .so links
+    // (the CloudNativePG PostGIS image bundles geos/proj/gdal), which live only
+    // in that ImageVolume. Appended, not prepended: the endpoint image's own
+    // libraries must keep winning.
+    if let Some(dirs) = env_opt("EXTENSION_LIBRARY_PATH") {
+        append_ld_library_path(&dirs);
+    }
 
     for dir in [l.run_dir.clone(), l.ps_datadir(), l.sk_datadir()] {
         std::fs::create_dir_all(&dir).with_context(|| format!("create {dir}"))?;
@@ -883,6 +890,25 @@ pub fn render_config(
         );
     }
 
+    // The chart's own settings get the same treatment. They used to be safe by
+    // construction — extension_control_path and dynamic_library_path are stock
+    // PG18 — but the chart now also renders fork-only GUCs for a registered
+    // extension (yb_amp_abi_extra_exempt_libraries). An endpoint pinned to an
+    // image whose postgres predates such a GUC would otherwise be handed a name
+    // it refuses, and Postgres discards the WHOLE config file over one bad
+    // name: the endpoint then dies at its next restart, far from the change
+    // that caused it. Dropping the one setting instead costs that extension its
+    // waiver and leaves everything else in force, which is the recoverable
+    // failure.
+    let screened_chart = guc::screen(&l.pg_bin(), &l.run_dir, &env.chart_settings);
+    for r in &screened_chart.refused {
+        tracing::warn!(
+            name = %r.name,
+            reason = %r.reason,
+            "chart setting not rendered: this compute's postgres does not accept it"
+        );
+    }
+
     let (settings, skipped) = pg_settings::derive(&res);
     for s in &settings {
         tracing::info!(name = %s.name, value = %s.value, "derived");
@@ -983,7 +1009,7 @@ pub fn render_config(
             compute_ctl_jwks: env.compute_ctl_jwks.clone(),
         },
         &settings,
-        &env.chart_settings,
+        &screened_chart.keep,
         &screened.keep,
     );
     let rendered_spec = serde_json::to_string(&compute_spec)?;
@@ -1008,7 +1034,19 @@ pub fn render_config(
         safekeeper,
         compute,
         changed_settings,
-        refused_settings: screened.refused.into_iter().chain(refused_daemon).collect(),
+        // The chart's refusals belong here too, not just in the log. Without
+        // them a chart GUC the probe rejected is reported nowhere the settings
+        // API can see; worse, on the next render its name has vanished from the
+        // previous compute_spec.json, so it lands in changed_settings, reaches
+        // classify_settings as "inapplicable", and slips past the filter whose
+        // whole job is to keep a render-refused name from being re-reported
+        // under that generic reason.
+        refused_settings: screened
+            .refused
+            .into_iter()
+            .chain(screened_chart.refused)
+            .chain(refused_daemon)
+            .collect(),
     })
 }
 
@@ -1143,6 +1181,21 @@ fn prepend_ld_library_path(dir: &Utf8Path) {
     } else {
         format!("{dir}:{existing}")
     };
+    // SAFETY: single-threaded at this point — no children are spawned and the
+    // tracing subscriber does not read the environment.
+    unsafe { std::env::set_var("LD_LIBRARY_PATH", joined) };
+}
+
+/// Puts `dirs` (a colon-separated list) behind the current `LD_LIBRARY_PATH`,
+/// which the children inherit in turn.
+fn append_ld_library_path(dirs: &str) {
+    let existing = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+    let joined = if existing.is_empty() {
+        dirs.to_string()
+    } else {
+        format!("{existing}:{dirs}")
+    };
+    tracing::info!(%dirs, "extension library dirs appended to LD_LIBRARY_PATH");
     // SAFETY: single-threaded at this point — no children are spawned and the
     // tracing subscriber does not read the environment.
     unsafe { std::env::set_var("LD_LIBRARY_PATH", joined) };

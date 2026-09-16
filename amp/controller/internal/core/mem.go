@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/internal/extensions"
 )
 
 // MemBackend is an in-memory Backend that mirrors PgBackend's semantics
@@ -33,7 +35,10 @@ type MemBackend struct {
 	// deploy projection, never on Endpoint.
 	endpointExts map[uuid.UUID][]string
 	writers      map[branchKey]struct{} // at most one read_write endpoint per branch
-	now          func() time.Time
+	// extensions an operator registered (the extensions.Store half); keyed by
+	// name, which is the identity in the schema too.
+	extensions map[string]extensions.Extension
+	now        func() time.Time
 }
 
 // clusterNameKey makes a cluster name unique within its pool (the schema's
@@ -1075,4 +1080,73 @@ func page[T any](items []T, limit, offset int) []T {
 	start := min(offset, len(items))
 	end := min(start+limit, len(items))
 	return items[start:end]
+}
+
+// --- registered extensions (extensions.Store) --------------------------------
+//
+// The in-memory twin of amp_registry.extensions. Same contract as PgBackend:
+// PutExtension fully replaces, a Get miss is (_, false, nil), and ExtensionUsers
+// reports the live branches that opted in — so a test exercises the same refusal
+// paths the database backend does.
+
+// ListExtensions returns every registered extension, name-ordered.
+func (m *MemBackend) ListExtensions(_ context.Context) ([]extensions.Extension, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.extensions))
+	for n := range m.extensions {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]extensions.Extension, 0, len(names))
+	for _, n := range names {
+		out = append(out, m.extensions[n])
+	}
+	return out, nil
+}
+
+// GetExtension reads one registered extension.
+func (m *MemBackend) GetExtension(_ context.Context, name string) (extensions.Extension, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.extensions[name]
+	return e, ok, nil
+}
+
+// PutExtension creates or fully replaces a registration.
+func (m *MemBackend) PutExtension(_ context.Context, e extensions.Extension) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.extensions == nil {
+		m.extensions = make(map[string]extensions.Extension)
+	}
+	m.extensions[e.Name] = e
+	return nil
+}
+
+// DeleteExtension removes a registration.
+func (m *MemBackend) DeleteExtension(_ context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.extensions, name)
+	return nil
+}
+
+// ExtensionUsers returns the ids of live branches that opted into name.
+func (m *MemBackend) ExtensionUsers(_ context.Context, name string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	// A dropped branch is removed from the map here (PgBackend tombstones with
+	// dropped_at instead), so everything present is live.
+	for id, b := range m.branches {
+		for _, n := range b.Extensions {
+			if n == name {
+				out = append(out, id.String())
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }

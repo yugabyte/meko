@@ -167,3 +167,6 @@ incident.
   progress without crashing, spinning, or blocking on YB/network.
 - [`../runbooks/controller_runbook.md`](../runbooks/controller_runbook.md) —
   control-plane (amp controller) incidents.
+- [`../runbooks/postgis.md`](../runbooks/postgis.md) —
+  adding PostGIS: registering a third-party extension image, and what
+  each missing piece of its metadata looks like when it fails.

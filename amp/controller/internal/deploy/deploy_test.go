@@ -152,6 +152,55 @@ func TestKubernetesValuesExtensions(t *testing.T) {
 	}
 }
 
+func TestKubernetesValuesThirdPartyExtensionLayout(t *testing.T) {
+	// A third-party image (postgis, from CloudNativePG) lays its tree out
+	// differently, bundles the system libraries its .so links, and was built
+	// against stock PG18. All four of those reach the chart as values, or the pod
+	// mounts a volume it cannot resolve anything in.
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	spec := testEndpointSpec()
+	spec.Extensions = []Extension{{
+		Name:           "postgis",
+		Image:          "ghcr.io/cloudnative-pg/postgis-extension:3.6.2-18-bookworm",
+		SharePath:      "share",
+		LibPath:        "lib",
+		LibraryPath:    []string{"system"},
+		EnvPaths:       map[string]string{"PROJ_DATA": "share/proj"},
+		ABIExtraExempt: []string{"postgis-3"},
+	}}
+	v := k.values(spec, "yb-ep-rel")
+	want := []extensionValues{{
+		Name:           "postgis",
+		Image:          "ghcr.io/cloudnative-pg/postgis-extension:3.6.2-18-bookworm",
+		SharePath:      "share",
+		LibPath:        "lib",
+		LibraryPath:    []string{"system"},
+		EnvPaths:       map[string]string{"PROJ_DATA": "share/proj"},
+		ABIExtraExempt: []string{"postgis-3"},
+	}}
+	if !reflect.DeepEqual(v.Endpoint.Extensions, want) {
+		t.Fatalf("endpoint.extensions = %+v, want %+v", v.Endpoint.Extensions, want)
+	}
+}
+
+func TestKubernetesValuesAmpExtensionOmitsLayoutKeys(t *testing.T) {
+	// An amp-built extension declares no layout, and the marshaled values must
+	// then carry none of the layout keys — the chart's defaults are the amp tree,
+	// and an explicit empty string would override them with nothing.
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	spec := testEndpointSpec()
+	spec.Extensions = []Extension{{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"}}
+	data, err := json.Marshal(k.values(spec, "yb-ep-rel"))
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	for _, key := range []string{"sharePath", "libPath", "libraryPath", "envPaths", "abiExtraExempt"} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("values carry %q for an amp-built extension: %s", key, data)
+		}
+	}
+}
+
 func TestKubernetesValuesNoExtensionsOmitted(t *testing.T) {
 	// With no extensions, the key must be omitted entirely so the chart's own
 	// no-extensions default applies.

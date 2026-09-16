@@ -448,3 +448,50 @@ tests:
           path: spec.template.spec.containers[0].resources.requests.ephemeral-storage
       - notExists:
           path: spec.template.spec.containers[0].resources.limits.ephemeral-storage
+
+  # envPaths become container env, and their position matters: they are rendered
+  # AFTER envFrom: configMapRef, so a registration's key would win over the
+  # ConfigMap. That ordering is the whole reason extensions.Validate refuses a
+  # variable the endpoint owns.
+  - it: renders a registered extension's envPaths as container env, after envFrom
+    template: templates/deployment.yaml
+    set:
+      endpoint:
+        extensions:
+          - name: postgis
+            image: ghcr.io/example/postgis:3.6.2
+            envPaths:
+              PROJ_DATA: share/proj
+              GDAL_DATA: share/gdal
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROJ_DATA
+            value: /extensions/postgis/share/proj
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GDAL_DATA
+            value: /extensions/postgis/share/gdal
+      # The ImageVolume is still mounted at the raw name.
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ext-postgis
+            mountPath: /extensions/postgis
+            readOnly: true
+
+  - it: renders no extension env for a built-in
+    template: templates/deployment.yaml
+    set:
+      endpoint:
+        extensions:
+          - name: vector
+            image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROJ_DATA
+            value: /extensions/vector/share/proj

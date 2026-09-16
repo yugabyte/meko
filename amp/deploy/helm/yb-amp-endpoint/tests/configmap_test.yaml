@@ -181,6 +181,68 @@ tests:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"dynamic_library_path":"\$libdir:/extensions/vector/lib/postgresql"'
 
+  # A REGISTERED extension: a prebuilt third-party image whose tree is not laid
+  # out the way deploy/extensions lays one out. Everything below is per-entry and
+  # defaults to the amp layout, so a built-in renders exactly as it did before.
+  - it: honours a registered extension's own layout on the path GUCs
+    set:
+      endpoint:
+        extensions:
+          - name: postgis
+            image: ghcr.io/example/postgis:3.6.2
+            preload: false
+            sharePath: share
+            libPath: lib
+    asserts:
+      # share/lib, NOT share/postgresql + lib/postgresql.
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"extension_control_path":"\$system:/extensions/postgis/share"'
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"dynamic_library_path":"\$libdir:/extensions/postgis/lib"'
+
+  - it: renders EXTENSION_LIBRARY_PATH from a registered extension's bundled dirs
+    set:
+      endpoint:
+        extensions:
+          - name: postgis
+            image: ghcr.io/example/postgis:3.6.2
+            libraryPath: [system]
+    asserts:
+      # Its own key, deliberately NOT a GUC: the loader reads it, not Postgres,
+      # and the chart cannot put it in LD_LIBRARY_PATH (the image bakes that as
+      # an ENV, and a container env: entry of the same name replaces it).
+      - equal:
+          path: data.EXTENSION_LIBRARY_PATH
+          value: /extensions/postgis/system
+
+  - it: merges abiExtraExempt into the waiver GUC
+    set:
+      endpoint:
+        extensions:
+          - name: postgis
+            image: ghcr.io/example/postgis:3.6.2
+            abiExtraExempt: [postgis-3, postgis_raster-3]
+    asserts:
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"yb_amp_abi_extra_exempt_libraries":"postgis-3,postgis_raster-3"'
+
+  # The amp-built path must be untouched by all of the above.
+  - it: emits neither the loader key nor the waiver for a built-in extension
+    set:
+      endpoint:
+        extensions:
+          - name: vector
+            image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+    asserts:
+      - notExists:
+          path: data.EXTENSION_LIBRARY_PATH
+      - notMatchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: 'abi_extra_exempt'
+
   - it: appends preload extensions (using library override) to shared_preload_libraries
     set:
       endpoint:

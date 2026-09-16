@@ -282,6 +282,36 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 			out[name] = v
 		}
 	}
+	// An externalized extension mounted from an image can need two things from
+	// the environment, which the Helm chart supplies in a pod and which the scrub
+	// above would otherwise drop here:
+	//
+	//   EXTENSION_LIBRARY_PATH  dirs of system libraries the extension bundles.
+	//                           The supervisor appends this to its own
+	//                           LD_LIBRARY_PATH — note it must NOT be merged into
+	//                           LD_LIBRARY_PATH here, which pgLibEnv owns and
+	//                           overwrites.
+	//   EXTENSION_ENV           comma-separated names of runtime data-dir
+	//                           variables to forward (PROJ_DATA, GDAL_DATA, …).
+	//                           The names are the extension's, not ours, so they
+	//                           are named rather than pattern-matched.
+	//
+	// Both are unset in ordinary local use; the extension test driver sets them
+	// (test/integration/compute/extensions.sh --registered).
+	if v, ok := os.LookupEnv("EXTENSION_LIBRARY_PATH"); ok {
+		out["EXTENSION_LIBRARY_PATH"] = v
+	}
+	if names, ok := os.LookupEnv("EXTENSION_ENV"); ok {
+		for _, name := range strings.Split(names, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if v, ok := os.LookupEnv(name); ok {
+				out[name] = v
+			}
+		}
+	}
 	return out, nil
 }
 

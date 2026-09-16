@@ -170,9 +170,13 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				Timeout:                    cfg.Deploy.Timeout,
 			}, logger)
 			// Externalized extensions are mounted as ImageVolumes, which only the
-			// Kubernetes runtime supports; the catalog resolves a branch's set to
+			// Kubernetes runtime supports; the service resolves a branch's set to
 			// pinned images for the endpoint spec (compute/architecture/extensions.md).
-			prov.Extensions = extensions.NewCatalog(cfg.Deploy.ExtensionRegistry)
+			// Built-ins only here — buildProvisioning runs before the database
+			// backend exists, so runServe rebinds this with the
+			// registered-extension store as soon as it does.
+			prov.Extensions = extensions.NewService(
+				extensions.NewCatalog(cfg.Deploy.ExtensionRegistry), nil)
 			logger.Info("kubernetes endpoint deployer enabled",
 				"namespace", cfg.Deploy.Namespace,
 				"chart", cfg.Deploy.ChartPath,
@@ -328,6 +332,15 @@ func runServe(args []string) error {
 	// deleteCluster. *core.PgBackend supplies the idempotent, id-keyed state
 	// operations the steps need.
 	prov.Recipes = recipeStore{s: regStore}
+
+	// Now that the backend exists, give the extension service its store: the
+	// built-in catalog buildProvisioning made, plus the extensions an operator
+	// registered (amp_registry.extensions). Only when externalized extensions are
+	// enabled at all — a nil service means the Docker driver, which has no
+	// ImageVolumes to mount.
+	if prov.Extensions != nil {
+		prov.Extensions = extensions.NewService(prov.Extensions.Builtin(), backend)
+	}
 
 	// Wire the migration store + derive-on-read service onto the provisioning the
 	// API handlers read (nil-safe: they stay nil when the feature is off, which is

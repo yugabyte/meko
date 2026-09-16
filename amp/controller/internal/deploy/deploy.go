@@ -147,12 +147,35 @@ func IsDedicatedLB(mode string) bool {
 }
 
 // Extension is one externalized extension to mount into an endpoint: its name
-// (the /extensions/<Name> mount subdir), the OCI image built by
-// deploy/extensions, and whether it needs a shared_preload_libraries entry.
+// (the /extensions/<Name> mount subdir), the OCI image — built by
+// deploy/extensions, or a third-party one consumed as-is — and whether it needs
+// a shared_preload_libraries entry.
+//
+// The remaining fields describe a third-party image whose tree is not laid out
+// the way deploy/extensions lays one out. Every path is relative to the mount
+// root; the zero value means the amp layout, so an amp-built extension leaves
+// them all empty.
 type Extension struct {
 	Name    string
 	Image   string
 	Preload bool
+	// Library is the shared-library basename when it differs from Name — the
+	// shared_preload_libraries entry the chart adds for a Preload extension.
+	// Empty means Name.
+	Library string
+	// SharePath is the sharedir BASE for extension_control_path (PG18 appends
+	// "/extension" itself); LibPath is the dynamic_library_path entry.
+	SharePath string
+	LibPath   string
+	// LibraryPath are dirs of system shared libraries the extension's .so links
+	// and the endpoint image does not carry; the supervisor appends them to
+	// LD_LIBRARY_PATH.
+	LibraryPath []string
+	// EnvPaths are runtime data dirs by environment variable name (PROJ_DATA).
+	EnvPaths map[string]string
+	// ABIExtraExempt lists modules allowed to differ from the server in
+	// FMGR_ABI_EXTRA — an image built against stock PostgreSQL.
+	ABIExtraExempt []string
 }
 
 // EndpointName is the deployer's stable instance handle for an endpoint (the

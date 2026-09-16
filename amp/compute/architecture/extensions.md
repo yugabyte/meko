@@ -6,7 +6,9 @@ into the endpoint pod as a Kubernetes **ImageVolume**, with PostgreSQL pointed a
 it via `extension_control_path` / `dynamic_library_path` (both PG18 features).
 `pgvector`, `pg_cron`, `hexabridge`, and `age` (Apache AGE) are delivered this
 way; the pipeline is generic so adding another is a manifest row plus a catalog
-entry.
+entry. An image amp does **not** build reaches an endpoint by a different route:
+an operator **registers** it through the API, and nothing in the product names
+it — see "[Registering an extension image](#registering-an-extension-image)".
 
 ## Why not bake them into the endpoint image
 
@@ -18,7 +20,8 @@ ships **only** PG18 — including the in-tree contrib modules installed by
 - **Licensing forces it.** GPL extensions (e.g. **PostGIS**) can't be baked into
   our image; they must be built and shipped independently, then downloaded and
   attached on demand by the customer. Externalized ImageVolumes are the delivery
-  mechanism that makes this possible.
+  mechanism that makes this possible — and for an extension we do not build at
+  all, registration is how the customer names the image.
 - **Partner / third-party extensions.** We want to support extensions we don't
   own or build ourselves (e.g. **hexabridge**, HexaCluster's Oracle-compat layer,
   now shipped this way), each on its own release track — an independent image per
@@ -152,21 +155,156 @@ deploy/extensions/build.sh --push --no-base-push pgvector
 deploy/extensions/build.sh --push --no-base-push --cache pgvector
 ```
 
+## Registering an extension image
+
+The built-in catalog covers what this repo builds. It deliberately covers
+nothing else: pinning a third-party image reference in the product would mean
+every new extension is a controller release, would put someone else's registry
+in our source, and would make us the distributor of software we did not build.
+
+So the catalog has two halves, and they meet in
+[`extensions.Service`](../../controller/internal/extensions/service.go):
+
+| | built-in | registered |
+|---|---|---|
+| lives in | `catalog.go`, compiled in | `amp_registry.extensions` (migration 0019) |
+| image | derived: `<registry>/amp-ext-<name>:<version>` | the reference as registered |
+| built by | `deploy/extensions` | someone else |
+| added by | a controller release | `PUT /extensions/{name}` |
+
+A branch opts in by name either way (`createCluster extensions:[…]`,
+`addBranchExtensions`), so nothing downstream of the catalog knows the
+difference — the deploy spec, the chart, and the supervisor see one shape.
+
+### The API
+
+`PUT /extensions/{name}` registers or fully replaces; `GET /extensions` lists
+both halves with a `builtin` flag; `DELETE /extensions/{name}` removes one.
+Registration is **admin-only** (`?user_id=` must name a user with `is_admin`)
+and **synchronous** — it deploys nothing. It makes an image *available*; a
+branch opting in is what mounts it, and that already redeploys the branch's
+endpoints. Keeping the two apart means registering can never disturb a running
+endpoint.
+
+Replacing a registration changes what endpoints mount at their **next** deploy;
+live endpoints keep the image they started with. Deregistering is refused
+(`409`) while any branch still opts in — otherwise those endpoints would lose
+the mount on their next deploy, taking any objects built on the extension with
+them.
+
+### The metadata, and why each field exists
+
+An image is not self-describing, so the registration carries what the endpoint
+needs to make it usable. Every path is **relative to the mount root**
+(`/extensions/<name>`), and the zero value is the layout `deploy/extensions`
+produces — a built-in declares none of this.
+
+- **`layout.share_path` / `layout.lib_path`** — the tree differs between
+  publishers. The CloudNativePG images use `share` + `lib` where we produce
+  `share/postgresql` + `lib/postgresql`. `share_path` is the sharedir *base*:
+  PG18 appends `/extension` itself.
+- **`layout.library_path`** — dirs of system shared libraries the extension's
+  `.so` links and the endpoint image does not carry, which the image therefore
+  bundles. The chart renders these into `EXTENSION_LIBRARY_PATH` and the
+  **supervisor appends that to its own `LD_LIBRARY_PATH`** before spawning
+  anything. The chart cannot set `LD_LIBRARY_PATH` itself: the endpoint image
+  bakes it as an `ENV`, and a container `env:` entry of the same name *replaces*
+  rather than extends it.
+- **`layout.env_paths`** — runtime data dirs those libraries read, by env var
+  name. Rendered as ordinary container env with the mount root prefixed. Without
+  PostGIS's `PROJ_DATA` the extension registers and *then* `ST_Transform` fails
+  on a missing `proj.db`, which is why the tests assert a transform and not just
+  `CREATE EXTENSION`.
+- **`abi_extra_exempt`** — see below.
+- **`preload` / `library`** — a preload extension's library name joins
+  `shared_preload_libraries`, so enabling it restarts the postmaster.
+
+### The ABI waiver
+
+This fork sets `FMGR_ABI_EXTRA` to `"yb_amp Postgres"`
+(`pg_config_manual.h`), and `dfmgr.c` rejects any module whose magic block says
+`"PostgreSQL"` with *"incompatible library: ABI mismatch"* before it runs a line
+of code. The fence is load-bearing: `BufferUsage` and `ExplainState` have both
+grown fields and `smgropen()` took a third argument, so a stock-built module
+that touches any of them is genuinely unsafe.
+
+Essentially every image the ecosystem publishes is built against stock PG18, so
+without a waiver the feature would be useless. `abi_extra_exempt` lists the
+modules for which **only** the `abi_extra` string is waived — the major version,
+`FUNC_MAX_ARGS`, `INDEX_MAX_KEYS`, `NAMEDATALEN` and `FLOAT8PASSBYVAL` are all
+still compared exactly (`yb_amp_abi_extra_exempt_libraries` in
+`compute/vendor/postgres-v18`). It defaults empty, and it is the sharpest reason
+registration is admin-only: a wrong waiver crashes the postmaster.
+
+The GUC is `PGC_SIGHUP` — a `postgresql.conf` setting, which is what the chart
+renders, and deliberately not settable per session. A parallel worker restores
+the leader's library list *before* its GUCs, so a session-level value would be
+at its default exactly when the worker reloads an exempt module, and every
+parallel query over that extension would fail.
+
+### Vetting an image before registering it
+
+Registration is trusted input, so the checks are the registrant's, done once by
+hand:
+
+```sh
+docker create --name x <image> /extract-only && docker export x | tar -C /tmp/ext -xf -
+# 1. every PG symbol it references must exist in our postgres, and none may be drifted
+nm -D --defined-only pg_install/v18/bin/postgres | awk '{print $NF}' | sort -u > /tmp/pg.syms
+nm -D --undefined-only /tmp/ext/lib/<module>.so | awk '{print $NF}' | sort -u > /tmp/mod.syms
+comm -12 /tmp/mod.syms /tmp/pg.syms
+# 2. its libc/libstdc++ floor must be <= the endpoint base's (debian:bookworm-slim)
+objdump -T /tmp/ext/lib/<module>.so | grep -oE 'GLIBC_[0-9.]+|GLIBCXX_[0-9.]+' | sort -uV | tail
+# 3. the FULL loader closure must resolve inside a container off the endpoint image
+docker run --rm -v /tmp/ext:/extensions/<name>:ro \
+  -e LD_LIBRARY_PATH=/usr/local/v18/lib:/extensions/<name>/system \
+  <endpoint image> sh -c 'ldd /extensions/<name>/lib/*.so | grep "not found"'
+```
+
+Step 3 is the full closure, not the module's own `DT_NEEDED` list, and the two
+differ. PostGIS's `.so` files name only geos, proj, gdal, json-c, protobuf-c and
+libxml2 — but `libproj` reaches its EPSG database through `libsqlite3` and
+`libgdal`'s HDF5 wants `libnuma`, neither of which the image bundles. Those
+surface only transitively, which is why `libsqlite3-0` and `libnuma1` are in
+[`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile). A library the
+endpoint image lacks is the one failure registration cannot fix by itself.
+
+**Step 1 is necessary and not sufficient, and this is the sharp edge.** A symbol
+diff catches a changed *function* signature (`smgropen`) but not a changed
+*struct layout*: field offsets are compiled into the module and generate no
+relocations. This fork's added `ExplainState` fields sit ahead of `format`,
+`indent` and `pstmt`, so a module that merely installs an explain hook and reads
+`es->format` passes a clean symbol diff and then reads at stale offsets. Waiving
+a module means knowing it does not *use* `BufferUsage` or `ExplainState` — which
+its symbol table cannot tell you, and which needs its source or documentation.
+
+A module that references a drifted symbol, or uses a drifted struct, does not
+get a waiver — it gets built against the ABI base like everything else.
+
+[`runbooks/postgis.md`](../../runbooks/postgis.md) walks the whole thing for
+PostGIS, which is the worked example throughout.
+
 ## Endpoint wiring (Helm chart)
 
 The [`yb-amp-endpoint`](../../deploy/helm/yb-amp-endpoint) chart takes an
-`endpoint.extensions` list — each entry `{ name, image, preload }`:
+`endpoint.extensions` list — each entry `{ name, image, preload, library }` plus
+the optional layout fields a registered image carries (`sharePath`, `libPath`,
+`libraryPath`, `envPaths`, `abiExtraExempt`), all defaulting to the amp layout:
 
 - **[`deployment.yaml`](../../deploy/helm/yb-amp-endpoint/templates/deployment.yaml)**
-  renders one read-only ImageVolume per entry, mounted at `/extensions/<name>`.
+  renders one read-only ImageVolume per entry, mounted at `/extensions/<name>`,
+  and one container `env` entry per `envPaths` key with the mount root prefixed.
   (ImageVolume is a Kubernetes 1.33+ beta feature — the `ImageVolume` feature
   gate.)
 - **[`configmap.yaml`](../../deploy/helm/yb-amp-endpoint/templates/configmap.yaml)**
   derives `extension_control_path` / `dynamic_library_path` (prepended with
-  `$system` / `$libdir`) and appends any `preload` entries to
-  `SHARED_PRELOAD_LIBRARIES`. The path GUCs are merged into
+  `$system` / `$libdir`, each entry's `sharePath` / `libPath` joined onto its
+  mount root), merges any `abiExtraExempt` names into
+  `yb_amp_abi_extra_exempt_libraries`, and appends any `preload` entries to
+  `SHARED_PRELOAD_LIBRARIES`. The GUCs are merged into
   `COMPUTE_EXTRA_SETTINGS_JSON`, which the supervisor renders into the compute's
-  `postgresql.conf`.
+  `postgresql.conf`. Any `libraryPath` dirs go into a separate
+  `EXTENSION_LIBRARY_PATH` — not a GUC, since the loader reads it, not Postgres.
 
 With `endpoint.extensions` empty, the chart output is unchanged from before —
 the feature is additive.
@@ -175,11 +313,15 @@ the feature is additive.
 
 - **Catalog** —
   [`controller/internal/extensions`](../../controller/internal/extensions/catalog.go)
-  is the fixed, code-defined set of known extensions (`Name`, `Version`,
-  `Preload`, `Default`). `Resolve(names)` maps names to pinned image references
-  (`<registry>/amp-ext-<name>:<version>`, registry from
-  `--extension-registry` / `AMP_EXTENSION_REGISTRY`), skipping unknown names so a
-  stale entry can't wedge a deploy.   `DefaultNames()` is the always-mounted set
+  is the fixed, code-defined set of extensions this repo builds (`Name`,
+  `Version`, `Preload`, `Default`) — and only those.
+  [`service.go`](../../controller/internal/extensions/service.go) pairs it with
+  the registered ones from the database and is what callers resolve against.
+  `Resolve(names)` maps names to pinned image references
+  (`<registry>/amp-ext-<name>:<version>` for a built-in, registry from
+  `--extension-registry` / `AMP_EXTENSION_REGISTRY`; the registered reference
+  verbatim otherwise), skipping unknown names so a stale entry — including one
+  since deregistered — can't wedge a deploy.   `DefaultNames()` is the always-mounted set
   (currently **empty** — All extensions are registered but off by
   default, so nothing is auto-mounted; opting in is **per branch** — the initial
   set is seeded on the default branch by `createCluster`, a fork inherits its
@@ -362,6 +504,12 @@ audit / recreate.
    for a custom runner. Bless any by-design amp diffs under
    `test/integration/compute/ext_regress_expected/<name>/`.
 
+That is the path for an extension **we build**. For one we do not, there is no
+manifest row, no catalog entry and no controller release: vet the image
+("Registering an extension image"), then `PUT /extensions/{name}` with its
+metadata. [`runbooks/postgis.md`](../../runbooks/postgis.md) is the worked
+example.
+
 ## Testing
 
 - **Controller unit tests** cover the catalog (`Has`/`Resolve`, preload flag
@@ -388,7 +536,17 @@ audit / recreate.
   and runs a `cypher()` CREATE/MATCH round-trip. `--ext` also takes a
   comma-separated list to **co-mount** several extensions on one endpoint (e.g.
   `--ext pgvector,age` — both non-preload — mounts both trees and runs each one's
-  smoke in turn). It is the local-deploy twin of `deploy/smoke-test.sh`'s
+  smoke in turn). `--registered <file>` mounts a **registered** extension instead
+  of a built one, from a `registerExtension` body under
+  [`ext_fixtures/`](../../test/integration/compute/ext_fixtures/): a local compute
+  has no controller, so the driver reads the same JSON and applies it by hand —
+  pulling the image, exporting the tree (the bundled `system/` dir is neither
+  `share` nor `lib`), putting that dir on `LD_LIBRARY_PATH`, exporting the
+  `env_paths`, and passing `yb_amp_abi_extra_exempt_libraries`. `--registered
+  ext_fixtures/postgis.json` then asserts `ST_Area`, a GiST nearest-neighbour
+  scan and an `ST_Transform` — the transform is what proves `proj.db` was found,
+  not just that the extension registered. It needs a host with **glibc ≥ 2.35**
+  (that image's floor). It is the local-deploy twin of `deploy/smoke-test.sh`'s
   `SMOKE_EXTENSIONS` check.
 - **Upstream regression suites (local)** —
   [`extensions.sh --regress`](../../test/integration/compute/extensions.sh) runs
@@ -408,7 +566,12 @@ audit / recreate.
 - **Smoke test** — `deploy/smoke-test.sh` with `SMOKE_EXTENSIONS=1` exercises the
   real K8s ImageVolume path end-to-end: pgvector and `age` co-mounted on one
   endpoint (asserting both `/extensions/<name>` mounts, the pgvector data query,
-  and an AGE `cypher()` round-trip), then pg_cron and hexabridge on their own.
+  and an AGE `cypher()` round-trip), then pg_cron and hexabridge on their own,
+  then the **registration** path — a non-admin `PUT` refused with 403, an admin
+  registering `ext_fixtures/postgis.json`, a cluster opting in, the pod carrying
+  the registered layout (`share/extension`, the bundled `system/libgeos_c.so.1`,
+  `share/proj/proj.db`), `CREATE EXTENSION` + `ST_Transform`, and deregistration
+  refused with 409 while the branch still uses it.
 
 ## Code anchors
 
@@ -442,3 +605,14 @@ audit / recreate.
   [migration 0010](../../controller/migrations/0010_cluster_engine.up.sql)
   (`amp_registry.clusters.engine`).
 - Patches: [`compute/image/patches/`](../image/patches/) (reused verbatim).
+- Registration: [`controller/internal/extensions/service.go`](../../controller/internal/extensions/service.go)
+  (the built-in ∪ registered union, and the metadata validation),
+  [`controller/internal/api/extensions.go`](../../controller/internal/api/extensions.go)
+  (the handlers and the admin gate),
+  [`controller/internal/core/registered_extensions.go`](../../controller/internal/core/registered_extensions.go)
+  (`amp_registry.extensions`), [migration 0019](../../controller/migrations/0019_registered_extensions.up.sql).
+- ABI waiver: `yb_amp_abi_extra_exempt_libraries` in the forked Postgres
+  (`compute/vendor/postgres-v18`: `src/backend/utils/fmgr/dfmgr.c`
+  `module_abi_compatible` / `abi_extra_exempt`, `src/backend/utils/misc/guc_tables.c`).
+- Supervisor: [`compute/endpoint_supervisor/src/main.rs`](../endpoint_supervisor/src/main.rs)
+  (`append_ld_library_path`, reading `EXTENSION_LIBRARY_PATH`).

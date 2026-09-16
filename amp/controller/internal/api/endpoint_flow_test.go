@@ -240,7 +240,7 @@ func TestClusterExtensions(t *testing.T) {
 	// redeploy below has something to lose.
 	const deployerVersion = "ep-2026.08.1"
 	dep := &fakeDeployer{version: deployerVersion}
-	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
+	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 

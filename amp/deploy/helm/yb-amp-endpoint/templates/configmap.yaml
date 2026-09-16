@@ -60,14 +60,25 @@ data:
   # so the supervisor has one contract.
   ENDPOINT_DATA_VOLUME_SIZE: {{ if .Values.persistence.storageClass }}{{ .Values.persistence.size | quote }}{{ else }}{{ .Values.runDir.sizeLimit | quote }}{{ end }}
   {{- /*
-    Extensions mounted as ImageVolumes contribute two things:
-      * their library name to shared_preload_libraries (preload: true only), and
+    Extensions mounted as ImageVolumes contribute:
+      * their library name to shared_preload_libraries (preload: true only),
       * their share/ + lib/ dirs to extension_control_path / dynamic_library_path
         (prepended with the PG18 defaults $system / $libdir so the built-in and
-        remote-downloaded extensions still resolve).
+        remote-downloaded extensions still resolve),
+      * any bundled system-library dirs to EXTENSION_LIBRARY_PATH, which the
+        supervisor appends to its own LD_LIBRARY_PATH before spawning the
+        compute (the image bakes LD_LIBRARY_PATH, so the chart must not set it
+        here — an env entry of that name REPLACES the image's), and
+      * any module waived from the FMGR_ABI_EXTRA check to
+        yb_amp_abi_extra_exempt_libraries.
     extension_control_path entries are sharedir bases: PG18 appends "/extension"
     to each non-$system entry itself (get_extension_control_directories), so we
-    pass .../share/postgresql, NOT .../share/postgresql/extension.
+    pass the share dir, NOT share/.../extension.
+
+    Every path below is relative to the entry's mount root, /extensions/<name>.
+    An amp-built image (deploy/extensions) is share/postgresql + lib/postgresql,
+    which is the default; a third-party image declares its own (the CloudNativePG
+    extension images are share + lib, with their bundled .so files under system).
   */ -}}
   {{- $preload := .Values.endpoint.sharedPreloadLibraries }}
   {{- /*
@@ -79,21 +90,41 @@ data:
     knowable from the database.
   */ -}}
   {{- $extra := dict }}
+  {{- $loaderDirs := list }}
   {{- if .Values.endpoint.extensions }}
   {{- $ctrlPaths := list "$system" }}
   {{- $libPaths := list "$libdir" }}
+  {{- $abiExempt := list }}
   {{- range .Values.endpoint.extensions }}
-  {{- $ctrlPaths = append $ctrlPaths (printf "/extensions/%s/share/postgresql" .name) }}
-  {{- $libPaths = append $libPaths (printf "/extensions/%s/lib/postgresql" .name) }}
+  {{- $mount := printf "/extensions/%s" .name }}
+  {{- $ctrlPaths = append $ctrlPaths (printf "%s/%s" $mount (default "share/postgresql" .sharePath)) }}
+  {{- $libPaths = append $libPaths (printf "%s/%s" $mount (default "lib/postgresql" .libPath)) }}
+  {{- range .libraryPath }}
+  {{- $loaderDirs = append $loaderDirs (printf "%s/%s" $mount .) }}
+  {{- end }}
+  {{- range .abiExtraExempt }}
+  {{- $abiExempt = append $abiExempt . }}
+  {{- end }}
   {{- if .preload }}
   {{- $preload = printf "%s,%s" $preload (default .name .library) }}
   {{- end }}
   {{- end }}
   {{- $_ := set $extra "extension_control_path" (join ":" $ctrlPaths) }}
   {{- $_ := set $extra "dynamic_library_path" (join ":" $libPaths) }}
+  {{- if $abiExempt }}
+  {{- $_ := set $extra "yb_amp_abi_extra_exempt_libraries" (join "," $abiExempt) }}
+  {{- end }}
   {{- end }}
   SHARED_PRELOAD_LIBRARIES: {{ $preload | quote }}
   COMPUTE_EXTRA_SETTINGS_JSON: {{ $extra | toJson | quote }}
+  {{- if $loaderDirs }}
+  # Dirs holding system shared libraries an externalized .so links (e.g. the
+  # geos/proj/gdal set bundled in the CloudNativePG PostGIS image). The
+  # supervisor appends this to LD_LIBRARY_PATH, so the loader resolves them for
+  # every process it spawns; the ImageVolume carries them, the endpoint image
+  # does not.
+  EXTENSION_LIBRARY_PATH: {{ join ":" $loaderDirs | quote }}
+  {{- end }}
 
   {{- if .Values.controller.url }}
   # --- Controller coordination ---

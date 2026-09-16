@@ -156,6 +156,137 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /extensions:
+    get:
+      tags: [extensions]
+      operationId: listExtensions
+      summary: List every extension a branch may enable
+      description: |
+        Returns the externalized extensions available to opt into: the ones this
+        controller ships (`builtin: true`) plus the ones an operator registered.
+        Built-ins come first, each group name-sorted. This is the set
+        `createCluster`'s `extensions[]` and `addBranchExtensions` validate
+        against. See compute/architecture/extensions.md.
+      responses:
+        '200':
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtensionList'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /extensions/{extensionName}:
+    parameters:
+      - $ref: '#/components/parameters/ExtensionName'
+    get:
+      tags: [extensions]
+      operationId: getExtension
+      summary: Get one extension
+      responses:
+        '200':
+          description: The extension.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Extension'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [extensions]
+      operationId: registerExtension
+      summary: Register (or replace) an extension image
+      description: |
+        Makes an OCI image available for branches to mount as an ImageVolume,
+        under `extensionName`. The name is the identity, so this is an upsert:
+        it creates the registration or **replaces it in full**, and an omitted
+        field means "not set" rather than "keep". A registered extension is
+        never a default — registering makes it *available*, not mounted.
+
+        **Admin only.** `user_id` must name a user with `is_admin` (`403`
+        otherwise). Registration decides what image runs inside an endpoint pod
+        and can waive the server's ABI check, so it is not a tenant-level
+        operation.
+
+        Synchronous — nothing is deployed here. Endpoints pick the image up when
+        a branch opts in (`addBranchExtensions`, which redeploys that branch's
+        endpoints); **replacing** an already-mounted extension's image does not
+        redeploy anything, so live endpoints keep the image they started with
+        until they are next recreated.
+
+        Validation is strict because these values become a container mount path,
+        the loader path and PostgreSQL's path GUCs: `400` for a name that is not
+        `[a-z0-9][a-z0-9_-]*`, an image with no tag or digest (or `:latest`), an
+        absolute or `..`-bearing layout path, an env var name the endpoint itself
+        owns (e.g. `LD_LIBRARY_PATH`), or an `abi_extra_exempt` entry that is not
+        a bare module name. `409` if the name is one of this controller's
+        built-ins — shadowing a built-in is refused rather than resolved by
+        precedence.
+      parameters:
+        - $ref: '#/components/parameters/ActingUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterExtensionRequest'
+      responses:
+        '200':
+          description: The registered extension.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Extension'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [extensions]
+      operationId: deregisterExtension
+      summary: Remove a registered extension
+      description: |
+        Deletes the registration. **Admin only** (`user_id`, as for `PUT`).
+
+        `409` if any branch still opts into it — those branches' endpoints would
+        lose the mount on their next deploy, taking any objects built on the
+        extension with them, so the branches must drop it first. `409` for a
+        built-in, which is compiled in and not deletable. `404` if it was never
+        registered.
+
+        Nothing is redeployed: endpoints already mounting it keep running until
+        they are next recreated.
+      parameters:
+        - $ref: '#/components/parameters/ActingUserId'
+      responses:
+        '204':
+          description: Deregistered.
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /storage-pools:
     post:
       tags: [storage-pools]
@@ -1259,6 +1390,26 @@ components:
       schema:
         type: string
         format: uuid
+    ExtensionName:
+      name: extensionName
+      in: path
+      required: true
+      description: >-
+        The extension's catalog name — also the ImageVolume mount subdir
+        (/extensions/<name>) and the name a branch opts in by.
+      schema:
+        type: string
+    ActingUserId:
+      name: user_id
+      in: query
+      required: true
+      description: >-
+        The user performing the call, which must be an admin. A placeholder for
+        real authentication: there is none yet, so the caller names itself the
+        same way createStoragePool takes an owner_user_id.
+      schema:
+        type: string
+        format: uuid
     PoolId:
       name: poolId
       in: path
@@ -1367,6 +1518,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The caller is not permitted to perform this operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Conflict:
       description: The request conflicts with existing state (e.g. a duplicate name).
       content:
@@ -1439,6 +1596,134 @@ components:
           type: boolean
           default: false
           description: Create the user as an admin.
+
+    ExtensionLayout:
+      type: object
+      description: >-
+        Where the image keeps its pieces, each path RELATIVE to the extension's
+        mount root (/extensions/<name>). Omit the whole object for an image laid
+        out the way deploy/extensions builds one; the CloudNativePG extension
+        images, for instance, use share + lib rather than share/postgresql +
+        lib/postgresql.
+      properties:
+        share_path:
+          type: string
+          description: >-
+            Directory appended to extension_control_path. This is the sharedir
+            BASE — PostgreSQL 18 appends "/extension" itself, so pass `share`,
+            not `share/extension`. Default `share/postgresql`.
+        lib_path:
+          type: string
+          description: Directory appended to dynamic_library_path. Default `lib/postgresql`.
+        library_path:
+          type: array
+          items:
+            type: string
+          description: >-
+            Directories of system shared libraries the extension's .so links but
+            the endpoint image does not carry, and which the image therefore
+            bundles (PostGIS's geos/proj/gdal live in `system`). Appended to the
+            compute's LD_LIBRARY_PATH. Note this is the FULL loader closure's
+            problem: a library the bundled ones themselves need, and neither the
+            image nor the endpoint carries, still fails at CREATE EXTENSION.
+        env_paths:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Runtime data directories the extension's libraries read, by
+            environment variable name (e.g. `PROJ_DATA: share/proj`). Rendered as
+            container environment with the mount root prefixed. Names the
+            endpoint itself owns (LD_LIBRARY_PATH, PATH, …) are rejected.
+
+    Extension:
+      type: object
+      required: [name, image, builtin, preload]
+      properties:
+        name:
+          type: string
+          description: Catalog name, mount subdir, and the name a branch opts in by.
+        image:
+          type: string
+          description: >-
+            The image actually mounted. For a built-in this is derived from the
+            controller's extension registry; for a registered one it is the
+            reference as given.
+        version:
+          type: string
+          description: Upstream version, for display. Not used to resolve the image.
+        description:
+          type: string
+        library:
+          type: string
+          description: >-
+            Shared-library basename when it differs from `name` — the
+            shared_preload_libraries entry when `preload` is set. Empty means `name`.
+        preload:
+          type: boolean
+          description: >-
+            The extension must be in shared_preload_libraries, so enabling it on a
+            branch restarts the postmaster rather than just adding a mount.
+        builtin:
+          type: boolean
+          description: >-
+            Compiled into this controller and built by deploy/extensions. A
+            built-in cannot be replaced or deregistered.
+        layout:
+          $ref: '#/components/schemas/ExtensionLayout'
+        abi_extra_exempt:
+          type: array
+          items:
+            type: string
+          description: >-
+            Modules (bare names, no `.so`) allowed to differ from the server in
+            FMGR_ABI_EXTRA — what makes an image built against stock PostgreSQL
+            loadable at all. Every other magic-block field is still enforced
+            exactly, so this waives the product string and nothing else. An empty
+            list means the image must match this fork's ABI string.
+
+    RegisterExtensionRequest:
+      type: object
+      required: [image]
+      properties:
+        image:
+          type: string
+          description: >-
+            OCI image reference, pinned to a tag or `@sha256` digest. `:latest`
+            and an untagged reference are rejected: ImageVolumes pull
+            IfNotPresent, so a node that cached the tag would serve stale bits
+            forever while a fresh node pulled new ones. The image must be
+            pullable with the cluster's existing pull secrets — there is no
+            per-extension credential, so a private registry needs one configured
+            on the deployment.
+        version:
+          type: string
+        description:
+          type: string
+        library:
+          type: string
+        preload:
+          type: boolean
+          default: false
+        layout:
+          $ref: '#/components/schemas/ExtensionLayout'
+        abi_extra_exempt:
+          type: array
+          items:
+            type: string
+
+    ExtensionList:
+      type: object
+      required: [extensions, total, count]
+      properties:
+        extensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Extension'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
 
     UserList:
       type: object

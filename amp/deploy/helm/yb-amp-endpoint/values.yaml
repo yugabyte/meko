@@ -76,9 +76,31 @@ endpoint:
   # `preload: true` extension also needs the postmaster restart to load).
   # Each entry:
   #   name    extension name; also the mount subdir and the CREATE EXTENSION name
-  #   image   OCI image reference (repo:tag) built from deploy/extensions
+  #   image   OCI image reference (repo:tag) built from deploy/extensions, or a
+  #           third-party image laid out per the paths below
   #   preload add the library to shared_preload_libraries (default false)
   #   library shared-library name if it differs from `name` (default `name`)
+  #
+  # The rest describe a non-amp in-image layout. Each path is relative to the
+  # entry's mount root, /extensions/<name>, and the defaults are what
+  # deploy/extensions builds — an amp-built extension sets none of them.
+  #   sharePath      dir appended to extension_control_path. This is the sharedir
+  #                  BASE: PG18 appends "/extension" itself. Default
+  #                  "share/postgresql"; the CloudNativePG images use "share".
+  #   libPath        dir appended to dynamic_library_path. Default
+  #                  "lib/postgresql"; the CloudNativePG images use "lib".
+  #   libraryPath    list of dirs holding system shared libraries the extension's
+  #                  .so links (geos/proj/gdal for PostGIS). Rendered into
+  #                  EXTENSION_LIBRARY_PATH, which the supervisor appends to
+  #                  LD_LIBRARY_PATH. Default none.
+  #   envPaths       map of env var to a data dir the extension reads at runtime
+  #                  (PROJ_DATA, GDAL_DATA). Rendered as container env with the
+  #                  mount root prefixed. Default none.
+  #   abiExtraExempt list of module names (no file extension) allowed to differ
+  #                  from the server in FMGR_ABI_EXTRA — for an image built
+  #                  against stock PG18. Rendered into
+  #                  yb_amp_abi_extra_exempt_libraries. Default none; every other
+  #                  magic-block field is still enforced.
   extensions: []
   # -- Compute reserved for the endpoint container. Each value is a Kubernetes
   # resource quantity and is rendered as BOTH a request and a limit, so the pod

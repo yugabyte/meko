@@ -138,6 +138,13 @@ WORKDIR /data
 # stages don't carry over — so it must be installed here for either to load.
 # libcurl4/zlib1g/openssl cover hexabridge's other link deps (utl_mail/utl_http,
 # utl_compress, dbms_crypto).
+#
+# libsqlite3-0 and libnuma1 are for the externalized PostGIS ImageVolume. That
+# image bundles its own geos/proj/gdal, but not those two — they are TRANSITIVE
+# deps of the bundled libraries (libproj reads its EPSG database through sqlite3;
+# libgdal's HDF5 wants libnuma), so they surface only in the full ldd closure,
+# never in the .so files' own DT_NEEDED list. Without them CREATE EXTENSION
+# postgis fails with "libsqlite3.so.0: cannot open shared object file".
 RUN set -e \
     && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update \
@@ -146,6 +153,8 @@ RUN set -e \
         openssl \
         libcurl4 \
         libxml2 \
+        libsqlite3-0 \
+        libnuma1 \
         libreadline8 \
         libseccomp2 \
         libicu72 \

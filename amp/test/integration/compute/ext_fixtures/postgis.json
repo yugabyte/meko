@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "A registerExtension body for the controller's PUT /extensions/{name}. The",
+    "PRODUCT catalog names no third-party image at all -- an image reaches amp only",
+    "by being registered (compute/architecture/extensions.md, 'Registering an",
+    "extension image'), and catalog_test.go fails a built-in that pins one. This",
+    "reference is repeated in the runbook and in several tests, so re-pinning the",
+    "tag is a multi-file edit, not a change here alone.",
+    "",
+    "This one is CloudNativePG's PostGIS build, used by extensions.sh (which mounts",
+    "the tree into a local compute) and deploy/smoke-test.sh (which registers it",
+    "through the real API). It doubles as the worked example in",
+    "runbooks/postgis.md.",
+    "",
+    "Pin -bookworm, NOT -trixie: the endpoint runtime is debian:bookworm-slim",
+    "(glibc 2.36, libstdc++ 3.4.30) and the trixie build needs GLIBC_2.38 /",
+    "GLIBCXX_3.4.32."
+  ],
+  "name": "postgis",
+  "image": "ghcr.io/cloudnative-pg/postgis-extension:3.6.2-18-bookworm",
+  "version": "3.6.2",
+  "description": "Spatial types, functions and indexes",
+  "preload": false,
+  "layout": {
+    "share_path": "share",
+    "lib_path": "lib",
+    "library_path": ["system"],
+    "env_paths": {
+      "PROJ_DATA": "share/proj",
+      "GDAL_DATA": "share/gdal"
+    }
+  },
+  "abi_extra_exempt": [
+    "postgis-3",
+    "postgis_raster-3",
+    "postgis_topology-3",
+    "postgis_sfcgal-3",
+    "address_standardizer-3"
+  ]
+}

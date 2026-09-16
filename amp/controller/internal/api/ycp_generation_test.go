@@ -139,7 +139,7 @@ func TestResizeWithoutAGenerationRecordsNothing(t *testing.T) {
 // endpoints.
 func TestAddBranchExtensionsGenerationAndInterlock(t *testing.T) {
 	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
+	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 

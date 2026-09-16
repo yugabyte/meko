@@ -29,6 +29,7 @@
 #   test/integration/compute/extensions.sh --ext pgvector   # explicit
 #   test/integration/compute/extensions.sh --ext pgvector,age # co-mount + smoke both
 #   test/integration/compute/extensions.sh --ext hexabridge # needs AMP_EXT_GH_TOKEN
+#   test/integration/compute/extensions.sh --registered ext_fixtures/postgis.json
 #   test/integration/compute/extensions.sh --debug          # debug cluster build
 #   test/integration/compute/extensions.sh --registry my    # override image registry
 #   test/integration/compute/extensions.sh --cache          # layer-cache the base build
@@ -60,6 +61,24 @@ Options:
                       list co-mounts several on one endpoint (e.g. pgvector,age)
                       and runs each one's smoke in turn. --regress needs a single
                       extension.
+  --registered <file> mount a REGISTERED extension instead of a built one: a
+                      registerExtension body (see test/integration/compute/
+                      ext_fixtures/) naming a prebuilt third-party image and its
+                      layout. Pulled, not built. Repeatable, and combinable with
+                      --ext to co-mount both kinds. The controller stores the same
+                      JSON; this reproduces its effect on a local compute, which
+                      has no controller.
+
+                      Run it on a host whose base matches the image's: the
+                      libraries such an image bundles go on LD_LIBRARY_PATH, which
+                      is searched before the system directories, so they shadow the
+                      host's for EVERY module — and the first casualty is yb_amp.so,
+                      not the extension. The bundled set is filtered to what the
+                      host cannot already resolve, which makes a near-enough host
+                      work, but the filter tracks that host's package set and is
+                      not a substitute for matching bases. CI covers this path
+                      through amp_deploy_gke_extensions instead, on the real
+                      endpoint image with real ImageVolumes.
   --regress           run the extension's OWN upstream regression suite against
                       the mounted ImageVolume (see the row's `regress:` block)
                       instead of the built-in smoke assertions.
@@ -84,6 +103,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO"
 
 EXT_NAME=pgvector
+# Whether --ext was actually given. The default above cannot be told apart from
+# an explicit `--ext pgvector` by value, and the parse loop shifts every
+# positional away, so $* is empty by the time anything downstream could look.
+EXT_EXPLICIT=0
+REGISTERED_FILES=()
 PROFILE=release
 REGISTRY_OVERRIDE=""
 CACHE=0
@@ -91,7 +115,8 @@ KEEP=0
 REGRESS=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --ext) EXT_NAME="$2"; shift ;;
+        --ext) EXT_NAME="$2"; EXT_EXPLICIT=1; shift ;;
+        --registered) REGISTERED_FILES+=("$2"); shift ;;
         --regress) REGRESS=1 ;;
         --debug) PROFILE=debug ;;
         --release) PROFILE=release ;;
@@ -112,9 +137,16 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH" >&2; ex
 # endpoint into extensions:[...]. The built-in smoke runs each extension's own
 # assertions in turn against the shared compute. --regress stays single-extension
 # (it drives one upstream pg_regress/script suite).
+# --registered on its own means "no built-in extensions": the default --ext
+# pgvector would otherwise silently ride along and make the run about two things.
+# Keyed on whether --ext was GIVEN, not on its value: `--ext pgvector
+# --registered …` is a legitimate co-mount and must keep pgvector.
+if [[ ${#REGISTERED_FILES[@]} -gt 0 && $EXT_EXPLICIT == 0 ]]; then
+    EXT_NAME=""
+fi
 IFS=',' read -ra EXT_NAMES <<< "$EXT_NAME"
-[[ ${#EXT_NAMES[@]} -ge 1 && -n "${EXT_NAMES[0]}" ]] || { echo "no --ext given" >&2; exit 2; }
-PRIMARY_EXT="${EXT_NAMES[0]}"
+if [[ -z "$EXT_NAME" ]]; then EXT_NAMES=(); fi
+[[ ${#EXT_NAMES[@]} -ge 1 || ${#REGISTERED_FILES[@]} -ge 1 ]] || { echo "no --ext or --registered given" >&2; exit 2; }
 if [[ $REGRESS == 1 && ${#EXT_NAMES[@]} -gt 1 ]]; then
     echo "--regress runs a single extension's upstream suite; got --ext $EXT_NAME" >&2
     exit 2
@@ -142,15 +174,66 @@ else:
     sys.exit("extension %r not found in %s" % (name, sys.argv[1]))
 PY
 }
-declare -a EXT_VERSIONS EXT_CONTROLS EXT_PRELOADS EXT_IMAGES
+declare -a EXT_VERSIONS EXT_CONTROLS EXT_PRELOADS EXT_IMAGES EXT_PREBUILT
+declare -a EXT_SHARE EXT_LIB EXT_LIBPATH EXT_ENVPATHS
+ABI_EXEMPT=()
 for _n in "${EXT_NAMES[@]}"; do
     IFS=$'\t' read -r _reg _ver _ctrl _pre < <(read_row "$_n")
     [[ -n "$REGISTRY_OVERRIDE" ]] && _reg="$REGISTRY_OVERRIDE"
     [[ -n "$_ver" ]] || { echo "no version for '$_n' in $MANIFEST" >&2; exit 1; }
     EXT_VERSIONS+=("$_ver"); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
-    EXT_IMAGES+=("${_reg}/amp-ext-${_n}:${_ver}")
+    EXT_IMAGES+=("${_reg}/amp-ext-${_n}:${_ver}"); EXT_PREBUILT+=("")
+    # An amp-built image is always the layout deploy/extensions produces.
+    EXT_SHARE+=("share/postgresql"); EXT_LIB+=("lib/postgresql")
+    EXT_LIBPATH+=(""); EXT_ENVPATHS+=("")
     echo ">>> extension=$_n version=$_ver control=$_ctrl preload=$_pre image=${_reg}/amp-ext-${_n}:${_ver}"
 done
+
+# 1b) REGISTERED extensions. In a deployment these are rows the controller stores
+#     from a registerExtension call and renders into the chart; a local compute has
+#     no controller, so read the same JSON body directly and apply it by hand. This
+#     is the only path that carries a third-party image reference, and it carries it
+#     from a fixture rather than from anything in the product.
+read_registered() {
+    python3 - "$1" <<'PY'
+import sys, json
+d = json.load(open(sys.argv[1]))
+name = d.get("name") or ""
+if not name:
+    sys.exit("%s: no \"name\"" % sys.argv[1])
+if not d.get("image"):
+    sys.exit("%s: no \"image\"" % sys.argv[1])
+layout = d.get("layout") or {}
+env_paths = layout.get("env_paths") or {}
+print("\t".join([
+    name,
+    d["image"],
+    d.get("control") or name,
+    "true" if d.get("preload") else "false",
+    layout.get("share_path") or "share/postgresql",
+    layout.get("lib_path") or "lib/postgresql",
+    ",".join(layout.get("library_path") or []),
+    ",".join("%s=%s" % (k, v) for k, v in sorted(env_paths.items())),
+    ",".join(d.get("abi_extra_exempt") or []),
+]))
+PY
+}
+for _f in "${REGISTERED_FILES[@]:-}"; do
+    [[ -n "$_f" ]] || continue
+    # Accept a path relative to this script's directory, so the fixtures are
+    # nameable as `ext_fixtures/postgis.json`.
+    [[ -f "$_f" ]] || _f="$REPO/test/integration/compute/$_f"
+    [[ -f "$_f" ]] || { echo "no such --registered file: $_f" >&2; exit 2; }
+    IFS=$'\t' read -r _n _img _ctrl _pre _share _lib _libpath _envpaths _abi < <(read_registered "$_f")
+    EXT_NAMES+=("$_n"); EXT_VERSIONS+=(""); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
+    EXT_IMAGES+=("$_img"); EXT_PREBUILT+=("$_img")
+    EXT_SHARE+=("$_share"); EXT_LIB+=("$_lib")
+    EXT_LIBPATH+=("$_libpath"); EXT_ENVPATHS+=("$_envpaths")
+    [[ -n "$_abi" ]] && ABI_EXEMPT+=("$_abi")
+    echo ">>> registered=$_n image=$_img control=$_ctrl preload=$_pre share=$_share lib=$_lib"
+done
+
+PRIMARY_EXT="${EXT_NAMES[0]}"
 # Legacy single-extension aliases: the --regress path below drives just the
 # primary extension and its script driver does CREATE EXTENSION $CONTROL.
 EXT_NAME="$PRIMARY_EXT"
@@ -171,25 +254,87 @@ declare -a EXT_DIRS
 CTRL_PATH_PARTS=('$system')
 LIB_PATH_PARTS=('$libdir')
 PRELOAD_LIBS=()
+LOADER_DIRS=()
+ENV_NAMES=()
 for _i in "${!EXT_NAMES[@]}"; do
     _n="${EXT_NAMES[$_i]}"; _img="${EXT_IMAGES[$_i]}"
-    echo ">>> building extension image ($_n) via deploy/extensions/build.sh"
-    BUILD_ARGS=()
-    [[ -n "$REGISTRY_OVERRIDE" ]] && BUILD_ARGS+=(--registry "$REGISTRY_OVERRIDE")
-    [[ $CACHE == 1 ]] && BUILD_ARGS+=(--cache)
-    bash "$REPO/deploy/extensions/build.sh" "${BUILD_ARGS[@]}" "$_n"
+    if [[ -n "${EXT_PREBUILT[$_i]}" ]]; then
+        # Registered: a prebuilt image, so there is nothing to compile. The
+        # endpoint's ImageVolume would pull the same reference.
+        echo ">>> pulling registered extension image ($_n): $_img"
+        docker pull "$_img"
+    else
+        echo ">>> building extension image ($_n) via deploy/extensions/build.sh"
+        BUILD_ARGS=()
+        [[ -n "$REGISTRY_OVERRIDE" ]] && BUILD_ARGS+=(--registry "$REGISTRY_OVERRIDE")
+        [[ $CACHE == 1 ]] && BUILD_ARGS+=(--cache)
+        bash "$REPO/deploy/extensions/build.sh" "${BUILD_ARGS[@]}" "$_n"
+    fi
 
     _dir="$(mktemp -d)"
     EXT_DIRS+=("$_dir")
     echo ">>> extracting $_img -> $_dir"
+    # Export the whole filesystem rather than `docker cp`ing known subtrees: a
+    # registered image also carries dirs that are neither share nor lib (the
+    # system libraries it bundles). The image is FROM scratch with no
+    # CMD/ENTRYPOINT and `docker create` refuses one without a command, so pass a
+    # placeholder — it is only recorded in the container config, never run.
     _cid="$(docker create "$_img" /extract-only)"
-    docker cp "$_cid:/share" "$_dir/"
-    docker cp "$_cid:/lib" "$_dir/"
+    docker export "$_cid" | tar -C "$_dir" -xf - >/dev/null 2>&1 || true
     docker rm "$_cid" >/dev/null
-    [[ -d "$_dir/share/postgresql/extension" ]] || { echo "extracted tree missing share/postgresql/extension" >&2; exit 1; }
-    [[ -d "$_dir/lib/postgresql" ]] || { echo "extracted tree missing lib/postgresql" >&2; exit 1; }
-    CTRL_PATH_PARTS+=("$_dir/share/postgresql")
-    LIB_PATH_PARTS+=("$_dir/lib/postgresql")
+    _share="${EXT_SHARE[$_i]}"; _lib="${EXT_LIB[$_i]}"
+    [[ -d "$_dir/$_share/extension" ]] || { echo "extracted tree missing $_share/extension" >&2; exit 1; }
+    [[ -d "$_dir/$_lib" ]] || { echo "extracted tree missing $_lib" >&2; exit 1; }
+    CTRL_PATH_PARTS+=("$_dir/$_share")
+    LIB_PATH_PARTS+=("$_dir/$_lib")
+    # Dirs of system shared libraries the .so links that live only in the image.
+    # In a pod these reach the loader through EXTENSION_LIBRARY_PATH, which the
+    # supervisor appends to LD_LIBRARY_PATH; here the compute is a bare process,
+    # so they go straight onto LD_LIBRARY_PATH below.
+    if [[ -n "${EXT_LIBPATH[$_i]}" ]]; then
+        IFS=',' read -ra _lps <<< "${EXT_LIBPATH[$_i]}"
+        for _lp in "${_lps[@]}"; do
+            [[ -d "$_dir/$_lp" ]] || { echo "extracted tree missing library_path dir $_lp" >&2; exit 1; }
+            # Path only what this host CANNOT already resolve.
+            #
+            # LD_LIBRARY_PATH is searched before the system directories, so the
+            # image's bundled libraries shadow the host's for EVERY module, not
+            # just this extension. In a pod that is harmless: the endpoint image
+            # and the extension image share a base, which the registration's tag
+            # rule already enforces. Here they need not — a CNPG bookworm image
+            # on an ubuntu runner shadows the host libcurl with a bookworm one
+            # that wants libldap-2.5, and the FIRST casualty is yb_amp.so, which
+            # links libcurl too and has nothing to do with this extension.
+            #
+            # So symlink through a filtered dir: anything ldconfig already knows
+            # stays the host's, anything it does not (geos, proj, gdal, …) comes
+            # from the image. On a matching base the two sets are identical, so
+            # this changes nothing there and makes the run portable here.
+            _filtered="$_dir/.loader/$(basename "$_lp")"
+            mkdir -p "$_filtered"
+            for _so in "$_dir/$_lp"/*.so*; do
+                [[ -e "$_so" ]] || continue
+                _base="$(basename "$_so")"
+                if ldconfig -p 2>/dev/null | awk "{print \$1}" | grep -qxF "$_base"; then continue; fi
+                ln -sf "$_so" "$_filtered/$_base"
+            done
+            echo ">>> bundled libs: $(find "$_filtered" -maxdepth 1 -type l | wc -l) of $(find "$_dir/$_lp" -maxdepth 1 -name '*.so*' | wc -l) in $_lp not resolvable on this host"
+            LOADER_DIRS+=("$_filtered")
+        done
+    fi
+    # Runtime data dirs the extension's libraries read (PROJ_DATA, GDAL_DATA).
+    # Exported so every process this script starts inherits them — what the
+    # chart's container env does in a pod.
+    if [[ -n "${EXT_ENVPATHS[$_i]}" ]]; then
+        IFS=',' read -ra _eps <<< "${EXT_ENVPATHS[$_i]}"
+        for _ep in "${_eps[@]}"; do
+            _k="${_ep%%=*}"; _v="${_ep#*=}"
+            [[ -d "$_dir/$_v" ]] || { echo "extracted tree missing env path $_v ($_k)" >&2; exit 1; }
+            export "$_k=$_dir/$_v"
+            ENV_NAMES+=("$_k")
+            echo ">>> $_k=$_dir/$_v"
+        done
+    fi
     [[ "${EXT_PRELOADS[$_i]}" == true ]] && PRELOAD_LIBS+=("${EXT_CONTROLS[$_i]}")
 done
 
@@ -239,6 +384,23 @@ export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/extensions_$
 # The cluster finds Postgres at runtime here; the compute (and our psql) need its libs.
 export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"
+# Hand the bundled library dirs to the SUPERVISOR, exactly as the chart does in
+# a pod, rather than exporting LD_LIBRARY_PATH here: yb_amp_local scrubs the
+# environment and rebuilds it for the supervisor, and pgLibEnv owns
+# LD_LIBRARY_PATH and overwrites it — an exported value never reaches the
+# compute. Going through EXTENSION_LIBRARY_PATH means this run exercises the
+# same append the pod path does (see append_ld_library_path in the supervisor).
+# EXTENSION_ENV names the data-dir variables to forward through the same scrub.
+if [[ ${#LOADER_DIRS[@]} -gt 0 ]]; then
+    _ext_libs="$(IFS=:; echo "${LOADER_DIRS[*]}")"
+    export EXTENSION_LIBRARY_PATH="$_ext_libs"
+    echo ">>> EXTENSION_LIBRARY_PATH=$EXTENSION_LIBRARY_PATH"
+fi
+if [[ ${#ENV_NAMES[@]} -gt 0 ]]; then
+    _ext_envs="$(IFS=,; echo "${ENV_NAMES[*]}")"
+    export EXTENSION_ENV="$_ext_envs"
+    echo ">>> EXTENSION_ENV=$EXTENSION_ENV"
+fi
 
 # Low end of the OS ephemeral (dynamic) port range; mirrors the Rust harness's
 # ephemeral_floor (test/integration/compute/cluster.rs).
@@ -298,7 +460,7 @@ dump_logs() {
     # The generated postgresql.conf shows whether the extension GUCs landed.
     while IFS= read -r f; do
         echo "===== ${f#"$d"/} (extension GUCs) ====="
-        grep -nE 'extension_control_path|dynamic_library_path|shared_preload_libraries' "$f" 2>/dev/null || true
+        grep -nE 'extension_control_path|dynamic_library_path|shared_preload_libraries|abi_extra_exempt' "$f" 2>/dev/null || true
     done < <(find "$d" -type f -name 'postgresql.conf' 2>/dev/null | sort)
 }
 # Tear down on ANY exit (success, set -e failure, or signal) unless --keep, so a
@@ -352,6 +514,14 @@ PG_SETTINGS=(
     # EXPLAIN tests diverge on a value that can't be blessed. Harmless elsewhere.
     --pg-setting "compute_query_id=off"
 )
+# A registered image built against stock PG18 carries abi_extra "PostgreSQL"
+# where this fork carries "yb_amp Postgres", and the server refuses it outright
+# ("incompatible library: ABI mismatch") unless the module is waived. The chart
+# renders the same GUC from the registration's abi_extra_exempt list. Comma-
+# separated (a list of module names), like shared_preload_libraries.
+if [[ ${#ABI_EXEMPT[@]} -gt 0 ]]; then
+    PG_SETTINGS+=(--pg-setting "yb_amp_abi_extra_exempt_libraries=$(IFS=,; echo "${ABI_EXEMPT[*]}")")
+fi
 # A preload extension must also be added to shared_preload_libraries; the base is
 # the supervisor's DEFAULT_SHARED_PRELOAD_LIBRARIES (endpoint_supervisor's
 # main.rs), which local and deployed endpoints share. That GUC is comma-separated
@@ -679,6 +849,51 @@ SQL
         echo ">>> PASS age: LOAD 'age' + create_graph + cypher CREATE/MATCH round-trip (ada)"
     else
         echo ">>> FAIL age cypher query; output:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+elif [[ "$EXT_NAME" == postgis ]]; then
+    # PostGIS, mounted from the registered CloudNativePG image
+    # (ext_fixtures/postgis.json) rather than anything this repo builds. Three
+    # things are under test that no built-in extension exercises:
+    #
+    #  * the ABI waiver — the .so is built against stock PG18, so without
+    #    yb_amp_abi_extra_exempt_libraries the CREATE below fails at load with
+    #    "incompatible library: ABI mismatch". Reaching any geometry function
+    #    proves the module loaded.
+    #  * the bundled system libraries — geos/proj/gdal live only in the image.
+    #  * their data dirs — ST_Transform needs proj.db, found only via PROJ_DATA.
+    #    A build that resolved libproj but not its database still answers
+    #    ST_AsText, so the transform is the assertion that matters.
+    #
+    # Values: ST_Area of the unit square is 1; EPSG:4326 -> 3857 sends longitude
+    # 180 to x = 20037508.34 (half the Web Mercator world), a spec-defined
+    # constant rather than a fixture.
+    out=$("${PSQL[@]}" <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS postgis;
+SELECT 'VERSION:'||extversion FROM pg_extension WHERE extname='postgis';
+SELECT 'AREA:'||round(ST_Area(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))::numeric, 3);
+DROP TABLE IF EXISTS amp_postgis_probe;
+CREATE TABLE amp_postgis_probe (id serial PRIMARY KEY, geom geometry(Point, 4326));
+INSERT INTO amp_postgis_probe (geom) VALUES
+  (ST_SetSRID(ST_MakePoint(0, 0), 4326)),
+  (ST_SetSRID(ST_MakePoint(180, 0), 4326));
+CREATE INDEX amp_postgis_probe_gix ON amp_postgis_probe USING GIST (geom);
+CHECKPOINT;
+SET enable_seqscan = off;
+SELECT 'NEAR:'||id FROM amp_postgis_probe
+  ORDER BY geom <-> ST_SetSRID(ST_MakePoint(1, 0), 4326) LIMIT 1;
+SELECT 'MERCX:'||round(ST_X(ST_Transform(geom, 3857))::numeric, 2)
+  FROM amp_postgis_probe ORDER BY id DESC LIMIT 1;
+SQL
+)
+    if echo "$out" | grep -q '^VERSION:3.6.2$' \
+       && echo "$out" | grep -q '^AREA:1.000$' \
+       && echo "$out" | grep -q '^NEAR:1$' \
+       && echo "$out" | grep -q '^MERCX:20037508.34$'; then
+        echo ">>> PASS postgis: v3.6.2 + ST_Area=1 + GiST NN + ST_Transform(4326->3857) x=20037508.34"
+    else
+        echo ">>> FAIL postgis checks; output:" >&2
         echo "$out" >&2
         exit 1
     fi

@@ -1059,6 +1059,59 @@ type ErrorBody struct {
 	Message string `json:"message"`
 }
 
+// Extension defines model for Extension.
+type Extension struct {
+	// AbiExtraExempt Modules (bare names, no `.so`) allowed to differ from the server in FMGR_ABI_EXTRA — what makes an image built against stock PostgreSQL loadable at all. Every other magic-block field is still enforced exactly, so this waives the product string and nothing else. An empty list means the image must match this fork's ABI string.
+	AbiExtraExempt *[]string `json:"abi_extra_exempt,omitempty"`
+
+	// Builtin Compiled into this controller and built by deploy/extensions. A built-in cannot be replaced or deregistered.
+	Builtin     bool    `json:"builtin"`
+	Description *string `json:"description,omitempty"`
+
+	// Image The image actually mounted. For a built-in this is derived from the controller's extension registry; for a registered one it is the reference as given.
+	Image string `json:"image"`
+
+	// Layout Where the image keeps its pieces, each path RELATIVE to the extension's mount root (/extensions/<name>). Omit the whole object for an image laid out the way deploy/extensions builds one; the CloudNativePG extension images, for instance, use share + lib rather than share/postgresql + lib/postgresql.
+	Layout *ExtensionLayout `json:"layout,omitempty"`
+
+	// Library Shared-library basename when it differs from `name` — the shared_preload_libraries entry when `preload` is set. Empty means `name`.
+	Library *string `json:"library,omitempty"`
+
+	// Name Catalog name, mount subdir, and the name a branch opts in by.
+	Name string `json:"name"`
+
+	// Preload The extension must be in shared_preload_libraries, so enabling it on a branch restarts the postmaster rather than just adding a mount.
+	Preload bool `json:"preload"`
+
+	// Version Upstream version, for display. Not used to resolve the image.
+	Version *string `json:"version,omitempty"`
+}
+
+// ExtensionLayout Where the image keeps its pieces, each path RELATIVE to the extension's mount root (/extensions/<name>). Omit the whole object for an image laid out the way deploy/extensions builds one; the CloudNativePG extension images, for instance, use share + lib rather than share/postgresql + lib/postgresql.
+type ExtensionLayout struct {
+	// EnvPaths Runtime data directories the extension's libraries read, by environment variable name (e.g. `PROJ_DATA: share/proj`). Rendered as container environment with the mount root prefixed. Names the endpoint itself owns (LD_LIBRARY_PATH, PATH, …) are rejected.
+	EnvPaths *map[string]string `json:"env_paths,omitempty"`
+
+	// LibPath Directory appended to dynamic_library_path. Default `lib/postgresql`.
+	LibPath *string `json:"lib_path,omitempty"`
+
+	// LibraryPath Directories of system shared libraries the extension's .so links but the endpoint image does not carry, and which the image therefore bundles (PostGIS's geos/proj/gdal live in `system`). Appended to the compute's LD_LIBRARY_PATH. Note this is the FULL loader closure's problem: a library the bundled ones themselves need, and neither the image nor the endpoint carries, still fails at CREATE EXTENSION.
+	LibraryPath *[]string `json:"library_path,omitempty"`
+
+	// SharePath Directory appended to extension_control_path. This is the sharedir BASE — PostgreSQL 18 appends "/extension" itself, so pass `share`, not `share/extension`. Default `share/postgresql`.
+	SharePath *string `json:"share_path,omitempty"`
+}
+
+// ExtensionList defines model for ExtensionList.
+type ExtensionList struct {
+	// Count The number of items returned in this response (this page).
+	Count      PageCount   `json:"count"`
+	Extensions []Extension `json:"extensions"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
 // Migration A migration and its derived status.
 type Migration struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -1328,6 +1381,21 @@ type ProvisionMigrationTargetRequest struct {
 
 	// Vcpu Target compute size in vCPU (chosen by the agent from the assessment). Zero/omitted leaves the deployer default.
 	Vcpu *int `json:"vcpu,omitempty"`
+}
+
+// RegisterExtensionRequest defines model for RegisterExtensionRequest.
+type RegisterExtensionRequest struct {
+	AbiExtraExempt *[]string `json:"abi_extra_exempt,omitempty"`
+	Description    *string   `json:"description,omitempty"`
+
+	// Image OCI image reference, pinned to a tag or `@sha256` digest. `:latest` and an untagged reference are rejected: ImageVolumes pull IfNotPresent, so a node that cached the tag would serve stale bits forever while a fresh node pulled new ones. The image must be pullable with the cluster's existing pull secrets — there is no per-extension credential, so a private registry needs one configured on the deployment.
+	Image string `json:"image"`
+
+	// Layout Where the image keeps its pieces, each path RELATIVE to the extension's mount root (/extensions/<name>). Omit the whole object for an image laid out the way deploy/extensions builds one; the CloudNativePG extension images, for instance, use share + lib rather than share/postgresql + lib/postgresql.
+	Layout  *ExtensionLayout `json:"layout,omitempty"`
+	Library *string          `json:"library,omitempty"`
+	Preload *bool            `json:"preload,omitempty"`
+	Version *string          `json:"version,omitempty"`
 }
 
 // ResizeEndpointRequest Request to change an existing endpoint's compute reservation. cpu/memory
@@ -1741,6 +1809,9 @@ type YCPGenerationApplied = int64
 // only created.
 type YCPGenerationObserved = int64
 
+// ActingUserId defines model for ActingUserId.
+type ActingUserId = openapi_types.UUID
+
 // BranchId defines model for BranchId.
 type BranchId = openapi_types.UUID
 
@@ -1749,6 +1820,9 @@ type ClusterId = openapi_types.UUID
 
 // EndpointId defines model for EndpointId.
 type EndpointId = openapi_types.UUID
+
+// ExtensionName defines model for ExtensionName.
+type ExtensionName = string
 
 // IncludeFailed defines model for IncludeFailed.
 type IncludeFailed = bool
@@ -1780,6 +1854,9 @@ type BadRequest = Error
 // Conflict defines model for Conflict.
 type Conflict = Error
 
+// Forbidden defines model for Forbidden.
+type Forbidden = Error
+
 // InternalError defines model for InternalError.
 type InternalError = Error
 
@@ -1788,6 +1865,18 @@ type NotFound = Error
 
 // ServiceUnavailable defines model for ServiceUnavailable.
 type ServiceUnavailable = Error
+
+// DeregisterExtensionParams defines parameters for DeregisterExtension.
+type DeregisterExtensionParams struct {
+	// UserId The user performing the call, which must be an admin. A placeholder for real authentication: there is none yet, so the caller names itself the same way createStoragePool takes an owner_user_id.
+	UserId ActingUserId `form:"user_id" json:"user_id"`
+}
+
+// RegisterExtensionParams defines parameters for RegisterExtension.
+type RegisterExtensionParams struct {
+	// UserId The user performing the call, which must be an admin. A placeholder for real authentication: there is none yet, so the caller names itself the same way createStoragePool takes an owner_user_id.
+	UserId ActingUserId `form:"user_id" json:"user_id"`
+}
 
 // ListMigrationsParams defines parameters for ListMigrations.
 type ListMigrationsParams struct {
@@ -1881,6 +1970,9 @@ type ListUsersParams struct {
 
 // UpgradeEndpointsJSONRequestBody defines body for UpgradeEndpoints for application/json ContentType.
 type UpgradeEndpointsJSONRequestBody = UpgradeEndpointsRequest
+
+// RegisterExtensionJSONRequestBody defines body for RegisterExtension for application/json ContentType.
+type RegisterExtensionJSONRequestBody = RegisterExtensionRequest
 
 // CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
 type CreateMigrationJSONRequestBody = CreateMigrationRequest
@@ -2130,6 +2222,20 @@ type ClientInterface interface {
 
 	UpgradeEndpoints(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListExtensions request
+	ListExtensions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeregisterExtension request
+	DeregisterExtension(ctx context.Context, extensionName ExtensionName, params *DeregisterExtensionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetExtension request
+	GetExtension(ctx context.Context, extensionName ExtensionName, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RegisterExtensionWithBody request with any body
+	RegisterExtensionWithBody(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RegisterExtension(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListMigrations request
 	ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2281,6 +2387,66 @@ func (c *Client) UpgradeEndpointsWithBody(ctx context.Context, contentType strin
 
 func (c *Client) UpgradeEndpoints(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewUpgradeEndpointsRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListExtensions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListExtensionsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeregisterExtension(ctx context.Context, extensionName ExtensionName, params *DeregisterExtensionParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeregisterExtensionRequest(c.Server, extensionName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetExtension(ctx context.Context, extensionName ExtensionName, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetExtensionRequest(c.Server, extensionName)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RegisterExtensionWithBody(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRegisterExtensionRequestWithBody(c.Server, extensionName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RegisterExtension(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRegisterExtensionRequest(c.Server, extensionName, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2922,6 +3088,194 @@ func NewUpgradeEndpointsRequestWithBody(server string, contentType string, body 
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewListExtensionsRequest generates requests for ListExtensions
+func NewListExtensionsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/extensions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDeregisterExtensionRequest generates requests for DeregisterExtension
+func NewDeregisterExtensionRequest(server string, extensionName ExtensionName, params *DeregisterExtensionParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "extensionName", extensionName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/extensions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "user_id", params.UserId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "uuid"}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetExtensionRequest generates requests for GetExtension
+func NewGetExtensionRequest(server string, extensionName ExtensionName) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "extensionName", extensionName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/extensions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewRegisterExtensionRequest calls the generic RegisterExtension builder with application/json body
+func NewRegisterExtensionRequest(server string, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRegisterExtensionRequestWithBody(server, extensionName, params, "application/json", bodyReader)
+}
+
+// NewRegisterExtensionRequestWithBody generates requests for RegisterExtension with any type of body
+func NewRegisterExtensionRequestWithBody(server string, extensionName ExtensionName, params *RegisterExtensionParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "extensionName", extensionName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/extensions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "user_id", params.UserId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "uuid"}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -4851,6 +5205,20 @@ type ClientWithResponsesInterface interface {
 
 	UpgradeEndpointsWithResponse(ctx context.Context, body UpgradeEndpointsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpgradeEndpointsResponse, error)
 
+	// ListExtensionsWithResponse request
+	ListExtensionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListExtensionsResponse, error)
+
+	// DeregisterExtensionWithResponse request
+	DeregisterExtensionWithResponse(ctx context.Context, extensionName ExtensionName, params *DeregisterExtensionParams, reqEditors ...RequestEditorFn) (*DeregisterExtensionResponse, error)
+
+	// GetExtensionWithResponse request
+	GetExtensionWithResponse(ctx context.Context, extensionName ExtensionName, reqEditors ...RequestEditorFn) (*GetExtensionResponse, error)
+
+	// RegisterExtensionWithBodyWithResponse request with any body
+	RegisterExtensionWithBodyWithResponse(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegisterExtensionResponse, error)
+
+	RegisterExtensionWithResponse(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*RegisterExtensionResponse, error)
+
 	// ListMigrationsWithResponse request
 	ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error)
 
@@ -5016,6 +5384,141 @@ func (r UpgradeEndpointsResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r UpgradeEndpointsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListExtensionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ExtensionList
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r ListExtensionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListExtensionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListExtensionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeregisterExtensionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *Forbidden
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r DeregisterExtensionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeregisterExtensionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeregisterExtensionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetExtensionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Extension
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r GetExtensionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetExtensionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetExtensionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RegisterExtensionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Extension
+	JSON400      *BadRequest
+	JSON403      *Forbidden
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r RegisterExtensionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RegisterExtensionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RegisterExtensionResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -6253,6 +6756,50 @@ func (c *ClientWithResponses) UpgradeEndpointsWithResponse(ctx context.Context, 
 	return ParseUpgradeEndpointsResponse(rsp)
 }
 
+// ListExtensionsWithResponse request returning *ListExtensionsResponse
+func (c *ClientWithResponses) ListExtensionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListExtensionsResponse, error) {
+	rsp, err := c.ListExtensions(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListExtensionsResponse(rsp)
+}
+
+// DeregisterExtensionWithResponse request returning *DeregisterExtensionResponse
+func (c *ClientWithResponses) DeregisterExtensionWithResponse(ctx context.Context, extensionName ExtensionName, params *DeregisterExtensionParams, reqEditors ...RequestEditorFn) (*DeregisterExtensionResponse, error) {
+	rsp, err := c.DeregisterExtension(ctx, extensionName, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeregisterExtensionResponse(rsp)
+}
+
+// GetExtensionWithResponse request returning *GetExtensionResponse
+func (c *ClientWithResponses) GetExtensionWithResponse(ctx context.Context, extensionName ExtensionName, reqEditors ...RequestEditorFn) (*GetExtensionResponse, error) {
+	rsp, err := c.GetExtension(ctx, extensionName, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetExtensionResponse(rsp)
+}
+
+// RegisterExtensionWithBodyWithResponse request with arbitrary body returning *RegisterExtensionResponse
+func (c *ClientWithResponses) RegisterExtensionWithBodyWithResponse(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegisterExtensionResponse, error) {
+	rsp, err := c.RegisterExtensionWithBody(ctx, extensionName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRegisterExtensionResponse(rsp)
+}
+
+func (c *ClientWithResponses) RegisterExtensionWithResponse(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*RegisterExtensionResponse, error) {
+	rsp, err := c.RegisterExtension(ctx, extensionName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRegisterExtensionResponse(rsp)
+}
+
 // ListMigrationsWithResponse request returning *ListMigrationsResponse
 func (c *ClientWithResponses) ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error) {
 	rsp, err := c.ListMigrations(ctx, params, reqEditors...)
@@ -6716,6 +7263,215 @@ func ParseUpgradeEndpointsResponse(rsp *http.Response) (*UpgradeEndpointsRespons
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListExtensionsResponse parses an HTTP response from a ListExtensionsWithResponse call
+func ParseListExtensionsResponse(rsp *http.Response) (*ListExtensionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListExtensionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExtensionList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeregisterExtensionResponse parses an HTTP response from a DeregisterExtensionWithResponse call
+func ParseDeregisterExtensionResponse(rsp *http.Response) (*DeregisterExtensionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeregisterExtensionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetExtensionResponse parses an HTTP response from a GetExtensionWithResponse call
+func ParseGetExtensionResponse(rsp *http.Response) (*GetExtensionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetExtensionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Extension
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRegisterExtensionResponse parses an HTTP response from a RegisterExtensionWithResponse call
+func ParseRegisterExtensionResponse(rsp *http.Response) (*RegisterExtensionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RegisterExtensionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Extension
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
 		var dest Conflict
@@ -8622,6 +9378,18 @@ type ServerInterface interface {
 	// Roll endpoints onto a target version
 	// (POST /endpoint-upgrades)
 	UpgradeEndpoints(ctx echo.Context) error
+	// List every extension a branch may enable
+	// (GET /extensions)
+	ListExtensions(ctx echo.Context) error
+	// Remove a registered extension
+	// (DELETE /extensions/{extensionName})
+	DeregisterExtension(ctx echo.Context, extensionName ExtensionName, params DeregisterExtensionParams) error
+	// Get one extension
+	// (GET /extensions/{extensionName})
+	GetExtension(ctx echo.Context, extensionName ExtensionName) error
+	// Register (or replace) an extension image
+	// (PUT /extensions/{extensionName})
+	RegisterExtension(ctx echo.Context, extensionName ExtensionName, params RegisterExtensionParams) error
 	// List migrations
 	// (GET /migrations)
 	ListMigrations(ctx echo.Context, params ListMigrationsParams) error
@@ -8743,6 +9511,81 @@ func (w *ServerInterfaceWrapper) UpgradeEndpoints(ctx echo.Context) error {
 
 	// Invoke the callback with all the unmarshaled arguments
 	err = w.Handler.UpgradeEndpoints(ctx)
+	return err
+}
+
+// ListExtensions converts echo context to params.
+func (w *ServerInterfaceWrapper) ListExtensions(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListExtensions(ctx)
+	return err
+}
+
+// DeregisterExtension converts echo context to params.
+func (w *ServerInterfaceWrapper) DeregisterExtension(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "extensionName" -------------
+	var extensionName ExtensionName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "extensionName", ctx.Param("extensionName"), &extensionName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter extensionName: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeregisterExtensionParams
+	// ------------- Required query parameter "user_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "user_id", ctx.QueryParams(), &params.UserId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter user_id: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeregisterExtension(ctx, extensionName, params)
+	return err
+}
+
+// GetExtension converts echo context to params.
+func (w *ServerInterfaceWrapper) GetExtension(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "extensionName" -------------
+	var extensionName ExtensionName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "extensionName", ctx.Param("extensionName"), &extensionName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter extensionName: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetExtension(ctx, extensionName)
+	return err
+}
+
+// RegisterExtension converts echo context to params.
+func (w *ServerInterfaceWrapper) RegisterExtension(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "extensionName" -------------
+	var extensionName ExtensionName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "extensionName", ctx.Param("extensionName"), &extensionName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter extensionName: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RegisterExtensionParams
+	// ------------- Required query parameter "user_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "user_id", ctx.QueryParams(), &params.UserId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter user_id: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.RegisterExtension(ctx, extensionName, params)
 	return err
 }
 
@@ -9678,6 +10521,10 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	}
 
 	router.POST(options.BaseURL+"/endpoint-upgrades", wrapper.UpgradeEndpoints, options.OperationMiddlewares["upgradeEndpoints"]...)
+	router.GET(options.BaseURL+"/extensions", wrapper.ListExtensions, options.OperationMiddlewares["listExtensions"]...)
+	router.DELETE(options.BaseURL+"/extensions/:extensionName", wrapper.DeregisterExtension, options.OperationMiddlewares["deregisterExtension"]...)
+	router.GET(options.BaseURL+"/extensions/:extensionName", wrapper.GetExtension, options.OperationMiddlewares["getExtension"]...)
+	router.PUT(options.BaseURL+"/extensions/:extensionName", wrapper.RegisterExtension, options.OperationMiddlewares["registerExtension"]...)
 	router.GET(options.BaseURL+"/migrations", wrapper.ListMigrations, options.OperationMiddlewares["listMigrations"]...)
 	router.POST(options.BaseURL+"/migrations", wrapper.CreateMigration, options.OperationMiddlewares["createMigration"]...)
 	router.POST(options.BaseURL+"/migrations/connectivity-checks", wrapper.CheckMigrationConnectivity, options.OperationMiddlewares["checkMigrationConnectivity"]...)
@@ -9729,6 +10576,8 @@ type AcceptedJSONResponse struct {
 type BadRequestJSONResponse Error
 
 type ConflictJSONResponse Error
+
+type ForbiddenJSONResponse Error
 
 type InternalErrorJSONResponse Error
 
@@ -9811,6 +10660,318 @@ func (response UpgradeEndpoints500JSONResponse) VisitUpgradeEndpointsResponse(w 
 type UpgradeEndpoints503JSONResponse struct{ ServiceUnavailableJSONResponse }
 
 func (response UpgradeEndpoints503JSONResponse) VisitUpgradeEndpointsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExtensionsRequestObject struct {
+}
+
+type ListExtensionsResponseObject interface {
+	VisitListExtensionsResponse(w http.ResponseWriter) error
+}
+
+type ListExtensions200JSONResponse ExtensionList
+
+func (response ListExtensions200JSONResponse) VisitListExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExtensions500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListExtensions500JSONResponse) VisitListExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExtensions503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListExtensions503JSONResponse) VisitListExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeregisterExtensionRequestObject struct {
+	ExtensionName ExtensionName `json:"extensionName"`
+	Params        DeregisterExtensionParams
+}
+
+type DeregisterExtensionResponseObject interface {
+	VisitDeregisterExtensionResponse(w http.ResponseWriter) error
+}
+
+type DeregisterExtension204Response struct {
+}
+
+func (response DeregisterExtension204Response) VisitDeregisterExtensionResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeregisterExtension403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeregisterExtension403JSONResponse) VisitDeregisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeregisterExtension404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeregisterExtension404JSONResponse) VisitDeregisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeregisterExtension409JSONResponse struct{ ConflictJSONResponse }
+
+func (response DeregisterExtension409JSONResponse) VisitDeregisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeregisterExtension500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeregisterExtension500JSONResponse) VisitDeregisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeregisterExtension503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response DeregisterExtension503JSONResponse) VisitDeregisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExtensionRequestObject struct {
+	ExtensionName ExtensionName `json:"extensionName"`
+}
+
+type GetExtensionResponseObject interface {
+	VisitGetExtensionResponse(w http.ResponseWriter) error
+}
+
+type GetExtension200JSONResponse Extension
+
+func (response GetExtension200JSONResponse) VisitGetExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExtension404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetExtension404JSONResponse) VisitGetExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExtension500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetExtension500JSONResponse) VisitGetExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExtension503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetExtension503JSONResponse) VisitGetExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtensionRequestObject struct {
+	ExtensionName ExtensionName `json:"extensionName"`
+	Params        RegisterExtensionParams
+	Body          *RegisterExtensionJSONRequestBody
+}
+
+type RegisterExtensionResponseObject interface {
+	VisitRegisterExtensionResponse(w http.ResponseWriter) error
+}
+
+type RegisterExtension200JSONResponse Extension
+
+func (response RegisterExtension200JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtension400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RegisterExtension400JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtension403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RegisterExtension403JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtension404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RegisterExtension404JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtension409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RegisterExtension409JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtension500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response RegisterExtension500JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterExtension503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response RegisterExtension503JSONResponse) VisitRegisterExtensionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -12582,6 +13743,18 @@ type StrictServerInterface interface {
 	// Roll endpoints onto a target version
 	// (POST /endpoint-upgrades)
 	UpgradeEndpoints(ctx context.Context, request UpgradeEndpointsRequestObject) (UpgradeEndpointsResponseObject, error)
+	// List every extension a branch may enable
+	// (GET /extensions)
+	ListExtensions(ctx context.Context, request ListExtensionsRequestObject) (ListExtensionsResponseObject, error)
+	// Remove a registered extension
+	// (DELETE /extensions/{extensionName})
+	DeregisterExtension(ctx context.Context, request DeregisterExtensionRequestObject) (DeregisterExtensionResponseObject, error)
+	// Get one extension
+	// (GET /extensions/{extensionName})
+	GetExtension(ctx context.Context, request GetExtensionRequestObject) (GetExtensionResponseObject, error)
+	// Register (or replace) an extension image
+	// (PUT /extensions/{extensionName})
+	RegisterExtension(ctx context.Context, request RegisterExtensionRequestObject) (RegisterExtensionResponseObject, error)
 	// List migrations
 	// (GET /migrations)
 	ListMigrations(ctx context.Context, request ListMigrationsRequestObject) (ListMigrationsResponseObject, error)
@@ -12727,6 +13900,112 @@ func (sh *strictHandler) UpgradeEndpoints(ctx echo.Context) error {
 		return err
 	} else if validResponse, ok := response.(UpgradeEndpointsResponseObject); ok {
 		return validResponse.VisitUpgradeEndpointsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListExtensions operation middleware
+func (sh *strictHandler) ListExtensions(ctx echo.Context) error {
+	var request ListExtensionsRequestObject
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListExtensions(ctx.Request().Context(), request.(ListExtensionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListExtensions")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListExtensionsResponseObject); ok {
+		return validResponse.VisitListExtensionsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// DeregisterExtension operation middleware
+func (sh *strictHandler) DeregisterExtension(ctx echo.Context, extensionName ExtensionName, params DeregisterExtensionParams) error {
+	var request DeregisterExtensionRequestObject
+
+	request.ExtensionName = extensionName
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeregisterExtension(ctx.Request().Context(), request.(DeregisterExtensionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeregisterExtension")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeregisterExtensionResponseObject); ok {
+		return validResponse.VisitDeregisterExtensionResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetExtension operation middleware
+func (sh *strictHandler) GetExtension(ctx echo.Context, extensionName ExtensionName) error {
+	var request GetExtensionRequestObject
+
+	request.ExtensionName = extensionName
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetExtension(ctx.Request().Context(), request.(GetExtensionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetExtension")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetExtensionResponseObject); ok {
+		return validResponse.VisitGetExtensionResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// RegisterExtension operation middleware
+func (sh *strictHandler) RegisterExtension(ctx echo.Context, extensionName ExtensionName, params RegisterExtensionParams) error {
+	var request RegisterExtensionRequestObject
+
+	request.ExtensionName = extensionName
+	request.Params = params
+
+	var body RegisterExtensionJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.RegisterExtension(ctx.Request().Context(), request.(RegisterExtensionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegisterExtension")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(RegisterExtensionResponseObject); ok {
+		return validResponse.VisitRegisterExtensionResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

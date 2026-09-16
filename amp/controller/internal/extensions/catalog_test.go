@@ -93,3 +93,37 @@ func TestCatalogResolveSkipsUnknownAndDeduplicates(t *testing.T) {
 		t.Fatalf("Resolve dropped/deduped wrong: %+v", got)
 	}
 }
+
+func TestBuiltinsDeclareNoLayoutOrImageRef(t *testing.T) {
+	// Everything built in is built by deploy/extensions, so it uses the amp tree
+	// (the zero Layout, which is what the chart defaults to), matches this fork's
+	// FMGR_ABI_EXTRA, and derives its image from the registry flag. A built-in
+	// carrying an ImageRef would be a third-party image hardcoded in the product,
+	// which is exactly what the registration API exists to avoid.
+	c := NewCatalog("quay.io/yugabyte")
+	for _, name := range c.order {
+		if c.byName[name].ImageRef != "" {
+			t.Errorf("built-in %s pins a third-party image %q; register it instead", name, c.byName[name].ImageRef)
+		}
+		got := c.Resolve([]string{name})[0]
+		if !reflect.DeepEqual(got.Layout, Layout{}) {
+			t.Errorf("Resolve(%s).Layout = %+v, want the zero value", name, got.Layout)
+		}
+		if len(got.ABIExtraExempt) != 0 {
+			t.Errorf("Resolve(%s).ABIExtraExempt = %v; an amp-built image matches FMGR_ABI_EXTRA exactly", name, got.ABIExtraExempt)
+		}
+	}
+}
+
+// listExtensions is what a picker renders, so a built-in without a description
+// shows a blank card — and the served catalog would then carry strictly LESS
+// than the build manifest the UI used to bundle. The manifest's generator
+// refuses a row missing one; this is the same guarantee on the served side.
+func TestBuiltinsAllCarryADescription(t *testing.T) {
+	c := NewCatalog("quay.io/yugabyte")
+	for _, n := range c.order {
+		if c.byName[n].Description == "" {
+			t.Errorf("built-in %s has no description; listExtensions would render a blank card", n)
+		}
+	}
+}

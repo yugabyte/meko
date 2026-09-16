@@ -75,7 +75,7 @@ type createEndpointStep struct {
 	deployer   deploy.Deployer
 	yb         deploy.YBConn
 	scURL      string
-	extensions *extensions.Catalog
+	extensions *extensions.Service
 }
 
 // NewCreateEndpointStep binds create_endpoint args + its deps into an executable step.

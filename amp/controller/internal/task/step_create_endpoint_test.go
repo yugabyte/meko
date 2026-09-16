@@ -63,7 +63,7 @@ func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 func TestCreateEndpointStepDeploysTheArgsDesiredState(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
 
@@ -221,7 +221,7 @@ func TestCreateEndpointStepNoDefaultsMountsNothing(t *testing.T) {
 	// pgvector is off by default.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
 
@@ -239,7 +239,7 @@ func TestCreateEndpointStepMountsClusterExtension(t *testing.T) {
 	// per endpoint.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
@@ -261,7 +261,7 @@ func TestCreateEndpointStepMountsClusterPreloadExtension(t *testing.T) {
 	// shared_preload_libraries).
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pg_cron")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
@@ -284,7 +284,7 @@ func TestCreateEndpointStepMountsMultipleClusterExtensions(t *testing.T) {
 	// local/smoke tests exercise end-to-end.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
-	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("quay.io/yugabyte"), nil)
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector", "age")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
@@ -316,7 +316,7 @@ func TestCreateEndpointStepMountsClusterExtensions(t *testing.T) {
 	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(clusterID, branchID, "pgvector", "totally-unknown-ext")
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
-	deps.Extensions = extensions.NewCatalog("r")
+	deps.Extensions = extensions.NewService(extensions.NewCatalog("r"), nil)
 	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
