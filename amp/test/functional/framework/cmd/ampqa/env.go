@@ -302,7 +302,7 @@ or --force to remove the record even when teardown errors.`,
 				if serr != nil {
 					return &exitError{code: 2, err: serr}
 				}
-				masker := core.NewMaskerFromSecrets(secrets)
+				masker := core.NewMaskerFromRun(secrets, cfg)
 				detected := core.DetectedVersions{
 					Product: cfg.GetString("versions.product", ""),
 					YB:      cfg.GetString("versions.yb", ""),

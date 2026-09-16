@@ -171,6 +171,8 @@ env:
     endpoint_image: "amp-endpoint:custom-7f195e43e51f"
     # quay.io robot credentials for the pull secret (custom/release builds
     # pushed by the amp build pipeline live there). Empty -> no quay auth.
+    # quay_token is redacted from the recorded config snapshot and masked in
+    # logs (core/secret.go), so it never reaches the report portal.
     quay_user: ""
     quay_token: ""
     # ghcr credentials; token empty falls back to the local `gh auth token`
@@ -1306,6 +1308,10 @@ artifacts:
 #
 # Referenced BY NAME elsewhere (an artifact's `secret:`, apps.cloud.aws.
 # access_key_secret, ...). Empty by default; declare per-project.
+#
+# A credential set as a plain knob instead (quay_token, *.password) is redacted
+# from the config snapshot by key name, and masked everywhere else once it
+# differs from the default here — but declare it as a secret where you can.
 secrets: {}
 
 # --- Reporting sinks (cmd/ampqa/run.go, report/jsonfile, report/junit) ---

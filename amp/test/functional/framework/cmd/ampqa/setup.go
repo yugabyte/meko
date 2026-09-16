@@ -61,7 +61,7 @@ ls' and tear one down with 'ampqa env rm <id>'.`,
 			if err != nil {
 				return &exitError{code: 2, err: err}
 			}
-			masker := core.NewMaskerFromSecrets(secrets)
+			masker := core.NewMaskerFromRun(secrets, cfg)
 
 			testRe, terr := resolveTestFilter(testName, testRegex)
 			if terr != nil {

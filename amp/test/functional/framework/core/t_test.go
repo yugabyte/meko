@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -132,5 +133,31 @@ func TestResourceSuffixIdentifierSafe(t *testing.T) {
 		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
 			t.Fatalf("suffix %q has non-hex rune %q (not SQL/DNS safe)", s, r)
 		}
+	}
+}
+
+// A collected pod log is shipped to the report portal verbatim, so a secret in
+// it leaks the same way a config value does. Text attachments are masked;
+// anything else is passed through untouched.
+func TestAttachBytesMasksTextAttachments(t *testing.T) {
+	res := &Result{}
+	cap := &captureEmitter{}
+	seed := NewRunSeed(1, true).ForTest("features/attach")
+	tt := newT(context.Background(), nil, seed, nil, NewMasker("s3cr3t"), res, cap)
+
+	tt.AttachBytes("controller.log", "log", []byte("auth=s3cr3t failed"))
+	tt.AttachBytes("heap.bin", "bin", []byte("auth=s3cr3t failed"))
+
+	if len(cap.events) != 2 {
+		t.Fatalf("emitted %d events, want 2", len(cap.events))
+	}
+	if got := string(cap.events[0].Content); strings.Contains(got, "s3cr3t") {
+		t.Errorf("log attachment leaked a secret: %q", got)
+	}
+	if got := string(cap.events[1].Content); !strings.Contains(got, "s3cr3t") {
+		t.Errorf("binary attachment was rewritten: %q", got)
+	}
+	if res.Attachments[0].Size != int64(len("auth=*** failed")) {
+		t.Errorf("recorded size %d does not match the masked content", res.Attachments[0].Size)
 	}
 }

@@ -315,3 +315,70 @@ func TestSecretsShorthandRedaction(t *testing.T) {
 		t.Errorf("redacted secrets = %v; want tok->\"token\" (no literal)", root["secrets"])
 	}
 }
+
+func TestSanitizeConfigSnapshotRedactsCredentialKeys(t *testing.T) {
+	// The amp-run pipeline passes the quay robot credential as
+	// `-o env.ampstack.quay_token=<user>:<pass>`, so it is an ordinary config
+	// value the Masker knows nothing about. It must not reach a result.
+	root := map[string]any{
+		"env": map[string]any{"ampstack": map[string]any{
+			"quay_user":        "yugabyte+quay_ampbot",
+			"quay_token":       "ROBOTSECRET123",
+			"ghcr_token":       "",
+			"pull_secret_name": "pull-secret",
+			"backing":          map[string]any{"password": "hunter2"},
+		}},
+		"apps": map[string]any{
+			"ybk8s": map[string]any{"image_pull_secret": "quay_images"},
+			"yba":   map[string]any{"api_token_secret": "yba_token"},
+		},
+		"artifacts": map[string]any{"sampleapp": map[string]any{"secret": "gh_package"}},
+	}
+	sanitizeConfigSnapshot(root, NewMasker())
+
+	amp := root["env"].(map[string]any)["ampstack"].(map[string]any)
+	if amp["quay_token"] != MaskWith {
+		t.Errorf("quay_token = %v; want %s", amp["quay_token"], MaskWith)
+	}
+	if amp["backing"].(map[string]any)["password"] != MaskWith {
+		t.Errorf("backing.password was not redacted: %v", amp["backing"])
+	}
+	// An unset credential stays empty: nothing to leak, and "" is the honest
+	// answer to whether it was configured.
+	if amp["ghcr_token"] != "" {
+		t.Errorf("empty ghcr_token = %v; want it left alone", amp["ghcr_token"])
+	}
+	// Names of credentials, and of Kubernetes objects, stay readable.
+	for _, tc := range []struct{ got, want any }{
+		{amp["quay_user"], "yugabyte+quay_ampbot"},
+		{amp["pull_secret_name"], "pull-secret"},
+		{root["apps"].(map[string]any)["ybk8s"].(map[string]any)["image_pull_secret"], "quay_images"},
+		{root["apps"].(map[string]any)["yba"].(map[string]any)["api_token_secret"], "yba_token"},
+		{root["artifacts"].(map[string]any)["sampleapp"].(map[string]any)["secret"], "gh_package"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("reference key redacted: got %v, want %v", tc.got, tc.want)
+		}
+	}
+}
+
+func TestMaskerFromRunCoversConfigCredentials(t *testing.T) {
+	cfg, err := LoadConfig(nil, nil, []string{"env.ampstack.quay_token=ROBOTSECRET123"})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	m := NewMaskerFromRun(nil, cfg)
+	if got := m.Mask("pulling with ROBOTSECRET123"); strings.Contains(got, "ROBOTSECRET123") {
+		t.Errorf("config credential survived masking: %q", got)
+	}
+	// A credential-shaped key left at its shipped default is NOT masked:
+	// functional.amp.endpoint_password is "cloud_admin", which is also a role
+	// name throughout the logs.
+	def := cfg.GetString("functional.amp.endpoint_password", "")
+	if def == "" {
+		t.Fatalf("endpoint_password default is empty; the case this guards is gone")
+	}
+	if got := m.Mask("connected as " + def); !strings.Contains(got, def) {
+		t.Errorf("shipped default was masked: %q", got)
+	}
+}

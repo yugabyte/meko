@@ -277,16 +277,23 @@ func NewMasker(values ...string) *Masker {
 // errors are intentionally swallowed here: this is the masking-safety path, not
 // the use path (a genuinely-needed secret errors clearly at its point of use).
 func NewMaskerFromSecrets(s *Secrets) *Masker {
-	if s == nil {
-		return NewMasker()
-	}
+	return NewMaskerFromRun(s, nil)
+}
+
+// NewMaskerFromRun is NewMaskerFromSecrets plus the credential-shaped config
+// values the run overrode (see configCredentialValues) — the pipeline passes
+// the quay robot credential as `-o env.ampstack.quay_token=...`, which no
+// secrets: declaration knows about.
+func NewMaskerFromRun(s *Secrets, cfg *Config) *Masker {
 	var vals []string
-	for _, name := range s.Names() {
-		if v, err := s.Value(name); err == nil && v != "" {
-			vals = append(vals, v)
+	if s != nil {
+		for _, name := range s.Names() {
+			if v, err := s.Value(name); err == nil && v != "" {
+				vals = append(vals, v)
+			}
 		}
 	}
-	return NewMasker(vals...)
+	return NewMasker(append(vals, configCredentialValues(cfg)...)...)
 }
 
 // Mask returns s with every known secret value replaced by MaskWith. A nil
@@ -347,14 +354,129 @@ func (m *Masker) maskValuesInPlace(v any) {
 // sanitizeConfigSnapshot prepares a resolved-config snapshot for recording into
 // a result: it REDACTS the secrets subtree (replacing each declaration with its
 // variant name only — never a value, since a token declaration holds the literal
-// inline) and then masks any secret value that leaked into the rest of the tree.
-// root is mutated in place; callers pass a fresh deep copy (Config.Resolved()).
+// inline), redacts every credential-shaped key outside it, and then masks any
+// secret value that leaked into the rest of the tree. root is mutated in place;
+// callers pass a fresh deep copy (Config.Resolved()).
 func sanitizeConfigSnapshot(root map[string]any, m *Masker) {
 	if root == nil {
 		return
 	}
 	redactSecretsSubtree(root)
+	redactCredentialKeys(root)
 	m.maskValuesInPlace(root)
+}
+
+// --- credential-shaped config keys ---
+
+// A resolved config carries credentials that were never declared under
+// secrets:, because the knob takes the literal (`-o env.ampstack.quay_token=...`,
+// which the amp-run pipeline does). The snapshot is shipped to the report portal
+// and served from its read API, so those keys are redacted by NAME, whether or
+// not the Masker happens to know the value.
+var credentialKeyParts = []string{
+	"token", "password", "passwd", "passphrase", "secret",
+	"credential", "api_key", "apikey", "access_key", "private_key",
+}
+
+// referenceKeySuffixes are the suffixes that make a credential-shaped key a
+// REFERENCE rather than the material: `quay_secret` names a declared secret,
+// `pull_secret_name` a Kubernetes object, `api_token_secret` the secret holding
+// the token. Redacting those would hide the wiring and protect nothing.
+var referenceKeySuffixes = []string{
+	"_secret", "_name", "_file", "_path", "_user", "_registry",
+	"_env", "_namespace", "_enabled",
+}
+
+func isCredentialKey(key string) bool {
+	k := strings.ToLower(key)
+	if k == "secret" {
+		return false
+	}
+	for _, suffix := range referenceKeySuffixes {
+		if strings.HasSuffix(k, suffix) {
+			return false
+		}
+	}
+	for _, part := range credentialKeyParts {
+		if strings.Contains(k, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactCredentialKeys replaces every non-empty value under a credential-shaped
+// key with MaskWith. An empty value is left alone: nothing to leak, and "" is
+// the honest answer to whether the knob was set.
+func redactCredentialKeys(node any) {
+	switch t := node.(type) {
+	case map[string]any:
+		for k, v := range t {
+			switch v.(type) {
+			case map[string]any, []any:
+				// A subtree is walked, never replaced wholesale: `secrets` is
+				// already redacted declaration by declaration above.
+				redactCredentialKeys(v)
+			default:
+				if isCredentialKey(k) && !isEmptyLeaf(v) {
+					t[k] = MaskWith
+				}
+			}
+		}
+	case []any:
+		for _, e := range t {
+			redactCredentialKeys(e)
+		}
+	}
+}
+
+func isEmptyLeaf(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
+}
+
+// configCredentialValues collects the credential-shaped config values that
+// DIFFER from the shipped default, so the Masker covers a literal passed with
+// -o the same way it covers a declared secret — in log lines, step properties
+// and error summaries, not only in the config snapshot. Values equal to the
+// default are left out on purpose: `functional.amp.endpoint_password` ships as
+// "cloud_admin", which is also a role name all over the logs, and masking it
+// would destroy far more evidence than it protects.
+func configCredentialValues(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	defaults := &Config{root: defaultBase}
+	var walk func(prefix string, node map[string]any)
+	walk = func(prefix string, node map[string]any) {
+		for k, v := range node {
+			key := k
+			if prefix != "" {
+				key = prefix + "." + k
+			}
+			if child, ok := v.(map[string]any); ok {
+				if prefix == "" && k == "secrets" {
+					continue // declared secrets are covered by NewMaskerFromSecrets
+				}
+				walk(key, child)
+				continue
+			}
+			s, ok := v.(string)
+			if !ok || s == "" || !isCredentialKey(k) {
+				continue
+			}
+			if def, found := defaults.lookup(key); found && def == v {
+				continue
+			}
+			out = append(out, s)
+		}
+	}
+	walk("", cfg.root)
+	return out
 }
 
 func redactSecretsSubtree(root map[string]any) {

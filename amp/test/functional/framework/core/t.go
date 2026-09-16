@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -140,6 +141,7 @@ func (t *T) Attach(name, kind string, size int64) {
 // to disk. Use it wherever the collected blob's content matters (logs, dumps,
 // diagnostics); Attach stays metadata-only for callers that only know a size.
 func (t *T) AttachBytes(name, kind string, content []byte) {
+	content = maskAttachment(t.masker, kind, content)
 	a := Attachment{Name: name, Kind: kind, Size: int64(len(content))}
 	t.mu.Lock()
 	t.result.Attachments = append(t.result.Attachments, a)
@@ -253,4 +255,24 @@ func (t *T) Failed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.failed
+}
+
+// maskAttachment masks secret values in a TEXT attachment (collected pod logs,
+// kubectl output). Only the text kinds are touched — masking a binary blob
+// would corrupt it, and no secret survives a base64 or gzip boundary intact
+// anyway.
+func maskAttachment(m *Masker, kind string, content []byte) []byte {
+	if m == nil || len(m.values) == 0 || len(content) == 0 {
+		return content
+	}
+	switch strings.ToLower(kind) {
+	case "log", "txt", "text", "json", "yaml", "yml", "csv", "md", "html":
+	default:
+		return content
+	}
+	masked := m.Mask(string(content))
+	if masked == string(content) {
+		return content
+	}
+	return []byte(masked)
 }

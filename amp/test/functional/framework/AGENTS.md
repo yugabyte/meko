@@ -76,6 +76,14 @@ quietly.
   **env** (env-var name) variants, and resolved by name. Secret values are
   **masked in logs and never recorded into results**. Do not hardcode
   credentials; do not read private key material into result artifacts.
+- A credential passed as an **ordinary config value** (`-o
+  env.ampstack.quay_token=...`, which the amp-run pipeline does) is covered
+  too: the result's config snapshot redacts every credential-shaped key, and
+  a value that differs from the shipped default joins the Masker, so it cannot
+  survive into a log line, a step property or a text attachment either. Keys
+  naming a credential rather than holding it (`*_secret`, `*_secret_name`,
+  `artifacts.*.secret`) stay readable. Prefer a `secrets:` declaration anyway —
+  the redaction is a backstop, not the design.
 
 ## 8. Infrastructure hygiene — reuse, don't pollute
 - On shared cloud accounts / clusters: **create no redundant or orphan
