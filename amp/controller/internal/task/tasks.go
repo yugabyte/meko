@@ -112,6 +112,14 @@ func NewService(store Store, subs SubtaskStore) *Service {
 	return &Service{store: store, subs: subs}
 }
 
+// RequestCancel asks for a task to stop. Cooperative: it records the request and
+// returns — the worker stops the task at its next step boundary, and work already
+// in flight runs to completion. ErrTaskTerminal when the task has already
+// finished, ErrTaskNotFound when there is no such task.
+func (s *Service) RequestCancel(ctx context.Context, id uuid.UUID) error {
+	return s.store.RequestCancel(ctx, id)
+}
+
 // Subtasks returns a parent task's children, oldest first (empty for a task that
 // fanned out to none).
 func (s *Service) Subtasks(ctx context.Context, parentID uuid.UUID) ([]*Subtask, error) {

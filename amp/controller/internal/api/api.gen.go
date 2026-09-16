@@ -1571,11 +1571,16 @@ type SubtaskList struct {
 
 // Task defines model for Task.
 type Task struct {
-	ClusterId *openapi_types.UUID `json:"cluster_id,omitempty"`
-	CreatedAt time.Time           `json:"created_at"`
-	Error     *string             `json:"error,omitempty"`
-	Id        openapi_types.UUID  `json:"id"`
-	Kind      string              `json:"kind"`
+	// CancelRequestedAt When `POST /tasks/{taskId}/cancel` was asked for, `null` when nobody
+	// has. A request, not an outcome: it is set the moment the request is
+	// accepted, and the task stays `running` until the worker reaches a step
+	// boundary. A `failed` task carrying it was cancelled rather than broken.
+	CancelRequestedAt *time.Time          `json:"cancel_requested_at,omitempty"`
+	ClusterId         *openapi_types.UUID `json:"cluster_id,omitempty"`
+	CreatedAt         time.Time           `json:"created_at"`
+	Error             *string             `json:"error,omitempty"`
+	Id                openapi_types.UUID  `json:"id"`
+	Kind              string              `json:"kind"`
 
 	// Params The originating request, as opaque JSON.
 	Params interface{} `json:"params,omitempty"`
@@ -2416,6 +2421,9 @@ type ClientInterface interface {
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CancelTask request
+	CancelTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListTaskSubtasks request
 	ListTaskSubtasks(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3060,6 +3068,18 @@ func (c *Client) ListTasks(ctx context.Context, params *ListTasksParams, reqEdit
 
 func (c *Client) GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetTaskRequest(c.Server, taskId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelTaskRequest(c.Server, taskId)
 	if err != nil {
 		return nil, err
 	}
@@ -5081,6 +5101,40 @@ func NewGetTaskRequest(server string, taskId TaskId) (*http.Request, error) {
 	return req, nil
 }
 
+// NewCancelTaskRequest generates requests for CancelTask
+func NewCancelTaskRequest(server string, taskId TaskId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "taskId", taskId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/tasks/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListTaskSubtasksRequest generates requests for ListTaskSubtasks
 func NewListTaskSubtasksRequest(server string, taskId TaskId) (*http.Request, error) {
 	var err error
@@ -5467,6 +5521,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
+
+	// CancelTaskWithResponse request
+	CancelTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*CancelTaskResponse, error)
 
 	// ListTaskSubtasksWithResponse request
 	ListTaskSubtasksWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*ListTaskSubtasksResponse, error)
@@ -6739,6 +6796,41 @@ func (r GetTaskResponse) ContentType() string {
 	return ""
 }
 
+type CancelTaskResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelTaskResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelTaskResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CancelTaskResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListTaskSubtasksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -7362,6 +7454,15 @@ func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, taskId Ta
 		return nil, err
 	}
 	return ParseGetTaskResponse(rsp)
+}
+
+// CancelTaskWithResponse request returning *CancelTaskResponse
+func (c *ClientWithResponses) CancelTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*CancelTaskResponse, error) {
+	rsp, err := c.CancelTask(ctx, taskId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelTaskResponse(rsp)
 }
 
 // ListTaskSubtasksWithResponse request returning *ListTaskSubtasksResponse
@@ -9380,6 +9481,67 @@ func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
 	return response, nil
 }
 
+// ParseCancelTaskResponse parses an HTTP response from a CancelTaskWithResponse call
+func ParseCancelTaskResponse(rsp *http.Response) (*CancelTaskResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelTaskResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListTaskSubtasksResponse parses an HTTP response from a ListTaskSubtasksWithResponse call
 func ParseListTaskSubtasksResponse(rsp *http.Response) (*ListTaskSubtasksResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -9721,6 +9883,9 @@ type ServerInterface interface {
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx echo.Context, taskId TaskId) error
+	// Ask a task to stop
+	// (POST /tasks/{taskId}/cancel)
+	CancelTask(ctx echo.Context, taskId TaskId) error
 	// List a task's subtasks
 	// (GET /tasks/{taskId}/subtasks)
 	ListTaskSubtasks(ctx echo.Context, taskId TaskId) error
@@ -10645,6 +10810,22 @@ func (w *ServerInterfaceWrapper) GetTask(ctx echo.Context) error {
 	return err
 }
 
+// CancelTask converts echo context to params.
+func (w *ServerInterfaceWrapper) CancelTask(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "taskId" -------------
+	var taskId TaskId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "taskId", ctx.Param("taskId"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter taskId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CancelTask(ctx, taskId)
+	return err
+}
+
 // ListTaskSubtasks converts echo context to params.
 func (w *ServerInterfaceWrapper) ListTaskSubtasks(ctx echo.Context) error {
 	var err error
@@ -10804,6 +10985,7 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/settings", wrapper.UpdateBranchSettings, options.OperationMiddlewares["updateBranchSettings"]...)
 	router.GET(options.BaseURL+"/tasks", wrapper.ListTasks, options.OperationMiddlewares["listTasks"]...)
 	router.GET(options.BaseURL+"/tasks/:taskId", wrapper.GetTask, options.OperationMiddlewares["getTask"]...)
+	router.POST(options.BaseURL+"/tasks/:taskId/cancel", wrapper.CancelTask, options.OperationMiddlewares["cancelTask"]...)
 	router.GET(options.BaseURL+"/tasks/:taskId/subtasks", wrapper.ListTaskSubtasks, options.OperationMiddlewares["listTaskSubtasks"]...)
 	router.GET(options.BaseURL+"/users", wrapper.ListUsers, options.OperationMiddlewares["listUsers"]...)
 	router.POST(options.BaseURL+"/users", wrapper.CreateUser, options.OperationMiddlewares["createUser"]...)
@@ -13757,6 +13939,100 @@ func (response GetTask503JSONResponse) VisitGetTaskResponse(w http.ResponseWrite
 	return err
 }
 
+type CancelTaskRequestObject struct {
+	TaskId TaskId `json:"taskId"`
+}
+
+type CancelTaskResponseObject interface {
+	VisitCancelTaskResponse(w http.ResponseWriter) error
+}
+
+type CancelTask202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response CancelTask202JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CancelTask400JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CancelTask404JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CancelTask409JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CancelTask500JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response CancelTask503JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListTaskSubtasksRequestObject struct {
 	TaskId TaskId `json:"taskId"`
 }
@@ -14179,6 +14455,9 @@ type StrictServerInterface interface {
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error)
+	// Ask a task to stop
+	// (POST /tasks/{taskId}/cancel)
+	CancelTask(ctx context.Context, request CancelTaskRequestObject) (CancelTaskResponseObject, error)
 	// List a task's subtasks
 	// (GET /tasks/{taskId}/subtasks)
 	ListTaskSubtasks(ctx context.Context, request ListTaskSubtasksRequestObject) (ListTaskSubtasksResponseObject, error)
@@ -15253,6 +15532,31 @@ func (sh *strictHandler) GetTask(ctx echo.Context, taskId TaskId) error {
 		return err
 	} else if validResponse, ok := response.(GetTaskResponseObject); ok {
 		return validResponse.VisitGetTaskResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CancelTask operation middleware
+func (sh *strictHandler) CancelTask(ctx echo.Context, taskId TaskId) error {
+	var request CancelTaskRequestObject
+
+	request.TaskId = taskId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelTask(ctx.Request().Context(), request.(CancelTaskRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelTask")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CancelTaskResponseObject); ok {
+		return validResponse.VisitCancelTaskResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

@@ -122,6 +122,53 @@ expires and it is reclaimed and replayed (§8.2) — durably failing a task over
 graceful shutdown would strand it. Only a genuine step error on a live context
 fails the task.
 
+**Cancellation is cooperative** (`POST /tasks/{taskId}/cancel`, migration 0020).
+The API stamps `tasks.cancel_requested_at`; the worker re-reads the row at the top
+of each step iteration and, if the request is there, abandons the task's
+unfinished children and calls `FailStep` on the step that would have run next. So
+a cancel takes effect at a **step boundary** — nothing in flight is killed, and a
+task whose last step is already done still succeeds.
+
+**What that does not reach.** A step already running is never interrupted. Most
+kinds plan a single step, so for those the only boundary is the one before that
+step starts, and neither a task whose step is running nor one still `pending` is
+stopped: the flag is read inside `execute`, which runs only after a claim, so a
+task no worker claims keeps both the request and its status indefinitely. That
+last case is the wedge [meko#1007](https://github.com/yugabyte/meko/issues/1007)
+is about, and this does not clear it — retiring the row by hand is still the
+remedy (`controller_runbook.md`). `abandonChildren` is likewise reachable only on
+a *reclaimed* fan-out parent, never on one this process is running.
+
+**What it reaches but does not clean up.** The check sits inside the step loop,
+after the skip for already-succeeded steps, so it fires before *every* unfinished
+step — the four kinds that plan more than one (`create_cluster` 2–3, `branch` 1–2,
+`voyager_start_migration_run` 2, `voyager_create_migration_target` 4) can therefore
+stop mid-task, with their earlier steps committed and no compensation run. Two of
+those leave state nothing converges: a cancelled `voyager_start_migration_run`
+wedges its migration behind `run_in_progress`, and a cancelled
+`voyager_create_migration_target` leaks a live endpoint past both GC sweepers.
+[meko#1385](https://github.com/yugabyte/meko/issues/1385) is the fix; until it
+lands, do not cancel a voyager task. The reach widens further as work gains real
+boundaries: a fan-out roll polling between its children can stop mid-flight.
+
+It ends `failed`, not under a status of its own: terminal-ness is spelled out as
+the literal `status IN ('pending','running')` across the claim predicate, both
+self-releasing partial unique indexes, `MemStore` and the failed-create GC
+sweeper, and the sweeper in particular reclaims a half-provisioned create only
+when it reads `failed` — a cancelled `create_endpoint` under a fifth status would
+hold its branch's single-writer slot forever. `failed` also reaches the reconcile
+agent through an arm it already has, which re-plans; a status it does not know
+falls through its default arm and is read as success. `cancel_requested_at` is what
+tells a cancelled task apart from a broken one.
+
+`Store.RequestCancel` carries **no owner fence**, deliberately: it comes from an
+API caller who is not the owner, and a `pending` task has no owner at all, so a
+fence would make it a permanent no-op. It is guarded on non-terminal status alone
+and never writes `status`, `owner` or `error` — taking a task terminal stays the
+fenced worker's write. It is not the only unfenced write on `tasks`: `Store.Claim`
+is status-only too, because re-stamping `owner` *is* the reclaim. What every
+fenced write has in common is that it takes a task terminal.
+
 **Ownership and recovery** (§8.2) is a **lease**, and it lives in
 `amp_registry.resource_token` rather than on the task row —
 [`ac-locking.md`](ac-locking.md) is the design; this is what the worker does with

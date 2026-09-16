@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -255,6 +256,38 @@ func (s *MemStore) CompleteTask(_ context.Context, taskID uuid.UUID, owner strin
 		t.UpdatedAt = s.now()
 	}
 	return nil
+}
+
+// RequestCancel mirrors PgStore's: guarded on non-terminal status and NOT on the
+// owner (the fence would make an API-originated write a permanent no-op — see the
+// Store interface), and a refused write is a typed error rather than the silent
+// no-op the fenced writes above are.
+func (s *MemStore) RequestCancel(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.cancellableLocked(id)
+	if err != nil {
+		return err
+	}
+	if t.CancelRequestedAt == nil {
+		now := s.now()
+		t.CancelRequestedAt = &now
+	}
+	t.UpdatedAt = s.now()
+	return nil
+}
+
+// cancellableLocked returns the task if it exists and is still non-terminal, and
+// otherwise the sentinel saying which of the two it is. Caller holds s.mu.
+func (s *MemStore) cancellableLocked(id uuid.UUID) (*Task, error) {
+	t := s.tasks[id]
+	if t == nil {
+		return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	if t.Status != StatusPending && t.Status != StatusRunning {
+		return nil, fmt.Errorf("%w: %s is %s", ErrTaskTerminal, id, t.Status)
+	}
+	return t, nil
 }
 
 func (s *MemStore) Get(_ context.Context, id uuid.UUID) (*Task, error) {

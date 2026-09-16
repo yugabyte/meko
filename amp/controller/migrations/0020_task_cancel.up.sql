@@ -1,0 +1,11 @@
+-- 0020: cooperative task cancellation.
+--
+-- A timestamp rather than a fifth `task_status` value: a cancelled task ends
+-- `failed` carrying the cancel as its error, and this column is what
+-- distinguishes that from having genuinely broken. `ALTER TYPE ... ADD VALUE`
+-- would also have no reverse for this migration's down.
+--
+-- IF NOT EXISTS: migrations are under the same idempotency contract as every
+-- other YB write, and on YugabyteDB an ADD COLUMN that adds nothing does not
+-- bump the catalog version (0013_ycp_generation documents the same).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cancel_requested_at timestamptz;

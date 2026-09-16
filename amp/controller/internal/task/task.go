@@ -43,10 +43,19 @@ type Task struct {
 	// YCP is the resource row and generation this task applies, when it was
 	// planned from YCP desired state; nil for a task an operator or the UI planned
 	// directly. The worker stamps it once every step has succeeded — see YCPTarget.
-	YCP       *YCPTarget
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	YCP *YCPTarget
+	// CancelRequestedAt is when an API caller asked for this task to stop, nil
+	// when nobody has. It is a request, not an outcome: the worker honors it at
+	// the next step boundary and then writes the terminal status, so a task can
+	// carry it and still succeed (every step was already done) or still be
+	// running (a long step is in flight).
+	CancelRequestedAt *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
+
+// CancelRequested reports whether a cancel has been requested for this task.
+func (t *Task) CancelRequested() bool { return t.CancelRequestedAt != nil }
 
 // YCPTarget is the resource row a task stamps with the YCP desired-state
 // generation it applies, once every one of its steps has succeeded.

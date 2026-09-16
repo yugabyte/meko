@@ -503,10 +503,17 @@ curl -s "$BASE/tasks/$TASK/subtasks" \
   **never reaches terminal**, so it blocks every later roll indefinitely. The resize
   `409`'s advice — wait for the in-flight task — is wrong for this one.
 
-There is no cancel verb and no `force`; an escape hatch is
-[meko#1007](https://github.com/yugabyte/meko/issues/1007). Until it exists the only
-remedy for the stuck case is to retire the row by hand — and only after confirming
-nothing is executing it, or you are stamping a status over a live roll:
+There is no `force`, and `POST /tasks/{taskId}/cancel` reaches **neither** state above.
+A `pending` roll is missed because the request is only read inside the worker's step
+loop, which runs after a claim, so a roll nobody claimed keeps both the request and
+its status. A `running` roll is missed too: `upgrade_endpoints` plans a single step,
+so once a worker is inside it there is no later boundary to stop at and the fleet runs
+to completion — a 202 here means the request was recorded, not that the roll stopped.
+What cancel does reach is a roll whose owner died and which has since been reclaimed,
+caught before its step restarts. Otherwise retire the row by hand — and only after
+confirming nothing is executing it, or you are stamping a status over a live roll. The
+escape hatch that would cover both is
+[meko#1007](https://github.com/yugabyte/meko/issues/1007):
 
 ```sql
 -- no row = no worker holds the task's lease (500 = the skew grace, in ms)

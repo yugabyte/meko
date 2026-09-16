@@ -1569,11 +1569,16 @@ type SubtaskList struct {
 
 // Task defines model for Task.
 type Task struct {
-	ClusterId *openapi_types.UUID `json:"cluster_id,omitempty"`
-	CreatedAt time.Time           `json:"created_at"`
-	Error     *string             `json:"error,omitempty"`
-	Id        openapi_types.UUID  `json:"id"`
-	Kind      string              `json:"kind"`
+	// CancelRequestedAt When `POST /tasks/{taskId}/cancel` was asked for, `null` when nobody
+	// has. A request, not an outcome: it is set the moment the request is
+	// accepted, and the task stays `running` until the worker reaches a step
+	// boundary. A `failed` task carrying it was cancelled rather than broken.
+	CancelRequestedAt *time.Time          `json:"cancel_requested_at,omitempty"`
+	ClusterId         *openapi_types.UUID `json:"cluster_id,omitempty"`
+	CreatedAt         time.Time           `json:"created_at"`
+	Error             *string             `json:"error,omitempty"`
+	Id                openapi_types.UUID  `json:"id"`
+	Kind              string              `json:"kind"`
 
 	// Params The originating request, as opaque JSON.
 	Params interface{} `json:"params,omitempty"`
@@ -2414,6 +2419,9 @@ type ClientInterface interface {
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CancelTask request
+	CancelTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListTaskSubtasks request
 	ListTaskSubtasks(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3058,6 +3066,18 @@ func (c *Client) ListTasks(ctx context.Context, params *ListTasksParams, reqEdit
 
 func (c *Client) GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetTaskRequest(c.Server, taskId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelTaskRequest(c.Server, taskId)
 	if err != nil {
 		return nil, err
 	}
@@ -5079,6 +5099,40 @@ func NewGetTaskRequest(server string, taskId TaskId) (*http.Request, error) {
 	return req, nil
 }
 
+// NewCancelTaskRequest generates requests for CancelTask
+func NewCancelTaskRequest(server string, taskId TaskId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "taskId", taskId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/tasks/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListTaskSubtasksRequest generates requests for ListTaskSubtasks
 func NewListTaskSubtasksRequest(server string, taskId TaskId) (*http.Request, error) {
 	var err error
@@ -5465,6 +5519,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
+
+	// CancelTaskWithResponse request
+	CancelTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*CancelTaskResponse, error)
 
 	// ListTaskSubtasksWithResponse request
 	ListTaskSubtasksWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*ListTaskSubtasksResponse, error)
@@ -6737,6 +6794,41 @@ func (r GetTaskResponse) ContentType() string {
 	return ""
 }
 
+type CancelTaskResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelTaskResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelTaskResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CancelTaskResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListTaskSubtasksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -7360,6 +7452,15 @@ func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, taskId Ta
 		return nil, err
 	}
 	return ParseGetTaskResponse(rsp)
+}
+
+// CancelTaskWithResponse request returning *CancelTaskResponse
+func (c *ClientWithResponses) CancelTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*CancelTaskResponse, error) {
+	rsp, err := c.CancelTask(ctx, taskId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelTaskResponse(rsp)
 }
 
 // ListTaskSubtasksWithResponse request returning *ListTaskSubtasksResponse
@@ -9358,6 +9459,67 @@ func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelTaskResponse parses an HTTP response from a CancelTaskWithResponse call
+func ParseCancelTaskResponse(rsp *http.Response) (*CancelTaskResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelTaskResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError

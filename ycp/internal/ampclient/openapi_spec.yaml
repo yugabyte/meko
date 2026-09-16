@@ -1211,6 +1211,72 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /tasks/{taskId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [tasks]
+      operationId: cancelTask
+      summary: Ask a task to stop
+      description: |
+        Records a cancellation request against a task that has not finished.
+
+        Cooperative, and asynchronous: nothing running is killed. A worker reads
+        the request at a STEP boundary — before each step that has not already
+        succeeded — abandons the children that will never run, and only then takes
+        the task terminal.
+
+        **That is limited in two ways worth knowing before relying on it.**
+
+        It never interrupts a step already running. Most task kinds plan a single
+        step, so for those the only boundary is the one before that step starts, a
+        window between the worker claiming the task and beginning its work. A task
+        waiting for a resource lock is inside its step and does not see the request
+        until that wait expires (up to `--task-lock-wait`). A task still `pending`
+        because no worker has claimed it is not stopped at all, since nothing reads
+        `cancel_requested_at` before a claim. That last case is the wedge an
+        operator most wants cleared, and clearing it still means retiring the row
+        by hand — see the controller runbook.
+
+        It runs no compensation for steps that already succeeded. Four kinds plan
+        more than one step (`create_cluster`, `branch`,
+        `voyager_start_migration_run`, `voyager_create_migration_target`), so there
+        the boundary is mid-task and a cancel commits the earlier steps while
+        abandoning the rest. Cancelling a `voyager_start_migration_run` between its
+        two steps wedges that migration behind `run_in_progress` until the run row
+        is repaired by hand, and cancelling a `voyager_create_migration_target`
+        after its endpoint step leaks a running endpoint that neither GC sweeper
+        reclaims: https://github.com/yugabyte/meko/issues/1385.
+
+        The reach widens as work gains real boundaries: a fan-out roll that polls
+        between its children can stop mid-flight.
+
+        A cancelled task ends `failed`, with the cancellation as its `error` and
+        `cancel_requested_at` set — there is no separate status. It may also still
+        end `succeeded`: the request loses the race if every step was already done.
+
+        A task planned from YCP desired state is a further case: the reconcile
+        agent reads `failed` as work to re-plan, so a cancelled create or resize
+        is re-issued within a reconcile interval unless the declaration is
+        withdrawn too.
+
+        `409` if the task has already reached a terminal status, `404` if it does
+        not exist. Repeating the request on a task that is still running is
+        harmless and keeps the original timestamp.
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /migrations/connectivity-checks:
     post:
       tags: [migrations]
@@ -2726,6 +2792,15 @@ components:
             `ycp_generation`) once every step has succeeded, so a task that is
             `failed` here has NOT advanced it. `kind` and `target_ref` say which
             resource.
+        cancel_requested_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When `POST /tasks/{taskId}/cancel` was asked for, `null` when nobody
+            has. A request, not an outcome: it is set the moment the request is
+            accepted, and the task stays `running` until the worker reaches a step
+            boundary. A `failed` task carrying it was cancelled rather than broken.
         created_at:
           type: string
           format: date-time

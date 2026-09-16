@@ -852,6 +852,7 @@ const (
 	errMsgCPUQuantity    = `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`
 	errMsgMemoryQuantity = `resources.memory must be a Kubernetes memory quantity with an explicit unit, Mi or larger (e.g. "4Gi", "512Mi"); a unitless "4" means four bytes`
 	errMsgUpgradeVersion = "a non-empty version is required"
+	errMsgTaskTerminal   = "the task has already finished and cannot be cancelled"
 )
 
 // parseResourceOverrides validates an optional resources object and returns the
@@ -1393,6 +1394,36 @@ func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject)
 	return GetTask200JSONResponse(out), nil
 }
 
+// CancelTask records a cancellation request against a task.
+//
+// The write is the existence check: RequestCancel is guarded on non-terminal
+// status, so a pre-read would only widen the window for the task to finish in
+// and would still have to handle the same two refusals.
+func (c *Controllers) CancelTask(ctx context.Context, request CancelTaskRequestObject) (CancelTaskResponseObject, error) {
+	switch err := c.tasks.RequestCancel(ctx, request.TaskId); {
+	case errors.Is(err, task.ErrTaskNotFound):
+		return CancelTask404JSONResponse{NotFoundJSONResponse(apiError("not_found", "task not found"))}, nil
+	case errors.Is(err, task.ErrTaskTerminal):
+		return CancelTask409JSONResponse{ConflictJSONResponse(apiError("conflict", errMsgTaskTerminal))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("request task cancel: %w", err)
+	}
+	// Read back rather than answer from the request: the body is the task as it
+	// stands now, still running until the worker reaches a step boundary.
+	t, err := c.tasks.Get(ctx, request.TaskId)
+	if err != nil {
+		return nil, fmt.Errorf("get task: %w", err)
+	}
+	if t == nil {
+		return CancelTask404JSONResponse{NotFoundJSONResponse(apiError("not_found", "task not found"))}, nil
+	}
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "task cancellation requested", slog.String(applog.KeyTaskID, t.ID.String()))
+	return CancelTask202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
 // ListTaskSubtasks returns the children a fan-out task owns — one per endpoint
 // for a fleet roll. It is where a roll's per-endpoint account lives: the parent's
 // own result summarizes, and a FAILED parent records no result at all.
@@ -1816,6 +1847,7 @@ func taskToAPI(t *task.Task) Task {
 			out.Params = &v
 		}
 	}
+	out.CancelRequestedAt = t.CancelRequestedAt
 	// The generation this task applies, so "which generation is in flight" is
 	// readable on the task rather than only inside the opaque params blob.
 	if t.YCP != nil {

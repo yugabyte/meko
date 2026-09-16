@@ -31,6 +31,15 @@ var ErrResizeInProgress = errors.New("a resize is already in progress for this e
 // not remove it: two adds of different names both leave every endpoint behind.
 var ErrBranchExtensionsInProgress = errors.New("an extension add is already in progress for this branch")
 
+// ErrTaskNotFound and ErrTaskTerminal are what RequestCancel — the one unfenced,
+// API-originated write — reports when it matched no row. They are distinguished
+// because they are different answers to the caller: nothing to act on (404)
+// versus the work is already over (409).
+var (
+	ErrTaskNotFound = errors.New("task not found")
+	ErrTaskTerminal = errors.New("task has already finished")
+)
+
 // taskLockViolation reports the typed conflict when inserting spec failed because
 // that kind's first-writer-wins lock rejected it, or nil when the error is
 // something else.
@@ -154,6 +163,22 @@ type Store interface {
 	// the lease cannot overwrite the state of a task another instance now owns.
 	CompleteTask(ctx context.Context, taskID uuid.UUID, owner string) error
 
+	// RequestCancel stamps cancel_requested_at on a non-terminal task, so the
+	// worker stops it at its next step boundary. ErrTaskTerminal when the task has
+	// already finished, ErrTaskNotFound when there is no such task; a repeat
+	// request keeps the first timestamp.
+	//
+	// UNFENCED, unlike every worker-side write that takes a task terminal. The
+	// fence is `AND owner = $currentOwner`, and it exists so a worker that lost its
+	// lease writes nothing — but this arrives from an API caller who is not the
+	// owner and never will be, and a task that is still `pending` has no owner at
+	// all, so fencing it would make it a permanent no-op on exactly the cases that
+	// matter. (`Claim` above is unfenced too, for its own reason: re-stamping
+	// `owner` IS the reclaim.) What this must still refuse is a terminal task, and
+	// it never writes `status`, `owner` or `error`: taking a task terminal stays
+	// the fenced worker's write.
+	RequestCancel(ctx context.Context, id uuid.UUID) error
+
 	// Get returns a task by id, or nil if it does not exist.
 	Get(ctx context.Context, id uuid.UUID) (*Task, error)
 
@@ -223,7 +248,7 @@ var _ Store = (*PgStore)(nil)
 // Cleanup: https://github.com/yugabyte/meko/issues/975
 const taskColumns = `id::text, kind, status::text, cluster_id::text, target_ref,
 	params, step_ids::text[], error, owner, ycp_resource, ycp_resource_id::text, ycp_generation,
-	created_at, updated_at`
+	created_at, updated_at, cancel_requested_at`
 
 func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	taskID := spec.ID
@@ -449,6 +474,37 @@ func (s *PgStore) CompleteTask(ctx context.Context, taskID uuid.UUID, owner stri
 	return err
 }
 
+func (s *PgStore) RequestCancel(ctx context.Context, id uuid.UUID) error {
+	// COALESCE, not a plain assignment: the stamp records when the FIRST request
+	// landed, so re-issuing a cancel while the worker is still unwinding does not
+	// keep moving it forward.
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tasks SET cancel_requested_at = COALESCE(cancel_requested_at, now()), updated_at = now()
+		 WHERE id = $1::uuid AND status IN ('pending', 'running')`,
+		id.String())
+	if err != nil {
+		return fmt.Errorf("request task cancel: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return s.whyNoRow(ctx, id)
+	}
+	return nil
+}
+
+// whyNoRow separates the two reasons a status-guarded write matched nothing.
+// Read after the write, never before it: the write is the decision, and a
+// pre-check would just be a wider window for the task to go terminal in.
+func (s *PgStore) whyNoRow(ctx context.Context, id uuid.UUID) error {
+	t, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	return fmt.Errorf("%w: %s is %s", ErrTaskTerminal, id, t.Status)
+}
+
 func (s *PgStore) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
 	row := s.pool.QueryRow(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id = $1::uuid`, id.String())
 	t, err := scanTask(row)
@@ -559,7 +615,7 @@ func scanTask(r row) (*Task, error) {
 	)
 	if err := r.Scan(&idStr, &t.Kind, &statusStr, &clusterStr, &t.TargetRef,
 		&params, &stepIDStrs, &t.Error, &t.Owner, &ycpRes, &ycpResID, &ycpGen,
-		&t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.CreatedAt, &t.UpdatedAt, &t.CancelRequestedAt); err != nil {
 		return nil, err
 	}
 	ycp, err := scanYCPTarget(ycpRes, ycpResID, ycpGen)

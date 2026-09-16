@@ -355,6 +355,12 @@ func (w *Worker) runTask(ctx context.Context, t *Task, lease Lease) {
 	case err == nil:
 		status = string(StatusSucceeded)
 		logger.Debug("task succeeded")
+	// Before the ctx arm: the cancel path has already written the task terminal, so
+	// reporting it as interrupted-and-reclaimable would be untrue even if the
+	// process is also shutting down.
+	case errors.Is(err, ErrCancelled):
+		status = string(StatusFailed)
+		logger.Info("task cancelled", "error", err)
 	case ctx.Err() != nil:
 		status = "interrupted"
 		logger.Info("task interrupted by shutdown; left reclaimable", "error", err)
@@ -416,6 +422,19 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		}
 		stepLog := logger.With(applog.KeyStep, i, "step_kind", st.Kind, "step_id", st.ID.String())
 
+		// Cancellation is checked HERE — before anything is built, locked or
+		// started — so no step is ever stopped part-way through. It is inside the
+		// loop and after the succeeded-step skip, so it fires before EVERY
+		// unfinished step, not only the first: on a multi-step kind that is a
+		// mid-task stop, earlier steps committed and nothing compensating for
+		// them, which for the two voyager kinds strands durable state (meko#1385).
+		// Unlike the ctx-cancel paths below, this one must write a terminal
+		// status: a cancelled task left `running` becomes immediately claimable
+		// again and the worker just re-runs it.
+		if w.cancelRequested(ctx, stepLog, t) {
+			return w.cancel(ctx, stepLog, t, i, st)
+		}
+
 		// Reconstruct the executable step from its persisted kind+args. An unknown
 		// kind or undecodable args can never run, so fail the task rather than spin
 		// on it.
@@ -469,6 +488,74 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		return err
 	}
 	return w.store.CompleteTask(ctx, t.ID, w.owner)
+}
+
+// ErrCancelled is the cause a cancelled task is failed with, so "an operator
+// stopped this" is distinguishable from "this broke" in the recorded error.
+//
+// A cancelled task ends FAILED rather than under a status of its own, because
+// terminal-ness is spelled out as the literal `status IN ('pending','running')` in
+// the claim predicate, both partial unique indexes, MemStore and the failed-create
+// GC sweeper — every one of which would have to be audited for a fifth value.
+// tasks.cancel_requested_at is what tells a cancelled task from a broken one.
+var ErrCancelled = errors.New("task cancelled by request")
+
+// cancelRequested re-reads the task and reports whether a cancel has been asked
+// for. The claimed Task is a snapshot from before the first step ran, so the
+// request can only be seen by going back to the row.
+//
+// A read failure is reported as "not cancelled": cancellation is cooperative and
+// best-effort, and refusing to run a task because its cancel flag was unreadable
+// would turn a transient database blip into stalled work.
+func (w *Worker) cancelRequested(ctx context.Context, logger *slog.Logger, t *Task) bool {
+	cur, err := w.store.Get(ctx, t.ID)
+	if err != nil {
+		logger.Warn("reading task cancellation state", "error", err)
+		return false
+	}
+	return cur != nil && cur.CancelRequested()
+}
+
+// cancel takes a task terminal at the boundary before step i, which is the step
+// that will now never run.
+func (w *Worker) cancel(ctx context.Context, logger *slog.Logger, t *Task, i int, st StepRecord) error {
+	cause := fmt.Errorf("%w (before step %d, %s)", ErrCancelled, i, st.Kind)
+
+	// Before the terminal write, never after: a terminal parent is never reclaimed,
+	// so a child left pending under it is a row nothing will ever run, and a
+	// re-fired roll derives different child ids and never picks it up.
+	w.abandonChildren(ctx, logger, t, cause.Error())
+
+	// FailStep rather than a task-only write: it records the stop on the step the
+	// task got to, and it is the one owner-fenced call that takes both the step and
+	// the task terminal in a single transaction.
+	if err := w.store.FailStep(ctx, t.ID, st.ID, w.owner, cause); err != nil {
+		return fmt.Errorf("fail cancelled task: %w", err)
+	}
+	return cause
+}
+
+// abandonChildren marks every unfinished child of a fan-out parent terminal. A
+// parent with no children (every task that never fanned out) does nothing.
+func (w *Worker) abandonChildren(ctx context.Context, logger *slog.Logger, t *Task, reason string) {
+	subs := w.registry.deps.Subtasks
+	if subs == nil {
+		return
+	}
+	children, err := subs.ByParent(ctx, t.ID)
+	if err != nil {
+		logger.Warn("listing subtasks of a cancelled task", "error", err)
+		return
+	}
+	for _, child := range children {
+		if child.Status == StatusSucceeded || child.Status == StatusFailed {
+			continue
+		}
+		if err := subs.Abandon(ctx, child, w.owner, reason); err != nil {
+			logger.Warn("abandoning subtask of a cancelled task",
+				applog.KeySubtaskID, child.ID.String(), "error", err)
+		}
+	}
 }
 
 // stampYCPGeneration records the applied YCP desired-state generation on the

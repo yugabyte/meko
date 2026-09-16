@@ -578,14 +578,17 @@ unreachable database and make `errors.Is(err, ErrFleetRollInProgress)` true for 
 infrastructure failure.
 
 **What refusing costs, stated plainly.** A non-terminal roll blocks every later one,
-and there is no `force` and no way to cancel a task. Two shapes:
+and there is no `force`. Two shapes:
 
 - A roll whose child is inside a long `helm --wait` clears on its own. Fine.
 - A roll left **`pending`** on a controller with no worker running is never claimed,
   so it never reaches terminal and blocks rolls **indefinitely**. Under queueing the
-  operator was merely delayed; under refusal they are stopped, and the only remedy is
-  to reach into the database. That is the trade this decision buys, and it wants an
-  escape hatch: [meko#1007](https://github.com/yugabyte/meko/issues/1007).
+  operator was merely delayed; under refusal they are stopped.
+  `POST /tasks/{taskId}/cancel` does **not** clear this one: the request is only read
+  inside `execute`, which runs after a claim, so a roll nobody claims keeps the
+  request and its status. Retiring the row by hand is still the remedy
+  (`controller_runbook.md`), and the escape hatch that would cover it is
+  [meko#1007](https://github.com/yugabyte/meko/issues/1007).
 
 Re-firing an **identical** roll is refused too — the check is per kind, not per
 version — which is the one case queueing handled better. Making it version-aware
