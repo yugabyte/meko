@@ -392,6 +392,23 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 		AppliedRevision:  ds.Revision,
 		Resources:        inventory(res),
 	}
+	// Workload health is additive, like the task log below: the console's components
+	// tab is worth having, but not at the cost of the convergence report that the
+	// environment's state and every resource row ride on. A namespace we cannot read
+	// reports no components rather than no status.
+	//
+	// Note what this cannot catch. Report is only reached when Reconcile succeeded,
+	// and Reconcile starts by listing through the api-server — so a crash-looping
+	// api-server posts no status at all and reads as a stale heartbeat, not as
+	// `meko-api-server 0/1`. This covers the workloads the loop does not depend on.
+	if a.kc != nil {
+		comps, cerr := a.kc.components()
+		if cerr != nil {
+			log.Printf("collect components (reporting status anyway): %v", cerr)
+		} else {
+			report.Components = comps
+		}
+	}
 	// Task visibility is additive: a controller that will not serve its task log
 	// must not also cost us the convergence report, which is what the environment's
 	// state and every resource row ride on. So this logs and carries on.

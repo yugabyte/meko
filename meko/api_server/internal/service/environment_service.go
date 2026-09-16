@@ -446,8 +446,15 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 	e.AgentVersion = r.AgentVersion
 	e.LastHeartbeatAt = &now
 	mergeFacts(e, r.ClusterFacts)
-	if comps, err := json.Marshal(r.Components); err == nil {
-		e.Components = comps
+	// nil means the agent could not collect (no RBAC, a transient API error) — not
+	// that the environment has no workloads, so the stored list is left alone. Marshal
+	// would write `null`, which is not empty, so the repo's len==0 default never
+	// rescues it and one blip would erase the last good report. Same guard as
+	// Resources below, for the same reason.
+	if r.Components != nil {
+		if comps, err := json.Marshal(r.Components); err == nil {
+			e.Components = comps
+		}
 	}
 	// The amp controller reports its inventory here; a meko agent omits it (nil),
 	// in which case the stored inventory is left as it was. A present-but-empty

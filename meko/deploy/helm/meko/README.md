@@ -197,8 +197,9 @@ rather than the Meko ECR, so it needs no cross-account pull secret.
 
 **It converges resources over the api-server's REST API, not Kubernetes.** The
 workloads are this chart's; what the agent manages is the `agent` and `datapack`
-resources the environment declares, so it needs no cluster RBAC beyond
-`get`/`create`/`update` on its own state Secret. The field reference is
+resources the environment declares, so it needs no cluster RBAC: a namespaced Role
+covering its own state Secret, plus read-only `list` on the namespace's Deployments
+and StatefulSets so the console can show which workloads are up. The field reference is
 [`ycp/DEPLOY.md`](https://github.com/yugabyte/meko/blob/main/ycp/DEPLOY.md) in the
 meko repo.
 

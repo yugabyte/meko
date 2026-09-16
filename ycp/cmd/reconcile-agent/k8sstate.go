@@ -28,6 +28,10 @@ type k8s struct {
 	tok  string
 	ns   string
 	http *http.Client
+
+	// compsForbidden latches when the namespace Role lacks list on apps workloads,
+	// so the components collector reports that once instead of every tick.
+	compsForbidden bool
 }
 
 func newK8s() (*k8s, error) {

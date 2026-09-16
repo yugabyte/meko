@@ -22,6 +22,13 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, patch]
+  # Read-only workload status, for the console's components tab: the agent reads
+  # readyReplicas and the container image off each object. Same grant the meko chart
+  # gives its agent — one binary, one collector. An agent whose Role predates this
+  # logs the refusal once and reports no components, rather than retrying every tick.
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

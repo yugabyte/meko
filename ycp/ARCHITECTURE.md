@@ -103,7 +103,10 @@ cluster.
    environment is told to hold nothing. Garbage collection is the one thing that needs
    a desired state that was actually read: the agent cannot know what an operator
    withdrew from a response it never got.
-5. **Report** — the agent `POST`s `/agent/status` with real facts and the inventory it
+5. **Report** — the agent `POST`s `/agent/status` with real facts, the workload health it
+   read from its own namespace (`components`: one row per Deployment and StatefulSet,
+   healthy-of-total plus the image tag — the only way the console can say what is up,
+   since nothing dials in to a BYOC data plane), and the inventory it
    read back. This drives the fleet registry and the console's live view. An amp agent
    also relays the controller's **task log** here — see below.
 

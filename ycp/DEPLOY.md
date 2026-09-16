@@ -324,6 +324,7 @@ Failure modes worth knowing:
 
 | Symptom | Cause |
 |---|---|
+| `collect components (reporting status anyway): … forbidden` | the agent's Role lacks `list` on `apps/deployments,statefulsets` in its namespace, so the components tab stays empty. Logged **once** and not retried — every tick would refuse identically — so upgrade the release to a chart carrying the grant and restart the agent. Non-fatal either way: the convergence report the environment's state rides on still lands. |
 | `could not read agent state` / `could not persist agent state` | the ServiceAccount lacks `get`/`create`/`update` on secrets in its namespace. Not fatal — the state holds no credential, and the check-in re-establishes identity from the API key — but a restart during a control-plane outage then starts from nothing. |
 | `environment changed (…) — discarding persisted identity` | `ENV_NAME` or `ENV_KIND` no longer matches what the state Secret recorded. Expected after an operator re-points the agent; unexpected otherwise, and it means the next enroll starts from scratch. |
 | `ENROLL REJECTED (401)`, repeating | the API key was revoked. Redeploy with a fresh key Secret pointed at a newly registered environment — an environment cannot be rebound to a different key once registered. |

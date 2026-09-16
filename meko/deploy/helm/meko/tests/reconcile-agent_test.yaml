@@ -100,9 +100,9 @@ tests:
             name: MEKO_API_URL
             value: "https://meko.example/ycp/api/v1"
 
-  # A namespaced Role, not the meko-agent's ClusterRole: this agent touches k8s
-  # only to persist the environment id its check-in confirmed.
-  - it: grants read/write on its own state Secret only
+  # A namespaced Role, not the meko-agent's ClusterRole: this agent touches k8s to
+  # persist the environment id its check-in confirmed and to read workload status.
+  - it: grants its own state Secret and read-only workload status, nothing wider
     template: templates/reconcile-agent/rbac.yaml
     documentIndex: 1
     set:
@@ -126,6 +126,12 @@ tests:
             - apiGroups: [""]
               resources: ["secrets"]
               verbs: ["create"]
+            # list only, and only the two workload kinds a BYOC release runs. Pods are
+            # absent because nothing reads them — readyReplicas and the image come off
+            # the workload object, whose pod template this grant already exposes.
+            - apiGroups: ["apps"]
+              resources: ["deployments", "statefulsets"]
+              verbs: ["list"]
 
   - it: renders nothing when disabled
     asserts:

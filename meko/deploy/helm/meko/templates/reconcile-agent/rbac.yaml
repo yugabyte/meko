@@ -10,10 +10,11 @@ metadata:
     {{- include "meko.componentLabels" (dict "app" "meko-reconcile-agent") | nindent 4 }}
 ---
 {{- /* A namespaced Role rather than a cluster-scoped one: this agent
-       converges datapacks over the api-server's REST API and touches k8s for one
-       thing only — persisting the environment id its last check-in confirmed, so
-       a restart during a control-plane outage still knows which environment it
-       is. Its credentials live in operator-planted Secrets it never writes; the
+       converges datapacks over the api-server's REST API and touches k8s for two
+       things: persisting the environment id its last check-in confirmed, so a
+       restart during a control-plane outage still knows which environment it is,
+       and reading workload status so the console can show what is running. Its
+       credentials live in operator-planted Secrets it never writes; the
        get/create/patch below is for its own state Secret. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -38,6 +39,15 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
+  # Read-only, and only the two workload kinds a BYOC release runs, so the components
+  # tab can say what is up: the agent reads readyReplicas and the container image off
+  # each object. Pods are not listed because nothing needs them — the counts come off
+  # the workload status. Note this grant already exposes each object's pod template,
+  # and so the names of every Secret it mounts or references; it is names only, and
+  # read-only, but adding pods would not be the line that changed that.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

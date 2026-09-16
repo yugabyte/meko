@@ -192,8 +192,9 @@ The chart change this needs landed alongside, in
 [meko-devops](https://github.com/yugabyte/meko-devops): the agent ClusterRole gains
 `patch` (server-side apply) plus `statefulsets` and `configmaps`. Without it an agent
 enrolls and then 403s on everything it tries to reconcile. The reconcile-agent needs
-none of it — it applies no manifests, and its only RBAC is `get`/`create`/`update` on
-its own state Secret.
+none of it — it applies no manifests. Its RBAC is a namespaced Role: its own state
+Secret, plus read-only `list` on the namespace's Deployments and StatefulSets, which
+is what the console's components tab is built from.
 
 ## Deployed (meko-dev-eks)
 
