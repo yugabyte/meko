@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 )
 
 func newTestCaller() *rawCaller {
@@ -81,11 +83,53 @@ func TestRawCallerRejectsAHang(t *testing.T) {
 func TestRawCallerTracksAcceptedAndRefused(t *testing.T) {
 	c := newTestCaller()
 	c.mu.Lock()
-	c.accepted = []string{"a"}
+	c.accepted = []acceptedCreate{{name: "a", taskID: "t-a"}}
 	c.refused = []string{"b"}
 	c.mu.Unlock()
 	c.record("create", rawAnswer{status: http.StatusAccepted})
 	if len(c.accepted) != 1 || len(c.refused) != 1 {
 		t.Errorf("record must not touch the accepted/refused lists: %v %v", c.accepted, c.refused)
+	}
+}
+
+// Precedence is controller.TaskRef's: the Location header wins over the body.
+func TestTaskIDOfFollowsTaskRef(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   rawAnswer
+		want string
+	}{
+		{"body", rawAnswer{body: `{"id":"11111111-1111-1111-1111-111111111111","kind":"create_cluster"}`}, "11111111-1111-1111-1111-111111111111"},
+		{"location only", rawAnswer{body: "", location: "/api/v1/tasks/22222222-2222-2222-2222-222222222222"}, "22222222-2222-2222-2222-222222222222"},
+		{"location wins", rawAnswer{body: `{"id":"aaa"}`, location: "/api/v1/tasks/bbb"}, "bbb"},
+		{"trailing slash", rawAnswer{location: "/api/v1/tasks/ccc/"}, "ccc"},
+		{"neither", rawAnswer{body: "not json"}, ""},
+	} {
+		if got := taskIDOf(c.in); got != c.want {
+			t.Errorf("%s: taskIDOf = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestJudgeAcceptedReadsTheTaskOutcome(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   acceptedOutcome
+		ok   bool
+	}{
+		{"succeeded and listed", acceptedOutcome{status: controller.TaskSucceeded, inDefault: true}, true},
+		{"succeeded but absent", acceptedOutcome{status: controller.TaskSucceeded, inDefault: false}, false},
+		{"failed and hidden", acceptedOutcome{status: controller.TaskFailed, inDefault: false}, true},
+		{"failed but listed", acceptedOutcome{status: controller.TaskFailed, inDefault: true}, false},
+		{"never settled", acceptedOutcome{status: "running"}, false},
+		{"no status at all", acceptedOutcome{status: ""}, false},
+	} {
+		err := judgeAccepted(c.in)
+		if c.ok && err != nil {
+			t.Errorf("%s: rejected: %v", c.name, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s: accepted, want a failure", c.name)
+		}
 	}
 }

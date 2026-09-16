@@ -3,8 +3,9 @@
 // route and only counts non-503 5xx; this test drives reads AND writes on their
 // own transport, holds every answer to the documented contract — a 503 carries
 // Retry-After, a write never answers 500, a 2xx is honest — and then proves the
-// window left no half-written state: every cluster the API reported created
-// exists and is usable, every cluster it refused does not exist.
+// window left no half-written state: a create is 202 + a Task, so every task the
+// API planned settled and the cluster matches its outcome, and every create it
+// refused left no row at all.
 package stress
 
 import (
@@ -31,7 +32,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
 		Tags:        []string{"stress", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Delete the backing YugabyteDB's serving pods, then drive reads and cluster creates against the controller on a transport that retries nothing: every answer must be a 2xx, a 4xx, or a 503 carrying Retry-After — never a 500 and never a hang (meko#886). Once the backing is back, every cluster the API reported created must exist and take a branch, every create it refused must have left no cluster row, and the API must answer normally again.",
+		Description: "Delete the backing YugabyteDB's serving pods, then drive reads and cluster creates against the controller on a transport that retries nothing: every answer must be a 2xx, a 4xx, or a 503 carrying Retry-After — never a 500 and never a hang (meko#886). Once the backing is back, every create task the API planned must have settled, a succeeded one leaving a cluster that lists and takes a branch and a failed one leaving nothing in the default listing, every create it refused must have left no cluster row, and the API must answer normally again.",
 		Params:      []string{"stress.backing_unreachable_api", "chaos"},
 		Timeout:     75 * time.Minute,
 		Run:         runBackingUnreachableAPI,
@@ -59,6 +60,10 @@ func unreachableAPIParamsFromConfig(c *core.Config) unreachableAPIParams {
 		MaxCallLatency: c.GetDuration("stress.backing_unreachable_api.max_call_latency", 120*time.Second),
 	}
 }
+
+// acceptedSettleBudget bounds waiting the fault window's create tasks out, so a
+// task that never settles costs this rather than the whole test's 75m.
+const acceptedSettleBudget = 15 * time.Minute
 
 // unreachableCleanupBudget bounds deleting the clusters the fault window
 // created, on its own deadline.
@@ -165,6 +170,7 @@ func runBackingUnreachableAPI(t *core.T) error {
 type rawAnswer struct {
 	status     int
 	retryAfter string
+	location   string
 	transport  error
 	took       time.Duration
 	body       string
@@ -191,7 +197,7 @@ type rawCaller struct {
 	slowest  time.Duration
 	failures []string
 	// accepted/refused name the clusters a create was answered 2xx / 4xx for.
-	accepted []string
+	accepted []acceptedCreate
 	refused  []string
 }
 
@@ -231,6 +237,7 @@ func (c *rawCaller) do(ctx context.Context, method, url string, body []byte) raw
 	return rawAnswer{
 		status:     resp.StatusCode,
 		retryAfter: resp.Header.Get("Retry-After"),
+		location:   resp.Header.Get("Location"),
 		took:       took,
 		body:       strings.TrimSpace(string(data)),
 	}
@@ -240,13 +247,26 @@ func (c *rawCaller) list(ctx context.Context) rawAnswer {
 	return c.do(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+c.poolID+"/clusters?limit=1", nil)
 }
 
+// A create is 202 + a Task: whether the store kept the cluster is that task's
+// outcome, never the status line.
+type acceptedCreate struct {
+	name   string
+	taskID string
+}
+
+func taskIDOf(a rawAnswer) string {
+	var t controller.Task
+	_ = json.Unmarshal([]byte(a.body), &t)
+	return controller.TaskRef(t, a.location)
+}
+
 func (c *rawCaller) createCluster(ctx context.Context, name string) rawAnswer {
 	body, _ := json.Marshal(map[string]any{"name": name})
 	a := c.do(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+c.poolID+"/clusters", body)
 	c.mu.Lock()
 	switch {
 	case a.status >= 200 && a.status < 300:
-		c.accepted = append(c.accepted, name)
+		c.accepted = append(c.accepted, acceptedCreate{name: name, taskID: taskIDOf(a)})
 	case a.status >= 400 && a.status < 500:
 		c.refused = append(c.refused, name)
 	}
@@ -356,10 +376,10 @@ func (c *rawCaller) Close(ctx context.Context, cl *controller.Client, logf func(
 		return
 	}
 	c.mu.Lock()
-	created := append([]string{}, c.accepted...)
+	created := append([]acceptedCreate{}, c.accepted...)
 	c.mu.Unlock()
-	for _, name := range created {
-		if id := names[name]; id != "" {
+	for _, acc := range created {
+		if id := names[acc.name]; id != "" {
 			if _, err := cl.DeleteClusterAndWait(cctx, c.poolID, id); err != nil {
 				logf("cleanup: delete cluster %s (best-effort): %v", id, err)
 			}
@@ -367,15 +387,69 @@ func (c *rawCaller) Close(ctx context.Context, cl *controller.Client, logf func(
 	}
 }
 
+type acceptedOutcome struct {
+	name      string
+	taskID    string
+	status    string
+	inDefault bool
+}
+
+// A failed create keeps its row for an operator until the GC sweeper takes it,
+// so the default listing is what it must be absent from (ac-tasks.md).
+func judgeAccepted(o acceptedOutcome) error {
+	switch o.status {
+	case controller.TaskSucceeded:
+		if !o.inDefault {
+			return fmt.Errorf("cluster %q is not in the listing although its create task %s succeeded; the store kept nothing for a write it reported done", o.name, o.taskID)
+		}
+	case controller.TaskFailed:
+		if o.inDefault {
+			return fmt.Errorf("cluster %q is in the default listing although its create task %s failed: pickers and counts must not see a half-provisioned cluster", o.name, o.taskID)
+		}
+	default:
+		return fmt.Errorf("the create task %s of cluster %q is still %q after the backing recovered: every planned task must reach a terminal state", o.taskID, o.name, o.status)
+	}
+	return nil
+}
+
+func (c *rawCaller) settleAccepted(ctx context.Context, cl *controller.Client, accepted []acceptedCreate) ([]acceptedOutcome, error) {
+	wctx, cancel := context.WithTimeout(ctx, acceptedSettleBudget)
+	defer cancel()
+	out := make([]acceptedOutcome, 0, len(accepted))
+	for _, acc := range accepted {
+		if acc.taskID == "" {
+			return nil, fmt.Errorf("the create of cluster %q was answered 2xx but named no task, so its outcome cannot be read: a 202 must carry the Task it planned", acc.name)
+		}
+		// WaitTask reports a failed task as an error WITH the task, which is the
+		// outcome this step reads rather than a failure of its own.
+		done, err := cl.WaitTask(wctx, acc.taskID)
+		if err != nil && done.Status == "" {
+			return nil, fmt.Errorf("await the create task %s of cluster %q: %w", acc.taskID, acc.name, err)
+		}
+		out = append(out, acceptedOutcome{name: acc.name, taskID: acc.taskID, status: done.Status})
+	}
+	return out, nil
+}
+
 // reconcile holds the API's answers to what the store actually kept: every
-// accepted create exists and takes a branch, every refused one left nothing.
+// create the API PLANNED settled, and the cluster it left behind matches that
+// task's outcome; every refused one left nothing.
 func (c *rawCaller) reconcile(ctx context.Context, cl *controller.Client, poolID string, env ampTenantEnv) (int, int, error) {
 	c.mu.Lock()
-	accepted := append([]string{}, c.accepted...)
+	accepted := append([]acceptedCreate{}, c.accepted...)
 	refused := append([]string{}, c.refused...)
 	c.mu.Unlock()
 
+	outcomes, err := c.settleAccepted(ctx, cl, accepted)
+	if err != nil {
+		return 0, 0, err
+	}
+	// Listed only once every task settled: a running create would read as lost.
 	names, err := clusterIDsByName(ctx, cl, poolID)
+	if err != nil {
+		return 0, 0, err
+	}
+	visible, err := clusterIDsIn(ctx, cl, poolID, false)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -385,19 +459,23 @@ func (c *rawCaller) reconcile(ctx context.Context, cl *controller.Client, poolID
 		}
 	}
 	present := 0
-	for _, name := range accepted {
-		id := names[name]
-		if id == "" {
-			return 0, 0, fmt.Errorf("cluster %q does not exist although its create was answered 2xx; the API acknowledged a write the store never kept", name)
+	var succeeded []string
+	for _, o := range outcomes {
+		o.inDefault = visible[o.name] != ""
+		if err := judgeAccepted(o); err != nil {
+			return 0, 0, err
 		}
-		present++
+		if o.status == controller.TaskSucceeded {
+			succeeded = append(succeeded, o.name)
+			present++
+		}
 	}
 	// One accepted cluster is exercised end to end. Deploying a compute on it and
 	// running a query is the honest proof its rows are complete: a cluster row
 	// that exists while its branch or recipe does not would list clean and fail
 	// here, and nothing in the listing can tell the two apart.
-	if len(accepted) > 0 {
-		if err := clusterIsUsable(ctx, cl, env, poolID, names[accepted[len(accepted)-1]]); err != nil {
+	if len(succeeded) > 0 {
+		if err := clusterIsUsable(ctx, cl, env, poolID, visible[succeeded[len(succeeded)-1]]); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -452,10 +530,20 @@ func awaitAPIReady(ctx context.Context, c *rawCaller, settle time.Duration) erro
 }
 
 func clusterIDsByName(ctx context.Context, cl *controller.Client, poolID string) (map[string]string, error) {
+	return clusterIDsIn(ctx, cl, poolID, true)
+}
+
+func clusterIDsIn(ctx context.Context, cl *controller.Client, poolID string, includeFailed bool) (map[string]string, error) {
 	out := map[string]string{}
 	const page = 100
 	for offset := 0; ; offset += page {
-		list, err := cl.ListClustersIncludingFailed(ctx, poolID, page, offset)
+		var list controller.ClusterList
+		var err error
+		if includeFailed {
+			list, err = cl.ListClustersIncludingFailed(ctx, poolID, page, offset)
+		} else {
+			list, err = cl.ListClusters(ctx, poolID, page, offset)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("list clusters: %w", err)
 		}
