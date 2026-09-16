@@ -657,8 +657,10 @@ type DefaultDatapackDetails struct {
 
 // GetDatapackProvisionDetails returns the connection details for the
 // datapack with the given ID, or (nil, nil) if it doesn't exist.
-// MCPServerURL is set to the static MCP endpoint; MCPAPIKey is left
-// empty — the handler layer populates it from the caller's auth token.
+// MCPServerURL is set to the static MCP endpoint; MCPAPIKey is left empty
+// for the handler layer to fill from the caller's auth token. It stays empty
+// when the caller has no token -- the case with auth disabled -- so the field
+// is always present in the response but may be the empty string.
 func (r *DatapackRepo) GetDatapackProvisionDetails(datapackID string) (*DefaultDatapackDetails, error) {
 	var d DefaultDatapackDetails
 	err := r.db.QueryRow(

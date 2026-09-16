@@ -306,6 +306,10 @@ func renderSuccessWithToken(c echo.Context, accessToken string) error {
 // in path scope (/datapacks/:datapack_id). Backs the per-datapack Connect
 // dialog. Access is enforced upstream by RequireDatapackAccess (owner or
 // accepted share with agent_access).
+//
+// mcp_api_key is the caller's own token echoed back, and is the empty string
+// when they have none (auth disabled). Callers must tolerate that rather than
+// treat the field as always populated.
 func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		dp, err := auth.GetDatapack(c)
@@ -326,14 +330,16 @@ func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.Handle
 				"NOT_FOUND", "datapack no longer exists")
 		}
 
-		// We need the caller's auth token to populate MCPAPIKey as its used
-		// by the WorkbenchLM to connect to the MCP server.
-		token, err := auth.ExtractBearerToken(c.Request())
-		if err != nil {
-			return apiError(c, http.StatusUnauthorized,
-				"UNAUTHORIZED", "unable to extract access token")
+		// MCPAPIKey hands the caller's own token back so WorkbenchLM can reach
+		// the MCP server as them. It is a convenience copy, not an authorization
+		// check -- RequireDatapackAccess already gated this route -- so a caller
+		// without a bearer token gets the field empty rather than a failed
+		// request. That is the case with auth disabled, where DevAuth supplies
+		// the account and no token exists to echo; 401ing here instead logs the
+		// SPA out, because its interceptor reads any 401 as an expired session.
+		if token, err := auth.ExtractBearerToken(c.Request()); err == nil {
+			details.MCPAPIKey = token
 		}
-		details.MCPAPIKey = token
 
 		redactProvisionDetails(details)
 
