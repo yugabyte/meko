@@ -305,12 +305,16 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   `jittered()` spreads over. `PingTimeout`, `MaxConnIdleTime` and `HealthCheckPeriod` are pgxpool's
   alone — the Rust clients have no acquire-time ping or background reaper to match.
 
-- **DB URL must match how YugabyteDB was stood up.** There are three shapes, and the
+- **DB URL must match how YugabyteDB was stood up.** There are four shapes, and the
   controller crash-loops on `hostname resolving error: lookup … no such host` whenever the
   DSN names one it did not get:
   - `deploy/controller/redeploy.sh` defaults `DB_URL`/`YB_HOST_PORTS` to `yb-tserver.$NS.svc…`;
   - `deploy/up.sh` and `deploy/up-gke.sh` (the default `FOUNDATION=yugabyted`) bring up a
     *yugabyted* StatefulSet at `yugabyted-0.yugabyted.$NS.svc.cluster.local:5433`;
+  - the same two with **`TLS=1`** bring up the upstream `yugabyte` chart instead, at
+    `yb-tserver-0.yb-tservers.$NS.svc.cluster.local:5433` behind TLS. The DSN then needs
+    `sslmode` and `sslrootcert` (the `amp-ca-bundle` ConfigMap, mounted at
+    `/etc/amp/tls/ca/ca.crt`);
   - `up-gke.sh` with **`FOUNDATION=operator`** brings up an operator-managed universe and
     takes the address from `foundation connstr` — the chart-created ClusterIP
     `<universe>-<suffix>-yb-tserver-conn.$NS.svc.cluster.local:5433`, which carries YSQL on
@@ -318,10 +322,10 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
     it with `kubectl -n "$NS" get svc -l serviceName=yb-tserver-conn,scope=Namespaced`
     rather than guessing.
 
-  Running `redeploy.sh` standalone with the default DB URL against either of the other two
-  is the usual way to hit this. Pass the real `DB_URL`/`YB_HOST_PORTS`, or re-run the
-  bring-up that set them — and for `up-gke.sh` **re-run it with the same `FOUNDATION` value**,
-  since that variable is what decides which shape you get. Confirm with:
+  Running `redeploy.sh` standalone with the default DB URL against any of the others is the
+  usual way to hit this. Pass the real `DB_URL`/`YB_HOST_PORTS`, or re-run the bring-up that
+  set them — and re-run it with the same `FOUNDATION` and `TLS` values, since those are what
+  decide which shape you get. Confirm with:
   `kubectl -n "$NS" get pod <pod> -o jsonpath='{..env[?(@.name=="AMP_DATABASE_URL")].value}'`.
 
   Deleting the foundation out from under a running controller produces the same symptom:

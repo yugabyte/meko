@@ -57,6 +57,35 @@ type UniverseSpec struct {
 	MasterMemGiB    int
 	TServerCPUCores int
 	TServerMemGiB   int
+
+	// Encryption in transit. RootCA is the UUID of a certificate already added
+	// to YBA (Integrations > Security > Encryption in Transit); for a Kubernetes
+	// universe that is the K8S cert-manager type, whose issuer the provider
+	// region names (K8sProviderSpec). Both toggles false leaves the fields out,
+	// which is YBA's default (plaintext). MasterGFlags/TServerGFlags carry the
+	// TLS-adjacent gflags (node_to_node_encryption_use_client_certificates,
+	// ysql_hba_conf_csv); applyGFlags writes them, and omits them when empty.
+	EnableNodeToNodeEncrypt   bool
+	EnableClientToNodeEncrypt bool
+	RootCA                    string
+	RootAndClientRootCASame   bool
+}
+
+// applyEncryptionInTransit adds the TLS fields YBA's userIntent takes when
+// either toggle is on. A universe with both off carries none of them, matching
+// what every request sent before TLS existed. The gflags are not written here:
+// applyGFlags is the single place that does that, and every provider path runs
+// it before this.
+func applyEncryptionInTransit(intent map[string]any, s UniverseSpec) {
+	if !s.EnableNodeToNodeEncrypt && !s.EnableClientToNodeEncrypt {
+		return
+	}
+	intent["enableNodeToNodeEncrypt"] = s.EnableNodeToNodeEncrypt
+	intent["enableClientToNodeEncrypt"] = s.EnableClientToNodeEncrypt
+	if s.RootCA != "" {
+		intent["rootCA"] = s.RootCA
+	}
+	intent["rootAndClientRootCASame"] = s.RootAndClientRootCASame
 }
 
 // DefaultOwner is the yb_owner tag value when neither the top-level `owner`
@@ -210,6 +239,7 @@ func BuildConfigureRequest(s UniverseSpec) map[string]any {
 	default:
 		userIntent = awsUserIntent(s)
 	}
+	applyEncryptionInTransit(userIntent, s)
 	return map[string]any{
 		"clusters": []any{
 			map[string]any{

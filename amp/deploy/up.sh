@@ -62,6 +62,27 @@ YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 # Stable in-cluster address of the yugabyted pod (StatefulSet headless Service DNS).
 YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
 
+# TLS (off by default). TLS=1 replaces the yugabyted StatefulSet with the
+# upstream `yugabyte` chart on cert-manager certificates, behind the trust root
+# deploy/tls/trust-root.sh stands up; see up-gke.sh for the knobs, which are the
+# same here. TLS_PERMISSIVE=1 (default) keeps plaintext accepted beside TLS,
+# which the controller still needs.
+TLS="${TLS:-0}"
+TLS_PERMISSIVE="${TLS_PERMISSIVE:-1}"
+TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
+TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-}"
+TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
+YB_CHART_VERSION="${YB_CHART_VERSION:-2026.1.0}"
+YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG:-}"
+# Empty by default: the chart then takes the cluster's default StorageClass,
+# the same choice the plaintext path here makes by omitting storageClass from
+# its volumeClaimTemplates. Naming a class means naming an EKS one.
+YB_STORAGE_CLASS="${YB_STORAGE_CLASS:-}"
+YB_STORAGE_ROLE="${YB_STORAGE_ROLE:-amp_storage}"
+if [ "${TLS}" = "1" ]; then
+  YB_FQDN="yb-tserver-0.yb-tservers.${NS}.svc.cluster.local"
+fi
+
 # Exposure — defaults avoid slow cloud LBs (see redeploy.sh for the full menu):
 #   CONTROLLER_EXPOSE  nodeport (default) | internal-lb | external-lb | none
 #   ENDPOINT_EXPOSE    clusterip (default) | nodeport | internal-lb | external-lb
@@ -109,10 +130,19 @@ done
 CTX="$(kubectl config current-context 2>/dev/null || true)"
 [ -n "$CTX" ] || die "no kubectl context set"
 aws sts get-caller-identity >/dev/null 2>&1 || die "no usable AWS credentials (needed for ECR login)"
+case "${TLS}" in 0|1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
+case "${TLS_PERMISSIVE}" in 0|1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
+if [ "${TLS}" = "1" ] && [ "${TLS_PERMISSIVE}" = "0" ]; then
+  die "TLS_PERMISSIVE=0 is not supported yet: the controller does not present a certificate"
+fi
 echo "   kube-context : ${CTX}"
 echo "   namespace    : ${NS}"
 echo "   registry     : ${ECR}  (region ${REGION})"
-echo "   yugabyted    : ${YB_IMAGE}"
+if [ "${TLS}" = "1" ]; then
+  echo "   yugabyte     : chart ${YB_CHART_VERSION}, TLS on (permissive=${TLS_PERMISSIVE}, issuer=${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
+else
+  echo "   yugabyted    : ${YB_IMAGE}"
+fi
 
 # --- 1. namespace ---
 say "namespace ${NS}"
@@ -127,7 +157,14 @@ kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f -
 say "ECR pull secret '${PULL_SECRET}' (refreshing — the ECR token is ~12h)"
 ensure_pull_secret "${NS}" "${ECR}" "${PULL_SECRET}" "${REGION}"
 
-# --- 3. single-node YugabyteDB (yugabyted) ---
+# --- 3. single-node YugabyteDB ---
+if [ "${TLS}" = "1" ]; then
+NS="${NS}" YB_CHART_VERSION="${YB_CHART_VERSION}" YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG}" \
+YB_STORAGE_SIZE="${YB_STORAGE_SIZE}" YB_STORAGE_CLASS="${YB_STORAGE_CLASS}" \
+YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" TLS_PERMISSIVE="${TLS_PERMISSIVE}" \
+TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
+  "${SCRIPT_DIR}/tls/yugabyte-tls.sh"
+else
 say "YugabyteDB (single-node yugabyted)"
 kubectl apply -f - <<YAML
 apiVersion: v1
@@ -237,6 +274,7 @@ else
   exit 1
 fi
 REMOTE
+fi
 
 # --- 5. resolve image tags (most-recent in ECR unless pinned) ---
 discover_tag() {

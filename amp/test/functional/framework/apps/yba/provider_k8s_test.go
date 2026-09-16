@@ -97,6 +97,71 @@ func TestAddK8sProviderPayloadShape(t *testing.T) {
 	if zcfg["KUBE_DOMAIN"] != "cluster.local" {
 		t.Errorf("zone KUBE_DOMAIN = %v", zcfg["KUBE_DOMAIN"])
 	}
+	if _, ok := zcfg["CERT-MANAGER-ISSUER-NAME"]; ok {
+		t.Errorf("cert-manager keys present with no issuer configured")
+	}
+}
+
+// TestAddK8sProviderCertManagerZoneKeys pins the cert-manager zone keys,
+// including their dash casing — the siblings beside them are underscored, so
+// the shape is easy to get wrong and stays invisible until a universe create
+// comes back without TLS.
+func TestAddK8sProviderCertManagerZoneKeys(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var body map[string]any
+	f.on("POST /api/v1/customers/cust1/providers/kubernetes", func(w http.ResponseWriter, r *http.Request) {
+		body = captureBody(t, r)
+		writeJSON(w, http.StatusOK, map[string]any{"uuid": "k8s-prov-1"})
+	})
+
+	spec := sampleK8sProviderSpec()
+	spec.CertManagerIssuerKind = "ClusterIssuer"
+	spec.CertManagerIssuerName = "amp-ca"
+	spec.CertManagerIssuerGroup = "cert-manager.io"
+	if _, err := f.client().AddK8sProvider(context.Background(), spec); err != nil {
+		t.Fatalf("add k8s provider: %v", err)
+	}
+	zcfg := k8sZoneConfig(t, body)
+	for k, want := range map[string]string{
+		"CERT-MANAGER-ISSUER-KIND":  "ClusterIssuer",
+		"CERT-MANAGER-ISSUER-NAME":  "amp-ca",
+		"CERT-MANAGER-ISSUER-GROUP": "cert-manager.io",
+	} {
+		if zcfg[k] != want {
+			t.Errorf("zone %s = %v, want %q", k, zcfg[k], want)
+		}
+	}
+
+	// The group is optional; dropping it must not drop the other two.
+	body = nil
+	spec.CertManagerIssuerGroup = ""
+	if _, err := f.client().AddK8sProvider(context.Background(), spec); err != nil {
+		t.Fatalf("add k8s provider: %v", err)
+	}
+	zcfg = k8sZoneConfig(t, body)
+	if _, ok := zcfg["CERT-MANAGER-ISSUER-GROUP"]; ok {
+		t.Errorf("CERT-MANAGER-ISSUER-GROUP present with empty group")
+	}
+	if zcfg["CERT-MANAGER-ISSUER-NAME"] != "amp-ca" {
+		t.Errorf("issuer name dropped with the group: %v", zcfg)
+	}
+}
+
+// k8sZoneConfig is the first zone's config map out of a provider-create body.
+func k8sZoneConfig(t *testing.T, body map[string]any) map[string]any {
+	t.Helper()
+	regions, _ := body["regionList"].([]any)
+	if len(regions) == 0 {
+		t.Fatalf("no regionList in %v", body)
+	}
+	zones, _ := regions[0].(map[string]any)["zoneList"].([]any)
+	if len(zones) == 0 {
+		t.Fatalf("no zoneList in %v", regions[0])
+	}
+	zcfg, _ := zones[0].(map[string]any)["config"].(map[string]any)
+	return zcfg
 }
 
 // TestAddK8sProviderInClusterOmitsKubeconfig: an empty KubeConfigContent (the

@@ -766,6 +766,25 @@ apps:
       master_mem_gib: 4
       tserver_cpu: 2
       tserver_mem_gib: 4
+      # Encryption in transit for the universe. Off (plaintext) by default; the
+      # amp side (controller, endpoints) does not present certificates yet, so
+      # a TLS universe needs a permissive HBA rule to admit them — there is no
+      # key for it here; write it into apps.yba.universe.tserver_gflags
+      # (ysql_hba_conf_csv) above. root_ca is
+      # the UUID of a K8S cert-manager certificate already added to YBA, issued
+      # by the issuer named on the provider region (cert_manager_issuer_*).
+      # See controller/architecture/ac-endpoint-tls.md.
+      cert_manager_issuer_kind: ""
+      cert_manager_issuer_name: ""
+      cert_manager_issuer_group: ""
+      tls:
+        node_to_node: false
+        client_to_node: false
+        root_ca: ""
+        root_and_client_root_ca_same: true
+        # The gflags TLS needs (client certificates demanded on RPC, an HBA with
+        # cert login for the storage role) go under apps.yba.universe.*_gflags
+        # above, which every provider already merges over its defaults.
     # gcp.*: GCP provider+universe (provider_type "gcp"): a universe on GCE VMs.
     gcp:
       # provider_name idempotent identity. project/network/subnetwork/region/zone
@@ -911,6 +930,19 @@ apps:
     # helm_release empty → the per-run namespace name.
     helm_release: ""
     helm_timeout: "45m"
+    # TLS via the chart's cert-manager mode: TLS on YSQL and tserver RPC,
+    # client certificates demanded on RPC, certificate login for storage_role.
+    # Needs an issuer already in the cluster and root_ca_file, the PEM CA chain
+    # it signs with. permissive keeps plaintext admitted beside TLS, which the
+    # amp side needs until it presents certificates. Off by default.
+    tls:
+      enabled: false
+      issuer_kind: "ClusterIssuer"
+      issuer_name: "amp-ca"
+      issuer_group: "cert-manager.io"
+      root_ca_file: ""
+      permissive: true
+      storage_role: "amp_storage"
 
   # apps/ybpod: yugabyted-in-pod deploy App. Stands up a single-node (RF1)
   # YugabyteDB inside a bare pod by installing the release TARBALL and running

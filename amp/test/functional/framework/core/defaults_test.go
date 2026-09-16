@@ -866,6 +866,21 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if k8sCfg.HelmTimeout != ybk8s.DefaultHelmTimeout {
 		t.Errorf("ybk8s HelmTimeout = %s, want %s", k8sCfg.HelmTimeout, ybk8s.DefaultHelmTimeout)
 	}
+	if k8sCfg.TLS != ybk8s.DefaultTLSEnabled {
+		t.Errorf("ybk8s TLS = %v, want %v", k8sCfg.TLS, ybk8s.DefaultTLSEnabled)
+	}
+	if k8sCfg.TLSPermissive != ybk8s.DefaultTLSPermissive {
+		t.Errorf("ybk8s TLSPermissive = %v, want %v", k8sCfg.TLSPermissive, ybk8s.DefaultTLSPermissive)
+	}
+	if k8sCfg.TLSIssuerKind != ybk8s.DefaultTLSIssuerKind || k8sCfg.TLSIssuerName != ybk8s.DefaultTLSIssuerName {
+		t.Errorf("ybk8s TLS issuer = %q/%q, want %q/%q", k8sCfg.TLSIssuerKind, k8sCfg.TLSIssuerName, ybk8s.DefaultTLSIssuerKind, ybk8s.DefaultTLSIssuerName)
+	}
+	if k8sCfg.TLSIssuerGroup != ybk8s.DefaultTLSIssuerGroup {
+		t.Errorf("ybk8s TLSIssuerGroup = %q, want %q", k8sCfg.TLSIssuerGroup, ybk8s.DefaultTLSIssuerGroup)
+	}
+	if k8sCfg.TLSStorageRole != ybk8s.DefaultTLSStorageRole {
+		t.Errorf("ybk8s TLSStorageRole = %q, want %q", k8sCfg.TLSStorageRole, ybk8s.DefaultTLSStorageRole)
+	}
 	// master_replicas/tserver_replicas default 0 → applyDefaults clamps to
 	// ReplicationFactor; FromConfig leaves them 0 here (the raw config default).
 	if k8sCfg.MasterReplicas != 0 || k8sCfg.TServerReplicas != 0 {

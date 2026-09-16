@@ -695,6 +695,13 @@ raises it); it falls back to the co-located `ybk8s` backing otherwise. A
 framework-wide `yba_provisioned` default is deliberately avoided so runs carrying
 no YBA creds don't attempt a doomed provision.
 
+Both k8s backings can be stood up with encryption in transit: `apps.ybk8s.tls.*`
+drives the chart's cert-manager mode, `apps.yba.k8s.tls.*` plus
+`apps.yba.k8s.cert_manager_issuer_*` the universe's K8S cert-manager certificate.
+Both are off by default and, when on, keep plaintext admitted (`permissive`)
+because the amp side does not present certificates yet; the design is
+`controller/architecture/ac-endpoint-tls.md`.
+
 ### 5.1 Shared environment — many co-tenant tests on one control plane (`SHARED`)
 **Only non-destructive, non-perf tests co-tenant.** Anything that kills
 components, simulates zone outages, or measures performance gets a dedicated

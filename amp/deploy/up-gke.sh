@@ -14,9 +14,12 @@
 #      key; one minted from a raw docker config.json (e.g. a CI Quay secret); or an
 #      EXISTING named secret (bring your own)
 #   4. the backing YugabyteDB, per FOUNDATION:
-#      yugabyted (default) a single-node StatefulSet + headless Service
+#      yugabyted (default) a single-node StatefulSet + headless Service, or with
+#                          TLS=1 the certificate trust root (deploy/tls/trust-root.sh)
+#                          and the upstream `yugabyte` chart on cert-manager certificates
 #      operator            an operator-managed universe, via foundation/
-#   5. the yb_storage database (the controller connects to it at startup)
+#   5. the yb_storage database (the controller connects to it at startup), plus the
+#      amp_storage role in TLS mode
 #   6. the amp controller (+ MCP + UI) via the yb-amp-controller Helm chart
 #
 # Idempotent: every step is create-or-apply / `helm upgrade --install`, so
@@ -34,6 +37,7 @@
 #   PULL_SECRET=gcr-pull-secret GCR_KEY_FILE=./gcr-sa-key.json deploy/up-gke.sh  # mint from a GCP SA key
 #   PULL_SECRET=quay-pull-secret PULL_SECRET_DOCKERCONFIGJSON="$(cat cfg.json)" deploy/up-gke.sh  # mint from a docker config.json
 #   FOUNDATION=operator deploy/up-gke.sh                          # operator-managed universe instead of yugabyted
+#   TLS=1 deploy/up-gke.sh                                        # TLS + certificate auth (see TLS below)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -92,6 +96,41 @@ YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:latest}"
 YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 # Stable in-cluster address of the yugabyted pod (StatefulSet headless Service DNS).
 YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
+
+# TLS. Off by default (encryption costs roughly 5% CPU and many deployments sit
+# on a private network). With TLS=1:
+#   - deploy/tls/trust-root.sh stands up (or verifies) cert-manager and
+#     trust-manager, the `amp-ca` ClusterIssuer and the `amp-ca-bundle` trust
+#     Bundle, and labels this namespace so the CA lands here as a ConfigMap;
+#     TLS_ISSUER_KIND / TLS_ISSUER_NAME / TLS_ISSUER_GROUP select an existing
+#     issuer instead of the bootstrapped one (see that script for TLS_CA_FILE).
+#   - YugabyteDB is the upstream `yugabyte` chart with cert-manager certificates
+#     rather than the yugabyted StatefulSet: TLS on YSQL and on the tserver RPC
+#     port, client certificates required on RPC, and certificate authentication
+#     for the storage role (`hostssl ... cert`).
+#   - TLS_PERMISSIVE=1 (the default until the controller and endpoints present
+#     certificates themselves) keeps plaintext accepted beside TLS
+#     (allow_insecure_connections=true, a trailing `host all all all trust` HBA
+#     rule), which is the transition shape controller/architecture/ac-endpoint-tls.md
+#     describes. TLS_PERMISSIVE=0 refuses plaintext.
+TLS="${TLS:-0}"
+TLS_PERMISSIVE="${TLS_PERMISSIVE:-1}"
+TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
+TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-}"
+TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
+# The chart-deployed YugabyteDB (TLS=1 only).
+YB_CHART_VERSION="${YB_CHART_VERSION:-2026.1.0}"
+YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG:-}"              # empty => the chart's appVersion
+# standard-rwo is a GKE PD class; this is the GKE script, so it names one.
+YB_STORAGE_CLASS="${YB_STORAGE_CLASS:-standard-rwo}"
+YB_RELEASE="yugabyte"
+# The storage role endpoints log in as, by certificate CN.
+YB_STORAGE_ROLE="${YB_STORAGE_ROLE:-amp_storage}"
+if [ "${TLS}" = "1" ]; then
+  # The chart's per-pod certificates carry the pod FQDNs (oldNamingStyle), so
+  # clients that verify the server name connect to the pod, not the Service.
+  YB_FQDN="yb-tserver-0.yb-tservers.${NS}.svc.cluster.local"
+fi
 
 # Exposure (GKE). Defaults to an internal LoadBalancer (private VPC IP).
 #   CONTROLLER_EXPOSE     internal-lb (default) | external-lb | nodeport | none
@@ -159,6 +198,18 @@ case "${FOUNDATION}" in
     ;;
   *) die "invalid FOUNDATION=${FOUNDATION} (want yugabyted|operator)" ;;
 esac
+case "${TLS}" in 0|1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
+case "${TLS_PERMISSIVE}" in 0|1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
+if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" != "yugabyted" ]; then
+  # deploy/tls/ replaces the yugabyted StatefulSet with the upstream chart; the
+  # operator-managed universe carries its own certificate configuration.
+  die "TLS=1 needs FOUNDATION=yugabyted, got '${FOUNDATION}'"
+fi
+if [ "${TLS}" = "1" ] && [ "${TLS_PERMISSIVE}" = "0" ]; then
+  # The controller still connects over plaintext; refusing plaintext at the
+  # database would leave it unable to start.
+  die "TLS_PERMISSIVE=0 is not supported yet: the controller does not present a certificate"
+fi
 if [ "${BUILD}" = "1" ] && [ -z "${TAG}" ]; then TAG="$(date +%Y%m%d-%H%M%S)"; fi
 TAG="${TAG:-latest}"
 echo "   kube-context : ${CTX}"
@@ -167,6 +218,11 @@ echo "   registry     : ${REGISTRY}   (host ${REG_HOST})"
 echo "   tag          : ${TAG}   (build=${BUILD})"
 echo "   expose       : ${CONTROLLER_EXPOSE}   endpoints=${ENDPOINT_SERVICE_TYPE}"
 echo "   foundation   : ${FOUNDATION}"
+if [ "${TLS}" = "1" ]; then
+  echo "   tls          : on (permissive=${TLS_PERMISSIVE}, issuer=${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca}, chart yugabyte ${YB_CHART_VERSION})"
+else
+  echo "   tls          : off"
+fi
 
 # --- 1. (optional) build + push images to GCR ---
 if [ "${BUILD}" = "1" ]; then
@@ -258,6 +314,20 @@ if [ "${FOUNDATION}" = "operator" ]; then
   [ -n "${DB_URL:-}" ] || die "foundation connstr produced no DB_URL"
   echo "   YB_HOST_PORTS : ${YB_HOST_PORTS}"
   echo "   DB_URL        : ${DB_URL}"
+elif [ "${TLS}" = "1" ]; then
+  # TLS: the trust root, then the upstream chart with cert-manager certificates,
+  # then yb_storage and the storage role — all in deploy/tls/yugabyte-tls.sh, so
+  # up.sh deploys the same database. It does section 5's work too.
+  NS="${NS}" YB_CHART_VERSION="${YB_CHART_VERSION}" YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG}" \
+  YB_STORAGE_SIZE="${YB_STORAGE_SIZE}" YB_STORAGE_CLASS="${YB_STORAGE_CLASS}" \
+  YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_RELEASE="${YB_RELEASE}" TLS_PERMISSIVE="${TLS_PERMISSIVE}" \
+  TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
+    "${SCRIPT_DIR}/tls/yugabyte-tls.sh"
+  # Plaintext even here: the controller does not present a certificate yet and
+  # the permissive HBA admits it. Its half of the TLS mode lands with the
+  # yb-amp-controller chart's tls block.
+  YB_HOST_PORTS="${YB_FQDN}:5433"
+  DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable"
 else
 # The yugabyted body below is deliberately left unindented: its manifest is a
 # heredoc whose YAML terminator must sit at column 0, so indenting the branch

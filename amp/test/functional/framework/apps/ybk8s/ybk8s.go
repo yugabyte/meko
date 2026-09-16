@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -86,6 +87,14 @@ const (
 	// DefaultUser is the YB superuser the framework and amp connect as; the
 	// cluster's always-present maintenance database is likewise "yugabyte".
 	DefaultUser = "yugabyte"
+
+	// TLS. Off by default; the rest only apply when it is on.
+	DefaultTLSIssuerKind  = "ClusterIssuer"
+	DefaultTLSIssuerName  = "amp-ca"
+	DefaultTLSIssuerGroup = "cert-manager.io"
+	DefaultTLSStorageRole = "amp_storage"
+	DefaultTLSEnabled     = false
+	DefaultTLSPermissive  = true
 
 	// Chart-fixed object names/labels (the upstream `yugabyte` chart). Not
 	// configurable — they are what the chart renders regardless of values.
@@ -154,6 +163,25 @@ type Config struct {
 	// NodeSelector pins the master/tserver pods, as a "k=v,k=v" CSV of node
 	// labels.
 	NodeSelector string
+	// TLS turns on the chart's cert-manager mode: TLS on YSQL and on the tserver
+	// RPC port, client certificates required on RPC, and certificate
+	// authentication for TLSStorageRole. It needs an issuer that already exists
+	// in the cluster (TLSIssuerKind/Name/Group) and the PEM CA chain it issues
+	// from (TLSRootCAPEM, from apps.ybk8s.tls.root_ca_file), which the chart
+	// distributes to its pods. TLSPermissive keeps plaintext accepted beside TLS
+	// (allow_insecure_connections plus a trailing `host all all all trust` rule),
+	// which is what clients that do not present a certificate yet need.
+	TLS            bool
+	TLSIssuerKind  string
+	TLSIssuerName  string
+	TLSIssuerGroup string
+	TLSRootCAPEM   string
+	TLSPermissive  bool
+	TLSStorageRole string
+	// The path TLSRootCAPEM came from, and why it could not be read. Deploy
+	// needs both to tell "never configured" from "configured but unreadable".
+	TLSRootCAFile string
+	TLSRootCAErr  error
 }
 
 // Getter is the minimal typed-config surface FromConfig needs (structurally
@@ -192,7 +220,7 @@ func FromConfig(get Getter) Config {
 	if imageTag == "" {
 		imageTag = chartVersion
 	}
-	return Config{
+	cfg := Config{
 		// Fall back to the k8s context the run already provides (sharedk8s /
 		// ampstack) so a self-provisioning test needs no ybk8s-specific context.
 		KubeContext: get.GetString("apps.ybk8s.kubecontext",
@@ -220,7 +248,86 @@ func FromConfig(get Getter) Config {
 		HelmRelease:         get.GetString("apps.ybk8s.helm_release", ""),
 		HelmTimeout:         get.GetDuration("apps.ybk8s.helm_timeout", DefaultHelmTimeout),
 		NodeSelector:        get.GetString("apps.ybk8s.node_selector", ""),
+
+		TLS:            get.GetBool("apps.ybk8s.tls.enabled", DefaultTLSEnabled),
+		TLSIssuerKind:  get.GetString("apps.ybk8s.tls.issuer_kind", DefaultTLSIssuerKind),
+		TLSIssuerName:  get.GetString("apps.ybk8s.tls.issuer_name", DefaultTLSIssuerName),
+		TLSIssuerGroup: get.GetString("apps.ybk8s.tls.issuer_group", DefaultTLSIssuerGroup),
+		TLSPermissive:  get.GetBool("apps.ybk8s.tls.permissive", DefaultTLSPermissive),
+		TLSStorageRole: get.GetString("apps.ybk8s.tls.storage_role", DefaultTLSStorageRole),
 	}
+	cfg.TLSRootCAFile = get.GetString("apps.ybk8s.tls.root_ca_file", "")
+	cfg.TLSRootCAPEM, cfg.TLSRootCAErr = readOptionalFile(cfg.TLSRootCAFile)
+	return cfg
+}
+
+// readOptionalFile is the file's content when a path is given. The error is
+// returned rather than folded into "", so the Deploy gate can tell a path that
+// was never set from one that is set but unreadable.
+func readOptionalFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// tlsHelmSets is the chart's cert-manager TLS block plus the gflags that make
+// the tserver demand client certificates on RPC and log the storage role in by
+// certificate. Values go through --set-string, so the HBA's commas are escaped.
+func (c Config) tlsHelmSets() map[string]string {
+	sets := map[string]string{
+		"tls.certManager.enabled": "true",
+	}
+	switch c.TLSIssuerKind {
+	case "", "ClusterIssuer":
+		sets["tls.certManager.clusterIssuer"] = c.TLSIssuerName
+	case "Issuer":
+		sets["tls.certManager.issuer"] = c.TLSIssuerName
+	default:
+		sets["tls.certManager.customIssuer.kind"] = c.TLSIssuerKind
+		sets["tls.certManager.customIssuer.name"] = c.TLSIssuerName
+		sets["tls.certManager.customIssuer.group"] = c.TLSIssuerGroup
+	}
+	if c.TLSRootCAPEM != "" {
+		sets["tls.rootCA.cert"] = base64.StdEncoding.EncodeToString([]byte(c.TLSRootCAPEM))
+		sets["tls.rootCA.key"] = ""
+	}
+	hba := fmt.Sprintf("hostssl yb_storage %s all cert,hostssl all yugabyte all cert,hostssl all all all scram-sha-256", c.TLSStorageRole)
+	if c.TLSPermissive {
+		hba += ",host all all all trust"
+	}
+	sets["gflags.tserver.ysql_hba_conf_csv"] = strings.ReplaceAll(hba, ",", `\,`)
+	return sets
+}
+
+// tlsHelmBoolSets are the TLS values the chart branches on with `{{- if }}`.
+// They go through `--set`, never `--set-string`: as a string, "false" is
+// non-empty and therefore truthy, which would deploy permissive mode when the
+// caller asked for strict and self-sign instead of chaining to the trust root.
+func (c Config) tlsHelmBoolSets() map[string]string {
+	sets := map[string]string{
+		"tls.enabled":                         "true",
+		"tls.nodeToNode":                      "true",
+		"tls.clientToServer":                  "true",
+		"tls.insecure":                        strconv.FormatBool(c.TLSPermissive),
+		"tls.certManager.bootstrapSelfsigned": "false",
+		"gflags.master.node_to_node_encryption_use_client_certificates":  "true",
+		"gflags.tserver.node_to_node_encryption_use_client_certificates": "true",
+		"gflags.tserver.ysql_enable_auth":                                "true",
+	}
+	switch c.TLSIssuerKind {
+	case "", "ClusterIssuer":
+		sets["tls.certManager.useClusterIssuer"] = "true"
+	case "Issuer":
+		sets["tls.certManager.useClusterIssuer"] = "false"
+	default:
+		sets["tls.certManager.useCustomIssuer"] = "true"
+	}
+	return sets
 }
 
 func applyDefaults(cfg *Config) {
@@ -454,6 +561,21 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 	}
 	if d.cfg.ChartVersion == "" {
 		return Info{}, fmt.Errorf("ybk8s: chart version is required (apps.ybk8s.chart_version, versions.yb or versions.yugabytedb)")
+	}
+	// The chart projects rootCA.cert beside the issued certificate's ca.crt;
+	// without the real CA it would project its sample one.
+	if d.cfg.TLS && d.cfg.TLSRootCAErr != nil {
+		return Info{}, fmt.Errorf("ybk8s: apps.ybk8s.tls.root_ca_file %q: %w", d.cfg.TLSRootCAFile, d.cfg.TLSRootCAErr)
+	}
+	if d.cfg.TLS && d.cfg.TLSRootCAPEM == "" {
+		return Info{}, fmt.Errorf("ybk8s: apps.ybk8s.tls.enabled needs apps.ybk8s.tls.root_ca_file (the PEM CA chain the issuer signs with)")
+	}
+	// finding: the deployer's own readiness probe and every existing consumer of
+	// this backing connect plaintext as `yugabyte` with no password, so strict
+	// mode would leave Deploy blocking until HelmTimeout on its own probe.
+	if d.cfg.TLS && !d.cfg.TLSPermissive {
+		return Info{}, fmt.Errorf("ybk8s: apps.ybk8s.tls.permissive=false is not supported yet: " +
+			"waitRolloutAndYSQL and the suites that use this backing connect with sslmode=disable")
 	}
 
 	// 1. namespace (labelled so Teardown/reaper recognizes it).
@@ -701,7 +823,20 @@ func (d *Deployer) helmSets() map[string]string {
 	for k, v := range ParseNodeSelector(d.cfg.NodeSelector) {
 		sets["nodeSelector."+helmEscapeKey(k)] = v
 	}
+	if d.cfg.TLS {
+		maps.Copy(sets, d.cfg.tlsHelmSets())
+	}
 	return sets
+}
+
+// helmBoolSets are the values that must reach the chart typed, not quoted.
+// `enableLoadBalancer` in helmSets has the same problem and is left there on
+// purpose (see the NOTE above): moving it changes the deployed topology.
+func (d *Deployer) helmBoolSets() map[string]string {
+	if !d.cfg.TLS {
+		return nil
+	}
+	return d.cfg.tlsHelmBoolSets()
 }
 
 // ParseNodeSelector reads a "k=v,k=v" CSV. Malformed pairs are dropped: a
@@ -735,6 +870,7 @@ func (d *Deployer) helmInstallArgs(chartDir string) []string {
 		argv = append(argv, "--kube-context", d.cfg.KubeContext)
 	}
 	argv = append(argv, sortedSetStringArgs(d.helmSets())...)
+	argv = append(argv, sortedSetArgs(d.helmBoolSets())...)
 	return argv
 }
 
@@ -1012,6 +1148,16 @@ func sortedSetStringArgs(kv map[string]string) []string {
 	out := make([]string, 0, len(keys)*2)
 	for _, k := range keys {
 		out = append(out, "--set-string", k+"="+kv[k])
+	}
+	return out
+}
+
+// sortedSetArgs is sortedSetStringArgs with `--set`, for values helm must
+// type-infer (booleans and numbers) rather than take as strings.
+func sortedSetArgs(kv map[string]string) []string {
+	out := sortedSetStringArgs(kv)
+	for i := 0; i < len(out); i += 2 {
+		out[i] = "--set"
 	}
 	return out
 }

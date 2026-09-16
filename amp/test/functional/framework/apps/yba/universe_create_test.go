@@ -115,6 +115,56 @@ func sampleK8sUniverseSpec() UniverseSpec {
 	}
 }
 
+// TestBuildConfigureRequestEncryptionInTransit asserts a plaintext spec carries
+// no TLS fields (YBA's default), and a TLS spec carries the toggles, the root CA
+// and the gflags on any provider's intent.
+func TestBuildConfigureRequestEncryptionInTransit(t *testing.T) {
+	// Set the gflags on the plaintext spec too, so their absence below is the
+	// encryption gate's doing and not just an empty map.
+	plain := sampleUniverseSpec()
+	plain.MasterGFlags = map[string]string{"ysql_enable_auth": "true"}
+	plain.TServerGFlags = map[string]string{"ysql_enable_auth": "true"}
+	ui := userIntentOf(t, BuildConfigureRequest(plain))
+	for _, k := range []string{"enableNodeToNodeEncrypt", "enableClientToNodeEncrypt", "rootCA"} {
+		if _, ok := ui[k]; ok {
+			t.Errorf("plaintext spec carries %s", k)
+		}
+	}
+
+	s := sampleUniverseSpec()
+	s.ProviderCode = "kubernetes"
+	s.EnableNodeToNodeEncrypt = true
+	s.EnableClientToNodeEncrypt = true
+	s.RootCA = "cert-uuid"
+	s.RootAndClientRootCASame = true
+	s.TServerGFlags = map[string]string{"ysql_hba_conf_csv": "hostssl all all all cert"}
+	ui = userIntentOf(t, BuildConfigureRequest(s))
+	if ui["enableNodeToNodeEncrypt"] != true || ui["enableClientToNodeEncrypt"] != true {
+		t.Errorf("toggles = %v / %v", ui["enableNodeToNodeEncrypt"], ui["enableClientToNodeEncrypt"])
+	}
+	if ui["rootCA"] != "cert-uuid" || ui["rootAndClientRootCASame"] != true {
+		t.Errorf("rootCA = %v same=%v", ui["rootCA"], ui["rootAndClientRootCASame"])
+	}
+	gf, _ := ui["tserverGFlags"].(map[string]any)
+	if gf["ysql_hba_conf_csv"] != "hostssl all all all cert" {
+		t.Errorf("tserverGFlags = %v", ui["tserverGFlags"])
+	}
+	if _, ok := ui["masterGFlags"]; ok {
+		t.Errorf("empty masterGFlags rendered: %v", ui["masterGFlags"])
+	}
+}
+
+func userIntentOf(t *testing.T, req map[string]any) map[string]any {
+	t.Helper()
+	clusters, _ := req["clusters"].([]any)
+	if len(clusters) != 1 {
+		t.Fatalf("clusters = %v", clusters)
+	}
+	cl0, _ := clusters[0].(map[string]any)
+	ui, _ := cl0["userIntent"].(map[string]any)
+	return ui
+}
+
 // TestBuildConfigureRequestK8sShape asserts a kubernetes universe emits
 // providerType=kubernetes with the master/tserver K8SNodeResourceSpec + a
 // deviceInfo.storageClass, and NO AWS-only fields (instanceType, accessKeyCode,

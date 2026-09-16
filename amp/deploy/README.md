@@ -32,7 +32,9 @@ controller and assumes its prerequisites already exist). In order, `up.sh`:
    expires ~12 h, so `up.sh` refreshes it every run (see [Refreshing the pull
    secret](#refreshing-the-pull-secret));
 3. deploys a **single-node YugabyteDB** (`yugabyted` StatefulSet + headless Service
-   + a PVC) and waits for it to be ready;
+   + a PVC) and waits for it to be ready — or, with `TLS=1`, the upstream `yugabyte`
+   chart on cert-manager certificates at `yb-tserver-0.yb-tservers.$NS.svc…`
+   (`tls/trust-root.sh` then `tls/yugabyte-tls.sh`);
 4. creates the **`yb_storage` database** (the controller's `db.Connect` targets it
    at startup, so it must exist first);
 5. runs `controller/redeploy.sh` to deploy the **amp controller** wired to that YB.
@@ -222,6 +224,28 @@ The default is deliberately unchanged: a `yugaware` pod alone wants ~4.5 CPU and
 tens of minutes to install, so the operator path soaks in its own nightly
 ([`amp-foundation-gke.yml`](../../.github/workflows/amp-foundation-gke.yml),
 `/ci amp_deploy_gke_foundation`) before anything else is pointed at it.
+
+### TLS and certificate authentication — `TLS=1`
+
+`TLS=1 deploy/up-gke.sh` (and `up.sh`) replaces the yugabyted StatefulSet with the
+upstream `yugabyte` chart on cert-manager certificates, behind a cluster-wide trust
+root:
+
+- [`tls/trust-root.sh`](tls/trust-root.sh) installs cert-manager and trust-manager
+  when absent (never touching an existing install), bootstraps a root CA and the
+  `amp-ca` ClusterIssuer unless `TLS_ISSUER_KIND` / `TLS_ISSUER_NAME` /
+  `TLS_ISSUER_GROUP` name one you already have, and distributes the CA as ConfigMap
+  `amp-ca-bundle` into every namespace labelled `amp.yugabyte.com/trust=true`.
+- [`tls/yugabyte-tls.sh`](tls/yugabyte-tls.sh) installs the chart (`YB_CHART_VERSION`,
+  `YB_STORAGE_CLASS`) with TLS on YSQL and on the tserver RPC port, client
+  certificates required on RPC, and an HBA that logs the storage role
+  (`YB_STORAGE_ROLE`, default `amp_storage`) in by certificate CN; then creates
+  `yb_storage` and that role.
+
+`TLS_PERMISSIVE=1` (the default, and the only mode until the controller and
+endpoints present certificates) keeps plaintext accepted beside TLS. Operating it,
+checking it, and rotating certificates: [`../runbooks/tls.md`](../runbooks/tls.md);
+the design: [`../controller/architecture/ac-endpoint-tls.md`](../controller/architecture/ac-endpoint-tls.md).
 
 ### Running in CI (itest-dev)
 

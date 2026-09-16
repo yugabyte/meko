@@ -53,6 +53,90 @@ func TestHelmReleaseFor(t *testing.T) {
 	}
 }
 
+// TestTLSHelmSets asserts the cert-manager TLS values: the issuer reference by
+// kind, the CA handed to the chart base64-encoded, client certificates demanded
+// on RPC, and an HBA whose commas survive --set-string.
+func TestTLSHelmSets(t *testing.T) {
+	c := Config{
+		TLS:            true,
+		TLSIssuerKind:  "ClusterIssuer",
+		TLSIssuerName:  "amp-ca",
+		TLSRootCAPEM:   "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+		TLSPermissive:  true,
+		TLSStorageRole: "amp_storage",
+	}
+	sets, bools := c.tlsHelmSets(), c.tlsHelmBoolSets()
+	want := map[string]string{
+		"tls.certManager.clusterIssuer":    "amp-ca",
+		"tls.rootCA.cert":                  base64.StdEncoding.EncodeToString([]byte(c.TLSRootCAPEM)),
+		"gflags.tserver.ysql_hba_conf_csv": `hostssl yb_storage amp_storage all cert\,hostssl all yugabyte all cert\,hostssl all all all scram-sha-256\,host all all all trust`,
+	}
+	for k, v := range want {
+		if sets[k] != v {
+			t.Errorf("%s = %q, want %q", k, sets[k], v)
+		}
+	}
+	wantBool := map[string]string{
+		"tls.enabled":                         "true",
+		"tls.insecure":                        "true",
+		"tls.certManager.bootstrapSelfsigned": "false",
+		"tls.certManager.useClusterIssuer":    "true",
+		"gflags.tserver.ysql_enable_auth":     "true",
+		"gflags.master.node_to_node_encryption_use_client_certificates": "true",
+	}
+	for k, v := range wantBool {
+		if bools[k] != v {
+			t.Errorf("bool %s = %q, want %q", k, bools[k], v)
+		}
+	}
+
+	c.TLSPermissive = false
+	c.TLSIssuerKind, c.TLSIssuerName, c.TLSIssuerGroup = "AWSPCAClusterIssuer", "corp", "awspca.cert-manager.io"
+	sets, bools = c.tlsHelmSets(), c.tlsHelmBoolSets()
+	if bools["tls.insecure"] != "false" || strings.Contains(sets["gflags.tserver.ysql_hba_conf_csv"], "trust") {
+		t.Errorf("strict mode still admits plaintext: %v %v", sets, bools)
+	}
+	if bools["tls.certManager.useCustomIssuer"] != "true" || sets["tls.certManager.customIssuer.group"] != "awspca.cert-manager.io" {
+		t.Errorf("custom issuer not rendered: %v %v", sets, bools)
+	}
+}
+
+// Every value the chart branches on with `{{- if }}` has to reach helm typed.
+// Through `--set-string` the string "false" is non-empty and therefore truthy,
+// which deploys permissive mode when the caller asked for strict.
+func TestTLSBooleansAreNotSetAsStrings(t *testing.T) {
+	d := New(Config{
+		TLS:            true,
+		TLSPermissive:  false,
+		TLSIssuerKind:  "ClusterIssuer",
+		TLSIssuerName:  "amp-ca",
+		TLSStorageRole: "amp_storage",
+	}, "run7")
+	argv := d.helmInstallArgs("/tmp/chart")
+
+	falseFlags := map[string]string{}
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] != "--set" && argv[i] != "--set-string" {
+			continue
+		}
+		k, v, ok := strings.Cut(argv[i+1], "=")
+		if ok && (v == "false" || v == "true") {
+			falseFlags[k] = argv[i]
+		}
+	}
+	for _, k := range []string{
+		"tls.enabled", "tls.insecure", "tls.certManager.bootstrapSelfsigned",
+		"tls.certManager.useClusterIssuer", "gflags.tserver.ysql_enable_auth",
+	} {
+		if got := falseFlags[k]; got != "--set" {
+			t.Errorf("%s passed with %q, want --set so helm types it", k, got)
+		}
+	}
+	if falseFlags["tls.insecure"] == "" {
+		t.Fatal("tls.insecure never reached the argv")
+	}
+}
+
 func TestFirstHostPort(t *testing.T) {
 	if h, p := FirstHostPort("10.1.2.3:5433,10.1.2.4:5433"); h != "10.1.2.3" || p != 5433 {
 		t.Errorf("FirstHostPort = %s/%d", h, p)

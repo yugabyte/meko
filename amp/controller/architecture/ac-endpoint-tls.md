@@ -1,7 +1,10 @@
 # ac — Certificate trust between endpoints and YugabyteDB (cert-manager)
 
-**Status:** Draft — decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)); one open
-**Last updated:** 2026-09-03
+**Status:** In progress — decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)); one open.
+Phase 1 (compute client certificates) and phase 2 (trust root, chart-deployed
+YugabyteDB, `deploy/tls/`) are implemented; the operator side is
+[`runbooks/tls.md`](../../runbooks/tls.md).
+**Last updated:** 2026-09-04
 **Tracks:** [#1114](https://github.com/yugabyte/meko/issues/1114)
 **Baseline:** `main` at 0fccf8f7d
 
@@ -392,10 +395,10 @@ story.
 ## Enabling TLS on an existing deployment
 
 This is the procedure a running deployment follows to move from plaintext to mTLS
-without recreating the database or the endpoint records. It becomes
-`amp/runbooks/tls.md` once the flags it names exist; until then it is the contract the
-implementation has to satisfy. Each endpoint pod is recreated exactly once, and nothing
-is refused until the final tightening step, which is the only one to schedule.
+without recreating the database or the endpoint records; the operator copy is
+[`runbooks/tls.md`](../../runbooks/tls.md). Each endpoint pod is recreated exactly
+once, and nothing is refused until the final tightening step, which is the only one to
+schedule.
 
 The mechanism is YugabyteDB's permissive transition flags. With
 `allow_insecure_connections=true`, a TLS-enabled tserver still accepts plaintext RPC, so
@@ -485,8 +488,7 @@ against a locally issued CA without waiting for the deployment work.
    RBAC, the re-render task for existing endpoints, the minimum-image check. Chart unit
    tests for both charts; a controller integration test that creates an endpoint against
    a TLS yugabyted and asserts the thin lane is active through the safekeeper status
-   endpoint. The enable procedure above lands as `amp/runbooks/tls.md` in this phase,
-   since this is where every flag it names comes into existence.
+   endpoint. `amp/runbooks/tls.md` landed with phase 2 and gains this phase's flags here.
 4. **Hot reload in endpoint processes** (`amp/compute`, `amp/controller`). Shared cert
    watcher, swappable YSQL connector, `recycle_now` on the thin pool, controller
    `GetClientCertificate`. Integration test: `cmctl renew` against a live endpoint, then

@@ -111,6 +111,13 @@ type K8sProviderSpec struct {
 	PullSecretContent string
 
 	Regions []K8sRegionSpec
+
+	// The cert-manager issuer a K8S cert-manager certificate is issued from,
+	// set on every zone (CERT-MANAGER-ISSUER-KIND / -NAME / -GROUP). Empty name
+	// → not set, the plaintext default.
+	CertManagerIssuerKind  string
+	CertManagerIssuerName  string
+	CertManagerIssuerGroup string
 }
 
 // K8sRegionSpec is one provider region and its zones.
@@ -175,6 +182,10 @@ func BuildK8sProviderSpec(c ConfigGetter, resolve SecretResolver) (K8sProviderSp
 		KubeConfigContent: kubeConfig,
 		PullSecretContent: pullSecret,
 		Regions:           []K8sRegionSpec{{Code: region, Name: region, Zones: readK8sZones(c)}},
+
+		CertManagerIssuerKind:  c.GetString("apps.yba.k8s.cert_manager_issuer_kind", ""),
+		CertManagerIssuerName:  c.GetString("apps.yba.k8s.cert_manager_issuer_name", ""),
+		CertManagerIssuerGroup: c.GetString("apps.yba.k8s.cert_manager_issuer_group", ""),
 	}, nil
 }
 
@@ -221,6 +232,14 @@ func BuildK8sUniverseSpec(c ConfigGetter) UniverseSpec {
 		EnableYbc:         c.GetBool("apps.yba.k8s.enable_ybc", DefaultK8sEnableYbc),
 		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
 		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
+
+		// The gflags TLS needs (client certificates on RPC, the cert HBA) go
+		// through the universe gflag keys above like any other, rather than a
+		// second TLS-only source.
+		EnableNodeToNodeEncrypt:   c.GetBool("apps.yba.k8s.tls.node_to_node", false),
+		EnableClientToNodeEncrypt: c.GetBool("apps.yba.k8s.tls.client_to_node", false),
+		RootCA:                    c.GetString("apps.yba.k8s.tls.root_ca", ""),
+		RootAndClientRootCASame:   c.GetBool("apps.yba.k8s.tls.root_and_client_root_ca_same", true),
 	}
 }
 
@@ -262,6 +281,15 @@ func k8sProviderPayload(spec K8sProviderSpec) map[string]any {
 			}
 			if spec.KubeDomain != "" {
 				zcfg["KUBE_DOMAIN"] = spec.KubeDomain
+			}
+			// A K8S cert-manager certificate on the universe needs the issuer
+			// named here; YBA renders it into the chart's tls.certManager block.
+			if spec.CertManagerIssuerName != "" {
+				zcfg["CERT-MANAGER-ISSUER-KIND"] = spec.CertManagerIssuerKind
+				zcfg["CERT-MANAGER-ISSUER-NAME"] = spec.CertManagerIssuerName
+				if spec.CertManagerIssuerGroup != "" {
+					zcfg["CERT-MANAGER-ISSUER-GROUP"] = spec.CertManagerIssuerGroup
+				}
 			}
 			zones = append(zones, map[string]any{"code": z.Code, "name": name, "config": zcfg})
 		}
