@@ -1,0 +1,75 @@
+suite: shard proxy deployment
+templates:
+  - templates/deployment.yaml
+tests:
+  # The entryPoint names are the join between this release and every endpoint
+  # route that lands on it — the controller spells the same name from
+  # deploy.EntryPointName. A route naming one that does not exist is accepted by
+  # Traefik and then silently serves nothing, so the spelling is pinned here.
+  - it: declares one entryPoint per port in the range
+    set:
+      cloud: aws
+      ports.lo: 20000
+      ports.hi: 20002
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.pg-20000.address=:20000
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.pg-20002.address=:20002
+
+  # The selector is what stops this shard programming another shard's routes.
+  # Without it an ingress_internal endpoint would also be served by the external
+  # shard's internet-facing load balancer, and two endpoints allocated the same
+  # port on different shards would shadow each other.
+  - it: watches only its own shard's routes
+    set:
+      cloud: aws
+      shardName: pgin-0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --providers.kubernetescrd.labelSelector=amp.yugabyte.com/ingress-shard=pgin-0
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --providers.kubernetescrd.allowCrossNamespace=false
+
+  - it: a second shard selects its own name, not the first one's
+    set:
+      cloud: aws
+      shardName: pgin-0-ext
+      family: external
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --providers.kubernetescrd.labelSelector=amp.yugabyte.com/ingress-shard=pgin-0-ext
+
+  # PROXY protocol with no trusted range would let any peer assert a client
+  # address and walk past every per-endpoint allowlist on the shard.
+  - it: refuses PROXY protocol with no trusted range
+    set:
+      cloud: aws
+      proxyProtocol.enabled: true
+      proxyProtocol.trustedIPs: []
+    asserts:
+      - failedTemplate:
+          errorMessage: proxyProtocol.enabled needs proxyProtocol.trustedIPs — the load balancer's range and nothing wider. Empty would trust every peer's claimed client address, and a per-endpoint allowlist would then match whatever a caller asserts
+
+  - it: trusts only the range it is given
+    set:
+      cloud: aws
+      proxyProtocol.enabled: true
+      proxyProtocol.trustedIPs: [10.1.2.0/24]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.pg-20000.proxyProtocol.trustedIPs=10.1.2.0/24
+
+  - it: renders no proxyProtocol args when it is off
+    set:
+      cloud: aws
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.pg-20000.proxyProtocol.trustedIPs=

@@ -1,0 +1,76 @@
+{{- $ports := include "yb-amp-ingress.ports" . | fromJsonArray }}
+{{- $internal := eq .Values.family "internal" }}
+{{- /*
+The shard's load balancer, and the whole reason this design costs one billed
+resource per ~50 endpoints instead of one per endpoint.
+
+Its ports are provisioned in FULL here, at shard build. Nothing about creating an
+endpoint touches this Service afterwards — an endpoint create only adds a
+route — so no endpoint lifecycle event mutates a load balancer that live
+connections are sitting behind.
+*/}}
+{{- /*
+Required for BOTH families, unlike the endpoint chart's nlb_* pair, which only
+guards the internal one. Two different hazards, and a shard has both.
+
+Internal without a cloud publishes what was meant to stay private, because every
+provider defaults a LoadBalancer Service to internet-facing. External without one
+is quieter and still wrong: with no annotations AWS provisions a CLASSIC load
+balancer, and this design assumes an NLB throughout — TCP passthrough so TLS
+terminates at the pod, and PROXY protocol so a per-endpoint allowlist sees the
+real client. A shard is also shared, so getting it wrong is wrong for every
+endpoint on it rather than for one.
+*/}}
+{{- if not (has .Values.cloud (list "aws" "gcp" "azure")) }}
+{{- fail (printf "family=%s needs cloud to be one of aws, gcp, azure (got %q) — internal would otherwise default to internet-facing and publish what was meant to stay private, and external would get a classic load balancer instead of the NLB this design needs for TCP passthrough" .Values.family .Values.cloud) }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-ingress.fullname" . }}
+  labels:
+    {{- include "yb-amp-ingress.labels" . | nindent 4 }}
+  annotations:
+    {{- if eq .Values.cloud "aws" }}
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-scheme: {{ if $internal }}internal{{ else }}internet-facing{{ end }}
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    {{- /*
+    On, unlike the per-endpoint Service this replaces, for a different reason:
+    there the backend was one pod in one zone, here the proxy tier is spread
+    across zones and cross-zone is what lets every load balancer interface reach
+    all of them.
+    */}}
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    {{- if .Values.proxyProtocol.enabled }}
+    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
+    {{- end }}
+    {{- else if eq .Values.cloud "gcp" }}
+    {{- if $internal }}
+    networking.gke.io/load-balancer-type: Internal
+    {{- end }}
+    {{- else if eq .Values.cloud "azure" }}
+    {{- if $internal }}
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    {{- end }}
+    {{- end }}
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "yb-amp-ingress.selectorLabels" . | nindent 4 }}
+  {{- with .Values.allowedCidrs }}
+  {{- /*
+  A coarse outer gate only. This is per-Service and the shard is shared, so
+  per-endpoint filtering lives in each endpoint's own middleware; set this to the
+  union the shard should ever serve.
+  */}}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  ports:
+    {{- range $p := $ports }}
+    - name: pg-{{ $p }}
+      port: {{ $p }}
+      targetPort: {{ $p }}
+      protocol: TCP
+    {{- end }}

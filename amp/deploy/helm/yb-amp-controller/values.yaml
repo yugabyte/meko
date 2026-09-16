@@ -34,6 +34,17 @@ rbac:
   # only where the install may hold no cluster-scoped binding at all — and then
   # set controller.endpoint.cloud, or `nlb_internal` will not work.
   nodeRead: true
+  # -- Grant the controller the two third-party CRDs the shared-ingress modes
+  # write: Traefik's IngressRouteTCP/MiddlewareTCP (an endpoint's route and its
+  # allowlist) and external-dns's DNSEndpoint (its published name). Both travel
+  # in the endpoint's own Helm release, so without these an `ingress_*` create
+  # is rejected by the API server mid-install.
+  #
+  # Default ON but harmless when unused: an RBAC rule naming a CRD that is not
+  # installed is simply inert, whereas discovering the grant is missing costs a
+  # failed deploy. Set false for an install that must hold no rules for APIs it
+  # does not use.
+  ingress: true
   # -- Also create a ClusterRole + ClusterRoleBinding for namespaces
   # get/list/create, which Helm's --create-namespace probing needs. Default off:
   # this is the grant that can change the cluster, and the deploy namespace is
@@ -142,6 +153,38 @@ controller:
     ybTlsCertDuration: "720h"
     ybTlsCertRenewBefore: "240h"
     # -- StorageClass for each endpoint's /data PVC; empty => emptyDir (AMP_DEPLOY_STORAGE_CLASS).
+    # -- Shared ingress: put endpoints on a port of a shared load balancer
+    # instead of one each (controller/architecture/ac-ingress.md). `enabled` is
+    # the whole opt-in — off (the default) means this deployment has no shards
+    # and the ingress_* connectivity modes are refused with 400 rather than
+    # falling back to a dedicated load balancer, which would reinstate the
+    # per-endpoint cost without anyone choosing it.
+    ingress:
+      # -- Route endpoints through shared ingress shards.
+      enabled: false
+      # -- DNS zone INTERNAL endpoint names are published under, e.g.
+      # internal.byoc.example.com. Separate from the switch, and one per family
+      # so external-dns can be pinned to each with --zone-id-filter and an
+      # internal endpoint's name can never be published to a public zone.
+      zoneInternal: ""
+      # -- DNS zone EXTERNAL endpoint names are published under.
+      zoneExternal: ""
+      # -- Listener range each shard provisions in full at build; its width is
+      # how many endpoints one shard holds.
+      portRange: "20000-20049"
+      # -- Free ports kept per family before another shard is built, so a slow
+      # shard build never lands on an endpoint create. Must be below the range's
+      # width or every new shard arrives already short of headroom.
+      headroom: 10
+      # -- Ceiling on shards the control plane may build unattended.
+      maxShards: 24
+      # -- How long a released port stays unissued, so a client holding a cached
+      # address cannot reach whichever database takes the slot next.
+      quarantine: "10m"
+      # -- `spread` (emptiest shard: smallest blast radius, but no shard ever
+      # empties so none can be reclaimed) or `pack` (fullest with room: shards
+      # drain by themselves as endpoints retire).
+      placement: spread
     storageClass: ""
     # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
     diskSize: "10Gi"

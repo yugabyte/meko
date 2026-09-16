@@ -1,7 +1,7 @@
 # ac — Shared Postgres ingress
 
-**Status:** Draft (schema, allocator and API surface landed; charts and lifecycle wiring in progress)
-**Last updated:** 2026-09-14
+**Status:** Draft (schema, allocator, API surface, lifecycle wiring and charts landed; capacity reconciler and per-endpoint certificates outstanding)
+**Last updated:** 2026-09-16
 
 How an endpoint becomes reachable from outside the cluster **without provisioning
 a load balancer of its own** ([meko#462](https://github.com/yugabyte/meko/issues/462)).
@@ -157,6 +157,14 @@ correct — it means reissuing addresses customers already hold.
 - **AWS Load Balancer Controller** provisions each shard's load balancer. Already
   deployed with its own IRSA role; the controller needs no cloud credentials, and
   neither does Traefik, which talks only to the Kubernetes API.
+- **The Traefik CRDs** (`ingressroutetcps`, `middlewaretcps` and the rest of the
+  `traefik.io` set). The shard chart renders Traefik directly rather than through
+  its upstream chart, which is what used to install them — so they are now a
+  prerequisite, and one with two failure modes worth knowing apart. Without them
+  the shard installs cleanly and its provider serves nothing, while every
+  `ingress_*` endpoint release fails at apply with `no matches for kind
+  IngressRouteTCP` — after its slot has been allocated. `deploy/controller/redeploy.sh`
+  applies them before installing a shard.
 - **external-dns** publishes the per-endpoint records from the `DNSEndpoint`
   objects each endpoint release renders. It needs its **CRD source** enabled
   (`--source=crd`) or those objects are inert, and `policy=sync` rather than
@@ -172,10 +180,14 @@ reconcile since it was installed, so it has never published a record.
 
 ## Not yet built
 
-Charts (the endpoint's route and the shard's own release), per-endpoint
-certificates (so
-`sslmode=verify-full` works against an endpoint's own name — a prerequisite for
-`ingress_external`), the capacity reconciler's watermark and ceiling,
+Per-endpoint certificates. TLS is passed through to the pod, so an endpoint
+presents whatever certificate it already has — which does not match the name it
+is published under, and `sslmode=verify-full` against that name therefore fails.
+`ingress_external` is usable at `sslmode=require` and is NOT gated on this, but
+an internet-facing endpoint that cannot be verified by name is a real limitation
+rather than a detail; `verify-full` needs a certificate per endpoint name.
+
+Also outstanding: the capacity reconciler's watermark and ceiling,
 **addressing an endpoint by its shard's `host:port` where there is no DNS zone**
 (until then a zone is required, see Config), and per-listener source-IP
 filtering. `allowed_cidrs` is refused on the `ingress_*`

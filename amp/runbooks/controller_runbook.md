@@ -520,6 +520,68 @@ UPDATE controller.tasks
 A roll retired this way never ran its step, so it created no subtasks and no
 endpoint moved; re-issue the upgrade once a worker is running.
 
+## `ingress_*` create fails: `no matches for kind "IngressRouteTCP"`
+
+**Symptom.** A create with an `ingress_*` mode allocates a slot and then fails its
+task at helm apply:
+
+```
+helm deploy yb-ep-<id>: ... no matches for kind "IngressRouteTCP" in version "traefik.io/v1alpha1"
+```
+
+The shard itself installed cleanly and looks healthy, which is the confusing part.
+
+**Cause.** The Traefik CRDs are not installed. The shard chart renders Traefik
+directly rather than through its upstream chart, so nothing installs them as a
+side effect any more — they are a prerequisite, like external-dns. A shard whose
+CRDs are missing comes up, passes its probes, and serves nothing, because its
+provider has no objects to read.
+
+**Check:**
+
+```sh
+kubectl get crd ingressroutetcps.traefik.io middlewaretcps.traefik.io
+```
+
+**Fix.** Apply the CRDs for the pinned Traefik version, then re-run the create —
+the endpoint keeps the slot it was already allocated, so nothing leaks:
+
+```sh
+kubectl apply -k "https://github.com/traefik/traefik-helm-chart/traefik/crds/?ref=v3.7.13"
+```
+
+`deploy/controller/redeploy.sh` does this before installing a shard, so a
+deployment stood up that way already has them.
+
+## `ingress_*` endpoint answers on the wrong load balancer
+
+**Symptom.** An `ingress_internal` endpoint is reachable from the internet, or a
+client on one endpoint's port reaches a different database.
+
+**Cause.** A shard's Traefik is programming routes that belong to another shard.
+Each shard watches only its own, by label:
+
+```
+--providers.kubernetescrd.labelSelector=amp.yugabyte.com/ingress-shard=<shard>
+```
+
+Every shard is built from the same `--deploy-ingress-port-range`, so `pgin-0` and
+`pgin-0-ext` both declare `pg-20000…`; without that selector each proxy programs
+every route in the namespace.
+
+**Check** that the selector is set on each shard and that the endpoint's route
+carries the matching label:
+
+```sh
+kubectl -n "$NS" get deploy -l amp.yugabyte.com/ingress-shard \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].args}{"\n"}{end}' \
+  | grep -o 'labelSelector=[^ ]*'
+kubectl -n "$NS" get ingressroutetcp -L amp.yugabyte.com/ingress-shard
+```
+
+A route with an empty or wrong shard label is served by whichever proxies match
+it. Re-running the endpoint's deploy re-renders the label from its allocation.
+
 ## `nlb_internal` create fails: `needs service.cloud to be one of aws, gcp, azure`
 
 **Symptom.** A create with `connectivity.mode: nlb_internal` fails its task with a

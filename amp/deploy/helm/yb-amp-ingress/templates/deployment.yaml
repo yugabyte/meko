@@ -1,0 +1,114 @@
+{{- if and .Values.proxyProtocol.enabled (not .Values.proxyProtocol.trustedIPs) }}
+{{- fail "proxyProtocol.enabled needs proxyProtocol.trustedIPs — the load balancer's range and nothing wider. Empty would trust every peer's claimed client address, and a per-endpoint allowlist would then match whatever a caller asserts" }}
+{{- end }}
+{{- $ports := include "yb-amp-ingress.ports" . | fromJsonArray }}
+{{- /*
+Traefik rendered directly rather than through its chart as a subchart: the
+entryPoint set is a templated RANGE, and subchart values cannot be templated.
+Doing it here also means the entryPoint names come out of one definition, so they
+match what the controller renders on each endpoint's route (deploy.EntryPointName).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yb-amp-ingress.fullname" . }}
+  labels:
+    {{- include "yb-amp-ingress.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.traefik.deployment.replicas }}
+  selector:
+    matchLabels:
+      {{- include "yb-amp-ingress.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yb-amp-ingress.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "yb-amp-ingress.fullname" . }}
+      {{- /*
+      Spread across zones so losing one does not take the shard's endpoints with
+      it. ScheduleAnyway rather than DoNotSchedule: a shard that will not schedule
+      is worse than one briefly unbalanced.
+      */}}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "yb-amp-ingress.selectorLabels" . | nindent 14 }}
+      {{- /*
+      The Traefik image is the one thing in this chart pulled from a public
+      registry, so an operator who mirrors it into the ECR the rest of the stack
+      uses needs somewhere to say so — every other amp chart takes this and the
+      deploy scripts pass it on every install. Without it the only option is an
+      anonymous Docker Hub pull, rate-limited, for a proxy that sits in the
+      connection path of every endpoint on the shard.
+      */}}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: traefik
+          image: "{{ .Values.traefik.image.repository }}:{{ .Values.traefik.image.tag }}"
+          imagePullPolicy: {{ .Values.traefik.image.pullPolicy }}
+          args:
+            - --entryPoints.traefik.address=:9000
+            - --ping=true
+            - --ping.entryPoint=traefik
+            - --providers.kubernetescrd=true
+            - --providers.kubernetescrd.namespaces={{ .Release.Namespace }}
+            - --providers.kubernetescrd.allowCrossNamespace=false
+            {{- /*
+            Scoped to THIS shard's routes, and load-bearing rather than tidy.
+            Endpoint releases and every shard live in one namespace (the route is
+            rendered into the endpoint's release, and allowCrossNamespace is
+            false), and every shard is built from the same --deploy-ingress-port-
+            range — so pgin-0 and pgin-0-ext both declare pg-20000..pg-20049.
+            Without this selector each shard's proxy would program EVERY
+            endpoint's route: an ingress_internal endpoint would answer on the
+            external shard's internet-facing load balancer, and two endpoints
+            allocated the same port on different shards would shadow each other,
+            one client reaching the other's database. That is the failure
+            ingress_allocations_slot_live is unique per (shard, port) to prevent,
+            and it only holds if the data plane can tell shards apart.
+            */}}
+            - --providers.kubernetescrd.labelSelector=amp.yugabyte.com/ingress-shard={{ .Values.shardName }}
+            - --log.level={{ .Values.traefik.logLevel }}
+            {{- range $p := $ports }}
+            - --entryPoints.pg-{{ $p }}.address=:{{ $p }}
+            {{- if $.Values.proxyProtocol.enabled }}
+            {{- /*
+            Without this Traefik sees the load balancer as the client, and every
+            per-endpoint allowlist matches the wrong address. trustedIPs is the
+            load balancer's range and nothing wider: a trusted peer may claim to
+            be any client it likes.
+            */}}
+            - --entryPoints.pg-{{ $p }}.proxyProtocol.trustedIPs={{ join "," $.Values.proxyProtocol.trustedIPs }}
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: traefik
+              containerPort: 9000
+            {{- range $p := $ports }}
+            - name: pg-{{ $p }}
+              containerPort: {{ $p }}
+              protocol: TCP
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /ping, port: 9000 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /ping, port: 9000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.traefik.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

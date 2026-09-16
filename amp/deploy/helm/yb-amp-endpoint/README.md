@@ -41,6 +41,14 @@ The chart renders:
   the new pod IP). `nlb_internal` is VPC-routable, `nlb_external` internet-facing;
   restrict either with `service.allowedCidrs`.
 
+- **IngressRouteTCP / MiddlewareTCP / DNSEndpoint** (when `service.connectivity`
+  is `ingress_internal` or `ingress_external`) — the endpoint's route onto a
+  **shared** load balancer: a port on an ingress shard rather than a load
+  balancer of its own. Carries `amp.yugabyte.com/ingress-shard` so only that
+  shard's proxy serves it. The `DNSEndpoint` is what external-dns publishes the
+  endpoint's own name from. Needs the Traefik CRDs installed
+  (`controller/architecture/ac-ingress.md`).
+
   Portable across clouds: the mode is the concept, and `service.cloud` selects
   the annotations — AWS gets an NLB with pod-IP targets and cross-zone on, GKE
   gets `networking.gke.io/load-balancer-type: Internal`, AKS gets
@@ -96,9 +104,10 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `16Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS. 16Gi is the 8 GiB per vCPU the control plane holds every endpoint to — a core without the memory to feed it gives Postgres a cache it cannot keep |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper HTTP |
-| `service.connectivity` | `cluster_ip` | client reachability: `cluster_ip`, `nlb_internal`, `nlb_external` |
+| `service.connectivity` | `cluster_ip` | client reachability: `cluster_ip`, `nlb_internal`, `nlb_external`, `ingress_internal`, `ingress_external` |
 | `service.cloud` | _(set by the controller)_ | whose LB annotations to render: `aws`, `gcp`, `azure`. The controller passes what it detected from node provider IDs, or its `--deploy-cloud` override; required for `nlb_internal` |
-| `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted |
+| `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted. On the `ingress_*` modes it renders a `MiddlewareTCP` instead, since a shared load balancer cannot carry a per-endpoint allowlist — the API refuses it there for now |
+| `service.ingress` | _(set by the controller)_ | the allocated shard slot: `shard`, `entryPoint`, `port`, `dnsName`, `shardHost`, `recordType`. Required for the `ingress_*` modes and rendered by nothing else |
 | `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
 | `metrics.postgresExporter.image.tag` | `v0.17.1` | exporter image tag |
 | `metrics.postgresExporter.extraArgs` | `[]` | extra exporter flags, beyond the `--no-collector.database` / `--collector.stat_statements` the template sets |

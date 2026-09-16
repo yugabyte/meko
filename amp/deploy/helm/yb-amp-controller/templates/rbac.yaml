@@ -37,6 +37,24 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: [certificates]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Shared ingress (controller/architecture/ac-ingress.md). An endpoint on a
+  # shard carries its route, its allowlist middleware and its DNS record in its
+  # OWN Helm release, so the controller creates and deletes all three — and a
+  # shard the controller builds is another release of yb-amp-ingress, whose
+  # Deployment/Service/RBAC are covered by the rules above.
+  #
+  # Narrow on purpose while the rest of this Role is not: these are the only two
+  # third-party APIs amp writes, and both are CRDs installed by somebody else.
+  # Granting "*" on a group we do not own would hand the controller whatever that
+  # group grows next.
+  {{- if .Values.rbac.ingress }}
+  - apiGroups: ["traefik.io"]
+    resources: [ingressroutetcps, middlewaretcps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: [dnsendpoints]
+    verbs: [get, list, watch, create, update, patch, delete]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -1,0 +1,128 @@
+suite: shared-ingress route, allowlist and DNS record
+templates:
+  - templates/ingressroute.yaml
+tests:
+  - it: renders nothing by default (cluster_ip)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for the dedicated load-balancer modes
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: aws
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The endpoint is unroutable without a slot, so the render must fail rather
+  # than produce an endpoint that deploys and is then unreachable.
+  - it: refuses an ingress mode with no slot allocated
+    set:
+      service.connectivity: ingress_internal
+    asserts:
+      - failedTemplate:
+          errorMessage: "service.ingress.shard is empty: the controller allocates it, so an empty value means the endpoint was rendered without a slot and would not be routable"
+
+  - it: refuses an ingress mode with no published name
+    set:
+      service.connectivity: ingress_internal
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        shardHost: lb-0.example
+    asserts:
+      - failedTemplate:
+          errorMessage: "service.ingress.dnsName is empty: without it the endpoint has no published address"
+
+  - it: binds the route to this endpoint's own entryPoint and pod
+    set:
+      service.connectivity: ingress_internal
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+        recordType: CNAME
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: IngressRouteTCP
+      - equal:
+          path: spec.entryPoints[0]
+          value: pg-20007
+      # The wildcard, and no tls block: the PORT is the discriminator here, and
+      # not terminating is what keeps the session end-to-end encrypted.
+      - equal:
+          path: spec.routes[0].match
+          value: HostSNI(`*`)
+      - notExists:
+          path: spec.routes[0].tls
+      - equal:
+          path: spec.routes[0].services[0].port
+          value: 55433
+
+  # The whole point of the per-endpoint middleware: a shared load balancer cannot
+  # express a per-endpoint allowlist through loadBalancerSourceRanges.
+  - it: carries the endpoint's own allowlist into a middleware bound to its route
+    set:
+      service.connectivity: ingress_internal
+      service.allowedCidrs: ["10.0.0.0/16", "192.168.1.0/24"]
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+        recordType: CNAME
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: MiddlewareTCP
+      - equal:
+          path: spec.ipAllowList.sourceRange
+          value: ["10.0.0.0/16", "192.168.1.0/24"]
+
+  - it: publishes the endpoint's own name at its shard, with a short TTL
+    set:
+      service.connectivity: ingress_external
+      service.ingress:
+        shard: pgin-1
+        entryPoint: pg-20031
+        port: 20031
+        dnsName: ep-77aa.external.example
+        shardHost: lb-1.elb.amazonaws.com
+        recordType: CNAME
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: DNSEndpoint
+      - equal:
+          path: spec.endpoints[0].dnsName
+          value: ep-77aa.external.example
+      - equal:
+          path: spec.endpoints[0].targets[0]
+          value: lb-1.elb.amazonaws.com
+      # Short because a released port is quarantined and an endpoint can move
+      # shards; a long TTL is how a client keeps an address that has moved on.
+      - equal:
+          path: spec.endpoints[0].recordTTL
+          value: 60
+
+  - it: publishes an A record where the cloud gave the shard an address
+    set:
+      service.connectivity: ingress_internal
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: 10.0.5.20
+        recordType: A
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.endpoints[0].recordType
+          value: A

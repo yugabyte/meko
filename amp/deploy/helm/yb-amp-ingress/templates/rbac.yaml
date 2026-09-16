@@ -1,0 +1,72 @@
+{{- /*
+Traefik reads its own route and middleware objects, and the Services they point
+at. Namespaced: routes live beside the endpoints, in this namespace, and
+allowCrossNamespace is off — a shard must not be steerable at a backend outside
+the namespace it serves.
+
+Nothing here touches the cloud. The load balancer is provisioned by the AWS Load
+Balancer Controller from the Service above, and it holds those credentials, so
+the shard itself needs none.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "yb-amp-ingress.fullname" . }}
+  labels:
+    {{- include "yb-amp-ingress.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "yb-amp-ingress.fullname" . }}
+  labels:
+    {{- include "yb-amp-ingress.labels" . | nindent 4 }}
+rules:
+  {{- /*
+  NO secrets. Endpoint releases install into this same namespace, so granting
+  them would hand the shared proxy read on every endpoint's YB password Secret —
+  and nothing here needs one: this design renders no `tls` block and no auth
+  middleware, because TLS is passed through to the pod rather than terminated.
+  */}}
+  - apiGroups: [""]
+    resources: [services, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  {{- /*
+  The whole read-only CRD set, not just the three kinds this design renders.
+  Traefik's kubernetescrd provider builds an informer per CRD kind at startup and
+  a Forbidden on any of them fails the cache sync — the shard then serves NO
+  routes at all, which is the silent never-serves failure this series is built to
+  design out. Read-only on objects we do not use is cheap; a proxy that comes up
+  and quietly routes nothing is not.
+  */}}
+  - apiGroups: ["traefik.io"]
+    resources:
+      - ingressroutes
+      - ingressroutetcps
+      - ingressrouteudps
+      - middlewares
+      - middlewaretcps
+      - serverstransports
+      - serverstransporttcps
+      - tlsoptions
+      - tlsstores
+      - traefikservices
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "yb-amp-ingress.fullname" . }}
+  labels:
+    {{- include "yb-amp-ingress.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "yb-amp-ingress.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "yb-amp-ingress.fullname" . }}
+    namespace: {{ .Release.Namespace }}

@@ -50,6 +50,12 @@ type AddressLookup interface {
 	// address to yet. The two need telling apart: only the second is worth
 	// waiting through, and both otherwise leave a shard in `building` forever.
 	ShardAddress(ctx context.Context, shard string) (host string, isHostname, addressed bool, err error)
+
+	// ShardPorts reports the listener ports the shard's Service actually
+	// publishes, and the family its release was installed as. Read from the same
+	// object as the address, and used to refuse promoting a shard whose release
+	// disagrees with the row — see ReconcileShards.
+	ShardPorts(ctx context.Context, shard string) (ports []int, family string, err error)
 }
 
 // ErrShardPortRangeChanged is returned when an existing shard's stored range
@@ -167,6 +173,23 @@ func (a *Allocator) ReconcileShards(ctx context.Context, look AddressLookup, log
 			logger.Debug("ingress shard still building", "shard", s.Name)
 			continue
 		}
+		// The row and the release are installed separately — the row from the
+		// controller's config, the release from its chart's values — and nothing
+		// makes them agree. Two ways they can diverge, both silent and both
+		// serious, so the Service is checked against the row before it is ever
+		// made allocatable.
+		//
+		// A narrower release than the row means the allocator hands out ports
+		// nothing is listening on: routes that name an entryPoint which does not
+		// exist, which Traefik accepts and never serves. A release installed as
+		// the wrong FAMILY is worse — an internal shard actually fronted by an
+		// internet-facing load balancer publishes every ingress_internal endpoint
+		// on it, with no error anywhere.
+		if err := a.verifyShardRelease(ctx, look, s); err != nil {
+			logger.Error("ingress shard release disagrees with its row; not promoting",
+				"shard", s.Name, "err", err)
+			continue
+		}
 		recordType := "A"
 		if isHostname {
 			recordType = "CNAME"
@@ -176,6 +199,43 @@ func (a *Allocator) ReconcileShards(ctx context.Context, look AddressLookup, log
 		}
 		logger.Info("ingress shard ready", "shard", s.Name, "family", s.Family,
 			"host", host, "record_type", recordType, "ports", fmt.Sprintf("%d-%d", s.PortLo, s.PortHi))
+	}
+	return nil
+}
+
+// verifyShardRelease refuses a shard whose installed Service does not cover the
+// row's port range, or was installed as a different family.
+//
+// A lookup that fails is NOT a mismatch: the shard simply stays building and the
+// next pass tries again, the same as an address that has not arrived.
+func (a *Allocator) verifyShardRelease(ctx context.Context, look AddressLookup, s Shard) error {
+	ports, family, err := look.ShardPorts(ctx, s.Name)
+	if err != nil {
+		return fmt.Errorf("read shard %s ports: %w", s.Name, err)
+	}
+	if family != "" && family != string(s.Family) {
+		return fmt.Errorf("shard %s is registered as family %q but its release was installed as %q: "+
+			"promoting it would put %s endpoints behind the wrong load balancer",
+			s.Name, s.Family, family, s.Family)
+	}
+	have := make(map[int]struct{}, len(ports))
+	for _, p := range ports {
+		have[p] = struct{}{}
+	}
+	var missing []int
+	for p := s.PortLo; p <= s.PortHi; p++ {
+		if _, ok := have[p]; !ok {
+			missing = append(missing, p)
+			if len(missing) == 5 {
+				break
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("shard %s is registered for ports %d-%d but its release does not publish %v: "+
+			"an endpoint allocated one of those would render a route naming an entryPoint that does not "+
+			"exist, which Traefik accepts and never serves",
+			s.Name, s.PortLo, s.PortHi, missing)
 	}
 	return nil
 }

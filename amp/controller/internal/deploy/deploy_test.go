@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -832,5 +833,103 @@ func TestKubernetesDeployerSupportsIngress(t *testing.T) {
 				t.Errorf("SupportsIngress() = %v, want %v", got, tc.enabled)
 			}
 		})
+	}
+}
+
+// The chart cannot render a route it is not told about, so a dropped
+// service.ingress is a silently unrouted endpoint — the same failure mode the
+// connectivity values test exists for, and the reason both are pinned rather
+// than trusted to the struct tags.
+func TestKubernetesValuesIngress(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+
+	spec := testEndpointSpec()
+	spec.Connectivity = ConnectivityIngressInternal
+	spec.Ingress = IngressSlot{
+		Shard: "pgin-0", Port: 20007,
+		DNSName: "ep-abc.int.example", ShardHost: "lb.example", RecordType: "CNAME",
+	}
+	v := k.values(spec, "yb-ep-1")
+	if v.Service.Ingress == nil {
+		t.Fatal("service.ingress is nil for an ingress mode; the chart renders no route and the " +
+			"endpoint answers nowhere while the API reports the mode")
+	}
+	got := *v.Service.Ingress
+	if got.Shard != "pgin-0" || got.Port != 20007 || got.DNSName != "ep-abc.int.example" {
+		t.Errorf("service.ingress = %+v, want the allocated slot", got)
+	}
+	// The route names the entryPoint the shard declares. Two spellings of the
+	// same thing is a route Traefik accepts and never serves.
+	if got.EntryPoint != EntryPointName(20007) {
+		t.Errorf("entryPoint = %q, want %q", got.EntryPoint, EntryPointName(20007))
+	}
+	if got.ShardHost != "lb.example" || got.RecordType != "CNAME" {
+		t.Errorf("shard address = %q/%q, want it carried for the DNS record", got.ShardHost, got.RecordType)
+	}
+
+	// And omitted entirely for a mode with no slot, so the key is absent from the
+	// marshaled values rather than present and empty.
+	for _, mode := range []string{ConnectivityClusterIP, ConnectivityNLBInternal, ConnectivityNLBExternal} {
+		plain := testEndpointSpec()
+		plain.Connectivity = mode
+		if got := k.values(plain, "yb-ep-1").Service.Ingress; got != nil {
+			t.Errorf("mode %q rendered service.ingress = %+v, want nil", mode, got)
+		}
+	}
+}
+
+// EntryPointName is spelled by both charts; if it ever stopped agreeing with the
+// shard's `--entryPoints.pg-<port>.address`, every route would name one that does
+// not exist — accepted by Traefik, and then silently serving nothing.
+func TestEntryPointName(t *testing.T) {
+	for _, tc := range []struct {
+		port int
+		want string
+	}{
+		{20000, "pg-20000"},
+		{20049, "pg-20049"},
+		{5432, "pg-5432"},
+	} {
+		if got := EntryPointName(tc.port); got != tc.want {
+			t.Errorf("EntryPointName(%d) = %q, want %q", tc.port, got, tc.want)
+		}
+	}
+}
+
+// PlacesIngress is what opens the API to the ingress_* modes, so it must be true
+// exactly where CreateEndpoint can render a route — which is this commit onward.
+func TestKubernetesDeployerPlacesIngress(t *testing.T) {
+	var d Deployer = NewKubernetesDeployer(testKubernetesConfig(), nil)
+	p, ok := d.(IngressPlacer)
+	if !ok {
+		t.Fatal("KubernetesDeployer must implement IngressPlacer once it renders routes")
+	}
+	if !p.PlacesIngress() {
+		t.Error("PlacesIngress() = false; the API would refuse the ingress_* modes even though " +
+			"the deploy path can now place them")
+	}
+}
+
+// The shard chart writes its entryPoint names in Go template and never calls
+// EntryPointName, so the two spellings are held equal here rather than by
+// construction. Reading the chart is the point: changing the format string
+// builds, renders and installs clean, while every route then names an entryPoint
+// that does not exist — accepted by Traefik and silently never served.
+func TestEntryPointNameMatchesTheShardChart(t *testing.T) {
+	const chart = "../../../deploy/helm/yb-amp-ingress/templates/deployment.yaml"
+	b, err := os.ReadFile(chart)
+	if err != nil {
+		t.Fatalf("read the shard chart: %v", err)
+	}
+	// The chart renders one entryPoint per port as `--entryPoints.pg-{{ $p }}...`.
+	// Turn its literal prefix into what EntryPointName must produce.
+	const want = "--entryPoints.pg-{{ $p }}.address=:{{ $p }}"
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("the shard chart no longer renders %q; if its entryPoint spelling changed, "+
+			"EntryPointName must change with it or every route names one that does not exist", want)
+	}
+	// And the Go side must produce exactly that shape for a concrete port.
+	if got := EntryPointName(20007); got != "pg-20007" {
+		t.Errorf("EntryPointName(20007) = %q, want pg-20007 to match the chart's pg-{{ $p }}", got)
 	}
 }

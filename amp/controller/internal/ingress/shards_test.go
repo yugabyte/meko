@@ -46,6 +46,7 @@ func TestShards(t *testing.T) {
 	t.Run("EnsureShardRefusesRangeChange", func(t *testing.T) { testEnsureShardRefusesRangeChange(ctx, t, pool, zones) })
 	t.Run("MarkReadyOnlyPromotesBuilding", func(t *testing.T) { testMarkReadyOnlyPromotesBuilding(ctx, t, pool, zones) })
 	t.Run("ReconcileShards", func(t *testing.T) { testReconcileShards(ctx, t, pool, zones) })
+	t.Run("ReconcileRefusesADivergentRelease", func(t *testing.T) { testReconcileRefusesADivergentRelease(ctx, t, pool, zones) })
 }
 
 // The property a restart depends on: registering the same shard again must not
@@ -171,6 +172,11 @@ type lookupResult struct {
 	isHostname bool
 	addressed  bool
 	err        error
+	// What the shard's Service actually publishes, for the release-vs-row check.
+	// Zero ports means "as registered", so a test only sets these to diverge.
+	ports    []int
+	family   string
+	portsErr error
 }
 
 func (f fakeLookup) ShardAddress(_ context.Context, shard string) (string, bool, bool, error) {
@@ -179,6 +185,17 @@ func (f fakeLookup) ShardAddress(_ context.Context, shard string) (string, bool,
 		return "", false, false, fmt.Errorf("no such shard %q", shard)
 	}
 	return r.host, r.isHostname, r.addressed, r.err
+}
+
+func (f fakeLookup) ShardPorts(_ context.Context, shard string) ([]int, string, error) {
+	r, ok := f[shard]
+	if !ok {
+		return nil, "", fmt.Errorf("no such shard %q", shard)
+	}
+	if r.portsErr != nil {
+		return nil, "", r.portsErr
+	}
+	return r.ports, r.family, nil
 }
 
 // A sweep must promote what it can and leave the rest, and it must not let one
@@ -193,10 +210,12 @@ func testReconcileShards(ctx context.Context, t *testing.T, pool *db.Pool, zones
 	a := New(pool, zones, time.Hour, PlacementSpread)
 
 	look := fakeLookup{
-		"pgin-addressed": {host: "lb.example", isHostname: true, addressed: true},
-		"pgin-waiting":   {},                                  // exists, no address yet
-		"pgin-broken":    {err: errors.New("403 Forbidden")},  // never clears on its own
-		"pgin-ip":        {host: "10.1.2.3", addressed: true}, // an A record, not CNAME
+		"pgin-addressed": {host: "lb.example", isHostname: true, addressed: true,
+			ports: portsIn(20000, 20049), family: "internal"},
+		"pgin-waiting": {},                                 // exists, no address yet
+		"pgin-broken":  {err: errors.New("403 Forbidden")}, // never clears on its own
+		"pgin-ip": {host: "10.1.2.3", addressed: true, // an A record, not CNAME
+			ports: portsIn(23000, 23049), family: "external"},
 	}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := a.ReconcileShards(ctx, look, quiet); err != nil {
@@ -227,5 +246,63 @@ func testReconcileShards(ctx context.Context, t *testing.T, pool *db.Pool, zones
 	// The failure must not have aborted the sweep before the shards after it.
 	if got["pgin-ip"].State != StateReady {
 		t.Error("a failed lookup stopped a later shard from being promoted")
+	}
+}
+
+func portsIn(lo, hi int) []int {
+	p := make([]int, 0, hi-lo+1)
+	for i := lo; i <= hi; i++ {
+		p = append(p, i)
+	}
+	return p
+}
+
+// The row and the release are installed separately and nothing makes them agree,
+// so a shard is checked against its own Service before it is ever allocatable.
+// Both divergences are silent in production and neither is recoverable after the
+// fact: ports the release does not publish become routes Traefik accepts and
+// never serves, and a family mismatch publishes internal endpoints to the
+// internet.
+func testReconcileRefusesADivergentRelease(ctx context.Context, t *testing.T, pool *db.Pool, zones Zones) {
+	reset(ctx, t, pool)
+	seedShard(ctx, t, pool, "pgin-narrow", FamilyInternal, "building", 20000, 20049)
+	seedShard(ctx, t, pool, "pgin-wrongfam", FamilyInternal, "building", 21000, 21049)
+	seedShard(ctx, t, pool, "pgin-good", FamilyInternal, "building", 22000, 22049)
+	a := New(pool, zones, time.Hour, PlacementSpread)
+
+	look := fakeLookup{
+		// Installed with a narrower range than it is registered for.
+		"pgin-narrow": {host: "lb.example", isHostname: true, addressed: true,
+			ports: portsIn(20000, 20009), family: "internal"},
+		// Registered internal, installed external: an internet-facing LB.
+		"pgin-wrongfam": {host: "lb.example", isHostname: true, addressed: true,
+			ports: portsIn(21000, 21049), family: "external"},
+		"pgin-good": {host: "lb.example", isHostname: true, addressed: true,
+			ports: portsIn(22000, 22049), family: "internal"},
+	}
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := a.ReconcileShards(ctx, look, quiet); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := map[string]Shard{}
+	shards, err := a.ListShards(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, s := range shards {
+		got[s.Name] = s
+	}
+	if s := got["pgin-narrow"]; s.State != StateBuilding {
+		t.Errorf("narrow shard = %q, want it left building: allocations above its listeners would "+
+			"render routes naming entryPoints that do not exist", s.State)
+	}
+	if s := got["pgin-wrongfam"]; s.State != StateBuilding {
+		t.Errorf("wrong-family shard = %q, want it left building: it would publish internal "+
+			"endpoints on an internet-facing load balancer", s.State)
+	}
+	// And a shard whose release matches is unaffected — the check must not be a
+	// blanket refusal.
+	if s := got["pgin-good"]; s.State != StateReady {
+		t.Errorf("matching shard = %q, want ready", s.State)
 	}
 }

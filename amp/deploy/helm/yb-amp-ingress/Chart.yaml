@@ -1,0 +1,12 @@
+apiVersion: v2
+name: yb-amp-ingress
+description: |
+  One shared-ingress shard: a Traefik deployment and the load balancer in front
+  of it, serving a fixed range of Postgres ports for many amp endpoints.
+  Installed once per shard. The control-plane deploy installs the first shard of
+  each configured family; building the rest on demand is the capacity
+  reconciler's job and is not written yet, so additional shards are installed by
+  hand today.
+type: application
+version: 0.1.0
+appVersion: "3.7"

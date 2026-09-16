@@ -26,7 +26,7 @@ name: Amp CI
 #   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), `npm test`
 #                (vitest — includes the generated extension-catalog drift guard),
 #                vite build.
-#   deploy     — Helm charts: `helm lint` and `helm unittest` on both charts
+#   deploy     — Helm charts: `helm lint` and `helm unittest` on all three charts
 #                plus the Guaranteed-QoS guardrail. Renders/validates without a
 #                cluster. The endpoint supervisor is a Rust crate, so its tests
 #                run in the compute job with the rest of the workspace.
@@ -612,12 +612,19 @@ jobs:
         run: |
           helm lint deploy/helm/yb-amp-endpoint
           helm lint deploy/helm/yb-amp-controller
+          # --set cloud: the shard chart refuses to render without one on
+          # purpose, because every provider defaults a LoadBalancer Service to
+          # internet-facing. Linting the shipped values would fail by design.
+          helm lint deploy/helm/yb-amp-ingress --set cloud=aws
 
       - name: helm unittest + Guaranteed-QoS guardrail (endpoint chart)
         run: make endpoint-chart-test
 
       - name: helm unittest (controller chart)
         run: helm unittest deploy/helm/yb-amp-controller
+
+      - name: helm unittest (ingress shard chart)
+        run: helm unittest deploy/helm/yb-amp-ingress
 
 
   # The controller's live-database Go tests, on a real YugabyteDB (0002/0003 use

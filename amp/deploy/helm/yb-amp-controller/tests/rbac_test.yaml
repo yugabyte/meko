@@ -162,3 +162,38 @@ tests:
           path: metadata.name
           value: staging-amp-controller-namespaces
         documentIndex: 5
+
+  # The ingress_* modes put an endpoint's route, allowlist and DNS record in its
+  # own Helm release, so the controller creates all three. Without these the
+  # install is rejected by the API server midway.
+  - it: grants the two third-party CRDs the ingress modes write
+    templates:
+      - templates/rbac.yaml
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["traefik.io"]
+            resources: [ingressroutetcps, middlewaretcps]
+            verbs: [get, list, watch, create, update, patch, delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["externaldns.k8s.io"]
+            resources: [dnsendpoints]
+            verbs: [get, list, watch, create, update, patch, delete]
+
+  - it: omits them when rbac.ingress is off
+    templates:
+      - templates/rbac.yaml
+    set:
+      rbac.ingress: false
+    documentIndex: 1
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["traefik.io"]
+            resources: [ingressroutetcps, middlewaretcps]
+            verbs: [get, list, watch, create, update, patch, delete]

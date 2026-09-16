@@ -281,7 +281,10 @@ service:
   exposeInternalHttp: false
   # -- Client reachability for the Postgres port. `cluster_ip` (default) leaves
   # the endpoint reachable only in-cluster (and over the tailnet, if the Service
-  # is tailnet-exposed). `nlb_internal` / `nlb_external` add a SECOND,
+  # is tailnet-exposed). `ingress_internal` / `ingress_external` put it on a
+  # SHARED ingress shard — a port on a load balancer many endpoints sit behind —
+  # so creating one provisions no cloud resource at all; the slot arrives in
+  # `service.ingress`. `nlb_internal` / `nlb_external` add a SECOND,
   # Postgres-only Service fronted by an AWS Network Load Balancer — internal
   # (VPC-routable) or internet-facing. The pageserver/safekeeper/supervisor ports
   # are deliberately never published on it: the supervisor's settings API is
@@ -295,6 +298,17 @@ service:
   # to internet-facing, so an unknown cloud would silently publish something the
   # caller asked to keep private, and the render fails instead.
   cloud: ""
+  # -- The shared-ingress slot, for the `ingress_*` modes only. The controller
+  # allocates it before the deploy and passes it in; nothing chooses a shard or
+  # port here, because two endpoints on one port is a connection reaching another
+  # customer's database. Empty for every other mode.
+  #   shard       the Traefik release fronting this endpoint
+  #   entryPoint  the listener its port is bound to on that release
+  #   port        the port clients connect to
+  #   dnsName     this endpoint's own published name
+  #   shardHost   where that name points: the shard load balancer's address
+  #   recordType  CNAME where the cloud gave a hostname, A where it gave an address
+  ingress: {}
   # -- CIDRs allowed to reach the load balancer (`loadBalancerSourceRanges`).
   # Portable: a core Service field, honoured on every cloud.
   # Empty means no restriction, which for `nlb_external` puts Postgres on the

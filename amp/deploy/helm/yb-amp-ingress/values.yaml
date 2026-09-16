@@ -1,0 +1,88 @@
+# Values for one ingress shard (controller/architecture/ac-ingress.md).
+
+# -- Shard name. Must match the ingress_shards row the controller registers and
+# the `shard` each endpoint's route is rendered with — it is how the two halves
+# find each other.
+shardName: pgin-0
+
+# -- Which exposure this shard provides: "internal" (reachable from the
+# surrounding network) or "external" (internet-facing). A property of the load
+# balancer, which is why it belongs to the shard rather than to an endpoint: it
+# is what stops an internal endpoint ever landing on a public address.
+family: internal
+
+# -- Which cloud's load-balancer annotations to render: aws, gcp or azure.
+# REQUIRED, for both families. Internal without it defaults to internet-facing
+# and publishes what was meant to stay private; external without it gets a
+# classic load balancer on AWS rather than the NLB this design needs for TCP
+# passthrough and PROXY protocol. A shard is shared, so either mistake is made
+# once and paid for by every endpoint on it.
+cloud: ""
+
+ports:
+  # -- The listener range this shard serves, provisioned in FULL at install.
+  # Provisioned once so that creating an endpoint never mutates a load balancer
+  # that live connections are sitting behind — an endpoint create only adds a
+  # route inside the cluster. Its width is how many endpoints one shard holds.
+  lo: 20000
+  hi: 20049
+
+# -- CIDRs allowed to reach the shard's load balancer. A coarse outer gate only:
+# it is per-Service and a shard is shared, so per-endpoint filtering is done by
+# the middleware in each endpoint's own release. Set this to the union the shard
+# should ever serve (a VPC, say) and let the middleware do the rest.
+allowedCidrs: []
+
+# -- Trust PROXY protocol on every Postgres entryPoint. Needed behind a cloud
+# load balancer that preserves the client address that way: without it Traefik
+# sees the load balancer as the client and every per-endpoint allowlist matches
+# the wrong thing. The load balancer must be configured to send it.
+proxyProtocol:
+  enabled: false
+  # -- Who may assert a client address. REQUIRED when proxyProtocol.enabled, and
+  # it must be the load balancer's own range and nothing wider: a trusted peer
+  # may claim to be any client it likes, so anything in this list can walk
+  # straight past every per-endpoint allowlist on the shard.
+  #
+  # Deliberately empty rather than defaulted to the cluster CIDR. A default like
+  # 10.0.0.0/8 covers the pods and nodes themselves, which would make any
+  # in-cluster peer able to forge a client address — the exact bypass the
+  # allowlists exist to stop, shipped on by default.
+  trustedIPs: []
+
+# -- Pull secrets for the Traefik image, as every other amp chart takes. Needed
+# when it is mirrored into a private registry — which is the normal case here,
+# since this is the only public-registry image in amp/deploy and an anonymous
+# Docker Hub pull is rate-limited.
+imagePullSecrets: []
+
+traefik:
+  image:
+    repository: docker.io/traefik
+    # -- Pinned: the proxy is in the connection path of every endpoint on the
+    # shard, so the version it runs is not something to inherit from a tag that
+    # moves underneath us.
+    tag: "v3.7.13"
+    pullPolicy: IfNotPresent
+  deployment:
+    # -- Two by default so a rollout or a node loss does not take the shard's
+    # endpoints with it. This is the blast radius consolidation buys us, and the
+    # floor it should not go below.
+    replicas: 2
+  logLevel: INFO
+  # -- Request == limit, so the proxy is Guaranteed-QoS and cannot be evicted
+  # under node pressure while it is carrying customer connections.
+  #
+  # The memory figure is measured: ~70 MiB per replica at 200 routes
+  # (amp/test/ingress-bakeoff), so 256Mi is roughly 3x headroom. The CPU is NOT
+  # measured — the bakeoff recorded no CPU number — so 200m is a scheduling floor
+  # chosen to keep the proxy off the smallest slice a node will give it, not a
+  # multiple of anything. Worth measuring under real connection load before it is
+  # treated as tuned.
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

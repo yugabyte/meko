@@ -1,0 +1,121 @@
+{{- if or (eq .Values.service.connectivity "ingress_internal") (eq .Values.service.connectivity "ingress_external") }}
+{{- /*
+This endpoint's place on a SHARED ingress shard — one load balancer and a Traefik
+deployment fronting many endpoints — instead of a load balancer of its own
+(controller/architecture/ac-ingress.md).
+
+Three objects, all in THIS endpoint's release: the route, its allowlist
+middleware, and its DNS record. That is the property the whole design leans on —
+retiring the endpoint is still one `helm uninstall` and nothing is orphaned
+behind it, exactly as for the ClusterIP and nlb_* modes.
+
+The controller allocates the shard and port before the deploy and passes them in;
+nothing here chooses either, because two endpoints choosing the same port is a
+connection reaching another customer's database.
+*/}}
+{{- $ing := required "service.ingress is required for the ingress_* connectivity modes" .Values.service.ingress }}
+{{- if not $ing.shard }}{{ fail "service.ingress.shard is empty: the controller allocates it, so an empty value means the endpoint was rendered without a slot and would not be routable" }}{{ end }}
+{{- if not $ing.dnsName }}{{ fail "service.ingress.dnsName is empty: without it the endpoint has no published address" }}{{ end }}
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: {{ include "yb-amp-endpoint.fullname" . }}
+  labels:
+    {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
+    {{- /*
+    The shard this endpoint was allocated on. Its proxy selects on exactly this
+    label, so the route is served by that shard and no other — without it every
+    shard in the namespace programs every route, and an internal endpoint ends up
+    answering on the external shard's public load balancer.
+    */}}
+    amp.yugabyte.com/ingress-shard: {{ $ing.shard }}
+spec:
+  {{- /*
+  The entryPoint is this endpoint's own port on the shard, declared by the shard's
+  release. A route naming one that does not exist is accepted and then never
+  serves, so both spellings come from deploy.EntryPointName rather than being
+  written twice.
+  */}}
+  entryPoints:
+    - {{ $ing.entryPoint }}
+  routes:
+    {{- /*
+    HostSNI(`*`) and no `tls` block: a non-TLS TCP router in Traefik may only
+    match the wildcard, because here the PORT is the discriminator. That is also
+    what keeps TLS end-to-end — Traefik forwards bytes and never terminates, so
+    nothing in the path can read the session.
+    */}}
+    - match: HostSNI(`*`)
+      services:
+        - name: {{ include "yb-amp-endpoint.fullname" . }}
+          port: {{ .Values.endpoint.computePort }}
+      {{- with .Values.service.allowedCidrs }}
+      middlewares:
+        - name: {{ include "yb-amp-endpoint.fullname" $ }}-allow
+      {{- end }}
+{{- with .Values.service.allowedCidrs }}
+---
+{{- /*
+Per-endpoint source filtering. loadBalancerSourceRanges cannot do this once the
+load balancer is shared — it is a per-Service field and a shard has one Service —
+so the allowlist moves into a middleware bound to this endpoint's route alone.
+
+Behind a cloud load balancer this needs the shard's entryPoint to trust PROXY
+protocol, or every client appears to come from the load balancer; that is the
+shard's configuration, not this endpoint's.
+*/}}
+{{- /*
+Rendered ahead of the API that will use it. endpointConnectivity still refuses
+allowed_cidrs on the ingress_* modes (a shared load balancer cannot carry a
+per-endpoint allowlist, so the filtering has to move here), which means
+service.allowedCidrs is empty for every release the controller produces today and
+this object is not created. It lands with the chart so that lifting the API
+refusal is a one-line change rather than a chart change too.
+*/}}
+apiVersion: traefik.io/v1alpha1
+kind: MiddlewareTCP
+metadata:
+  name: {{ include "yb-amp-endpoint.fullname" $ }}-allow
+  labels:
+    {{- include "yb-amp-endpoint.labels" $ | nindent 4 }}
+    {{- /* Selected by the same per-shard selector as the route above; without
+    this label the shard's proxy cannot see the middleware its own route names. */}}
+    amp.yugabyte.com/ingress-shard: {{ $ing.shard }}
+spec:
+  ipAllowList:
+    sourceRange:
+      {{- toYaml . | nindent 6 }}
+{{- end }}
+---
+{{- /*
+The endpoint's own DNS name, stated outright as a DNSEndpoint rather than
+inferred by external-dns from an annotation on some other object. Stating it
+keeps the record independent of what external-dns can read out of a Traefik CRD,
+and makes retire withdraw it with the rest of the release.
+
+recordType follows the cloud: a CNAME where the load balancer has a hostname
+(AWS), an A where it has an address (GCP, Azure). The controller reads which off
+the shard, once, when the shard is built.
+*/}}
+apiVersion: externaldns.k8s.io/v1alpha1
+kind: DNSEndpoint
+metadata:
+  name: {{ include "yb-amp-endpoint.fullname" . }}
+  labels:
+    {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
+    {{- /* Which shard's address this record points at — read by operators, not
+    by external-dns, which selects on nothing here. */}}
+    amp.yugabyte.com/ingress-shard: {{ $ing.shard }}
+spec:
+  endpoints:
+    - dnsName: {{ $ing.dnsName }}
+      recordType: {{ $ing.recordType | default "CNAME" }}
+      targets:
+        - {{ required "service.ingress.shardHost is required: the record needs somewhere to point" $ing.shardHost }}
+      {{- /*
+      Short on purpose. A released port is quarantined before reuse and an
+      endpoint can be moved between shards, so a long TTL is how a client ends up
+      holding an address that has moved on.
+      */}}
+      recordTTL: 60
+{{- end }}

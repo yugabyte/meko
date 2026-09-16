@@ -1,0 +1,64 @@
+suite: shard RBAC
+templates:
+  - templates/rbac.yaml
+tests:
+  # Namespaced, deliberately. A shard's proxy only ever reads objects in its own
+  # namespace, and a ClusterRole here would let every shard read Secrets — which
+  # is where endpoint TLS material lives — across the whole cluster. Pinned
+  # because the upstream Traefik chart ships cluster-scoped RBAC by default, so
+  # this is the kind of thing a later "align with upstream" quietly undoes.
+  - it: grants namespaced RBAC only, never cluster-scoped
+    set:
+      cloud: aws
+    asserts:
+      - hasDocuments:
+          count: 3
+      - notFailedTemplate: {}
+  - it: the Role is a Role
+    documentIndex: 1
+    set:
+      cloud: aws
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: apiVersion
+          value: rbac.authorization.k8s.io/v1
+  - it: the binding is a RoleBinding pointing at a Role
+    documentIndex: 2
+    set:
+      cloud: aws
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: roleRef.kind
+          value: Role
+  # No Secrets. Endpoint releases share this namespace, so the grant would cover
+  # every endpoint's YB password Secret — and nothing in this design reads one,
+  # since TLS is passed through to the pod rather than terminated here.
+  - it: never grants access to Secrets
+    documentIndex: 1
+    set:
+      cloud: aws
+    asserts:
+      - notContains:
+          path: rules[0].resources
+          content: secrets
+  # Read-only. The proxy discovers routes; nothing about serving traffic needs
+  # to create or mutate anything, and a write verb here would let a compromised
+  # proxy rewrite the routes that decide which database a client reaches.
+  - it: is read-only on every resource it can reach
+    documentIndex: 1
+    set:
+      cloud: aws
+    asserts:
+      - equal:
+          path: rules[0].verbs
+          value: [get, list, watch]
+      - equal:
+          path: rules[1].verbs
+          value: [get, list, watch]
+      - equal:
+          path: rules[2].verbs
+          value: [get, list, watch]

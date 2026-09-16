@@ -7,6 +7,7 @@ package deploy
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -125,6 +126,18 @@ type IngressSlot struct {
 	ShardHost  string
 	RecordType string
 }
+
+// EntryPointName is the Traefik entryPoint a shard declares for one port, and
+// the name an endpoint's route binds to.
+//
+// It is NOT the single source for both. The shard chart writes the name itself,
+// in Go template (`--entryPoints.pg-<port>`), and never calls this. So the two
+// spellings are two things kept equal by a test that reads the chart and
+// compares — TestEntryPointNameMatchesTheShardChart — rather than one thing by
+// construction. Worth the test because the failure is silent: Traefik accepts a
+// route naming an entryPoint that does not exist and then never serves it, which
+// looks like a routing bug rather than a typo.
+func EntryPointName(port int) string { return fmt.Sprintf("pg-%d", port) }
 
 // Client reachability modes for EndpointSpec.Connectivity. These strings are
 // also the chart's `service.connectivity` values and the API's enum, so one

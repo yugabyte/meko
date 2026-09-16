@@ -193,7 +193,13 @@ func NewKubernetesDeployer(cfg KubernetesConfig, logger *slog.Logger) *Kubernete
 	}
 }
 
-var _ Deployer = (*KubernetesDeployer)(nil)
+var (
+	_ Deployer = (*KubernetesDeployer)(nil)
+	// The API gates the ingress_* modes on this, so a deployer that stops being
+	// able to place one has to be a compile error rather than a silent reopening
+	// of the window where the mode is accepted and nothing honours it.
+	_ IngressPlacer = (*KubernetesDeployer)(nil)
+)
 
 // SupportsConnectivity reports that this deployer renders the per-endpoint
 // load-balancer Service, satisfying deploy.ConnectivitySupporter. The docker and
@@ -209,6 +215,21 @@ func (k *KubernetesDeployer) SupportsConnectivity() bool { return true }
 // it, and endpointConnectivity reads it to reject the ingress_* modes up front,
 // so a caller gets a 400 rather than an endpoint that deploys unreachable.
 func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnabled }
+
+// PlacesIngress reports that CreateEndpoint can actually put an endpoint on a
+// shard, satisfying deploy.IngressPlacer. It is what opens the API to the
+// ingress_* modes, and it belongs to THIS commit rather than an earlier one
+// because this is where the route starts being rendered: values() carries the
+// slot (ingressValuesFor) and the endpoint chart has an IngressRouteTCP to put
+// it on. Before this, accepting the mode would have recorded an exposure the
+// endpoint did not have — a create that succeeds, a GET reporting
+// ingress_internal, and an address nothing routes to.
+//
+// Unconditional rather than read from config, because it is a property of this
+// code — the rendering below exists — not of how a deployment is configured.
+// Whether the deployment opted in is SupportsIngress; whether a slot is free is
+// the allocator's answer.
+func (k *KubernetesDeployer) PlacesIngress() bool { return true }
 
 // CreateEndpoint installs/updates the endpoint's Helm release and waits for it
 // to be ready, then returns the stable in-cluster client address. The release
@@ -602,6 +623,43 @@ func (k *KubernetesDeployer) podClientAddress(ctx context.Context, release strin
 // cadence, and a shard that is not ready yet is an ordinary state to report
 // rather than something to block on. `ok` is false while the cloud has not
 // assigned anything.
+// ShardPorts reads the listener ports a shard's Service publishes and the family
+// its release was installed as, satisfying ingress.AddressLookup.
+//
+// From the same Service as the address, so the controller can check what is
+// actually deployed against the row it registered. The two are installed
+// separately — the row from the controller's config, the release from its
+// chart's values — and nothing else would notice them diverging.
+//
+// The family comes from the label the shard chart stamps on every object it
+// renders; an empty one means the Service predates the label, which is treated
+// as "cannot tell" rather than a mismatch.
+func (k *KubernetesDeployer) ShardPorts(ctx context.Context, release string) ([]int, string, error) {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s", k.cfg.Namespace, release)
+	body, err := k.k8sAPIGetErr(ctx, path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read shard service %s: %w", release, err)
+	}
+	var out struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+		Spec struct {
+			Ports []struct {
+				Port int `json:"port"`
+			} `json:"ports"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, "", fmt.Errorf("parse shard service %s: %w", release, err)
+	}
+	ports := make([]int, 0, len(out.Spec.Ports))
+	for _, p := range out.Spec.Ports {
+		ports = append(ports, p.Port)
+	}
+	return ports, out.Metadata.Labels["amp.yugabyte.com/ingress-family"], nil
+}
+
 // ShardAddress reads where a shard's load balancer answers, satisfying
 // ingress.AddressLookup.
 //
@@ -1182,6 +1240,25 @@ type serviceValues struct {
 	// internet-facing, so the chart refuses to render an INTERNAL one without
 	// this rather than publish it by accident.
 	Cloud string `json:"cloud,omitempty"`
+	// Ingress is the shard slot for the ingress_* modes: the chart renders the
+	// endpoint's route, its per-endpoint allowlist middleware and its DNS record
+	// from it. Omitted entirely for every other mode.
+	Ingress *ingressValues `json:"ingress,omitempty"`
+}
+
+// ingressValues is what the chart needs to publish one endpoint on a shard.
+type ingressValues struct {
+	// Shard is the Traefik release fronting this endpoint, and EntryPoint the
+	// name of the listener its port is bound to on that release.
+	Shard      string `json:"shard"`
+	EntryPoint string `json:"entryPoint"`
+	Port       int    `json:"port"`
+	// DNSName is the endpoint's own published name, and ShardHost/RecordType
+	// what its record points at — a CNAME to the shard load balancer's hostname,
+	// or an A to its address.
+	DNSName    string `json:"dnsName"`
+	ShardHost  string `json:"shardHost"`
+	RecordType string `json:"recordType"`
 }
 
 type controllerValues struct {
@@ -1326,6 +1403,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Annotations:  k.cfg.ServiceAnnotations,
 			Connectivity: spec.Connectivity,
 			AllowedCidrs: spec.AllowedCIDRs,
+			Ingress:      ingressValuesFor(spec),
 		},
 		StartupProbe: startupProbeBudget(k.cfg.Timeout),
 		// Headroom over the startup budget: the rollout must not be declared
@@ -1377,6 +1455,23 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 		v.NodeSelector = k.cfg.NodeSelector
 	}
 	return v
+}
+
+// ingressValuesFor renders the shard slot for the chart, or nil for a mode that
+// has none. The entryPoint name comes from EntryPointName, which a test holds
+// equal to the shard chart's own spelling — see that function.
+func ingressValuesFor(spec EndpointSpec) *ingressValues {
+	if !IsIngress(spec.Connectivity) {
+		return nil
+	}
+	return &ingressValues{
+		Shard:      spec.Ingress.Shard,
+		EntryPoint: EntryPointName(spec.Ingress.Port),
+		Port:       spec.Ingress.Port,
+		DNSName:    spec.Ingress.DNSName,
+		ShardHost:  spec.Ingress.ShardHost,
+		RecordType: spec.Ingress.RecordType,
+	}
 }
 
 // extensionValuesFor maps the spec's extensions to the chart's endpoint.extensions

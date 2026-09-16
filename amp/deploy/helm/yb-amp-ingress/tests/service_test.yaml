@@ -1,0 +1,98 @@
+suite: shard load-balancer service
+templates:
+  - templates/service.yaml
+tests:
+  # A shard is shared, so a wrong load balancer is wrong for every endpoint on
+  # it rather than for one. Both families therefore refuse to render without a
+  # cloud, for two different reasons.
+  - it: refuses to render internal without a cloud
+    set:
+      family: internal
+      cloud: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'family=internal needs cloud to be one of aws, gcp, azure (got "") — internal would otherwise default to internet-facing and publish what was meant to stay private, and external would get a classic load balancer instead of the NLB this design needs for TCP passthrough'
+
+  - it: refuses to render external without a cloud
+    set:
+      family: external
+      cloud: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'family=external needs cloud to be one of aws, gcp, azure (got "") — internal would otherwise default to internet-facing and publish what was meant to stay private, and external would get a classic load balancer instead of the NLB this design needs for TCP passthrough'
+
+  - it: refuses a cloud it does not know
+    set:
+      family: internal
+      cloud: oracle
+    asserts:
+      - failedTemplate: {}
+
+  # The scheme is the whole difference between the two families, and getting it
+  # backwards publishes a private database.
+  - it: internal renders an internal-scheme NLB
+    set:
+      family: internal
+      cloud: aws
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-scheme"]
+          value: internal
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+          value: nlb
+
+  - it: external renders an internet-facing NLB
+    set:
+      family: external
+      cloud: aws
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-scheme"]
+          value: internet-facing
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+          value: nlb
+
+  # Provisioned in full at build, which is what keeps an endpoint create off the
+  # load balancer's critical path: creating one only adds a route inside the
+  # cluster, never mutates this Service.
+  - it: provisions the whole port range at install
+    set:
+      family: internal
+      cloud: aws
+      ports.lo: 20000
+      ports.hi: 20004
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 5
+      - equal:
+          path: spec.ports[0].port
+          value: 20000
+      - equal:
+          path: spec.ports[4].port
+          value: 20004
+
+  - it: carries the allowlist onto the load balancer as a coarse outer gate
+    set:
+      family: internal
+      cloud: aws
+      allowedCidrs: [10.0.0.0/8, 192.168.0.0/16]
+    asserts:
+      - equal:
+          path: spec.loadBalancerSourceRanges
+          value: [10.0.0.0/8, 192.168.0.0/16]
+
+  - it: leaves the load balancer unrestricted when no allowlist is set
+    set:
+      family: internal
+      cloud: aws
+    asserts:
+      - notExists:
+          path: spec.loadBalancerSourceRanges
