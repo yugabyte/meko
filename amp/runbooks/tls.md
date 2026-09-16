@@ -74,12 +74,18 @@ counts the times that process saw a watched file change and asked its pools to
 reconnect, and their logs carry a matching `TLS reload` line. The serial beside
 it, `yb_tls.client_cert`, is re-read from disk per request — it shows the new
 certificate the moment cert-manager writes it, whether or not anything picked
-it up, so it is not on its own evidence of a reload. A renewed tserver certificate is copied into place
-only at pod start (the chart's `certmanager-init` container), so after a renewal:
+it up, so it is not on its own evidence of a reload. A renewed tserver
+certificate is copied into place only at pod start (the chart's
+`certmanager-init` container). The CronJob `yb-cert-rollout` that
+`yugabyte-tls.sh` installs beside the chart (`YB_CERT_ROLLOUT_SCHEDULE`, hourly
+by default; `YB_CERT_ROLLOUT=0` to skip it) compares each Certificate's
+`notBefore` with its pods' start time and restarts the StatefulSet whose
+certificate is newer than its pods, masters before tservers. To do it by hand,
+or to force a renewal:
 
 ```bash
 cmctl renew -n "$NS" yb-tserver-yugabyte-tls-cert yb-master-yugabyte-tls-cert   # or wait for renewBefore
-kubectl -n "$NS" rollout restart statefulset yb-tserver yb-master
+kubectl -n "$NS" create job --from=cronjob/yb-cert-rollout yb-cert-rollout-now  # or: rollout restart statefulset yb-master yb-tserver
 ```
 
 Check the serial the server presents against the Secret afterwards:
@@ -98,15 +104,48 @@ the last leaf has moved.
    `amp-root-ca` renew), then re-run `deploy/tls/trust-root.sh`: a root not yet in
    `amp-ca-roots` is appended, never replaced. With a BYO issuer, re-run it with
    `TLS_CA_FILE` set to a PEM holding both roots. trust-manager rewrites
-   `amp-ca-bundle` everywhere within seconds.
+   `amp-ca-bundle` everywhere within seconds. The **endpoints** read it live.
+   The **controller does not**: `installClientCertReload` replaces only
+   `GetClientCertificate`, while its trust store is the `RootCAs` pgx built
+   once from `sslrootcert` at `ParseConfig`, and nothing re-reads it. The
+   database does not either: a chart universe trusts exactly the CA
+   in its leaf Secret's `ca.crt`, which cert-manager sets to the certificate
+   that signed the leaf (never a bundle, even when the issuer Secret carries
+   one). It cannot trust both roots at once, so step 3 is a cut-over rather
+   than a drain.
 2. **Repoint the issuer.** `kubectl edit clusterissuer amp-ca` → `spec.ca.secretName`
    to the new root's Secret (or point the BYO issuer at its new CA).
-3. **Renew every leaf.** `cmctl renew -n "$NS" --all`, then the rolling restart
-   above for the database. Endpoints and the controller pick the new leaves up
-   on their own.
+3. **Renew every leaf, then roll the database.** `cmctl renew -n "$NS" --all`
+   in the amp and database namespaces, then
+   `kubectl -n "$NS" create job --from=cronjob/yb-cert-rollout yb-cert-rollout-now`
+   rather than waiting for the hourly run. From the moment a tserver restarts
+   on the new root it refuses new handshakes from a client still presenting an
+   old-root leaf; established connections are unaffected, and each endpoint
+   presents its renewed leaf within the 60s poll plus one reconnect. Expect a
+   minute or two of connection retries in the daemon logs, not an outage for
+   the endpoints: a compute keeps its pooled connections throughout.
+
+   **Restart the controller here.** Its leaf reloads but its trust store does
+   not (step 1), so once the tservers serve new-root leaves every fresh
+   controller connection fails verification — and because the pool sets
+   `MaxConnLifetime`, the pooled ones recycle into that failure rather than
+   riding it out:
+
+   ```bash
+   kubectl -n "$NS" rollout restart deploy/yb-amp-controller
+   ```
 4. **Remove the old root.** Edit `amp-ca-roots` down to the new root and re-apply
-   the same Bundle (trust-manager syncs). Connections established under the old
-   chain stay up until they recycle, then are refused.
+   the same Bundle (trust-manager syncs). Connections
+   established under the old chain stay up until they recycle, then are refused.
+5. **Re-run `deploy/tls/yugabyte-tls.sh`.** The chart holds the bundle in its own
+   `tls.rootCA.cert` value, which none of the steps above touch, so until it is
+   re-rendered a later `helm upgrade` of the database would reinstate the
+   pre-rotation roots.
+
+`features/amp_tls_ca_rotation` in the QA framework rehearses steps 1 to 3 against
+a trust root the run owns (`functional.tls_rotation.enabled=true`, plus an
+`env.ampstack.tls.issuer_name` other than the shared `amp-ca`); see
+[`../docs/qa-framework/architecture.md`](../docs/qa-framework/architecture.md).
 
 ## Bring your own cert-manager or issuer
 

@@ -249,7 +249,11 @@ The controller then gets a cert-manager certificate of its own (chart values
 `tls.*`) and logs in with it, and renders one into every endpoint
 (`controller.endpoint.ybTlsMode=verify-full`), which connects as `YB_STORAGE_ROLE`.
 Endpoints that predate a TLS change are brought onto it with
-`POST /api/v1/endpoint-rerenders`.
+`POST /api/v1/endpoint-rerenders`. Renewed certificates are picked up live by the
+controller and the endpoints; the database copies its files at pod start, so
+`yugabyte-tls.sh` also installs the `yb-cert-rollout` CronJob
+(`YB_CERT_ROLLOUT_SCHEDULE`, `YB_CERT_ROLLOUT=0` to skip) that restarts a
+StatefulSet whose certificate is newer than its pods.
 
 `TLS_PERMISSIVE=1` (the default) keeps plaintext accepted beside TLS; once
 `pg_stat_ssl` shows every amp connection on a certificate, redeploy with

@@ -22,6 +22,11 @@
 #   YB_RELEASE         helm release name (yugabyte). With the chart's default
 #                      naming the pods are yb-master-0 / yb-tserver-0 and the
 #                      tserver pod FQDN is yb-tserver-0.yb-tservers.<NS>.svc.cluster.local
+#   YB_CERT_ROLLOUT    1 (default) installs the yb-cert-rollout CronJob, which
+#                      restarts a StatefulSet whose certificate was renewed after
+#                      its pods started (the chart copies certificates at pod
+#                      start only); 0 skips it
+#   YB_CERT_ROLLOUT_SCHEDULE  its cron schedule (17 * * * *)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +42,9 @@ TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-}"
 TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
 YB_RELEASE="${YB_RELEASE:-yugabyte}"
 YB_FQDN="yb-tserver-0.yb-tservers.${NS}.svc.cluster.local"
+YB_CERT_ROLLOUT="${YB_CERT_ROLLOUT:-1}"
+YB_CERT_ROLLOUT_IMAGE="${YB_CERT_ROLLOUT_IMAGE:-alpine/k8s:1.33.4}"
+YB_CERT_ROLLOUT_SCHEDULE="${YB_CERT_ROLLOUT_SCHEDULE:-17 * * * *}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -130,6 +138,139 @@ YB_HELM_ARGS=(upgrade --install "${YB_RELEASE}" yugabytedb/yugabyte --version "$
 [ -n "${YB_CHART_IMAGE_TAG}" ] && YB_HELM_ARGS+=(--set "Image.tag=${YB_CHART_IMAGE_TAG}")
 echo ">> helm ${YB_HELM_ARGS[*]}"
 helm "${YB_HELM_ARGS[@]}"
+# helm --wait returns while a gflag change is still rolling the pods; the role
+# step below needs a tserver that answers.
+kubectl -n "${NS}" rollout status statefulset/yb-master --timeout=20m
+kubectl -n "${NS}" rollout status statefulset/yb-tserver --timeout=20m
+# Both halves are needed: the rollout wait proves the pods are Ready, this
+# proves the SQL port is listening, which lags pod-Ready. Without it the
+# CREATE DATABASE below hits `connection refused` under `set -e` and takes the
+# whole deploy with it.
+say "waiting for YSQL"
+# By certificate, like every other admin query here: the HBA this script installs
+# matches an SSL connection on `hostssl ... cert` and stops there, so a plaintext
+# or cert-less probe is refused even in permissive mode.
+ysql_ok() {
+  kubectl -n "${NS}" exec -i yb-tserver-0 -- bash -s -- "${YB_FQDN}" <<'REMOTE' >/dev/null 2>&1
+set -euo pipefail
+H="$1"
+YSQLSH="$(command -v ysqlsh || echo /home/yugabyte/tserver/bin/ysqlsh)"
+CONN="host=$H port=5433 user=yugabyte dbname=yugabyte sslmode=verify-full sslrootcert=/root/.yugabytedb/root.crt sslcert=/root/.yugabytedb/yugabytedb.crt sslkey=/root/.yugabytedb/yugabytedb.key"
+"$YSQLSH" "$CONN" -tAc "select 1"
+REMOTE
+}
+ysql_ready=0
+for _ in $(seq 1 60); do
+  if ysql_ok; then
+    ysql_ready=1
+    break
+  fi
+  sleep 5
+done
+[ "${ysql_ready}" = "1" ] || die "YSQL never came up on yb-tserver-0 after the rollout"
+
+if [ "${YB_CERT_ROLLOUT}" = "1" ]; then
+  say "certificate rollout CronJob (${YB_CERT_ROLLOUT_SCHEDULE})"
+  # A renewed Certificate's notBefore is later than the pods that still carry
+  # the old files, which is the whole test. Masters before tservers, each
+  # rollout waited out, so a renewal of both never restarts them together.
+  kubectl -n "${NS}" apply -f - <<YAML
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: yb-cert-rollout
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: yb-cert-rollout
+rules:
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: yb-cert-rollout
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: yb-cert-rollout
+subjects:
+  - kind: ServiceAccount
+    name: yb-cert-rollout
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: yb-cert-rollout
+spec:
+  schedule: "${YB_CERT_ROLLOUT_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # Past the sum of the two --timeout=30m rollout waits below, plus slack.
+      # Short of that the Job is killed mid-roll and, with backoffLimit 0, the
+      # tservers keep the old certificate until the next schedule.
+      activeDeadlineSeconds: 4200
+      template:
+        spec:
+          serviceAccountName: yb-cert-rollout
+          restartPolicy: Never
+          containers:
+            - name: rollout
+              # kubectl plus a shell. Timestamps are compared as the RFC 3339
+              # UTC strings the API returns, so no GNU date is needed.
+              #
+              # The default is a Docker Hub image, and an unauthenticated Hub
+              # pull is rate-limited — on the very renewal this Job exists to
+              # handle. There is no canonical mirror of a kubectl image in
+              # quay.io/yugabyte today; until there is, a deployment that
+              # cares should point YB_CERT_ROLLOUT_IMAGE at its own.
+              image: ${YB_CERT_ROLLOUT_IMAGE}
+              env:
+                - { name: RELEASE, value: "${YB_RELEASE}" }
+              command: ["bash", "-euo", "pipefail", "-c"]
+              args:
+                - |
+                  newest_not_before() {
+                    local newest="" nb
+                    for cert in "\$@"; do
+                      nb=\$(kubectl get certificate "\$cert" -o jsonpath='{.status.notBefore}' 2>/dev/null || true)
+                      [ -n "\$nb" ] || continue
+                      [[ "\$nb" > "\$newest" ]] && newest="\$nb"
+                    done
+                    echo "\$newest"
+                  }
+                  roll_if_stale() {
+                    local sts="\$1"; shift
+                    local nb oldest
+                    nb=\$(newest_not_before "\$@")
+                    oldest=\$(kubectl get pods -l "app=\$sts" -o jsonpath='{range .items[*]}{.status.startTime}{"\n"}{end}' | sort | head -1)
+                    if [ -z "\$nb" ] || [ -z "\$oldest" ]; then
+                      echo "\$sts: no certificate or no pods; nothing to do"; return
+                    fi
+                    if [[ ! "\$nb" > "\$oldest" ]]; then
+                      echo "\$sts: pods (started \$oldest) already carry the current certificate (\$nb)"; return
+                    fi
+                    echo "\$sts: certificate renewed (\$nb) after the pods started (\$oldest); rolling restart"
+                    kubectl rollout restart statefulset "\$sts"
+                    kubectl rollout status statefulset "\$sts" --timeout=30m
+                  }
+                  roll_if_stale yb-master "yb-master-\${RELEASE}-tls-cert"
+                  roll_if_stale yb-tserver "yb-tserver-\${RELEASE}-tls-cert" "\${RELEASE}-tls-client-cert"
+YAML
+fi
 
 # The chart mounts a CN=yugabyte client certificate into the tserver pod, so
 # admin work logs in by certificate. The storage role is a member of yugabyte

@@ -108,6 +108,16 @@ func (s *teardownStack) push(name string, fn func(context.Context) error) {
 	s.fns = append(s.fns, namedCleanup{name, fn})
 }
 
+// pushLast puts a step at the bottom of the stack, so the LIFO run reaches it
+// after everything registered before it. For teardown that other teardown
+// depends on: restoring cluster-wide trust has to happen after the deletes
+// that still talk to the database, not before them.
+func (s *teardownStack) pushLast(name string, fn func(context.Context) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fns = append([]namedCleanup{{name, fn}}, s.fns...)
+}
+
 func (s *teardownStack) run(ctx context.Context, logf func(string, ...any)) error {
 	s.mu.Lock()
 	fns := s.fns
@@ -193,6 +203,10 @@ type flow struct {
 }
 
 func (f *flow) register(name string, fn func(context.Context) error) { f.td.push(name, fn) }
+
+// registerLast is register for a step every other teardown depends on; it runs
+// after all of them.
+func (f *flow) registerLast(name string, fn func(context.Context) error) { f.td.pushLast(name, fn) }
 
 // suffix is the per-invocation unique token every resource name embeds
 // (seed + nonce; see core.T.ResourceSuffix).

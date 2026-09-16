@@ -1,6 +1,6 @@
 # ac — Certificate trust between endpoints and YugabyteDB (cert-manager)
 
-**Status:** Phases 1 to 4 of the [delivery plan](#delivery-plan) implemented; decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)), one open.
+**Status:** All five phases of the [delivery plan](#delivery-plan) implemented; decisions 1 to 5 taken 2026-09-03, 6 settled by phase 5 (see [Decisions](#decisions)). Phases 1 to 3 were verified on itest-dev (`shubin-amp-tls`, strict mode) before the rebase onto the subtask machinery.
 The operator side is [`runbooks/tls.md`](../../runbooks/tls.md).
 **Last updated:** 2026-09-08
 **Tracks:** [#1114](https://github.com/yugabyte/meko/issues/1114)
@@ -386,20 +386,29 @@ applies it only at pod start. Options, in order of preference:
 ### CA rotation: rare, staged, operator-driven
 
 A new root cannot be swapped in one step because every party verifies its peer against
-`ca.crt`. The Bundle makes the staging explicit:
+`ca.crt`. On the amp side the Bundle makes the staging explicit; the database side is
+the constraint. A chart universe's trust store is the `ca.crt` of its own leaf Secret,
+which cert-manager's CA issuer sets to the certificate that signed the leaf — a bundle
+in the issuer Secret is not propagated (checked against cert-manager 1.21) — so the
+database trusts one root at a time and its move is a cut-over:
 
 1. **Add the new root to the Bundle.** Both roots are now in `amp-ca-bundle`.
-   trust-manager rewrites the ConfigMap in every namespace; endpoint and controller
-   watchers reload their trust store; YugabyteDB receives it as `rootCA.cert` (chart) or
-   as a re-uploaded chained CA (YBA) and reloads.
+   trust-manager rewrites the ConfigMap in every namespace; the endpoint and controller
+   connectors read it on their next dial. A YBA universe takes a re-uploaded chained CA.
 2. **Point the issuer at the new CA.** Repoint `amp-ca`, or create `amp-ca-v2` and update
-   the issuer references in the controller values. Nothing breaks yet: every consumer
-   trusts both roots.
-3. **Renew every leaf.** `cmctl renew -A -l app.kubernetes.io/part-of=amp`, then the
-   YugabyteDB certificates. Endpoints pick up new leaves through the leaf-renewal path
-   with no restart; the database follows its own rotation path.
+   the issuer references in the controller values. Nothing breaks yet: every leaf is still
+   from the old root and every consumer trusts both.
+3. **Renew every leaf, then roll the database.** The endpoints and the controller reload
+   their new-root leaves within the watcher's poll; the database restarts onto its own
+   (`yb-cert-rollout`, or YBA's rolling restart) and from then on trusts the new root
+   only. Between the first tserver restart and the last client reload, a client still on
+   an old-root leaf is refused new handshakes; its established connections are not
+   affected, and the window is the 60s poll plus one reconnect.
 4. **Remove the old root.** Edit the Bundle again. Sessions established under the old
    chain stay up until they recycle, then are refused; that is correct.
+
+`features/amp_tls_ca_rotation` rehearses steps 1 to 3 end to end on a trust root the QA
+run owns.
 
 The YSQL password is not rotated by this design because it no longer exists on endpoint
 pods. Roles that still use passwords (operators, migration tooling) keep their existing
@@ -516,8 +525,11 @@ against a locally issued CA without waiting for the deployment work.
    cert-manager's expiry metrics and `yb_client_cert_not_after_seconds` is left to the
    monitoring stack.
 5. **Database-side renewal and CA rotation rehearsal** (`amp/deploy`, QA framework,
-   runbook). The rollout-restart CronJob for chart universes, the CA rotation runbook,
-   and a QA scenario that rotates the root end to end on a shared stack.
+   runbook). The `yb-cert-rollout` CronJob for chart universes (restart a StatefulSet
+   whose Certificate is newer than its pods), the CA rotation runbook with the
+   single-root constraint above, `env.ampstack.tls.*` so the QA framework can stand a
+   TLS stack up, and `features/amp_tls_ca_rotation`, which rotates the root end to end on
+   a stack the run owns and restores the issuer afterwards.
 
 ## Decisions
 
@@ -553,10 +565,10 @@ cluster-scoped and usually already present. The `--enable-certificate-owner-ref`
 requirement is stated for the BYO case; if an installation cannot meet it, the
 controller deletes the Secret itself on endpoint delete.
 
-**6. Database-side renewal on chart universes — open.** Rolling restart triggered
-externally, or a chart contribution for in-place reload. Recommendation: rolling restart
-first. It is one restart per 90 days and needs no upstream change; contribute the
-sidecar when the rest is stable.
+**6. Database-side renewal on chart universes — rolling restart.** The `yb-cert-rollout`
+CronJob (`deploy/tls/yugabyte-tls.sh`) restarts a StatefulSet whose Certificate is newer
+than its pods, masters first. One restart per 90 days and no upstream change; a chart
+sidecar for in-place reload stays a possible later contribution.
 
 ## Files and docs touched
 

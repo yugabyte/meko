@@ -217,6 +217,18 @@ env:
       password: ""
       sslmode: ""
       admin_host_ports: ""
+    # tls: the controller and every endpoint authenticate to the backing with
+    # cert-manager client certificates from issuer_name (the trust root
+    # deploy/tls/trust-root.sh stands up; ca_configmap is its bundle). Needs an
+    # external backing that accepts them (apps.ybk8s.tls.enabled). Endpoints
+    # connect as storage_role, the CN of their certificate. Off by default.
+    tls:
+      enabled: false
+      issuer_kind: "ClusterIssuer"
+      issuer_name: "amp-ca"
+      issuer_group: "cert-manager.io"
+      ca_configmap: "amp-ca-bundle"
+      storage_role: "amp_storage"
     # The controller's own endpoint deploy budget (AMP_DEPLOY_TIMEOUT, helm
     # --wait). The binary default is 10m — sized for a warm single-node cluster;
     # a multi-node backing's first endpoint (node scale-up + multi-GB pull)
@@ -354,6 +366,22 @@ functional:
     base_dir: ""
     rf: 0
     ysql_port: 5433
+  # features/amp_tls_ca_rotation: rehearse a CA rotation (runbooks/tls.md) on a
+  # TLS stack (apps.ybk8s.tls + env.ampstack.tls). It adds a root to
+  # roots_configmap, repoints the configured ClusterIssuer at it, renews every
+  # leaf and rolls the database, then restores the issuer. That rewrites
+  # cluster-wide trust, so it stays off unless the run owns the issuer — and
+  # `enabled: true` is not enough on its own: the rehearsal also refuses the
+  # cluster-wide default `env.ampstack.tls.issuer_name: amp-ca`, because a
+  # ClusterIssuer is shared with every other stack in the cluster and the
+  # scheduler cannot serialise against runs it does not own. Point the run at
+  # an issuer created for it.
+  tls_rotation:
+    enabled: false
+    cert_manager_namespace: "cert-manager"
+    bootstrap_issuer: "amp-ca-bootstrap"
+    roots_configmap: "amp-ca-roots"
+    renew_timeout: "10m"
   # amp endpoint connection knobs (layer 2). Every amp compute endpoint
   # provisions this cloud_admin superuser (NOT postgres/postgres). sslmode empty
   # → apps/pg default (disable). create_spec (yba, owned): no default.

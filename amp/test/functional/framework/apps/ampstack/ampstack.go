@@ -44,6 +44,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"os/exec"
 	"slices"
@@ -199,6 +200,26 @@ type Backing struct {
 	KubePod string
 }
 
+// TLS is the chart's `tls.*` block plus the endpoint TLS mode: the controller
+// gets a Certificate (CN = the backing user) and the CA bundle mounted, and
+// renders one (CN = StorageRole) into every endpoint. The issuer and the bundle
+// ConfigMap are the trust root deploy/tls/trust-root.sh stands up.
+type TLS struct {
+	Enabled           bool
+	IssuerKind        string // "" → ClusterIssuer
+	IssuerName        string // "" → amp-ca
+	IssuerGroup       string // "" → cert-manager.io
+	CABundleConfigMap string // "" → amp-ca-bundle
+	StorageRole       string // the role endpoints connect as; "" → amp_storage
+}
+
+// Mounted by the controller chart when tls.enabled; the DSN names them.
+const (
+	tlsCAPath   = "/etc/amp/tls/ca/ca.crt"
+	tlsCertPath = "/etc/amp/tls/client/tls.crt"
+	tlsKeyPath  = "/etc/amp/tls/client/tls.key"
+)
+
 // Config configures a control-plane stack. Namespace is required; a few fields
 // (Context, images, storage class, ECR registry) default sensibly and the rest
 // carry the deploy-script defaults.
@@ -251,6 +272,10 @@ type Config struct {
 	// chart's controller.endpoint.nodeSelector, which the controller forwards as
 	// AMP_DEPLOY_NODE_SELECTOR.
 	EndpointNodeSelector string
+	// TLS puts the controller and every endpoint on cert-manager client
+	// certificates against an external backing that demands them (a ybk8s
+	// deploy with apps.ybk8s.tls.enabled). Off by default.
+	TLS TLS
 
 	// DeployTimeout is the controller's own endpoint helm --wait budget
 	// (AMP_DEPLOY_TIMEOUT). Empty = the binary default (10m), which a multi-node
@@ -412,6 +437,14 @@ func FromConfig(get Getter) Config {
 			Password:       get.GetString("env.ampstack.backing.password", ""),
 			SSLMode:        get.GetString("env.ampstack.backing.sslmode", ""),
 			AdminHostPorts: get.GetString("env.ampstack.backing.admin_host_ports", ""),
+		},
+		TLS: TLS{
+			Enabled:           get.GetBool("env.ampstack.tls.enabled", false),
+			IssuerKind:        get.GetString("env.ampstack.tls.issuer_kind", "ClusterIssuer"),
+			IssuerName:        get.GetString("env.ampstack.tls.issuer_name", "amp-ca"),
+			IssuerGroup:       get.GetString("env.ampstack.tls.issuer_group", "cert-manager.io"),
+			CABundleConfigMap: get.GetString("env.ampstack.tls.ca_configmap", "amp-ca-bundle"),
+			StorageRole:       get.GetString("env.ampstack.tls.storage_role", "amp_storage"),
 		},
 		DeployTimeout:             get.GetString("env.ampstack.deploy_timeout", "20m"),
 		EndpointNodeSelector:      get.GetString("env.ampstack.endpoint_node_selector", ""),
@@ -1234,7 +1267,7 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 		"controller.image.tag":                 ctrlTag,
 		"controller.endpoint.image.repository": epRepo,
 		"controller.endpoint.image.tag":        epTag,
-		"controller.endpoint.ybUser":           a.backingUser(),
+		"controller.endpoint.ybUser":           a.endpointUser(),
 		"controller.endpoint.ybDbname":         a.storageDBName(),
 		"controller.endpoint.service.type":     a.cfg.EndpointServiceType,
 		"controller.endpoint.storageClass":     a.cfg.StorageClass,
@@ -1257,6 +1290,7 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 		sets["ui.image.repository"] = r
 		sets["ui.image.tag"] = t
 	}
+	maps.Copy(sets, a.tlsHelmSets())
 
 	argv := []string{"helm", "template", a.cfg.HelmRelease, a.cfg.ControllerChart, "--namespace", a.cfg.Namespace}
 	if a.cfg.Context != "" {
@@ -1345,10 +1379,52 @@ func (a *App) adminHostPorts() string {
 // nothing for them. The two-minute control-plane stall in #961 was a pool
 // holding dead sockets, and is fixed controller-side.
 func (a *App) dbURL() string {
+	if a.cfg.TLS.Enabled {
+		// The controller authenticates with the certificate the chart mounts;
+		// no password, whatever the backing block says. The host list still
+		// depends on which backing this is: Backing.HostPorts is empty on the
+		// built-in path, and an empty list here would produce a DSN with no
+		// host at all rather than falling through to the ybFQDN form.
+		hosts := hostPortList(a.cfg.Backing.HostPorts)
+		if !a.externalBacking() {
+			hosts = fmt.Sprintf("%s:5433", a.ybFQDN())
+		}
+		return fmt.Sprintf("postgres://%s@%s/%s?sslmode=verify-full&sslrootcert=%s&sslcert=%s&sslkey=%s",
+			a.backingUser(), hosts, a.storageDBName(), tlsCAPath, tlsCertPath, tlsKeyPath)
+	}
 	if a.externalBacking() {
 		return backingDSN(hostPortList(a.cfg.Backing.HostPorts), a.backingUser(), a.cfg.Backing.Password, a.storageDBName(), orDefault(a.cfg.Backing.SSLMode, DefaultBackingSSLMode))
 	}
 	return fmt.Sprintf("postgres://%s@%s:5433/%s?sslmode=%s", DefaultBackingUser, a.ybFQDN(), a.cfg.DBName, DefaultBackingSSLMode)
+}
+
+// endpointUser is the YSQL role endpoints connect as: the storage role under
+// TLS (its certificate's CN), else the backing user.
+func (a *App) endpointUser() string {
+	if a.cfg.TLS.Enabled {
+		return orDefault(a.cfg.TLS.StorageRole, "amp_storage")
+	}
+	return a.backingUser()
+}
+
+// tlsHelmSets is the controller chart's `tls.*` block and the endpoint TLS
+// mode; empty when TLS is off.
+func (a *App) tlsHelmSets() map[string]string {
+	if !a.cfg.TLS.Enabled {
+		return nil
+	}
+	return map[string]string{
+		"tls.enabled":           "true",
+		"tls.issuerRef.kind":    orDefault(a.cfg.TLS.IssuerKind, "ClusterIssuer"),
+		"tls.issuerRef.name":    orDefault(a.cfg.TLS.IssuerName, "amp-ca"),
+		"tls.issuerRef.group":   orDefault(a.cfg.TLS.IssuerGroup, "cert-manager.io"),
+		"tls.caBundleConfigMap": orDefault(a.cfg.TLS.CABundleConfigMap, "amp-ca-bundle"),
+		// The CN of the controller's certificate has to be the role its DSN
+		// logs in as: the HBA this stack installs authenticates by CN, so a
+		// configured backing user with the chart's default CN cannot connect.
+		"tls.controllerUser":            a.backingUser(),
+		"controller.endpoint.ybTlsMode": "verify-full",
+	}
 }
 
 // backingDescribe is a one-line human summary of the backing store.

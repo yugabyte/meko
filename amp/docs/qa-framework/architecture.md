@@ -698,9 +698,18 @@ no YBA creds don't attempt a doomed provision.
 Both k8s backings can be stood up with encryption in transit: `apps.ybk8s.tls.*`
 drives the chart's cert-manager mode, `apps.yba.k8s.tls.*` plus
 `apps.yba.k8s.cert_manager_issuer_*` the universe's K8S cert-manager certificate.
-Both are off by default and, when on, keep plaintext admitted (`permissive`)
-because the amp side does not present certificates yet; the design is
-`controller/architecture/ac-endpoint-tls.md`.
+`env.ampstack.tls.*` then puts the controller and every endpoint on client
+certificates from the same issuer (`tls.*` chart values, endpoint TLS mode
+`verify-full`, endpoints as `storage_role`). All are off by default; a TLS
+backing keeps plaintext admitted (`permissive`) until the amp side is on
+certificates. `features/amp_tls_ca_rotation` rehearses the CA rotation in
+`runbooks/tls.md` and is gated on `functional.tls_rotation.enabled`, because it
+rewrites the configured issuer's root and roots ConfigMap: run it only against a
+trust root the run owns. It additionally refuses the shared default
+`env.ampstack.tls.issuer_name: amp-ca` — a ClusterIssuer is cluster-scoped, and
+`core.Exclusive` serialises only against work in the same run, so another stack
+would go on issuing from the rotation root and be left holding leaves signed by
+a root the teardown deletes. The design is `controller/architecture/ac-endpoint-tls.md`.
 
 ### 5.1 Shared environment — many co-tenant tests on one control plane (`SHARED`)
 **Only non-destructive, non-perf tests co-tenant.** Anything that kills

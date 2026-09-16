@@ -878,6 +878,34 @@ func TestDeployExternalBackingSkipsYugabytedAndEnsuresDB(t *testing.T) {
 	}
 }
 
+// TLS on: the controller chart gets the tls.* block and the endpoint TLS mode,
+// endpoints connect as the storage role, and the controller's DSN names the
+// mounted certificate instead of a password.
+func TestDeployTLSSetsChartValuesAndCertificateDSN(t *testing.T) {
+	rec := newRecorder()
+	ens := &ensureRec{}
+	a := externalApp(Config{HelmShim: false, TLS: TLS{Enabled: true, IssuerName: "qa-ca"}}, rec, ens)
+
+	if _, err := a.Deploy(context.Background()); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	calls := rec.snapshot()
+	for _, want := range []string{
+		"--set tls.enabled=true",
+		"--set tls.issuerRef.kind=ClusterIssuer",
+		"--set tls.issuerRef.name=qa-ca",
+		"--set tls.issuerRef.group=cert-manager.io",
+		"--set tls.caBundleConfigMap=amp-ca-bundle",
+		"--set controller.endpoint.ybTlsMode=verify-full",
+		"--set controller.endpoint.ybUser=amp_storage",
+		`--set-string controller.databaseUrl=postgres://yugabyte@yb-0.db.example.com:5433\,yb-1.db.example.com:5433\,yb-2.db.example.com:5433/yb_storage?sslmode=verify-full&sslrootcert=/etc/amp/tls/ca/ca.crt&sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key`,
+	} {
+		if !hasCall(calls, want) {
+			t.Errorf("helm template must carry %q\ncalls: %v", want, calls)
+		}
+	}
+}
+
 func TestDeployExternalBackingCarriesUserPasswordSSL(t *testing.T) {
 	rec := newRecorder()
 	ens := &ensureRec{}
