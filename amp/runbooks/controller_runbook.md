@@ -46,15 +46,33 @@ The task framework captures the failure verbatim. Get it before touching `kubect
 curl -s "$BASE/tasks?limit=50&kind=create_endpoint" | jq -r '.tasks[] | select(.status=="failed") | .error' | tail -1
 ```
 
-A deploy failure looks like:
-`deploy endpoint: helm upgrade --install yb-ep-<id> … --wait --timeout 10m0s: exit status 1: …`.
-That tells you the failure is in the **Helm deploy step**, almost always because the endpoint pod
-never became `Ready` (so `helm --wait` gave up). The `10m0s` is `--deploy-timeout`'s default and moves
-with it; since #960 it also sets the pod's startupProbe budget and the Deployment's
-`progressDeadlineSeconds`, so a longer timeout really does buy the pod more time rather than just the
-caller. It does **not** tell you *why* the pod is unhealthy —
-that's the next layers. (A `helm … --wait` that fails fast with `Error: services "…" not found` is the
-same root cause: the release is rolling back because the pod isn't coming up.)
+Since #635 that error carries the **pod's own reason**, so in the common cases it is the whole
+answer and steps 2-3 are unnecessary:
+
+```
+deploy endpoint: pod yb-ep-<id>-7d9 could not be scheduled: 0/14 nodes are available:
+1 node(s) were unschedulable, 13 Insufficient ephemeral-storage.: release yb-ep-<id> did not
+become ready within 10m0s: helm upgrade --install yb-ep-<id>: exit status 1:
+Error: context deadline exceeded
+```
+
+The leading clause is one of: the scheduler's message, an `ImagePullBackOff` and its image, a
+container's exit code, or the pod's recent events. A scheduling failure also carries a
+`; recent events: …` tail, which is where cluster-autoscaler's `NotTriggerScaleUp` reason lands —
+"the cluster could not add a node", as distinct from "no existing node fits". The `10m0s` is
+`--deploy-timeout`'s default and moves with it; since #960 it also sets the pod's startupProbe budget
+and the Deployment's `progressDeadlineSeconds`, so a longer timeout really does buy the pod more time
+rather than just the caller.
+
+You still need the layers below when the leading clause names no cause — `is running but not ready`
+(usually a slow or wedged supervisor: go to step 3 for its log), `is Pending with no scheduling
+decision yet`, `reports no failure`, or a `could not be scheduled` with no detail after it. Any of
+these may carry a `; recent events: …` tail, which is often the answer on its own. A different
+sentence, `its state could not be read`, means the pod was already gone — as does the enrichment
+being absent entirely, which happens when helm failed for a reason other than the wait expiring
+(a chart render refusal, say, whose own message is then the whole story). (A `helm … --wait` that
+fails fast with `Error: services "…" not found` is the same root cause: the release is rolling back
+because the pod isn't coming up.)
 
 ### 2. Classify the pod state — crash-loop vs. not-ready vs. pending
 
@@ -508,7 +526,8 @@ endpoint moved; re-issue the upgrade once a worker is running.
 helm render error:
 
 ```
-deploy endpoint: helm deploy yb-ep-<id>: ... exit status 1: Error: execution error at
+deploy endpoint: helm deploy yb-ep-<id>: helm upgrade --install yb-ep-<id>: exit status 1:
+Error: execution error at
 (yb-amp-endpoint/templates/service-lb.yaml:28:4): service.connectivity=nlb_internal
 needs service.cloud to be one of aws, gcp, azure (got "") — without it the Service
 would default to an internet-facing load balancer

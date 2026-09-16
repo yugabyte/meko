@@ -449,10 +449,12 @@ rather than assumed:
   roll fails almost immediately with the registry's own error. Fail-fast buys little
   here.
 - **Kubernetes does not.** The pod is accepted and then sits in `ImagePullBackOff`
-  until helm `--wait` times out — minutes, per endpoint, surfacing as the bare
-  `context deadline exceeded` of [meko#635](https://github.com/yugabyte/meko/issues/635).
-  This is the case fail-fast exists for, and it is **unverified**: no local
-  environment can currently run a Kubernetes endpoint (see below).
+  until helm `--wait` times out — minutes, per endpoint. Since
+  [meko#635](https://github.com/yugabyte/meko/issues/635) the task error at least
+  names the image and the pull error rather than only `context deadline exceeded`,
+  but the minutes are still spent, which is what fail-fast exists to save. It is
+  **unverified**: no local environment can currently run a Kubernetes endpoint
+  (see below).
 
 So the pairing holds where it matters, but the argument is narrower than "a typo
 costs minutes" — on the driver most local development uses, it does not. If the probe

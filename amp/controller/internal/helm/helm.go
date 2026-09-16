@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -65,8 +66,30 @@ func (c *Client) UpgradeInstall(ctx context.Context, r Release) error {
 		return fmt.Errorf("render helm values: %w", err)
 	}
 	defer cleanup()
-	_, err = c.run(ctx, upgradeArgs(r, valuesPath))
-	return err
+	if _, err := c.run(ctx, "upgrade --install "+r.Name, upgradeArgs(r, valuesPath)); err != nil {
+		return waitTimeout(r, err)
+	}
+	return nil
+}
+
+// ErrWaitTimeout marks the one failure where the workload, not helm, holds the
+// reason: --wait ran out with the release still not ready. Callers enrich on
+// exactly this (errors.Is) — every other way an upgrade fails (a chart render
+// refusal, an unwritable values file, a cancelled context) has its cause in
+// helm's own message and no pod to read.
+var ErrWaitTimeout = errors.New("helm --wait expired")
+
+// waitTimeout renames helm's timeout for what it is and tags it. When --wait
+// runs out helm exits with "Error: context deadline exceeded", which names Go's
+// plumbing rather than the deploy and reads — to an operator, and to an AI
+// handed the task row — as a request-context bug somewhere else entirely
+// (#635). The stderr is matched rather than the exit status because only that
+// distinguishes the timeout from every other way helm exits 1.
+func waitTimeout(r Release, err error) error {
+	if !r.Wait || r.Timeout == 0 || !strings.Contains(err.Error(), "context deadline exceeded") {
+		return err
+	}
+	return fmt.Errorf("release %s did not become ready within %s (%w): %w", r.Name, r.Timeout, ErrWaitTimeout, err)
 }
 
 // recoverPending uninstalls a release stuck in a pending state (the residue of
@@ -74,7 +97,7 @@ func (c *Client) UpgradeInstall(ctx context.Context, r Release) error {
 // UpgradeInstall can proceed. A release that does not exist — or whose status
 // is otherwise unavailable — is left for the install to handle.
 func (c *Client) recoverPending(ctx context.Context, release, namespace string) error {
-	out, err := c.run(ctx, []string{"status", release, "--namespace", namespace, "--output", "json"})
+	out, err := c.run(ctx, "status "+release, []string{"status", release, "--namespace", namespace, "--output", "json"})
 	if err != nil {
 		return nil // release absent or status unavailable; a fresh install proceeds
 	}
@@ -107,7 +130,7 @@ func (c *Client) Uninstall(ctx context.Context, release, namespace string, wait 
 	if timeout > 0 {
 		args = append(args, "--timeout", timeout.String())
 	}
-	_, err := c.run(ctx, args)
+	_, err := c.run(ctx, "uninstall "+release, args)
 	return err
 }
 
@@ -128,7 +151,13 @@ func upgradeArgs(r Release, valuesPath string) []string {
 	return args
 }
 
-func (c *Client) run(ctx context.Context, args []string) (string, error) {
+// run executes helm and, on failure, reports `what` plus helm's stderr. `what`
+// is the operation in the operator's terms ("upgrade --install yb-ep-<id>"),
+// NOT the argv: the full command echoes the chart path and a temp values file,
+// controller internals nobody reading a failed task can act on, which crowd out
+// the part of the error that matters (#635). The argv stays on the debug log
+// below, where a controller developer can find it.
+func (c *Client) run(ctx context.Context, what string, args []string) (string, error) {
 	cmd := osexec.CommandContext(ctx, c.bin, args...)
 	if c.kubeconfig != "" {
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+c.kubeconfig)
@@ -141,7 +170,7 @@ func (c *Client) run(ctx context.Context, args []string) (string, error) {
 	}
 	if err := cmd.Run(); err != nil {
 		return stdout.String(), fmt.Errorf("helm %s: %w: %s",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+			what, err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
 }

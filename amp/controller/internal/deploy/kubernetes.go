@@ -243,15 +243,28 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	// AMP_DEPLOY_NAMESPACE to .Release.Namespace), so it always exists — no
 	// --create-namespace, which would otherwise demand cluster-scoped
 	// namespaces:create the controller need not hold on a shared cluster.
-	if err := k.helm.UpgradeInstall(ctx, helm.Release{
+	//
+	// The watcher runs for the length of the wait: helm removes the pod when it
+	// gives up, and the pod is the only thing that knows why the deploy failed.
+	watch := k.watchDeploy(ctx, release)
+	err := k.helm.UpgradeInstall(ctx, helm.Release{
 		Name:      release,
 		Chart:     k.cfg.ChartPath,
 		Namespace: k.cfg.Namespace,
 		Values:    vals,
 		Wait:      true,
 		Timeout:   k.cfg.Timeout,
-	}); err != nil {
-		return Endpoint{}, fmt.Errorf("helm deploy %s: %w", release, err)
+	})
+	watch.close()
+	if err != nil {
+		// Only a wait expiry is the workload's failure to explain. Every other way
+		// helm fails — a chart render refusal, an unwritable values file, a
+		// cancelled context — already carries its cause, and on most of them no pod
+		// exists at all, so a pod diagnosis in front would be noise or a lie.
+		if !errors.Is(err, helm.ErrWaitTimeout) {
+			return Endpoint{}, fmt.Errorf("helm deploy %s: %w", release, err)
+		}
+		return Endpoint{}, k.explainDeployFailure(ctx, release, watch, err)
 	}
 	// Resolve the client address by Service type: a LoadBalancer's external LB IP,
 	// a NodePort's "<nodeIP>:<nodePort>", or (ClusterIP) the pod IP — a demo

@@ -289,14 +289,17 @@ func refusalVerdict(task controller.Task, err error, took, bound time.Duration) 
 	if strings.TrimSpace(msg) == "" {
 		return fmt.Errorf("the create that ended the ladder recorded no reason at all (it took %s against the %s bound)", took.Round(time.Second), bound)
 	}
-	// Before the markers: a helm deploy out of its own 35m clock says "context deadline exceeded", which several of them would otherwise match.
-	if strings.Contains(low, "context deadline exceeded") || strings.Contains(low, "timeout") {
-		return fmt.Errorf("the create died on a deadline instead of reporting a reason: %q", strings.TrimSpace(msg))
-	}
+	// Markers first: since meko#635 a deploy that times out on an unschedulable pod
+	// leads with the scheduler's reason and still carries helm's "context deadline
+	// exceeded" at the tail, so checking the deadline first would report a ladder
+	// end that DID name its reason as one that did not.
 	for _, m := range schedulingMarkers {
 		if strings.Contains(low, m) {
 			return nil
 		}
+	}
+	if strings.Contains(low, "context deadline exceeded") || strings.Contains(low, "timeout") {
+		return fmt.Errorf("the create died on a deadline instead of reporting a reason: %q", strings.TrimSpace(msg))
 	}
 	return fmt.Errorf("the create failed for a reason that names neither scheduling nor a quota: %q", strings.TrimSpace(msg))
 }

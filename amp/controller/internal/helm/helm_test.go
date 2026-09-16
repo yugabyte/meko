@@ -2,8 +2,10 @@ package helm
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -148,5 +150,32 @@ func TestWriteValuesStructRoundTrip(t *testing.T) {
 	}
 	if got != in {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", got, in)
+	}
+}
+
+// A --wait deploy that runs out of time must say so in its own terms, not in
+// Go's (#635) — the same exit status from any other cause is left alone.
+func TestWaitTimeout(t *testing.T) {
+	waiting := Release{Name: "ep-1", Wait: true, Timeout: 10 * time.Minute}
+	timedOut := errors.New("helm upgrade --install ep-1: exit status 1: Error: context deadline exceeded")
+
+	got := waitTimeout(waiting, timedOut).Error()
+	if !strings.Contains(got, "did not become ready within 10m0s") {
+		t.Errorf("waitTimeout() = %q, want it to name the wait budget", got)
+	}
+	if !strings.Contains(got, "context deadline exceeded") {
+		t.Errorf("waitTimeout() = %q, want helm's own text kept", got)
+	}
+	if !errors.Is(waitTimeout(waiting, timedOut), timedOut) {
+		t.Error("waitTimeout() dropped the wrapped error")
+	}
+
+	other := errors.New("helm upgrade --install ep-1: exit status 1: Error: chart not found")
+	if got := waitTimeout(waiting, other); got != other {
+		t.Errorf("waitTimeout() rewrote a non-timeout failure: %v", got)
+	}
+	noWait := Release{Name: "ep-1"}
+	if got := waitTimeout(noWait, timedOut); got != timedOut {
+		t.Errorf("waitTimeout() rewrote a failure on a release that did not --wait: %v", got)
 	}
 }

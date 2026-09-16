@@ -3,12 +3,10 @@
 // the controller owns these rows; we only browse them here.
 
 import { useState } from "react";
+import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { Button } from "@/components/ui/button";
 import {
   Pagination,
   PaginationContent,
@@ -38,6 +36,7 @@ import {
   PageHeader,
 } from "@/components/data/Page";
 import { useTasks } from "@/lib/api/queries";
+import { dataBranchingMessages as msg } from "@/lib/messages";
 import type { Task, TaskStatus } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
 
@@ -240,18 +239,72 @@ function StatusBadge({ status }: { status: TaskStatus }) {
   return <Badge className={`${STATUS_CLASS[status]} capitalize`}>{status}</Badge>;
 }
 
-/** Failed-task error: truncated inline, full text on hover. */
-function ErrorCell({ error }: { error: string }) {
+/** Failed-task error: one truncated line, click to expand to the full text,
+ *  with a copy button.
+ *
+ *  It used to reveal the full error only in a hover card, which put the one
+ *  thing an operator needs to paste into a ticket or a Slack thread somewhere it
+ *  could not be selected — the card closes the moment the pointer leaves the
+ *  trigger (#635). Expanded, the text is ordinary selectable DOM; the copy
+ *  button is there so it is one action either way. */
+export function ErrorCell({ error }: { error: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  function copy() {
+    if (!navigator.clipboard) {
+      toast.error(msg.clipboardError);
+      return;
+    }
+    navigator.clipboard
+      .writeText(error)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => {
+        toast.error(msg.clipboardError);
+        console.error("Clipboard copy failed:", err);
+      });
+  }
+
   return (
-    <HoverCard>
-      <HoverCardTrigger asChild>
-        <span className="block max-w-xs cursor-default truncate text-destructive">
+    <div className="flex max-w-md items-start gap-1">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? "Collapse error" : "Expand error"}
+        onClick={() => setExpanded((e) => !e)}
+        className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
+      >
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5" />
+        )}
+      </button>
+      {expanded ? (
+        <p className="max-h-48 flex-1 select-text overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-destructive">
+          {error}
+        </p>
+      ) : (
+        <span
+          onClick={() => setExpanded(true)}
+          className="flex-1 cursor-pointer truncate text-destructive"
+          title="Click to expand"
+        >
           {error}
         </span>
-      </HoverCardTrigger>
-      <HoverCardContent className="w-80 text-sm">
-        <p className="break-words text-foreground">{error}</p>
-      </HoverCardContent>
-    </HoverCard>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={copy}
+        aria-label="Copy error"
+        className="h-6 shrink-0 px-1.5 text-muted-foreground"
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
+    </div>
   );
 }

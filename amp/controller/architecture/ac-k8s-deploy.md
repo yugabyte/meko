@@ -98,6 +98,44 @@ safekeeper still binding its port fails an otherwise good deploy. A failure leav
 the release installed and the endpoint row addressless, the same shape as any
 other failed deploy; the create is idempotent, so re-issuing it converges.
 
+### A failed deploy carries the pod's reason, not helm's timeout
+
+When `--wait` runs out helm says only `context deadline exceeded` — the same
+sentence for unschedulable, `ImagePullBackOff`, a crash loop and a wedged
+supervisor alike, and the reason was on the pod all along (#635). So the deployer
+reads the pod and puts its words in front of helm's: the `PodScheduled=False`
+message (where `Insufficient ephemeral-storage` and the node counts live), else a
+container's waiting reason and image, else its last exit code, else the pod's
+recent `Warning` events.
+
+It has to read **during** the wait, because helm tears the Deployment and pod
+down when it gives up and there is nothing left to read afterwards
+(`controller_runbook.md`, "A `helm --wait` pod is ephemeral"). `watchDeploy`
+therefore snapshots the pod every 15s while helm blocks and keeps the most
+specific answer; the failure path prefers a fresh read and falls back to that
+snapshot. Namespaced pods and events only — the Role already grants both, and the
+cluster-scoped node reads that would size the shortfall are deliberately not part
+of this (#584, #602).
+
+Only a **wait expiry** is enriched (`helm.ErrWaitTimeout`). Every other way an
+upgrade fails — a chart render refusal, an unwritable values file, a cancelled
+context — already carries its cause in helm's own message, and usually has no pod
+at all; leading those with a pod diagnosis would bury the real error in the tail,
+which is the position this whole mechanism exists to keep clear.
+
+Events are read only on that failure path, never on a snapshot. A pod that is
+merely still starting is inconclusive too, so consulting events per tick would put
+a namespace-wide event LIST (the `involvedObject` fieldSelector is unindexed) on
+every tick of every healthy deploy.
+
+Two details about which events count. A **scheduling** failure asks for them even
+though it is conclusive: the scheduler names the nodes it rejected, but only
+cluster-autoscaler says why no node can be *added*. And the filter is not
+Warning-only, because autoscaler records that as **Normal**
+(`NotTriggerScaleUp: … 9 exceeded quota: "cluster-wide", resources: cpu`) — the
+single line #635 was filed about, and the reason raising the deploy timeout
+20m→35m never helped.
+
 Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 --ignore-not-found --wait` then drop the row → `204`. This is the design's
 kill-before-create retire (ac-highlvl.md §4); `--wait` blocks until the
