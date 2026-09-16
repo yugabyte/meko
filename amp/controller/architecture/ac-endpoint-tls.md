@@ -1,6 +1,6 @@
 # ac — Certificate trust between endpoints and YugabyteDB (cert-manager)
 
-**Status:** Phases 1 to 3 of the [delivery plan](#delivery-plan) implemented; decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)), one open.
+**Status:** Phases 1 to 4 of the [delivery plan](#delivery-plan) implemented; decisions 1 to 5 taken 2026-09-03 (see [Decisions](#decisions)), one open.
 The operator side is [`runbooks/tls.md`](../../runbooks/tls.md).
 **Last updated:** 2026-09-08
 **Tracks:** [#1114](https://github.com/yugabyte/meko/issues/1114)
@@ -302,25 +302,41 @@ not affected by a renewal, because certificates are validated only at handshake.
 has to change is which certificate the *next* handshake uses, and today's two
 transports differ in how far they are from that:
 
-- **Thin lane, nearly free.** The `Recycling` wrapper rebuilds the client on its
-  15-minute cadence by calling `ybthin_client_create` with the same `TsClientConfig`,
-  and the shim reads the three files inside that call. A renewed leaf is therefore in
-  use within one recycle period with no code change, and old generations drain as their
-  references drop. To react promptly, the watcher calls a new `recycle_now()` on the
-  pool.
-- **YSQL lane, needs one refactor.** The pool's reopen closure captures the already-built
-  `MakeRustlsConnect`, so a recycle re-dials with the old certificate forever. The
-  connector moves behind a swappable handle (`arc_swap`) that the watcher replaces; the
-  reopen closure reads it per dial. After a swap the 15-minute recycle drains the old
-  sessions naturally, which also bounds how long old-chain sessions survive the last
-  step of a CA rotation. The supervisor's write-fence connection uses the same handle.
-- **Watcher.** One small module in `libs/utils`, modelled on the digest poller
-  compute_ctl already uses for Postgres's server certificate (`compute_tools/src/tls.rs`):
-  hash `ca.crt`, `tls.crt` and `tls.key` every 30 to 60 seconds, retry on read errors,
-  and verify the key matches the cert before announcing a change so a half-written
-  renewal is never loaded. That existing verifier handles only ECDSA P-256, which is one
-  more reason to issue endpoint certificates as ECDSA P-256. The `notify` crate is
-  already vendored if inotify turns out to be preferable to polling.
+- **Thin lane.** The `Recycling` wrapper rebuilds the client by calling
+  `ybthin_client_create` with the same `TsClientConfig`, and the shim reads the three
+  files inside that call, so a renewed leaf is in use after the next rebuild and old
+  generations drain as their references drop. `Recycling::recycle_now()` makes that
+  rebuild happen on the next use instead of at the 15-minute mark; a rebuild that fails
+  keeps the current generation and the request stands until one succeeds.
+- **YSQL lane.** The pool's reopen closure used to capture the already-built
+  `MakeRustlsConnect`, so a recycle re-dialled with the old certificate forever. It now
+  builds the connector per dial (`connect_rustls_pooled_with`), so every reconnect —
+  lifetime-driven, after a dropped connection, or forced — reads the files as they are.
+  `YsqlClient::recycle_now()` marks every slot for reopening on its next use; the same
+  cooldown as a lifetime recycle paces a reopen that fails. The supervisor's write-fence
+  connection and the pageserver's blob store go through the same constructor, so they
+  are covered without wiring.
+- **Watcher.** Each pool watches the files it was configured with, and starts doing so
+  when it is constructed, so no caller can forget to wire it. The polling is `yb_tls`,
+  a crate of its own because the two lane crates are independent of each other: every
+  60 seconds (`YB_TLS_RELOAD_POLL_SECS`) it compares contents, and a file that cannot
+  be read keeps its last contents rather than counting as a change. Each lane supplies
+  the reaction — `ysql_client::tls_reload` bumps the reload generation,
+  `yb_thin_client::tls_watch` calls `Recycling::recycle_now` — and holds its pool
+  weakly, which is also how it ends the watch when the pool is dropped. The YSQL side
+  additionally re-inspects the certificate, moves the `notAfter` gauge and logs the new
+  serial.
+  cert-manager writes `tls.crt` and `tls.key` into one Secret and the kubelet swaps the
+  volume atomically, so a poll never sees one without the other — which is why the
+  watcher compares each file on its own and does no cross-file check. That argument
+  does not extend to `sslrootcert`: it comes from the trust-manager ConfigMap, a
+  separate volume, so a CA rotation can be seen before or after the leaf that chains to
+  it. Either ordering re-handshakes, and a mismatched pair fails that handshake and
+  leaves the old connection in place, which is the same outcome as a bad mount.
+- **Reload counter.** Each daemon reports `yb_tls.reloads` on `/v1/status`: how many
+  times that process saw a watched file change and asked its pools to reconnect. The
+  `client_cert` beside it is re-read from disk per request, so it moves when
+  cert-manager writes the file; only the counter says a watcher acted.
 - **Fallback lever.** The supervisor's `POST /v1/settings/reload` re-renders the daemon
   TOML files and restarts the daemons whose files changed. It is the wrong default for
   rotation because it restarts the pageserver and safekeeper, but it remains the escape
@@ -343,7 +359,7 @@ sequenceDiagram
   CM->>S: new tls.crt and tls.key (rotationPolicy Always)
   K->>K: periodic sync sees the Secret change
   K-->>P: atomic swap of ..data in /etc/amp/tls/client
-  W->>W: digest changed; verify key matches cert
+  W->>W: contents changed (per file; no cross-file check)
   W->>P: swap YSQL connector; recycle thin-lane pool
   P->>YB: new connections handshake with the new cert
   Note over P,YB: existing sessions keep running and drain on the 15 min recycle
@@ -491,11 +507,14 @@ against a locally issued CA without waiting for the deployment work.
    controller integration test that creates an endpoint against a TLS yugabyted and
    asserts the thin lane through the safekeeper status endpoint. `amp/runbooks/tls.md`
    landed with phase 2 and gains this phase's flags here.
-4. **Hot reload in endpoint processes** (`amp/compute`, `amp/controller`). Shared cert
-   watcher, swappable YSQL connector, `recycle_now` on the thin pool, controller
-   `GetClientCertificate`. Integration test: `cmctl renew` against a live endpoint, then
-   assert new handshakes carry the new serial and the pod never restarted. Alert on
-   cert-manager's expiry metrics and the new gauge.
+4. **Hot reload in endpoint processes** (`amp/compute`). The `yb_tls` watcher, a
+   per-dial YSQL connector with `YsqlClient::recycle_now`, and
+   `Recycling::recycle_now` on the thin pool (the controller's `GetClientCertificate`
+   landed in phase 3). Integration test `fast/tls_cert_reload`: re-issue the client
+   certificate under the running daemons, assert both report the new serial, the thin
+   lane keeps serving, and the YSQL pools reopen on it — no restart. Alerting on
+   cert-manager's expiry metrics and `yb_client_cert_not_after_seconds` is left to the
+   monitoring stack.
 5. **Database-side renewal and CA rotation rehearsal** (`amp/deploy`, QA framework,
    runbook). The rollout-restart CronJob for chart universes, the CA rotation runbook,
    and a QA scenario that rotates the root end to end on a shared stack.
@@ -546,7 +565,7 @@ sidecar when the rest is stable.
 | Trust root and installer | `amp/deploy/up.sh`, `up-gke.sh`, new `amp/deploy/tls/` manifests (bootstrap issuer, `amp-ca`, Bundle), `amp/deploy/helm/yb-amp-controller` (tls block, Certificate, mounts, RBAC) | `amp/deploy/README.md`, controller chart README, new `amp/runbooks/tls.md` |
 | YugabyteDB layer | QA: `apps/yba/universe_create.go` TLS fields, `apps/ybk8s` chart values, `ybbacking` sslmode propagation, a `tls` axis in `configs/default.yaml` | `amp/docs/qa-framework/architecture.md` section 5 |
 | Controller | `internal/config/config.go`, `internal/deploy/deploy.go`, `kubernetes.go`, `docker.go`, `cmd/controller/main.go`, `internal/db/db.go`, new re-render task in `internal/task`, `controller/local/config` mirror; endpoint chart `values.yaml`, `templates/certificate.yaml`, `configmap.yaml`, `deployment.yaml` | `ac-k8s-deploy.md` values table, endpoint chart README, `controller_runbook.md` DSN section |
-| Endpoint processes | `libs/ysql_client`, `libs/yb_thin_client` (Rust side only; the shim is unchanged), `safekeeper/src/yb_wal_storage.rs`, `pageserver/src/page_store.rs`, `endpoint_supervisor` env and render, `libs/utils` cert watcher and write fence, `tools` CLIs | `remote-storage.md`, `safekeeper.md`, `yugabyte.md`, `single-container-endpoint.md`, `startup-failures.md` section D |
+| Endpoint processes | `libs/ysql_client`, `libs/yb_thin_client` (Rust side only; the shim is unchanged), new `libs/yb_tls`, `safekeeper/src/yb_wal_storage.rs`, `pageserver/src/page_store.rs`, `endpoint_supervisor` env and render, `libs/utils` write fence, `tools` CLIs | `remote-storage.md`, `safekeeper.md`, `yugabyte.md`, `single-container-endpoint.md`, `startup-failures.md` section D |
 
 Sources verified for this note: the `yugabyte` chart 2025.2.5 templates, YBA's
 `KubernetesCommandExecutor` and `KubernetesRegionInfo`, `src/yb/rpc/secure.cc`,

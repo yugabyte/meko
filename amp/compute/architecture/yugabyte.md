@@ -236,6 +236,19 @@ When the connection block names a client certificate (`sslcert`/`sslkey`),
 expiry can be alerted on; the same files are what the thin-client lane
 presents on RPC 9100 (`YbConnConfig::thin_client_tls`).
 
+**Renewed files are picked up without a restart.** Both transports read the
+TLS files at connect, not at startup: the YSQL pool builds its rustls
+connector per connection and the shim reads the paths in `TlsOpts` on
+`TsClient::connect`. Each pool also watches those files from the moment it is
+built, so nothing has to be wired at the call site. `yb_tls` polls every 60s
+(`YB_TLS_RELOAD_POLL_SECS` overrides) and hands the rewritten paths to the
+lane: `ysql_client::tls_reload` bumps a YSQL pool's reload generation,
+`yb_thin_client::tls_watch` rebuilds a thin one's shim connection. Either way
+the reconnect is the same lazy, best-effort one as a lifetime recycle. The
+YSQL side logs the new certificate's serial and moves the `notAfter` gauge. Until then the old
+connections, authenticated at handshake, keep working — a certificate's
+expiry is checked only when it is presented.
+
 At startup each daemon resolves its hot tables' DocDB ids via a one-time
 catalog lookup over YSQL (`lookup_table_oids`), failing hard if any
 table is missing — a daemon never runs with a partially-enabled direct

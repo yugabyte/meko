@@ -47,6 +47,7 @@
 //! statement multiplexing concurrently with no extra serialization.
 
 mod metrics;
+mod tls_reload;
 
 pub use yb_tokio_postgres as tokio_postgres;
 
@@ -525,6 +526,12 @@ pub struct TlsStatus {
     /// Why `client_cert` is absent although `sslcert` is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_cert_error: Option<String>,
+    /// How many times this process has noticed a watched TLS file change and
+    /// asked its pools to reconnect. `client_cert` above is re-read from disk
+    /// per request, so it moves when cert-manager writes the file; this moves
+    /// only when a watcher acted on it.
+    #[serde(default)]
+    pub reloads: u64,
 }
 
 const CN_OID: x509_cert::der::oid::ObjectIdentifier =
@@ -719,6 +726,7 @@ impl YbConnConfig {
             sslrootcert: self.sslrootcert.clone(),
             client_cert,
             client_cert_error,
+            reloads: yb_tls::reloads(),
         }
     }
 }
@@ -1378,6 +1386,11 @@ type OpenFut = BoxFuture<'static, Result<tokio_postgres::Client>>;
 /// configured cluster + TLS mode.
 type OpenFn = Arc<dyn Fn() -> OpenFut + Send + Sync>;
 
+/// Builds the rustls connector one connection will use; see
+/// [`YsqlClient::connect_rustls_pooled_with`].
+pub type MakeTlsFn =
+    Arc<dyn Fn() -> Result<Arc<yb_postgres_rustls::MakeRustlsConnect>> + Send + Sync>;
+
 pub struct YsqlClient {
     open: OpenFn,
     /// Connection pool. One slot per parallel YSQL connection. PostgreSQL
@@ -1399,6 +1412,12 @@ pub struct YsqlClient {
     /// have no connection block to read) leaves connections unbounded, as
     /// they were before #811.
     max_lifetime: Option<Duration>,
+    /// Bumped by [`Self::recycle_now`]. A slot opened under an older value is
+    /// reconnected on its next use, which is how a renewed client certificate
+    /// reaches the pool without waiting out the lifetime. Shared with the
+    /// TLS file watcher (`tls_reload`) through a `Weak`, so the watcher stops
+    /// when the client is dropped.
+    reload_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The live connection and its per-connection prepared-statement cache.
@@ -1424,39 +1443,54 @@ struct State {
     /// attempted on this slot until then, so a cluster that is briefly
     /// unreachable isn't hammered with one reopen per call.
     recycle_after: Option<std::time::Instant>,
+    /// The [`YsqlClient::reload_generation`] this connection was opened under.
+    generation: u64,
 }
 
 impl State {
-    fn new(client: tokio_postgres::Client, max_lifetime: Option<Duration>) -> State {
+    fn new(
+        client: tokio_postgres::Client,
+        max_lifetime: Option<Duration>,
+        generation: u64,
+    ) -> State {
         State {
             client: Arc::new(client),
             prepared: HashMap::new(),
             opened_at: std::time::Instant::now(),
             lifetime: max_lifetime.map(jittered),
             recycle_after: None,
+            generation,
         }
     }
 
-    /// Whether this slot's connection has outlived its lifetime and no
-    /// cooldown from a failed reopen is in force.
-    fn recycle_due(&self) -> bool {
+    /// Whether this slot's connection should be replaced: it has outlived its
+    /// lifetime or predates a [`YsqlClient::recycle_now`], and no cooldown from
+    /// a failed reopen is in force.
+    fn recycle_due(&self, current_generation: u64) -> bool {
         recycle_due_at(
             self.opened_at,
             self.lifetime,
             self.recycle_after,
             std::time::Instant::now(),
+            self.generation != current_generation,
         )
     }
 
     /// Install a freshly-opened connection, dropping the prepared-statement
     /// cache (its `Statement`s belong to the connection being replaced) and
     /// restarting the lifetime clock.
-    fn replace(&mut self, client: tokio_postgres::Client, max_lifetime: Option<Duration>) {
+    fn replace(
+        &mut self,
+        client: tokio_postgres::Client,
+        max_lifetime: Option<Duration>,
+        generation: u64,
+    ) {
         self.client = Arc::new(client);
         self.prepared.clear();
         self.opened_at = std::time::Instant::now();
         self.lifetime = max_lifetime.map(jittered);
         self.recycle_after = None;
+        self.generation = generation;
     }
 }
 
@@ -1464,20 +1498,25 @@ impl State {
 /// it can be exercised without a live connection (`tokio_postgres::Client`
 /// has no public constructor).
 ///
-/// `lifetime: None` is the unbounded case. `recycle_after` is the cooldown a
-/// failed reopen installed: while it is in the future the connection stays
-/// past its lifetime deliberately, because replacing it is what just failed.
+/// `lifetime: None` is the unbounded case. `stale` is a connection opened
+/// before the last [`YsqlClient::recycle_now`]: due regardless of lifetime.
+/// `recycle_after` is the cooldown a failed reopen installed: while it is in
+/// the future the connection stays deliberately, because replacing it is
+/// what just failed.
 fn recycle_due_at(
     opened_at: std::time::Instant,
     lifetime: Option<Duration>,
     recycle_after: Option<std::time::Instant>,
     now: std::time::Instant,
+    stale: bool,
 ) -> bool {
-    let Some(lifetime) = lifetime else {
-        return false;
-    };
-    if now.saturating_duration_since(opened_at) < lifetime {
-        return false;
+    if !stale {
+        let Some(lifetime) = lifetime else {
+            return false;
+        };
+        if now.saturating_duration_since(opened_at) < lifetime {
+            return false;
+        }
     }
     match recycle_after {
         Some(at) => now >= at,
@@ -1554,15 +1593,35 @@ impl YsqlClient {
         set_fast_path_upsert: bool,
         disable_transactional_writes: bool,
     ) -> Result<Self> {
-        let config = Arc::new(config);
         let tls = Arc::new(tls);
+        Self::connect_rustls_pooled_with(
+            config,
+            Arc::new(move || Ok(tls.clone())),
+            pool_size,
+            set_fast_path_upsert,
+            disable_transactional_writes,
+        )
+        .await
+    }
+
+    /// Like [`Self::connect_rustls_pooled`], but builds the connector afresh
+    /// for every connection opened, so a connector that reads certificate
+    /// files from disk presents the files as they are at (re)connect time.
+    pub async fn connect_rustls_pooled_with(
+        config: tokio_postgres::Config,
+        make_tls: MakeTlsFn,
+        pool_size: usize,
+        set_fast_path_upsert: bool,
+        disable_transactional_writes: bool,
+    ) -> Result<Self> {
+        let config = Arc::new(config);
         let open: OpenFn = {
             let config = config.clone();
-            let tls = tls.clone();
             Arc::new(move || {
                 let config = config.clone();
-                let tls = tls.clone();
+                let make_tls = make_tls.clone();
                 async move {
+                    let tls = make_tls()?;
                     open_tls(
                         &config,
                         &tls,
@@ -1628,13 +1687,21 @@ impl YsqlClient {
                 .await?
             }
             Some(_mode) => {
-                let tls = build_yb_rustls_connector(
-                    cfg.sslrootcert.as_deref(),
-                    cfg.client_identity()?.as_ref(),
-                )?;
-                Self::connect_rustls_pooled(
+                // Built per connection so a reconnect — lifetime-driven or a
+                // `recycle_now` from the file watcher — presents the renewed
+                // certificate. A failure to read the files at reconnect keeps
+                // the current connection, as any failed reopen does.
+                let sslrootcert = cfg.sslrootcert.clone();
+                let identity = cfg.client_identity()?;
+                build_yb_rustls_connector(sslrootcert.as_deref(), identity.as_ref())
+                    .context("building the TLS connector")?;
+                let make_tls: MakeTlsFn = Arc::new(move || {
+                    build_yb_rustls_connector(sslrootcert.as_deref(), identity.as_ref())
+                        .map(Arc::new)
+                });
+                Self::connect_rustls_pooled_with(
                     pg_config,
-                    tls,
+                    make_tls,
                     pool_size,
                     set_fast_path_upsert,
                     disable_transactional_writes,
@@ -1642,10 +1709,20 @@ impl YsqlClient {
                 .await?
             }
         };
-        Ok(match cfg.max_connection_lifetime() {
-            Some(max) => client.with_max_connection_lifetime(max),
+        let client = match cfg.max_connection_lifetime() {
+            Some(max) => {
+                let client = client.with_max_connection_lifetime(max);
+                tls_reload::watch_for_client(cfg, application_name, &client);
+                client
+            }
+            // An unbounded lifetime is an explicit "do not recycle this
+            // connection underneath me" — what `YbConnArgs::into_config` sets
+            // for the diagnostic CLIs, whose long single passes ride on their
+            // prepared statements. A reload forces a reopen regardless of age,
+            // so honour the opt-out and start no watch.
             None => client,
-        })
+        };
+        Ok(client)
     }
 
     async fn from_open(open: OpenFn, pool_size: usize) -> Result<Self> {
@@ -1653,14 +1730,25 @@ impl YsqlClient {
         let mut pool = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             let client = (open)().await?;
-            pool.push(tokio::sync::Mutex::new(State::new(client, None)));
+            pool.push(tokio::sync::Mutex::new(State::new(client, None, 0)));
         }
         Ok(Self {
             open,
             pool,
             next: std::sync::atomic::AtomicUsize::new(0),
             max_lifetime: None,
+            reload_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
+    }
+
+    /// Replace every pooled connection on its next use, each re-running the
+    /// open closure — which on the TLS path re-reads the certificate files.
+    /// Infallible and non-blocking: a reopen that fails keeps the current
+    /// connection and retries after [`RECYCLE_RETRY_COOLDOWN`], as a
+    /// lifetime-driven recycle does.
+    pub fn recycle_now(&self) {
+        self.reload_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
     /// Bound how long each pooled connection may stay open before it is
@@ -1722,27 +1810,35 @@ impl YsqlClient {
     /// exists to improve availability and must not be able to cost any.
     async fn current_client_at(&self, slot: usize) -> Result<Arc<tokio_postgres::Client>> {
         let mut guard = self.pool[slot].lock().await;
+        let generation = self
+            .reload_generation
+            .load(std::sync::atomic::Ordering::Acquire);
         if guard.client.is_closed() {
             tracing::info!(slot, "YsqlClient: previous client closed, reconnecting");
             let client = (self.open)().await?;
-            guard.replace(client, self.max_lifetime);
-        } else if guard.recycle_due() {
+            guard.replace(client, self.max_lifetime, generation);
+        } else if guard.recycle_due(generation) {
             let age = guard.opened_at.elapsed();
+            let reason = if guard.generation != generation {
+                "after a recycle_now (TLS files changed)"
+            } else {
+                "past its lifetime"
+            };
             match (self.open)().await {
                 Ok(client) => {
                     tracing::info!(
                         slot,
                         age_secs = age.as_secs(),
-                        "YsqlClient: recycling connection past its lifetime"
+                        "YsqlClient: recycling connection {reason}"
                     );
-                    guard.replace(client, self.max_lifetime);
+                    guard.replace(client, self.max_lifetime, generation);
                     YB_CONNECTION_RECYCLES.with_label_values(&["ok"]).inc();
                 }
                 Err(e) => {
                     tracing::warn!(
                         slot,
                         age_secs = age.as_secs(),
-                        "YsqlClient: could not recycle connection past its lifetime, \
+                        "YsqlClient: could not recycle connection {reason}, \
                          keeping the current one: {e:#}"
                     );
                     guard.recycle_after = Some(std::time::Instant::now() + RECYCLE_RETRY_COOLDOWN);
@@ -1765,7 +1861,10 @@ impl YsqlClient {
         }
         tracing::info!(slot, "YsqlClient: forcing reconnect after failed op");
         let client = (self.open)().await?;
-        guard.replace(client, self.max_lifetime);
+        let generation = self
+            .reload_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        guard.replace(client, self.max_lifetime, generation);
         Ok(guard.client.clone())
     }
 
@@ -2548,21 +2647,31 @@ mod retry_class_tests {
     fn recycle_is_due_only_past_the_lifetime() {
         let now = std::time::Instant::now();
         let opened = now - Duration::from_secs(1_000);
-        // Unbounded: never due, however old.
-        assert!(!recycle_due_at(opened, None, None, now));
-        // Younger than its lifetime: not due.
+        // Unbounded: never due, however old — unless a recycle_now is pending.
+        assert!(!recycle_due_at(opened, None, None, now, false));
+        assert!(recycle_due_at(opened, None, None, now, true));
+        // Younger than its lifetime: not due, unless stale.
         assert!(!recycle_due_at(
             opened,
             Some(Duration::from_secs(2_000)),
             None,
-            now
+            now,
+            false
+        ));
+        assert!(recycle_due_at(
+            opened,
+            Some(Duration::from_secs(2_000)),
+            None,
+            now,
+            true
         ));
         // Past it: due.
         assert!(recycle_due_at(
             opened,
             Some(Duration::from_secs(900)),
             None,
-            now
+            now,
+            false
         ));
     }
 
@@ -2576,10 +2685,12 @@ mod retry_class_tests {
         let lifetime = Some(Duration::from_secs(900));
 
         let cooling = Some(now + Duration::from_secs(5));
-        assert!(!recycle_due_at(opened, lifetime, cooling, now));
+        assert!(!recycle_due_at(opened, lifetime, cooling, now, false));
+        // The cooldown also paces a recycle_now.
+        assert!(!recycle_due_at(opened, lifetime, cooling, now, true));
 
         let expired = Some(now - Duration::from_millis(1));
-        assert!(recycle_due_at(opened, lifetime, expired, now));
+        assert!(recycle_due_at(opened, lifetime, expired, now, false));
     }
 
     /// The per-slot lifetime carries the same 0–25% jitter the retry backoff

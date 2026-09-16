@@ -2,8 +2,7 @@
 
 Operating the certificate trust between the amp stack and its YugabyteDB. The
 design is [`../controller/architecture/ac-endpoint-tls.md`](../controller/architecture/ac-endpoint-tls.md);
-this is what an operator runs and checks. Sections marked *(pending)* describe
-behaviour that lands with the endpoint hot-reload work.
+this is what an operator runs and checks.
 
 ## What is deployed
 
@@ -68,11 +67,15 @@ every amp process, the deployment is ready for strict mode.
 
 cert-manager renews every certificate at `renewBefore` and rewrites its Secret,
 and the kubelet refreshes the mounted files within about a minute. The controller
-reads the files on every new connection. Endpoints re-read them on their own once
-they watch their files *(pending)*; until then, `kubectl -n "$NS" rollout restart
-deployment -l app.kubernetes.io/name=yb-amp-endpoint` after a renewal. A renewed
-tserver certificate is copied into place only at pod start (the chart's
-`certmanager-init` container), so after a renewal:
+reads the files on every new connection. Endpoint daemons poll their files every
+60s and reconnect both lanes on the next use. To confirm one actually happened,
+read `yb_tls.reloads` on the safekeeper's and pageserver's `/v1/status`: it
+counts the times that process saw a watched file change and asked its pools to
+reconnect, and their logs carry a matching `TLS reload` line. The serial beside
+it, `yb_tls.client_cert`, is re-read from disk per request — it shows the new
+certificate the moment cert-manager writes it, whether or not anything picked
+it up, so it is not on its own evidence of a reload. A renewed tserver certificate is copied into place
+only at pod start (the chart's `certmanager-init` container), so after a renewal:
 
 ```bash
 cmctl renew -n "$NS" yb-tserver-yugabyte-tls-cert yb-master-yugabyte-tls-cert   # or wait for renewBefore
@@ -99,8 +102,8 @@ the last leaf has moved.
 2. **Repoint the issuer.** `kubectl edit clusterissuer amp-ca` → `spec.ca.secretName`
    to the new root's Secret (or point the BYO issuer at its new CA).
 3. **Renew every leaf.** `cmctl renew -n "$NS" --all`, then the rolling restart
-   above for the database. Endpoints pick the new leaves up on their own
-   *(pending)*.
+   above for the database. Endpoints and the controller pick the new leaves up
+   on their own.
 4. **Remove the old root.** Edit `amp-ca-roots` down to the new root and re-apply
    the same Bundle (trust-manager syncs). Connections established under the old
    chain stay up until they recycle, then are refused.

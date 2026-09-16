@@ -372,6 +372,16 @@ impl TlsOpts {
             key_path,
         }
     }
+
+    /// The files that are actually set, in CA / certificate / key order. What
+    /// the reload watcher polls.
+    pub fn paths(&self) -> Vec<String> {
+        [&self.ca_cert_path, &self.cert_path, &self.key_path]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]

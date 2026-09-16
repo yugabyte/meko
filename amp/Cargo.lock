@@ -6721,7 +6721,17 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "yb_tls",
  "ysql_client",
+]
+
+[[package]]
+name = "yb_tls"
+version = "0.1.0"
+dependencies = [
+ "rand 0.9.1",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6768,6 +6778,7 @@ dependencies = [
  "x509-cert",
  "yb-postgres-rustls",
  "yb-tokio-postgres",
+ "yb_tls",
 ]
 
 [[package]]

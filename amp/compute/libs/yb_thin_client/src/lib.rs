@@ -12,6 +12,7 @@ mod client;
 mod error;
 mod ffi;
 mod recycle;
+mod tls_watch;
 
 pub use client::{
     BindValue, ColKind, Column, CondOp, RangeRead, ReadBatch, ReadOp, ReadPage, ReadResult, Row,

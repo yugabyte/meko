@@ -36,7 +36,7 @@ router is not kept authoritative.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/v1/status` | Healthcheck (`SafekeeperStatus`). Liveness, plus `yb_tls` in YB-WAL mode: `{enabled, sslmode, sslrootcert, client_cert: {common_name, serial, not_before_unix, not_after_unix}}`, or `client_cert_error` when the pair does not check out — unreadable, expired or not yet valid, a CN that does not match the configured user, or only one of `sslcert`/`sslkey` set. Auth-exempt. |
+| GET | `/v1/status` | Healthcheck (`SafekeeperStatus`). Liveness, plus `yb_tls` in YB-WAL mode: `{enabled, sslmode, sslrootcert, reloads, client_cert: {common_name, serial, not_before_unix, not_after_unix}}`, or `client_cert_error` when the pair does not check out — unreadable, expired or not yet valid, a CN that does not match the configured user, or only one of `sslcert`/`sslkey` set. `reloads` counts the times this process acted on a changed TLS file; the certificate above is re-read per request, so only the counter shows a reload happened. Auth-exempt. |
 | GET | `/metrics` | Prometheus exposition (see [`safekeeper-metrics.md`](safekeeper-metrics.md)). Auth-exempt. Honors `force_metric_collection_on_scrape`. |
 | GET | `/profile/cpu` | CPU profile (pprof). Auth-exempt. |
 | GET | `/profile/heap` | Heap profile (jemalloc). Auth-exempt. |

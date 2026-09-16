@@ -17,8 +17,9 @@ serde = { workspace = true, features = ["derive"] }
 metrics.workspace = true
 once_cell.workspace = true
 rand.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tracing.workspace = true
+yb_tls.workspace = true
 
 # YB smart-driver fork of tokio-postgres. Used for cluster-aware YB
 # connections (yb_servers() discovery, load balancing, topology-aware

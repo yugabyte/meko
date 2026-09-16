@@ -63,7 +63,7 @@ Routes exempt from auth even when JWT is enabled
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| GET | `/v1/status` | Health check (`StatusResponse`). Carries `yb_tls` when a YB store is configured: `{enabled, sslmode, sslrootcert, client_cert: {common_name, serial, not_before_unix, not_after_unix}}`, or `client_cert_error` when the pair does not check out — unreadable, expired or not yet valid, a CN that does not match the configured user, or only one of `sslcert`/`sslkey` set. Instance-wide scope. |
+| GET | `/v1/status` | Health check (`StatusResponse`). Carries `yb_tls` when a YB store is configured: `{enabled, sslmode, sslrootcert, reloads, client_cert: {common_name, serial, not_before_unix, not_after_unix}}`, or `client_cert_error` when the pair does not check out — unreadable, expired or not yet valid, a CN that does not match the configured user, or only one of `sslcert`/`sslkey` set. `reloads` counts the times this process acted on a changed TLS file; the certificate above is re-read per request, so only the counter shows a reload happened. Instance-wide scope. |
 | GET | `/metrics` | Prometheus text exposition (`prometheus_metrics_handler`). Honors `force_metric_collection_on_scrape`. See [`pageserver-metrics.md`](pageserver-metrics.md). |
 | GET | `/v1/doc` | Swagger UI HTML for the embedded OpenAPI spec. |
 | GET | `/swagger.yml` | Raw OpenAPI spec (`openapi_spec.yml`, embedded at compile time). **Not authoritative** — `make_router()` is the source of truth for the route set; the spec still lists paths the router does not serve. |

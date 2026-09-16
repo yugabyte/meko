@@ -512,6 +512,12 @@ impl Cluster {
                 "YB_PS_VERIFY_WAL_ROUNDTRIP",
                 env_or(&["YB_PS_VERIFY_WAL_ROUNDTRIP"], "1"),
             )
+            // Daemons re-read their TLS files this often; tls_cert_reload
+            // waits on it, and a minute would be most of the suite's budget.
+            .env(
+                "YB_TLS_RELOAD_POLL_SECS",
+                env_or(&["YB_TLS_RELOAD_POLL_SECS"], "2"),
+            )
             // Every pageserver the launcher provisions is BORN with GC
             // on: this fragment is merged into its pageserver.toml at
             // generation (see control_plane::pageserver's
@@ -644,6 +650,10 @@ impl Cluster {
             .env(
                 "YB_PS_VERIFY_WAL_ROUNDTRIP",
                 env_or(&["YB_PS_VERIFY_WAL_ROUNDTRIP"], "1"),
+            )
+            .env(
+                "YB_TLS_RELOAD_POLL_SECS",
+                env_or(&["YB_TLS_RELOAD_POLL_SECS"], "2"),
             )
             .args(args)
             .stdout(std::process::Stdio::null());

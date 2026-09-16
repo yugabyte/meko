@@ -129,8 +129,11 @@ start_tls() {
         openssl x509 -req -in /tmp/tls/client.csr -CA "$certs/ca.crt" -CAkey "$certs/ca.key" \
             -CAcreateserial -days 365 -extfile /tmp/tls/client.ext -out /tmp/tls/client.crt 2>/dev/null
         rm -f /tmp/tls/*.csr /tmp/tls/*.ext
+        # ca.key travels too so a test can re-issue the client cert
+        # (tls_cert_reload) against the CA the tservers trust.
         cp "$certs/ca.crt" /tmp/tls/ca.crt
-        chmod 600 "$certs"/*.key /tmp/tls/client.key
+        cp "$certs/ca.key" /tmp/tls/ca.key
+        chmod 600 "$certs"/*.key /tmp/tls/client.key /tmp/tls/ca.key
         chmod 644 /tmp/tls/ca.crt /tmp/tls/client.crt
         common="use_node_to_node_encryption=true,certs_dir=$certs,node_to_node_encryption_use_client_certificates=true,allow_insecure_connections=true"
         # shellcheck disable=SC2086  # YB_PORTS is a deliberate word list
@@ -141,8 +144,8 @@ start_tls() {
     wait_ready
     mkdir -p "$YB_TLS_DIR"
     docker cp "$YB_CONTAINER:/tmp/tls/." "$YB_TLS_DIR/"
-    chmod 600 "$YB_TLS_DIR/client.key"
-    echo "yb-local: TLS material in $YB_TLS_DIR (ca.crt, client.crt CN=yugabyte, client.key)"
+    chmod 600 "$YB_TLS_DIR/client.key" "$YB_TLS_DIR/ca.key"
+    echo "yb-local: TLS material in $YB_TLS_DIR (ca.crt + ca.key, client.crt CN=yugabyte, client.key)"
     echo "yb-local: YSQL 127.0.0.1:${YB_PORT}, tserver RPC 127.0.0.1:$((9100 + off)); for the harness:"
     echo "  YB_PORT=${YB_PORT} YB_RPC_PORT=$((9100 + off)) YB_SSLMODE=verify-full \\"
     echo "  YB_SSLROOTCERT=$YB_TLS_DIR/ca.crt YB_SSLCERT=$YB_TLS_DIR/client.crt YB_SSLKEY=$YB_TLS_DIR/client.key"

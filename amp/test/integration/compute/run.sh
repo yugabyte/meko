@@ -56,6 +56,8 @@ YB_AMP_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, COMPUTE_PORT,
 YB_SSLMODE, YB_SSLROOTCERT, YB_SSLCERT, YB_SSLKEY (the daemons' TLS to YB;
 scripts/yb-local.sh with YB_TLS=1 produces the files), YB_RPC_PORT (tserver
 RPC for the thin lane, default 9100; yb-local.sh prints the offset one),
+YB_TLS_CA_KEY (the CA key tls_cert_reload re-issues the client cert with;
+default: ca.key beside YB_SSLROOTCERT), YB_TLS_RELOAD_POLL_SECS (default 2 here),
 SOAK_SECS, PS_HTTP_TIMEOUT, ENDPOINT_START_TIMEOUT,
 YB_PS_VERIFY_WAL_ROUNDTRIP, YB_AMP, INTEGRATION_PORT_BASE.
 

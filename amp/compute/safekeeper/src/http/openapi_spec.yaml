@@ -179,6 +179,13 @@ components:
         client_cert_error:
           description: Why client_cert is absent although sslcert is set.
           type: string
+        reloads:
+          description: >-
+            Times this process saw a watched TLS file change and asked its pools to
+            reconnect. client_cert above is re-read from disk per request, so only
+            this says a reload happened.
+          type: integer
+          format: int64
 
     TimelineStatus:
       type: object

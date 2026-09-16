@@ -1,0 +1,16 @@
+[package]
+name = "yb_tls"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+rand.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

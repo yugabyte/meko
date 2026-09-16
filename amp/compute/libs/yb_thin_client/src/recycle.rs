@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::client::{TsClient, TsClientConfig};
+use crate::client::{TlsOpts, TsClient, TsClientConfig};
 use crate::error::YbError;
 
 /// How long to wait before retrying a rebuild that failed. The current
@@ -74,6 +74,12 @@ pub struct Recycling<T> {
     rebuild: tokio::sync::Mutex<()>,
     open: OpenFn<T>,
     max_lifetime: Option<Duration>,
+    /// Bumped by [`Recycling::recycle_now`], and `acked` catches up once a
+    /// rebuild that started after the bump succeeds. Counters rather than a
+    /// flag: a `recycle_now` landing *during* a rebuild must stay pending, and
+    /// clearing a flag afterwards would swallow it.
+    forced: std::sync::atomic::AtomicU64,
+    acked: std::sync::atomic::AtomicU64,
     /// Names this pool in log lines (`pageserver`, `safekeeper WAL`, ...),
     /// with the addresses a recycle re-resolves.
     what: String,
@@ -95,13 +101,25 @@ impl<T: Send + Sync + 'static> Recycling<T> {
     ) -> Result<Arc<Self>, YbError> {
         let build: BuildFn<T> = Arc::new(build);
         let what = format!("{} {:?}", what.into(), config.tserver_addrs);
+        // Read before the config moves into the opener. Empty without TLS, and
+        // then nothing is watched.
+        let tls_paths = config.tls.as_ref().map(TlsOpts::paths).unwrap_or_default();
         let open: OpenFn<T> = Arc::new(move || {
             let config = config.clone();
             let build = build.clone();
             Box::pin(connect_and_build(config, build))
         });
         let generation = (open)().await?;
-        Ok(Self::from_parts(generation, open, max_lifetime, what))
+        let pool = Self::from_parts(generation, open, max_lifetime, what.clone());
+        // Self-wiring, so a caller cannot forget it and silently keep serving a
+        // certificate that has been renewed underneath it.
+        crate::tls_watch::spawn(
+            Arc::downgrade(&pool),
+            tls_paths,
+            what,
+            yb_tls::poll_interval(),
+        );
+        Ok(pool)
     }
 
     /// Wrap an already-built generation with no lifetime bound — for tests
@@ -137,8 +155,29 @@ impl<T: Send + Sync + 'static> Recycling<T> {
             rebuild: tokio::sync::Mutex::new(()),
             open,
             max_lifetime: max_lifetime.filter(|l| !l.is_zero()),
+            forced: std::sync::atomic::AtomicU64::new(0),
+            acked: std::sync::atomic::AtomicU64::new(0),
             what,
         })
+    }
+
+    /// Rebuild the generation on its next use, whatever its age — the TLS
+    /// files changed and the shim reads them at connect. Best-effort like a
+    /// lifetime recycle: a rebuild that fails keeps the current generation and
+    /// is retried after [`RECYCLE_RETRY_COOLDOWN`]; the request stands until
+    /// one succeeds.
+    pub fn recycle_now(&self) {
+        self.forced
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Whether a `recycle_now` is outstanding, and which request it is.
+    fn forced_request(&self) -> (bool, u64) {
+        let want = self.forced.load(std::sync::atomic::Ordering::Acquire);
+        (
+            want != self.acked.load(std::sync::atomic::Ordering::Acquire),
+            want,
+        )
     }
 
     /// The generation to use for the next operation, rebuilding first if the
@@ -173,17 +212,29 @@ impl<T: Send + Sync + 'static> Recycling<T> {
             }
             live.opened_at.elapsed()
         };
+        let (forced, request) = self.forced_request();
         match (self.open)().await {
             Ok(fresh) => {
                 tracing::info!(
                     "yb_thin_client {}: recycled the connection after {age:?} \
-                     (addresses re-resolved)",
+                     ({})",
                     self.what,
+                    if forced {
+                        "TLS files reloaded, addresses re-resolved"
+                    } else {
+                        "addresses re-resolved"
+                    }
                 );
                 let mut live = self.live.write().await;
                 live.generation = fresh.clone();
                 live.opened_at = Instant::now();
                 live.recycle_after = None;
+                if forced {
+                    // Only the request this rebuild started for. A later one
+                    // leaves `forced` ahead of `acked`, so it stays due.
+                    self.acked
+                        .store(request, std::sync::atomic::Ordering::Release);
+                }
                 fresh
             }
             Err(e) => {
@@ -205,6 +256,7 @@ impl<T: Send + Sync + 'static> Recycling<T> {
             self.max_lifetime,
             live.recycle_after,
             Instant::now(),
+            self.forced_request().0,
         )
     }
 }
@@ -226,18 +278,22 @@ async fn connect_and_build<T: Send + Sync + 'static>(
 
 /// The recycle predicate, with the timestamps passed in so it is testable
 /// without a live shim client. `max_lifetime: None` is the unbounded case;
+/// `forced` is a pending [`Recycling::recycle_now`], due whatever the age;
 /// `recycle_after` in the future is the cooldown a failed rebuild installed.
 fn due_at(
     opened_at: Instant,
     max_lifetime: Option<Duration>,
     recycle_after: Option<Instant>,
     now: Instant,
+    forced: bool,
 ) -> bool {
-    let Some(lifetime) = max_lifetime else {
-        return false;
-    };
-    if now.saturating_duration_since(opened_at) < lifetime {
-        return false;
+    if !forced {
+        let Some(lifetime) = max_lifetime else {
+            return false;
+        };
+        if now.saturating_duration_since(opened_at) < lifetime {
+            return false;
+        }
     }
     match recycle_after {
         Some(at) => now >= at,
@@ -343,19 +399,159 @@ mod tests {
         assert_eq!(opens.load(Ordering::SeqCst), 1);
     }
 
+    /// `recycle_now` replaces a generation that is nowhere near its lifetime,
+    /// once; a failed forced rebuild keeps the request pending past the
+    /// cooldown.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recycle_now_replaces_a_young_generation_once() {
+        let (pool, opens) = pool(Duration::from_secs(900), Duration::ZERO, usize::MAX).await;
+        assert_eq!(*pool.current().await, 0, "young: nothing to do");
+        pool.recycle_now();
+        assert_eq!(*pool.current().await, 1, "forced → rebuilt");
+        assert_eq!(*pool.current().await, 1, "request consumed");
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+    }
+
+    /// A second renewal landing while the first rebuild is still connecting
+    /// must not be swallowed by that rebuild's own acknowledgement — otherwise
+    /// the pool serves the older material until its age deadline.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_recycle_now_during_a_rebuild_stays_pending() {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let counter = opens.clone();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let opened = Arc::new(tokio::sync::Notify::new());
+        let (g, o) = (gate.clone(), opened.clone());
+        let open: OpenFn<usize> = Arc::new(move || {
+            let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            let (g, o) = (g.clone(), o.clone());
+            Box::pin(async move {
+                // Only the first forced rebuild waits, so the test can slip a
+                // second recycle_now in while it is in flight.
+                if n == 1 {
+                    o.notify_one();
+                    g.notified().await;
+                }
+                Ok(Arc::new(n))
+            })
+        });
+        let pool = Recycling::from_parts(
+            Arc::new(0usize),
+            open,
+            Some(Duration::from_secs(900)),
+            "test".into(),
+        );
+
+        pool.recycle_now();
+        let p = pool.clone();
+        let first = tokio::spawn(async move { *p.current().await });
+        opened.notified().await;
+        pool.recycle_now(); // arrives mid-connect
+        gate.notify_one();
+        assert_eq!(first.await.unwrap(), 1, "the in-flight rebuild finished");
+
+        assert_eq!(
+            *pool.current().await,
+            2,
+            "the second request was not dropped"
+        );
+        assert_eq!(opens.load(Ordering::SeqCst), 2);
+        assert_eq!(*pool.current().await, 2, "and then it is consumed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_forced_rebuild_stays_pending() {
+        let (pool, opens) = pool(Duration::from_secs(900), Duration::ZERO, 1).await;
+        pool.recycle_now();
+        assert_eq!(*pool.current().await, 0, "kept the old generation");
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        // Cooldown suppresses the retry, but the request is still standing.
+        assert_eq!(*pool.current().await, 0);
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        {
+            let mut live = pool.live.write().await;
+            live.recycle_after = Some(Instant::now() - Duration::from_millis(1));
+        }
+        assert_eq!(*pool.current().await, 0, "still failing");
+        assert_eq!(
+            opens.load(Ordering::SeqCst),
+            2,
+            "retried after the cooldown"
+        );
+    }
+
+    /// The pool wires its own reload: rewriting a watched file rebuilds the
+    /// generation with nobody having asked. `Recycling::new` needs a live
+    /// tserver, so the watcher is started here the way `new` starts it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rewritten_certificate_rebuilds_without_a_caller() {
+        let dir = std::env::temp_dir().join(format!("thin-selfwire-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert = dir.join("tls.crt");
+        std::fs::write(&cert, b"v1").unwrap();
+
+        // Unbounded lifetime, so a rebuild can only come from the watcher.
+        let (pool, opens) = pool(Duration::from_secs(900), Duration::ZERO, usize::MAX).await;
+        crate::tls_watch::spawn(
+            Arc::downgrade(&pool),
+            vec![cert.to_string_lossy().into_owned()],
+            "test".into(),
+            Duration::from_millis(10),
+        );
+        assert_eq!(*pool.current().await, 0, "nothing changed yet");
+
+        std::fs::write(&cert, b"v2").unwrap();
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if *pool.current().await == 1 {
+                break;
+            }
+        }
+        assert_eq!(
+            *pool.current().await,
+            1,
+            "the rewritten file was not noticed"
+        );
+        assert_eq!(
+            opens.load(Ordering::SeqCst),
+            1,
+            "rebuilt once, not per poll"
+        );
+    }
+
     #[test]
     fn unbounded_never_recycles() {
         let now = Instant::now();
         let ancient = now - Duration::from_secs(86_400 * 4);
-        assert!(!due_at(ancient, None, None, now));
+        assert!(!due_at(ancient, None, None, now, false));
+        assert!(due_at(ancient, None, None, now, true), "unless forced");
     }
 
     #[test]
     fn recycle_is_due_only_past_the_lifetime() {
         let now = Instant::now();
         let opened = now - Duration::from_secs(1_000);
-        assert!(!due_at(opened, Some(Duration::from_secs(2_000)), None, now));
-        assert!(due_at(opened, Some(Duration::from_secs(900)), None, now));
+        assert!(!due_at(
+            opened,
+            Some(Duration::from_secs(2_000)),
+            None,
+            now,
+            false
+        ));
+        assert!(due_at(
+            opened,
+            Some(Duration::from_secs(2_000)),
+            None,
+            now,
+            true
+        ));
+        assert!(due_at(
+            opened,
+            Some(Duration::from_secs(900)),
+            None,
+            now,
+            false
+        ));
     }
 
     #[test]
@@ -367,13 +563,25 @@ mod tests {
             opened,
             lifetime,
             Some(now + Duration::from_secs(5)),
-            now
+            now,
+            false
         ));
+        assert!(
+            !due_at(
+                opened,
+                lifetime,
+                Some(now + Duration::from_secs(5)),
+                now,
+                true
+            ),
+            "the cooldown also paces a forced rebuild"
+        );
         assert!(due_at(
             opened,
             lifetime,
             Some(now - Duration::from_millis(1)),
-            now
+            now,
+            false
         ));
     }
 
