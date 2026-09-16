@@ -11,6 +11,7 @@ package stress
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -147,6 +148,16 @@ func runBackingUnreachableAPI(t *core.T) error {
 			return err
 		}
 		s.Set("ready_after", waited.Round(time.Second).String())
+		led, err := awaitBackingTabletsLed(t, backingEnv.BackingKube(), params.SettleTimeout, logf)
+		switch {
+		case errors.Is(err, errNoTabletView):
+			s.Set("tablets_led_after", "skipped: "+err.Error())
+			logf("tablet-leader gate skipped: %v", err)
+		case err != nil:
+			return err
+		default:
+			s.Set("tablets_led_after", led.Round(time.Second).String())
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -470,10 +481,10 @@ func (c *rawCaller) reconcile(ctx context.Context, cl *controller.Client, poolID
 			present++
 		}
 	}
-	// One accepted cluster is exercised end to end. Deploying a compute on it and
-	// running a query is the honest proof its rows are complete: a cluster row
-	// that exists while its branch or recipe does not would list clean and fail
-	// here, and nothing in the listing can tell the two apart.
+	// One accepted cluster is exercised end to end: a cluster row that exists
+	// while its branch or recipe does not lists clean and fails here, and nothing
+	// in the listing can tell the two apart. A failure is not proof of that, since
+	// a leaderless backing tablet fails it too (meko#1366).
 	if len(succeeded) > 0 {
 		if err := clusterIsUsable(ctx, cl, env, poolID, visible[succeeded[len(succeeded)-1]]); err != nil {
 			return 0, 0, err
@@ -494,7 +505,7 @@ func clusterIsUsable(ctx context.Context, cl *controller.Client, env ampTenantEn
 	}
 	if _, err := cl.CreateEndpointAndWait(ctx, poolID, clusterID, cluster.DefaultBranch.BranchID,
 		controller.CreateEndpointRequest{Role: "read_write", Resources: &controller.EndpointResources{CPU: tenantEndpointCPU, Memory: tenantEndpointMemory}}); err != nil {
-		return fmt.Errorf("a cluster created while the backing was unreachable cannot take a compute afterwards, so its rows are incomplete: %w", err)
+		return fmt.Errorf("a cluster created while the backing was unreachable could not take a compute once it was back: %w", err)
 	}
 	eps, err := cl.ListAllEndpoints(ctx, poolID, clusterID, cluster.DefaultBranch.BranchID)
 	if err != nil || len(eps) == 0 {

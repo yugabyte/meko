@@ -1,11 +1,18 @@
 package stress
 
 import (
+	"context"
+	"errors"
+	"io"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybadmin"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // The selector list is what makes backing chaos work against EVERY backing
@@ -98,5 +105,105 @@ func TestForeignEndpointPod(t *testing.T) {
 		if got := foreignEndpointPod(pod, tenants); got != foreign {
 			t.Errorf("foreignEndpointPod(%s) = %v, want %v", pod, got, foreign)
 		}
+	}
+}
+
+type scriptedAdmin struct {
+	answers []string
+	cmds    []string
+}
+
+func (s *scriptedAdmin) Run(_ context.Context, cmd string) (execpkg.Result, error) {
+	s.cmds = append(s.cmds, cmd)
+	if len(s.answers) == 0 {
+		return execpkg.Result{ExitCode: 1}, nil
+	}
+	out := s.answers[0]
+	s.answers = s.answers[1:]
+	return execpkg.Result{Stdout: out}, nil
+}
+
+func (s *scriptedAdmin) Copy(context.Context, string, string) error { return nil }
+
+const ampTables = `Table-Name  Table-ID
+yb_storage.endpoints_name_per_branch [ysql_schema=amp_registry]  000040000000300080000000000040b3
+yb_storage.meta [ysql_schema=amp_storage]  000040000000300080000000000040cf
+other_db.pages [ysql_schema=public]  000040000000300080000000000040ff`
+
+const mixedTablets = `Tablet-UUID                       Range                                         Leader-IP        Leader-UUID
+8cc256fe5b9d4b199b3b8bd8f4497578  partition_key_start: "" partition_key_end: ""
+a1b2c3d4e5f60718293a4b5c6d7e8f90  partition_key_start: "" partition_key_end: ""  10.4.0.11:9100   c9a3b1de4f5061728394a5b6c7d8e9f0`
+
+const ledTablets = `Tablet-UUID                       Range                                         Leader-IP        Leader-UUID
+2e74036a9f6c44dd89040a0deeb40471  partition_key_start: "" partition_key_end: ""  10.4.0.12:9100   d9a3b1de4f5061728394a5b6c7d8e9f1`
+
+func TestLeaderlessTabletsNamesOnlyTheLeaderlessOnesInTheDatabase(t *testing.T) {
+	ex := &scriptedAdmin{answers: []string{ampTables, mixedTablets, ledTablets}}
+	got, raw, err := leaderlessTablets(context.Background(), ybadmin.New(ex, "m:7100"), "yb_storage")
+	if err != nil {
+		t.Fatalf("leaderlessTablets: %v", err)
+	}
+	want := "yb_storage.amp_registry.endpoints_name_per_branch/8cc256fe5b9d4b199b3b8bd8f4497578"
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("leaderless = %v, want only %s", got, want)
+	}
+	if !strings.Contains(raw, "no leader") {
+		t.Errorf("raw listing does not record the leaderless tablet: %q", raw)
+	}
+	for _, c := range ex.cmds {
+		if strings.Contains(c, "000040000000300080000000000040ff") {
+			t.Errorf("listed tablets of a table outside yb_storage: %s", c)
+		}
+	}
+}
+
+func TestLeaderlessTabletsIsEmptyWhenEveryTabletIsLed(t *testing.T) {
+	ex := &scriptedAdmin{answers: []string{ampTables, ledTablets, ledTablets}}
+	got, _, err := leaderlessTablets(context.Background(), ybadmin.New(ex, "m:7100"), "yb_storage")
+	if err != nil {
+		t.Fatalf("leaderlessTablets: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("leaderless = %v, want none", got)
+	}
+}
+
+func TestLeaderlessTabletsMatchesTheKeyspaceBySubstring(t *testing.T) {
+	const prefixed = `Table-Name  Table-ID
+ysql.yb_storage.meta [ysql_schema=amp_storage]  000040000000300080000000000040cf`
+	ex := &scriptedAdmin{answers: []string{prefixed, mixedTablets}}
+	got, _, err := leaderlessTablets(context.Background(), ybadmin.New(ex, "m:7100"), "yb_storage")
+	if err != nil {
+		t.Fatalf("a keyspace carrying a db-type prefix was not matched: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("leaderless = %v, want the one leaderless tablet", got)
+	}
+}
+
+func TestLeaderlessTabletsFailsWhenNoTableMatched(t *testing.T) {
+	const noAmpTables = `Table-Name  Table-ID
+other_db.pages [ysql_schema=public]  000040000000300080000000000040ff`
+	_, raw, err := leaderlessTablets(context.Background(), ybadmin.New(&scriptedAdmin{answers: []string{noAmpTables}}, "m:7100"), "yb_storage")
+	if err == nil {
+		t.Fatal("a listing with no yb_storage table read as a led universe")
+	}
+	if !strings.Contains(raw, "other_db.pages") {
+		t.Errorf("the raw listing is not carried back for the record: %q", raw)
+	}
+}
+
+func TestBackingAdminReportsABackingItCannotInspect(t *testing.T) {
+	if !slices.Contains(backingPodSelectors, "app=yugabyted") {
+		t.Fatal("backingPodSelectors no longer covers the built-in yugabyted")
+	}
+	// Every tserver selector matches nothing, as on a yugabyted backing.
+	kube := k8s.New(k8s.Config{Namespace: "yb-dev-t"}).WithRunner(
+		func(context.Context, io.Reader, []string) (execpkg.Result, error) {
+			return execpkg.Result{}, nil
+		})
+	_, err := backingAdmin(context.Background(), kube, func(string, ...any) {})
+	if !errors.Is(err, errNoTabletView) {
+		t.Fatalf("backingAdmin on a backing with no tserver pod = %v, want errNoTabletView", err)
 	}
 }

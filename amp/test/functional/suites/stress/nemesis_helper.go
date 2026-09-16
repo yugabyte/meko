@@ -1,11 +1,15 @@
 package stress
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybadmin"
 	"github.com/yugabyte/amp/test/functional/framework/chaos"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -171,6 +175,97 @@ const (
 	backingReadyPollInterval = 5 * time.Second
 	backingReadySettled      = 3
 )
+
+// errNoTabletView: yb-admin needs a tserver-shaped pod, which the built-in
+// yugabyted is not.
+var errNoTabletView = errors.New("no tserver pod to run yb-admin in")
+
+// Pods Ready is not the store serving: a restarted universe can leave tablets
+// with no leader (meko#1366), and the first write to one waits out YB's deadline.
+//
+// The admin client is rebuilt per poll: every serving pod was just deleted, so
+// the one this resolves may be replaced mid-wait.
+func awaitBackingTabletsLed(t *core.T, kube *k8s.Kubectl, settle time.Duration, logf func(string, ...any)) (time.Duration, error) {
+	start := time.Now()
+	deadline := start.Add(settle)
+	var last []string
+	var raw string
+	var err error
+	for {
+		var admin *ybadmin.Client
+		admin, err = backingAdmin(t.Context, kube, logf)
+		if errors.Is(err, errNoTabletView) {
+			return time.Since(start), err
+		}
+		if err == nil {
+			last, raw, err = leaderlessTablets(t.Context, admin, ampStorageDB)
+			if err == nil && len(last) == 0 {
+				return time.Since(start), nil
+			}
+		}
+		if t.Context.Err() != nil {
+			return time.Since(start), t.Context.Err()
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(backingReadyPollInterval)
+	}
+	if raw != "" {
+		t.AttachBytes("backing-leaderless-tablets.txt", "log", []byte(raw))
+	}
+	if err != nil {
+		return time.Since(start), fmt.Errorf("list %s tablets on the backing: %w", ampStorageDB, err)
+	}
+	return time.Since(start), fmt.Errorf("%d %s tablet(s) still have no leader %s after the backing's pods were Ready, so a write to any of them hangs until YB's client deadline (meko#1366): %s",
+		len(last), ampStorageDB, settle, strings.Join(last, ", "))
+}
+
+func backingAdmin(ctx context.Context, kube *k8s.Kubectl, logf func(string, ...any)) (*ybadmin.Client, error) {
+	pod, err := firstTserverPod(ctx, kube)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errNoTabletView, err)
+	}
+	masters, err := masterAddrsFromTServerConf(ctx, kube)
+	if err != nil {
+		return nil, err
+	}
+	return ybadmin.New(kube.ForPod(pod, tserverContainer), masters, ybadmin.WithLogf(logf)), nil
+}
+
+// Substring, as ybadmin documents: the printed keyspace varies by version, and
+// matching none of them is a parse failure to report, not a led universe.
+func leaderlessTablets(ctx context.Context, admin *ybadmin.Client, database string) ([]string, string, error) {
+	tables, rawTables, err := admin.ListTables(ctx)
+	if err != nil {
+		return nil, rawTables, err
+	}
+	var out []string
+	var raw strings.Builder
+	raw.WriteString(rawTables)
+	matched := 0
+	for _, tbl := range tables {
+		if !strings.Contains(tbl.Keyspace, database) {
+			continue
+		}
+		matched++
+		tablets, err := admin.ListTablets(ctx, tbl.ID, 0)
+		if err != nil {
+			return nil, raw.String(), fmt.Errorf("%s.%s: %w", tbl.Keyspace, tbl.Name, err)
+		}
+		for _, tab := range tablets {
+			if tab.Leader == "" {
+				out = append(out, tbl.Keyspace+"."+tbl.Name+"/"+tab.ID)
+				fmt.Fprintf(&raw, "\n%s.%s tablet %s: no leader", tbl.Keyspace, tbl.Name, tab.ID)
+			}
+		}
+	}
+	if matched == 0 {
+		return nil, raw.String(), fmt.Errorf("no %s table among the %d yb-admin lists: the listing could not be read, so nothing was checked for a leader", database, len(tables))
+	}
+	sort.Strings(out)
+	return out, raw.String(), nil
+}
 
 func backingNotReady(t *core.T, kube *k8s.Kubectl) (string, error) {
 	pods, err := backingPods(t, kube)
