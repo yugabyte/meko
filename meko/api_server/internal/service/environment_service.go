@@ -512,7 +512,13 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 	}
 	now := time.Now().UTC()
 	e.State = state
-	e.AgentVersion = r.AgentVersion
+	// Guarded because a report can name a state and still omit this: normalizeState
+	// above refuses only a report with NO state, and nullStr turns the empty string
+	// into a NULL, erasing the version last reported. The merged fields below
+	// (mergeFacts, Components, Resources) all hold to the same rule.
+	if r.AgentVersion != "" {
+		e.AgentVersion = r.AgentVersion
+	}
 	e.LastHeartbeatAt = &now
 	mergeFacts(e, r.ClusterFacts)
 	// nil means the agent could not collect (no RBAC, a transient API error) — not

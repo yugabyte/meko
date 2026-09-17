@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -83,6 +84,38 @@ func bindJSON(c echo.Context, v any) bool {
 			return false
 		}
 		_ = apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+		return false
+	}
+	return true
+}
+
+// bindJSONStrict is bindJSON that also refuses a field the target does not declare,
+// for a handler where a silently dropped key changes what the request means.
+//
+// SetDesired is the case it exists for: desired state is replaced, so a key the
+// decoder ignores is a resource the agent deletes. `{"resourses": [...]}` bound to an
+// empty set and emptied the environment (CLOUDGA-36999). The strictness reaches every
+// level, since one decoder walks the whole document -- a typo beside a resource's
+// `kind` is refused like one beside `resources`. `spec` is the deliberate exception:
+// json.RawMessage, so the decoder never descends into it and a field only a newer
+// agent knows still reaches it.
+//
+// Not the default. Rejecting unknown fields on an agent-facing route would refuse the
+// heartbeats of an agent newer than the control plane, and the customer controls that
+// upgrade order (REVIEW.md's rule for this contract); AgentStatus therefore keeps
+// bindJSON and validates the fields it cares about instead.
+func bindJSONStrict(c echo.Context, v any) bool {
+	if status, code, message, bad := jsonBodyProblem(c); bad {
+		_ = apiError(c, status, code, message)
+		return false
+	}
+	dec := json.NewDecoder(c.Request().Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		// The decoder's own message names the offending field -- "json: unknown field
+		// \"resourses\"" is precisely what tells a caller its payload was ignored --
+		// so it is worth more here than the fixed string bindJSON returns.
+		_ = apiError(c, http.StatusBadRequest, "INVALID_JSON", err.Error())
 		return false
 	}
 	return true

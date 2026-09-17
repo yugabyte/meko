@@ -103,6 +103,15 @@ cluster.
    environment is told to hold nothing. Garbage collection is the one thing that needs
    a desired state that was actually read: the agent cannot know what an operator
    withdrew from a response it never got.
+
+   Because the agent obeys an empty set, the *write* side has to be sure the operator
+   meant one. On top of the body checks every write shares (below),
+   `POST /environments/{id}/desired` requires an explicit `resources` and rejects
+   unknown fields at *every* level, so a misspelled key is a 400 rather than a
+   tree-emptying command; `"resources": []` additionally needs `"allow_empty": true`.
+   `spec` is exempt — it is passed through opaquely, so a field only a newer agent
+   knows still reaches it. Registration keeps its plain `"desired": []` (below): there
+   is nothing yet to delete.
 5. **Report** — the agent `POST`s `/agent/status` with real facts, the workload health it
    read from its own namespace (`components`: one row per Deployment and StatefulSet,
    healthy-of-total plus the image tag — the only way the console can say what is up,
