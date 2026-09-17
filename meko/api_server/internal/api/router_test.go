@@ -263,3 +263,35 @@ func TestRouter_NotFound(t *testing.T) {
 		)
 	}
 }
+
+// TestRouter_KBDocumentRoutesRegistered pins the knowledge-base document
+// routes in the routing table: the per-file DELETE and the documents list
+// that hands out document_id values. Needs no database (NewRouter only
+// constructs repositories), so it runs in CI — unlike the DB-backed tests
+// above, which self-skip there.
+//
+// Scope honesty: Echo's routing table carries no middleware information, so
+// dpDirect (PAT) membership and RequireScope are NOT assertable here; that
+// contract lives in router.go and is enforced by review. This test guards
+// against the routes disappearing or their paths/methods drifting.
+func TestRouter_KBDocumentRoutesRegistered(t *testing.T) {
+	router, _, err := api.NewRouter(api.ServerConfig{})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	want := map[string]bool{
+		"DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/documents/:document_id": false,
+		"GET /api/v1/datapacks/:datapack_id/knowledge-bases/documents":                 false,
+	}
+	for _, r := range router.Routes() {
+		key := r.Method + " " + r.Path
+		if _, seen := want[key]; seen {
+			want[key] = true
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Errorf("route not registered: %s", key)
+		}
+	}
+}

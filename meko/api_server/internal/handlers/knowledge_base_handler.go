@@ -2039,6 +2039,7 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 //     @Param		status_filter query	string	false	"Exact status match: NOT_STARTED, QUEUED, PROCESSING, COMPLETED, FAILED or RETRY"
 //     @Success	200			{object}	APIResponse
 //     @Failure	401			{object}	APIResponse
+//     @Failure	403			{object}	APIResponse	"PAT without the read scope"
 //     @Failure	500			{object}	APIResponse
 //     @Security	BearerAuth
 //     @Router		/datapacks/{datapack_id}/knowledge-bases/documents [get]

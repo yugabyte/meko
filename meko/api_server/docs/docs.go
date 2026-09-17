@@ -487,6 +487,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
+                    },
+                    "403": {
+                        "description": "PAT without the read scope",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
                     }
                 }
             },
@@ -536,6 +542,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
+                    "403": {
+                        "description": "PAT without the write scope",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
                     "409": {
                         "description": "Conflict",
                         "schema": {
@@ -577,6 +589,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "PAT without the write scope",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -2684,6 +2702,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
+                    "403": {
+                        "description": "PAT without the read scope",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -3012,13 +3036,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Byte source: 'local' (default). Reserved: 'url'.",
+                        "description": "Byte source: 'local_filesystem' (default). Reserved: 'url'.",
                         "name": "source",
                         "in": "formData"
                     },
                     {
                         "type": "file",
-                        "description": "File to upload (pdf, txt, md, json, csv, xml, html) — required when source=local",
+                        "description": "File to upload (pdf, txt, md, json, csv, xml, html)",
                         "name": "file",
                         "in": "formData",
                         "required": true
@@ -3123,6 +3147,18 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
                     }
                 }
             }
@@ -3143,7 +3179,7 @@ const docTemplate = `{
                 "tags": [
                     "knowledge-bases"
                 ],
-                "summary": "Generate a presigned S3 upload URL",
+                "summary": "Generate a presigned S3 upload authorization (POST + policy)",
                 "parameters": [
                     {
                         "type": "string",
@@ -4947,13 +4983,11 @@ const docTemplate = `{
                     "description": "ContentHash is the hex-encoded SHA-256 of the file bytes, computed by\nthe client before requesting the presigned URL. It is used as the S3\nsub-directory so that (a) the same filename with different content gets\na unique path, and (b) re-uploading identical bytes is idempotent.",
                     "type": "string"
                 },
-                "content_type": {
-                    "type": "string"
-                },
                 "filename": {
                     "type": "string"
                 },
                 "size": {
+                    "description": "Size is the client's *declared* size — only a UX-nicety early\nrejection. The actual cap signed into the policy (see RequestUploadURL's\nsignedCap) is derived entirely from server-side state, so a lied-about\nSize can't get more past S3 than an honest one could.",
                     "type": "integer"
                 }
             }
@@ -5045,7 +5079,18 @@ const docTemplate = `{
             }
         },
         "service.AddRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
         },
         "service.ChangePasswordRequest": {
             "type": "object",
@@ -5113,7 +5158,18 @@ const docTemplate = `{
             }
         },
         "service.CreateUserAgentRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "agent_details": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "agent_id": {
+                    "type": "string"
+                }
+            }
         },
         "service.ForgotPasswordConfirmRequest": {
             "type": "object",

@@ -1054,7 +1054,13 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.GET("/datapacks/:datapack_id/knowledge-bases/counts", kbH.Counts,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:datapack_id/knowledge-bases/documents", kbH.Documents,
+	// On dpDirect (PAT-accepting, read scope). document_id also appears in
+	// kb_hits[] on the conversation-detail / message-trace / decision-trace
+	// routes below — this is the authoritative browse surface for a datapack's
+	// KB documents, i.e. how a PAT client discovers ids to delete without
+	// first replaying a conversation trace.
+	dpDirect.GET("/datapacks/:datapack_id/knowledge-bases/documents", kbH.Documents,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 	// SharedKnowledge page: header tile aggregates + auto-generated
@@ -1083,8 +1089,12 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	// RequireDatapackAccess (not the owner-or-maintainer middleware)
 	// — viewers and contributors who uploaded a file must be able
 	// to delete their own contribution.
-	g.DELETE("/datapacks/:datapack_id/knowledge-bases/documents/:document_id",
+	// On dpDirect (PAT-accepting, write scope) so the MCP server's
+	// knowledgebase_delete_document tool can call it — same move
+	// /promote-memories needed for memory_promote.
+	dpDirect.DELETE("/datapacks/:datapack_id/knowledge-bases/documents/:document_id",
 		kbH.DeleteDocument,
+		auth.RequireScope(auth.ScopeWrite),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 

@@ -78,11 +78,14 @@ definitions:
           sub-directory so that (a) the same filename with different content gets
           a unique path, and (b) re-uploading identical bytes is idempotent.
         type: string
-      content_type:
-        type: string
       filename:
         type: string
       size:
+        description: |-
+          Size is the client's *declared* size — only a UX-nicety early
+          rejection. The actual cap signed into the policy (see RequestUploadURL's
+          signedCap) is derived entirely from server-side state, so a lied-about
+          Size can't get more past S3 than an honest one could.
         type: integer
     type: object
   models.CreateFeedbackRequest:
@@ -142,6 +145,13 @@ definitions:
         type: string
     type: object
   service.AddRequest:
+    properties:
+      details:
+        items:
+          type: integer
+        type: array
+      url:
+        type: string
     type: object
   service.ChangePasswordRequest:
     properties:
@@ -186,6 +196,13 @@ definitions:
         type: string
     type: object
   service.CreateUserAgentRequest:
+    properties:
+      agent_details:
+        items:
+          type: integer
+        type: array
+      agent_id:
+        type: string
     type: object
   service.ForgotPasswordConfirmRequest:
     properties:
@@ -603,6 +620,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: PAT without the read scope
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
       summary: List agents for the authenticated user
@@ -633,6 +654,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: PAT without the write scope
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "409":
           description: Conflict
           schema:
@@ -659,6 +684,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: PAT without the write scope
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
@@ -1973,6 +2002,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: PAT without the read scope
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -2177,12 +2210,11 @@ paths:
         name: datapack_id
         required: true
         type: string
-      - description: 'Byte source: ''local'' (default). Reserved: ''url''.'
+      - description: 'Byte source: ''local_filesystem'' (default). Reserved: ''url''.'
         in: formData
         name: source
         type: string
-      - description: File to upload (pdf, txt, md, json, csv, xml, html) — required
-          when source=local
+      - description: File to upload (pdf, txt, md, json, csv, xml, html)
         in: formData
         name: file
         required: true
@@ -2254,6 +2286,14 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
       summary: Confirm a completed file upload
@@ -2296,7 +2336,7 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Generate a presigned S3 upload URL
+      summary: Generate a presigned S3 upload authorization (POST + policy)
       tags:
       - knowledge-bases
   /datapacks/{datapack_id}/langfuse/project-keys:
