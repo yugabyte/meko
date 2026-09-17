@@ -113,14 +113,23 @@ def advisory(status):
     return WARN if status == FAIL else status
 
 
+def liveness(selector, grace):
+    """OK if the target answered any scrape in the window.
+
+    A single missed scrape is not an outage: omes closes its metrics ports for
+    ~32s between 2-hour scenario blocks, read as 13 FAILs over 48h.
+    """
+    v = q(f"max(max_over_time({selector}[{grace}]))")
+    return v, OK if v == 1 else FAIL if v is not None else ERR
+
+
 def check_all():
     endpoint = state["endpoint_id"]
     ep = f'endpoint="{endpoint}"' if endpoint else ""
     lru = f'lru="{LRU}"'
     rules = {}
 
-    v = q(f'max(up{{job="ledger",component="metrics",{lru}}})')
-    rules["ledger_up"] = (v, OK if v == 1 else FAIL if v is not None else ERR)
+    rules["ledger_up"] = liveness(f'up{{job="ledger",component="metrics",{lru}}}', "5m")
 
     # This driver reports only at the end of a cycle, so every rule below that
     # reads a summary is meaningless until the first one lands. Judging them
@@ -197,8 +206,7 @@ def check_all():
         return rules
     rules["amp_endpoint_resolved"] = (1.0, OK)
 
-    v = q(f"max(pg_up{{{ep}}})")
-    rules["amp_endpoint_up"] = (v, OK if v == 1 else FAIL if v is not None else ERR)
+    rules["amp_endpoint_up"] = liveness(f"pg_up{{{ep}}}", "3m")
 
     v = q(f'sum(rate(pg_stat_database_xact_commit{{{ep},datname="{WORKLOAD_DB}"}}[5m]))')
     rules["endpoint_commits_per_s"] = (v, band(v, 1, 0.1, higher_is_bad=False))

@@ -128,3 +128,35 @@ not certain. It is the obvious thing to watch.
 
 Recorded before anything degrades, which is the point: the prediction is on
 record and either the mechanism generalises or it does not.
+
+## 2026-09-17 `omes_up` was our rule, not an outage
+
+`omes_up` FAILed 13 times in 48h, one minute each, spaced 2h00m18s apart and
+drifting a minute later each time. Nothing was wrong.
+
+omes runs `throughput_stress` in two-hour blocks. Between blocks it stops the
+worker, rebuilds the Go binary and starts a new one, leaving both metrics ports
+closed for about 32 seconds:
+
+```
+16:50:31 Run completed in 2h0m18.245282923s
+16:50:37 Sending interrupt to worker, PID 18871 ... Worker has been stopped
+16:51:07 Building go program at /work/src/workers/go/omes-temp-4287630458
+16:51:09 Starting worker ... Process metrics sidecar started on 0.0.0.0:9091
+```
+
+Both targets, `:9090` and `:9091`, failed the same single scrape and no other.
+At each one `workflow_success` held 1.64-1.75/s, persistence p99 18.3-19.2 ms,
+error ratio 0.0002, and every amp-endpoint scrape was up, so the database was
+never involved. Scrape durations are 2-29 ms typical, 211 ms worst over 48h,
+so nothing was timing out either.
+
+The defect was reading one instantaneous `up` sample and calling a zero a FAIL.
+Eight rules across the four checkers did this: `omes_up`, `ledger_up`,
+`bomber_up`, `card_up` and `amp_endpoint_up`. All now go through `liveness()`,
+which asks whether the target answered any scrape in a window: 5m for the
+workload drivers, which restart on their own schedule, 3m for the endpoint.
+
+The cost: a roll that takes an endpoint down for about a minute no longer FAILs
+`amp_endpoint_up`. `persistence_error_ratio` and `persistence_p99_s` are what
+actually caught the 15 Sep roll, and they still do.

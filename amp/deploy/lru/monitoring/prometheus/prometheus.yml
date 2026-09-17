@@ -58,3 +58,28 @@ scrape_configs:
         regex: "7676"
         target_label: exporter
         replacement: safekeeper
+  # Per-container memory, through the API server's node proxy. Without it the
+  # only reading is a point-in-time kubectl top, which cannot tell a leak from
+  # a working set that is still filling.
+  - job_name: cadvisor
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+    metric_relabel_configs:
+      - source_labels: [namespace]
+        regex: amp-lru|amp-dev
+        action: keep
+      - source_labels: [__name__]
+        regex: container_(memory_working_set_bytes|memory_rss|cpu_usage_seconds_total|spec_memory_limit_bytes)
+        action: keep

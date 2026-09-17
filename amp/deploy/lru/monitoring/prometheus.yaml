@@ -31,6 +31,28 @@ subjects:
     name: prometheus
     namespace: amp-lru
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: amp-lru-prometheus-node-proxy
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, nodes/metrics]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: amp-lru-prometheus-node-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: amp-lru-prometheus-node-proxy
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: amp-lru
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
