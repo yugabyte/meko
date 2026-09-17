@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
@@ -173,7 +174,7 @@ func workloadConfigAt(c *core.Config, p string) maintenanceConfig {
 		// An amp endpoint provisions cloud_admin/postgres, not the jar's yugabyte defaults.
 		EndpointCreds: endpointCreds{
 			User:     c.GetString("functional.amp.endpoint_user", "cloud_admin"),
-			Password: c.GetString("functional.amp.endpoint_password", "cloud_admin"),
+			Password: c.GetString("functional.amp.endpoint_password", controller.DefaultEndpointPassword),
 			Database: c.GetString("functional.amp.endpoint_db", "postgres"),
 		},
 		SettleTimeout: c.GetDuration(p+"settle_timeout", DefaultMaintenanceSettleTimeout),

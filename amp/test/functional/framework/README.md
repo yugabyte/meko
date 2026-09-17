@@ -137,7 +137,10 @@ postmaster, postgres answering again (`core/conndrop.go`,
 `env/sharedk8s/conndrop.go`); anything short of full attestation stays
 `failed`. A third: a failure that is ONLY our own kubectl failing to reach the
 API server (`k8s.APIServerUnreachableError`) never observed the product, so it
-lands `env_failed` too — joined with any other error it stays `failed`.
+lands `env_failed` too — joined with any other error it stays `failed`. And a
+fourth: any failure recorded while the shared control plane's own namespace is
+gone or Terminating, which nothing in the product can cause
+(`SharedInfraGoneChecker`).
 
 **Env-failure retries** (`core/retry.go`). A test whose environment failed for a
 SCHEDULING-CLASS reason — pod unschedulable, insufficient cpu/memory,

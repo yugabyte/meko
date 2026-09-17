@@ -189,6 +189,9 @@ type Provider struct {
 	ampCfg ampstack.Config
 	newApp func(cfg ampstack.Config) *ampstack.App
 	app    *ampstack.App
+	// Monotone: once the shared namespace is gone it never returns, so the
+	// per-failure probe is paid once rather than by every red test.
+	sharedGone atomic.Bool
 
 	// Run-scoped deploy selection (deploy mode). ybDeployCfg is the raw config the
 	// selector reads (env.yb_deploy, knob only — a shared control plane cannot vary
@@ -930,6 +933,33 @@ func (p *Provider) SharedInfraHealthy(ctx context.Context) error {
 		}
 		return p.canaryCluster(ctx, cl)
 	})
+}
+
+// SharedInfraGone reports the SHARED control plane's namespace missing; nothing in the product can delete it.
+func (p *Provider) SharedInfraGone(ctx context.Context) (string, bool) {
+	// A stack that never deployed has no namespace to lose, and an all-dedicated
+	// run never deploys one — without this every failure there reads as deleted.
+	if p.sharedApp() == nil && p.deploy {
+		return "", false
+	}
+	ns := p.kube.Namespace()
+	if ns == "" {
+		return "", false
+	}
+	if p.sharedGone.Load() {
+		return "control-plane namespace " + ns, true
+	}
+	where := "control-plane namespace " + ns
+	phase, err := p.kube.GetClusterScoped(ctx, "namespace", ns, "{.status.phase}")
+	switch {
+	case err != nil && strings.Contains(strings.ToLower(err.Error()), "not found"):
+	// Terminating counts: the delete is irreversible and every write is already refused.
+	case err == nil && strings.EqualFold(phase, "Terminating"):
+	default:
+		return "", false
+	}
+	p.sharedGone.Store(true)
+	return where, true
 }
 
 // canaryCluster runs one create/delete round trip — the first thing every test

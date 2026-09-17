@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -34,14 +35,9 @@ const (
 	DefaultConcurrency  = 4
 	DefaultPgVersion    = 0 // 0 → let the controller choose the endpoint's PG version
 
-	// DefaultEndpointUser/Password/DB: every amp compute endpoint (sharedk8s
-	// single-container and controller-created alike) provisions the same
-	// cloud_admin superuser with this default password (deploy/README.md,
-	// the supervisor's COMPUTE_PASSWORD) — the controller API
-	// neither sets nor returns endpoint credentials, so this is the real
-	// default, not a placeholder.
+	// DefaultEndpointPassword is the create's password on a meko#1272 controller and the compute's own default on an older one.
 	DefaultEndpointUser     = "cloud_admin"
-	DefaultEndpointPassword = "cloud_admin"
+	DefaultEndpointPassword = controller.DefaultEndpointPassword
 	DefaultEndpointDB       = "postgres"
 
 	DefaultClusterRF       = 0    // 0 → clamp to the node count

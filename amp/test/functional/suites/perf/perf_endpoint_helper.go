@@ -29,13 +29,9 @@ const (
 	// The endpoint's compute Postgres role/database, as the endpoint image
 	// bootstraps them (deploy/README.md; the same pair sharedk8s connects with).
 	endpointComputeUser = "cloud_admin"
-	// endpointComputePassword is what the compute's supervisor sets for
-	// cloud_admin over its loopback trust connection so REMOTE clients can
-	// authenticate (endpoint_supervisor remote_auth.rs; the value is
-	// env_or("COMPUTE_PASSWORD", "cloud_admin") and the chart does not override
-	// it). sharedk8s never needed it because a port-forward arrives on loopback,
-	// where pg_hba trusts; this client pod is a remote peer.
-	endpointComputePassword = "cloud_admin"
+	// The password the create asked for. A port-forward lands on loopback where
+	// pg_hba trusts, but this client pod is a remote peer and must authenticate.
+	endpointComputePassword = controller.DefaultEndpointPassword
 	endpointComputeDB       = "postgres"
 	// endpointComputePort is the chart's endpoint.computePort — the port the
 	// endpoint Service publishes for compute Postgres. Used only when the

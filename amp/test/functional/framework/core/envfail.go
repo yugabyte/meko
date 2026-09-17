@@ -52,7 +52,13 @@ var neverRetry = []string{
 	"invalid credentials",
 	"x509",
 	"no such file or directory",
+	// A namespace that was deleted never comes back; retrying burns the backoff
+	// and a whole attempt to fail identically.
+	sharedInfraGoneMarker,
 }
+
+// sharedInfraGoneMarker is appended to a verdict reached on a deleted control plane.
+const sharedInfraGoneMarker = "was deleted mid-run"
 
 // schedulingSignals are the ONLY retryable failures. Every token of an entry must
 // appear, pinning "context deadline exceeded" to a readiness wait; specific first.

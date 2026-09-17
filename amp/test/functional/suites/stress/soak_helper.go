@@ -118,7 +118,7 @@ func soakFromConfig(c *core.Config) soakConfig {
 		SettleTimeout:       c.GetDuration(p+"settle_timeout", DefaultSoakSettleTimeout),
 		Creds: endpointCreds{
 			User:     c.GetString("functional.amp.endpoint_user", "cloud_admin"),
-			Password: c.GetString("functional.amp.endpoint_password", "cloud_admin"),
+			Password: c.GetString("functional.amp.endpoint_password", controller.DefaultEndpointPassword),
 			Database: c.GetString("functional.amp.endpoint_db", "postgres"),
 		},
 	}

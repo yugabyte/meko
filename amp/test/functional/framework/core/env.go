@@ -74,3 +74,8 @@ type SharedInfraHealthChecker interface {
 
 // ErrNoSharedInfraProbe reports that this provider has no health probe.
 var ErrNoSharedInfraProbe = errors.New("provider has no shared-infra health probe")
+
+// SharedInfraGoneChecker reports the shared stack's namespace deleted — narrower than SharedInfraHealthy, whose failure can be a product bug.
+type SharedInfraGoneChecker interface {
+	SharedInfraGone(ctx context.Context) (where string, gone bool)
+}

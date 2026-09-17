@@ -273,6 +273,13 @@ func (k *Kubectl) LabelNamespace(ctx context.Context, name, key, value string) e
 	return err
 }
 
+// GetClusterScoped reads a cluster-scoped resource, dropping the -n that would name the namespace being asked about.
+func (k *Kubectl) GetClusterScoped(ctx context.Context, kind, name, jsonpath string) (string, error) {
+	nk := *k
+	nk.cfg.Namespace = ""
+	return nk.Get(ctx, kind, name, jsonpath)
+}
+
 // Label sets one label on a namespaced resource, overwriting any current value.
 func (k *Kubectl) Label(ctx context.Context, kind, name, key, value string) error {
 	_, err := k.exec(ctx, nil, "label", kind, name, fmt.Sprintf("%s=%s", key, value), "--overwrite")

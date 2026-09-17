@@ -445,6 +445,9 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 			} else if reason, ok := attestConnDrop(env, wd.err); ok {
 				result.Status = StatusEnvFailed
 				result.ErrorSummary += " [" + reason + "]"
+			} else if reason, ok := attestSharedInfraGone(test, opts.Provider); ok {
+				result.Status = StatusEnvFailed
+				result.ErrorSummary += " [" + reason + "]"
 			}
 		case failed:
 			result.Status = StatusFailed
@@ -455,6 +458,9 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 					result.ErrorSummary += " [" + reason + "]"
 				} else if KubeAPIUnreachable(failErr) {
 					result.Status = StatusEnvFailed
+				} else if reason, ok := attestSharedInfraGone(test, opts.Provider); ok {
+					result.Status = StatusEnvFailed
+					result.ErrorSummary += " [" + reason + "]"
 				}
 			}
 		default:
@@ -507,3 +513,25 @@ func shouldCollect(mode string, failed bool) bool {
 		return failed
 	}
 }
+
+// attestSharedInfraGone: a verdict reached on a deleted control plane is not one.
+func attestSharedInfraGone(test Test, prov EnvProvider) (string, bool) {
+	// Only the shared stack: a dedicated test runs in its own namespace, which
+	// this answers nothing about.
+	if test.Env.Dedicated() || !ProviderSharesInfra(prov) {
+		return "", false
+	}
+	c, ok := prov.(SharedInfraGoneChecker)
+	if !ok {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sharedInfraGoneTimeout)
+	defer cancel()
+	where, gone := c.SharedInfraGone(ctx)
+	if !gone {
+		return "", false
+	}
+	return "env: " + where + " " + sharedInfraGoneMarker + ", so this verdict is not the product's", true
+}
+
+const sharedInfraGoneTimeout = 15 * time.Second

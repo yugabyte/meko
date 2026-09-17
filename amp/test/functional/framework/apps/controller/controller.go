@@ -701,9 +701,13 @@ func (c *Client) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID
 }
 
 // DefaultEndpointPassword is what the harness creates writers with when a suite
-// names no password. Fixed and in the clear on purpose: these endpoints are
-// throwaway, and what the suites assert is the API's behaviour, not secrecy.
-const DefaultEndpointPassword = "functional-suite-pw-1"
+// names no password. In the clear on purpose (throwaway endpoints), and equal to
+// the compute's own pre-meko#1272 default so ONE value authenticates against
+// both image trains: an older controller drops the field silently and the
+// compute keeps this password, a newer one sets exactly this password.
+// TODO: once the nightly runs a post-1272 image everywhere, make this distinct
+// again so a supervisor that stopped applying the password fails a test.
+const DefaultEndpointPassword = "cloud_admin"
 
 // withEndpointPassword fills in the writer's password when the caller left it
 // empty. A read_only endpoint creates no role and the controller rejects a
