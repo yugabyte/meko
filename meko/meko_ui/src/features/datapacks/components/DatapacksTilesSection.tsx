@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { useDatapackMetrics } from "@/features/datapacks/hooks/useDatapackMetrics";
 import { ArrowRight, Database, Plus, Search, Share2, Terminal } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -121,8 +120,6 @@ function DatapackTile({
   const canShare = isDatapackGrantEligibleToShare(dp);
   const sharedByLabel = datapackSharedByLabel(dp);
 
-  const { data: metrics } = useDatapackMetrics(dp.datapack_id);
-
   // M-01: computed from fields already on the Datapack object (no API needed)
   const m01Tokens = ((dp.knowledge_count ?? 0) * 1000) + ((dp.memory_count ?? 0) * 200);
   const m01Label = m01Tokens >= 1_000_000
@@ -130,23 +127,6 @@ function DatapackTile({
     : m01Tokens >= 1_000
       ? `${Math.round(m01Tokens / 1_000)}K ctx`
       : `${m01Tokens} ctx`;
-
-  // M-02: savings % from metrics API
-  const m02Label = metrics && metrics.total_requests > 0
-    ? `${(metrics.savings_pct * 100).toFixed(0)}% saved`
-    : null;
-
-  // M-03: quality score → High / Mid / Low label
-  const scoreTotal = (metrics?.score_high_total ?? 0) + (metrics?.score_mid_total ?? 0) + (metrics?.score_low_total ?? 0);
-  const qualityScore = scoreTotal > 0 ? (metrics?.score_high_total ?? 0) / scoreTotal : null;
-  const m03Label = qualityScore === null ? null
-    : qualityScore > 0.75 ? "High quality"
-    : qualityScore > 0.5  ? "Mid quality"
-    : "Low quality";
-  const m03Color = qualityScore === null ? ""
-    : qualityScore > 0.75 ? "text-green-600 dark:text-green-400"
-    : qualityScore > 0.5  ? "text-amber-600 dark:text-amber-400"
-    : "text-red-600 dark:text-red-400";
 
   return (
     <Card
@@ -229,16 +209,6 @@ function DatapackTile({
               <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
                 {m01Label}
               </span>
-              {m02Label && (
-                <span className="rounded-md bg-green-500/10 px-2 py-0.5 text-[10px] font-medium tabular-nums text-green-700 dark:text-green-400">
-                  {m02Label}
-                </span>
-              )}
-              {m03Label && (
-                <span className={cn("rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium", m03Color)}>
-                  {m03Label}
-                </span>
-              )}
             </div>
 
           <div className="flex items-start justify-between gap-3 text-xs text-muted-foreground">

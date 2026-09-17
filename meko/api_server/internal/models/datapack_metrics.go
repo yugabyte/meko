@@ -29,6 +29,18 @@ type DatapackMetrics struct {
 	ConversationCount     int     `json:"conversation_count"`
 	MemoryExtractionCount int     `json:"memory_extraction_count"`
 	ExtractionRate        float64 `json:"extraction_rate"`
+
+	// M-09 chunk counts per content type (for token and size estimates)
+	// Each chunk is assumed to be ~1024 tokens.
+	KBChunkCount           int64 `json:"kb_chunk_count"`
+	KBFileCount            int64 `json:"kb_file_count"`
+	MemoryChunkCount       int64 `json:"memory_chunk_count"`
+	ConversationChunkCount int64 `json:"conversation_chunk_count"`
+
+	// M-10 storage size estimates (bytes of stored text content)
+	KBBytes           int64 `json:"kb_bytes"`
+	MemoryBytes       int64 `json:"memory_bytes"`
+	ConversationBytes int64 `json:"conversation_bytes"`
 }
 
 // DailyActivityPoint is one day's query breakdown from datapack_daily_activity.

@@ -127,7 +127,7 @@ function StatsTile({
       <div className="grid grid-cols-1 divide-y divide-border/60 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
         <StatCell
           icon={<Layers className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />}
-          label="Vector entries"
+          label="Vector chunks"
           value={fmt(summary?.total_chunks)}
         />
         <StatCell

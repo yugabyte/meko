@@ -12,7 +12,7 @@ export function useDatapackMetrics(datapackId: string | null | undefined) {
       }
       return getDatapackMetrics(datapackId, { signal });
     },
-    staleTime: 0,
+    staleTime: 30_000,
     enabled: Boolean(datapackId),
   });
 }

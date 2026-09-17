@@ -50,6 +50,9 @@ func (r *DatapackMetricsRepo) fetchMetrics(ctx context.Context, datapackID strin
 	if err := r.fetchMemoryExtractionCount(ctx, datapackID, m); err != nil {
 		return nil, err
 	}
+	if err := r.fetchChunkCounts(ctx, datapackID, m); err != nil {
+		return nil, err
+	}
 
 	if m.TokensIfRawTotal > 0 {
 		m.SavingsPct = float64(m.TokensSavedTotal) / float64(m.TokensIfRawTotal)
@@ -109,7 +112,6 @@ func (r *DatapackMetricsRepo) fetchAccess(ctx context.Context, datapackID string
 	}
 	return nil
 }
-
 func (r *DatapackMetricsRepo) fetchDailyActivity(ctx context.Context, datapackID string, m *models.DatapackMetrics) error {
 	rows, err := r.systemDB.QueryContext(ctx,
 		`SELECT activity_date, search_type, query_count
@@ -166,7 +168,6 @@ func (r *DatapackMetricsRepo) fetchDailyActivity(ctx context.Context, datapackID
 	}
 	return nil
 }
-
 func (r *DatapackMetricsRepo) fetchConversationCount(ctx context.Context, datapackID string, m *models.DatapackMetrics) error {
 	err := r.dataDB.QueryRowContext(ctx,
 		`SELECT COUNT(DISTINCT conversation_id)
@@ -179,7 +180,6 @@ func (r *DatapackMetricsRepo) fetchConversationCount(ctx context.Context, datapa
 	}
 	return nil
 }
-
 func (r *DatapackMetricsRepo) fetchMemoryExtractionCount(ctx context.Context, datapackID string, m *models.DatapackMetrics) error {
 	err := r.dataDB.QueryRowContext(ctx,
 		`SELECT COUNT(*)
@@ -190,5 +190,38 @@ func (r *DatapackMetricsRepo) fetchMemoryExtractionCount(ctx context.Context, da
 	if err != nil {
 		return fmt.Errorf("failed to read memory extraction count: %w", err)
 	}
+	return nil
+}
+func (r *DatapackMetricsRepo) fetchChunkCounts(ctx context.Context, datapackID string, m *models.DatapackMetrics) error {
+	err := r.dataDB.QueryRowContext(ctx,
+		`SELECT COUNT(*), COUNT(DISTINCT document_id), COALESCE(SUM(octet_length(chunk_text)), 0)
+		 FROM datapacks.knowledge_bases
+		 WHERE tenant_id = $1::uuid`,
+		datapackID,
+	).Scan(&m.KBChunkCount, &m.KBFileCount, &m.KBBytes)
+	if err != nil {
+		return fmt.Errorf("failed to read kb chunk counts: %w", err)
+	}
+
+	err = r.dataDB.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(octet_length(payload->>'data')), 0)
+		 FROM datapacks.meko_mem0_collection
+		 WHERE meko_datapack_id = $1::uuid`,
+		datapackID,
+	).Scan(&m.MemoryChunkCount, &m.MemoryBytes)
+	if err != nil {
+		return fmt.Errorf("failed to read memory chunk counts: %w", err)
+	}
+
+	err = r.dataDB.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(octet_length(chunk_text)), 0)
+		 FROM datapacks.conversation_history_search
+		 WHERE tenant_id = $1::uuid`,
+		datapackID,
+	).Scan(&m.ConversationChunkCount, &m.ConversationBytes)
+	if err != nil {
+		return fmt.Errorf("failed to read conversation chunk counts: %w", err)
+	}
+
 	return nil
 }

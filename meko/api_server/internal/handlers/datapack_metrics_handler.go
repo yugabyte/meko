@@ -23,7 +23,7 @@ func NewDatapackMetricsHandler(repo *repository.DatapackMetricsRepo) *DatapackMe
 // GetMetrics handles GET /api/v1/datapacks/{datapack_id}/metrics.
 //
 //	@Summary	Get all analytics metrics for a datapack
-//	@Description	Returns token savings, score bands, agent/human access counts, daily activity (last 30 days), conversation count, and memory extraction rate for the given datapack.
+//	@Description	Returns token savings, score bands, agent/human access counts, daily activity (last 30 days), conversation count, memory extraction rate, chunk counts per content type, and storage byte sizes for the given datapack.
 //	@Tags		datapacks
 //	@Produce	json
 //	@Param		datapack_id	path		string	true	"Datapack UUID"

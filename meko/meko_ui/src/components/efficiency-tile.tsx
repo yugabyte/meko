@@ -69,6 +69,8 @@ export type EfficiencyTileProps = {
   /** Shown when there is no data yet (e.g. zero requests). */
   emptyLabel?: string;
   isEmpty?: boolean;
+  /** Optional CTA button rendered below the empty label. */
+  emptyAction?: { label: string; onClick: () => void };
   className?: string;
 };
 
@@ -86,6 +88,7 @@ export function EfficiencyTile({
   error = null,
   emptyLabel = "No data yet",
   isEmpty = false,
+  emptyAction,
   className,
 }: EfficiencyTileProps) {
   const styles = ACCENT_STYLES[accent];
@@ -119,7 +122,23 @@ export function EfficiencyTile({
       ) : error ? (
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       ) : isEmpty ? (
-        <p className="py-2 text-sm text-muted-foreground">{emptyLabel}</p>
+        <div className="flex flex-col gap-3 py-2">
+          <p className="text-sm text-muted-foreground">{emptyLabel}</p>
+          {emptyAction ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); emptyAction.onClick(); }}
+              className={cn(
+                "w-fit rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                "border border-border hover:border-foreground/30",
+                "text-foreground/80 hover:text-foreground",
+                "bg-transparent hover:bg-foreground/5",
+              )}
+            >
+              {emptyAction.label} →
+            </button>
+          ) : null}
+        </div>
       ) : (
         <>
           <div>

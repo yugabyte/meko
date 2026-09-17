@@ -930,6 +930,13 @@ export type DatapackMetrics = {
   conversation_count: number;
   memory_extraction_count: number;
   extraction_rate: number;
+  kb_chunk_count: number;
+  kb_file_count: number;
+  memory_chunk_count: number;
+  conversation_chunk_count: number;
+  kb_bytes: number;
+  memory_bytes: number;
+  conversation_bytes: number;
 };
 
 export async function getDatapackMetrics(

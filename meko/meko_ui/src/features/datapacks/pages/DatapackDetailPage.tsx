@@ -58,9 +58,7 @@ import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
-import { DatapackMetricsSection, DatapackMetricsSummaryRow } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
-import { DatapackTokenBurnTile } from "@/features/datapacks/components/efficiency/TokenBurnTile";
-import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
+import { DatapackMetricsSection, DatapackMetricsTilesRow } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailClustersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailClustersTile";
@@ -544,8 +542,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6 mt-0">
-            {/* M01 / M02 / M03 summary chips */}
-            <DatapackMetricsSummaryRow
+            {/* Metrics tiles — Total Context / Context Efficiency / Context Quality */}
+            <DatapackMetricsTilesRow
               datapackId={datapack?.datapack_id ?? null}
               knowledgeCount={datapack?.knowledge_count ?? 0}
               memoryCount={memoriesCount}
@@ -553,16 +551,10 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
               onNavigateToMetric={(sectionId) => {
                 setActiveTab("analytics");
                 setTimeout(() => {
-                  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                }, 80);
+                  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }, 50);
               }}
             />
-
-            {/* Meko efficiency — token burn saved for this datapack. Only shown
-                where contextual prominence search is enabled. */}
-            {CONTEXTUAL_PROMINENCE_SEARCH_ENABLED ? (
-              <DatapackTokenBurnTile datapackId={datapack?.datapack_id ?? null} />
-            ) : null}
 
             <CollectiveLearningPipeline
               currentUser={currentUser}
@@ -612,7 +604,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
             </div>
           </TabsContent>
 
-          <TabsContent value="analytics" className="mt-0">
+          <TabsContent value="analytics" className="mt-0" forceMount hidden={activeTab !== "analytics"}>
             <DatapackMetricsSection
               datapackId={datapack?.datapack_id ?? null}
               knowledgeCount={datapack?.knowledge_count ?? 0}
