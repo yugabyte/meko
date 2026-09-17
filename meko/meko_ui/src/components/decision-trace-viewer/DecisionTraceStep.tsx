@@ -210,6 +210,12 @@ export function DecisionTraceStep({
                         </div>
                       ) : null}
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
+                        {/* ml-0 because the conversation link below owns the
+                            row's ml-auto; the chip reads left, beside the
+                            distance it was derived from. */}
+                        {typeof c.score === "number" && Number.isFinite(c.score) ? (
+                          <MatchChip pct={c.score * 100} className="ml-0" />
+                        ) : null}
                         {typeof c.distance === "number" ? (
                           <span>
                             distance:{" "}
@@ -596,9 +602,10 @@ function HitRow({
   );
 }
 
-// Renders a "% match" chip from an already-computed percentage (see HitRow
-// for the per-source normalization). Buckets: ≥70% green, ≥40% amber, else grey.
-function MatchChip({ pct: rawPct }: { pct: number }) {
+// Renders a "% match" chip from an already-computed percentage; each caller
+// normalizes its own source to one first. Buckets: ≥70% green, ≥40% amber,
+// else grey.
+function MatchChip({ pct: rawPct, className }: { pct: number; className?: string }) {
   const pct = Math.round(Math.max(0, Math.min(100, rawPct)));
   const tone =
     pct >= 70
@@ -608,7 +615,11 @@ function MatchChip({ pct: rawPct }: { pct: number }) {
         : "bg-muted/40 text-muted-foreground";
   return (
     <span
-      className={cn("ml-auto shrink-0 rounded px-1 py-0.5 font-mono text-[10px] tabular-nums", tone)}
+      className={cn(
+        "ml-auto shrink-0 rounded px-1 py-0.5 font-mono text-[10px] tabular-nums",
+        tone,
+        className,
+      )}
       title="Relevance match %. 100% = highly relevant, 0% = unrelated."
     >
       {pct}% match

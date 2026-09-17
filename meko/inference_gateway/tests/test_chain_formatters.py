@@ -26,11 +26,14 @@ in milliseconds.
 
 from __future__ import annotations
 
+import pytest
+
 from inference_gateway.chain import (
     CONV_SUMMARY_MAX_TURNS,
     _FOCUS_BLOCK_END,
     _FOCUS_BLOCK_START,
     _conversation_hits_to_bullets,
+    _distance_to_similarity,
     _format_knowledge_context,
     _format_memory_context,
     _is_trivial_query,
@@ -589,3 +592,27 @@ def test_tone_strictness_block_renders_both() -> None:
     rendered = _render_tone_strictness_block("encouraging", "lenient")
     assert "Tone: frame feedback constructively" in rendered
     assert "Strictness: only flag significant issues" in rendered
+
+
+# --------------------------------------------------------------------------- #
+# distance -> similarity
+# --------------------------------------------------------------------------- #
+
+
+def test_distance_to_similarity_is_one_minus_distance() -> None:
+    assert _distance_to_similarity(0.25) == 0.75
+    assert _distance_to_similarity(0) == 1.0
+
+
+def test_distance_to_similarity_stays_negative_past_orthogonal() -> None:
+    """A distance above 1.0 is genuinely anti-correlated. We pass the negative
+    through so the UI's clamp is the only place a value is floored at 0% --
+    clamping here would hide it from anything else reading the trace."""
+    assert _distance_to_similarity(1.0149994944400873) == pytest.approx(-0.014999494440087302)
+
+
+def test_distance_to_similarity_none_for_missing_or_non_numeric() -> None:
+    """Thread turns can arrive without a distance; they get no score rather
+    than a fabricated 0."""
+    assert _distance_to_similarity(None) is None
+    assert _distance_to_similarity("0.3") is None

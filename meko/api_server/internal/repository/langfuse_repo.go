@@ -330,7 +330,12 @@ type MessageDecisionTrace struct {
 // ConversationChunk is one prior-conversation excerpt that fed a cache-hit
 // summary. conversation_id + user_id let the UI link back to the source.
 type ConversationChunk struct {
-	Content        string   `json:"content,omitempty"`
+	Content string `json:"content,omitempty"`
+	// Score is the cosine similarity (1 - Distance) the gateway recorded,
+	// same scale as KBHit.Score and mem0's memory score. Nil on turns
+	// traced before the gateway started emitting it, and on thread turns
+	// that carry no distance.
+	Score          *float64 `json:"score,omitempty"`
 	Distance       *float64 `json:"distance,omitempty"`
 	ConversationID string   `json:"conversation_id,omitempty"`
 	MessageID      string   `json:"message_id,omitempty"`

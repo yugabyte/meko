@@ -2116,6 +2116,7 @@ async def _add_message(
             {
                 "content": (c.get("content") or "")[:600],
                 "distance": c.get("distance"),
+                "score": _distance_to_similarity(c.get("distance")),
                 "conversation_id": c.get("conversation_id"),
                 "message_id": c.get("message_id"),
                 "user_id": c.get("user_id"),
@@ -2281,6 +2282,19 @@ def _extract_memory_hits(payload: object, relation_cap: Optional[int] = None) ->
     return mem_hits + graph_hits + promoted_hits
 
 
+def _distance_to_similarity(raw_distance: object) -> Optional[float]:
+    """Cosine similarity from a pgvector cosine distance: `1 - distance`.
+
+    The same value shape mem0 returns for memory hits, so KB, memory and
+    conversation hits all reach the UI on one scale. Unclamped: a distance
+    above 1.0 is genuinely anti-correlated and the negative says so. The UI
+    clamps to [0, 100] on display.
+    """
+    if not isinstance(raw_distance, (int, float)):
+        return None
+    return 1.0 - float(raw_distance)
+
+
 def _extract_kb_hits(payload: object) -> List[KbHit]:
     """Pull structured KB chunk hits out of whatever `knowledgebase_search` returned.
 
@@ -2310,10 +2324,7 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
             distance: Optional[float] = (
                 float(raw_distance) if isinstance(raw_distance, (int, float)) else None
             )
-            # Cosine similarity = 1 - distance (same value shape as mem0's
-            # memory score). Passed through unclamped — the UI clamps on
-            # display and mem0 clamps memory upstream.
-            score: Optional[float] = (1.0 - distance) if distance is not None else None
+            score: Optional[float] = _distance_to_similarity(distance)
             text = (
                 item.get("chunk_text")
                 or item.get("text")

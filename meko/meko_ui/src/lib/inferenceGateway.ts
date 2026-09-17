@@ -133,6 +133,10 @@ export type ProcessingStep = {
 /** One prior-conversation excerpt that fed a conversation_search hit. */
 export type ConversationChunk = {
   content?: string;
+  /** Cosine similarity (1 - distance), same value shape as memory and KB
+   *  scores. Absent on turns traced before the gateway emitted it, and on
+   *  thread turns carrying no distance. */
+  score?: number;
   distance?: number;
   conversation_id?: string;
   message_id?: string;
