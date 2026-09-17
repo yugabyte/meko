@@ -95,7 +95,7 @@ type Spec struct {
 	InstallDir string
 	BaseDir    string // --base_dir; "" → DefaultBaseDir
 	DataDir    string // --data_dir; "" → omitted (yugabyted default under base_dir)
-	RF         int    // replication factor → --fault_tolerance; <=1 → none
+	RF         int    // replication factor; >1 → `configure data_placement` after start
 	YSQLPort   int    // libpq port exposed in ConnInfo; 0 → 5433
 	// YSQLHost overrides the host used in ConnInfo. "" → nodes[0].Advertise
 	// (the coordinator must be able to reach it).
@@ -121,6 +121,7 @@ type App struct {
 	logf           func(format string, args ...any)
 	pythonEnsure   bool // gates the ensurePython step; see WithEnsurePython
 	pythonSetupCmd string
+	placed         bool // data placement applied; Wait is called more than once
 }
 
 // Option customizes an App.
@@ -386,10 +387,19 @@ func (a *App) startNode(ctx context.Context, n Node, joinHost string) error {
 	if a.spec.DataDir != "" {
 		fmt.Fprintf(&b, " --data_dir=%s", shellQuote(a.spec.DataDir))
 	}
-	if a.spec.RF > 1 {
-		fmt.Fprintf(&b, " --fault_tolerance=%s", faultTolerance(a.spec.RF))
-	}
 	return a.runOK(ctx, n.Exec, b.String())
+}
+
+// configureDataPlacement sets the cluster's replication factor. A joining node
+// brings its master up in shell mode and `yugabyted start` pins
+// --replication_factor=1, so RF is only ever applied here. No --fault_tolerance:
+// the nodes carry no --cloud_location and so share one placement, which only the
+// unset (cloud.region.zone) domain can satisfy.
+func (a *App) configureDataPlacement(ctx context.Context) error {
+	cmd := fmt.Sprintf("%s configure data_placement --base_dir=%s --rf=%d",
+		a.bin(), shellQuote(a.baseDir()), a.spec.RF)
+	a.log("yugabyted: configuring data placement for RF %d across %d node(s)", a.spec.RF, len(a.nodes))
+	return a.runOK(ctx, a.nodes[0].Exec, cmd)
 }
 
 // Wait blocks until YSQL answers on the cluster and node 0 reports a running
@@ -404,6 +414,12 @@ func (a *App) Wait(ctx context.Context) error {
 	}
 	if _, err := a.Status(ctx); err != nil {
 		return fmt.Errorf("yugabyted status not healthy: %w", err)
+	}
+	if a.spec.RF > 1 && !a.placed {
+		if err := a.configureDataPlacement(ctx); err != nil {
+			return fmt.Errorf("yugabyted configure data_placement --rf=%d: %w", a.spec.RF, err)
+		}
+		a.placed = true
 	}
 	return nil
 }
@@ -511,19 +527,6 @@ func (a *App) runOK(ctx context.Context, ex exec.RemoteExecutor, cmd string) err
 		return fmt.Errorf("command exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return nil
-}
-
-// faultTolerance maps an RF to yugabyted's --fault_tolerance argument. RF 3
-// tolerates one node loss (zone), RF 5 two; anything else falls back to "none".
-func faultTolerance(rf int) string {
-	switch {
-	case rf >= 5:
-		return "zone"
-	case rf >= 3:
-		return "zone"
-	default:
-		return "none"
-	}
 }
 
 // shellQuote wraps s in single quotes, escaping embedded single quotes, so it

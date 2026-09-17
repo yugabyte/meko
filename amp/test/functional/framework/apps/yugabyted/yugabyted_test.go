@@ -99,7 +99,6 @@ func TestStartJoinSequence(t *testing.T) {
 		"--advertise_address='10.0.0.1'",
 		"--base_dir='" + DefaultBaseDir + "'",
 		"--background=true",
-		"--fault_tolerance=zone",
 	} {
 		if !strings.Contains(startCmd, want) {
 			t.Errorf("node0 start missing %q in %q", want, startCmd)
@@ -107,6 +106,10 @@ func TestStartJoinSequence(t *testing.T) {
 	}
 	if strings.Contains(startCmd, "--join") {
 		t.Errorf("node0 must not join: %q", startCmd)
+	}
+	// RF is applied by `configure data_placement`, never at start.
+	if strings.Contains(startCmd, "--fault_tolerance") {
+		t.Errorf("start must not set fault_tolerance: %q", startCmd)
 	}
 
 	// Nodes 1 and 2 join node 0.
@@ -179,7 +182,7 @@ func TestStartWithoutInstallDirUsesPathBinary(t *testing.T) {
 		t.Errorf("expected bare `yugabyted` on PATH, got %q", c0)
 	}
 	if strings.Contains(c0, "--fault_tolerance") {
-		t.Errorf("RF<=1 must not set fault_tolerance: %q", c0)
+		t.Errorf("start must not set fault_tolerance: %q", c0)
 	}
 }
 
@@ -463,6 +466,69 @@ func TestWaitProbesYSQLAndStatus(t *testing.T) {
 	}
 }
 
+func TestWaitConfiguresDataPlacementForRF(t *testing.T) {
+	nodes, execs := threeNodes()
+	execs[0].on("status", exec.Result{ExitCode: 0, Stdout: "Status: Running"})
+	app := New(nodes, Spec{RF: 3}, WithWaitPG(func(context.Context, pg.ConnInfo, time.Duration) error {
+		return nil
+	}))
+	if err := app.Wait(context.Background()); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	cmds := execs[0].recorded()
+	idx := indexOfContains(cmds, "configure data_placement")
+	if idx < 0 {
+		t.Fatalf("configure data_placement never ran: %v", cmds)
+	}
+	for _, want := range []string{"--rf=3", "--base_dir='" + DefaultBaseDir + "'"} {
+		if !strings.Contains(cmds[idx], want) {
+			t.Errorf("configure missing %q in %q", want, cmds[idx])
+		}
+	}
+	if strings.Contains(cmds[idx], "--fault_tolerance") {
+		t.Errorf("configure must not set fault_tolerance: %q", cmds[idx])
+	}
+	// A second Wait must not move masters again.
+	if err := app.Wait(context.Background()); err != nil {
+		t.Fatalf("second wait: %v", err)
+	}
+	if got := countContains(execs[0].recorded(), "configure data_placement"); got != 1 {
+		t.Errorf("configure data_placement ran %d times, want 1", got)
+	}
+	for i, ex := range execs[1:] {
+		if indexOfContains(ex.recorded(), "configure data_placement") >= 0 {
+			t.Errorf("node%d ran configure; only the bootstrap node should", i+1)
+		}
+	}
+}
+
+func TestWaitSkipsDataPlacementForSingleNode(t *testing.T) {
+	nodes, execs := threeNodes()
+	execs[0].on("status", exec.Result{ExitCode: 0, Stdout: "Status: Running"})
+	app := New(nodes[:1], Spec{RF: 1}, WithWaitPG(func(context.Context, pg.ConnInfo, time.Duration) error {
+		return nil
+	}))
+	if err := app.Wait(context.Background()); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if indexOfContains(execs[0].recorded(), "configure data_placement") >= 0 {
+		t.Errorf("RF 1 must not configure data placement: %v", execs[0].recorded())
+	}
+}
+
+func TestWaitFailsWhenDataPlacementFails(t *testing.T) {
+	nodes, execs := threeNodes()
+	execs[0].on("status", exec.Result{ExitCode: 0, Stdout: "Status: Running"}).
+		on("configure data_placement", exec.Result{ExitCode: 1, Stderr: "not enough nodes to set-up a RF-3 cluster"})
+	app := New(nodes, Spec{RF: 3}, WithWaitPG(func(context.Context, pg.ConnInfo, time.Duration) error {
+		return nil
+	}))
+	err := app.Wait(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not enough nodes") {
+		t.Fatalf("expected the data_placement failure to surface, got %v", err)
+	}
+}
+
 func TestCollectGathersLogs(t *testing.T) {
 	nodes, execs := threeNodes()
 	execs[0].on("yugabyted.log", exec.Result{ExitCode: 0, Stdout: "yb line\n"})
@@ -500,6 +566,16 @@ func (m *memSink) names() []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func countContains(cmds []string, sub string) int {
+	n := 0
+	for _, c := range cmds {
+		if strings.Contains(c, sub) {
+			n++
+		}
+	}
+	return n
 }
 
 func indexOfContains(cmds []string, sub string) int {
