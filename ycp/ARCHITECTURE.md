@@ -218,6 +218,32 @@ READY → DRAINING (drain) → DEREGISTERED (deregister)
 - Console lifecycle actions (`suspend`/`resume`/`drain`/`deregister`) are applied
   via `PATCH`/`DELETE`.
 
+A state must be *present* on both `/agent/status` and `/agent/bootstrap-progress`:
+an absent or blank one is a `400` that writes nothing, heartbeat included. Every
+agent write must likewise carry `Content-Type: application/json` (`415` otherwise)
+and a non-empty body (`400`). BYOC is pull-only, so the agent's self-report is the
+*only* signal about a data plane: a call that succeeds for a report that did not
+happen leaves the environment reading as healthy. An empty body used to do exactly
+that, binding to a zero-valued report and blanking the state
+([CLOUDGA-36984](https://yugabyte.atlassian.net/browse/CLOUDGA-36984)).
+
+A state the control plane does not *recognise* is a different case and is stored,
+with a warning in the control-plane log. The agent is upgraded on the customer's
+schedule, so it can report a state added after the running control plane shipped;
+refusing it would fail every heartbeat from every environment on that agent version,
+and since a failed report is only logged (`reconcile/loop.go`) the fleet would go
+stale with no other signal. That is the compatibility rule [`REVIEW.md`](../REVIEW.md)
+states for `EnvState`, and the console follows it too — an unrecognised state renders
+under its own name.
+
+The known-state list is still duplicated in three places — `EnvState` here,
+`envStates` in meko's `api_server`, and the enum in `meko/design/ycp-openapi.yaml` —
+because the two sides are separate Go modules that cannot import each other. Drift no
+longer strands a fleet, but it makes the published contract untrue and the
+unknown-state warning misleading, so `TestEnvStateListsAgreeAcrossTheRepo` compares
+them and the `meko_api_server` CI filter lists both non-Go copies so that a PR
+touching only one still runs it.
+
 ## Authentication
 
 The agent's credential is a **YBM-minted API key**, shown once by YBM and

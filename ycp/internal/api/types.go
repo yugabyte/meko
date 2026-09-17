@@ -8,6 +8,14 @@ import (
 )
 
 // EnvState is a value from the §7 bootstrapping / lifecycle state machine.
+//
+// The control plane requires a state to be present but TOLERATES one it does not
+// know (REVIEW.md: "a new value is safe only if the receiver tolerates unknown
+// states") — an agent on the customer's upgrade schedule can be ahead of it. The
+// list is still copied, deliberately, ycp and meko being separate Go modules that
+// must not cross-import: into envStates in meko's api_server and the EnvState enum
+// in meko/design/ycp-openapi.yaml. Adding a state means all three, and
+// TestEnvStateListsAgreeAcrossTheRepo fails until it is.
 type EnvState string
 
 const (

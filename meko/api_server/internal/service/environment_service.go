@@ -77,6 +77,59 @@ func normalizeKind(kind string) (string, error) {
 	}
 }
 
+// The environment lifecycle states this control plane KNOWS. Not the set it
+// accepts: an agent the customer upgrades on their own schedule can report a state
+// added after this binary shipped, and per REVIEW.md ("a new value is safe only if
+// the receiver tolerates unknown states") refusing it would strand that agent's
+// whole fleet. Unknown is therefore stored and warned about, not rejected.
+//
+// A DELIBERATE COPY of EnvState in ycp/internal/api/types.go and the EnvState enum
+// in design/ycp-openapi.yaml -- ycp and meko are separate Go modules that must not
+// cross-import, and the spec is not Go at all. The copies drifting apart no longer
+// breaks a fleet, but it does make the published contract untrue and the warning
+// below misleading, so TestEnvStateListsAgreeAcrossTheRepo holds them together.
+const (
+	StatePending             = "PENDING"
+	StateClusterProvisioning = "CLUSTER_PROVISIONING"
+	StateEnrolling           = "ENROLLING"
+	StateAttesting           = "ATTESTING"
+	StateProvisioning        = "PROVISIONING"
+	StateValidating          = "VALIDATING"
+	StateReady               = "READY"
+	StateDegraded            = "DEGRADED"
+	StateSuspended           = "SUSPENDED"
+	StateDraining            = "DRAINING"
+	StateDeregistered        = "DEREGISTERED"
+)
+
+var envStates = map[string]struct{}{
+	StatePending: {}, StateClusterProvisioning: {}, StateEnrolling: {},
+	StateAttesting: {}, StateProvisioning: {}, StateValidating: {},
+	StateReady: {}, StateDegraded: {}, StateSuspended: {},
+	StateDraining: {}, StateDeregistered: {},
+}
+
+// normalizeState uppercases a reported state and rejects only an absent one.
+//
+// Absent is the whole of CLOUDGA-36984: it is what a dropped request body
+// deserializes to, it is stored verbatim in a NOT NULL column so the DEFAULT never
+// rescues it, and it renders as a blank chip on an environment whose heartbeat says
+// it is healthy -- indistinguishable from a working agent. An unknown-but-present
+// state is the opposite: legible in the console, and the expected shape of version
+// skew, so it is accepted. stateIsKnown is how a caller says so in the log.
+func normalizeState(state string) (string, error) {
+	s := strings.ToUpper(strings.TrimSpace(state))
+	if s == "" {
+		return "", fmt.Errorf("%w: environment_state is required", ErrValidation)
+	}
+	return s, nil
+}
+
+func stateIsKnown(state string) bool {
+	_, ok := envStates[state]
+	return ok
+}
+
 // EnvironmentService owns the YCP fleet-registry logic: the api-key identity
 // binding, status ingestion, and generic desired-state. Control-plane mode only.
 type EnvironmentService struct {
@@ -303,9 +356,9 @@ func (s *EnvironmentService) Register(
 	if placement == "" {
 		placement = "cloud"
 	}
-	state := "PENDING"
+	state := StatePending
 	if req.ClusterSpec != nil {
-		state = "CLUSTER_PROVISIONING"
+		state = StateClusterProvisioning
 	}
 	// The id is the slug of the name, whatever the kind. It deliberately encodes no
 	// kind: the id is the environment's addressing key — unique per account, the
@@ -390,7 +443,7 @@ func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind strin
 		e.Placement = placement
 	}
 	mergeFacts(e, f)
-	e.State = "ATTESTING"
+	e.State = StateAttesting
 	// The MCP base URL and cert fingerprint are meko-specific: the meko agent fronts
 	// a per-environment MCP endpoint under mekodata.ai and presents a TLS cert. The
 	// amp controller reports neither, so synthesizing a mekodata.ai hostname and a
@@ -437,12 +490,28 @@ type StatusResult struct {
 
 // ApplyStatus merges an agent status report. Found=false ⇒ unknown environment.
 func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (StatusResult, error) {
+	// Before the read: a report with no state costs no query, and the heartbeat must
+	// NOT be refreshed for it -- a report that did not happen buying the environment
+	// another staleness window is the whole of CLOUDGA-36984.
+	state, err := normalizeState(r.EnvironmentState)
+	if err != nil {
+		slog.Warn("reject agent status report", "env_uuid", envUUID,
+			"reported_state", r.EnvironmentState, "error", err)
+		return StatusResult{}, err
+	}
+	// Stored either way -- see envStates on why an unknown state is not an error --
+	// but an operator seeing an unfamiliar state in the console should be able to
+	// find out here whether this binary is simply older than the agent.
+	if !stateIsKnown(state) {
+		slog.Warn("agent reported a state this control plane does not know",
+			"env_uuid", envUUID, "reported_state", state)
+	}
 	e, err := s.repo.GetByUUID(envUUID)
 	if err != nil || e == nil {
 		return StatusResult{}, err
 	}
 	now := time.Now().UTC()
-	e.State = r.EnvironmentState
+	e.State = state
 	e.AgentVersion = r.AgentVersion
 	e.LastHeartbeatAt = &now
 	mergeFacts(e, r.ClusterFacts)
@@ -560,11 +629,18 @@ func (s *EnvironmentService) Task(envUUID, taskID string) (*models.EnvironmentTa
 // SetState moves an environment to an agent-reported bootstrap phase. Distinct
 // from Action, which applies operator intent from a fixed set.
 func (s *EnvironmentService) SetState(envUUID, state string) (bool, error) {
+	// BootstrapProgress.Phase is typed EnvState on the wire and required by the
+	// spec, so a phase is a state and gets the same check: present or rejected,
+	// unknown tolerated.
+	phase, err := normalizeState(state)
+	if err != nil {
+		return false, err
+	}
 	e, err := s.repo.GetByUUID(envUUID)
 	if err != nil || e == nil {
 		return false, err
 	}
-	e.State = state
+	e.State = phase
 	return true, s.repo.Update(e)
 }
 
@@ -639,13 +715,13 @@ func (s *EnvironmentService) Action(envID string, scope AccountScope, action str
 	}
 	switch action {
 	case "suspend":
-		e.State = "SUSPENDED"
+		e.State = StateSuspended
 	case "resume":
-		e.State = "READY"
+		e.State = StateReady
 	case "drain":
-		e.State = "DRAINING"
+		e.State = StateDraining
 	case "deregister":
-		e.State = "DEREGISTERED"
+		e.State = StateDeregistered
 	default:
 		return nil, fmt.Errorf("%w: unknown action %q", ErrValidation, action)
 	}

@@ -16,6 +16,9 @@
 #   4c. GET /environments/{id} hands back the same install hint register returned, so
 #      an operator who did not run it there and then can still find it -- including
 #      the YBM pass-through base a registration gave, which is stored for it.
+#   5. the agent surface refuses a non-JSON content type (415), an empty body (400)
+#      and a blank state (400) -- and leaves the environment's state untouched
+#      when it does.
 #
 # What it no longer covers: an agent converging anything. It used to drive the
 # retired meko-agent against a public postgres image, which was the only workload it
@@ -362,5 +365,34 @@ case "$stored_hint" in
   *"$want_url"*) echo "    a stored agent_base_url is what the hint dials" ;;
   *) die "hint-check's hint does not dial its stored agent base url: ${stored_hint:0:400}" ;;
 esac
+
+# 5. The agent surface refuses a request it cannot read, and — the part that matters
+#    — refuses it without touching the environment. CLOUDGA-36984: a status POST
+#    whose body the gateway had dropped bound to a zero-valued report and wrote the
+#    environment's state as empty, on a row whose heartbeat the same statement
+#    refreshed. Unit tests cover the codes; this covers them over the wire, through
+#    the real middleware chain, against real Postgres.
+log "probing the agent surface with requests it must refuse"
+agent_post_code() {
+  curl -s -o /dev/null -w '%{http_code}' -X POST \
+    "http://127.0.0.1:$PORT$BASE/api/v1/agent/status" \
+    -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H "X-Meko-Api-Key-ID: $API_KEY_ID" \
+    -H "content-type: $1" --data-binary "$2"
+}
+state_before="$(api GET "/api/v1/environments/$ENV_NAME" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["state"])')"
+
+code="$(agent_post_code text/plain hello)"
+[ "$code" = "415" ] || die "POST /agent/status as text/plain returned $code, want 415"
+code="$(agent_post_code application/json '')"
+[ "$code" = "400" ] || die "POST /agent/status with an empty body returned $code, want 400"
+code="$(agent_post_code application/json '{"environment_state":""}')"
+[ "$code" = "400" ] || die "POST /agent/status with a blank state returned $code, want 400"
+
+state_after="$(api GET "/api/v1/environments/$ENV_NAME" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["state"])')"
+[ "$state_after" = "$state_before" ] ||
+  die "the refused probes moved the environment's state from '$state_before' to '$state_after'"
+echo "    refused (415/400/400), and the environment's state survived them"
 
 log "PASS — control plane built, deployed, gated, and registering against api_server --control-plane-mode"

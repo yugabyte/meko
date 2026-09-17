@@ -463,9 +463,15 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		// The agent surface has no account header — the key id names the environment
 		// on its own — so it hangs off v1 directly with its own auth pair rather
 		// than the fleet group's.
+		// The body guard sits after the auth pair so an unauthenticated probe still
+		// gets 401 and cannot learn which routes speak JSON. It is safe group-wide
+		// here because every route below either requires a body or is a GET; the
+		// fleet group above gets the same answers from bindJSON per handler instead,
+		// because it also carries GETs and a DELETE.
 		agentGroup := v1.Group("/agent",
 			auth.RequireAdminSecret(cfg.AdminAPIKey),
 			auth.RequireAPIKeyID(),
+			handlers.JSONBodyGuard(),
 		)
 		agentGroup.POST("/enroll", envH.AgentEnroll)
 		agentGroup.GET("/desired-state", envH.AgentDesiredState)

@@ -356,7 +356,10 @@
   let ENVS = [];
   let currentFilter = "all";
   let selectedId = null;
-  const STATE_CLASS = { READY:"ready", DEGRADED:"degraded", SUSPENDED:"suspended", DRAINING:"suspended", DEREGISTERED:"suspended", PROVISIONING:"prov", CLUSTER_PROVISIONING:"prov", ENROLLING:"prov", ATTESTING:"prov", VALIDATING:"prov", PENDING:"prov" };
+  // UNKNOWN is not a lifecycle state: it is what a row with no state at all is
+  // shown as, so a stored blank reads as a problem rather than as an unlabelled
+  // chip. See mapEnv, and renderRows for where it is listed.
+  const STATE_CLASS = { READY:"ready", DEGRADED:"degraded", SUSPENDED:"suspended", DRAINING:"suspended", DEREGISTERED:"suspended", PROVISIONING:"prov", CLUSTER_PROVISIONING:"prov", ENROLLING:"prov", ATTESTING:"prov", VALIDATING:"prov", PENDING:"prov", UNKNOWN:"degraded" };
   const LIFECYCLE = ["PENDING","CLUSTER_PROVISIONING","ENROLLING","ATTESTING","PROVISIONING","VALIDATING","READY"];
   const TERMINAL = new Set(["READY","DEGRADED","SUSPENDED","DRAINING","DEREGISTERED"]);
   const chip = s => `<span class="chip ${STATE_CLASS[s]||"prov"}">${s}</span>`;
@@ -371,7 +374,7 @@
     return Math.round(s/3600)+"h";
   }
   function mapEnv(a) {
-    return { id:a.id, kind:a.kind||"meko", region:a.region||"—", place:a.placement, state:a.state,
+    return { id:a.id, kind:a.kind||"meko", region:a.region||"—", place:a.placement, state:a.state||"UNKNOWN",
       agent:a.agent_version||"—", hb:rel(a.last_heartbeat_at), stale:a.last_heartbeat_at && (Date.now()-new Date(a.last_heartbeat_at).getTime())>90000,
       live:a.live, components:a.components||null, resources:a.resources||[], mcp:a.mcp_base_url||"", cert:a.cert_fingerprint||"",
       k8s:a.k8s_version, nodes:a.node_count, provider:a.provider };
@@ -514,7 +517,13 @@
   }
 
   function renderRows(filter) {
-    const list = ENVS.filter(e => !filter || filter==="all" || (filter==="PROVISIONING" ? String(e.state).includes("PROVISIONING") : e.state===filter));
+    // UNKNOWN has no filter button of its own, so it rides with DEGRADED: it means
+    // the row reached us with no state at all, and an operator looking for broken
+    // environments is looking under DEGRADED. Without this it shows only under All.
+    const list = ENVS.filter(e => !filter || filter==="all"
+      || (filter==="PROVISIONING" ? String(e.state).includes("PROVISIONING")
+      : filter==="DEGRADED" ? (e.state==="DEGRADED" || e.state==="UNKNOWN")
+      : e.state===filter));
     if (!list.length) {
       rowsEl.innerHTML = `<tr><td colspan="8" style="color:var(--ink-faint);padding:20px">No environments yet — enroll an agent, or use <b>Register</b>.</td></tr>`;
       el("detail").innerHTML = '<div style="color:var(--ink-faint);font-size:13px">Select an environment.</div>';

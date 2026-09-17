@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -232,14 +233,8 @@ const accountIDUniqueConstraint = "environments_account_id_uniq"
 // between two registrations of the same (account_id, id) simply gets
 // ErrEnvironmentExists.
 func (r *EnvironmentRepo) Insert(e *models.Environment) error {
-	components := e.Components
-	if len(components) == 0 {
-		components = json.RawMessage("[]")
-	}
-	resources := e.Resources
-	if len(resources) == 0 {
-		resources = json.RawMessage("[]")
-	}
+	components := jsonArray(e.Components)
+	resources := jsonArray(e.Resources)
 	kind := e.Kind
 	if kind == "" {
 		kind = "meko"
@@ -298,14 +293,8 @@ func isUniqueViolationOf(err error, constraint string) bool {
 // The key bindings are not written either -- they live in their own table, so a
 // status heartbeat cannot disturb them.
 func (r *EnvironmentRepo) Update(e *models.Environment) error {
-	components := e.Components
-	if len(components) == 0 {
-		components = json.RawMessage("[]")
-	}
-	resources := e.Resources
-	if len(resources) == 0 {
-		resources = json.RawMessage("[]")
-	}
+	components := jsonArray(e.Components)
+	resources := jsonArray(e.Resources)
 	kind := e.Kind
 	if kind == "" {
 		kind = "meko"
@@ -430,4 +419,17 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+// jsonArray coerces an absent, blank or literal-null document to an empty array.
+// Both columns are read as arrays everywhere, and json.Marshal of a nil slice
+// yields `null` -- four bytes, so a plain length check waves it through and the
+// next reader gets a null where it expects a list. This is the last gate before
+// the column, so it covers every caller rather than each marshal site.
+func jsonArray(raw json.RawMessage) []byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return []byte("[]")
+	}
+	return raw
 }

@@ -88,6 +88,13 @@ jobs:
             meko_api_server:
               - 'meko/api_server/**'
               - '.github/workflows/meko-pr-build.yml'
+              # Not api_server sources, but the two other copies of the EnvState
+              # list that TestEnvStateListsAgreeAcrossTheRepo compares against.
+              # A new state naturally gets written in one of these FIRST, and
+              # without them such a PR skips this job and merges with the copies
+              # disagreeing -- which is the one case the test exists to catch.
+              - 'ycp/internal/api/types.go'
+              - 'meko/design/ycp-openapi.yaml'
             # Scoped narrower than meko_api_server: this job diffs against
             # main and only cares about the migrations tree (plus the tool
             # that checks it), not every api_server PR.

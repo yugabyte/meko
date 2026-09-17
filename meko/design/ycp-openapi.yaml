@@ -87,6 +87,7 @@ paths:
           description: Aeon entitlement does not permit another environment.
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
   /api/v1/environments/{envId}:
     parameters: [{ $ref: '#/components/parameters/EnvId' }]
@@ -130,8 +131,10 @@ paths:
                 properties:
                   api_key_id: { type: string, format: uuid }
         '202': { description: Accepted; transition queued as desired state. }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
     delete:
       tags: [environments]
       summary: Deregister an environment
@@ -239,7 +242,9 @@ paths:
                   environment_id: { type: string }
                   environment_uuid: { type: string, description: The row key; the id is a slug unique only within an account. }
                   mcp_base_url: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { description: No environment is bound to the API key. }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
   /api/v1/agent/bootstrap-progress:
     post:
@@ -262,6 +267,8 @@ paths:
                 error: { type: string, nullable: true }
       responses:
         '204': { description: Recorded. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
   /api/v1/agent/desired-state:
     get:
@@ -295,7 +302,9 @@ paths:
         content: { application/json: { schema: { $ref: '#/components/schemas/StatusReport' } } }
       responses:
         '204': { description: Recorded. }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
   # ------------------------------------------------------------------ internal
   /api/v1/internal/meko-tokens/validate:
@@ -354,11 +363,23 @@ components:
     NotFound: { description: Not found., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     BadRequest: { description: Invalid request., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: Conflicting state., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    UnsupportedMediaType:
+      description: |
+        The request did not carry `Content-Type: application/json`. Every write on
+        this API requires it, and a body-less write is a `400` — a request whose body
+        was dropped in transit must not be mistaken for a report of empty fields.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
     EnvState:
       type: string
-      description: Bootstrapping / lifecycle state (§7 state machine).
+      description: |
+        Bootstrapping / lifecycle state (§7 state machine). A reported state must be
+        present — absent or blank is `400` — but one outside this list is accepted
+        and stored, because the agent is upgraded on the customer's schedule and can
+        be ahead of the control plane. This list is the set the control plane
+        recognises; adding to it means adding to `envStates` in the api_server and to
+        `EnvState` in `ycp/internal/api` in the same change.
       enum: [PENDING, CLUSTER_PROVISIONING, ENROLLING, ATTESTING, PROVISIONING, VALIDATING, READY, DEGRADED, SUSPENDED, DRAINING, DEREGISTERED]
 
     Environment:

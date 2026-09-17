@@ -73,8 +73,8 @@ func (h *EnvironmentHandler) Get(c echo.Context) error {
 // name this account already holds answers 409 ENVIRONMENT_EXISTS.
 func (h *EnvironmentHandler) Register(c echo.Context) error {
 	var req service.RegisterEnvironmentRequest
-	if err := c.Bind(&req); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	if !bindJSON(c, &req) {
+		return nil
 	}
 	e, err := h.svc.Register(req, accountScope(c))
 	if err != nil {
@@ -103,8 +103,8 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 	var body struct {
 		Resources []models.DesiredResource `json:"resources"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	if !bindJSON(c, &body) {
+		return nil
 	}
 	found, err := h.svc.SetDesired(c.Param("id"), accountScope(c), body.Resources)
 	if err != nil {
@@ -156,8 +156,8 @@ func (h *EnvironmentHandler) Action(c echo.Context) error {
 	var body struct {
 		Action string `json:"action"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	if !bindJSON(c, &body) {
+		return nil
 	}
 	e, err := h.svc.Action(c.Param("id"), accountScope(c), body.Action)
 	if err != nil {
@@ -212,13 +212,23 @@ func (h *EnvironmentHandler) AgentBootstrapProgress(c echo.Context) error {
 		Phase string `json:"phase"`
 		Step  string `json:"step"`
 	}
-	if err := c.Bind(&bp); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	if !bindJSON(c, &bp) {
+		return nil
 	}
-	if bp.Phase != "" {
-		if _, err := h.svc.SetState(e.UUID, bp.Phase); err != nil {
-			return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	// No "empty phase is a quiet no-op" branch: phase is required by the spec, and
+	// answering 204 to a report that moved nothing is the pattern this ticket is
+	// about. The found bool is checked for the same reason, and answers 404 as
+	// AgentStatus does -- the two agent-facing writes must not disagree about what
+	// an unknown environment looks like.
+	found, err := h.svc.SetState(e.UUID, bp.Phase)
+	if err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	if !found {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "unknown environment")
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -228,8 +238,8 @@ func (h *EnvironmentHandler) AgentBootstrapProgress(c echo.Context) error {
 // needs to run.
 func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	var req service.EnrollRequest
-	if err := c.Bind(&req); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	if !bindJSON(c, &req) {
+		return nil
 	}
 	e, err := h.svc.EnrollByKey(auth.GetAPIKeyID(c), req.Placement, req.Kind, req.ClusterFacts)
 	if err != nil {
@@ -288,11 +298,14 @@ func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
 		return nil
 	}
 	var rep service.StatusReport
-	if err := c.Bind(&rep); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	if !bindJSON(c, &rep) {
+		return nil
 	}
 	res, err := h.svc.ApplyStatus(e.UUID, rep)
 	if err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	if !res.Found {
