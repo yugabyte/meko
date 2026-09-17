@@ -565,6 +565,42 @@ whose control plane is already installed (the usual case when this fails) the
 apply above is what installs them; re-running a deploy script that upgrades in
 place will not.
 
+## `ingress_*` endpoint accepts the connection, then hangs
+
+**Symptom.** `nc -z <shard>:<port>` succeeds and the endpoint's pod is Ready, but
+a client hangs until its timeout. The shard's pods are Running, its probes pass
+and its load balancer has backends — nothing looks wrong.
+
+**Cause.** Traefik published no configuration at all, so the entryPoint accepts
+the connection and no router ever dials a backend. Its provider builds one
+informer per watched type and fails its whole cache sync if any single one cannot
+list — so one missing CRD, or one resource the shard's Role does not cover, takes
+out every route on the shard rather than the object involved. `nc -z` cannot see
+this: the listener is open either way.
+
+**Check.** The proxy logs the reason, and the absence of the confirmation is the
+tell:
+
+```sh
+kubectl -n <ns> logs deploy/<shard> | grep -i forbidden          # want nothing
+kubectl -n <ns> logs deploy/<shard> | grep "Configuration loaded" # want a line
+```
+
+**Fix.** Whatever the log names — a missing CRD (above), or a resource missing
+from the Role. Two the chart handles that an older shard release may not:
+`--providers.kubernetescrd.disableClusterScopeResources=true`, without which the
+cluster-scoped Node informer can never sync against a namespaced Role; and
+`secrets`/`configmaps` read, which the provider watches whether or not anything
+uses them. Upgrade the shard release **and restart it** — the provider syncs once
+at startup, so a proxy that came up before the new Role propagated has already
+given up and will keep serving nothing:
+
+```sh
+kubectl -n <ns> rollout restart deploy/<shard>
+```
+
+The endpoints keep their slots across both.
+
 ## `ingress_*` endpoint answers on the wrong load balancer
 
 **Symptom.** An `ingress_internal` endpoint is reachable from the internet, or a

@@ -22,14 +22,26 @@ metadata:
   labels:
     {{- include "yb-amp-ingress.labels" . | nindent 4 }}
 rules:
-  {{- /*
-  NO secrets. Endpoint releases install into this same namespace, so granting
-  them would hand the shared proxy read on every endpoint's YB password Secret —
-  and nothing here needs one: this design renders no `tls` block and no auth
-  middleware, because TLS is passed through to the pod rather than terminated.
-  */}}
   - apiGroups: [""]
     resources: [services, endpoints]
+    verbs: [get, list, watch]
+  {{- /*
+  Secrets and ConfigMaps are granted even though this design uses neither — it
+  renders no `tls` block and no auth middleware, because TLS is passed through to
+  the pod. The provider builds an informer for both unconditionally and fails its
+  whole cache sync if either cannot list, so refusing them means the shard
+  publishes no configuration and serves nothing (see the CRD note below; same
+  failure, different resource). Traefik has no flag to disable these two the way
+  --providers.kubernetescrd.disableClusterScopeResources handles Nodes, and RBAC
+  cannot restrict list/watch by name, so there is no narrower grant than this.
+
+  Endpoint releases install into this same namespace, so the shared proxy can
+  read every endpoint's YB password Secret. Accepted: the only narrower shape is
+  shards in a namespace of their own, which needs allowCrossNamespace and buys
+  nothing here.
+  */}}
+  - apiGroups: [""]
+    resources: [secrets, configmaps]
     verbs: [get, list, watch]
   - apiGroups: ["discovery.k8s.io"]
     resources: [endpointslices]

@@ -107,8 +107,20 @@ export type EndpointRole = "read_write" | "read_only";
  *  (plus the tailnet) only; the `nlb_*` modes add a Postgres-only Service behind
  *  the cloud's L4 load balancer — internal (reachable from the surrounding
  *  VPC/VNet) or internet-facing. Works on EKS, GKE and AKS; the controller
- *  renders the right provider's annotations. */
-export type EndpointConnectivityMode = "cluster_ip" | "nlb_internal" | "nlb_external";
+ *  renders the right provider's annotations.
+ *
+ *  The `ingress_*` pair gives those same two exposures from a SHARED load
+ *  balancer — a port on an ingress shard — so creating one provisions nothing in
+ *  the cloud. They are refused with 400 unless the deployment has ingress
+ *  enabled, and they take no `allowed_cidrs`: the load balancer is shared, so a
+ *  per-endpoint allowlist cannot be a per-Service field, and the middleware that
+ *  will do it is not built yet. */
+export type EndpointConnectivityMode =
+  | "cluster_ip"
+  | "ingress_internal"
+  | "ingress_external"
+  | "nlb_internal"
+  | "nlb_external";
 export type EndpointConnectivity = {
   mode?: EndpointConnectivityMode;
   /** Sources allowed to reach the load balancer, as CIDRs. Empty is

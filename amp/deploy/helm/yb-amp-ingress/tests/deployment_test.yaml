@@ -19,6 +19,42 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --entryPoints.pg-20002.address=:20002
 
+  # Guaranteed QoS: equal request and limit is what stops the kubelet evicting a
+  # proxy that is carrying customer connections under node pressure. The CPU
+  # figure itself is sized in values.yaml against a measurement; what is pinned
+  # here is that the two stay equal, since raising only the limit silently drops
+  # the pod to Burstable.
+  - it: reserves CPU and memory equally, so the proxy is Guaranteed QoS
+    set:
+      cloud: aws
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "1"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+
+  # The provider fails its cache sync if any watched type cannot be listed, and
+  # it watches Nodes — a cluster-scoped resource the namespaced Role in
+  # rbac.yaml can never cover. A failed sync publishes no configuration at all,
+  # so the proxy listens on every port and routes nothing while its probes pass.
+  # Pinned here because that failure is invisible from the outside: the port
+  # accepts the connection either way.
+  - it: disables cluster-scoped lookups, which a namespaced Role cannot satisfy
+    set:
+      cloud: aws
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --providers.kubernetescrd.disableClusterScopeResources=true
+
   # The selector is what stops this shard programming another shard's routes.
   # Without it an ingress_internal endpoint would also be served by the external
   # shard's internet-facing load balancer, and two endpoints allocated the same

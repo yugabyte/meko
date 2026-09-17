@@ -2,11 +2,13 @@ suite: shard RBAC
 templates:
   - templates/rbac.yaml
 tests:
-  # Namespaced, deliberately. A shard's proxy only ever reads objects in its own
-  # namespace, and a ClusterRole here would let every shard read Secrets — which
-  # is where endpoint TLS material lives — across the whole cluster. Pinned
+  # Namespaced, deliberately. A ClusterRole here would let every shard read
+  # Secrets across the whole cluster rather than in its own namespace, which is
+  # already more than this design wants (see the Secrets test below). Pinned
   # because the upstream Traefik chart ships cluster-scoped RBAC by default, so
-  # this is the kind of thing a later "align with upstream" quietly undoes.
+  # this is the kind of thing a later "align with upstream" quietly undoes — and
+  # staying namespaced is what makes the deployment's
+  # disableClusterScopeResources flag load-bearing rather than cosmetic.
   - it: grants namespaced RBAC only, never cluster-scoped
     set:
       cloud: aws
@@ -34,17 +36,24 @@ tests:
       - equal:
           path: roleRef.kind
           value: Role
-  # No Secrets. Endpoint releases share this namespace, so the grant would cover
-  # every endpoint's YB password Secret — and nothing in this design reads one,
-  # since TLS is passed through to the pod rather than terminated here.
-  - it: never grants access to Secrets
+  # Secrets and ConfigMaps, though nothing in this design reads either: TLS is
+  # passed through to the pod rather than terminated here. Traefik's CRD provider
+  # builds an informer for both unconditionally and fails its whole cache sync if
+  # either cannot list — and a provider that has not synced publishes no
+  # configuration, so the shard serves NO routes while looking healthy. Pinned
+  # because removing the grant on the reasoning that nothing uses it is exactly
+  # the change that would silently break every endpoint on the shard.
+  - it: grants Secrets and ConfigMaps, which the provider watches whether or not we use them
     documentIndex: 1
     set:
       cloud: aws
     asserts:
-      - notContains:
-          path: rules[0].resources
+      - contains:
+          path: rules[1].resources
           content: secrets
+      - contains:
+          path: rules[1].resources
+          content: configmaps
   # Read-only. The proxy discovers routes; nothing about serving traffic needs
   # to create or mutate anything, and a write verb here would let a compromised
   # proxy rewrite the routes that decide which database a client reaches.
@@ -61,4 +70,7 @@ tests:
           value: [get, list, watch]
       - equal:
           path: rules[2].verbs
+          value: [get, list, watch]
+      - equal:
+          path: rules[3].verbs
           value: [get, list, watch]

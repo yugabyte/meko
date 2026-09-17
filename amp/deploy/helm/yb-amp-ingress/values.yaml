@@ -62,6 +62,11 @@ traefik:
     # -- Pinned: the proxy is in the connection path of every endpoint on the
     # shard, so the version it runs is not something to inherit from a tag that
     # moves underneath us.
+    #
+    # The matching CRDs ship in the CONTROLLER chart's crds/, copied from
+    # traefik-helm-chart v37.1.2 — its own CHART version series, not this image's
+    # — so bumping this tag means refreshing them from the chart tag that ships
+    # this proxy version.
     tag: "v3.7.13"
     pullPolicy: IfNotPresent
   deployment:
@@ -74,15 +79,24 @@ traefik:
   # under node pressure while it is carrying customer connections.
   #
   # The memory figure is measured: ~70 MiB per replica at 200 routes
-  # (amp/test/ingress-bakeoff), so 256Mi is roughly 3x headroom. The CPU is NOT
-  # measured — the bakeoff recorded no CPU number — so 200m is a scheduling floor
-  # chosen to keep the proxy off the smallest slice a node will give it, not a
-  # multiple of anything. Worth measuring under real connection load before it is
-  # treated as tuned.
+  # (amp/test/ingress-bakeoff), so 256Mi is roughly 3x headroom.
+  #
+  # The CPU is measured too, and the floor matters more than the number. At 200m
+  # — the earlier unmeasured guess — pgbench at 16 connections through one
+  # endpoint pinned both replicas at their limit and the shard delivered 4.3k
+  # tps at 3.7ms, against 21k tps at 0.76ms straight to the pod: a fifth of the
+  # throughput, for the whole shard and every endpoint on it. The cliff is the
+  # limit, not the proxy. Unthrottled, the replicas draw 0.34-0.58 CPU each at
+  # that load and land within ~15% of talking to the pod directly, so 1 covers it
+  # with headroom.
+  #
+  # That load was ONE endpoint's client, on a shard built to hold 50. It sets a
+  # floor, not a ceiling: a shard carrying many busy endpoints wants more, and
+  # request == limit means whatever is set here is reserved on the node.
   resources:
     requests:
-      cpu: 200m
+      cpu: "1"
       memory: 256Mi
     limits:
-      cpu: 200m
+      cpu: "1"
       memory: 256Mi

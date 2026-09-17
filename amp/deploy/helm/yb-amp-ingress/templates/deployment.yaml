@@ -61,6 +61,16 @@ spec:
             - --providers.kubernetescrd.namespaces={{ .Release.Namespace }}
             - --providers.kubernetescrd.allowCrossNamespace=false
             {{- /*
+            The provider builds an informer per watched type and fails its cache
+            sync if any one of them cannot list — and a Node informer is among
+            them, which a namespaced Role can never satisfy. The sync failing
+            means NO configuration is ever published: the proxy comes up healthy,
+            listens on all its ports, answers the load balancer's health check,
+            and routes nothing. Off is safe here because what it disables is
+            IngressClasses and NodePortLB, neither of which this design uses.
+            */}}
+            - --providers.kubernetescrd.disableClusterScopeResources=true
+            {{- /*
             Scoped to THIS shard's routes, and load-bearing rather than tidy.
             Endpoint releases and every shard live in one namespace (the route is
             rendered into the endpoint's release, and allowCrossNamespace is

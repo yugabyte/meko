@@ -39,13 +39,21 @@ export function parseCidrs(raw: string): string[] {
     .filter(Boolean);
 }
 
-export function usesLoadBalancer(mode: EndpointConnectivityMode): boolean {
-  return mode !== "cluster_ip";
+/** Whether the mode takes an allowlist, which is NOT the same question as
+ *  whether it has a load balancer. An ingress endpoint has one but shares it, so
+ *  `loadBalancerSourceRanges` — a per-Service field — cannot express a
+ *  per-endpoint allowlist; the controller refuses `allowed_cidrs` there with a
+ *  400 until the shard's own middleware does the filtering. Offering the field
+ *  anyway would collect a value the API rejects. */
+export function takesAllowedCidrs(mode: EndpointConnectivityMode): boolean {
+  return mode === "nlb_internal" || mode === "nlb_external";
 }
 
 /** The label shown for each mode, also used by the wizard's Review step. */
 export const CONNECTIVITY_LABELS: Record<EndpointConnectivityMode, string> = {
   cluster_ip: "in-cluster",
+  ingress_internal: "shared ingress (internal)",
+  ingress_external: "shared ingress (external)",
   nlb_internal: "NLB (internal)",
   nlb_external: "NLB (external)",
 };
@@ -62,7 +70,7 @@ export function ConnectivityField({
   layout?: "row" | "stacked";
   className?: string;
 }) {
-  const lb = usesLoadBalancer(value.mode);
+  const cidrs = takesAllowedCidrs(value.mode);
   const row = layout === "row";
 
   return (
@@ -79,9 +87,21 @@ export function ConnectivityField({
         </Label>
         <Select
           value={value.mode}
-          onValueChange={(v) =>
-            onChange({ ...value, mode: v as EndpointConnectivityMode })
-          }
+          onValueChange={(v) => {
+            const mode = v as EndpointConnectivityMode;
+            // Drop the allowlist when the new mode does not take one, rather
+            // than only hiding the input. The value lives in the caller's state
+            // and both submit paths send it unconditionally, so a CIDR typed on
+            // an nlb_* mode would otherwise still be posted after switching to
+            // an ingress_* one — earning a 400 that names a field no longer on
+            // screen. Not a problem before this commit: cluster_ip was the only
+            // mode hiding the input, and its connectivity block is dropped whole.
+            onChange({
+              ...value,
+              mode,
+              allowedCidrs: takesAllowedCidrs(mode) ? value.allowedCidrs : "",
+            });
+          }}
         >
           <SelectTrigger className={row ? "h-8 w-36" : undefined}>
             <SelectValue />
@@ -98,7 +118,7 @@ export function ConnectivityField({
         </Select>
       </div>
 
-      {lb && (
+      {cidrs && (
         <div className={cn("flex flex-col gap-1", !row && "space-y-1.5")}>
           <Label
             htmlFor="connectivity-cidrs"
@@ -126,6 +146,18 @@ export function ConnectivityField({
 /** The warning for an external load balancer left open to everything. Rendered
  *  by the caller, so each layout can place it where its own errors go. */
 export function ConnectivityWarning({ value }: { value: Connectivity }) {
+  // ingress_external is unconditional: it takes no allowlist at all, so there is
+  // no entry the user could make that would narrow it.
+  if (value.mode === "ingress_external") {
+    return (
+      <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">
+        An external ingress shard puts Postgres on the public internet, with
+        password authentication as the only barrier. Per-endpoint allowlists are
+        not available on the shared modes yet — use NLB (external) for an
+        endpoint that needs one.
+      </p>
+    );
+  }
   if (value.mode !== "nlb_external" || value.allowedCidrs.trim()) return null;
   return (
     <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">

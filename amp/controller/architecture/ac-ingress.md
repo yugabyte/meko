@@ -194,6 +194,19 @@ can correct — it means reissuing addresses customers already hold.
   A missing `ingressroutetcps` at least fails each `ingress_*` release at apply
   with `no matches for kind IngressRouteTCP` (after its slot is allocated); a
   missing `traefikservices` is silent.
+- **The shard's own RBAC, kept namespaced.** The proxy reads Services,
+  EndpointSlices, the `traefik.io` set — and Secrets and ConfigMaps, which it
+  watches whether or not anything uses them. Nothing here terminates TLS, so the
+  Secret grant buys this design nothing, and endpoint releases install into the
+  same namespace, so the shared proxy can read every endpoint's password Secret.
+  Granted anyway, and accepted rather than worked around: the provider's cache
+  sync fails without it, Traefik has no flag to disable those two informers the
+  way `--providers.kubernetescrd.disableClusterScopeResources` handles the Node
+  one, and RBAC cannot restrict `list`/`watch` by name, so the only narrower
+  shape is shards in a namespace of their own — which needs `allowCrossNamespace`
+  and buys nothing this deployment wants. That cluster-scope flag is what keeps
+  the Role namespaced at all: the Node informer is cluster-scoped, so without the
+  flag the sync fails and the shard listens on all 50 ports and routes nothing.
 - **external-dns**, *only when a zone is configured*, publishes the per-endpoint records from the `DNSEndpoint`
   objects each endpoint release renders. It needs its **CRD source** enabled
   (`--source=crd`) or those objects are inert, and `policy=sync` rather than
