@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { invokeDeployment, invokeSharedDeployment, type ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
-import { MODEL_OPTIONS } from "./ReviewAgentConfigPanel";
+import { MODEL_LABELS, MODEL_OPTIONS } from "./ReviewAgentConfigPanel";
+import { DEFAULT_REVIEW_AGENT_CONFIG } from "./ReviewAgentConfigPanel";
 import { PrReviewDemoApp } from "./PrReviewDemoApp";
 
 // The wiring contract this test locks: whatever the "Configure your
@@ -96,20 +97,21 @@ beforeEach(() => {
 
 describe("PrReviewDemoApp guided-customization wiring", () => {
   it("shows the config panel and Run review button immediately, before running anything", () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     expect(screen.getByRole("button", { name: /run review/i })).toBeTruthy();
     expect(mockInvokeDeployment).not.toHaveBeenCalled();
   });
 
   it("shows no diff preview before running when using the bundled sample (it has its own earlier stage)", () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
     expect(screen.queryByText(/view on github/i)).toBeNull();
   });
 
   it("previews a real PR's title/diff and links to it before running, when given a prSource", () => {
     render(
       <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession()}
         prSource={{
@@ -128,6 +130,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   it("runs the review with the prSource's title/diff, not the bundled sample", async () => {
     render(
       <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession()}
         prSource={{ title: "Fix the thing", diff: "diff --git a/x b/x\n+fixed\n" }}
@@ -142,7 +145,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   });
 
   it("defaults both switches on and sends them, plus the default model, with the sample diff run", async () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -161,7 +164,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
 
 
   it("shows no usage line when the deployed image predates this feature (no usage on done)", async () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -169,18 +172,24 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(screen.queryByText(/in \/.*out tokens/)).toBeNull();
   });
 
-  it("forwards a disabled switch and a focus note to invokeDeployment", async () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+  // The config is chosen a chapter earlier (ConfigureAgentKStage) and handed
+  // in, so what this component owns is forwarding it verbatim.
+  it("forwards the config it was given to invokeDeployment", async () => {
+    render(
+      <PrReviewDemoApp
+        reviewConfig={{
+          ...DEFAULT_REVIEW_AGENT_CONFIG,
+          useKnowledgeBase: false,
+          focus: "Check for SQL injection.",
+          tone: "concise",
+          strictness: "strict",
+          model: MODEL_OPTIONS[1].value,
+        }}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
-    // First switch rendered is the knowledgebase_search toggle chip (before
-    // memory_search) — queried by role, not label text.
-    fireEvent.click(screen.getAllByRole("switch")[0]);
-    // Focus lives behind the "+ Tone, strictness, focus" disclosure,
-    // collapsed by default.
-    fireEvent.click(screen.getByText("+ Tone, strictness, focus"));
-    fireEvent.change(screen.getByPlaceholderText(/pay extra attention/i), {
-      target: { value: "Check for SQL injection." },
-    });
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
     await waitFor(() => expect(mockInvokeDeployment).toHaveBeenCalledTimes(1));
@@ -188,6 +197,20 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(payload.enable_knowledge_base).toBe(false);
     expect(payload.enable_memory_search).toBe(true);
     expect(payload.focus).toBe("Check for SQL injection.");
+    expect(payload.tone).toBe("concise");
+    expect(payload.strictness).toBe("strict");
+    expect(payload.model).toBe(MODEL_OPTIONS[1].value);
+  });
+
+  it("names the configured model before the review runs", () => {
+    render(
+      <PrReviewDemoApp
+        reviewConfig={{ ...DEFAULT_REVIEW_AGENT_CONFIG, model: MODEL_OPTIONS[1].value }}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
+    expect(screen.getByText(MODEL_LABELS[MODEL_OPTIONS[1].value])).toBeTruthy();
   });
 
   it("shows a loading state, then the parsed findings atomically once done", async () => {
@@ -205,7 +228,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         },
       ]),
     );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -230,7 +253,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: "Looks fine, no issues." },
       ]),
     );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -251,7 +274,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: "Sure, here's my review: looks fine!", findings: [] },
       ]),
     );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -269,7 +292,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: "No issues found.", findings: [] },
       ]),
     );
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -277,7 +300,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   });
 
   it("never renders a Deploy panel, even for a deployable lab, even after a review completes", async () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP_WITH_DEPLOYABLE} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP_WITH_DEPLOYABLE} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
     await waitFor(() => expect(mockInvokeDeployment).toHaveBeenCalledTimes(1));
@@ -287,7 +310,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   });
 
   it("sends a follow-up question against the same conversation once the review is done", async () => {
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
     await waitFor(() => expect(screen.getByText("Looks good.")).toBeTruthy());
@@ -314,6 +337,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   it("shared mode calls invokeSharedDeployment instead, with no meko_pat in the payload", async () => {
     render(
       <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession({ deploymentMode: "shared", deploymentId: null, userToken: null })}
       />,
@@ -336,7 +360,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     }
     mockInvokeDeployment.mockReturnValue(hangingStream());
 
-    const { unmount } = render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} />);
+    const { unmount } = render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
     await waitFor(() => expect(mockInvokeDeployment).toHaveBeenCalledTimes(1));
@@ -350,7 +374,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
 
   it("reports the completed review's results via onRunChange", async () => {
     const onRunChange = vi.fn();
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} onRunChange={onRunChange} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} onRunChange={onRunChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -367,6 +391,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     const onRunChange = vi.fn();
     render(
       <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession()}
         prSource={{ title: "Fix the thing", diff: "diff --git a/x b/x\n", htmlUrl: "https://github.com/acme/widgets/pull/42" }}
@@ -402,7 +427,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
       reviewPromptMessageId: "user-1",
       sendError: null,
     };
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
 
     // The pre-review config panel/Run review button must NOT reappear --
     // this is what "navigate away and back" needs to avoid, since it would
@@ -435,7 +460,7 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
       sendError: null,
     };
     // No `prSource` prop passed -- exactly the remounted-after-navigation case.
-    render(<PrReviewDemoApp demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
 
     expect(screen.queryByText("Sample PR")).toBeNull();
     const link = screen.getByRole("link", { name: /view on github/i }) as HTMLAnchorElement;

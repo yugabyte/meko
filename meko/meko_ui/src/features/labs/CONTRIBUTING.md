@@ -16,29 +16,45 @@ lab means adding config, not touching those pages.
    for the common mistakes (duplicate ids, empty summaries) before you get
    to manual testing.
 
-## The 18 fixed stages, grouped into chapters
+## The fixed stages, grouped into chapters
 
-Every lab walks the same 18 stages (`LabStageId` in `types.ts`): Create
-Datapack → What is context? → Build a knowledge base → Add a memory → Chat
-about a preference → Deploy Agent → Share your datapack → Review the sample
-PR → See Claude's reference review → Configure & run your review →
-Collaborate → Why a dashboard needs real storage → Create an AMP cluster →
-Run another review → See your dashboard → Choose a datapack → Share your
-datapack (again) → Review a real PR. They're a closed union, not per-lab
-config — a lab supplies the `title`/`summary`/`highlights` copy for each, but
-the stage components themselves (`components/stages/*`) are shared across
-every lab — some cover more than one stage id (`CreateDatapackStage` for
-both Create Datapack and Choose a Datapack, `ShareWithAgentStage` for both
-Share Your Datapack cases) via optional props rather than a separate
-component per reuse. `LabStageSlot.tsx` switches on `LabStage.id` to render
-the right one.
+`LabStageId` (`types.ts`) is a closed union, not per-lab config — a lab
+supplies the `title`/`summary` copy for each, but the stage components
+(`components/stages/*`) are shared across every lab. The ADLC review lab
+walks 16 of them:
 
-The last four (the "Build a dashboard" chapter) are gated behind
-`LabChapter.requiresAmp` — `getLabDefinition` (`data/labDefinitions.ts`) drops
-that whole chapter when `isAmpEnabled()` is false, rather than showing stages
+| Chapter | Stages |
+|---|---|
+| Give your agent context | `see-the-pr` → `create-datapack` → `knowledge-base` → `memory` → `conversation` |
+| Share it with AgentK | `meet-agentk` → `share-with-agent` → `configure-agentk` → `retrieval-cost` → `guardrail` |
+| Read the review | `run-review` → `review-findings` → `review-cost` → `collaborate` |
+| Close the loop | `save-findings` → `make-it-yours` |
+
+The union also carries `dashboard-intro`, `create-amp-cluster`,
+`run-review-again` and `review-dashboard`. Those belong to the parked "Build
+a dashboard" chapter: their stage components are still in the tree, and
+restoring the chapter means uncommenting its block in
+`adlcReviewAgentLab/chapters.ts` and the matching cases in `LabStageSlot`.
+See that file's own comment for why it was parked.
+
+`LabStageSlot.tsx` switches on `LabStage.id` to render the right component.
+A component can cover more than one stage id through optional props rather
+than a copy per reuse: `CreateDatapackStage` takes `heading`/`description`
+overrides for a second "pick a datapack again" placement, which no chapter
+uses today.
+
+One stage hosts another. `make-it-yours` renders `BringYourOwnPrStage` inside
+its own section rather than that flow having a step of its own, so the
+datapack and deployment gating is reused instead of repeated. A stage that
+invokes the agent must also be listed in `STAGES_NEEDING_TOKEN`
+(`pages/LabRunnerPage.tsx`), or it renders before the MCP token lands and
+tells the user to deploy an agent that is already deployed.
+
+`LabChapter.requiresAmp` drops a whole chapter when `isAmpEnabled()` is false
+(`getLabDefinition`, `data/labDefinitions.ts`), rather than showing stages
 that would all immediately degrade. A chapter that only makes sense with a
-feature flag on should set the same field, not add its own ad hoc check in
-every stage.
+feature flag on should set that field, not add its own ad hoc check in every
+stage.
 
 A `LabDefinition` groups its stages into one or more `LabChapter`s
 (`chapters: LabChapter[]`, each `{ id, title, stages: LabStage[] }`) — the

@@ -163,7 +163,7 @@ describe("DeployAgentPanel", () => {
 
   it("shows the mode chooser, defaulting to the shared instance (not the dedicated wizard)", () => {
     renderPanel({ agentSlug: "adlc-review-agent", agentDisplayName: "AgentK" });
-    expect(screen.getByText("Use the shared AgentK")).toBeTruthy();
+    expect(screen.getByText("Use the predeployed AgentK")).toBeTruthy();
     expect(screen.getByText("Deploy your own dedicated AgentK")).toBeTruthy();
     expect(screen.queryByText("Choose a runtime")).toBeNull();
   });
@@ -186,7 +186,7 @@ describe("DeployAgentPanel", () => {
     });
     renderPanel({ agentSlug: "adlc-review-agent", agentDisplayName: "AgentK" });
 
-    fireEvent.click(screen.getByText("Use the shared AgentK"));
+    fireEvent.click(screen.getByText("Use the predeployed AgentK"));
 
     expect(screen.queryByText("Choose a runtime")).toBeNull();
     expect(await screen.findByText(/ready\. click next/i)).toBeTruthy();
@@ -196,7 +196,7 @@ describe("DeployAgentPanel", () => {
     mockGetSharedDeployment.mockRejectedValue(new Error("not found"));
     renderPanel({ agentSlug: "adlc-review-agent", agentDisplayName: "AgentK" });
 
-    fireEvent.click(screen.getByText("Use the shared AgentK"));
+    fireEvent.click(screen.getByText("Use the predeployed AgentK"));
 
     expect(await screen.findByText(/isn't configured with a shared instance yet/i)).toBeTruthy();
   });

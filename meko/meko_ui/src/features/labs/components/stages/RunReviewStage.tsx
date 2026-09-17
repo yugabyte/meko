@@ -1,3 +1,4 @@
+import type { ReviewAgentConfig } from "../demo-apps/ReviewAgentConfigPanel";
 import { PrReviewDemoApp, type PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
@@ -8,6 +9,7 @@ import { LabStageHeader } from "./LabStageHeader";
 export function RunReviewStage({
   demoApp,
   session,
+  reviewConfig,
   onGoToCreateDatapack,
   onGoToDeployAgent,
   savedRun,
@@ -15,6 +17,8 @@ export function RunReviewStage({
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  /** Chosen in Chapter 2's Configure step; threaded straight through. */
+  reviewConfig: ReviewAgentConfig;
   onGoToCreateDatapack: () => void;
   onGoToDeployAgent: () => void;
   /** Threaded straight through to PrReviewDemoApp -- see its own doc
@@ -43,7 +47,7 @@ export function RunReviewStage({
           tags={["Live"]}
         />
       </div>
-      <PrReviewDemoApp demoApp={demoApp} session={session} savedRun={savedRun} onRunChange={onRunChange} />
+      <PrReviewDemoApp demoApp={demoApp} session={session} reviewConfig={reviewConfig} savedRun={savedRun} onRunChange={onRunChange} />
     </div>
   );
 }

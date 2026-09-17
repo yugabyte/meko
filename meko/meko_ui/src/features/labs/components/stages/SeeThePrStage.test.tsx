@@ -1,10 +1,10 @@
-// The cold-review screen is the one place in Labs that shows a result nobody
-// has measured yet. These pin the gate that keeps it honest.
+// The cold-review screen's verdict is the baseline the whole lab argues
+// against, so it may never appear before the replay has finished.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-import { COLD_REVIEW_IS_POPULATED } from "../../data/adlcReviewAgentLab/coldReviewCapture";
+import { COLD_REVIEW_VERDICT } from "../../data/adlcReviewAgentLab/coldReviewCapture";
 import { SeeThePrStage } from "./SeeThePrStage";
 
 // ColdReviewTrace replays line by line on timers unless the reader has asked
@@ -30,18 +30,22 @@ function runTheColdReview() {
 }
 
 describe("SeeThePrStage", () => {
-  // COLD_REVIEW_IS_POPULATED is derived from the capture's token counts, so it
-  // flips on its own the moment someone records a real run. Until then no part
-  // of this screen may state an outcome: not the verdict, not the badge, not
-  // the button label.
-  it("states no outcome while the baseline capture is unrecorded", async () => {
-    expect(COLD_REVIEW_IS_POPULATED).toBe(false);
+  it("approves the diff once the replay finishes, which is the baseline", async () => {
     runTheColdReview();
 
-    expect(await screen.findByText(/hasn't been recorded yet/)).toBeTruthy();
-    expect(screen.queryByText("approved")).toBeNull();
-    expect(screen.queryByText(/Reviewed, \d+ issues/)).toBeNull();
+    expect(await screen.findByText("approved")).toBeTruthy();
+    expect(screen.getByText(new RegExp(COLD_REVIEW_VERDICT.slice(0, 20)))).toBeTruthy();
     expect(screen.getByRole("button", { name: /review complete/i })).toBeTruthy();
+  });
+
+  // The measured half of the capture (tokens, duration) is still unrecorded,
+  // so the card states the verdict and nothing quantitative.
+  it("quotes no measured numbers beside the verdict", async () => {
+    runTheColdReview();
+    await screen.findByText("approved");
+
+    expect(screen.queryByText(/input tokens/i)).toBeNull();
+    expect(screen.queryByText(/\d+ issues/)).toBeNull();
   });
 
   // The label used to key off `started`, which is set synchronously on click,

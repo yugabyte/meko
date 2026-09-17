@@ -18,6 +18,7 @@ import {
 import { ORG_CODING_STANDARDS_CONTENT } from "../../data/adlcReviewAgentLab/orgCodingStandards";
 import { computeSavingsPct, estimateCost } from "../../lib/bedrockPricing";
 import { estimatePasteTokens } from "../../lib/retrievalCostEstimate";
+import { ColdVsContextCards } from "../demo-apps/ColdVsContextCards";
 import { ContextStatsCard } from "../demo-apps/ContextStatsCard";
 import { DatapackActivitySummary } from "../demo-apps/DatapackActivitySummary";
 import { CostPayoffCard } from "../demo-apps/CostPayoffCard";
@@ -29,11 +30,15 @@ import { LabStageHeader } from "./LabStageHeader";
 export function ReviewCostStage({
   run,
   datapackId,
+  datapackName,
   onGoToRunReview,
 }: {
   run: PrReviewRunState | null;
   /** For the datapack-wide rollup on the Metrics tab. */
   datapackId: string | null;
+  /** Named on the with-context card, so the comparison says which datapack
+   *  did the work rather than "with a datapack". */
+  datapackName: string | null;
   onGoToRunReview: () => void;
 }) {
   const usage = run?.reviewUsage ?? null;
@@ -54,6 +59,14 @@ export function ReviewCostStage({
       </div>
     );
   }
+
+  // Structured findings are an array; "unstructured" means the agent replied
+  // in prose, which is a different thing from finding nothing.
+  const findings = Array.isArray(run?.reviewFindings) ? run.reviewFindings : null;
+  const findingsCount = findings ? findings.length : null;
+  const blockingCount = findings
+    ? findings.filter((f) => f.severity === "critical" || f.severity === "major").length
+    : null;
 
   const modelLabel = MODEL_LABELS[modelId];
   const slmCost = estimateCost(modelId, usage);
@@ -78,6 +91,13 @@ export function ReviewCostStage({
         eyebrow="Chapter 3 · Step 3"
         title="What the context actually cost"
         lede={`Real token counts from the run you just did with ${modelLabel}.`}
+      />
+
+      <ColdVsContextCards
+        datapackName={datapackName ?? "your datapack"}
+        findingsCount={findingsCount}
+        blockingCount={blockingCount}
+        inputTokens={usage.input_tokens}
       />
 
       <Tabs defaultValue="cost" className="flex flex-col gap-6">

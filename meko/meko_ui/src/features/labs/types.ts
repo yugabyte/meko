@@ -20,6 +20,7 @@ export type LabStageId =
   // Chapter 2 — share it with AgentK
   | "meet-agentk"
   | "share-with-agent"
+  | "configure-agentk"
   | "retrieval-cost"
   | "guardrail"
   // Chapter 3 — read the review
@@ -34,7 +35,6 @@ export type LabStageId =
   | "review-dashboard"
   // Chapter 4 — close the loop
   | "save-findings"
-  | "bring-your-own-pr"
   | "make-it-yours";
 
 /** Blocks "Next" until the stage reports its own work done, by calling the

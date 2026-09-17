@@ -12,6 +12,7 @@
 // so there's a second, real review run to look at, and review-dashboard
 // shows illustrative sample data instead of this run's actual numbers.
 
+import type { ReviewAgentConfig } from "../demo-apps/ReviewAgentConfigPanel";
 import { PrReviewDemoApp, type PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
@@ -22,6 +23,7 @@ import { LabStageHeader } from "./LabStageHeader";
 export function RunReviewAgainStage({
   demoApp,
   session,
+  reviewConfig,
   onGoToCreateDatapack,
   onGoToDeployAgent,
   savedRun,
@@ -29,6 +31,8 @@ export function RunReviewAgainStage({
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  /** Chosen in Chapter 2's Configure step; threaded straight through. */
+  reviewConfig: ReviewAgentConfig;
   onGoToCreateDatapack: () => void;
   onGoToDeployAgent: () => void;
   savedRun?: PrReviewRunState | null;
@@ -54,7 +58,7 @@ export function RunReviewAgainStage({
           lede="One more review, so the dashboard's per-session table has more than a single row to show."
         />
       </div>
-      <PrReviewDemoApp demoApp={demoApp} session={session} savedRun={savedRun} onRunChange={onRunChange} />
+      <PrReviewDemoApp demoApp={demoApp} session={session} reviewConfig={reviewConfig} savedRun={savedRun} onRunChange={onRunChange} />
     </div>
   );
 }

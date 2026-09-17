@@ -22,19 +22,23 @@ function renderSection(path: string = ROUTES.labs) {
   );
 }
 
-describe("LabsSection pre-GA gating", () => {
-  it("renders 404 on the labs list route when the showLabs flag is off", () => {
+// Labs shipped: no flag gates it any more, so both routes resolve for
+// everyone. These pin that a stale latched flag can't resurrect the 404.
+describe("LabsSection routing", () => {
+  it("renders the labs list with no flag set", () => {
     renderSection(ROUTES.labs);
-    expect(screen.getByText("404 Page Not Found")).toBeTruthy();
+    expect(screen.queryByText("404 Page Not Found")).toBeNull();
   });
 
-  it("renders 404 on a lab detail route when the flag is off, not the detail page", () => {
+  it("renders a lab detail route with no flag set", () => {
     renderSection(`${ROUTES.labs}/adlc-review-agent`);
-    expect(screen.getByText("404 Page Not Found")).toBeTruthy();
+    expect(screen.queryByText("404 Page Not Found")).toBeNull();
   });
 
-  it("renders the labs list once the flag is latched", () => {
-    localStorage.setItem("meko:show_labs_nav", "true");
+  // The old latch survives in the localStorage of anyone who ever unlocked
+  // Labs, so nothing may read it back into a gate.
+  it("ignores the retired showLabs latch, whichever value it holds", () => {
+    localStorage.setItem("meko:show_labs_nav", "false");
     renderSection(ROUTES.labs);
     expect(screen.queryByText("404 Page Not Found")).toBeNull();
   });

@@ -1,6 +1,7 @@
-// Closes the lab: what the user actually built (real counts, not a script),
-// then the four ways to point the same setup at their own work, and the MCP
-// config that connects their own tools to this datapack.
+// Closes the lab: point AgentK at a real pull request of the user's own,
+// then what they actually built (real counts, not a script) and the ways to
+// take the same setup back to their work. Absorbed the old standalone
+// "Review a real PR" step, which was the same screen split in two.
 
 import { CheckCircle2 } from "lucide-react";
 
@@ -10,7 +11,10 @@ import { formatTokens } from "@/lib/tokenSavings";
 
 import { useLabReviewDashboard } from "../../hooks/useLabReviewDashboard";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import type { LabDemoAppConfig } from "../../types";
 import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
+import type { ReviewAgentConfig } from "../demo-apps/ReviewAgentConfigPanel";
+import { BringYourOwnPrStage } from "./BringYourOwnPrStage";
 import { LabStageHeader } from "./LabStageHeader";
 
 /** The four directions out of the lab. Each is a real product surface the
@@ -35,13 +39,25 @@ const NEXT_STEPS = [
 ];
 
 export function MakeItYoursStage({
+  demoApp,
   session,
   sessionRuns,
+  reviewConfig,
+  byocRun,
+  onByocRunChange,
+  onGoToCreateDatapack,
+  onGoToDeployAgent,
   onGoToCollaborate,
   onEndLab,
 }: {
+  demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
   sessionRuns: PrReviewRunState[];
+  reviewConfig: ReviewAgentConfig;
+  byocRun: PrReviewRunState | null;
+  onByocRunChange: (run: PrReviewRunState) => void;
+  onGoToCreateDatapack: () => void;
+  onGoToDeployAgent: () => void;
   onGoToCollaborate: () => void;
   onEndLab: () => void;
 }) {
@@ -51,10 +67,35 @@ export function MakeItYoursStage({
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Lab complete"
-        title="You built the loop"
-        lede={`Everything below is ${session.datapackName ?? "your datapack"}'s own record. Nothing in this lab was a simulation of a product that doesn't exist.`}
+        eyebrow="Chapter 4 · Step 2"
+        title="Make it yours"
+        lede={`Every review so far used a bundled sample. Point ${demoApp.agentDisplayName} at a pull request of your own, reviewed against the same context.`}
+        tags={["Your repo"]}
       />
+
+      {/* The BYO-PR flow, hosted rather than given its own step: it is the
+          same screen as the summary below, and splitting them made the user
+          leave the review to read what they had built. Bounded so the
+          transcript scrolls inside the section, not the page. */}
+      <div className="flex max-h-[32rem] min-h-0 flex-col overflow-hidden rounded-lg border border-border">
+        <BringYourOwnPrStage
+          demoApp={demoApp}
+          session={session}
+          reviewConfig={reviewConfig}
+          savedRun={byocRun}
+          onRunChange={onByocRunChange}
+          onGoToCreateDatapack={onGoToCreateDatapack}
+          onGoToDeployAgent={onGoToDeployAgent}
+        />
+      </div>
+
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">You built the loop</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Everything below is {session.datapackName ?? "your datapack"}'s own record. Nothing in
+          this lab was a simulation of a product that doesn't exist.
+        </p>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile

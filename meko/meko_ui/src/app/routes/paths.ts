@@ -14,8 +14,7 @@ export const ROUTES = {
   workbenchLm: "/workbench-lm",
   datapacks: "/datapacks",
   observeHub: "/observe-hub",
-  /** Guided product labs (e.g. the ADLC Review Agent Lab). Gated by the
-   *  showLabs feature flag; see `@/features/labs/hooks/useLabsNavFlag`. */
+  /** Guided product labs (e.g. the ADLC Review Agent Lab). */
   labs: "/labs",
   /** Account-scoped settings page (profile + change password). */
   settings: "/settings",

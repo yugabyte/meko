@@ -26,7 +26,18 @@ function stubReviewStage({
   );
 }
 vi.mock("../demo-apps/PrReviewDemoApp", () => ({ PrReviewDemoApp: stubReviewStage }));
-vi.mock("../stages/BringYourOwnPrStage", () => ({ BringYourOwnPrStage: stubReviewStage }));
+// Chapter 4's review now lives inside MakeItYoursStage, which also reads a
+// datapack rollup over the network -- stubbed to the same review shim so
+// these stay tests of LabStageSlot's own state.
+vi.mock("../stages/MakeItYoursStage", () => ({
+  MakeItYoursStage: ({
+    byocRun,
+    onByocRunChange,
+  }: {
+    byocRun?: { reviewText: string | null } | null;
+    onByocRunChange?: (run: unknown) => void;
+  }) => stubReviewStage({ savedRun: byocRun, onRunChange: onByocRunChange }),
+}));
 
 const RUN_REVIEW_STAGE: LabStage = {
   id: "run-review",
@@ -38,9 +49,9 @@ const GUARDRAIL_STAGE: LabStage = {
   title: "Decide where it needs you",
   summary: "",
 };
-const BRING_YOUR_OWN_PR_STAGE: LabStage = {
-  id: "bring-your-own-pr",
-  title: "Review a real PR",
+const MAKE_IT_YOURS_STAGE: LabStage = {
+  id: "make-it-yours",
+  title: "Make it yours",
   summary: "",
 };
 
@@ -98,7 +109,7 @@ describe("LabStageSlot", () => {
 
   it("clears Chapter 4's byocReviewRun once session.datapackId actually changes", () => {
     const { rerender } = render(
-      <LabStageSlot lab={LAB} session={fakeSession("dp-1")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />,
+      <LabStageSlot lab={LAB} session={fakeSession("dp-1")} progress={fakeProgress(MAKE_IT_YOURS_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />,
     );
     fireEvent.click(screen.getByText("simulate review complete"));
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
@@ -106,7 +117,7 @@ describe("LabStageSlot", () => {
     // Chapter 4's own choose-datapack-again stage can change session.datapackId
     // mid-chapter -- a review run against the OLD datapack must not keep
     // showing (and blocking the fetch form) once the datapack switches.
-    rerender(<LabStageSlot lab={LAB} session={fakeSession("dp-2")} progress={fakeProgress(BRING_YOUR_OWN_PR_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
+    rerender(<LabStageSlot lab={LAB} session={fakeSession("dp-2")} progress={fakeProgress(MAKE_IT_YOURS_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
     expect(screen.getByTestId("review-text").textContent).toBe("(none)");
   });
 });

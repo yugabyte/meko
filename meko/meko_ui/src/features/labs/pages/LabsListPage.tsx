@@ -23,7 +23,9 @@ export default function LabsListPage() {
       <div className="flex flex-col gap-6 p-6">
         <div className="flex flex-col gap-3">
           <h1 className="text-2xl font-semibold">Labs</h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
+          {/* Wide enough for one line on a laptop, still capped so the
+              sentence doesn't run the full width of an ultrawide display. */}
+          <p className="max-w-7xl text-sm text-muted-foreground">
             Short, hands-on runs through a real ADLC stage. You build the context, an agent uses it, and
             you see exactly what it changed. Every lab ends with a path to your own repo.
           </p>

@@ -24,6 +24,7 @@ const FIXED_STAGE_IDS: LabStageId[] = [
   "conversation",
   "meet-agentk",
   "share-with-agent",
+  "configure-agentk",
   "retrieval-cost",
   "guardrail",
   "run-review",
@@ -31,7 +32,6 @@ const FIXED_STAGE_IDS: LabStageId[] = [
   "review-cost",
   "collaborate",
   "save-findings",
-  "bring-your-own-pr",
   "make-it-yours",
 ];
 

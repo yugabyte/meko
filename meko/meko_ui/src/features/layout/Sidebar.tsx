@@ -43,7 +43,6 @@ import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { resetTelemetry, trackEvent } from "@/lib/telemetry/rudderstack";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
-import { useLabsNavFlag } from "@/features/labs/hooks/useLabsNavFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isAdminViewEnabled } from "@/lib/admin";
 
@@ -87,9 +86,6 @@ export default function Sidebar() {
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
   const showBillingNav = useBillingNavFlag();
-  // Hidden by default — unlocked once the user lands on /labs?showLabs=true
-  // (persisted in localStorage). See useLabsNavFlag for the gate logic.
-  const showLabsNav = useLabsNavFlag();
   // Admin console tab — gated by the SHOW_ADMIN_VIEW runtime flag (off by
   // default). Interim gate until a per-user admin role lands; see `@/lib/admin`.
   const showAdminNav = isAdminViewEnabled();
@@ -406,22 +402,20 @@ export default function Sidebar() {
           {!isCollapsed && <span className="animate-in fade-in truncate">WorkbenchLM</span>}
         </NavLink>
 
-        {showLabsNav ? (
-          <NavLink
-            to={ROUTES.labs}
-            className={cn(
-              "flex items-center rounded-md text-sm font-medium transition-colors",
-              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.labs || location.pathname.startsWith(`${ROUTES.labs}/`)
-                ? "bg-foreground/10 text-foreground"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-            )}
-            title={isCollapsed ? "Labs" : undefined}
-          >
-            <FlaskConical className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Labs</span>}
-          </NavLink>
-        ) : null}
+        <NavLink
+          to={ROUTES.labs}
+          className={cn(
+            "flex items-center rounded-md text-sm font-medium transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+            location.pathname === ROUTES.labs || location.pathname.startsWith(`${ROUTES.labs}/`)
+              ? "bg-foreground/10 text-foreground"
+              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+          )}
+          title={isCollapsed ? "Labs" : undefined}
+        >
+          <FlaskConical className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Labs</span>}
+        </NavLink>
 
         {/* Datapacks + children */}
         {isCollapsed ? (

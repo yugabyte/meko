@@ -27,8 +27,8 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   // The lab runner takes over the whole viewport -- no Sidebar, no shared
   // shell -- so users get a focused, distraction-free lab experience with
   // its own top bar (LabRunnerPage owns its own exit-to-list action). It
-  // self-guards internally (showLabs flag, invalid :labId), so no extra
-  // logic is needed here beyond the early return itself.
+  // self-guards internally (an invalid :labId redirects to the list), so no
+  // extra logic is needed here beyond the early return itself.
   if (isLabRunner) {
     return <LabRunnerPage />;
   }

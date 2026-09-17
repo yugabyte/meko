@@ -3,6 +3,10 @@
 // memories/KB content into whichever datapack is picked. Also frames the
 // three context sources the next three lessons fill (absorbed from the old
 // standalone ContextIntroStage).
+//
+// Creating is the primary path and selecting is the escape hatch: a lab run
+// fills its datapack with sample standards and memories, which is not what
+// someone wants landing in a datapack they already rely on.
 
 import { useState } from "react";
 import { AlertCircle, Loader2, Plus } from "lucide-react";
@@ -46,7 +50,15 @@ export function CreateDatapackStage({
   heading?: string;
   description?: string;
 }) {
-  const [showCreate, setShowCreate] = useState(false);
+  // `null` until the user picks a side, so the default below is re-derived on
+  // every render. It has to be: `hasHitDatapackCount` comes from the
+  // account-usage query, which reports false while it loads, so seeding state
+  // from it once would open a capped user on a create form that can only
+  // fail. The reuse case (a `heading` override) opens on the picker, where
+  // choosing is the point.
+  const [createChosen, setCreateChosen] = useState<boolean | null>(null);
+  const showCreate = createChosen ?? (!heading && !hasHitDatapackCount);
+  const setShowCreate = setCreateChosen;
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -75,8 +87,16 @@ export function CreateDatapackStage({
         }
       />
       {showCreate ? (
-        <div className="flex flex-col gap-3 rounded-md border border-border p-4">
-          <Label htmlFor="create-datapack-name">New datapack name</Label>
+        <div className="flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/[0.03] p-5">
+          <div>
+            <Label htmlFor="create-datapack-name" className="text-base">
+              Create a datapack for this lab
+            </Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              A fresh one keeps the sample standards and memories you are about to add out of
+              anything you already rely on.
+            </p>
+          </div>
           <Input
             id="create-datapack-name"
             autoFocus
@@ -85,7 +105,6 @@ export function CreateDatapackStage({
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleCreate();
-              if (e.key === "Escape") setShowCreate(false);
             }}
           />
           {createError && (
@@ -93,62 +112,65 @@ export function CreateDatapackStage({
               <AlertCircle className="h-4 w-4 shrink-0" /> {createError}
             </p>
           )}
-          <div className="flex gap-2">
-            <Button onClick={() => void handleCreate()} disabled={!newName.trim() || creating}>
-              {creating && <Loader2 className="h-4 w-4 animate-spin" />}
-              Create
-            </Button>
-            <Button variant="ghost" onClick={() => setShowCreate(false)}>
-              Cancel
-            </Button>
-          </div>
+          <Button
+            size="lg"
+            className="self-start"
+            onClick={() => void handleCreate()}
+            disabled={!newName.trim() || creating}
+          >
+            {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Create datapack
+          </Button>
+          <button
+            type="button"
+            className="self-start text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+            onClick={() => setShowCreate(false)}
+          >
+            Or use a datapack you already have
+          </button>
         </div>
       ) : (
-        <div className="flex flex-col gap-3 rounded-md border border-border p-4">
-          <Label htmlFor="create-datapack-select">Select a datapack</Label>
-          <div className="flex items-center gap-2">
-            <Select
-              value={selectedId ?? undefined}
-              onValueChange={(id) => {
-                onSelect(id);
-                onComplete();
-              }}
-              disabled={loading}
-            >
-              <SelectTrigger
-                id="create-datapack-select"
-                className="flex-1"
-                aria-label="Select datapack"
-              >
-                <SelectValue
-                  placeholder={
-                    loading ? "Loading datapacks…" : datapacks.length === 0 ? "No datapacks yet" : "Select a datapack"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent className="max-h-[300px]">
-                {datapacks.map((dp) => (
-                  <SelectItem key={dp.datapack_id} value={dp.datapack_id}>
-                    {dp.datapack_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              className="gap-1"
-              onClick={() => setShowCreate(true)}
-              disabled={hasHitDatapackCount}
-              title={hasHitDatapackCount ? "You've hit your datapack limit -- upgrade to create more." : undefined}
-            >
-              <Plus className="h-4 w-4" />
-              New
-            </Button>
-          </div>
-          {hasHitDatapackCount && (
+        <div className="flex flex-col gap-3 rounded-lg border border-border p-4">
+          <Label htmlFor="create-datapack-select">Use an existing datapack</Label>
+          <Select
+            value={selectedId ?? undefined}
+            onValueChange={(id) => {
+              onSelect(id);
+              onComplete();
+            }}
+            disabled={loading}
+          >
+            <SelectTrigger id="create-datapack-select" aria-label="Select datapack">
+              <SelectValue
+                placeholder={
+                  loading
+                    ? "Loading datapacks…"
+                    : datapacks.length === 0
+                      ? "No datapacks yet"
+                      : "Select a datapack"
+                }
+              />
+            </SelectTrigger>
+            <SelectContent className="max-h-[300px]">
+              {datapacks.map((dp) => (
+                <SelectItem key={dp.datapack_id} value={dp.datapack_id}>
+                  {dp.datapack_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {hasHitDatapackCount ? (
             <p className="text-sm text-muted-foreground">
               You've hit your datapack limit. Pick an existing one, or upgrade to create more.
             </p>
+          ) : (
+            <button
+              type="button"
+              className="self-start text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+              onClick={() => setShowCreate(true)}
+            >
+              Or create a new one
+            </button>
           )}
         </div>
       )}

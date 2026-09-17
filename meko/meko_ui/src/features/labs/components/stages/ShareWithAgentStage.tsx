@@ -132,7 +132,7 @@ function ShareWithAgentStageContent({
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
         eyebrow="Chapter 2 · Step 2"
-        title="Share the datapack, not a copy"
+        title={`Share the datapack with ${AGENT_DISPLAY_NAME}`}
         lede={`Sharing is a grant, not a transfer. ${AGENT_DISPLAY_NAME} reads the live datapack, so a rule you edit at 4pm lands in the 4:01 review. Nothing is exported, duplicated, or re-embedded.`}
         tags={["Sharing"]}
       />
@@ -147,6 +147,7 @@ function ShareWithAgentStageContent({
         </p>
       ) : (
         <AgentGrantCard
+          datapackName={session.datapackName ?? "This datapack"}
           agentDisplayName={AGENT_DISPLAY_NAME}
           agentEmail={AGENTK_ADMIN_EMAIL}
           grant={DATAPACK_SHARE_GRANT_CONTRIBUTOR}

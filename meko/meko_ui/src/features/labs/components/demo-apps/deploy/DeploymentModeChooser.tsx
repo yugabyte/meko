@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import type { DeploymentMode } from "../../../hooks/useLabRunnerSession";
 
 const MODE_LABELS: Record<DeploymentMode, string> = {
-  shared: "Use the shared AgentK",
+  shared: "Use the predeployed AgentK",
   dedicated: "Deploy your own dedicated AgentK",
 };
 
@@ -77,7 +77,7 @@ export function DeploymentModeChooser({
           )}
         >
           <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium">Use the shared AgentK</p>
+            <p className="text-sm font-medium">Use the predeployed AgentK</p>
             <Badge variant="secondary">No wait</Badge>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">

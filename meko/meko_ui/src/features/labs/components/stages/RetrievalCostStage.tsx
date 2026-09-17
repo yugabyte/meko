@@ -51,7 +51,7 @@ export function RetrievalCostStage({
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 2 · Step 3"
+        eyebrow="Chapter 2 · Step 4"
         title="How should it read the standards?"
         lede="Same document, two ways to get it into the model. This choice is the whole cost argument, so make it yourself."
         tags={["Cost"]}

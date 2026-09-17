@@ -5,8 +5,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
-import { BringYourOwnPrStage } from "../stages/BringYourOwnPrStage";
+import {
+  DEFAULT_REVIEW_AGENT_CONFIG,
+  type ReviewAgentConfig,
+} from "../demo-apps/ReviewAgentConfigPanel";
 import { CollaborateStage } from "../stages/CollaborateStage";
+import { ConfigureAgentKStage } from "../stages/ConfigureAgentKStage";
 import { ConversationStage } from "../stages/ConversationStage";
 // PARKED with the create-amp-cluster stage, see chapters.ts.
 // import { CreateAmpClusterStage } from "../stages/CreateAmpClusterStage";
@@ -62,9 +66,12 @@ export function LabStageSlot({
     [markStageComplete, currentStageId],
   );
 
-  // Owned here, not inside PrReviewDemoApp, because THIS component stays
-  // mounted for the whole lab run while the switch below remounts whichever
-  // stage component is current -- see PrReviewRunState's own doc comment.
+  // Both of these are owned here, not inside the stage components, because
+  // THIS component stays mounted for the whole lab run while the switch below
+  // remounts whichever stage is current -- see PrReviewRunState's own doc
+  // comment. For the config that is what carries Chapter 2's choice across
+  // the walk to Chapter 3.
+  const [reviewConfig, setReviewConfig] = useState<ReviewAgentConfig>(DEFAULT_REVIEW_AGENT_CONFIG);
   const [reviewRun, setReviewRun] = useState<PrReviewRunState | null>(null);
   // A run that reported real token usage is a finished review, which is what
   // releases run-review's gate -- and what the findings and cost stages both
@@ -149,6 +156,16 @@ export function LabStageSlot({
           onComplete={completeCurrentStage}
         />
       );
+    case "configure-agentk":
+      return (
+        <ConfigureAgentKStage
+          agentDisplayName={lab.demoApp.agentDisplayName}
+          datapackId={session.datapackId}
+          config={reviewConfig}
+          onConfigChange={setReviewConfig}
+          onGoToCreateDatapack={goToCreateDatapack}
+        />
+      );
     case "retrieval-cost":
       return <RetrievalCostStage agentDisplayName={lab.demoApp.agentDisplayName} feed={contextFeed} />;
     case "guardrail":
@@ -158,6 +175,7 @@ export function LabStageSlot({
         <RunReviewStage
           demoApp={lab.demoApp}
           session={session}
+          reviewConfig={reviewConfig}
           onGoToCreateDatapack={goToCreateDatapack}
           onGoToDeployAgent={goToMeetAgentK}
           savedRun={reviewRun}
@@ -177,6 +195,7 @@ export function LabStageSlot({
         <ReviewCostStage
           run={reviewRun}
           datapackId={session.datapackId}
+          datapackName={session.datapackName}
           onGoToRunReview={goToRunReview}
         />
       );
@@ -207,22 +226,17 @@ export function LabStageSlot({
     // );
     case "save-findings":
       return <SaveFindingsStage session={session} run={reviewRun} onComplete={completeCurrentStage} />;
-    case "bring-your-own-pr":
-      return (
-        <BringYourOwnPrStage
-          demoApp={lab.demoApp}
-          session={session}
-          onGoToCreateDatapack={goToCreateDatapack}
-          onGoToDeployAgent={goToMeetAgentK}
-          savedRun={byocReviewRun}
-          onRunChange={setByocReviewRun}
-        />
-      );
     case "make-it-yours":
       return (
         <MakeItYoursStage
+          demoApp={lab.demoApp}
           session={session}
           sessionRuns={sessionRuns}
+          reviewConfig={reviewConfig}
+          byocRun={byocReviewRun}
+          onByocRunChange={setByocReviewRun}
+          onGoToCreateDatapack={goToCreateDatapack}
+          onGoToDeployAgent={goToMeetAgentK}
           onGoToCollaborate={() => progress.goToStageById("collaborate")}
           onEndLab={onEndLab}
         />

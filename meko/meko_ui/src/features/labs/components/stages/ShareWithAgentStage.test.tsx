@@ -84,7 +84,7 @@ describe("ShareWithAgentStage", () => {
         onComplete={vi.fn()}
       />,
     );
-    fireEvent.click(await screen.findByRole("button", { name: /share datapack/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /share with agentk/i }));
     await waitFor(() =>
       expect(mockInvite).toHaveBeenCalledWith(
         "dp-1",
@@ -103,7 +103,7 @@ describe("ShareWithAgentStage", () => {
         onComplete={vi.fn()}
       />,
     );
-    fireEvent.click(await screen.findByRole("button", { name: /share datapack/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /share with agentk/i }));
     // The API's own message, not a generic fallback that hides the reason.
     await waitFor(() => expect(screen.getByText(/share limit reached/i)).toBeTruthy());
   });

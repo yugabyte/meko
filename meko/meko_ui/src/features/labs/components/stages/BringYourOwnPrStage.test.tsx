@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { GitHubApiError } from "@/lib/api/githubApi";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
+import { DEFAULT_REVIEW_AGENT_CONFIG } from "../demo-apps/ReviewAgentConfigPanel";
 import { BringYourOwnPrStage } from "./BringYourOwnPrStage";
 
 // Deep coverage of the review flow itself lives in PrReviewDemoApp.test.tsx --
@@ -47,6 +48,7 @@ describe("BringYourOwnPrStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession(null)}
         onGoToCreateDatapack={vi.fn()}
@@ -59,6 +61,7 @@ describe("BringYourOwnPrStage", () => {
   it("shows the deployment-needed prompt when a datapack is set but no deployment is active", () => {
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", false)}
         onGoToCreateDatapack={vi.fn()}
@@ -71,6 +74,7 @@ describe("BringYourOwnPrStage", () => {
   it("shows the fetch form, not PrReviewDemoApp, before a PR has been fetched", () => {
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
@@ -84,6 +88,7 @@ describe("BringYourOwnPrStage", () => {
   it("rejects a malformed PR reference before ever calling the GitHub client", async () => {
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
@@ -104,6 +109,7 @@ describe("BringYourOwnPrStage", () => {
     mockFetchDiff.mockRejectedValue(new GitHubApiError("GitHub API request failed: 404 Not Found"));
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
@@ -123,6 +129,7 @@ describe("BringYourOwnPrStage", () => {
     mockFetchDiff.mockResolvedValue("diff --git a/x b/x\n+fixed\n");
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
@@ -146,6 +153,7 @@ describe("BringYourOwnPrStage", () => {
     const savedRun = { diffContent: "diff --git a/x b/x\n" } as never;
     render(
       <BringYourOwnPrStage
+      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}

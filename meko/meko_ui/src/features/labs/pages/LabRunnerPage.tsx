@@ -1,16 +1,15 @@
-import { useEffect, useRef } from "react";
-import { Loader2, LogOut } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { ROUTES } from "@/app/routes/paths";
-import NotFoundPage from "@/features/system/pages/NotFoundPage";
 
-import { getLabDefinition, LAB_DEFINITIONS } from "../data/labDefinitions";
+import { getLabDefinition } from "../data/labDefinitions";
 import { parseLabRoute } from "../lib/parseLabRoute";
-import { useLabsNavFlag } from "../hooks/useLabsNavFlag";
+import { resetLabState } from "../lib/labSessionReset";
+import { LabExitControls } from "../components/lab-runner/LabExitControls";
 import { useLabProgress } from "../hooks/useLabProgress";
 import { useLabRunnerSession } from "../hooks/useLabRunnerSession";
 import { useLabContextFeed } from "../hooks/useLabContextFeed";
@@ -19,19 +18,19 @@ import { LabStageNav } from "../components/lab-runner/LabStageNav";
 import { LabStageSlot } from "../components/lab-runner/LabStageSlot";
 import { LabStageFooter } from "../components/lab-runner/LabStageFooter";
 import { LabContextPane } from "../components/lab-runner/LabContextPane";
-import type { LabStageId } from "../types";
+import type { LabDefinition, LabStageId } from "../types";
 
-// The only stages that read session.userToken (MemoryStage,
-// ConversationStage's SeedContextChat, and all three PrReviewDemoApp call
-// sites -- run-review, run-review-again, and bring-your-own-pr) -- Deploy
-// Agent and Collaborate need just session.datapackId, which is available
-// synchronously.
+// The only stages that read session.userToken: MemoryStage, ConversationStage's
+// SeedContextChat, and the two stages that render PrReviewDemoApp -- run-review,
+// and make-it-yours, which hosts the bring-your-own-PR review. Meet AgentK and
+// Collaborate need just session.datapackId, which is available synchronously.
+// Miss one and that stage renders mid-provision: deploymentActive is still
+// false, so it shows a spurious "deploy the agent first" prompt.
 const STAGES_NEEDING_TOKEN: LabStageId[] = [
   "memory",
   "conversation",
   "run-review",
-  "run-review-again",
-  "bring-your-own-pr",
+  "make-it-yours",
 ];
 
 /** The opening stage runs the agent with no context on purpose, so the pane
@@ -63,13 +62,49 @@ export default function LabRunnerPage() {
   const navigate = useNavigate();
   const parsed = parseLabRoute(location.pathname);
   const lab = parsed?.isRunner ? getLabDefinition(parsed.labId) : undefined;
-  const showLabs = useLabsNavFlag();
 
-  // Hooks must run unconditionally — an invalid :labId means `lab` is
-  // undefined, so we call these with LAB_DEFINITIONS[0] as a placeholder
-  // and redirect below once we know whether the real lookup succeeded.
-  const progress = useLabProgress(lab ?? LAB_DEFINITIONS[0]);
-  const session = useLabRunnerSession(lab ?? LAB_DEFINITIONS[0]);
+  // Bumping this remounts the whole run, which is what makes Restart
+  // complete: every piece of in-memory state below lives in a hook that
+  // seeds itself from storage on mount, so clearing storage and remounting
+  // resets all of it without each hook needing its own reset path.
+  const [runKey, setRunKey] = useState(0);
+
+  if (!lab) return <Navigate to={ROUTES.labs} replace />;
+
+  return (
+    <LabRunnerView
+      key={runKey}
+      lab={lab}
+      onExit={() => {
+        resetLabState(lab.id);
+        navigate(ROUTES.labs);
+      }}
+      onLeave={() => navigate(ROUTES.labs)}
+      onRestart={() => {
+        resetLabState(lab.id);
+        setRunKey((k) => k + 1);
+      }}
+    />
+  );
+}
+
+function LabRunnerView({
+  lab,
+  onExit,
+  onLeave,
+  onRestart,
+}: {
+  lab: LabDefinition;
+  /** Discards the run's saved state, behind a confirm. */
+  onExit: () => void;
+  /** Leaves the runner with the run intact, so it resumes where it stopped.
+   *  The completion screen's own "Back to Labs" -- finishing a lab is not a
+   *  reason to throw it away, and it asks nothing before navigating. */
+  onLeave: () => void;
+  onRestart: () => void;
+}) {
+  const progress = useLabProgress(lab);
+  const session = useLabRunnerSession(lab);
 
   // A lesson that recorded a trace did its work, so that's what satisfies
   // its gate. Compared by identity, not content: re-recording the same
@@ -103,11 +138,6 @@ export default function LabRunnerPage() {
     if (TRACE_COMPLETED_STAGES.includes(currentStage.id)) markStageComplete(currentStage.id);
   }, [session.lastLessonTrace, currentStage.id, markStageComplete]);
 
-  // Pre-GA: the flag gates more than the Sidebar entry -- a direct URL hit
-  // must bounce too, same as BillingPage/AdminPage self-guard.
-  if (!showLabs) return <NotFoundPage />;
-  if (!lab) return <Navigate to={ROUTES.labs} replace />;
-
   const showSpinner = shouldShowProvisionStatusSpinner(session.loading, progress.currentStage.id);
 
   const LabIcon = lab.icon;
@@ -123,10 +153,7 @@ export default function LabRunnerPage() {
             {progress.currentStage.title}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.labs)}>
-          <LogOut className="h-3.5 w-3.5" aria-hidden />
-          End Lab
-        </Button>
+        <LabExitControls onExit={onExit} onRestart={onRestart} />
       </div>
       {session.error && (
         <p className="border-b border-border bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -157,7 +184,7 @@ export default function LabRunnerPage() {
                 session={session}
                 progress={progress}
                 contextFeed={contextFeed}
-                onEndLab={() => navigate(ROUTES.labs)}
+                onEndLab={onLeave}
               />
             </div>
           )}

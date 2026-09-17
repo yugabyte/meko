@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
@@ -19,6 +19,9 @@ afterEach(() => {
 });
 beforeEach(() => {
   localStorage.clear();
+  // Hoisted, so it is shared across tests and would otherwise carry the
+  // previous test's navigation into an assertion that nothing navigated.
+  mockNavigate.mockClear();
   // jsdom has no matchMedia -- LabObservationSlot's useIsMobile() needs it.
   vi.stubGlobal(
     "matchMedia",
@@ -44,34 +47,52 @@ function renderPage() {
   );
 }
 
-describe("LabRunnerPage pre-GA gating", () => {
-  it("renders 404 for a direct URL hit when the showLabs flag is off", () => {
-    renderPage();
-    expect(screen.getByText("404 Page Not Found")).toBeTruthy();
-  });
-
-  it("renders the runner once the flag is latched", () => {
-    localStorage.setItem("meko:show_labs_nav", "true");
+describe("LabRunnerPage", () => {
+  it("renders the runner with no flag set", () => {
     renderPage();
     expect(screen.queryByText("404 Page Not Found")).toBeNull();
   });
 
-  it("clicking End Lab navigates back to the labs list", () => {
-    localStorage.setItem("meko:show_labs_nav", "true");
+  // Both exits discard the run, so neither acts on the first click.
+  it("asks before exiting, then clears the run's saved state and leaves", () => {
+    localStorage.setItem("meko:lab-progress:adlc-review-agent", '{"chapterIndex":2,"stageIndex":1}');
     renderPage();
-    fireEvent.click(screen.getByRole("button", { name: /end lab/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /exit lab/i }));
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    const dialog = within(screen.getByRole("alertdialog"));
+    fireEvent.click(dialog.getByRole("button", { name: /exit lab/i }));
+    expect(localStorage.getItem("meko:lab-progress:adlc-review-agent")).toBeNull();
     expect(mockNavigate).toHaveBeenCalledWith(ROUTES.labs);
+  });
+
+  it("asks before restarting, then clears the run's saved state and stays put", () => {
+    localStorage.setItem("meko:lab-progress:adlc-review-agent", '{"chapterIndex":2,"stageIndex":1}');
+    localStorage.setItem("meko:lab-completed:adlc-review-agent", '["see-the-pr"]');
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /restart lab/i }));
+    expect(localStorage.getItem("meko:lab-progress:adlc-review-agent")).not.toBeNull();
+
+    const dialog = within(screen.getByRole("alertdialog"));
+    fireEvent.click(dialog.getByRole("button", { name: /restart lab/i }));
+    expect(localStorage.getItem("meko:lab-progress:adlc-review-agent")).toBeNull();
+    expect(localStorage.getItem("meko:lab-completed:adlc-review-agent")).toBeNull();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
 
 describe("shouldShowProvisionStatusSpinner", () => {
-  it("blocks memory, conversation, run-review, and run-review-again while the provision-status lookup is loading", () => {
+  it("blocks every stage that invokes the agent while the provision-status lookup is loading", () => {
     expect(shouldShowProvisionStatusSpinner(true, "memory")).toBe(true);
     expect(shouldShowProvisionStatusSpinner(true, "conversation")).toBe(true);
     expect(shouldShowProvisionStatusSpinner(true, "run-review")).toBe(true);
-    // Regression: run-review-again renders the same PrReviewDemoApp, which
-    // needs session.userToken in dedicated mode just like run-review does.
-    expect(shouldShowProvisionStatusSpinner(true, "run-review-again")).toBe(true);
+    // make-it-yours hosts the bring-your-own-PR review, so it renders the
+    // same PrReviewDemoApp and needs session.userToken in dedicated mode.
+    // Without it the stage renders mid-provision and tells the user to deploy
+    // an agent that is already deploying.
+    expect(shouldShowProvisionStatusSpinner(true, "make-it-yours")).toBe(true);
   });
 
   it("doesn't block see-the-pr, create-datapack, knowledge-base, meet-agentk, or collaborate -- none read session.userToken", () => {

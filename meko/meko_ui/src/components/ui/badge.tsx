@@ -27,6 +27,11 @@ const badgeVariants = cva(
         // One recipe — change it here and every <Badge variant="brand">
         // follows, instead of hand-tuning each tag's classes per file.
         brand: "border-brand/40 bg-brand/10 text-brand [&_svg]:text-brand",
+        // A passed / approved / healthy state. Reuses the knowledge-source
+        // green, which already has a light and a dark value, so this needs no
+        // token of its own.
+        success:
+          "border-context-knowledge/40 bg-context-knowledge-soft text-context-knowledge [&_svg]:text-context-knowledge",
       },
     },
     defaultVariants: {

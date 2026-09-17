@@ -20,7 +20,7 @@ export function GuardrailStage({ agentDisplayName }: { agentDisplayName: string 
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 2 · Step 4"
+        eyebrow="Chapter 2 · Step 5"
         title="Decide where it needs you"
         lede="An autonomous agent is only useful if you know where it stops. This is the human-in-the-loop line for the review stage."
         tags={["Guardrail"]}

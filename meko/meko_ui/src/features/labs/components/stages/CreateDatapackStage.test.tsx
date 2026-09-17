@@ -46,13 +46,32 @@ describe("CreateDatapackStage", () => {
     expect(screen.getByText("Conversation")).toBeTruthy();
   });
 
+  // Creating is the path this step opens on: a lab run writes sample
+  // standards and memories, which should not land in a datapack the user
+  // already relies on.
+  it("opens on the create form rather than the picker", () => {
+    renderStage();
+    expect(screen.getByLabelText("Create a datapack for this lab")).toBeTruthy();
+    expect(screen.queryByLabelText("Select datapack")).toBeNull();
+  });
+
   it("creating a new datapack calls onCreate with the trimmed name", async () => {
     const { onCreate } = renderStage();
-    fireEvent.click(screen.getByRole("button", { name: /new/i }));
-    fireEvent.change(screen.getByLabelText("New datapack name"), { target: { value: "  My Pack  " } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(screen.getByLabelText("Create a datapack for this lab"), {
+      target: { value: "  My Pack  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create datapack/i }));
     await Promise.resolve();
     expect(onCreate).toHaveBeenCalledWith("My Pack");
+  });
+
+  it("reaches the existing-datapack picker from the create form, and back", () => {
+    renderStage();
+    fireEvent.click(screen.getByRole("button", { name: /use a datapack you already have/i }));
+    expect(screen.getByLabelText("Select datapack")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /create a new one/i }));
+    expect(screen.getByLabelText("Create a datapack for this lab")).toBeTruthy();
   });
 
   it("renders no heading/description by default, but shows them when passed (a later chapter's reuse)", () => {
@@ -94,20 +113,25 @@ describe("CreateDatapackStage", () => {
     expect(screen.getByText("Keep the same one, or switch.")).toBeTruthy();
   });
 
-  it("disables New once the datapack quota is hit", () => {
+  // At the quota there is nothing to create, so the step opens on the picker
+  // and offers no way back to a form that could only fail.
+  it("opens on the picker with no create option once the datapack quota is hit", () => {
     renderStage({ hasHitDatapackCount: true });
-    expect((screen.getByRole("button", { name: /new/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByLabelText("Select datapack")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /create a new one/i })).toBeNull();
+    expect(screen.getByText(/hit your datapack limit/i)).toBeTruthy();
   });
 
   it("surfaces onCreate's rejection instead of silently doing nothing", async () => {
     const onCreate = vi.fn().mockRejectedValue(new Error("You've hit the Free tier limit."));
     renderStage({ onCreate });
-    fireEvent.click(screen.getByRole("button", { name: /new/i }));
-    fireEvent.change(screen.getByLabelText("New datapack name"), { target: { value: "My Pack" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(screen.getByLabelText("Create a datapack for this lab"), {
+      target: { value: "My Pack" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create datapack/i }));
 
     expect(await screen.findByText("You've hit the Free tier limit.")).toBeTruthy();
-    // The dialog stays open with the name intact so the user can retry.
-    expect(screen.getByLabelText("New datapack name")).toBeTruthy();
+    // The form stays put with the name intact so the user can retry.
+    expect(screen.getByLabelText("Create a datapack for this lab")).toBeTruthy();
   });
 });

@@ -1,12 +1,11 @@
 import type { LabChapter } from "../../types";
 
-// Five chapters. Chapter 1 opens on the PR itself so the user watches AgentK
-// miss a real bug before building anything, Chapter 2 introduces the agent
-// and hands it the datapack, and Chapter 3 is the review. "Build a dashboard"
-// reads that datapack's own activity back out of Meko. "Bring your own PR"
-// points AgentK at a real pull request instead of the bundled sample, fetched
-// client-side with the user's own GitHub token (lib/api/githubApi.ts) and
-// never sent to Meko.
+// Four chapters. Chapter 1 opens on the PR itself so the user watches AgentK
+// miss a real bug before building anything; Chapter 2 introduces the agent,
+// hands it the datapack and configures the run; Chapter 3 is the review. The
+// last chapter points AgentK at a real pull request instead of the bundled
+// sample, fetched client-side with the user's own GitHub token
+// (lib/api/githubApi.ts) and never sent to Meko.
 export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   {
     id: "give-context",
@@ -55,7 +54,7 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
     id: "share-with-agentk",
     title: "Share it with AgentK",
     summary:
-      "Meet the reviewer, grant it read access to the datapack you just built, and see what that access costs.",
+      "Meet the reviewer, grant it read access to the datapack you just built, configure the run, and see what that access costs.",
     stages: [
       {
         id: "meet-agentk",
@@ -65,10 +64,16 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
       },
       {
         id: "share-with-agent",
-        title: "Share the datapack, not a copy",
+        title: "Share the datapack with AgentK",
         summary:
           "Sharing is a grant, not a transfer. AgentK reads the live datapack, so a rule you edit at 4pm lands in the 4:01 review.",
         gate: { message: "Share the datapack to continue" },
+      },
+      {
+        id: "configure-agentk",
+        title: "Configure AgentK",
+        summary:
+          "Pick the model that reviews your PR, and which of your datapack's sources it may read. This is the run Chapter 3 executes.",
       },
       {
         id: "retrieval-cost",
@@ -94,7 +99,7 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
         id: "run-review",
         title: "Run the review",
         summary:
-          "Nothing about the diff changed. The only difference is that AgentK can now read your datapack.",
+          "Same diff, same agent, the model you configured. The only difference is that AgentK can now read your datapack.",
         gate: { message: "Run the review to continue" },
       },
       {
@@ -177,15 +182,10 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
           "Write this review's findings into the feature's own datapack, so the agent that fixes them starts where the reviewer stopped.",
       },
       {
-        id: "bring-your-own-pr",
-        title: "Review a real PR",
-        summary:
-          "Paste a pull request you have access to. It's fetched in your browser with your own GitHub token, which never reaches Meko.",
-      },
-      {
         id: "make-it-yours",
         title: "Make it yours",
-        summary: "What you built, and the four ways to point the same setup at your own repositories.",
+        summary:
+          "Point AgentK at a pull request of your own, fetched in your browser with your own GitHub token, then take the setup back to your work.",
       },
     ],
   },

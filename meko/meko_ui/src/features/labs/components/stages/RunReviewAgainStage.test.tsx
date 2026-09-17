@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
+import { DEFAULT_REVIEW_AGENT_CONFIG } from "../demo-apps/ReviewAgentConfigPanel";
 import { RunReviewAgainStage } from "./RunReviewAgainStage";
 
 // Deep coverage of the review flow itself lives in PrReviewDemoApp.test.tsx —
@@ -34,6 +35,7 @@ describe("RunReviewAgainStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
     render(
       <RunReviewAgainStage
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession(null)}
         onGoToCreateDatapack={vi.fn()}
@@ -47,6 +49,7 @@ describe("RunReviewAgainStage", () => {
   it("shows the deployment-needed prompt when a datapack is set but no deployment is active", () => {
     render(
       <RunReviewAgainStage
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", false)}
         onGoToCreateDatapack={vi.fn()}
@@ -59,6 +62,7 @@ describe("RunReviewAgainStage", () => {
   it("renders PrReviewDemoApp once a datapack is selected and the deployment is active", () => {
     render(
       <RunReviewAgainStage
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}

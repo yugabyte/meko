@@ -9,7 +9,7 @@ describe("DeploymentModeChooser", () => {
   it("clicking the shared card calls onSelect with 'shared'", () => {
     const onSelect = vi.fn();
     render(<DeploymentModeChooser selected="dedicated" onSelect={onSelect} canDeployDedicated />);
-    fireEvent.click(screen.getByText("Use the shared AgentK"));
+    fireEvent.click(screen.getByText("Use the predeployed AgentK"));
     expect(onSelect).toHaveBeenCalledWith("shared");
   });
 
@@ -37,16 +37,16 @@ describe("DeploymentModeChooser", () => {
     // not real state) -- pass the value that matches what gets clicked so
     // the collapsed summary (which reads the `selected` prop) is coherent.
     render(<DeploymentModeChooser selected="shared" onSelect={vi.fn()} canDeployDedicated />);
-    fireEvent.click(screen.getByText("Use the shared AgentK"));
+    fireEvent.click(screen.getByText("Use the predeployed AgentK"));
 
     expect(screen.queryByText("Deploy your own dedicated AgentK")).toBeNull();
-    expect(screen.getByText("Use the shared AgentK")).toBeTruthy();
+    expect(screen.getByText("Use the predeployed AgentK")).toBeTruthy();
     expect(screen.getByText("Change")).toBeTruthy();
   });
 
   it("'Change' re-expands both options", () => {
     render(<DeploymentModeChooser selected="shared" onSelect={vi.fn()} canDeployDedicated />);
-    fireEvent.click(screen.getByText("Use the shared AgentK"));
+    fireEvent.click(screen.getByText("Use the predeployed AgentK"));
     fireEvent.click(screen.getByRole("button", { name: /change/i }));
 
     expect(screen.getByText("Deploy your own dedicated AgentK")).toBeTruthy();

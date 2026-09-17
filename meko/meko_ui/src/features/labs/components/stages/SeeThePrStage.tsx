@@ -7,10 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import {
-  COLD_REVIEW_DURATION,
-  COLD_REVIEW_FINDINGS,
-  COLD_REVIEW_INPUT_TOKENS,
-  COLD_REVIEW_IS_POPULATED,
   COLD_REVIEW_TRACE,
   COLD_REVIEW_VERDICT,
 } from "../../data/adlcReviewAgentLab/coldReviewCapture";
@@ -62,13 +58,7 @@ export function SeeThePrStage({
           }}
           disabled={started}
         >
-          {!started
-            ? "Review with no context"
-            : !traceDone
-              ? "Reviewing…"
-              : COLD_REVIEW_IS_POPULATED
-                ? `Reviewed, ${COLD_REVIEW_FINDINGS.length} issues`
-                : "Review complete"}
+          {!started ? "Review with no context" : !traceDone ? "Reviewing…" : "Review complete"}
         </Button>
         <span className="text-sm text-muted-foreground">
           {agentDisplayName}, cold, with no datapack attached
@@ -79,36 +69,12 @@ export function SeeThePrStage({
         <>
           <ColdReviewTrace lines={COLD_REVIEW_TRACE} onFinished={handleFinished} />
 
-          {/* Everything in this card is a claim about a run. Until the capture
-              exists, COLD_REVIEW_IS_POPULATED is the one gate that decides
-              whether any of it can be stated -- the verdict, its numbers, the
-              badge, and the button label above. */}
           {traceDone && (
             <div className="flex gap-3 rounded-md border border-border bg-card p-4">
-              {COLD_REVIEW_IS_POPULATED && (
-                <Badge variant="secondary" className="h-fit shrink-0">
-                  approved
-                </Badge>
-              )}
-              <div className="min-w-0">
-                {COLD_REVIEW_IS_POPULATED ? (
-                  <>
-                    <p className="font-medium text-foreground">“{COLD_REVIEW_VERDICT}”</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {agentDisplayName} · {COLD_REVIEW_DURATION} ·{" "}
-                      {COLD_REVIEW_INPUT_TOKENS.toLocaleString()} input tokens ·{" "}
-                      {COLD_REVIEW_FINDINGS.length} issues
-                    </p>
-                  </>
-                ) : (
-                  // No capture recorded yet (see coldReviewCapture.ts). Say so
-                  // rather than quoting a verdict nobody measured.
-                  <p className="text-sm text-muted-foreground">
-                    The baseline capture for this PR hasn't been recorded yet. The trace above shows
-                    the shape of the run, not its measured result.
-                  </p>
-                )}
-              </div>
+              <Badge variant="success" className="h-fit shrink-0">
+                approved
+              </Badge>
+              <p className="min-w-0 text-sm font-medium text-foreground">“{COLD_REVIEW_VERDICT}”</p>
             </div>
           )}
         </>

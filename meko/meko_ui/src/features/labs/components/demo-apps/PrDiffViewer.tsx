@@ -1,4 +1,5 @@
-import { ExternalLink } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ export function PrDiffViewer({
   diff,
   isSample,
   url,
+  collapsible,
 }: {
   title: string;
   description?: string;
@@ -44,14 +46,31 @@ export function PrDiffViewer({
   /** Links out to the real PR on GitHub -- only set for a bring-your-own-PR
    *  review, where there's an actual page to link to. */
   url?: string;
+  /** Starts folded to its header, for a screen where the diff is context the
+   *  reader has already seen rather than the thing they came for. The
+   *  header's own stats stay visible either way. */
+  collapsible?: boolean;
 }) {
+  const [open, setOpen] = useState(!collapsible);
   const lines = diff.split("\n");
   const stats = diffStats(diff);
+  const Chevron = open ? ChevronDown : ChevronRight;
   return (
     <div className="overflow-hidden rounded-md border border-border">
-      <div className="border-b border-border px-3 py-2.5">
+      <div className={cn("px-3 py-2.5", open && "border-b border-border")}>
         <div className="flex items-center gap-2">
-          <div className="text-sm font-medium">{title}</div>
+          {collapsible && (
+            <button
+              type="button"
+              onClick={() => setOpen((o) => !o)}
+              aria-expanded={open}
+              className="inline-flex items-center gap-1 text-sm font-medium hover:text-foreground"
+            >
+              <Chevron className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+              {title}
+            </button>
+          )}
+          {!collapsible && <div className="text-sm font-medium">{title}</div>}
           {isSample && (
             <Badge variant="outline" className="shrink-0">
               Sample PR
@@ -79,6 +98,7 @@ export function PrDiffViewer({
           </span>
         </div>
       </div>
+      {open && (
       <pre className="max-h-64 overflow-auto p-3 font-mono text-xs leading-relaxed">
         {lines.map((line, i) => (
           <div
@@ -92,6 +112,7 @@ export function PrDiffViewer({
           </div>
         ))}
       </pre>
+      )}
     </div>
   );
 }

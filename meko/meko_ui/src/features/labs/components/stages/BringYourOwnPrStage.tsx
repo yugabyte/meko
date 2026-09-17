@@ -1,5 +1,6 @@
-// Chapter 4: lets the user point AgentK at a real pull request instead of
-// the bundled sample. The PR is fetched entirely client-side (githubApi.ts,
+// The bring-your-own-PR flow, hosted by MakeItYoursStage: lets the user point
+// AgentK at a real pull request instead of the bundled sample. Titleless on
+// purpose -- the hosting stage owns the heading. The PR is fetched entirely client-side (githubApi.ts,
 // "Called directly from the browser with a user-pasted PAT" -- GitHub's REST
 // API sets permissive CORS for PAT-authenticated requests) using the user's
 // own GitHub personal access token, which is never sent to Meko's backend or
@@ -20,16 +21,17 @@ import {
   parsePrRef,
 } from "@/lib/api/githubApi";
 
+import type { ReviewAgentConfig } from "../demo-apps/ReviewAgentConfigPanel";
 import { PrReviewDemoApp, type PrReviewRunState, type PrSource } from "../demo-apps/PrReviewDemoApp";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
-import { LabStageHeader } from "./LabStageHeader";
 
 export function BringYourOwnPrStage({
   demoApp,
   session,
+  reviewConfig,
   onGoToCreateDatapack,
   onGoToDeployAgent,
   savedRun,
@@ -37,6 +39,8 @@ export function BringYourOwnPrStage({
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  /** Chosen in Chapter 2's Configure step; threaded straight through. */
+  reviewConfig: ReviewAgentConfig;
   onGoToCreateDatapack: () => void;
   onGoToDeployAgent: () => void;
   savedRun?: PrReviewRunState | null;
@@ -54,18 +58,26 @@ export function BringYourOwnPrStage({
     );
   }
   return (
-    <BringYourOwnPrStageContent demoApp={demoApp} session={session} savedRun={savedRun} onRunChange={onRunChange} />
+    <BringYourOwnPrStageContent
+      demoApp={demoApp}
+      session={session}
+      reviewConfig={reviewConfig}
+      savedRun={savedRun}
+      onRunChange={onRunChange}
+    />
   );
 }
 
 function BringYourOwnPrStageContent({
   demoApp,
   session,
+  reviewConfig,
   savedRun,
   onRunChange,
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  reviewConfig: ReviewAgentConfig;
   savedRun?: PrReviewRunState | null;
   onRunChange?: (run: PrReviewRunState) => void;
 }) {
@@ -164,17 +176,10 @@ function BringYourOwnPrStageContent({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 px-6 pt-6">
-        <LabStageHeader
-          eyebrow="Chapter 4 · Step 1"
-          title="Review a real PR"
-          lede={`Every review so far used a bundled sample. This one is the pull request you fetched, reviewed by ${demoApp.agentDisplayName} against the same context.`}
-          tags={["Your repo"]}
-        />
-      </div>
       <PrReviewDemoApp
         demoApp={demoApp}
         session={session}
+        reviewConfig={reviewConfig}
         prSource={prSource ?? undefined}
         savedRun={savedRun}
         onRunChange={onRunChange}

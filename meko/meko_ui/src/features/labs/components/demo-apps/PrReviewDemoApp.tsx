@@ -35,9 +35,7 @@ import type { LabDemoAppConfig } from "../../types";
 import { FindingsList } from "./FindingsList";
 import { PrDiffViewer } from "./PrDiffViewer";
 import {
-  DEFAULT_REVIEW_AGENT_CONFIG,
   MODEL_LABELS,
-  ReviewAgentConfigPanel,
   type ReviewAgentConfig,
   type SlmModelId,
 } from "./ReviewAgentConfigPanel";
@@ -112,12 +110,16 @@ function reviewConfigPayload(config: ReviewAgentConfig) {
 export function PrReviewDemoApp({
   demoApp,
   session,
+  reviewConfig,
   prSource,
   savedRun,
   onRunChange,
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
+  /** Chosen in Chapter 2's Configure step and owned by LabStageSlot, so it
+   *  survives this component remounting on every stage navigation. */
+  reviewConfig: ReviewAgentConfig;
   /** A real PR to review instead of the bundled sample -- see PrSource's own
    *  comment. Only read at the moment "Run review" is clicked (handleRunReview);
    *  once a review is underway or restored from `savedRun`, this is ignored. */
@@ -195,15 +197,10 @@ export function PrReviewDemoApp({
   const [initialReviewMessageId, setInitialReviewMessageId] = useState<string | null>(
     () => savedRun?.initialReviewMessageId ?? null,
   );
-  // Captured at send time rather than read from reviewConfig.model later.
-  // The config panel unmounts once hasReviewed flips (it only renders in the
-  // !hasReviewed branch), so reviewConfig can't actually change after a
-  // review starts within one mount -- but this component itself unmounts and
-  // remounts on stage navigation (see savedRun above), which resets
-  // reviewConfig to its default. Without a separately-tracked
-  // selectedModelId, the post-review cost comparison would silently show
-  // whatever model a fresh reviewConfig happens to default to, not the model
-  // the restored review actually used.
+  // Captured at send time rather than read from reviewConfig.model later: the
+  // user can go back to Chapter 2 and pick a different model after a review
+  // has run, and the cost comparison must keep naming the model that run
+  // actually used.
   const [selectedModelId, setSelectedModelId] = useState<SlmModelId | null>(() => savedRun?.selectedModelId ?? null);
   const [sendError, setSendError] = useState<string | null>(() => savedRun?.sendError ?? null);
   // id of the first, diff-embedded user turn — hidden from the transcript
@@ -216,8 +213,6 @@ export function PrReviewDemoApp({
   const [slackToken, setSlackToken] = useState("");
   const [slackChannel, setSlackChannel] = useState("");
   const [slackStatus, setSlackStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
-
-  const [reviewConfig, setReviewConfig] = useState<ReviewAgentConfig>(DEFAULT_REVIEW_AGENT_CONFIG);
 
   // Shared mode needs no deploymentId/userToken of its own -- the shared
   // instance authenticates with its own credential, and RunReviewStage
@@ -403,6 +398,14 @@ export function PrReviewDemoApp({
     }
   }, [messages, slackToken, slackChannel, diffTitle]);
 
+  // Named from the config rather than stated flatly: the Configure step can
+  // switch either source off, and naming a tool the run was told not to call
+  // is worse than saying less.
+  const enabledTools = [
+    reviewConfig.useKnowledgeBase && "knowledgebase_search",
+    reviewConfig.useMemories && "memory_search",
+  ].filter((t): t is string => typeof t === "string");
+
   const hasReviewed = diffContent !== null;
   const canFollowUp = canReview && conversationId !== null && reviewText !== null;
 
@@ -420,16 +423,26 @@ export function PrReviewDemoApp({
             {prSource && <PrDiffViewer title={prSource.title} diff={prSource.diff} url={prSource.htmlUrl} />}
             <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
               <p className="text-sm text-muted-foreground">
-                Every source in this datapack is live here. Whichever model you pick below
-                reaches it the same way Claude did: by calling{" "}
-                <code className="font-mono">knowledgebase_search</code> and{" "}
-                <code className="font-mono">memory_search</code> against your datapack.
+                Reviewing with{" "}
+                <span className="font-medium text-foreground">{MODEL_LABELS[reviewConfig.model]}</span>
+                {enabledTools.length > 0 ? (
+                  <>
+                    , reading your datapack over{" "}
+                    {enabledTools.map((tool, i) => (
+                      <span key={tool}>
+                        {i > 0 && " and "}
+                        <code className="font-mono">{tool}</code>
+                      </span>
+                    ))}
+                    .
+                  </>
+                ) : (
+                  // Both sources switched off in the Configure step: the run
+                  // reads nothing, which is a legitimate comparison to make
+                  // and should not be described as retrieval.
+                  ", with no datapack sources enabled."
+                )}
               </p>
-              <ReviewAgentConfigPanel
-                value={reviewConfig}
-                onChange={setReviewConfig}
-                agentDisplayName={demoApp.agentDisplayName}
-              />
               <Button onClick={handleRunReview} disabled={!canReview || sending} className="self-start">
                 {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 Run review
@@ -443,6 +456,7 @@ export function PrReviewDemoApp({
               diff={diffContent}
               isSample={isSample}
               url={sourceUrl ?? undefined}
+              collapsible
             />
             {/* The diff-embedded review prompt itself is skipped — PrDiffViewer
                 already shows the diff. Every later turn (reply + any

@@ -2,12 +2,14 @@
 // datapack attached -- the baseline Chapter 1 opens on, before the user has
 // built any context.
 //
-// PLACEHOLDER until someone runs the capture: AgentK has no "review without
-// context" mode (the invoke path always carries the datapack), so this is
-// produced by invoking the agent against an empty datapack and pasting the
-// result here, the same way anthropicReferenceReview.ts is produced. Until
-// then COLD_REVIEW_IS_POPULATED is false and SeeThePrStage shows the diff
-// alone rather than claiming a result nobody measured.
+// The QUALITATIVE half is authored: the trace below and the verdict it
+// reaches are what Chapter 1 replays, and SeeThePrStage renders them
+// unconditionally. The MEASURED half -- token counts and wall-clock -- is a
+// placeholder until someone runs the capture, and nothing renders it, so no
+// screen states a number nobody recorded. AgentK has no "review without
+// context" mode (the invoke path always carries the datapack), so the capture
+// is produced by invoking the agent against an empty datapack and pasting the
+// result here, the same way anthropicReferenceReview.ts is produced.
 //
 // The UI REPLAYS this line by line, because watching the agent announce
 // "context sources available: none" is the lesson -- but it is labelled a
@@ -41,10 +43,15 @@ export const COLD_REVIEW_TRACE: ColdReviewTraceLine[] = [
  *  makes the lab's argument, and the copy would need rewriting. */
 export const COLD_REVIEW_FINDINGS: ReviewFinding[] = [];
 
-/** The agent's own summary verdict, verbatim from the capture. */
-export const COLD_REVIEW_VERDICT = "PENDING_REAL_CAPTURE";
+/** The verdict the cold run reaches, and the whole point of the baseline:
+ *  an agent with no context approves a diff that carries an injection. Stated
+ *  here rather than gated on COLD_REVIEW_IS_POPULATED because the trace above
+ *  already asserts it line by line -- what stays gated is the MEASURED half
+ *  (tokens, duration), which nobody has recorded yet. */
+export const COLD_REVIEW_VERDICT = "Looks good. Clean handler, clear naming. No blocking concerns.";
 
-/** Wall-clock the capture took, shown beside the verdict. */
+/** Wall-clock the capture took. Recorded for whoever runs the real capture;
+ *  no screen renders it today. */
 export const COLD_REVIEW_DURATION = "4.6s";
 
 export const COLD_REVIEW_INPUT_TOKENS = 0;
@@ -52,5 +59,6 @@ export const COLD_REVIEW_OUTPUT_TOKENS = 0;
 
 /** Same gate as ANTHROPIC_REFERENCE_IS_POPULATED: a real capture always has
  *  non-zero usage, so this is the single source of truth for "has anyone run
- *  the capture yet". */
+ *  the capture yet". Read by the cost step's comparison card, which shows
+ *  "not measured" rather than a token count until it flips. */
 export const COLD_REVIEW_IS_POPULATED = COLD_REVIEW_INPUT_TOKENS > 0;

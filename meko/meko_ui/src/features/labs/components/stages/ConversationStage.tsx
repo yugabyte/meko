@@ -68,8 +68,8 @@ export function ConversationStage({
               Meko is reading that for anything worth keeping
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              No need to say "remember this". Extraction runs after the reply, so a new memory shows up
-              shortly rather than instantly.
+              Extraction runs after the reply, so a new memory shows up shortly rather than
+              instantly.
             </p>
           </div>
         </div>
