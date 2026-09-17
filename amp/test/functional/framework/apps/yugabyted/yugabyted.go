@@ -47,6 +47,9 @@ const (
 	ybUser           = "yugabyte"
 	ybDatabase       = "yugabyte"
 
+	dataPlacementRetryFor   = 3 * time.Minute
+	dataPlacementRetryDelay = 10 * time.Second
+
 	// postInstallScript runs bin/fips_install.sh (FIPS/OpenSSL config) on a
 	// bare tarball deploy. It does not provision a Python interpreter — see
 	// ensurePython, which handles that separately.
@@ -122,6 +125,9 @@ type App struct {
 	pythonEnsure   bool // gates the ensurePython step; see WithEnsurePython
 	pythonSetupCmd string
 	placed         bool // data placement applied; Wait is called more than once
+	// how long configureDataPlacement keeps retrying; fields so tests can shrink it
+	placementRetryFor   time.Duration
+	placementRetryDelay time.Duration
 }
 
 // Option customizes an App.
@@ -161,6 +167,9 @@ func New(nodes []Node, spec Spec, opts ...Option) *App {
 		logf:           log.Printf,
 		pythonEnsure:   DefaultEnsurePython,
 		pythonSetupCmd: DefaultPythonSetupCmd,
+
+		placementRetryFor:   dataPlacementRetryFor,
+		placementRetryDelay: dataPlacementRetryDelay,
 	}
 	for _, o := range opts {
 		o(a)
@@ -399,7 +408,22 @@ func (a *App) configureDataPlacement(ctx context.Context) error {
 	cmd := fmt.Sprintf("%s configure data_placement --base_dir=%s --rf=%d",
 		a.bin(), shellQuote(a.baseDir()), a.spec.RF)
 	a.log("yugabyted: configuring data placement for RF %d across %d node(s)", a.spec.RF, len(a.nodes))
-	return a.runOK(ctx, a.nodes[0].Exec, cmd)
+	// Retried: YSQL answering on node 0 does not mean every node's tserver has
+	// registered with the master, and until they have, yugabyted reports fewer
+	// nodes than RF and refuses.
+	deadline := time.Now().Add(a.placementRetryFor)
+	for attempt := 1; ; attempt++ {
+		err := a.runOK(ctx, a.nodes[0].Exec, cmd)
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+		a.log("yugabyted: data placement attempt %d failed (%v); retrying", attempt, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(a.placementRetryDelay):
+		}
+	}
 }
 
 // Wait blocks until YSQL answers on the cluster and node 0 reports a running

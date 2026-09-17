@@ -26,10 +26,18 @@ type rule struct {
 	match string
 	res   exec.Result
 	err   error
+	fn    func() exec.Result
 }
 
 func (s *scriptExec) on(match string, res exec.Result) *scriptExec {
 	s.rules = append(s.rules, rule{match: match, res: res})
+	return s
+}
+
+// onFunc registers a rule whose result is computed per call, for commands whose
+// answer changes between attempts.
+func (s *scriptExec) onFunc(match string, fn func() exec.Result) *scriptExec {
+	s.rules = append(s.rules, rule{match: match, fn: fn})
 	return s
 }
 
@@ -39,6 +47,9 @@ func (s *scriptExec) Run(_ context.Context, cmd string) (exec.Result, error) {
 	s.commands = append(s.commands, cmd)
 	for _, r := range s.rules {
 		if strings.Contains(cmd, r.match) {
+			if r.fn != nil {
+				return r.fn(), nil
+			}
 			return r.res, r.err
 		}
 	}
@@ -516,6 +527,30 @@ func TestWaitSkipsDataPlacementForSingleNode(t *testing.T) {
 	}
 }
 
+func TestWaitRetriesDataPlacementUntilTheNodesJoin(t *testing.T) {
+	nodes, execs := threeNodes()
+	execs[0].on("status", exec.Result{ExitCode: 0, Stdout: "Status: Running"})
+	// Fail the first data_placement the way a not-yet-joined cluster does.
+	attempts := 0
+	execs[0].onFunc("configure data_placement", func() exec.Result {
+		attempts++
+		if attempts == 1 {
+			return exec.Result{ExitCode: 1, Stderr: "not enough nodes to set-up a RF-3 cluster"}
+		}
+		return exec.Result{ExitCode: 0}
+	})
+	app := New(nodes, Spec{RF: 3}, WithWaitPG(func(context.Context, pg.ConnInfo, time.Duration) error {
+		return nil
+	}))
+	app.placementRetryDelay = time.Millisecond
+	if err := app.Wait(context.Background()); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("data_placement attempts = %d, want 2", attempts)
+	}
+}
+
 func TestWaitFailsWhenDataPlacementFails(t *testing.T) {
 	nodes, execs := threeNodes()
 	execs[0].on("status", exec.Result{ExitCode: 0, Stdout: "Status: Running"}).
@@ -523,6 +558,7 @@ func TestWaitFailsWhenDataPlacementFails(t *testing.T) {
 	app := New(nodes, Spec{RF: 3}, WithWaitPG(func(context.Context, pg.ConnInfo, time.Duration) error {
 		return nil
 	}))
+	app.placementRetryFor, app.placementRetryDelay = 0, time.Millisecond
 	err := app.Wait(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not enough nodes") {
 		t.Fatalf("expected the data_placement failure to surface, got %v", err)
