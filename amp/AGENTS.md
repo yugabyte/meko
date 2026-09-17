@@ -221,6 +221,11 @@ bring-up — `up.sh`" + "ECR access & the pull secret"). In short:
   the pull secret").
 - To debug a deploy (endpoint won't come up, a task fails), see
   [`runbooks/controller_runbook.md`](runbooks/controller_runbook.md).
+- For a **customer's first BYOC install** — what their cluster, RBAC, network and nodes
+  must provide before the chart goes on — see
+  [`docs/byoc-production-checklist.md`](docs/byoc-production-checklist.md).
+- To publish an endpoint to a consumer in another VPC, see
+  [`runbooks/psc-endpoint-publishing.md`](runbooks/psc-endpoint-publishing.md).
 
 ## Outstanding work / known sharp edges
 

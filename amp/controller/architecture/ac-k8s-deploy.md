@@ -466,7 +466,11 @@ a shared load balancer cannot carry a per-endpoint allowlist.
 `connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`;
 empty is unrestricted, which on `nlb_external` leaves password authentication as
 the only barrier. Each `nlb_*` endpoint provisions its own load balancer — a
-billed resource that counts against the account's per-region quota.
+billed resource that counts against the account's per-region quota. Both fields
+are **create-time only** — the endpoint's update paths are `/settings` and `/resize`,
+neither of which touches connectivity — so a wrong allowlist is fixed by recreating the
+endpoint. Reaching one from another VPC needs a service attachment the customer creates:
+[`runbooks/psc-endpoint-publishing.md`](../../runbooks/psc-endpoint-publishing.md).
 
 **Portable across clouds.** The mode is the concept; the annotations that
 implement it are per-provider, so the deployer detects the cloud from a node's
