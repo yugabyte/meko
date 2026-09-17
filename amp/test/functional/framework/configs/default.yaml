@@ -2403,6 +2403,57 @@ perf:
     # ready_timeout bounds the compute workload becoming ready again after the
     # pod is rolled for the cold read.
     ready_timeout: 10m
+  # branch_depth is perf/branch_depth: read, insert, update and delete latency
+  # at each depth of a fork chain root -> child -> grandchild, every level on a
+  # fresh endpoint.
+  # A page miss on a branch is looked up in the branch and then in each
+  # ancestor, so the cost is on the cold read path and grows with depth.
+  branch_depth:
+    # max_depth is how many forks deep the chain goes; level 0 is the root.
+    # Every level is measured, so this is also the run's length: each rung is a
+    # fork, an endpoint, a read set, a full scan and an update, and the scan and
+    # the update both grow with depth.
+    max_depth: 20
+    # rows is the root's dataset, ~100 bytes a row with the default payload;
+    # batch_rows is one INSERT ... SELECT of that load.
+    rows: 2000000
+    batch_rows: 200000
+    payload_bytes: 64
+    # samples is how many random point reads are timed cold, then warm, per
+    # level, inside the server (the tunnel would hide a page miss).
+    samples: 300
+    # touch_rows sizes each level's own band: it INSERTS that many rows above
+    # the loaded ones, UPDATEs that many and DELETEs that many, so a deeper
+    # branch has pages whose newest version lives at every ancestor and all
+    # four operations are timed at every depth. Insert and delete are the same
+    # size, so count(*) is unchanged and the cold scan asserts the same number
+    # at every depth. The id space holds an update band and a delete band per
+    # level plus a pristine region the reads sample, so
+    # 2 * (max_depth + 1) * touch_rows must leave rows over.
+    touch_rows: 25000
+    # gate_depths are the rungs whose numbers become GATED datapoints; every
+    # other depth still reports its numbers as informational. Gating all 21
+    # rungs would put 105 series on the portal, most of them saying what their
+    # neighbour says. Rungs past max_depth are dropped, not rejected, so
+    # lowering max_depth needs no edit here.
+    gate_depths: [0, 1, 5, 10, 20]
+    # max_ratio gates cold p50 at ratio_depth over cold p50 at the root. A fork
+    # one level down pays one extra lookup on a miss, not a multiple of the
+    # read. p50, not p99: two fresh pods differ in their tails by more than a
+    # page miss costs. Depth 1 measured 1.38x (run 68906b60) and 1.26x (run
+    # 58e317e4), so 2.0 is roughly a 45% margin over the wider of the two; the
+    # per-ancestor cost is ~2.7 ms against a ~5 ms root read, so a legitimate
+    # depth-1 read cannot approach it. The deep rungs are deliberately NOT
+    # asserted — walking 20 ancestors costs 11.8x today, and what that SHOULD
+    # cost is the product's call, so the ladder reports it and history tracks
+    # it. 0 keeps the datapoints and drops the assertion.
+    max_ratio: 2.0
+    ratio_depth: 1
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+    # ready_timeout bounds the root's compute becoming ready again after its
+    # pod is rolled for the cold read.
+    ready_timeout: 10m
   # idle_footprint is perf/idle_footprint: what one endpoint costs while nobody
   # is connected to it, split per process inside the endpoint container.
   idle_footprint:

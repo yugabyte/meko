@@ -40,8 +40,8 @@ untagged and run on demand — see the Perf bullet):
 - **`perf`** — the baseline-gated benchmarks in `suites/perf` (`tpcc`, `pgbench`,
   `sysbench`), with version/image comparison + bisect + history/trend, plus the
   measured-number tests that gate against portal history rather than a workload
-  baseline (`lifecycle`, `ops_latency`, `chain_depth_read`, `idle_footprint`).
-  Those four each provision a stack of their own.
+  baseline (`lifecycle`, `ops_latency`, `chain_depth_read`, `branch_depth`,
+  `idle_footprint`). Those five each provision a stack of their own.
 
 The `scale` tests in `suites/perf` fit no scheduled lane and run on demand by
 name or `--testr`.
@@ -145,11 +145,14 @@ tests need (a single run would demand every cloud credential at once):
   fork, cold reads, pause/resume once `perf.lifecycle.pause_resume` is on, big
   delete, drop, branch and cluster delete), run over
   `perf.lifecycle.iterations` concurrent fresh tenants with each phase's median
-  as the portal-gated datapoint. Three more take a stack of their own too:
+  as the portal-gated datapoint. Four more take a stack of their own too:
   `ops_latency` times every control-plane operation on fresh objects over
   `perf.ops_latency.repeats` repeats, `chain_depth_read` times cold single-page
   reads at each delta-chain depth and also asserts the `image_chain_limit`
-  contract outright, and `idle_footprint` reads /proc inside an untouched
+  contract outright, `branch_depth` measures cold and warm point reads, a cold
+  scan, an insert, an update and a delete at each depth of a 20-deep fork chain
+  and asserts the first fork's cold p50 within `perf.branch_depth.max_ratio` of
+  the root's, and `idle_footprint` reads /proc inside an untouched
   endpoint's container for its per-process idle CPU and RSS.
 
 Example (one env at a time):

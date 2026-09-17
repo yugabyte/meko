@@ -1820,6 +1820,38 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 
+	// --- perf/branch_depth (perf.branch_depth.*) ---
+	for key, want := range map[string]int{
+		"perf.branch_depth.max_depth":     perf.DefaultBranchDepthMaxDepth,
+		"perf.branch_depth.rows":          perf.DefaultBranchDepthRows,
+		"perf.branch_depth.batch_rows":    perf.DefaultBranchDepthBatchRows,
+		"perf.branch_depth.payload_bytes": perf.DefaultBranchDepthPayloadBytes,
+		"perf.branch_depth.samples":       perf.DefaultBranchDepthSamples,
+		"perf.branch_depth.touch_rows":    perf.DefaultBranchDepthTouchRows,
+		"perf.branch_depth.ratio_depth":   perf.DefaultBranchDepthRatioDepth,
+	} {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	for key, want := range map[string]string{
+		"perf.branch_depth.endpoint_cpu":    perf.DefaultBranchDepthEndpointCPU,
+		"perf.branch_depth.endpoint_memory": perf.DefaultBranchDepthEndpointMem,
+	} {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := cfg.GetFloat("perf.branch_depth.max_ratio", -1); got != perf.DefaultBranchDepthMaxRatio {
+		t.Errorf("perf.branch_depth.max_ratio = %v, want %v", got, perf.DefaultBranchDepthMaxRatio)
+	}
+	if got := cfg.GetDuration("perf.branch_depth.ready_timeout", -1); got != perf.DefaultBranchDepthReadyTimeout {
+		t.Errorf("perf.branch_depth.ready_timeout = %s, want %s", got, perf.DefaultBranchDepthReadyTimeout)
+	}
+	if got := cfg.GetStringSlice("perf.branch_depth.gate_depths", nil); !slices.Equal(got, perf.DefaultBranchDepthGateDepths) {
+		t.Errorf("perf.branch_depth.gate_depths = %v, want %v", got, perf.DefaultBranchDepthGateDepths)
+	}
+
 	// --- perf/client_window (perf.client_window.*) ---
 	if got := cfg.GetInt("perf.client_window.rate_tps", -1); got != perf.DefaultClientWindowRateTPS {
 		t.Errorf("perf.client_window.rate_tps = %d, want %d", got, perf.DefaultClientWindowRateTPS)

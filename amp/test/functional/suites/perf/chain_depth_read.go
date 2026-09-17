@@ -280,24 +280,7 @@ func (r *chainRun) flushAndRestart() error {
 }
 
 func (r *chainRun) pageserverClient() (*pageserver.Client, error) {
-	pod, err := ampstack.EndpointPodName(r.t.Context, r.kube, r.ten.Endpoint.ID)
-	if err != nil {
-		return nil, err
-	}
-	return pageserver.New(func(ctx context.Context, script string) (string, error) {
-		res, err := r.kube.ForPod(pod, chainEndpointContainer).Run(ctx, script)
-		if err != nil {
-			return "", err
-		}
-		switch res.ExitCode {
-		case 0:
-			return res.Stdout, nil
-		case pageserver.ConnectRefusedExit:
-			return "", fmt.Errorf("nothing answers on the pageserver's management port in pod %s", pod)
-		default:
-			return "", fmt.Errorf("pageserver request in pod %s exited %d: %s", pod, res.ExitCode, strings.TrimSpace(res.Stderr))
-		}
-	}, pageserver.DefaultHTTPPort), nil
+	return endpointPageserver(r.t.Context, r.kube, r.ten.Endpoint.ID)
 }
 
 func (r *chainRun) restartCompute() error {
