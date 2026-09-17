@@ -99,36 +99,14 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 }
 
 // SetDesired replaces the environment's desired resource set.
-//
-// The set is authoritative and the agent garbage-collects what it omits, so emptying
-// it deletes the environment's pool, cluster, branch and endpoint. That makes the
-// destructive write the one a malformed body must not be able to reach: `resources`
-// is required (a pointer, so an absent key is not an empty slice — the same
-// distinction RegisterEnvironmentRequest.Desired already draws), unknown fields are
-// refused rather than dropped, and an explicit empty set has to say so twice.
 func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 	var body struct {
-		Resources *[]models.DesiredResource `json:"resources"`
-		// AllowEmpty confirms an empty Resources. A body field rather than a query
-		// parameter because YBM's pass-through forwards the JSON body and nothing
-		// else — as a parameter it would never arrive, leaving no way to withdraw a
-		// stack through YBM at all.
-		AllowEmpty bool `json:"allow_empty"`
+		Resources []models.DesiredResource `json:"resources"`
 	}
-	if err := bindStrict(c, &body); err != nil {
-		return apiError(c, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if err := c.Bind(&body); err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	if body.Resources == nil {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
-			`resources is required: desired state is replaced, not merged, so send the whole set. `+
-				`To withdraw everything, send {"resources": [], "allow_empty": true}.`)
-	}
-	if len(*body.Resources) == 0 && !body.AllowEmpty {
-		return apiError(c, http.StatusBadRequest, "EMPTY_DESIRED_STATE",
-			`an empty resources array withdraws everything this environment declares, and the `+
-				`agent deletes it on its next tick; resend with "allow_empty": true to confirm.`)
-	}
-	found, err := h.svc.SetDesired(c.Param("id"), accountScope(c), *body.Resources)
+	found, err := h.svc.SetDesired(c.Param("id"), accountScope(c), body.Resources)
 	if err != nil {
 		// A kind this environment's agent does not serve is the caller's mistake, so
 		// it is a 400 here rather than the 500 envLookupError would give it.

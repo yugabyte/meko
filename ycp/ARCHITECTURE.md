@@ -103,13 +103,6 @@ cluster.
    environment is told to hold nothing. Garbage collection is the one thing that needs
    a desired state that was actually read: the agent cannot know what an operator
    withdrew from a response it never got.
-
-   Because the agent obeys an empty set, the *write* side has to be sure the operator
-   meant one. `POST /environments/{id}/desired` requires an explicit `resources` and
-   rejects unknown top-level fields, so a truncated or misspelled body is a 400 instead
-   of a tree-emptying command; `"resources": []` additionally needs `"allow_empty":
-   true`. Registration is the exception and keeps its plain `"desired": []` (below) —
-   there is nothing yet to delete.
 5. **Report** — the agent `POST`s `/agent/status` with real facts, the workload health it
    read from its own namespace (`components`: one row per Deployment and StatefulSet,
    healthy-of-total plus the image tag — the only way the console can say what is up,
