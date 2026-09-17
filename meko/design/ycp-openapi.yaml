@@ -149,6 +149,45 @@ paths:
                   api_key_id: { type: string, format: uuid }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/environments/{envId}/desired:
+    parameters: [{ $ref: '#/components/parameters/EnvId' }]
+    get:
+      tags: [environments]
+      summary: Read what this environment is declared to run
+      operationId: getEnvironmentDesiredState
+      description: The operator-facing read. The agent has its own route, `/api/v1/agent/desired-state`.
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resources: { type: array, items: { $ref: '#/components/schemas/DesiredResource' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [environments]
+      summary: Replace what this environment is declared to run
+      operationId: setEnvironmentDesiredState
+      description: |
+        Replaces the set; nothing is merged, and a resource left out is garbage-collected by
+        the agent on its next tick.
+
+        Because omission is deletion, `resources` is required (an absent key is not an empty
+        set) and an unknown top-level field is a 400 rather than silently dropped. Withdrawing
+        everything is still one call, but `"resources": []` must carry `"allow_empty": true`.
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/DesiredStateWrite' } }
+      responses:
+        '202': { description: Accepted; the agent converges on its next tick. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   # ------------------------------------------------------------------ datapacks
   /api/v1/datapacks:
     get:
@@ -458,6 +497,26 @@ components:
         resources:
           type: array
           items: { $ref: '#/components/schemas/DesiredResource' }
+
+    DesiredStateWrite:
+      type: object
+      additionalProperties: false
+      # resources is required so that an absent key cannot pass for an empty set: the
+      # agent garbage-collects what desired state omits, so the two readings differ by
+      # the environment's whole resource tree.
+      required: [resources]
+      properties:
+        resources:
+          type: array
+          items: { $ref: '#/components/schemas/DesiredResource' }
+        allow_empty:
+          type: boolean
+          default: false
+          description: |
+            Confirms an empty `resources`, which withdraws everything the environment
+            declares. Required for that case and ignored otherwise. A body field rather
+            than a query parameter because YBM's pass-through forwards the JSON body and
+            nothing else.
 
     DesiredResource:
       type: object

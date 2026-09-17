@@ -154,6 +154,17 @@ The set is **replaced**, not merged: anything left out is garbage-collected on t
 next tick. **The agent is the api-server's only caller and is authoritative over it** —
 a datapack made by hand that desired state does not declare is deleted.
 
+Because omitting a resource deletes it, the body has to say what it means. `resources`
+is required and unknown top-level fields are refused, so a truncated or misspelled body
+is a 400 rather than an instruction to run nothing. Withdrawing everything is still one
+call, but it has to ask:
+
+```bash
+curl -X POST "$YCP/api/v1/environments/$ENV/desired" \
+  -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+  -d '{"resources":[],"allow_empty":true}'
+```
+
 A kind this environment's agent does not serve is refused with a 400 naming the entry
 (`resources[1] has kind "datapak", which a meko environment does not serve`), on both
 this call and `POST /environments`. Only the **kind** is checked here — name shape is

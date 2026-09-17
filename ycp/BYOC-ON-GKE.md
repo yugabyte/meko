@@ -166,7 +166,9 @@ kubectl --context $C -n $NS port-forward svc/meko-ui 5000:5000
 ## 5. Drive it
 
 Registering binds the environment to an API key and gives you the install hint.
-Desired state is the control surface afterwards, and it is replaced rather than merged:
+Desired state is the control surface afterwards, and it is replaced rather than merged,
+so every POST carries the whole set. `resources` is required and unknown fields are
+rejected: a body that omits it is a 400, never an instruction to run nothing.
 
 ```bash
 KEY=$(kubectl --context $C -n ycp-anijhawan get secret meko-admin-api-key -o jsonpath='{.data.admin-api-key}' | base64 -d)
@@ -182,9 +184,10 @@ curl -s -X POST -H "X-Meko-Admin-Secret: $KEY" -H 'content-type: application/jso
 
 # Withdraw everything. The agent collects both datapacks and then the agent on its
 # next tick — deleting an agent cascades its datapacks first, because the api-server's
-# own delete would strand them.
+# own delete would strand them. allow_empty is what makes the empty set a command
+# rather than a 400.
 curl -s -X POST -H "X-Meko-Admin-Secret: $KEY" -H 'content-type: application/json' \
-  -d '{"resources":[]}' "$YCP/api/v1/environments/itest-mcs/desired"
+  -d '{"resources":[],"allow_empty":true}' "$YCP/api/v1/environments/itest-mcs/desired"
 ```
 
 **The agent is authoritative over this api-server.** A datapack created by hand that
