@@ -66,14 +66,14 @@ function runWith(overrides: Partial<PrReviewRunState> = {}): PrReviewRunState {
 describe("ReviewCostStage", () => {
   it("sends the user back to the review rather than showing numbers nobody measured", () => {
     const onGoToRunReview = vi.fn();
-    renderStage(<ReviewCostStage run={null} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={onGoToRunReview} />);
+    renderStage(<ReviewCostStage run={null} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={onGoToRunReview} />);
 
     fireEvent.click(screen.getByRole("button", { name: /go to run the review/i }));
     expect(onGoToRunReview).toHaveBeenCalled();
   });
 
   it("shows the chosen model's real token usage from the run", () => {
-    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={vi.fn()} />);
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={vi.fn()} />);
 
     // 512 lands twice now: once on the with-context comparison card at the
     // top, once in the Cost tab's stat grid.
@@ -93,7 +93,7 @@ describe("ReviewCostStage", () => {
         memory_tokens_estimated: 85,
       },
     });
-    renderStage(<ReviewCostStage run={run} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={vi.fn()} />);
+    renderStage(<ReviewCostStage run={run} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={vi.fn()} />);
 
     expect(screen.getByText(/10 of 70 chunks/)).toBeTruthy();
     expect(screen.getByText(/3 of 24 memories/)).toBeTruthy();
@@ -104,7 +104,7 @@ describe("ReviewCostStage", () => {
     // gen_reference_review.py's real output is pasted into the fixture --
     // dividing by a zero reference cost must not render a bogus "Infinity%"
     // or "NaN%" savings line.
-    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={vi.fn()} />);
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={vi.fn()} />);
 
     expect(screen.queryByText(/less, from this run/)).toBeNull();
   });
@@ -112,7 +112,7 @@ describe("ReviewCostStage", () => {
   it("hides the paste comparison when no retrieval happened, leaving nothing to compare", () => {
     // Both search tools off -> no retrieved tokens -> a second bar would be
     // a claim about a review that never queried anything.
-    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={vi.fn()} />);
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={vi.fn()} />);
 
     expect(screen.queryByText(/Input tokens per review/)).toBeNull();
   });
@@ -128,7 +128,7 @@ describe("ReviewCostStage", () => {
         memory_tokens_estimated: 40,
       },
     });
-    renderStage(<ReviewCostStage run={run} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={vi.fn()} />);
+    renderStage(<ReviewCostStage run={run} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={vi.fn()} />);
 
     expect(screen.getByText(/Input tokens per review/)).toBeTruthy();
     expect(screen.getByText(/Paste the whole standards doc/)).toBeTruthy();
@@ -140,7 +140,7 @@ describe("ReviewCostStage", () => {
   // The datapack rollup is the half that outlives the session, so it gets its
   // own tab rather than sitting under this run's numbers.
   it("keeps the datapack rollup behind the Metrics tab", () => {
-    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" onGoToRunReview={vi.fn()} />);
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" datapackName="org-standards" kbChunksTotal={4} kbChunkSize={1024} onGoToRunReview={vi.fn()} />);
     expect(screen.getByRole("tab", { name: "Cost" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Metrics" })).toBeTruthy();
     expect(screen.queryByText(/What the datapack has built up/)).toBeNull();

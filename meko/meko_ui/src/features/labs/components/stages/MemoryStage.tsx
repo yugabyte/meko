@@ -119,8 +119,7 @@ export function MemoryStage({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground">Scope</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Private to you. Agents you share this datapack with can read it; promoting it to collective
-            memory is a separate, deliberate step.
+            Private to you until you promote it. Chapter 4 promotes one to collective memory.
           </p>
         </div>
         <Badge variant="secondary" className="shrink-0 text-[10px]">

@@ -31,6 +31,8 @@ export function ReviewCostStage({
   run,
   datapackId,
   datapackName,
+  kbChunksTotal,
+  kbChunkSize,
   onGoToRunReview,
 }: {
   run: PrReviewRunState | null;
@@ -39,6 +41,14 @@ export function ReviewCostStage({
   /** Named on the with-context card, so the comparison says which datapack
    *  did the work rather than "with a datapack". */
   datapackName: string | null;
+  /** Every chunk in the datapack, and the index's chunk size, both from the
+   *  knowledge-base summary. `contextStats.kb_chunks_total` is the same
+   *  datapack-wide total (it comes from datapack_describe, and is the
+   *  denominator in "N of M chunks"), so it serves as the fallback -- the
+   *  summary is preferred only because it is present whether or not a run
+   *  reported stats. */
+  kbChunksTotal: number | null;
+  kbChunkSize: number | null;
   onGoToRunReview: () => void;
 }) {
   const usage = run?.reviewUsage ?? null;
@@ -98,10 +108,12 @@ export function ReviewCostStage({
         findingsCount={findingsCount}
         blockingCount={blockingCount}
         inputTokens={usage.input_tokens}
+        kbChunksTotal={kbChunksTotal ?? stats?.kb_chunks_total ?? null}
+        kbChunkSize={kbChunkSize}
       />
 
       <Tabs defaultValue="cost" className="flex flex-col gap-6">
-        <TabsList className="w-full justify-start sm:w-auto">
+        <TabsList className="w-auto justify-start">
           <TabsTrigger value="cost">Cost</TabsTrigger>
           <TabsTrigger value="metrics">Metrics</TabsTrigger>
         </TabsList>

@@ -16,7 +16,8 @@ function feed(overrides: Partial<LabContextFeed> = {}): LabContextFeed {
     collective: [],
     collectiveTotal: 0,
     conversationsTotal: 0,
-  chunkSize: null,
+    chunksTotal: null,
+    chunkSize: null,
     loading: false,
     ...overrides,
   };

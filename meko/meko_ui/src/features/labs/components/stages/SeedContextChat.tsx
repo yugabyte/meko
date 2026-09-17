@@ -25,8 +25,10 @@ export function SeedContextChat({
   userToken: string | null;
   /** Called after a successful turn with the MCP tool calls the gateway
    *  made (`res.processing_steps`) -- e.g. `memory_search`,
-   *  `conversation_add_message` -- so the caller can surface them (X-Ray). */
-  onTurnComplete: (steps: ProcessingStep[]) => void;
+   *  `conversation_add_message` -- so the caller can surface them (X-Ray).
+   *  The conversation id comes with them: extraction runs against that
+   *  conversation, so it is how a caller finds what this turn taught Meko. */
+  onTurnComplete: (steps: ProcessingStep[], conversationId: string) => void;
   /** Optional ready-made prompts rendered as clickable chips above the
    *  input — clicking one prefills the input rather than sending it, so
    *  the user can still edit before submitting. */
@@ -61,7 +63,7 @@ export function SeedContextChat({
           ...prev,
           { id: crypto.randomUUID(), role: "assistant", content: res.message, langfuseMessageId: res.message_id },
         ]);
-        onTurnComplete(res.processing_steps ?? []);
+        onTurnComplete(res.processing_steps ?? [], res.conversation_id);
       } catch (err) {
         setSendError(getInferenceGatewayErrorMessage(err));
       } finally {
@@ -110,6 +112,7 @@ export function SeedContextChat({
         </div>
       )}
       <ChatInput
+        compact
         value={input}
         onChange={setInput}
         onSubmit={() => {

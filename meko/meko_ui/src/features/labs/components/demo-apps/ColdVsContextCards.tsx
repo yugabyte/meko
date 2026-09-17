@@ -5,18 +5,16 @@
 
 import { cn } from "@/lib/utils";
 
-import {
-  COLD_REVIEW_FINDINGS,
-  COLD_REVIEW_INPUT_TOKENS,
-  COLD_REVIEW_IS_POPULATED,
-  COLD_REVIEW_VERDICT,
-} from "../../data/adlcReviewAgentLab/coldReviewCapture";
+import { COLD_REVIEW_FINDINGS, COLD_REVIEW_VERDICT } from "../../data/adlcReviewAgentLab/coldReviewCapture";
+import { estimatePasteTokensFromDocuments } from "../../lib/retrievalCostEstimate";
 
 export function ColdVsContextCards({
   datapackName,
   findingsCount,
   blockingCount,
   inputTokens,
+  kbChunksTotal,
+  kbChunkSize,
 }: {
   datapackName: string;
   /** Null when the run returned prose the agent didn't structure, so the
@@ -24,7 +22,18 @@ export function ColdVsContextCards({
   findingsCount: number | null;
   blockingCount: number | null;
   inputTokens: number;
+  /** Every chunk in the datapack, and the index's own chunk size. A review
+   *  that cannot query the datapack has to be handed all of it, and that is
+   *  what this prices -- through the same estimator Chapter 2 uses, so the
+   *  two chapters cannot quote the same knowledge base differently. */
+  kbChunksTotal: number | null;
+  kbChunkSize: number | null;
 }) {
+  const coldTokens =
+    estimatePasteTokensFromDocuments(
+      [{ chunks_processed: kbChunksTotal ?? 0 }],
+      kbChunkSize,
+    ) ?? 0;
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <ComparisonCard
@@ -33,9 +42,15 @@ export function ColdVsContextCards({
         valueTone="muted"
         caption={`issues found · “${COLD_REVIEW_VERDICT}”`}
         rows={[
-          // The cold run's verdict is authored, its token count is not: until
-          // someone records the capture there is no number to quote here.
-          { label: "Input tokens", value: COLD_REVIEW_IS_POPULATED ? COLD_REVIEW_INPUT_TOKENS.toLocaleString() : "not measured" },
+          // NOT the cold run's own spend -- that capture is unmeasured, and
+          // the run read nothing. This is what the same review costs without
+          // a datapack to query: the whole knowledge base in the prompt. The
+          // label says so, because the number is meaningless attributed to
+          // the run above it.
+          {
+            label: "Whole KB in the prompt",
+            value: coldTokens > 0 ? `${coldTokens.toLocaleString()} est.` : "not measured",
+          },
           { label: "Vulnerability", value: "shipped", tone: "bad" },
         ]}
       />
@@ -82,13 +97,13 @@ function ComparisonCard({
         highlighted ? "border-context-knowledge/40 bg-card" : "border-border bg-card",
       )}
     >
-      <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {eyebrow}
       </p>
       <div>
         <p
           className={cn(
-            "text-3xl font-semibold tabular-nums",
+            "text-2xl font-semibold tabular-nums",
             valueTone === "good" ? "text-context-knowledge" : "text-muted-foreground",
           )}
         >
@@ -102,7 +117,7 @@ function ComparisonCard({
             <dt className="text-xs text-muted-foreground">{row.label}</dt>
             <dd
               className={cn(
-                "font-mono text-xs tabular-nums",
+                "text-xs tabular-nums",
                 row.tone === "good" && "text-context-knowledge",
                 row.tone === "bad" && "text-destructive",
                 !row.tone && "text-foreground",

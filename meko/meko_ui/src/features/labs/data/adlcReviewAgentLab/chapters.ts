@@ -1,11 +1,13 @@
 import type { LabChapter } from "../../types";
 
-// Four chapters. Chapter 1 opens on the PR itself so the user watches AgentK
+// Five chapters. Chapter 1 opens on the PR itself so the user watches AgentK
 // miss a real bug before building anything; Chapter 2 introduces the agent,
 // hands it the datapack and configures the run; Chapter 3 is the review. The
-// last chapter points AgentK at a real pull request instead of the bundled
-// sample, fetched client-side with the user's own GitHub token
-// (lib/api/githubApi.ts) and never sent to Meko.
+// Chapter 4 closes the loop, and Chapter 5 leaves the sample behind: first
+// Yugabyte's own production AgentK (a dated snapshot, see
+// productionSnapshot.ts), then a real pull request of the user's own, fetched
+// client-side with their own GitHub token (lib/api/githubApi.ts) and never
+// sent to Meko.
 export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   {
     id: "give-context",
@@ -180,6 +182,32 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
         title: "Save the findings",
         summary:
           "Write this review's findings into the feature's own datapack, so the agent that fixes them starts where the reviewer stopped.",
+      },
+      {
+        id: "promote-learning",
+        title: "Promote the learning",
+        summary:
+          "One private memory becomes the datapack's. Promotion is the only step in this lab that changes what other people's agents read.",
+      },
+    ],
+  },
+  {
+    id: "see-it-in-production",
+    title: "See it in production",
+    summary:
+      "The same loop, running against Yugabyte's own 104 repositories, then a pull request of your own.",
+    stages: [
+      {
+        id: "production-reviews",
+        title: "Real reviews, in the open",
+        summary:
+          "Yugabyte's live AgentK: 104 repositories, real pull requests, real comments, and the numbers its dashboard reports.",
+      },
+      {
+        id: "production-trend",
+        title: "Thirty days of runs",
+        summary:
+          "A month of production reviews, and the cost per pull request that makes reviewing all of them affordable.",
       },
       {
         id: "make-it-yours",

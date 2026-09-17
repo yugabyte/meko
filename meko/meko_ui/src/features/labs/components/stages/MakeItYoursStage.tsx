@@ -7,6 +7,7 @@ import { CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatTile } from "@/components/ui/stat-tile";
+import { cn } from "@/lib/utils";
 import { formatTokens } from "@/lib/tokenSavings";
 
 import { useLabReviewDashboard } from "../../hooks/useLabReviewDashboard";
@@ -67,7 +68,7 @@ export function MakeItYoursStage({
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 4 · Step 2"
+        eyebrow="Chapter 5 · Step 3"
         title="Make it yours"
         lede={`Every review so far used a bundled sample. Point ${demoApp.agentDisplayName} at a pull request of your own, reviewed against the same context.`}
         tags={["Your repo"]}
@@ -75,9 +76,19 @@ export function MakeItYoursStage({
 
       {/* The BYO-PR flow, hosted rather than given its own step: it is the
           same screen as the summary below, and splitting them made the user
-          leave the review to read what they had built. Bounded so the
-          transcript scrolls inside the section, not the page. */}
-      <div className="flex max-h-[32rem] min-h-0 flex-col overflow-hidden rounded-lg border border-border">
+          leave the review to read what they had built.
+          Before a run there is no wrapper at all -- the fetch form carries its
+          own border, and boxing it produced a second frame the form was then
+          clipped inside, because a `min-h-0` child of this scrolling column
+          shrinks below its content. After a run the transcript is what needs
+          bounding, so the frame and the cap appear then and scroll internally
+          rather than pushing the summary off the page. */}
+      <div
+        className={cn(
+          "flex flex-col",
+          byocRun && "max-h-[32rem] min-h-0 overflow-hidden rounded-lg border border-border",
+        )}
+      >
         <BringYourOwnPrStage
           demoApp={demoApp}
           session={session}

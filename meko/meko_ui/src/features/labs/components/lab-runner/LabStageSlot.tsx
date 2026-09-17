@@ -21,6 +21,9 @@ import { GuardrailStage } from "../stages/GuardrailStage";
 import { KnowledgeBaseStage } from "../stages/KnowledgeBaseStage";
 import { MakeItYoursStage } from "../stages/MakeItYoursStage";
 import { MeetAgentKStage } from "../stages/MeetAgentKStage";
+import { ProductionReviewsStage } from "../stages/ProductionReviewsStage";
+import { ProductionTrendStage } from "../stages/ProductionTrendStage";
+import { PromoteLearningStage } from "../stages/PromoteLearningStage";
 import { MemoryStage } from "../stages/MemoryStage";
 import { RetrievalCostStage } from "../stages/RetrievalCostStage";
 import { ReviewCostStage } from "../stages/ReviewCostStage";
@@ -196,6 +199,8 @@ export function LabStageSlot({
           run={reviewRun}
           datapackId={session.datapackId}
           datapackName={session.datapackName}
+          kbChunksTotal={contextFeed.chunksTotal}
+          kbChunkSize={contextFeed.chunkSize}
           onGoToRunReview={goToRunReview}
         />
       );
@@ -226,6 +231,18 @@ export function LabStageSlot({
     // );
     case "save-findings":
       return <SaveFindingsStage session={session} run={reviewRun} onComplete={completeCurrentStage} />;
+    case "promote-learning":
+      return (
+        <PromoteLearningStage
+          session={session}
+          feed={contextFeed}
+          onGoToCreateDatapack={goToCreateDatapack}
+        />
+      );
+    case "production-reviews":
+      return <ProductionReviewsStage />;
+    case "production-trend":
+      return <ProductionTrendStage />;
     case "make-it-yours":
       return (
         <MakeItYoursStage

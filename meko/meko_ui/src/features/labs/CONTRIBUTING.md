@@ -21,14 +21,15 @@ lab means adding config, not touching those pages.
 `LabStageId` (`types.ts`) is a closed union, not per-lab config — a lab
 supplies the `title`/`summary` copy for each, but the stage components
 (`components/stages/*`) are shared across every lab. The ADLC review lab
-walks 16 of them:
+walks 19 of them:
 
 | Chapter | Stages |
 |---|---|
 | Give your agent context | `see-the-pr` → `create-datapack` → `knowledge-base` → `memory` → `conversation` |
 | Share it with AgentK | `meet-agentk` → `share-with-agent` → `configure-agentk` → `retrieval-cost` → `guardrail` |
 | Read the review | `run-review` → `review-findings` → `review-cost` → `collaborate` |
-| Close the loop | `save-findings` → `make-it-yours` |
+| Close the loop, then let go | `save-findings` → `promote-learning` |
+| See it in production | `production-reviews` → `production-trend` → `make-it-yours` |
 
 The union also carries `dashboard-intro`, `create-amp-cluster`,
 `run-review-again` and `review-dashboard`. Those belong to the parked "Build

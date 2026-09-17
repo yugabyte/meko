@@ -42,7 +42,12 @@ const STAGES_BEFORE_ANY_CONTEXT: LabStageId[] = ["see-the-pr"];
  *  Both show a four-up stat grid, which wraps every label onto two lines at
  *  the default width. Prose stages stay narrow: a wide column is worse for
  *  reading, which is why this is a list and not the default. */
-const WIDE_STAGES: LabStageId[] = ["review-cost", "make-it-yours"];
+const WIDE_STAGES: LabStageId[] = [
+  "review-cost",
+  "make-it-yours",
+  "production-reviews",
+  "production-trend",
+];
 
 /** The lessons that satisfy their gate by writing into the datapack. Each
  *  reports a lesson trace on success, which releases the gate immediately.

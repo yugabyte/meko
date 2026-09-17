@@ -39,6 +39,10 @@ export type LabContextFeed = {
   /** Only a count — the pane doesn't list conversations, but a datapack that
    *  has any is evidence the conversation lesson's work exists. */
   conversationsTotal: number;
+  /** Every chunk across every document in this datapack's knowledge base.
+   *  The per-run context stats report only what a search RETRIEVED, so this
+   *  is the one number that says how big the whole thing is. */
+  chunksTotal: number | null;
   /** Characters per chunk, from the index's own config. Null when the summary
    *  is unavailable; callers fall back to file size. */
   chunkSize: number | null;
@@ -53,6 +57,7 @@ const EMPTY: LabContextFeed = {
   collective: [],
   collectiveTotal: 0,
   conversationsTotal: 0,
+  chunksTotal: null,
   chunkSize: null,
   loading: false,
 };
@@ -99,6 +104,7 @@ export function useLabContextFeed({
         collectiveTotal: promoted.status === "fulfilled" ? promoted.value.total : 0,
         conversationsTotal:
           convos.status === "fulfilled" ? convos.value.conversations.length : 0,
+        chunksTotal: summary.status === "fulfilled" ? (summary.value.total_chunks ?? null) : null,
         chunkSize: summary.status === "fulfilled" ? (summary.value.chunk_size ?? null) : null,
         loading: false,
       });

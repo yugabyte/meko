@@ -119,19 +119,20 @@ function BringYourOwnPrStageContent({
     }
   };
 
+  // Top-aligned and content-sized: this renders inside the hosting stage's
+  // section, not as a full-height stage of its own, so `flex-1
+  // justify-center` centred it in a fixed box and clipped both ends. The
+  // heading and the "what this is" line belong to the host.
   if (!alreadyReviewed && !prSource) {
     return (
-      <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 overflow-y-auto p-6">
-        <div className="flex items-center gap-2">
-          <Github className="h-5 w-5 text-primary" aria-hidden />
-          <h2 className="text-lg font-semibold text-foreground">Bring your own PR</h2>
+      <div className="flex w-full flex-col gap-3 rounded-lg border border-border p-4">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Github className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+          Fetched in your browser with your own token, which never reaches Meko.
         </div>
-        <p className="text-sm text-muted-foreground">
-          Every review so far used a bundled sample PR. Point {demoApp.agentDisplayName} at a real
-          pull request you have access to instead, fetched directly from GitHub in your browser;
-          your token is never sent to Meko.
-        </p>
-        <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+        {/* Two short fields side by side at width: stacked full-bleed, each
+            input runs far wider than anything anyone pastes into it. */}
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <Label htmlFor="byoc-pr-ref">Pull request</Label>
             <Input
@@ -160,16 +161,20 @@ function BringYourOwnPrStageContent({
               Read-only" is enough.
             </p>
           </div>
-          {fetchError && (
-            <p className="flex items-center gap-1.5 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 shrink-0" /> {fetchError}
-            </p>
-          )}
-          <Button onClick={() => void handleFetch()} disabled={!prRefInput.trim() || !token.trim() || fetching}>
-            {fetching && <Loader2 className="h-4 w-4 animate-spin" />}
-            {fetching ? "Fetching…" : "Fetch PR"}
-          </Button>
         </div>
+        {fetchError && (
+          <p className="flex items-center gap-1.5 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" /> {fetchError}
+          </p>
+        )}
+        <Button
+          className="self-start"
+          onClick={() => void handleFetch()}
+          disabled={!prRefInput.trim() || !token.trim() || fetching}
+        >
+          {fetching && <Loader2 className="h-4 w-4 animate-spin" />}
+          {fetching ? "Fetching…" : "Fetch PR"}
+        </Button>
       </div>
     );
   }

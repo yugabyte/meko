@@ -59,6 +59,8 @@ export const COLD_REVIEW_OUTPUT_TOKENS = 0;
 
 /** Same gate as ANTHROPIC_REFERENCE_IS_POPULATED: a real capture always has
  *  non-zero usage, so this is the single source of truth for "has anyone run
- *  the capture yet". Read by the cost step's comparison card, which shows
- *  "not measured" rather than a token count until it flips. */
+ *  the capture yet". NOTHING READS IT TODAY -- no screen quotes the cold
+ *  run's measured numbers, since the cost step prices the no-datapack side as
+ *  the whole knowledge base in the prompt instead. Kept, with the token
+ *  counts below, for whoever records the real capture. */
 export const COLD_REVIEW_IS_POPULATED = COLD_REVIEW_INPUT_TOKENS > 0;

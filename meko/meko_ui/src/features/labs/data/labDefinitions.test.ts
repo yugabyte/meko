@@ -32,6 +32,9 @@ const FIXED_STAGE_IDS: LabStageId[] = [
   "review-cost",
   "collaborate",
   "save-findings",
+  "promote-learning",
+  "production-reviews",
+  "production-trend",
   "make-it-yours",
 ];
 

@@ -16,6 +16,7 @@ import type { KeyboardEvent } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
 
 // ~10 lines of body text — past this the textarea scrolls instead of
@@ -38,6 +39,7 @@ export function ChatInput({
   disabled,
   sending,
   blockedReason,
+  compact = false,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -45,6 +47,11 @@ export function ChatInput({
   disabled: boolean;
   sending: boolean;
   blockedReason: string | null;
+  /** Sits the composer on the page's own 14px body scale on DESKTOP instead
+   *  of the 16px pin below. Mobile keeps 16px either way. For a chat embedded
+   *  in a step alongside ordinary prose, where a larger composer reads as a
+   *  different app. */
+  compact?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -127,7 +134,12 @@ export function ChatInput({
             // md:leading-relaxed pairs with it. Mobile is already
             // text-base / leading-normal from the primitive, so no
             // unprefixed override is needed.
-            className="resize-none overflow-hidden border-0 bg-transparent p-2 placeholder:text-muted-foreground/80 focus-visible:ring-0 focus-visible:ring-offset-0 md:text-base md:leading-relaxed"
+            className={cn(
+              "resize-none overflow-hidden border-0 bg-transparent p-2 placeholder:text-muted-foreground/80 focus-visible:ring-0 focus-visible:ring-offset-0",
+              // md: only -- the primitive's mobile text-base is deliberate,
+              // since iOS Safari zooms the viewport on a sub-16px input.
+              compact ? "md:text-sm" : "md:text-base md:leading-relaxed",
+            )}
           />
           <Button
             type="submit"

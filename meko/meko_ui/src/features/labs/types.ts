@@ -35,6 +35,10 @@ export type LabStageId =
   | "review-dashboard"
   // Chapter 4 — close the loop
   | "save-findings"
+  | "promote-learning"
+  // Chapter 5 — see it in production
+  | "production-reviews"
+  | "production-trend"
   | "make-it-yours";
 
 /** Blocks "Next" until the stage reports its own work done, by calling the
