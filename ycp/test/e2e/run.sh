@@ -15,7 +15,9 @@
 #   4. registering an environment binds it to an api_key_id,
 #   4c. GET /environments/{id} hands back the same install hint register returned, so
 #      an operator who did not run it there and then can still find it -- including
-#      the YBM pass-through base a registration gave, which is stored for it.
+#      the YBM pass-through base a registration gave, which is stored for it,
+#   4d. a name stays claimed after deregistration, so re-registering it is a 409
+#      naming the collision rather than a 500,
 #   5. the agent surface refuses a non-JSON content type (415), an empty body (400)
 #      and a blank state (400) -- and leaves the environment's state untouched
 #      when it does.
@@ -359,12 +361,45 @@ api POST /api/v1/environments -H 'content-type: application/json' \
 stored_hint="$(api GET /api/v1/environments/hint-check |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["data"].get("install_hint",""))')"
 api DELETE /api/v1/environments/hint-check >/dev/null 2>&1 || true
+# 4d below asserts that a DEREGISTERED name stays claimed, so it has to know the
+# deregister actually happened -- the DELETE above is best-effort because the hint check
+# does not care, and a silently failed one would leave 4d passing against a LIVE row
+# while printing that a deregistered name stays claimed.
+hint_state="$(api GET /api/v1/environments/hint-check 2>/dev/null |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"].get("state",""))' || true)"
+[ "$hint_state" = "DEREGISTERED" ] ||
+  die "hint-check reads back as '$hint_state' after DELETE, want DEREGISTERED"
 want_url="reconcileAgent.ycpUrl=https://cloud.yugabyte.com/api/public/v1"
 want_url="$want_url/accounts/11111111-1111-1111-1111-111111111111/ycp"
 case "$stored_hint" in
   *"$want_url"*) echo "    a stored agent_base_url is what the hint dials" ;;
   *) die "hint-check's hint does not dial its stored agent base url: ${stored_hint:0:400}" ;;
 esac
+
+# 4d. A deregister is a state change, not a row delete, so hint-check's name is still
+#     claimed and re-registering it is the 409 an operator hits on every repeat run.
+#
+#     Postgres here, so this CANNOT catch the shape of the bug it was added for -- YSQL
+#     reports the violation with no constraint name, which the repository once keyed on
+#     (CLOUDGA-36978); that case lives in the repository unit tests. What this covers is
+#     the whole chain through a real server.
+#
+#     A FRESH api_key_id so the request is a name conflict and nothing else, and the
+#     code asserted rather than just the status -- Insert refuses at the environments
+#     row, before the key binding, so a 409 that was API_KEY_BOUND would mean the
+#     ordering changed underneath this. Inline curl because api() sends -f.
+dup_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+dup="$(curl -sS -w '\n%{http_code}' -X POST "http://127.0.0.1:$PORT$BASE/api/v1/environments" \
+  -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+  -d '{"name":"hint-check","account_id":"11111111-1111-1111-1111-111111111111","placement":"cloud",
+       "region":"local","api_key_id":"'"$dup_key"'"}')"
+[ "$(printf '%s' "$dup" | tail -n1)" = "409" ] ||
+  die "re-registering the deregistered name hint-check returned $(printf '%s' "$dup" | tail -n1), want 409: $dup"
+printf '%s' "$dup" | grep -q ENVIRONMENT_EXISTS ||
+  die "the repeat registration was refused, but not as ENVIRONMENT_EXISTS: $dup"
+printf '%s' "$dup" | grep -q hint-check ||
+  die "the repeat registration's 409 does not name the environment that collided: $dup"
+echo "    a deregistered name stays claimed: re-registering is 409 ENVIRONMENT_EXISTS"
 
 # 5. The agent surface refuses a request it cannot read, and — the part that matters
 #    — refuses it without touching the environment. CLOUDGA-36984: a status POST

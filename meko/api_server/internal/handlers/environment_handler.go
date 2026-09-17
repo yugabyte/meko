@@ -86,8 +86,12 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 				"this api key is already bound to another environment; one key drives one environment")
 		}
 		if errors.Is(err, service.ErrEnvironmentExists) {
+			// err names the environment's id -- the slug that was stored, which is
+			// what the API keys on and what an operator needs to find the row holding
+			// the name. Not req.Name, which differs from it whenever slug() changed
+			// anything.
 			return apiError(c, http.StatusConflict, "ENVIRONMENT_EXISTS",
-				"an environment with this name is already registered")
+				err.Error()+"; the name stays claimed for the life of the row, deregistered or not")
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}

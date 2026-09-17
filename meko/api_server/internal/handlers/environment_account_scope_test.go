@@ -182,28 +182,41 @@ func TestRegister_RequiresAPIKeyID(t *testing.T) {
 	}
 }
 
-// Re-registering an existing name is a 409 with a legible code, not a reset of
-// the existing row.
+// Re-registering an existing name is a 409 with a legible code, not a reset of the
+// existing row, and the body NAMES the environment that collided -- without that an
+// operator only learns that something went wrong (CLOUDGA-36978).
+//
+// Both driver shapes: the e2e runs on PostgreSQL, so the ysql case is the only cover
+// the shape that reaches production has.
 func TestRegister_ExistingNameIs409(t *testing.T) {
-	h, mock, done := newScopeHandler(t)
-	defer done()
+	msg := `duplicate key value violates unique constraint "environments_account_id_uniq"`
+	for _, tc := range []struct {
+		name string
+		err  *pq.Error
+	}{
+		{"postgres", &pq.Error{Code: "23505", Constraint: "environments_account_id_uniq", Message: msg}},
+		{"ysql", &pq.Error{Code: "23505", Message: msg}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mock, done := newScopeHandler(t)
+			defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnError(&pq.Error{
-			Code:       "23505",
-			Constraint: "environments_account_id_uniq",
-			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
+			mock.ExpectBegin()
+			mock.ExpectQuery(`INSERT INTO meko_system\.environments`).WillReturnError(tc.err)
+			mock.ExpectRollback()
+
+			rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
+				acctA, `{"name":"acme-prod","api_key_id":"`+keyB+`"}`, "")
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "ENVIRONMENT_EXISTS") {
+				t.Errorf("error code missing from %s", rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "acme-prod") {
+				t.Errorf("the 409 does not name the environment that collided: %s", rec.Body.String())
+			}
 		})
-	mock.ExpectRollback()
-
-	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
-		acctA, `{"name":"acme-prod","api_key_id":"`+keyB+`"}`, "")
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "ENVIRONMENT_EXISTS") {
-		t.Errorf("error code missing from %s", rec.Body.String())
 	}
 }
 

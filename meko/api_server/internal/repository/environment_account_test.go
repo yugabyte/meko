@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,65 +198,88 @@ func TestEnvironmentRepo_InsertConflictsOnAccountAndIDAndReturnsUUID(t *testing.
 	}
 }
 
-// Re-registering an already-claimed (account_id, id) is refused as
-// ErrEnvironmentExists.
-func TestEnvironmentRepo_InsertRejectsExistingAccountAndID(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
+// uniqueViolationShapes is one conflict as each of the two drivers reports it:
+// PostgreSQL names the violated index in pq.Error.Constraint, YSQL leaves that field
+// empty. Insert must classify both -- see isUniqueViolation23505.
+func uniqueViolationShapes(index string) []struct {
+	name string
+	err  *pq.Error
+} {
+	msg := `duplicate key value violates unique constraint "` + index + `"`
+	return []struct {
+		name string
+		err  *pq.Error
+	}{
+		{"postgres", &pq.Error{Code: "23505", Constraint: index, Message: msg}},
+		{"ysql", &pq.Error{Code: "23505", Message: msg}},
 	}
-	defer db.Close()
-	repo := NewEnvironmentRepo(db)
+}
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnError(&pq.Error{
-			Code:       "23505",
-			Constraint: "environments_account_id_uniq",
-			Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
+// Re-registering an already-claimed (account_id, id) is refused as
+// ErrEnvironmentExists, whichever driver reports the violation. The error also has to
+// carry the id: the handler puts it in the 409 body, which is the only thing that
+// tells an operator WHICH name collided.
+func TestEnvironmentRepo_InsertRejectsExistingAccountAndID(t *testing.T) {
+	for _, tc := range uniqueViolationShapes("environments_account_id_uniq") {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			repo := NewEnvironmentRepo(db)
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`INSERT INTO meko_system\.environments`).WillReturnError(tc.err)
+			mock.ExpectRollback()
+
+			err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyB})
+			if !errors.Is(err, ErrEnvironmentExists) {
+				t.Fatalf("Insert err = %v, want ErrEnvironmentExists", err)
+			}
+			if !strings.Contains(err.Error(), "acme-prod") {
+				t.Errorf("Insert err = %v, want it to name the environment", err)
+			}
 		})
-	mock.ExpectRollback()
-
-	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyB})
-	if !errors.Is(err, ErrEnvironmentExists) {
-		t.Fatalf("Insert err = %v, want ErrEnvironmentExists", err)
 	}
 }
 
 // One key drives one environment: the side table's primary key forbids binding a
 // key another environment holds, and that has to surface as ErrAPIKeyBound (409)
-// rather than a raw driver error behind a 500.
+// rather than a raw driver error behind a 500 -- on both drivers.
 func TestEnvironmentRepo_InsertRejectsKeyBoundElsewhere(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	repo := NewEnvironmentRepo(db)
+	for _, tc := range uniqueViolationShapes("environment_api_keys_pkey") {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
-	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
-		WillReturnError(&pq.Error{
-			Code:       "23505",
-			Constraint: "environment_api_keys_pkey",
-			Message:    `duplicate key value violates unique constraint "environment_api_keys_pkey"`,
+			mock.ExpectBegin()
+			mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+				WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+			mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).WillReturnError(tc.err)
+			mock.ExpectRollback()
+
+			err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
+			if !errors.Is(err, ErrAPIKeyBound) {
+				t.Fatalf("Insert err = %v, want ErrAPIKeyBound", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("the environment row must not survive a failed key binding: %v", err)
+			}
 		})
-	mock.ExpectRollback()
-
-	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})
-	if !errors.Is(err, ErrAPIKeyBound) {
-		t.Fatalf("Insert err = %v, want ErrAPIKeyBound", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("the environment row must not survive a failed key binding: %v", err)
 	}
 }
 
-// A unique violation on any OTHER index is neither a key-binding nor a name
-// conflict, so it must keep surfacing as itself rather than being reported as one.
-func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotASentinel(t *testing.T) {
+// An error that is NOT a unique violation must still surface as itself, so a
+// connection drop or a NOT NULL violation is never reported as a name conflict. Which
+// unique index a 23505 means is pinned by
+// TestControlPlaneUniqueIndexesOnEnvironmentTables, not here -- the driver does not
+// always say.
+func TestEnvironmentRepo_InsertNonUniqueViolationIsNotASentinel(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -265,7 +289,7 @@ func TestEnvironmentRepo_InsertOtherUniqueViolationIsNotASentinel(t *testing.T) 
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnError(&pq.Error{Code: "23505", Constraint: "environments_pkey", Message: "duplicate key"})
+		WillReturnError(&pq.Error{Code: "23502", Message: `null value in column "id" violates not-null constraint`})
 	mock.ExpectRollback()
 
 	err = repo.Insert(&models.Environment{ID: "acme-prod", AccountID: acctA, State: "PENDING", APIKeyID: keyA})

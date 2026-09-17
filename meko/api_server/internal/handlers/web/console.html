@@ -176,6 +176,7 @@
   .fgroup { margin-bottom: 16px; }
   .fgroup label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
   .fgroup input, .fgroup select { width: 100%; padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--ink); font-family: inherit; font-size: 13px; }
+  .fgroup .err { font-size: 12px; color: var(--crit); margin-top: 6px; }
   .frow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .mode { border: 1px solid var(--border-strong); border-radius: 11px; padding: 14px; background: var(--surface); }
@@ -268,7 +269,8 @@
       <div class="phead"><div><h2>Register environment</h2><div class="desc">Creates a real environment (state PENDING) bound to a generated API key id. Run the printed command in your cluster to bring the agent online.</div></div></div>
       <div class="wiz">
         <div class="frow">
-          <div class="fgroup"><label>Environment name</label><input id="obName" /></div>
+          <div class="fgroup"><label>Environment name</label><input id="obName" />
+            <div class="err" id="obNameErr" hidden></div></div>
           <div class="fgroup"><label>Account</label><input id="obAccount" value="33333333-3333-3333-3333-333333333333" /></div>
         </div>
         <div class="frow">
@@ -714,9 +716,18 @@
     document.querySelectorAll("#modes .mode").forEach(x => x.classList.remove("sel"));
     m.classList.add("sel"); mode = m.dataset.mode;
   });
+  // A registration refused over the NAME belongs beside the name, not in a popup that
+  // says only that something went wrong -- which is how a duplicate name read before
+  // the server started answering 409 ENVIRONMENT_EXISTS (CLOUDGA-36978).
+  const nameErr = (msg) => { const e = el("obNameErr"); e.textContent = msg || ""; e.hidden = !msg; };
   el("registerBtn").onclick = async () => {
+    nameErr("");
+    // The previous registration's key id and install command, cleared with the error:
+    // an inline message does not interrupt the way the alert did, so leaving the panel
+    // up would show the last success as if it were this attempt's result.
+    el("registerResult").hidden = true;
     const name = el("obName").value.trim();
-    if (!name) { alert("Environment name is required"); return; }
+    if (!name) { nameErr("Environment name is required"); return; }
     // The console has no YBM to mint a real API key, so it generates the id an
     // operator hands to a dev-mode agent (YCP_DEV_ADMIN_SECRET + YCP_DEV_API_KEY_ID).
     const apiKeyId = crypto.randomUUID();
@@ -728,7 +739,9 @@
     const r = await api("/api/v1/environments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(reqBody)});
     if (!r.ok) {
       const errBody = await r.json().catch(() => null);
-      alert((errBody && errBody.error && errBody.error.message) || ("Register failed ("+r.status+")"));
+      const err = (errBody && errBody.error) || {};
+      const msg = err.message || ("Register failed ("+r.status+")");
+      if (err.code === "ENVIRONMENT_EXISTS") { nameErr(msg); el("obName").focus(); } else { alert(msg); }
       return;
     }
     const j = (await unwrap(r)) || {};

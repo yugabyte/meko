@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/lib/pq"
 
@@ -210,16 +209,10 @@ const envColumnsInsert = `id, account_id, placement, region, state, k8s_version,
 // handlers.
 var ErrAPIKeyBound = errors.New("api key is already bound to another environment")
 
-// apiKeyUniqueConstraint is the index whose violation means ErrAPIKeyBound.
-const apiKeyUniqueConstraint = "environment_api_keys_pkey"
-
 // ErrEnvironmentExists is returned when a registration's (account_id, id) is
 // already taken, which environments_account_id_uniq forbids. Mapped to 409 by
 // handlers. The name stays taken for the life of the row, deregistered or not.
 var ErrEnvironmentExists = errors.New("environment already registered")
-
-// accountIDUniqueConstraint is the index whose violation means ErrEnvironmentExists.
-const accountIDUniqueConstraint = "environments_account_id_uniq"
 
 // Insert registers a brand-new environment with e.APIKeyID as its primary key
 // binding, and sets e.UUID to the generated row key. A name already claimed by this
@@ -257,14 +250,20 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 		e.CreatedAt, kind,
 		[]byte(resources), nullStr(e.AgentBaseURL)).Scan(&e.UUID)
 	if err != nil {
-		if isUniqueViolationOf(err, accountIDUniqueConstraint) {
+		// A 23505 from THIS statement can only be environments_account_id_uniq: the
+		// table's other unique key is its primary key, whose uuid the INSERT never
+		// supplies -- gen_random_uuid() fills it.
+		if isUniqueViolation23505(err) {
 			return fmt.Errorf("%w: %s", ErrEnvironmentExists, e.ID)
 		}
 		slog.Error("insert environment", "id", e.ID, "account", e.AccountID, "err", err)
 		return fmt.Errorf("insert environment: %w", err)
 	}
 	if _, err := tx.Exec(insertPrimaryKeyBinding, e.APIKeyID, e.UUID); err != nil {
-		if isUniqueViolationOf(err, apiKeyUniqueConstraint) {
+		// Likewise: the other unique key on environment_api_keys is (env_uuid, status),
+		// and e.UUID is the row created just above, so no pre-existing row can collide
+		// on it. Only the api_key_id primary key is reachable here.
+		if isUniqueViolation23505(err) {
 			return fmt.Errorf("%w: %s", ErrAPIKeyBound, e.APIKeyID)
 		}
 		slog.Error("bind environment api key", "id", e.ID, "err", err)
@@ -278,14 +277,22 @@ const insertPrimaryKeyBinding = `
 	INSERT INTO meko_system.environment_api_keys (api_key_id, env_uuid, status)
 	VALUES ($1, $2, 'active')`
 
-// isUniqueViolationOf reports whether err is a unique violation (SQLSTATE 23505) of
-// an index whose name contains constraint. Matched on the driver error's code and
-// constraint name rather than on message text, which is not a stable contract; by
-// name so a violation of any OTHER unique index still surfaces as itself.
-func isUniqueViolationOf(err error, constraint string) bool {
+// isUniqueViolation23505 reports whether err is a unique violation. WHICH index was
+// violated is the caller's to know from the statement that raised it, because no
+// portable field carries the name: upstream PostgreSQL raises it through
+// errtableconstraint(), which fills the wire protocol's `n` field that lib/pq exposes
+// as pq.Error.Constraint, while YSQL builds the same error in pg_yb_utils.c and only
+// formats the name into the message, leaving Constraint and Detail empty. Keying on
+// that field is what made every duplicate registration a 500 instead of a 409
+// (CLOUDGA-36978), and keying on the message text instead would just trade a silent
+// break for a brittle one. https://github.com/yugabyte/amp/issues/400 is the same bug
+// -- see amp/controller/internal/task/store.go. (A bare "#400" would resolve to an
+// unrelated meko PR: amp's issues were renumbered by the monorepo migration.)
+//
+// Named apart from sharing_repo.go's isUniqueViolation, which does match on text.
+func isUniqueViolation23505(err error) bool {
 	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && pqErr.Code == "23505" &&
-		strings.Contains(pqErr.Constraint, constraint)
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
 // Update writes an existing environment back by its key. Every caller has already

@@ -85,6 +85,13 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
   in its directory, and ship both an `up.sql` and a `down.sql` — CI's
   `meko_migration_versions` job blocks a PR that doesn't. Check locally before
   pushing: `go run ./internal/db/migrations/checkmigrations origin/main`.
+- Classify a unique violation by SQLSTATE `23505` plus **which statement raised
+  it**, never by `pq.Error.Constraint`: PostgreSQL fills that field, YSQL does not
+  (it only formats the index name into the message), so name-matching passes every
+  test and turns the 409 into a 500 in production — CLOUDGA-36978, and
+  <https://github.com/yugabyte/amp/issues/400> before it. Where the statement
+  alone doesn't identify the index, pin the table's unique-index inventory in a
+  test, as `internal/repository/environment_unique_indexes_test.go` does.
 
 ## Conventions
 

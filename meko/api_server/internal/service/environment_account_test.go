@@ -191,20 +191,29 @@ func TestRegister_NameHeldByAnotherAccountIsItsOwnEnvironment(t *testing.T) {
 	}
 }
 
-// Re-registering the same (account_id, id) is refused as ErrEnvironmentExists.
+// Re-registering the same (account_id, id) is refused as ErrEnvironmentExists on both
+// drivers -- YSQL reports the violation with no constraint name, which is why a
+// duplicate on YugabyteDB answered 500 instead of 409 (CLOUDGA-36978).
 func TestRegister_RejectsExistingName(t *testing.T) {
-	svc, mock, done := newEnvSvc(t)
-	defer done()
+	msg := `duplicate key value violates unique constraint "environments_account_id_uniq"`
+	for _, tc := range []struct {
+		name string
+		err  *pq.Error
+	}{
+		{"postgres", &pq.Error{Code: "23505", Constraint: "environments_account_id_uniq", Message: msg}},
+		{"ysql", &pq.Error{Code: "23505", Message: msg}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, mock, done := newEnvSvc(t)
+			defer done()
 
-	expectRegisterInsertFails(mock, &pq.Error{
-		Code:       "23505",
-		Constraint: "environments_account_id_uniq",
-		Message:    `duplicate key value violates unique constraint "environments_account_id_uniq"`,
-	})
+			expectRegisterInsertFails(mock, tc.err)
 
-	_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyB}, acctA)
-	if !errors.Is(err, repository.ErrEnvironmentExists) {
-		t.Fatalf("Register err = %v, want ErrEnvironmentExists", err)
+			_, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", APIKeyID: keyB}, acctA)
+			if !errors.Is(err, repository.ErrEnvironmentExists) {
+				t.Fatalf("Register err = %v, want ErrEnvironmentExists", err)
+			}
+		})
 	}
 }
 
