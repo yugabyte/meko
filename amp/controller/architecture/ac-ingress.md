@@ -180,14 +180,20 @@ can correct — it means reissuing addresses customers already hold.
 - **AWS Load Balancer Controller** provisions each shard's load balancer. Already
   deployed with its own IRSA role; the controller needs no cloud credentials, and
   neither does Traefik, which talks only to the Kubernetes API.
-- **The Traefik CRDs** (`ingressroutetcps`, `middlewaretcps` and the rest of the
-  `traefik.io` set). The shard chart renders Traefik directly rather than through
-  its upstream chart, which is what used to install them — so they are now a
-  prerequisite, and one with two failure modes worth knowing apart. Without them
-  the shard installs cleanly and its provider serves nothing, while every
-  `ingress_*` endpoint release fails at apply with `no matches for kind
-  IngressRouteTCP` — after its slot has been allocated. `deploy/controller/redeploy.sh`
-  applies them before installing a shard.
+- **The Traefik CRDs** — all ten of the `traefik.io` set, not just the two this
+  design renders: the provider builds an informer per kind and a failed sync on
+  any one of them publishes NO configuration, so one missing CRD costs every
+  route on the shard rather than the kind involved. The CONTROLLER chart carries
+  them in `crds/` (from traefik-helm-chart **v37.1.2** — the chart's version
+  series, not the proxy image's), which covers a **first install** of that
+  release: Helm processes `crds/` on install only, skips it on `helm upgrade`,
+  and omits it from `helm template` without `--include-crds`. Every other path
+  therefore applies the directory explicitly — `deploy/controller/redeploy.sh`,
+  `deploy/meko-dev/amp-redeploy.sh`, and the functional stack's render — because
+  an existing release upgraded in place would otherwise never get them.
+  A missing `ingressroutetcps` at least fails each `ingress_*` release at apply
+  with `no matches for kind IngressRouteTCP` (after its slot is allocated); a
+  missing `traefikservices` is silent.
 - **external-dns**, *only when a zone is configured*, publishes the per-endpoint records from the `DNSEndpoint`
   objects each endpoint release renders. It needs its **CRD source** enabled
   (`--source=crd`) or those objects are inert, and `policy=sync` rather than

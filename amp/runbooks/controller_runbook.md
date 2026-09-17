@@ -547,18 +547,23 @@ provider has no objects to read.
 **Check:**
 
 ```sh
-kubectl get crd ingressroutetcps.traefik.io middlewaretcps.traefik.io
+# all ten, not just the two we render: the provider builds an informer per kind
+# and one missing CRD fails the whole cache sync, so the shard serves nothing
+kubectl get crd -o name | grep -c traefik.io   # want 10
 ```
 
-**Fix.** Apply the CRDs for the pinned Traefik version, then re-run the create —
+**Fix.** Apply the CRDs the controller chart carries, then re-run the create —
 the endpoint keeps the slot it was already allocated, so nothing leaks:
 
 ```sh
-kubectl apply -k "https://github.com/traefik/traefik-helm-chart/traefik/crds/?ref=v3.7.13"
+kubectl apply --server-side --force-conflicts -f deploy/helm/yb-amp-controller/crds/
 ```
 
-`deploy/controller/redeploy.sh` does this before installing a shard, so a
-deployment stood up that way already has them.
+The controller chart ships them in `crds/`, but that only fires on a **first
+install** of the release — Helm skips `crds/` on `helm upgrade`. On a cluster
+whose control plane is already installed (the usual case when this fails) the
+apply above is what installs them; re-running a deploy script that upgrades in
+place will not.
 
 ## `ingress_*` endpoint answers on the wrong load balancer
 

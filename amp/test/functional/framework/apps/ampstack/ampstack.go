@@ -1292,7 +1292,10 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 	}
 	maps.Copy(sets, a.tlsHelmSets())
 
-	argv := []string{"helm", "template", a.cfg.HelmRelease, a.cfg.ControllerChart, "--namespace", a.cfg.Namespace}
+	// --include-crds: helm template omits a chart's crds/ directory by default, so
+	// without it the rendered stack carries no traefik.io CRDs and an ingress_*
+	// endpoint's release fails at apply.
+	argv := []string{"helm", "template", a.cfg.HelmRelease, a.cfg.ControllerChart, "--namespace", a.cfg.Namespace, "--include-crds"}
 	if a.cfg.Context != "" {
 		argv = append(argv, "--kube-context", a.cfg.Context)
 	}

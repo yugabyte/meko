@@ -47,12 +47,26 @@ scripts work:
 reads a bare-numeric tag as a number.
 
 The chart does **not** create the namespace, the backing YugabyteDB, or the
-image pull secret — those are prerequisites. It installs **once per namespace**, and a
+image pull secret — those are prerequisites.
+
+It **does** create ten cluster-scoped `traefik.io` CRDs, from `crds/`, which an
+ingress shard's proxy watches. That happens on every fresh install whether or not
+`controller.endpoint.ingress.enabled` is set, and Helm gives a `crds/` directory
+no values-level opt-out: an install that may hold no cluster-scoped rights (see
+`rbac.nodeRead` / `rbac.clusterScoped` below) has to pass `--skip-crds`, and then
+the `ingress_*` connectivity modes are unavailable until someone installs the
+CRDs another way. Note also that Helm processes `crds/` on **install only** — an
+existing release upgraded in place never receives them, which is why the deploy
+scripts apply the directory explicitly. It installs **once per namespace**, and a
 cluster can hold several installs, one environment each with its own backing database;
 the cluster-scoped RBAC it creates is namespace-prefixed so the copies do not collide.
 
 ## What it renders
 
+- **CRDs** (`crds/`, install-time only, no opt-out but `--skip-crds`) — the ten
+  `traefik.io` kinds, vendored from traefik-helm-chart v37.1.2. All ten rather
+  than the two an endpoint route uses: Traefik builds an informer per kind and a
+  failed sync on any one publishes no configuration at all.
 - **RBAC** — `ServiceAccount`, `Role`+`RoleBinding` `amp-controller` (full access
   to pods/services/configmaps/secrets/pvc/endpoints/events/serviceaccounts and
   apps deployments/replicasets/statefulsets in the release namespace), and

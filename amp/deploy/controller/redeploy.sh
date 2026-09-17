@@ -428,31 +428,26 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
       echo "   instead of the NLB this design needs." >&2
       exit 1 ;;
   esac
-  # The Traefik CRDs, before any shard. The shard chart renders Traefik directly
-  # rather than through its upstream chart, which is what used to install these —
-  # so they are a prerequisite now, and their absence is quiet in the worst way:
-  # the shard comes up healthy and its provider serves nothing, while every
-  # ingress_* endpoint release fails at apply with "no matches for kind
-  # IngressRouteTCP", after its slot has already been allocated.
+  # The Traefik CRDs, vendored in the CONTROLLER chart's crds/ from
+  # traefik-helm-chart v37.1.2 — that is the CHART's version series, not the
+  # proxy image's (v3.7.13 in yb-amp-ingress/values.yaml). One cannot be read off
+  # the other, so a proxy bump means refreshing these from the chart tag that
+  # ships that proxy.
   #
-  # Pinned separately from the image, because they are different version series:
-  # traefik/traefik-helm-chart is tagged by CHART version (v34.x, v37.x…), while
-  # traefik.image.tag in our values is the proxy's own version (v3.7.13). Reading
-  # one from the other gives a ref that does not resolve, so this is its own knob
-  # and has to be bumped alongside the image.
+  # Applied here and NOT left to the chart, because Helm processes a crds/
+  # directory on INSTALL ONLY: `helm upgrade` skips it and `helm template` omits
+  # it without --include-crds. So the chart covers a first install of a release
+  # and nothing else — every existing portal reaches them through this apply.
   #
   # --force-conflicts because a cluster that once ran the upstream traefik chart
   # has CRDs owned by that release's field manager; without it server-side apply
   # refuses them and the deploy stops on exactly the clusters most likely to have
   # them.
-  TRAEFIK_CHART_VERSION="${TRAEFIK_CHART_VERSION:-v37.1.2}"
-  echo ">> installing the Traefik CRDs (chart ${TRAEFIK_CHART_VERSION})"
-  if ! kubectl apply --server-side --force-conflicts -k \
-    "https://github.com/traefik/traefik-helm-chart/traefik/crds/?ref=${TRAEFIK_CHART_VERSION}"; then
+  echo ">> installing the Traefik CRDs (from the controller chart)"
+  if ! kubectl apply --server-side --force-conflicts \
+    -f "${SCRIPT_DIR}/../helm/yb-amp-controller/crds/"; then
     echo "!! could not install the Traefik CRDs. Without them the shard installs and serves" >&2
-    echo "   nothing, and every ingress_* endpoint create fails at apply. Check that" >&2
-    echo "   TRAEFIK_CHART_VERSION (${TRAEFIK_CHART_VERSION}) is a real tag of" >&2
-    echo "   traefik/traefik-helm-chart — it is the CHART version, not the image version." >&2
+    echo "   nothing, and every ingress_* endpoint create fails at apply." >&2
     exit 1
   fi
 

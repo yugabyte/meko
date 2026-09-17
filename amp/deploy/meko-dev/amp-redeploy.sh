@@ -64,6 +64,13 @@ PY
   helm --kube-context "$KCTX" -n "$NS" upgrade "$REL" "$CHART" -f /tmp/amp-vals.yaml --force-conflicts
 fi
 
+# The Traefik CRDs an ingress shard's proxy watches. Applied rather than left to
+# the chart because Helm processes a crds/ directory on install only — this
+# script upgrades an existing release, which skips it — so without this a
+# redeployed portal keeps whatever CRDs it had, or none.
+kubectl --context "$KCTX" apply --server-side --force-conflicts \
+  -f "$(dirname "$0")/../helm/yb-amp-controller/crds/"
+
 # 5. wait for control plane ready
 log "5. wait for control plane ready"
 if guard "rollout wait"; then
