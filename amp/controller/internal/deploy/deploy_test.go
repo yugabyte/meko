@@ -471,6 +471,33 @@ func TestKubernetesAddress(t *testing.T) {
 	}
 }
 
+// The recorded client address is a Service address in every case, never the
+// pod's: a pod IP dies at the next reschedule and takes the connection string the
+// console handed out with it (CLOUDGA-36993). The ClusterIP row that is handed an
+// external address is the regression pin — the bug was a pod lookup wired into
+// that branch.
+func TestClientAddress(t *testing.T) {
+	const dns = "yb-ep-92331eed.endpoints.svc.cluster.local:55433"
+	for _, tc := range []struct {
+		name        string
+		serviceType string
+		external    string
+		want        string
+	}{
+		{"ClusterIP is the Service DNS", "ClusterIP", "", dns},
+		{"ClusterIP ignores an external address", "ClusterIP", "10.5.150.209:55433", dns},
+		{"LoadBalancer takes its ingress", serviceTypeLoadBalancer, "a1b2.elb.amazonaws.com:55433", "a1b2.elb.amazonaws.com:55433"},
+		{"LoadBalancer without one falls back", serviceTypeLoadBalancer, "", dns},
+		{"NodePort takes nodeIP:nodePort", serviceTypeNodePort, "34.1.2.3:31234", "34.1.2.3:31234"},
+		{"NodePort without one falls back", serviceTypeNodePort, "", dns},
+		{"an unset type is the Service DNS", "", "10.5.150.209:55433", dns},
+	} {
+		if got := clientAddress(tc.serviceType, dns, tc.external); got != tc.want {
+			t.Errorf("%s: clientAddress(%q, _, %q) = %q, want %q", tc.name, tc.serviceType, tc.external, got, tc.want)
+		}
+	}
+}
+
 // EndpointSafekeeperURL addresses the endpoint's safekeeper at the same stable
 // host the controller dials (CONTROLLER_REACHABLE_HOST): the Service DNS in k8s,
 // the container name on Docker — both at the fixed safekeeper HTTP port.

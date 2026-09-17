@@ -95,10 +95,10 @@ func ampBacking(info ybk8s.Info) ampstack.Backing {
 }
 
 // endpointConn builds the connection the in-cluster client pod drives: the
-// endpoint Service's STABLE DNS name, cross-namespace from the client pod's own.
-// The controller-reported address is only consulted for its port — under the
-// default ClusterIP service type that address is the compute POD IP, which a
-// reschedule invalidates.
+// endpoint Service's DNS name, cross-namespace from the client pod's own. The
+// controller-reported address is consulted only for its port, so this holds on a
+// NodePort or LoadBalancer deployment too, where that address is an external one
+// the client pod has no reason to route through.
 func endpointConn(namespace, endpointID, reportedAddr string) pg.ConnInfo {
 	return pg.ConnInfo{
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", ampstack.EndpointWorkloadName(endpointID), namespace),

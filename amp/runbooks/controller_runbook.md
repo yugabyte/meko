@@ -654,19 +654,21 @@ the next create with no controller restart. `controller.endpoint.cloud` restarts
 the pod, and a value outside `aws|gcp|azure` fails the render rather than
 installing a controller that exits at startup.
 
-## Endpoint stuck on a pod IP after an `nlb_*` create
+## Endpoint stuck on the in-cluster address after an `nlb_*` create
 
 **Symptom.** An endpoint created with `connectivity.mode` `nlb_internal` or
-`nlb_external` reports a pod IP (or a NodePort/Service address) as its `address`
-instead of a load balancer hostname, and that address dies the next time the pod
-is replaced. The create logged
+`nlb_external` reports its in-cluster Service DNS
+(`yb-ep-<id>.<ns>.svc.cluster.local:55433`, or a NodePort address) as its
+`address` instead of a load balancer hostname, so clients outside the cluster —
+the whole point of the mode — cannot reach it. The create logged
 `endpoint load balancer not ready in time; falling back to the Service-type address`.
 
 **Cause.** Cloud load balancer provisioning routinely takes longer than
 `lbAddressPollTimeout` (2 min). `CreateEndpoint` falls back rather than failing an
 endpoint that is up and serving — but **nothing re-polls afterwards**. The
 recorded address stays the fallback until the endpoint's next controller-driven
-redeploy re-runs the resolution.
+redeploy re-runs the resolution. The endpoint is reachable in-cluster the whole
+time; only external reachability waits.
 
 **Check** the load balancer actually came up (it almost always does, minutes after
 the create):
@@ -683,10 +685,12 @@ its events before anything else; a missing subnet tag or an exhausted NLB quota
 For a BYOC environment the same endpoint reports `attrs.connectivity_mode` beside
 its `address`, which is the only way to see the requested mode without cluster
 access — a `cluster_ip` endpoint and one that asked for a load balancer otherwise
-look alike. It is **conclusive only for `nlb_external`**, where a private address
-is this bug outright. An `nlb_internal` LB on GKE/AKS is itself assigned a private
-VPC IP in the same `<addr>:<port>` shape as the fallback, so there the mode only
-tells you to go check the Service above.
+look alike. On the default `ClusterIP` deployment the two are conclusive for
+either mode, since the fallback is a `.svc.cluster.local` name and no load
+balancer address is. On a `NodePort` or `LoadBalancer` deployment the fallback is
+an `<ip>:<port>` again: a private address is then this bug outright for
+`nlb_external`, and for `nlb_internal` — whose LB is itself assigned a private VPC
+IP on GKE/AKS — only a reason to go and check the Service above.
 
 ```sh
 # YCP fleet API, not the controller's: see ycp/DEPLOY.md for these values.
@@ -719,9 +723,53 @@ re-read it:
 UPDATE amp_registry.endpoints SET address = '<lb-hostname>:55433' WHERE id = '<ep>';
 ```
 
-**Prevention.** The endpoint is reachable in-cluster the whole time; only the
-recorded client address is stale. Callers that resolve the endpoint through the
-API on each connect pick up the corrected value with no further action.
+**Prevention.** Callers that resolve the endpoint through the API on each connect
+pick up the corrected value with no further action. Making the address converge
+without an operator is
+[#1380](https://github.com/yugabyte/meko/issues/1380).
+
+
+## An endpoint's `address` is a pod IP
+
+**Symptom.** `address` is a bare `<ipv4>:<port>` on a deployment whose
+`--deploy-service-type` is the default `ClusterIP`, and clients using it lose the
+connection whenever the endpoint's pod is replaced.
+
+**Cause.** The endpoint was deployed by a controller that recorded the pod IP
+rather than the endpoint Service's DNS name (CLOUDGA-36993). Upgrading the
+controller does not rewrite rows: an endpoint keeps the address it was last
+deployed with until something redeploys it and re-records the result. A resize, a
+controller restart and a reschedule do not.
+
+**Recover — re-render.** `rerender_endpoints` redeploys from the stored record
+unchanged and calls `SetEndpointAddress` with the result, so it repairs the row
+with no other change, fleet-wide when `endpoint_ids` is omitted. An endpoint
+already carrying the current configuration is a no-op Helm upgrade that does not
+recreate the pod, so this is the repair to reach for first:
+
+```sh
+curl -sX POST "$AMP/endpoint-rerenders" -H 'Content-Type: application/json' \
+  -d "{\"endpoint_ids\":[\"$EP\"]}"
+```
+
+**Or rewrite the rows.** For a `cluster_ip` endpoint the address is a pure
+function of the id and the deploy namespace:
+
+```sql
+UPDATE amp_registry.endpoints
+   SET address = 'yb-ep-' || id || '.<deploy-namespace>.svc.cluster.local:55433'
+ WHERE address ~ '^\d+\.\d+\.\d+\.\d+:'
+   AND COALESCE(config->>'connectivity', '') IN ('', 'cluster_ip');
+```
+
+**Both predicates are load-bearing.** `connectivity` is a *per-endpoint* choice,
+so an `nlb_*` endpoint sits in the same namespace as the rows being repaired and
+legitimately records a bare IPv4 — a GKE/AKS internal LB, or a GCP/Azure external
+one. Rewriting it to the in-cluster name unpublishes a live endpoint while its
+billed load balancer stays up unadvertised, which is the failure this whole change
+exists to prevent. And run it only on a `ClusterIP` deployment: under
+`--deploy-service-type=NodePort` or `LoadBalancer` every endpoint records an IP
+legitimately, and the statement would overwrite all of them.
 
 
 ## Every API call answers `503 service_unavailable`

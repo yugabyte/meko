@@ -287,17 +287,10 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		}
 		return Endpoint{}, k.explainDeployFailure(ctx, release, watch, err)
 	}
-	// Resolve the client address by Service type: a LoadBalancer's external LB IP,
-	// a NodePort's "<nodeIP>:<nodePort>", or (ClusterIP) the pod IP — a demo
-	// convenience. All fall back to the stable Service DNS. NB: this is only the
-	// *client* address — the controller reaches the endpoint's pageserver/
-	// safekeeper by the stable Service DNS (CONTROLLER_REACHABLE_HOST set in the chart),
-	// so a pod reschedule re-registers the same address (no 409, #121).
-	addr := k.address(release)
 	// A per-endpoint load balancer is the DURABLE client address: the AWS load
 	// balancer controller re-registers the pod when it is replaced, so unlike the
-	// pod IP the other branches fall back to, this survives pod replacement. It
-	// also survives a controller-driven redeploy, but only because
+	// Service DNS the other branches fall back to, it is reachable from outside
+	// the cluster. It also survives a controller-driven redeploy, but only because
 	// core.EndpointDeploy carries Connectivity/AllowedCIDRs — without them the
 	// redeploy renders service.connectivity empty, helm prunes the -lb Service and
 	// the load balancer is deleted. Checked before the Service-type switch because
@@ -344,30 +337,26 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		// lbAddressPollTimeout. Fall through rather than fail the create: the
 		// endpoint is up and serving on the Service-type address.
 		//
-		// Nothing re-polls on its own. The recorded address stays the fallback
-		// (the pod IP, which a pod replacement invalidates) until the endpoint's
-		// next controller-driven redeploy re-runs this resolution. See
-		// "Endpoint stuck on a pod IP after an nlb_* create" in
-		// amp/runbooks/controller_runbook.md for the operator recovery.
+		// Nothing re-polls on its own. The recorded address stays the fallback —
+		// the Service DNS, which serves in-cluster clients but not the ones this
+		// mode exists for — until the endpoint's next controller-driven redeploy
+		// re-runs this resolution (#1380). See "Endpoint stuck on the in-cluster
+		// address after an nlb_* create" in amp/runbooks/controller_runbook.md.
 		k.logger.Warn("endpoint load balancer not ready in time; falling back to the Service-type address",
 			"endpoint", release, "connectivity", spec.Connectivity)
 	}
+	// Only the *client* address. The controller reaches the endpoint's
+	// pageserver/safekeeper by the stable Service DNS (CONTROLLER_REACHABLE_HOST
+	// set in the chart), so a pod reschedule re-registers the same address (no
+	// 409, #121).
+	external := ""
 	switch k.cfg.ServiceType {
 	case serviceTypeLoadBalancer:
-		if lb := k.serviceLBAddress(ctx, release); lb != "" {
-			addr = lb
-		} else if podAddr := k.podClientAddress(ctx, release); podAddr != "" {
-			addr = podAddr
-		}
+		external = k.serviceLBAddress(ctx, release)
 	case serviceTypeNodePort:
-		if np := k.nodePortClientAddress(ctx, release); np != "" {
-			addr = np
-		}
-	default:
-		if podAddr := k.podClientAddress(ctx, release); podAddr != "" {
-			addr = podAddr
-		}
+		external = k.nodePortClientAddress(ctx, release)
 	}
+	addr := clientAddress(k.cfg.ServiceType, k.address(release), external)
 	// helm --wait covers the pod, not the Service in front of it: it has no
 	// endpoint check, so a release is "ready" before the pod is a backend the
 	// ClusterIP forwards to. The controller reaches this endpoint's
@@ -603,28 +592,6 @@ func (k *KubernetesDeployer) k8sAPIPatch(ctx context.Context, path, contentType 
 		return respBody, resp.StatusCode, fmt.Errorf("k8s PATCH %s -> %s: %s", path, resp.Status, strings.TrimSpace(string(respBody)))
 	}
 	return respBody, resp.StatusCode, nil
-}
-
-// podClientAddress returns "<podIP>:<computePort>" for the endpoint's pod, or ""
-// when not in-cluster / on error. Best-effort: the pod IP is not stable across
-// pod restarts (the Service DNS is).
-func (k *KubernetesDeployer) podClientAddress(ctx context.Context, release string) string {
-	q := url.Values{"labelSelector": {"app.kubernetes.io/instance=" + release}, "limit": {"1"}}
-	body, ok := k.k8sAPIGet(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods?%s", k.cfg.Namespace, q.Encode()))
-	if !ok {
-		return ""
-	}
-	var out struct {
-		Items []struct {
-			Status struct {
-				PodIP string `json:"podIP"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &out) != nil || len(out.Items) == 0 || out.Items[0].Status.PodIP == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s:%d", out.Items[0].Status.PodIP, k.cfg.ComputePort)
 }
 
 // ShardAddress reports where an ingress shard's load balancer answers, and
@@ -1014,8 +981,8 @@ func (k *KubernetesDeployer) ResizeEndpoint(ctx context.Context, spec ResizeSpec
 	return result, nil
 }
 
-// podName returns the name of the endpoint's (single) pod, found by the same
-// instance label podClientAddress uses.
+// podName returns the name of the endpoint's (single) pod, found by its instance
+// label.
 func (k *KubernetesDeployer) podName(ctx context.Context, release string) (string, error) {
 	q := url.Values{"labelSelector": {"app.kubernetes.io/instance=" + release}, "limit": {"1"}}
 	body, ok := k.k8sAPIGet(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods?%s", k.cfg.Namespace, q.Encode()))
@@ -1106,6 +1073,27 @@ func classifyResize(podBody []byte, wantCPU, wantMem, container string) ResizeRe
 	}
 	// The endpoint container's status is not present yet — still settling.
 	return ResizeResult{Outcome: ResizePending, Message: resizeInProgressMsg}
+}
+
+// clientAddress is the address recorded for CLIENTS of an endpoint: whatever
+// external address the Service type yielded — a LoadBalancer ingress, a NodePort
+// — and otherwise the endpoint's own Service DNS. external is "" when the type
+// has none to offer (ClusterIP) or when the lookup failed.
+//
+// It is never the pod's address. A pod IP dies at the next reschedule, and
+// nothing re-resolves this value until the endpoint's next controller-driven
+// redeploy — so an ordinary extension add or eviction would silently invalidate
+// the connection string the console handed out (CLOUDGA-36993). The Service DNS
+// is the address the controller has always used for its own calls to the
+// endpoint, and verifyReady gates the create on it resolving.
+func clientAddress(serviceType, serviceDNS, external string) string {
+	switch serviceType {
+	case serviceTypeLoadBalancer, serviceTypeNodePort:
+		if external != "" {
+			return external
+		}
+	}
+	return serviceDNS
 }
 
 // address is the in-cluster DNS name + port of an endpoint's compute Service.

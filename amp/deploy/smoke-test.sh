@@ -43,7 +43,7 @@
 # Oracle-compat function returns its expected value. Then the other half of the
 # API: addBranchExtensions on the still-live pgvector+age branch — union pg_cron
 # in, assert getBranch reports the unioned set, the live endpoint is redeployed
-# with the new mount, and its address is re-recorded to the new pod. Finally,
+# with the new mount, and its address survives the redeploy unchanged. Finally,
 # fork that branch and assert the fork inherits its parent's set (getBranch) and
 # a fresh endpoint on the fork mounts pgvector with no per-endpoint opt-in.
 # Requires the cluster's ImageVolume feature gate and images pushed by
@@ -95,6 +95,16 @@ PROJ_NAME="proj-${SUFFIX}"
 ROOT_URL="http://127.0.0.1:${PF_PORT}"
 BASE="${ROOT_URL}/api/v1"
 PASS=0; FAIL=0
+# The client address the controller should record for an endpoint, or "" when this
+# deployment does not publish endpoints on a plain ClusterIP Service — under
+# ENDPOINT_SERVICE_TYPE=NodePort or LoadBalancer the recorded address is
+# legitimately an external <ip>:<port>, and there is no single string to expect.
+want_endpoint_addr() {
+  local ep="$1" type
+  type=$(kubectl -n "$NS" get svc "yb-ep-$ep" -o jsonpath='{.spec.type}' 2>/dev/null)
+  [ "$type" = ClusterIP ] || return 0
+  printf '%s' "yb-ep-$ep.$NS.svc.cluster.local:55433"
+}
 ok()  { printf '  \033[0;32mPASS\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad() { printf '  \033[0;31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
@@ -241,7 +251,17 @@ IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint succeeded" || bad "create_endpoint task=$st"
 EP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" | jq -r '.endpoints[0].id')
 ADDR=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -r '.address')
-[ -n "$ADDR" ] && [ "$ADDR" != null ] && ok "endpoint address recorded: $ADDR" || bad "endpoint address empty"
+# On a ClusterIP deployment the recorded address must be the endpoint Service's
+# DNS name. A pod IP here is CLOUDGA-36993: it dies at the endpoint's next
+# reschedule, and the connection string the console handed a client dies with it.
+WANT_ADDR=$(want_endpoint_addr "$EP")
+if [ -n "$WANT_ADDR" ]; then
+  [ "$ADDR" = "$WANT_ADDR" ] && ok "endpoint address is the Service DNS: $ADDR" \
+    || bad "endpoint address $ADDR, want $WANT_ADDR"
+else
+  [ -n "$ADDR" ] && [ "$ADDR" != null ] && ok "endpoint address recorded: $ADDR" \
+    || bad "endpoint address empty"
+fi
 POD=""
 for ((i=0; i<60; i++)); do
   POD=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$EP" | head -1)
@@ -384,6 +404,7 @@ if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(ext) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
   EEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
+  EADDR=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints/$EEP" | jq -r '.address // ""')
   EPOD=$(wait_ready_pod "$EEP")
   [ -n "$EPOD" ] && ok "ext endpoint pod Ready ($EPOD)" || bad "ext endpoint pod not Ready"
 
@@ -670,14 +691,16 @@ SQL
   kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control \
     && ok "pg_cron ImageVolume mounted after addBranchExtensions" || bad "pg_cron ImageVolume not mounted after add"
 
-  # The pod IP changed with the restart, so the step MUST have re-recorded the
-  # endpoint's address — a stale address is what clients and YCP's readiness
-  # check would then consume. Assert the recorded address points at the NEW pod.
-  podip=$(kubectl -n "$NS" get pod "$EPOD" -o jsonpath='{.status.podIP}' 2>/dev/null)
+  # The redeploy replaced the pod. Adding an extension is a supported operation a
+  # customer is invited to perform, so the connection string they already hold has
+  # to keep working: the recorded address must come back byte-identical. On a
+  # ClusterIP deployment it must also be the Service DNS rather than anything
+  # pod-scoped (CLOUDGA-36993).
   addr=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints/$EEP" | jq -r '.address // ""')
-  [ -n "$podip" ] && [ "${addr%%:*}" = "$podip" ] \
-    && ok "endpoint address re-recorded to the new pod IP ($addr)" \
-    || bad "endpoint address $addr does not match new pod IP $podip (stale after redeploy)"
+  want=$(want_endpoint_addr "$EEP")
+  [ -n "$EADDR" ] && [ "$addr" = "$EADDR" ] && { [ -z "$want" ] || [ "$addr" = "$want" ]; } \
+    && ok "endpoint address survived the redeploy ($addr)" \
+    || bad "endpoint address $addr after the redeploy (was $EADDR, want ${want:-it unchanged})"
 
   hdr "externalized extensions: a fork inherits its parent branch's opted-in set"
 

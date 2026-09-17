@@ -572,9 +572,9 @@ type CreateEndpointRequest struct {
 	// `202` and an endpoint row: nothing on the request path knows the cloud,
 	// so it is the deploy task that fails.
 	//
-	// The load-balancer address is also what `Endpoint.address` reports for
-	// these modes, and unlike a pod IP it stays correct when the pod is
-	// replaced.
+	// `Endpoint.address` reports the load-balancer address for these modes, and
+	// for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
+	// address, so a pod replacement leaves both correct.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
 
 	// DiskType Backing disk for the endpoint's data volume. `network` (the default)
@@ -763,7 +763,7 @@ type DaemonSettings map[string]interface{}
 
 // Endpoint defines model for Endpoint.
 type Endpoint struct {
-	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.
+	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed. Never a pod address, so a pod reschedule does not invalidate it: a load-balanced mode reports its load balancer, and a `cluster_ip` endpoint reports whatever the deployment publishes it on — the endpoint Service's in-cluster DNS name by default, or a node address where endpoints are deployed as NodePort Services, which a node replacement does invalidate.
 	Address string `json:"address"`
 
 	// BranchId The branch (storage-layer branch id) this endpoint is bound to.
@@ -792,9 +792,9 @@ type Endpoint struct {
 	// `202` and an endpoint row: nothing on the request path knows the cloud,
 	// so it is the deploy task that fails.
 	//
-	// The load-balancer address is also what `Endpoint.address` reports for
-	// these modes, and unlike a pod IP it stays correct when the pod is
-	// replaced.
+	// `Endpoint.address` reports the load-balancer address for these modes, and
+	// for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
+	// address, so a pod replacement leaves both correct.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
 	CreatedAt    time.Time             `json:"created_at"`
 
@@ -918,9 +918,9 @@ type EndpointRole string
 // `202` and an endpoint row: nothing on the request path knows the cloud,
 // so it is the deploy task that fails.
 //
-// The load-balancer address is also what `Endpoint.address` reports for
-// these modes, and unlike a pod IP it stays correct when the pod is
-// replaced.
+// `Endpoint.address` reports the load-balancer address for these modes, and
+// for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
+// address, so a pod replacement leaves both correct.
 type EndpointConnectivity struct {
 	// AllowedCidrs Sources allowed to reach the load balancer, as CIDRs
 	// (`loadBalancerSourceRanges`), e.g. `["10.0.0.0/16"]`. Each entry must

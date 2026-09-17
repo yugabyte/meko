@@ -2166,7 +2166,7 @@ components:
           description: 'The caller''s handle for this endpoint, unique among its branch''s endpoints. Empty when the endpoint was created without one.'
         address:
           type: string
-          description: 'Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.'
+          description: 'Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed. Never a pod address, so a pod reschedule does not invalidate it: a load-balanced mode reports its load balancer, and a `cluster_ip` endpoint reports whatever the deployment publishes it on — the endpoint Service''s in-cluster DNS name by default, or a node address where endpoints are deployed as NodePort Services, which a node replacement does invalidate.'
         tailnet_address:
           type: string
           description: 'Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.'
@@ -2580,9 +2580,9 @@ components:
         `202` and an endpoint row: nothing on the request path knows the cloud,
         so it is the deploy task that fails.
 
-        The load-balancer address is also what `Endpoint.address` reports for
-        these modes, and unlike a pod IP it stays correct when the pod is
-        replaced.
+        `Endpoint.address` reports the load-balancer address for these modes, and
+        for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
+        address, so a pod replacement leaves both correct.
       properties:
         mode:
           type: string

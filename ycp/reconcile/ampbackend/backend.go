@@ -278,10 +278,12 @@ func attrPutAppliedGen(m map[string]string, echoed *int64) map[string]string {
 // before connectivity was configurable reports none and behaves as cluster_ip. It
 // is also the only record of the exposure that was ASKED for, which an address
 // alone cannot show: an nlb_* create whose load balancer outruns the controller's
-// poll falls back to the pod IP and nothing re-polls. That makes a private address
-// conclusive for nlb_external, and merely a reason to check the Service for
-// nlb_internal, whose LB address is itself private on GKE/AKS
-// (controller_runbook.md, "Endpoint stuck on a pod IP after an nlb_* create").
+// poll falls back to the Service-type address and nothing re-polls. On the default
+// ClusterIP deployment that fallback is a .svc.cluster.local name, so the pair is
+// conclusive for either mode; on a NodePort or LoadBalancer deployment it is an IP
+// again, and for nlb_internal — whose LB address is itself private on GKE/AKS — the
+// mode is then only a reason to go and check the Service (controller_runbook.md,
+// "Endpoint stuck on the in-cluster address after an nlb_* create").
 func endpointAttrs(ep ampclient.Endpoint) map[string]string {
 	var m map[string]string
 	m = attrPut(m, "id", ep.Id.String())

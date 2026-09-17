@@ -115,10 +115,10 @@ func (s *addBranchExtensionsStep) Execute(ctx context.Context) StepResult {
 		if err != nil {
 			return Fail(fmt.Errorf("redeploy endpoint %s: %w", d.ID, err))
 		}
-		// A helm upgrade that changes ImageVolume mounts recreates the pod, so with
-		// a ClusterIP address (the pod IP) the endpoint's recorded address is now
-		// stale. Re-record it, same as create_endpoint does after its own deploy —
-		// otherwise clients and YCP's readiness check consume the dead address.
+		// Re-record the address, same as create_endpoint does after its own deploy.
+		// It is unchanged for a cluster_ip endpoint, but this redeploy is where an
+		// nlb_* endpoint whose create outran the load balancer picks up the address
+		// it should have had.
 		if err := s.state.SetEndpointAddress(ctx, d.ID, deployed.Address, deployed.TailnetAddress); err != nil {
 			return Fail(fmt.Errorf("record endpoint address %s: %w", d.ID, err))
 		}

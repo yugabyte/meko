@@ -5,9 +5,9 @@ metadata:
   labels:
     {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
 ---
-# The controller drives Helm to deploy endpoint workloads, and reads
-# pods/services (pod-IP / LoadBalancer-IP lookups), so it needs broad access in
-# its namespace.
+# The controller drives Helm to deploy endpoint workloads, and reads pods (resize,
+# deploy diagnosis) and services (LoadBalancer / NodePort address lookups), so it
+# needs broad access in its namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

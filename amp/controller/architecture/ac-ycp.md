@@ -263,12 +263,10 @@ endpoints a failed run never reached, and a task whose set is already applied
 everywhere deploys nothing. (Names only, so a catalog revision that moves an
 extension's *image* without renaming it does not land through this path — the fleet
 upgrade re-renders extensions for that.) The endpoint's
-recorded address is never blanked (the redeploy re-records it, since a ClusterIP
-address is the pod IP and the old one is dead), so the agent's readiness check —
-address non-empty — stays true throughout, including the window where the row still
-names a retired pod. The endpoint therefore never reads as non-Ready or stuck across
-a redeploy, and never as failed if one goes wrong: what an endpoint actually mounts
-is not in the amp API, so the agent cannot check it.
+recorded address is never blanked, so the agent's readiness check — address
+non-empty — stays true throughout. The endpoint therefore never reads as non-Ready
+or stuck across a redeploy, and never as failed if one goes wrong: what an endpoint
+actually mounts is not in the amp API, so the agent cannot check it.
 
 A branch's set only grows: there is no remove API, so a fork's endpoints always mount
 a superset of what its inherited objects need. Dropping a name from the spec is

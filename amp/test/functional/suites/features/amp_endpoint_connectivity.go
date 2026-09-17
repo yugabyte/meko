@@ -1,6 +1,7 @@
 // Per-endpoint connectivity (meko#967): an endpoint created with an nlb_* mode
 // gets a second, Postgres-only Service behind the cloud's L4 load balancer, and
-// its recorded address is the load balancer's rather than a pod IP. nlb_external
+// its recorded address is the load balancer's rather than the in-cluster one.
+// nlb_external
 // is exercised only behind an allow-list that admits nobody: it puts Postgres on
 // the internet behind a password.
 package features
@@ -24,7 +25,7 @@ import (
 const (
 	// lbReadyTimeout bounds the wait for the cloud to hand the Service an
 	// ingress address. The controller itself gives up after two minutes and
-	// records the pod IP instead, which the address assertion below catches.
+	// records the Service-type address instead, which the assertion below catches.
 	lbReadyTimeout = 8 * time.Minute
 	// lbGoneTimeout bounds the wait for the Service to disappear after the
 	// endpoint delete: the load balancer is a billed cloud resource.
@@ -378,7 +379,7 @@ func lbAddressVerdict(address, lbHost string) error {
 	if host == lbHost {
 		return nil
 	}
-	return fmt.Errorf("the endpoint's recorded address is %q but its load balancer is at %q: the create fell back to the Service-type address after lbAddressPollTimeout and nothing re-polls, so the address dies with the pod (\"Endpoint stuck on a pod IP after an nlb_* create\" in amp/runbooks/controller_runbook.md)", address, lbHost)
+	return fmt.Errorf("the endpoint's recorded address is %q but its load balancer is at %q: the create fell back to the Service-type address after lbAddressPollTimeout and nothing re-polls, so nothing outside the cluster can reach it (\"Endpoint stuck on the in-cluster address after an nlb_* create\" in amp/runbooks/controller_runbook.md)", address, lbHost)
 }
 
 // clusterCloud names the cloud from a node's spec.providerID the way the

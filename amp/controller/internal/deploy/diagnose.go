@@ -271,7 +271,7 @@ func (k *KubernetesDeployer) diagnoseRelease(ctx context.Context, release string
 }
 
 // releasePod returns the raw Pod object for a release, found by the same
-// instance label podClientAddress and podName use.
+// instance label podName uses.
 func (k *KubernetesDeployer) releasePod(ctx context.Context, release string) ([]byte, bool) {
 	q := url.Values{"labelSelector": {"app.kubernetes.io/instance=" + release}, "limit": {"1"}}
 	body, ok := k.k8sAPIGet(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods?%s", k.cfg.Namespace, q.Encode()))

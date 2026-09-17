@@ -64,7 +64,7 @@ POST …/storage-pools/{pool}/clusters/{proj}/branches/{br}/endpoints
    │  (handlers.go: CreateEndpoint)
    ├─ core.Backend.CreateEndpoint              → inserts the endpoint row (address empty)
    ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait
-   └─ core.Backend.SetEndpointAddress(<LB IP / pod IP / Service DNS>:<port>)
+   └─ core.Backend.SetEndpointAddress(<LB / NodePort / Service DNS>:<port>)
                                                               → 201 {endpoint}
 ```
 
@@ -216,10 +216,15 @@ Two distinct network paths:
     ClusterRole (`redeploy.sh`). NB: a NodePort Service applies to *all* its ports,
     so with SC coordination on (the default) the pageserver/safekeeper
     HTTP ports are exposed on node ports too — demo-grade, like the rest of this path;
-  - `ClusterIP` → the **pod IP** `<podIP>:<computePort>` (connect in-cluster).
+  - `ClusterIP` (the default) → the endpoint's own **Service DNS**
+    `<release>.<ns>.svc.cluster.local:<computePort>` — in-cluster reachability only.
 
-  All fall back to the stable **Service DNS** when the lookup isn't possible. The
-  LB/node/pod IP is **not** stable across pod (or node) restarts; the Service DNS is.
+  All fall back to the Service DNS when the lookup isn't possible, and none of them
+  is the **pod** address: nothing re-resolves a recorded address until the
+  endpoint's next controller-driven redeploy, so a pod IP would let an extension add
+  or an eviction silently invalidate a connection string a client already holds
+  (CLOUDGA-36993). An LB ingress survives pod replacement, a node IP does not
+  survive node replacement, and the Service DNS survives both.
 
 The deployed endpoints reach their **backing YugabyteDB** by its in-cluster
 Service DNS (`--deploy-yb-host-ports`), which may differ from the controller's own
@@ -500,7 +505,7 @@ Three properties are deliberate:
   Postgres port alone.
 - **Pod-IP target group (AWS)** (`nlb-target-type: ip`), so there is no kube-proxy hop
   and the load balancer controller re-registers the pod when it is replaced. That
-  is what makes this address durable where the stored pod IP is not.
+  is what keeps this address correct across a pod replacement, with no redeploy.
 - **Cross-zone enabled (AWS).** An endpoint is one pod in one AZ while the NLB
   takes an interface per subnet; with cross-zone off (the AWS load balancer
   controller's default) interfaces in the other AZs have no target and clients
@@ -511,8 +516,9 @@ Cloud load balancers often take longer to provision than
 `lbAddressPollTimeout`, so `CreateEndpoint` falls back to the Service-type
 address rather than failing the create; the endpoint is up and serving either
 way. Nothing re-polls afterwards — the recorded address stays the fallback until
-the endpoint's next controller-driven redeploy re-runs the resolution. Recovery:
-"Endpoint stuck on a pod IP after an `nlb_*` create" in
+the endpoint's next controller-driven redeploy re-runs the resolution, so the
+endpoint is reachable in-cluster throughout and only the external address waits.
+Recovery: "Endpoint stuck on the in-cluster address after an `nlb_*` create" in
 [`amp/runbooks/controller_runbook.md`](../../runbooks/controller_runbook.md).
 
 A redeploy re-renders the release from `core.EndpointDeploy` alone, so that record
@@ -571,9 +577,10 @@ The deploy is **demo-grade**. What it currently takes for granted:
   [#84](https://github.com/yugabyte/amp/issues/84) /
   [#113](https://github.com/yugabyte/amp/issues/113)); a crash mid-flow can
   orphan committed state ([#106](https://github.com/yugabyte/amp/issues/106)).
-- **Client address is a point-in-time value.** The LB/pod IP recorded at create
-  time is not refreshed; the stable Service DNS is the durable address. The
-  LoadBalancer poll (~2 min) can time out for a slow internal LB and fall back.
+- **An external client address is a point-in-time value.** An LB ingress or a
+  NodePort address is recorded at create time and not refreshed; the `ClusterIP`
+  default records the Service DNS, which does not go stale. The LoadBalancer poll
+  (~2 min) can time out for a slow internal LB and fall back.
 
 ## Known edges / not yet
 
