@@ -183,11 +183,12 @@ deleted. It carries the account's share and invite grants, and a create that nam
 agent lands on it, so garbage-collecting it because desired state does not mention it
 would break the account.
 
-Some refusals are **permanent**, reported as drift and never retried: a name the
-api-server rejects (400), a conflict (409), a revoked or unscoped token (401/403), and
-a free-tier cap (402) — that counter is lifetime and is never refunded on delete, so
-retrying can only fail. Clearing a datapack's description is permanent drift for the
-same reason: the api-server will not write an empty one.
+Some refusals are **permanent** and never retried. They report as `rejected` when
+the api-server refused the declaration — a name it rejects (400) or a conflict (409)
+— and as `blocked` when the agent is not permitted: a revoked or unscoped token
+(401/403), or the free-tier cap (402), whose counter is lifetime and never refunded
+on delete, so no re-declaration gets past it. Clearing a datapack's description is
+`drift`: the api-server has no verb that writes an empty one.
 
 Fleet-wide knobs on the control plane:
 
@@ -346,7 +347,8 @@ Failure modes worth knowing:
 | `amp task feed unavailable: the controller ignored updated_since` | the reconcile agent is newer than the amp controller it drives. Task reporting stays off for the life of the agent (inventory is unaffected); restart it against a controller built from this repo's `main` or later. |
 | `collect amp tasks (reporting inventory anyway)` | the controller's task API is erroring. Deliberately non-fatal: the environment's state and inventory still land, and the unreported tasks are re-sent on a later tick. |
 | `status accepted but the task delta was NOT stored` | the control plane took the report but could not store the tasks, so the delta is held for the next tick rather than committed. Persisting means the control plane's task write is failing. |
-| a resource row reads permanent drift and never retries | the backend refused it for a reason retrying cannot change — a name the api-server rejects, a free-tier cap (the counter is lifetime and never refunded), a revoked token, or an update the api-server will not write (clearing a datapack description). Fix the desired state; the agent will not keep hammering it. |
+| a resource row reads `drift`, `rejected` or `blocked` and never retries | the backend refused it for a reason retrying cannot change, and the state says which kind: `drift` is a verb that does not exist (an update the api-server will not write, a pool delete that cannot cascade) and nothing you declare fixes it; `rejected` is the backend refusing your declaration (a name it will not take, a spec that does not parse, a compute shape below the memory-per-vCPU floor) — re-declare it, and the row's `error` says what it wants; `blocked` is a revoked token, a missing permission, or the free-tier cap, whose counter is lifetime and never refunded, so no rewrite clears it. The agent will not keep hammering any of them. |
+| an `endpoint` reads `rejected` with `below the N GiB per vCPU this control plane requires` | the declaration named `resources.cpu` without a `resources.memory` to match. The amp controller fills an omitted dimension from the endpoint's **stored** row, not from the new cpu, so growing cores alone leaves the endpoint under the floor and is refused. Declare both. |
 | a `datapack` row stays `Pending` | its `agent` parent has not converged yet. Children are gated on the parent existing, so the agent row's own reason is the one to read. |
 
 The agent's credential is the operator-provided `meko-agent-api-key` Secret

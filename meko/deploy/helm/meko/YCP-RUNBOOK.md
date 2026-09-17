@@ -379,10 +379,13 @@ deploy/meko-api-server` shows the cause on an `enroll failed:` line.
 the kind the environment was registered as. Fatal by design; register a new
 environment with the right kind, or point the agent at the matching one.
 
-**Agent logs a resource as permanently drifted and never retries** — the api-server
-refused it for a reason retrying cannot change: a name it rejects (400), a conflict
-(409), a revoked or unscoped token (401/403), or the free-tier cap (402), whose
-counter is lifetime and is never refunded on delete. Fix the desired state.
+**Agent reports a resource `drift`, `rejected` or `blocked` and never retries** —
+the api-server refused it for a reason retrying cannot change, and the state says
+which. `rejected` is your declaration: a name it will not take (400) or a conflict
+(409) — rewrite it, and the row's `error` says what it wants. `blocked` is a revoked
+or unscoped token (401/403), or the free-tier cap (402), whose counter is lifetime
+and is never refunded on delete — no rewrite clears either. `drift` is a verb that
+does not exist, so nothing you declare changes it.
 
 **`kubectl exec` into the agent gives no shell** — it is
 `gcr.io/distroless/static:nonroot`. Use logs and port-forward. (The api-server image

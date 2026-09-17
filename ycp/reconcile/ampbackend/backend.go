@@ -485,7 +485,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 			return err
 		}
 		if len(extensionSet(spec.Extensions)) > 0 {
-			return reconcile.Permanent(fmt.Errorf(
+			return reconcile.Rejected(fmt.Errorf(
 				"create branch %q: extensions cannot be declared at branch create (a new branch inherits its parent's set) — declare them once the branch exists",
 				r.Name))
 		}
@@ -495,7 +495,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 		// drop a declared write lease silently — and the lease is what stops two
 		// computes both believing they may write.
 		if spec.WriteTokenSettings != nil {
-			return reconcile.Permanent(fmt.Errorf(
+			return reconcile.Rejected(fmt.Errorf(
 				"create branch %q: write_token_settings cannot be declared at branch create (no create verb carries it) — declare it once the branch exists",
 				r.Name))
 		}
@@ -693,6 +693,45 @@ func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (s
 	return string(t.Status), taskErr, nil
 }
 
+// driftSet collects the reasons an update could not fully land, and the reason
+// they add up to. Both update paths mix two kinds: a field no verb carries
+// (ReasonUnsupported — the resource is simply like that), and a call the controller
+// refused (ReasonRejected — the operator re-declares and it works). Reported as one
+// word the second reads as the first, which is CLOUDGA-36992.
+type driftSet struct {
+	reasons []string
+	reason  reconcile.PermanentReason
+}
+
+func (d *driftSet) add(reasons ...string) { d.reasons = append(d.reasons, reasons...) }
+
+func (d *driftSet) any() bool { return len(d.reasons) > 0 }
+
+// fold records a verb's failure as one more reason, and lets a rejection or a
+// block outrank the plain unsupported ones — those are the halves an operator can
+// act on, and burying them under "immutable" is the whole bug.
+//
+// EVERY failure, including a Pending one, because this row gets exactly one
+// report. A drifted spec claims generation 0, so nothing ever advances the
+// echoed generation, the engine's permanent mark never expires (loop.go), and
+// this update is never issued again — priorTask does not run a second time and the
+// task recorded by applyUpdate is never read back. Naming the task here is
+// therefore the only trace of it on the resource; its outcome comes from the task
+// log the agent relays, keyed by that id.
+func (d *driftSet) fold(err error) {
+	d.reasons = append(d.reasons, err.Error())
+	if r := reconcile.PermanentReasonOf(err); r != reconcile.ReasonUnsupported {
+		d.reason = r
+	}
+}
+
+// err is the permanent error to return for the whole update: every reason joined,
+// under the verb and resource the caller names.
+func (d *driftSet) err(format string, args ...any) error {
+	return reconcile.PermanentAs(d.reason,
+		fmt.Errorf(format+": %s", append(args, strings.Join(d.reasons, "; "))...))
+}
+
 // updateEndpoint converges an endpoint's settings and its compute reservation.
 //
 // Two calls, and which one carries the generation is the whole ordering argument.
@@ -730,7 +769,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 		return err
 	}
 	ep := idx.endpointRow[r.Name]
-	drift := unappliedEndpoint(spec, ep)
+	drift := driftSet{reasons: unappliedEndpoint(spec, ep)}
 	resizing := spec.Resources != nil
 
 	// Before anything is issued, and before anything can claim a generation: the
@@ -752,12 +791,12 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 	// Drift excluded because there would be nothing to stamp: a spec that never fully
 	// lands claims no generation, so the call would carry an empty body and no
 	// generation either.
-	if !changed && !resizing && len(drift) == 0 && b.generationBehind(r, ep.YcpGeneration) {
+	if !changed && !resizing && !drift.any() && b.generationBehind(r, ep.YcpGeneration) {
 		changed = true
 	}
 	if changed {
 		gen := r.Generation
-		if len(drift) > 0 {
+		if drift.any() {
 			gen = 0 // claim nothing; see the drift note above
 		}
 		if !resizing && gen > 0 {
@@ -776,7 +815,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 			// them. Report it with the rest of the drift rather than returning here,
 			// so one bad setting does not block a resources change — but the
 			// generation is now unclaimable, which the drift list takes care of.
-			drift = append(drift, err.Error())
+			drift.fold(err)
 		}
 	}
 
@@ -786,7 +825,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 			return err
 		}
 		gen := r.Generation
-		if len(drift) > 0 {
+		if drift.any() {
 			gen = 0 // claim nothing; see the drift note above
 		}
 		if err := b.applyUpdate(ctx, key, gen,
@@ -795,12 +834,19 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 					req.YcpGeneration = &gen
 				}
 				return b.api.ResizeEndpoint(c, poolID, clusterID, branchID, endpointID, req)
-			}); err != nil && len(drift) == 0 {
-			return err
+			}); err != nil {
+			if !drift.any() {
+				return err
+			}
+			// Drift already decided this update reports permanent, so the resize's own
+			// outcome has nowhere to be returned to. Folding it in is the only way it
+			// is reported at all: dropped, a refused resize leaves the row naming an
+			// unrelated immutable field and nothing else.
+			drift.fold(err)
 		}
 	}
-	if len(drift) > 0 {
-		return reconcile.Permanent(fmt.Errorf("update endpoint %q: %s", r.Name, strings.Join(drift, "; ")))
+	if drift.any() {
+		return drift.err("update endpoint %q", r.Name)
 	}
 	return nil
 }
@@ -1003,13 +1049,13 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 	// so claiming it would stamp the row, echo back at the desired generation, and
 	// have the engine Noop the resource forever — silently converged at a generation
 	// that was never met, which is the failure this whole change removes.
-	var drift []string
+	var drift driftSet
 	if spec.Extensions != nil {
 		if extra := sortedMissing(have, want); len(extra) > 0 {
-			drift = append(drift, "extensions "+strings.Join(extra, ",")+" are enabled and cannot be removed")
+			drift.add("extensions " + strings.Join(extra, ",") + " are enabled and cannot be removed")
 		}
 	}
-	drift = append(drift, unapplied(spec, br)...)
+	drift.add(unapplied(spec, br)...)
 
 	// As in updateEndpoint, and for the sharper reason described on priorTask: an
 	// add_branch_extensions task unions the branch row before it redeploys anything,
@@ -1033,12 +1079,12 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 	// the whole extension set to get a generation recorded, which was the only way
 	// before this verb could carry one — and which cost an add_branch_extensions
 	// task on every generation bump of a branch that declares extensions.
-	if !changed && !adding && len(drift) == 0 && b.generationBehind(r, br.YcpGeneration) {
+	if !changed && !adding && !drift.any() && b.generationBehind(r, br.YcpGeneration) {
 		changed = true
 	}
 	if changed {
 		gen := r.Generation
-		if len(drift) > 0 {
+		if drift.any() {
 			gen = 0 // claim nothing; see the drift note above
 		}
 		if !adding && gen > 0 {
@@ -1051,13 +1097,13 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 			if !errors.As(err, &perm) {
 				return fmt.Errorf("update branch %q settings: %w", r.Name, err)
 			}
-			drift = append(drift, err.Error())
+			drift.fold(err)
 		}
 	}
 
 	if adding {
 		gen := r.Generation
-		if len(drift) > 0 {
+		if drift.any() {
 			gen = 0 // claim nothing; see the drift note above
 		}
 		if err := b.applyUpdate(ctx, key, gen,
@@ -1067,13 +1113,18 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 					req.YcpGeneration = &gen
 				}
 				return b.api.AddBranchExtensions(c, poolID, clusterID, branchID, req)
-			}); err != nil && len(drift) == 0 {
-			return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(send, ","), r.Name, err)
+			}); err != nil {
+			if !drift.any() {
+				return fmt.Errorf("add extensions %s to branch %q: %w", strings.Join(send, ","), r.Name, err)
+			}
+			// As in updateEndpoint: drift already decided the verdict, so the add's own
+			// outcome is folded in rather than lost.
+			drift.fold(err)
 		}
 	}
 
-	if len(drift) > 0 {
-		return reconcile.Permanent(fmt.Errorf("update branch %q: %s", r.Name, strings.Join(drift, "; ")))
+	if drift.any() {
+		return drift.err("update branch %q", r.Name)
 	}
 	return nil
 }
@@ -1249,7 +1300,9 @@ func unmarshalSpec(r api.DesiredResource, dst any) error {
 		return nil
 	}
 	if err := json.Unmarshal(r.Spec, dst); err != nil {
-		return fmt.Errorf("decode %s %q spec: %w", r.Kind, r.Name, err)
+		// Rejected, not retryable: every tick would decode the same bytes and fail
+		// the same way, so a backoff only hides that the declaration is malformed.
+		return reconcile.Rejected(fmt.Errorf("decode %s %q spec: %w", r.Kind, r.Name, err))
 	}
 	return nil
 }
@@ -1286,7 +1339,7 @@ func (b *Backend) mutateTask(resp *http.Response) (*openapi_types.UUID, error) {
 	case resp.StatusCode == http.StatusConflict:
 		return nil, reconcile.Pending(fmt.Errorf("a task already holds this resource: %s", httpErr(resp.StatusCode, body)))
 	case resp.StatusCode == http.StatusBadRequest:
-		return nil, reconcile.Permanent(httpErr(resp.StatusCode, body))
+		return nil, reconcile.Rejected(httpErr(resp.StatusCode, body))
 	case resp.StatusCode >= 300:
 		return nil, httpErr(resp.StatusCode, body)
 	}
@@ -1331,17 +1384,17 @@ func (b *Backend) patchSettings(ctx context.Context, call func(context.Context) 
 		return nil
 	}
 	if resp.StatusCode == http.StatusBadRequest {
-		return reconcile.Permanent(httpErr(resp.StatusCode, body))
+		return reconcile.Rejected(httpErr(resp.StatusCode, body))
 	}
 	return httpErr(resp.StatusCode, body)
 }
 
 // mutate issues a create/delete. 2xx and 409 (already exists / in
 // flight) are success; any other non-2xx is an error carrying the controller's
-// message so a failed task surfaces in the tick result. A 400 is permanent: the
+// message so a failed task surfaces in the tick result. A 400 is Rejected: the
 // controller is refusing the spec as declared (an endpoint memory quantity with
-// no unit, say), so every retry sends the same rejected body — surface it as
-// drift instead of backing off forever.
+// no unit, say), so every retry sends the same body — name it on the resource
+// instead of backing off forever.
 //
 // Updates go through mutateTask instead — see its 409 note.
 func (b *Backend) mutate(ctx context.Context, call func(context.Context) (*http.Response, error)) error {
@@ -1355,7 +1408,7 @@ func (b *Backend) mutate(ctx context.Context, call func(context.Context) (*http.
 		return nil
 	}
 	if resp.StatusCode == http.StatusBadRequest {
-		return reconcile.Permanent(httpErr(resp.StatusCode, body))
+		return reconcile.Rejected(httpErr(resp.StatusCode, body))
 	}
 	return httpErr(resp.StatusCode, body)
 }

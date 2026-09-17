@@ -149,7 +149,7 @@ func checkName(kind, name string) error {
 		want = 2
 	}
 	if segs[0] == defaultAgentID {
-		return reconcile.Permanent(fmt.Errorf(
+		return reconcile.Rejected(fmt.Errorf(
 			"%s %q: %q is the account's signup agent and is not managed here — deleting "+
 				"it would drop the account's share grants and break every create that "+
 				"names no agent", kind, name, defaultAgentID))
@@ -159,7 +159,7 @@ func checkName(kind, name string) error {
 		if kind == KindDatapack {
 			shape = "<agent>/<datapack>"
 		}
-		return reconcile.Permanent(fmt.Errorf("%s %q: name must be %q", kind, name, shape))
+		return reconcile.Rejected(fmt.Errorf("%s %q: name must be %q", kind, name, shape))
 	}
 	return nil
 }
@@ -432,7 +432,7 @@ func datapackSpecOf(r api.DesiredResource) (datapackSpec, error) {
 		return s, nil
 	}
 	if err := json.Unmarshal(r.Spec, &s); err != nil {
-		return s, reconcile.Permanent(fmt.Errorf("%s %q: bad spec: %w", r.Kind, r.Name, err))
+		return s, reconcile.Rejected(fmt.Errorf("%s %q: bad spec: %w", r.Kind, r.Name, err))
 	}
 	return s, nil
 }
@@ -457,13 +457,21 @@ func classify(err error) error {
 		return err
 	}
 	switch apiErr.StatusCode {
-	case http.StatusBadRequest, http.StatusConflict, http.StatusPaymentRequired:
-		return reconcile.Permanent(err)
+	case http.StatusBadRequest, http.StatusConflict:
+		return reconcile.Rejected(err)
+	case http.StatusPaymentRequired:
+		// Blocked, not Rejected, for the reason above: the counter is lifetime, so
+		// no re-declaration under any name or description gets past it. Telling the
+		// operator to rewrite the spec would be the misdirection this vocabulary
+		// exists to remove.
+		return reconcile.Blocked(err)
 	case http.StatusUnauthorized, http.StatusForbidden:
 		// A missing or rejected token, a scope the token lacks, or a row this
 		// account does not own. None is fixed by asking again, and each is worth
-		// naming on the resource instead of hiding in a backoff.
-		return reconcile.Permanent(err)
+		// naming on the resource instead of hiding in a backoff. Blocked, not
+		// Rejected: nothing is wrong with the declaration, so "re-declare it" is the
+		// wrong thing to tell whoever reads the row.
+		return reconcile.Blocked(err)
 	}
 	return err
 }

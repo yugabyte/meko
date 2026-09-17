@@ -67,17 +67,26 @@ onto the resource's `ResourceStatus.Error` (`ycp/internal/api`):
   non-Ready in the same backend state (an endpoint that never provisions), or an
   update stayed `Updating` that long — a wedged worker, the one case reading the
   task's status cannot detect. Also `DEGRADED`, with a "no progress" reason.
-- **Permanent drift** — a verb that cannot succeed for the spec as declared: a
-  storage pool has no delete, pools and clusters have no update, a branch's
-  `extensions` cannot be removed (and is the one field it cannot be *created*
-  with — below), an endpoint spec declares anything but `resources` (below), and
-  the controller refuses some bodies outright with a `400`.
-  The engine reports it and stops re-issuing it (no backoff flap) rather than
-  treating an unfixable call as a failure; it does **not** by itself degrade the
-  environment. Backends flag these with `reconcile.Permanent`. The mark is held
-  against the resource's **generation**, so a rewritten spec retires it and the
-  verb is asked again — otherwise a refused create would wedge the resource for
-  the life of the agent process, since its action stays planned every tick.
+- **Permanent** — a verb that cannot succeed for the spec as declared. The engine
+  reports it and stops re-issuing it (no backoff flap) rather than treating an
+  unfixable call as a failure; it does **not** by itself degrade the environment.
+  The mark is held against the resource's **generation**, so a rewritten spec
+  retires it and the verb is asked again — otherwise a refused create would wedge
+  the resource for the life of the agent process, since its action stays planned
+  every tick.
+
+  It reports as one of **three** states, because they ask different things of
+  whoever reads the row and the console renders a different sentence for each:
+
+  | state | `reconcile.` | what it is |
+  |---|---|---|
+  | `drift` | `Permanent` | no verb exists: a storage pool has no delete, pools and clusters have no update, a branch's `extensions` cannot be removed, an endpoint spec declares `connectivity`, `role` or `extended_config` (below) |
+  | `rejected` | `Rejected` | this declaration cannot be applied but another could. Either the controller refused the body with a `400` — a compute shape under the memory-per-vCPU floor, an unknown extension, a setting Postgres will not take — or the agent refused it before sending: a spec that does not parse, and `extensions` / `write_token_settings` on a branch *create*, which are declared in a later write (below). `Error` says what to write instead |
+  | `blocked` | `Blocked` | the agent is not permitted: the meko backend's 401/403 and its free-tier cap, which no rewrite clears. The amp controller's calls are not authenticated per-resource |
+
+  An update that hits both at once reports `rejected`: that is the half an operator
+  can act on, and burying it under `drift` costs them the controller's message
+  (CLOUDGA-36992).
 
 Each inventory row also carries `ResourceStatus.Attrs`, kind-specific details the
 backend read while listing: every resource's amp `id` (a UUID, distinct from the
@@ -137,8 +146,8 @@ empty, it is a blank editor for a resource full of settings and every one of the
 deleted on save.
 
 `extended_config` is reported although the settings PATCH cannot write it. It is
-declarable at endpoint create, so a spec that disagrees is permanent drift, and this
-is the only way to see what it disagrees with.
+declarable at endpoint create, so a spec that disagrees is `drift`, and this is the
+only way to see what it disagrees with.
 
 ## The applied generation
 
@@ -252,9 +261,9 @@ catch — the cluster create materializes `main`, so the agent never issues a br
 create for it, and declaring `extensions` on `main` in the same write that creates
 its cluster is inert until a later edit. Seed it through the cluster spec instead.
 
-An unknown name is a `400`, which the backend already treats as permanent drift, so
-a typo surfaces as a reason on the resource rather than an endless backoff. The
-update sends only the names the controller does not already report, because the add
+An unknown name is a `400`, which the backend reports as `rejected`, so a typo
+surfaces as a reason on the resource rather than an endless backoff. The update
+sends only the names the controller does not already report, because the add
 **redeploys the endpoints that are behind** — the ImageVolume set is fixed at pod
 start — so expect a compute bounce on the tick that applies one. Only endpoints
 whose recorded mount set differs from the branch's are rolled: the task records what
@@ -270,9 +279,9 @@ actually mounts is not in the amp API, so the agent cannot check it.
 
 A branch's set only grows: there is no remove API, so a fork's endpoints always mount
 a superset of what its inherited objects need. Dropping a name from the spec is
-therefore permanent drift, named in the resource's `Error`. Omitting `extensions`
-altogether leaves the branch's set unmanaged, which is what a fork inheriting its
-parent's set wants.
+therefore `drift`, named in the resource's `Error`. Omitting `extensions` altogether
+leaves the branch's set unmanaged, which is what a fork inheriting its parent's set
+wants.
 
 ### Settings are replaced, not merged
 
@@ -296,7 +305,7 @@ and no create request carries it — so, like `extensions`, `Create` refuses a b
 spec that declares it rather than dropping the field, and it is declared in a later
 write once the branch exists.
 
-A setting the controller refuses is permanent drift, not a retry: the `400` stored
+A setting the controller refuses is `rejected`, not a retry: the `400` stored
 nothing, so every retry would send the same rejected body. Two independent checks
 produce one — Postgres itself refusing a `pg_settings` name or value, and the
 controller's generated key set refusing a daemon key — and the agent reports either
@@ -311,9 +320,8 @@ pod, where most `pg_settings` reload in place.
 ### What an endpoint spec can declare and not get
 
 An endpoint converges `resources` and its three settings surfaces. What is left
-over — `connectivity`, `role`, `extended_config` — is permanent drift on an
-**existing** endpoint, named in the resource's `Error`. Omitting a field leaves it
-unmanaged.
+over — `connectivity`, `role`, `extended_config` — is `drift` on an **existing**
+endpoint, named in the resource's `Error`. Omitting a field leaves it unmanaged.
 
 The reasons differ. `connectivity` and `role` are create-time in the controller:
 no update verb carries them, so they can never converge and recreating the endpoint

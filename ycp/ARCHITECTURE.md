@@ -120,6 +120,24 @@ cluster.
 Because desired state is resource-typed, adding a new managed resource needs only a
 new case in a backend — no protocol change.
 
+### A resource that will not converge says which kind of "will not"
+
+A resource the agent stops trying to converge reports one of three states, and they
+are not interchangeable — each asks something different of whoever reads the row:
+
+| `state` | what happened | what to do |
+|---|---|---|
+| `drift` | no verb exists for this resource as declared — a kind with no update/delete path, a field only create carries | nothing; the resource is like that |
+| `rejected` | this declaration cannot be applied but another could — the remote refused it with a 400, or the agent refused it before sending | re-declare it; `error` says what it wants |
+| `blocked` | the agent is not permitted: credentials, a scope it lacks, a quota no rewrite clears | fix the agent's access or the account's |
+
+All three are permanent in the same way — issued once, not re-issued until the spec
+changes, and not enough on their own to make the environment DEGRADED. Only the state
+differs, because only the state reaches the console, which renders a different
+sentence for each: a refused declaration reported as `drift` gets an operator "this
+resource type cannot be changed in place" in place of the reason (CLOUDGA-36992). A
+reader that meets a state it does not know must show `error`, not that sentence.
+
 ### Tasks: the operations behind the inventory
 
 Inventory says an endpoint is `updating`; the amp controller's task log says *why*, and

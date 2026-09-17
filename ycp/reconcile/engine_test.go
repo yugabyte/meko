@@ -103,7 +103,9 @@ type fakeBackend struct {
 	parents  map[ResourceKey]ResourceKey
 	failCall map[ResourceKey]int  // remaining forced failures per key
 	perm     map[ResourceKey]bool // keys whose verb returns a PermanentError
-	pending  map[ResourceKey]bool // keys whose verb returns a PendingError
+	// permReason overrides the reason perm returns; zero is ReasonUnsupported.
+	permReason map[ResourceKey]PermanentReason
+	pending    map[ResourceKey]bool // keys whose verb returns a PendingError
 
 	attempts map[ResourceKey]int // every verb call, success or not
 	creates  []ResourceKey
@@ -113,11 +115,12 @@ type fakeBackend struct {
 
 func newFake() *fakeBackend {
 	return &fakeBackend{
-		parents:  map[ResourceKey]ResourceKey{},
-		failCall: map[ResourceKey]int{},
-		perm:     map[ResourceKey]bool{},
-		pending:  map[ResourceKey]bool{},
-		attempts: map[ResourceKey]int{},
+		parents:    map[ResourceKey]ResourceKey{},
+		failCall:   map[ResourceKey]int{},
+		perm:       map[ResourceKey]bool{},
+		permReason: map[ResourceKey]PermanentReason{},
+		pending:    map[ResourceKey]bool{},
+		attempts:   map[ResourceKey]int{},
 	}
 }
 
@@ -139,7 +142,7 @@ func (f *fakeBackend) Parent(r api.DesiredResource) (ResourceKey, bool) {
 func (f *fakeBackend) maybeReject(k ResourceKey) error {
 	f.attempts[k]++
 	if f.perm[k] {
-		return Permanent(errors.New("unsupported"))
+		return PermanentAs(f.permReason[k], errors.New("refused"))
 	}
 	if f.pending[k] {
 		return Pending(errors.New("task still running"))
@@ -602,5 +605,50 @@ func TestReconcileClearsBackoffOnceConverged(t *testing.T) {
 	e.mu.Unlock()
 	if stillBacking {
 		t.Error("the spent backoff ladder outlived the failure it came from")
+	}
+}
+
+// A rejection and a block are permanent on exactly the same terms as an
+// unsupported verb — issued once, never re-issued, and not enough to degrade the
+// environment — and each keeps its own reason all the way to the Result, because
+// that is what the row's state is read from.
+func TestPermanentReasonSurvivesToTheResult(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason PermanentReason
+		state  string
+	}{
+		{"unsupported", ReasonUnsupported, "drift"},
+		{"rejected", ReasonRejected, "rejected"},
+		{"blocked", ReasonBlocked, "blocked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			k := key("endpoint", "p/c/b/rw")
+			f.actual = []Actual{{Key: k, Ready: true}}
+			f.perm[k] = true
+			f.permReason[k] = tc.reason
+
+			e := New(f, Options{})
+			desired := []api.DesiredResource{d("endpoint", "p/c/b/rw", 1)}
+
+			res, _ := e.Reconcile(context.Background(), desired, true)
+			err, ok := res.Permanent[k]
+			if !ok || len(res.Failed) != 0 {
+				t.Fatalf("tick1: permanent=%v failed=%d, want the update reported permanent", res.Permanent, len(res.Failed))
+			}
+			if got := PermanentReasonOf(err).State(); got != tc.state {
+				t.Errorf("state = %q, want %q", got, tc.state)
+			}
+
+			// Not re-issued while the spec stands, whatever the reason.
+			res, _ = e.Reconcile(context.Background(), desired, true)
+			if _, ok := res.Permanent[k]; !ok {
+				t.Errorf("tick2: the verdict was dropped instead of being held")
+			}
+			if f.attempts[k] != 1 {
+				t.Errorf("tick2: attempts=%d, want still 1", f.attempts[k])
+			}
+		})
 	}
 }

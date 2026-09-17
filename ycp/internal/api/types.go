@@ -178,7 +178,29 @@ type ResourceStatus struct {
 	ID     string `json:"id"`
 	Name   string `json:"name,omitempty"`
 	Parent string `json:"parent,omitempty"`
-	State  string `json:"state,omitempty"`
+	// State is the backend's own status for the resource ("ready",
+	// "provisioning"), overridden by the agent when it has something the backend
+	// cannot say. The overrides, and what each tells a reader to DO — the console
+	// renders a different sentence for each, so they must not be conflated:
+	//
+	//   updating  an async task for this resource is in flight; wait.
+	//   drift     no verb exists for this resource as declared — a kind with no
+	//             update/delete path, or a field only create carries. Nothing the
+	//             operator writes changes it; this is the "cannot be changed in
+	//             place" case.
+	//   rejected  this declaration cannot be applied but another could — the
+	//             remote refused it (a 400) or the agent refused it before
+	//             sending. Fixed by re-declaring, and Error says how.
+	//   blocked   the agent is not permitted: credentials, a scope it lacks, or a
+	//             quota no rewrite clears. Neither the spec nor the resource is
+	//             wrong.
+	//   error     a create/delete that failed for a resource the backend does not
+	//             list, so there is no backend state to override.
+	//
+	// A reader that does not know a value must fall back to showing Error, never
+	// to the immutability sentence: reporting a rejected endpoint as immutable is
+	// CLOUDGA-36992.
+	State string `json:"state,omitempty"`
 	// Error is why this resource is not converged, when the agent can say: the
 	// controller's rejection of a create/update/delete, the error a completed-but-
 	// failed async task reported, a resource stuck non-Ready past the reconcile

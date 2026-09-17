@@ -379,8 +379,8 @@ func (a *agent) fallback(err error) (api.DesiredState, bool, error) {
 
 // Report implements reconcile.Reporter: post a status heartbeat with the
 // reconciled inventory and applied revision. A retryable failure or a stuck
-// resource makes the environment DEGRADED; permanent drift (an unsupported
-// verb) is reported per-resource but does not by itself degrade the env.
+// resource makes the environment DEGRADED; a permanent verdict (drift, rejected
+// or blocked) is reported per-resource but does not by itself degrade the env.
 func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.Result) error {
 	stateStr := api.StateReady
 	if len(res.Failed) > 0 || len(res.Stuck) > 0 {
@@ -443,10 +443,14 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 
 // inventory maps a tick's result to the flat resource inventory YCP renders in
 // the console, folding each resource's reason-for-not-converging (Failed,
-// Stuck, Permanent drift, or an Updating task still in flight) onto its row. A
-// create/delete that failed for a resource not in actual (a create that never
+// Stuck, a permanent verdict, or an Updating task still in flight) onto its row.
+// A create/delete that failed for a resource not in actual (a create that never
 // landed, a pool that cannot be deleted) is emitted as its own row so the reason
 // is still visible.
+//
+// A permanent verdict names WHICH kind it is — see reconcile.PermanentReason —
+// because the console renders a different sentence for each and only one of them
+// is "this cannot be changed in place".
 func inventory(res reconcile.Result) []api.ResourceStatus {
 	inActual := make(map[reconcile.ResourceKey]bool, len(res.Actual))
 	out := make([]api.ResourceStatus, 0, len(res.Actual))
@@ -469,7 +473,7 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 		} else if d, ok := res.Stuck[act.Key]; ok {
 			rs.Error = fmt.Sprintf("no progress: %q for %s", act.State, d.Round(time.Second))
 		} else if err, ok := res.Permanent[act.Key]; ok {
-			rs.State, rs.Error = "drift", err.Error()
+			rs.State, rs.Error = reconcile.PermanentReasonOf(err).State(), err.Error()
 		} else if err, ok := res.Updating[act.Key]; ok {
 			// An update the controller is still working on. Not an error — the state
 			// says what is happening, so "generation 3 declared, 1 applied" is legible
@@ -481,16 +485,20 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 
 	// Failed/permanent keys with no actual row (a create that never landed, a
 	// withdrawn pool that cannot be deleted) still need a row to carry the reason.
-	orphans := map[reconcile.ResourceKey]string{}
+	type orphan struct{ state, err string }
+	orphans := map[reconcile.ResourceKey]orphan{}
 	for k, err := range res.Failed {
 		if !inActual[k] {
-			orphans[k] = err.Error()
+			orphans[k] = orphan{state: "error", err: err.Error()}
 		}
 	}
 	for k, err := range res.Permanent {
 		if !inActual[k] {
 			if _, dup := orphans[k]; !dup {
-				orphans[k] = err.Error()
+				// Same three-way verdict as a row that does exist: a create the backend
+				// refused reads "rejected", not the generic "error" that says nothing
+				// about whether re-declaring would help.
+				orphans[k] = orphan{state: reconcile.PermanentReasonOf(err).State(), err: err.Error()}
 			}
 		}
 	}
@@ -504,8 +512,8 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 			Kind:  k.Kind,
 			ID:    k.String(),
 			Name:  leaf(k.Name),
-			State: "error",
-			Error: orphans[k],
+			State: orphans[k].state,
+			Error: orphans[k].err,
 		})
 	}
 	return out

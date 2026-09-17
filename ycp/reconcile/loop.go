@@ -23,7 +23,7 @@ type Engine struct {
 	mu        sync.Mutex
 	cache     map[ResourceKey]int64      // last-applied generation; fallback for a backend that cannot echo
 	failures  map[ResourceKey]*failState // per-resource backoff
-	permanent map[ResourceKey]permMark   // non-retryable, surfaced as drift
+	permanent map[ResourceKey]permMark   // non-retryable; the reason picks the state
 	updating  map[ResourceKey]updateMark // update issued, not yet confirmed applied
 	seenState map[ResourceKey]stateStamp // when a resource entered its current state
 }
@@ -122,9 +122,10 @@ type Result struct {
 	// Failed maps a resource to the retryable error from its attempt this tick.
 	Failed map[ResourceKey]error
 	// Permanent maps a resource to a non-retryable error (a verb the kind does
-	// not support, e.g. deleting a storage pool). The engine does not re-issue
-	// these until the resource's spec changes; they are reported as drift, and
-	// unlike Failed they do not by themselves make the environment DEGRADED.
+	// not support, a declaration the backend refused, a call it is not permitted).
+	// The engine does not re-issue these until the resource's spec changes, and
+	// unlike Failed they do not by themselves make the environment DEGRADED. Which
+	// state each is reported in comes off the error — see PermanentReason.
 	Permanent map[ResourceKey]error
 	// Updating maps a resource whose update the backend has issued but cannot yet
 	// confirm — it just planned the work, or the work it planned earlier is still
@@ -205,8 +206,8 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 		}
 	}
 
-	// Surface permanent (known-unsupported) actions as drift and drop them from
-	// this tick's work, and forget any permanent mark whose situation has moved
+	// Surface permanent actions on the resource and drop them from this tick's
+	// work, and forget any permanent mark whose situation has moved
 	// on: its action is no longer planned (e.g. the pool was re-declared), or the
 	// spec has been rewritten since — a new generation is a new question, so the
 	// verb is asked again rather than staying latched on the old answer.
@@ -304,7 +305,7 @@ func (e *Engine) filterEligible(actions []Action, actualByKey map[ResourceKey]Ac
 	var out []Action
 	for _, a := range actions {
 		if _, perm := e.permanent[a.Key]; perm {
-			continue // reported as drift; not re-issued until the spec changes
+			continue // reported on the resource; not re-issued until the spec changes
 		}
 		if f := e.failures[a.Key]; f != nil && now.Before(f.nextAttempt) {
 			continue

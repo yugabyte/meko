@@ -30,9 +30,11 @@ func TestInventoryFoldsReasons(t *testing.T) {
 			{Key: pool, Ready: true, State: "ready"},
 			{Key: rw, Parent: branch, Ready: false, State: "provisioning"},
 		},
-		Failed:    map[reconcile.ResourceKey]error{failedCreate: errors.New("task rejected: write token held")},
-		Stuck:     map[reconcile.ResourceKey]time.Duration{rw: 12 * time.Minute},
-		Permanent: map[reconcile.ResourceKey]error{pool: errors.New(`delete storage pool "p": not supported`)},
+		Failed: map[reconcile.ResourceKey]error{failedCreate: errors.New("task rejected: write token held")},
+		Stuck:  map[reconcile.ResourceKey]time.Duration{rw: 12 * time.Minute},
+		Permanent: map[reconcile.ResourceKey]error{
+			pool: reconcile.Permanent(errors.New(`delete storage pool "p": not supported`)),
+		},
 	}
 
 	byID := map[string]api.ResourceStatus{}
@@ -40,7 +42,7 @@ func TestInventoryFoldsReasons(t *testing.T) {
 		byID[r.ID] = r
 	}
 
-	// Permanent drift: state overridden to "drift" with the reason.
+	// A verb the kind does not have: state overridden to "drift" with the reason.
 	if got := byID["storage-pool/p"]; got.State != "drift" || got.Error == "" {
 		t.Errorf("pool row = %+v, want state=drift with an error", got)
 	}
@@ -244,5 +246,48 @@ func TestEnrollKindMismatchIsFatalEvenWithPersistedState(t *testing.T) {
 	}
 	if a.envID != "" {
 		t.Errorf("envID = %q, want the agent not to have adopted an identity", a.envID)
+	}
+}
+
+// The two permanent verdicts must not arrive as one word. "drift" is what the
+// console renders "this resource type cannot be changed in place" from, and that
+// sentence sent an operator looking for an immutable endpoint when the controller
+// had simply refused the declaration and said what to write instead
+// (CLOUDGA-36992). A rejected resource an operator never created still gets its
+// own synthetic row, on the same terms.
+func TestInventorySeparatesRejectionFromImmutability(t *testing.T) {
+	const refusal = "HTTP 400: resources.memory 4Gi is below the 8 GiB per vCPU this " +
+		"control plane requires: 1 cpu needs at least 8Gi (invalid_argument)"
+	rw := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/rw"}
+	pool := reconcile.ResourceKey{Kind: "storage-pool", Name: "p"}
+	refused := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/ro"}
+
+	res := reconcile.Result{
+		Actual: []reconcile.Actual{
+			{Key: rw, Ready: true, State: "ready"},
+			{Key: pool, Ready: true, State: "ready"},
+		},
+		Failed: map[reconcile.ResourceKey]error{},
+		Stuck:  map[reconcile.ResourceKey]time.Duration{},
+		Permanent: map[reconcile.ResourceKey]error{
+			rw:      reconcile.Rejected(errors.New(refusal)),
+			pool:    reconcile.Permanent(errors.New("delete storage pool: no cascade")),
+			refused: reconcile.Rejected(errors.New("create endpoint: bad memory quantity")),
+		},
+	}
+
+	byID := map[string]api.ResourceStatus{}
+	for _, r := range inventory(res) {
+		byID[r.ID] = r
+	}
+
+	if got := byID["endpoint/p/c/main/rw"]; got.State != "rejected" || got.Error != refusal {
+		t.Errorf("rw row = %+v, want state=rejected carrying the controller's reason", got)
+	}
+	if got := byID["storage-pool/p"]; got.State != "drift" {
+		t.Errorf("pool row = %+v, want state=drift — this one really has no verb", got)
+	}
+	if got := byID["endpoint/p/c/main/ro"]; got.State != "rejected" || got.Error == "" {
+		t.Errorf("synthetic row = %+v, want state=rejected with a reason", got)
 	}
 }

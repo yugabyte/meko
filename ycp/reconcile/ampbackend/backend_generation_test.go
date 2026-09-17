@@ -42,8 +42,10 @@ type genServer struct {
 	// server 404 the task, i.e. "the controller no longer knows it".
 	taskStatus string
 	taskError  string
-	// mutateStatus overrides the status code the two mutating calls return.
+	// mutateStatus overrides the status code the two mutating calls return;
+	// mutateError is the error message sent with a non-2xx.
 	mutateStatus int
+	mutateError  string
 	// endpointConnectivity is spliced into the endpoint row as the raw JSON value
 	// of its `connectivity` property. Empty renders no property at all, i.e. an
 	// endpoint from before connectivity was configurable.
@@ -168,7 +170,16 @@ func (g *genServer) writeMutateResponse(w http.ResponseWriter) {
 			`"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
 		return
 	}
-	io.WriteString(w, `{"error":{"code":"conflict","message":"a task is already in progress"}}`)
+	msg, code := g.mutateError, "conflict"
+	if g.mutateStatus == http.StatusBadRequest {
+		code = "invalid_argument"
+	}
+	if msg == "" {
+		msg = "a task is already in progress"
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{"code": code, "message": msg},
+	})
 }
 
 // writeSettingsResponse answers a settings PATCH. Unlike the mutating calls it is
@@ -1087,5 +1098,138 @@ func TestUpdateEndpointDoesNotStampOverARunningTask(t *testing.T) {
 	}
 	if len(g.epPatches) != 0 {
 		t.Errorf("endpoint settings calls = %d, want 0", len(g.epPatches))
+	}
+}
+
+// The controller refusing a declaration is not the same thing as a resource that
+// cannot be changed, and reporting both as "drift" is CLOUDGA-36992: a console
+// resize to 1 vCPU came back as "this resource type cannot be changed in place",
+// which is true of a storage pool and false of an endpoint — and it replaced the
+// controller's message saying exactly what memory to declare instead.
+//
+// The refusal here is the real one: resize fills an omitted dimension from the
+// endpoint's stored row rather than from the new cpu, so naming cpu alone lands
+// under the memory-per-vCPU floor.
+func TestControllerRejectionIsNotReportedAsImmutability(t *testing.T) {
+	const refusal = "resources.memory 4Gi is below the 8 GiB per vCPU this control plane " +
+		"requires: 1 cpu needs at least 8Gi"
+	g := &genServer{mutateStatus: http.StatusBadRequest, mutateError: refusal}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 1,
+		Spec: json.RawMessage(`{"role":"read_write","resources":{"cpu":"1"}}`),
+	})
+	if got := reconcile.PermanentReasonOf(err); got != reconcile.ReasonRejected {
+		t.Fatalf("Update = %v (reason %v), want ReasonRejected", err, got)
+	}
+	if got := reconcile.PermanentReasonOf(err).State(); got != "rejected" {
+		t.Errorf("reported state = %q, want %q", got, "rejected")
+	}
+	// The whole point: the operator is told what to declare instead.
+	if !strings.Contains(err.Error(), refusal) {
+		t.Errorf("error = %q, does not carry the controller's reason", err)
+	}
+	// Nothing landed, so nothing may claim the generation.
+	if len(g.resizes) != 1 {
+		t.Fatalf("resizes = %d, want the one refused call", len(g.resizes))
+	}
+	if gen := g.resizes[0].YcpGeneration; gen == nil || *gen != 1 {
+		t.Errorf("resize carried generation %v, want 1 — the drift is the controller's, not the spec's", gen)
+	}
+}
+
+// A kind with no update verb at all still reports the immutability verdict, which
+// is the case the console's "cannot be changed in place" copy is written for.
+func TestUnsupportedVerbStaysImmutabilityDrift(t *testing.T) {
+	g := &genServer{}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindCluster, Name: "pool-a/recproj", Generation: 1,
+		Spec: json.RawMessage(`{"pg_version":18}`),
+	})
+	if got := reconcile.PermanentReasonOf(err); got != reconcile.ReasonUnsupported {
+		t.Fatalf("Update = %v (reason %v), want ReasonUnsupported", err, got)
+	}
+	if got := reconcile.PermanentReasonOf(err).State(); got != "drift" {
+		t.Errorf("reported state = %q, want %q", got, "drift")
+	}
+}
+
+// A spec that mixes the two — a field no verb carries AND a call the controller
+// refuses — reports the refusal, because that is the half the operator can act on
+// and "some field is immutable" would bury it.
+//
+// It also pins the resize's own error down. That error used to be discarded
+// whenever the spec had any other drift, so a refused resize left no trace at all
+// and the row named only the immutable field.
+func TestRejectionOutranksUnsupportedDrift(t *testing.T) {
+	const refusal = "resources.memory 4Gi is below the 8 GiB per vCPU this control plane requires"
+	g := &genServer{mutateStatus: http.StatusBadRequest, mutateError: refusal}
+	b := g.start(t)
+
+	// role is create-time in the controller, so a declared read_only on a
+	// read_write endpoint is drift no verb here can fix.
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 1,
+		Spec: json.RawMessage(`{"role":"read_only","resources":{"cpu":"1"}}`),
+	})
+	if got := reconcile.PermanentReasonOf(err); got != reconcile.ReasonRejected {
+		t.Fatalf("Update = %v (reason %v), want ReasonRejected to outrank the role drift", err, got)
+	}
+	if !strings.Contains(err.Error(), "role") {
+		t.Errorf("error = %q, dropped the unapplied field", err)
+	}
+	if !strings.Contains(err.Error(), refusal) {
+		t.Errorf("error = %q, dropped the resize's own refusal", err)
+	}
+}
+
+// A drifted spec claims generation 0, so the echo never advances, the engine's
+// permanent mark never expires, and this update is never issued again — priorTask
+// does not run a second time and the task applyUpdate recorded is never read back.
+// Naming the task in the row is therefore its only trace; without it a resize that
+// WAS issued is indistinguishable from one that never went out, which is the
+// question CLOUDGA-36992 was filed to answer.
+func TestDriftedUpdateNamesTheTaskItPlanned(t *testing.T) {
+	g := &genServer{} // 202 + a task, the ordinary resize path
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 1,
+		Spec: json.RawMessage(`{"role":"read_only","resources":{"cpu":"1"}}`),
+	})
+	if got := reconcile.PermanentReasonOf(err); got != reconcile.ReasonUnsupported {
+		t.Fatalf("Update = %v (reason %v), want the role drift's own reason", err, got)
+	}
+	if len(g.resizes) != 1 {
+		t.Fatalf("resizes = %d, want the resize issued alongside the drift", len(g.resizes))
+	}
+	if !strings.Contains(err.Error(), genTaskID) {
+		t.Errorf("error = %q, does not name the task it planned", err)
+	}
+	if !strings.Contains(err.Error(), "role") {
+		t.Errorf("error = %q, dropped the unapplied field", err)
+	}
+}
+
+// A spec that does not parse can never succeed on retry, so backing off on it
+// leaves the endpoint DEGRADED with nothing saying the declaration is malformed.
+// It reports as `rejected`, like every other declaration the agent refuses before
+// sending it.
+func TestAMalformedSpecIsRejectedNotRetried(t *testing.T) {
+	g := &genServer{}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 1,
+		Spec: json.RawMessage(`{"resources":`),
+	})
+	if got := reconcile.PermanentReasonOf(err); got != reconcile.ReasonRejected {
+		t.Fatalf("Update = %v (reason %v), want ReasonRejected", err, got)
+	}
+	if len(g.resizes) != 0 {
+		t.Errorf("a spec that does not decode reached the controller: %+v", g.resizes)
 	}
 }

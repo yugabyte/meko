@@ -91,27 +91,97 @@ type Backend interface {
 	Parent(r api.DesiredResource) (ResourceKey, bool)
 }
 
+// PermanentReason says WHY an error is permanent. The engine treats all three
+// alike — no retry, no DEGRADED — but they ask different things of whoever reads
+// the resource row, so they must not arrive as one word.
+//
+// Collapsing them is CLOUDGA-36992: the controller refused a resize whose spec
+// named cpu without the memory that cpu needs, and the console answered "cannot be
+// changed in place" — true of a storage pool, false of an endpoint, and it replaced
+// the message naming what to declare.
+type PermanentReason int
+
+const (
+	// ReasonUnsupported: no verb exists for this resource as declared — a kind
+	// with no update/delete path, or a field no verb carries. Nothing the operator
+	// writes makes it work; the resource is what it is.
+	ReasonUnsupported PermanentReason = iota
+	// ReasonRejected: this declaration cannot be applied as written, though a
+	// different one could — the remote refused these bytes (a 400), or the backend
+	// did (a name it will not take, a spec that does not parse, a field that has to
+	// be declared in a later write). Rewriting is the fix, and the error says how.
+	ReasonRejected
+	// ReasonBlocked: the agent is not permitted to do this — credentials, a scope
+	// it lacks (401/403), or a quota no rewrite gets past (the free-tier cap, whose
+	// counter is lifetime). Neither the spec nor the resource is wrong.
+	ReasonBlocked
+)
+
+// State is the value the agent reports for a resource held up for this reason.
+func (r PermanentReason) State() string {
+	switch r {
+	case ReasonRejected:
+		return "rejected"
+	case ReasonBlocked:
+		return "blocked"
+	default:
+		return "drift"
+	}
+}
+
 // PermanentError wraps a backend error the engine must not retry: the verb
 // cannot succeed for this resource as declared — a kind with no delete path
 // (storage pools) or no update path (pools and clusters), or a spec the
-// controller rejects outright (400). The engine surfaces it as drift on the
-// resource and stops re-issuing the call, instead of flapping the environment to
-// DEGRADED on an endless backoff of a call that will always fail. "As declared"
-// is the limit of it: a rewritten spec is a new question, so the next generation
-// retires the mark and the verb is asked again. Contrast a transient failure
-// (task rejected, controller down), which is retried on backoff.
-type PermanentError struct{ Err error }
+// controller rejects outright (400). The engine stops re-issuing the call instead
+// of flapping the environment to DEGRADED on an endless backoff of a call that
+// will always fail. "As declared" is the limit of it: a rewritten spec is a new
+// question, so the next generation retires the mark and the verb is asked again.
+// Contrast a transient failure (task rejected, controller down), which is retried
+// on backoff.
+//
+// Reason decides which state the resource is reported in; see PermanentReason.
+type PermanentError struct {
+	Err    error
+	Reason PermanentReason
+}
 
 func (e *PermanentError) Error() string { return e.Err.Error() }
 func (e *PermanentError) Unwrap() error { return e.Err }
 
-// Permanent marks err as non-retryable. Backends return it for a verb a kind
-// structurally does not support, or a spec the remote rejects as invalid.
-func Permanent(err error) error { return &PermanentError{Err: err} }
+// Permanent marks err as non-retryable for want of a verb: the kind or the field
+// structurally has no update/delete path. A backend whose REMOTE refused the spec
+// wants Rejected, and one refused by credentials wants Blocked — the engine does
+// the same thing with all three, but the resource row does not.
+func Permanent(err error) error { return PermanentAs(ReasonUnsupported, err) }
+
+// Rejected marks err as non-retryable because the remote refused the declaration
+// as written. Re-declaring is what fixes it.
+func Rejected(err error) error { return PermanentAs(ReasonRejected, err) }
+
+// Blocked marks err as non-retryable because the agent is not permitted to make
+// the call — credentials, scope, or an entitlement no rewrite of the spec clears.
+func Blocked(err error) error { return PermanentAs(ReasonBlocked, err) }
+
+// PermanentAs marks err non-retryable for a reason picked at runtime — for a
+// caller that accumulates several failures and reports the reason they add up to.
+func PermanentAs(reason PermanentReason, err error) error {
+	return &PermanentError{Err: err, Reason: reason}
+}
 
 func isPermanent(err error) bool {
 	var p *PermanentError
 	return errors.As(err, &p)
+}
+
+// PermanentReasonOf is why err is permanent. An error that is not permanent at
+// all reports ReasonUnsupported: there is nothing to say about it here, and a
+// caller folding errors together wants the zero value.
+func PermanentReasonOf(err error) PermanentReason {
+	var p *PermanentError
+	if !errors.As(err, &p) {
+		return ReasonUnsupported
+	}
+	return p.Reason
 }
 
 // PendingError wraps a backend outcome that is neither success nor failure: the

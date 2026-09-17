@@ -231,19 +231,25 @@ func TestDeleteUsesTheListedIdsAndTreats404AsSuccess(t *testing.T) {
 	}
 }
 
-// Rejections that can never succeed belong on the resource as drift, not inside a
-// backoff. 402 is the counter-intuitive one: the free-tier gate counts lifetime
-// creations and never refunds them, so withdrawing a datapack frees nothing.
+// Rejections that can never succeed belong on the resource, not inside a backoff.
+// 402 is the counter-intuitive one: the free-tier gate counts lifetime creations
+// and never refunds them, so withdrawing a datapack frees nothing.
+//
+// Which reason each carries matters as much as that they are permanent: the state
+// is what the console picks a sentence from, and telling someone to re-declare a
+// spec that a revoked token refused wastes their time (CLOUDGA-36992).
 func TestUnsatisfiableRejectionsArePermanent(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		code int
+		name  string
+		code  int
+		state string
 	}{
-		{"validation", http.StatusBadRequest},
-		{"conflict", http.StatusConflict},
-		{"free-tier cap", http.StatusPaymentRequired},
-		{"unauthorized", http.StatusUnauthorized},
-		{"forbidden", http.StatusForbidden},
+		{"validation", http.StatusBadRequest, "rejected"},
+		{"conflict", http.StatusConflict, "rejected"},
+		// blocked, not rejected: the counter is lifetime, so no rewrite clears it.
+		{"free-tier cap", http.StatusPaymentRequired, "blocked"},
+		{"unauthorized", http.StatusUnauthorized, "blocked"},
+		{"forbidden", http.StatusForbidden, "blocked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +260,34 @@ func TestUnsatisfiableRejectionsArePermanent(t *testing.T) {
 			if !isPermanent(err) {
 				t.Fatalf("Create = %v, want permanent", err)
 			}
+			if got := reconcile.PermanentReasonOf(err).State(); got != tc.state {
+				t.Errorf("state = %q, want %q", got, tc.state)
+			}
 		})
+	}
+}
+
+// A name the backend will not take and a spec that does not parse are the
+// operator's to fix by re-declaring, so they report as rejected — unlike a kind
+// with no verb, which reports as drift and no rewrite can help.
+func TestPermanentReasonsAreDistinguished(t *testing.T) {
+	b := listing(t, agentYCP, packSmoke, nil)
+
+	badName := b.Create(t.Context(), api.DesiredResource{Kind: KindDatapack, Name: "no-slash"})
+	if got := reconcile.PermanentReasonOf(badName).State(); got != "rejected" {
+		t.Errorf("bad name = %v (state %q), want rejected", badName, got)
+	}
+
+	badSpec := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindDatapack, Name: "ycp/smoke", Spec: []byte(`{"description":`),
+	})
+	if got := reconcile.PermanentReasonOf(badSpec).State(); got != "rejected" {
+		t.Errorf("bad spec = %v (state %q), want rejected", badSpec, got)
+	}
+
+	unknown := b.Update(t.Context(), api.DesiredResource{Kind: "nope", Name: "x"})
+	if got := reconcile.PermanentReasonOf(unknown).State(); got != "drift" {
+		t.Errorf("unknown kind = %v (state %q), want drift", unknown, got)
 	}
 }
 
