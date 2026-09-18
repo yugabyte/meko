@@ -1,4 +1,4 @@
-import { useLocation } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { ROUTES } from "./paths";
 import Sidebar from "@/features/layout/Sidebar";
 import { KbImportStatusBanner } from "@/features/layout/KbImportStatusBanner";
@@ -15,6 +15,7 @@ import MarketplaceCompletePage from "@/features/billing/pages/MarketplaceComplet
 import LabsSection from "@/features/labs/pages/LabsSection";
 import LabRunnerPage from "@/features/labs/pages/LabRunnerPage";
 import { parseLabRoute } from "@/features/labs/lib/parseLabRoute";
+import { isLabsEnabled, isLabsPath } from "@/lib/labs";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -23,6 +24,15 @@ type Props = {
 export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const { pathname } = useLocation();
   const isLabRunner = parseLabRoute(pathname)?.isRunner ?? false;
+
+  // MEKO_ENABLE_LABS off: bounce every /labs route, before the runner's
+  // early return below can take over the viewport. A redirect rather than a
+  // silent fallthrough, for the reason the admin comment below gives -- a
+  // bookmark or a shared link should land somewhere real, not render
+  // Datapacks under a /labs URL. Sidebar hides the entry on the same flag.
+  if (isLabsPath(pathname) && !isLabsEnabled()) {
+    return <Navigate to={ROUTES.datapacks} replace />;
+  }
 
   // The lab runner takes over the whole viewport -- no Sidebar, no shared
   // shell -- so users get a focused, distraction-free lab experience with
@@ -63,7 +73,7 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isUsage = pathname === ROUTES.usage || pathname.startsWith(`${ROUTES.usage}/`);
 
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
-  const isLabsRoute = pathname === ROUTES.labs || pathname.startsWith(`${ROUTES.labs}/`);
+  const isLabsRoute = isLabsPath(pathname);
   const isLabsListOrDetail = isLabsRoute && !isLabRunner;
   // Admin console (flag-gated). Conditionally mounted like WorkbenchLM so its
   // /admin/* data fetches never tick while the user is elsewhere.

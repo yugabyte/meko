@@ -211,6 +211,10 @@ app.use((req, res, next) => {
     // tool behind it, so one env var turns the feature off end to end.
     // Default off.
     "MEKO_ENABLE_CONVERSATION_SEARCH",
+    // Gates Discovery Labs: the left-nav entry and every /labs route. Runtime
+    // flag so it can be turned on per environment without a rebuild. Off by
+    // default, so a deployment that has not set it gets no Labs.
+    "MEKO_ENABLE_LABS",
     // Gates the in-app Admin console (Data Plane / Metrics / Executive / Users /
     // AMP) and its left-nav tab. Off by default. When on, the server also
     // injects the admin secret on /api/v1/admin/* (see adminProxyEnabled above),
