@@ -73,7 +73,20 @@ traefik:
     # -- Two by default so a rollout or a node loss does not take the shard's
     # endpoints with it. This is the blast radius consolidation buys us, and the
     # floor it should not go below.
+    #
+    # Two is also what keeps a replica off its CPU limit: measured at 16
+    # connections, the pair serves ~19k tps between them, while a single replica
+    # carrying the same load saturates and its p99 goes to ~13ms. A rolling
+    # update produces exactly that single-replica case, which is what
+    # maxUnavailable: 0 below is for.
     replicas: 2
+  # -- How long a draining proxy keeps established connections before cutting
+  # them, and (plus a margin) the pod's terminationGracePeriodSeconds. Traefik's
+  # own default is 10s, which is sized for an HTTP request; a Postgres session
+  # is not. Nothing here can avoid cutting a session eventually — this buys
+  # clients a window to finish and reconnect, at the cost of making a rolling
+  # update take at least this long per replica.
+  drainTimeoutSeconds: 300
   logLevel: INFO
   # -- Request == limit, so the proxy is Guaranteed-QoS and cannot be evicted
   # under node pressure while it is carrying customer connections.

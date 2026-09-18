@@ -19,6 +19,46 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --entryPoints.pg-20002.address=:20002
 
+  # The Go runtime reads the NODE's CPU count, not the cgroup quota, so without
+  # this a 1-CPU container on a 4-core node runs 4 Ps against one CPU of quota
+  # and stalls them together at each period boundary. Measured on a saturated
+  # replica: p99 13-35ms without, ~2.4ms with.
+  - it: sizes the Go scheduler from the CPU limit, not the node
+    set:
+      cloud: aws
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: GOMAXPROCS
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.resourceFieldRef.resource
+          value: limits.cpu
+
+  # A Postgres session outlives an HTTP request by hours, and Traefik's default
+  # graceTimeOut is 10s. The pod's own grace period has to exceed the proxy's or
+  # the kubelet kills it mid-drain, which is the thing the drain exists to avoid.
+  - it: drains for longer than an HTTP request, and outlives the proxy's own window
+    set:
+      cloud: aws
+      traefik.drainTimeoutSeconds: 300
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.pg-20000.transport.lifeCycle.graceTimeOut=300s
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 310
+
+  # A rollout that drops the shard to one replica puts that replica on its CPU
+  # limit; surging keeps capacity whole.
+  - it: never rolls down to a single replica
+    set:
+      cloud: aws
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
   # Guaranteed QoS: equal request and limit is what stops the kubelet evicting a
   # proxy that is carrying customer connections under node pressure. The CPU
   # figure itself is sized in values.yaml against a measurement; what is pinned

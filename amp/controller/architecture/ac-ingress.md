@@ -231,7 +231,20 @@ is published under, and `sslmode=verify-full` against that name therefore fails.
 an internet-facing endpoint that cannot be verified by name is a real limitation
 rather than a detail; `verify-full` needs a certificate per endpoint name.
 
-Also outstanding: the capacity reconciler's watermark and ceiling, and
-per-listener source-IP filtering. `allowed_cidrs` is refused on the `ingress_*`
+Per-listener source-IP filtering, and it needs more than the middleware. The
+shard's Service is `externalTrafficPolicy: Cluster`, so kube-proxy SNATs and the
+proxy sees a node address rather than the client — measured on GKE by giving a
+route an `ipAllowList` of the client's own range and of `10.0.0.0/8` in turn:
+under `Cluster` only the `10.0.0.0/8` rule admitted the connection, under `Local`
+only the client's own did. So an allowlist written against customer addresses
+would match the wrong thing until the Service is `Local`. PROXY protocol is not
+the alternative it is on AWS: GCP's internal passthrough load balancer does not
+offer it, which is why `proxyProtocol` in the shard chart is an AWS-shaped knob.
+`Local` costs no measurable throughput (16.3k vs 16.9k tps at 16 connections,
+inside this cluster's run-to-run spread) but restricts the load balancer to nodes
+that host a replica, so it wants checking against replica placement before it is
+turned on.
+
+Also outstanding: the capacity reconciler's watermark and ceiling. `allowed_cidrs` is refused on the `ingress_*`
 modes until that last one lands; `nlb_*` remains the mode for an endpoint that
 needs an allowlist today.

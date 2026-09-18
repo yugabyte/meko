@@ -1,3 +1,25 @@
+{{- /*
+A shard's Service declares its whole port range, and past some threshold GCP
+gives it an ALL-PORTS forwarding rule instead of an explicit-port one. Measured
+on GKE 1.36, us-west1: the 50-port shard rule has allPorts=true, while a
+single-port endpoint Service alongside it lists its one port. The exact
+threshold is not established here — only that 50 crosses it and 1 does not.
+
+The consequence is that the shard's address also reaches every NodePort on its
+nodes. From a VPC client, the shard VIP answers the controller's /healthz on
+that Service's NodePort; the single-port LB drops the same request.
+
+For an internal shard that grants nothing new: the same NodePort answers
+directly on the node's own IP to the same audience, so this is a second route to
+a surface already open, and allowedCidrs stays optional. For an external one the
+audience IS new — node IPs are not public, an internet-facing all-ports rule
+makes those ports reachable, and the k8s firewall rule for THIS Service (scoped
+to the shard's range) is not what would be gating them. Hence the CIDRs are
+required there and nowhere else.
+*/}}
+{{- if and (eq .Values.cloud "gcp") (eq .Values.family "external") (not .Values.allowedCidrs) }}
+{{- fail "cloud=gcp with family=external needs allowedCidrs: GCP allows 5 ports per forwarding rule, so a shard's 50-port Service becomes an ALL-PORTS rule and this internet-facing address would publish every NodePort on its nodes. Set allowedCidrs, or use family=internal" }}
+{{- end }}
 {{- $ports := include "yb-amp-ingress.ports" . | fromJsonArray }}
 {{- $internal := eq .Values.family "internal" }}
 {{- /*

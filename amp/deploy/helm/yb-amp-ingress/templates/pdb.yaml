@@ -1,0 +1,18 @@
+{{- /*
+A shard's replicas carry live Postgres sessions, and a single replica under the
+shard's own load saturates its CPU limit (see traefik.resources in values.yaml).
+Without this a drain or an autoscaler consolidation may evict both, or leave one
+serving everything. minAvailable rather than maxUnavailable so it still holds if
+the replica count is raised.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "yb-amp-ingress.fullname" . }}
+  labels:
+    {{- include "yb-amp-ingress.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ sub (int .Values.traefik.deployment.replicas) 1 | max 1 }}
+  selector:
+    matchLabels:
+      {{- include "yb-amp-ingress.selectorLabels" . | nindent 6 }}
