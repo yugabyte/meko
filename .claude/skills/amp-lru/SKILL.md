@@ -9,6 +9,9 @@ An LRU is a standing environment on amp that never gets torn down, runs a real
 application workload 24x7, and gets an hourly verdict on the report portal. Every
 LRU has the same shape so the portal, the sync job and a person on call can treat
 them alike. The authority on the shape is `amp/deploy/lru/README.md`; read it first.
+`amp/docs/lru-environment.md` is the companion: which cluster and namespaces, which
+four LRUs exist, how a verdict reaches the portal, and what has already gone wrong.
+Read it before touching a running LRU, and when picking this up without context.
 
 ## Where things are
 
@@ -34,7 +37,7 @@ them alike. The authority on the shape is `amp/deploy/lru/README.md`; read it fi
    name metrics ports `metrics` or `metrics-<x>`. Nothing in `monitoring/` is
    edited. Series get `job` (pod label `app`), `lru`, `component` (port name).
 5. **No environment ids in tracked files.** Resolve an endpoint id from the
-   controller by pool name (`amp_endpoint_info{pool="lru-<name>"}` in a
+   controller by pool name (`amp_endpoint_info{default="true",pool="lru-<name>"}` in a
    dashboard, the controller API in a checker). Never sed one into a tracked
    manifest: it goes stale and leaves the checkout dirty.
 6. **A checker.** One pod, `checker/check.py`, evaluating the LRU's rules every
@@ -50,7 +53,9 @@ them alike. The authority on the shape is `amp/deploy/lru/README.md`; read it fi
    `LRU: <name>`. Every Temporal/app/checker query scoped with `lru="$lru"` where
    `$lru` is a hidden constant variable. Endpoint queries filter on
    `endpoint="$endpoint"`, a hidden variable resolved from
-   `amp_endpoint_info{pool="lru-<name>"}`.
+   `amp_endpoint_info{default="true",pool="lru-<name>"}`. The `default` filter is
+   load-bearing: a fork of the branch puts a second endpoint in the same pool,
+   and without it the hidden variable can latch onto the fork.
 8. **`up.sh`, `README.md`, `FINDINGS.md`.** `up.sh` idempotent and driven by env
    vars with defaults (controller, namespace, pool, sizes, kube context). README
    says what runs and how to operate it. FINDINGS is the dated log of what the

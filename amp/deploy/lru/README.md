@@ -104,6 +104,21 @@ throughput reads a fifth of yesterday's because its concurrency was deliberately
 cut - so FAIL stays reserved for the workload not doing its job, and the portal
 badge keeps meaning that.
 
+The cost of that choice: an LRU can sit at WARN for days and still report `ok`
+every hour. `lru_check_status < 1` is the query that shows what the badge hides.
+
+## Liveness is a window, not a sample
+
+Every `*_up` rule goes through `liveness(selector, grace)`, which asks whether the
+target answered **any** scrape in the window: 5m for a workload driver, 3m for the
+endpoint. They are not single-sample reads, because a single missed scrape is not
+an outage and drivers restart on their own schedule. small_temporal's omes rebuilds
+its worker between two-hour scenario blocks and leaves its metrics ports closed for
+about 32 seconds, which read as 13 FAILs in 48 hours before this existed.
+
+The status encoding, which the sync job and any ad-hoc query depend on:
+**1 OK, 0.5 WARN, 0 FAIL, -1 ERR**, and `lru_overall_status` is the minimum.
+
 ## The shared monitoring base
 
 `monitoring/` is applied once and rarely changes:
@@ -156,3 +171,12 @@ manifests, write `checker/check.py` rules for it, write `dashboard.json` with
   reap them as cleanup.
 - One LRU is one directory. Shared changes go in `monitoring/` and get applied to
   every LRU at once, so keep them rare.
+- **Merging does not deploy.** Nothing watches git. Re-apply the kustomization and
+  roll the checker after a merge, or the cluster and `main` drift apart quietly.
+- Record what a workload showed in that LRU's `FINDINGS.md`, including the wrong
+  turns. One of the checker's own rules turned out to be measuring a constant and
+  another to be comparing against a window shorter than the decay it was for, and
+  the entries saying so are what stop them coming back.
+
+What is deployed where, and what has already gone wrong across all four:
+[`amp/docs/lru-environment.md`](../../docs/lru-environment.md).

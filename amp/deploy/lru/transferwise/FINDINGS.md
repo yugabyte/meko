@@ -3,6 +3,46 @@
 What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
+
+## 2026-09-17 - latency is drifting up with nothing else moving
+
+`latency_vs_7d_baseline` has climbed steadily since the rule was added: 1.87 on
+14 Sep, 2.09 on 15 Sep, 2.20 on 16 Sep, 2.28 on 17 Sep. Write workflow latency
+went 25.1 ms to 27.7 ms over the last of those days, and throughput reads 0.92
+of yesterday's.
+
+No step change, and nothing else moved. Reads are 1.8 ms, the outbox holds
+around 27k rows so retention is keeping up, pageserver GC drain lag has been 0
+since the 15 Sep drain (see below), and no absolute floor is near its threshold.
+Dataset is about 4.3x the endpoint's file cache and still growing.
+
+Unexplained. It is the exact shape the 7d baseline rule was added for after
+`latency_vs_24h_ago` read 1.21 through a four-day decay, so the rule is doing its
+job; what it is pointing at is not yet known. Worth separating growth from the
+15 Sep build, which are confounded so far.
+
+## 2026-09-14 - pageserver GC lag is a long duty cycle, not a stall
+
+`pageserver_gc_drain_lag_bytes` on transferwise, the only endpoint that has ever
+shown it, read off a 6-day range query at 10-minute steps:
+
+    13 Sep 13:27   rises to 0.8 GB, drained ten minutes later
+    14 Sep 11:27   rises, peaks at 20.3 GB
+    15 Sep 05:47   back to ~0, so 18h20m from rise to drained
+    since          flat 0
+
+I first reported this as GC having stopped draining. That was wrong: it drained
+itself, `gc_applied_cutoff_lsn` never plateaued, and the shape is a slow duty
+cycle on the largest and busiest endpoint. A correction went to the thread.
+
+Two things it leaves open. The rule fails above 10 GB, chosen before any cycle
+had been observed, and the one full cycle peaked at twice that, so the threshold
+is still unmeasured. And nothing has cycled since 15 Sep 05:47, against a prior
+cadence of roughly a day. That is nearly three days quiet. The 15 Sep endpoint
+roll landed at ~22:30, *after* that drain finished, so the roll is not evidence
+for the quiet period and neither is retention reaching steady state; they are
+confounded and no cycle has come along to separate them.
+
 ## 2026-09-14 - two of our own rules were wrong
 
 Both found while assessing the LRUs after a quiet weekend, both ours rather than

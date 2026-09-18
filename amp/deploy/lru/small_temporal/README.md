@@ -92,8 +92,10 @@ would then reset the alias and take the whole LRU down. Re-run `up.sh` to repoin
 No endpoint id is stored in a tracked file: the checker asks the controller which endpoint
 belongs to pool `lru-temporal` and re-resolves every five minutes, so recreating
 the endpoint needs no redeploy. The dashboard resolves it the same way, from
-`amp_endpoint_info{pool="lru-temporal"}`; if you run `up.sh` with a different
-`POOL`, change that query in `dashboard.json` to match.
+`amp_endpoint_info{default="true",pool="lru-temporal"}`; if you run `up.sh` with a
+different `POOL`, change that query in `dashboard.json` to match. The `default`
+filter is what keeps the branch probe's fork endpoint, which lives in this same
+pool, out of the variable's options.
 
 Workload knobs are the `small-temporal-omes-run` ConfigMap: `OMES_SCENARIO`,
 `OMES_MAX_CONCURRENT`, `OMES_MAX_ITERATIONS_PER_SECOND`, `OMES_CYCLE_DURATION`.

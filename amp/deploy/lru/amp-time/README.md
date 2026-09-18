@@ -90,3 +90,20 @@ ALTER DATABASE transferwise_lru SET search_path = ledger_bench, public;
 
 `BEGIN` and `COMMIT` appear in the statement list and cannot be inspected. That
 is correct - they have no plan.
+
+## Memory
+
+Each container is capped at 2Gi. It was 1Gi until 17 Sep, when the four of them
+were OOMKilled 8 times in a day (newblack 5, transferwise 2, solidgate 1). The UIs
+came back on their own each time, so the only visible symptom was a restart count.
+
+Whether that is a leak is still open. Nothing in the cluster scraped per-container
+memory at the time, so there was only `kubectl top`'s point-in-time reading; a
+cAdvisor job in `../monitoring/prometheus/prometheus.yml` now collects it. Freshly
+restarted containers sit at 28-31 MiB against 250-517 MiB before the restart, and
+the stores grow until the 7-day retention cutoff first bites, which for the 12 Sep
+deploy is around 19 Sep. A working set tracking a still-filling store explains it
+without a leak. If RSS keeps climbing after the stores plateau, it does not.
+
+The store is SQLite per LRU on the shared PVC, `--interval 10` seconds and
+`--retention-hours 168`, so disk and working set both scale with slice count.

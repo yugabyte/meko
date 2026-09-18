@@ -3,6 +3,24 @@
 What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
+
+## 2026-09-17 — about to cross its file cache, which makes it the clean test
+
+`days_until_file_cache_full` warned for 226 minutes on 17 Sep, the first time this
+LRU has warned on capacity. Logical size is 0.59x the endpoint's file cache and
+growing at roughly 6.8 days to full. Throughput is unchanged, pinned at its 50
+txn/s pace with 6.8 ms average transaction latency.
+
+This matters beyond solidgate. Crossing the file cache is the one thing that moved
+across the 11 Sep transferwise inflection, but it is not sufficient on its own:
+small_temporal has run past its own cache since 12 Sep with no measurable effect,
+at a much lower write rate. What else is required has never been established, and
+the thread cut from 4 threads to 1 was transferwise's response, not a measured
+cause. solidgate is rate-limited by design, so it crosses at a fixed write rate
+and is the cleanest available test of the crossing on its own.
+
+Nothing to do but watch. Do not raise the endpoint size to avoid the crossing.
+
 ## 2026-09-11 — one read grew with the data, and the wire with it
 
 Twenty-two hours in, network out of the endpoint had climbed steadily while
