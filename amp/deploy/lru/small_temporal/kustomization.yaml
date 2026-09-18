@@ -9,11 +9,14 @@ resources:
   - temporal-ui.yaml
   - omes.yaml
   - checker.yaml
+  - branch-probe.yaml
 configMapGenerator:
   - name: small-temporal-checker
     files: [checker/check.py]
   - name: small-temporal-pgstats
     files: [pgstats.py]
+  - name: small-temporal-branch-probe
+    files: [branch-probe/probe.py]
   # The shared Grafana's sidecar picks up any ConfigMap with this label.
   - name: small-temporal-dashboard
     # The sidecar names the file on disk after the ConfigMap key, and every LRU

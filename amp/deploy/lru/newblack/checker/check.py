@@ -79,6 +79,7 @@ def endpoint_info():
         pools = [p for p in pools if p["name"] == AMP_POOL]
     for pool in pools:
         for cl in amp_get(f"/storage-pools/{pool['id']}/clusters?limit=500").get("clusters", []):
+            default = cl["default_branch"]["branch_id"]
             branches = amp_get(
                 f"/storage-pools/{pool['id']}/clusters/{cl['id']}/branches?limit=500"
             ).get("branches") or [cl["default_branch"]]
@@ -87,7 +88,9 @@ def endpoint_info():
                     f"/storage-pools/{pool['id']}/clusters/{cl['id']}/branches/{br['branch_id']}/endpoints"
                 ).get("endpoints", [])
                 for ep in eps:
-                    out.append((ep["id"], pool["name"], cl["name"], br["name"]))
+                    out.append(
+                        (ep["id"], pool["name"], cl["name"], br["name"], br["branch_id"] == default)
+                    )
     return out
 
 
@@ -287,7 +290,9 @@ def info_loop():
             eps = endpoint_info()
             state["endpoints"] = eps
             if AMP_POOL:
-                mine = [ep for ep, pool, _cl, _br in eps if pool == AMP_POOL]
+                # Default branch only, so a fork's endpoint can never be picked
+                # up. Nothing forks this LRU today; small_temporal does.
+                mine = [ep for ep, pool, _cl, _br, default in eps if pool == AMP_POOL and default]
                 state["endpoint_id"] = mine[0] if mine else ""
         except Exception as e:
             print("endpoint info failed:", e, flush=True)
@@ -315,9 +320,9 @@ class H(BaseHTTPRequestHandler):
                 lines.append(f'lru_check_value{{lru="{LRU}",check="{name}"}} {val}')
             statuses.append(st)
         lines.append(f'lru_overall_status{{lru="{LRU}"}} {min(statuses) if statuses else -1}')
-        for ep, pool, cl, br in state["endpoints"]:
+        for ep, pool, cl, br, default in state["endpoints"]:
             lines.append(
-                f'amp_endpoint_info{{endpoint="{ep}",pool="{pool}",cluster="{cl}",branch="{br}",name="{pool}/{cl}"}} 1'
+                f'amp_endpoint_info{{endpoint="{ep}",pool="{pool}",cluster="{cl}",branch="{br}",default="{str(default).lower()}",name="{pool}/{cl}"}} 1'
             )
         lines.append(f'lru_check_last_run_timestamp_seconds{{lru="{LRU}"}} {state["ts"]}')
         body = ("\n".join(lines) + "\n").encode()

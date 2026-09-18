@@ -160,3 +160,64 @@ workload drivers, which restart on their own schedule, 3m for the endpoint.
 The cost: a roll that takes an endpoint down for about a minute no longer FAILs
 `amp_endpoint_up`. `persistence_error_ratio` and `persistence_p99_s` are what
 actually caught the 15 Sep roll, and they still do.
+
+## 2026-09-17 first branch probe: warm reads cost ~1.4x on a depth-1 fork
+
+First cycle of `branch-probe`. Fork took 5.1s, its endpoint 15.0s, teardown 10.1s.
+
+| probe | parent warm | branch warm | ratio | parent cold | branch cold | ratio |
+|---|---|---|---|---|---|---|
+| `executions_point` | 0.163 ms | 0.220 ms | 1.35 | 0.217 ms | 122.8 ms | 566 |
+| `history_node_range` | 0.197 ms | 0.264 ms | 1.34 | 1.47 ms | 17.3 ms | 11.7 |
+| `history_tree_scan` | 0.145 ms | 0.212 ms | 1.46 | 0.957 ms | 7.21 ms | 7.5 |
+| `shards_point` | 0.134 ms | 0.209 ms | 1.56 | 0.149 ms | 4.66 ms | 31.3 |
+
+The cold column is not a fork measurement. The parent has weeks of file cache and
+the fork's endpoint was seconds old, so 566x is mostly cache warmth. Read it as an
+upper bound on what a fresh endpoint costs, not as fork overhead.
+
+These particular cold numbers overstate it further: this cycle sampled its
+predicates on the parent about a minute before reading it, so the parent's cold
+pass was a second touch of pages the probe had just faulted in.
+
+**The warm row above is wrong, and the next entry retracts it.**
+
+The warm column is the real number, and it is consistent: 1.34-1.56x across four
+unrelated access patterns, all at sub-millisecond absolute latency. Same session,
+second execution of the same statement, so both sides are serving from
+`shared_buffers`. The parent is also carrying live Temporal traffic while the fork
+is idle, which biases against the fork being the slower one, so 1.4x is if anything
+conservative.
+
+One cycle. The point of running it daily is to find out whether 1.4x is stable.
+
+## 2026-09-17 retraction: warm reads on a depth-1 fork cost nothing measurable
+
+The 1.34-1.56x warm ratio above does not survive fixing the probe's own
+methodology. Sampling moved to the fork and the parent is now read first, so
+nothing touches the parent before its own pass and the fork gets the length of
+the parent's pass to settle. Same four probes, next cycle:
+
+| probe | warm ratio before | warm ratio after | cold ratio after |
+|---|---|---|---|
+| `executions_point` | 1.35 | 0.99 | 61.0 |
+| `history_node_range` | 1.34 | 0.99 | 13.6 |
+| `history_tree_scan` | 1.46 | 1.00 | 1.12 |
+| `shards_point` | 1.56 | 0.96 | 1.01 |
+
+Warm is 0.96-1.00 across all four, so once the pages are in `shared_buffers` a
+depth-1 fork costs nothing this probe can measure. That matches the depth sweep
+in the branch-depth thread, where warm p50 was flat at 0.007 ms from depth 0 to
+20, and it is the earlier 1.4x that was the outlier. The most likely cause of
+the old number is that the fork's endpoint was seconds old when it was measured
+first; reading the parent first gives it the parent's pass to finish its own
+startup work.
+
+Cold still splits by access path, and the split is informative. The two probes
+that go through an index are 61x and 13.6x; the two that do not are ~1.0. The
+sampler runs on the fork and `TABLESAMPLE SYSTEM` reads heap blocks, so the
+fork's heap is warm for exactly these rows while its index pages are not. What
+is left in the cold column is therefore mostly index page misses on a fresh
+endpoint, which is the read-across-levels path that is not pushed down today.
+
+One cycle each way. The daily run is what decides whether this holds.

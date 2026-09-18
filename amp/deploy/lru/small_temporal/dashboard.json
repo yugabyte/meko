@@ -2375,6 +2375,107 @@
      "legendFormat": "oldest analyze age s"
     }
    ]
+  },
+  {
+   "id": 48,
+   "type": "timeseries",
+   "title": "Branch probe: fork vs parent latency ratio",
+   "description": "Daily depth-1 fork, same statements on both sides. Warm is the fair comparison; cold favours the parent, which has weeks of file cache.",
+   "gridPos": {
+    "x": 0,
+    "y": 168,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (probe) (lru_branch_probe_ratio{lru=\"$lru\",pass=\"warm\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "warm {{probe}}"
+    },
+    {
+     "refId": "B",
+     "expr": "max by (probe) (lru_branch_probe_ratio{lru=\"$lru\",pass=\"cold\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "cold {{probe}}"
+    }
+   ]
+  },
+  {
+   "id": 49,
+   "type": "timeseries",
+   "title": "Branch probe: liveness",
+   "description": "up 0 or a rising age means a cycle failed, which can leave a fork endpoint behind.",
+   "gridPos": {
+    "x": 12,
+    "y": 168,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "lru-prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(lru_branch_probe_up{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "up"
+    },
+    {
+     "refId": "B",
+     "expr": "max(lru_branch_probe_age_seconds{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "age since last good cycle"
+    },
+    {
+     "refId": "C",
+     "expr": "max by (phase) (lru_branch_probe_setup_seconds{lru=\"$lru\"})",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "lru-prom"
+     },
+     "legendFormat": "{{phase}}"
+    }
+   ]
   }
  ]
 }

@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small-temporal-branch-probe
+  namespace: amp-lru
+  labels:
+    app: branch-probe
+    lru: small_temporal
+spec:
+  replicas: 1
+  # Two probes overlapping would have the new pod's reap_orphans drop the old
+  # pod's live fork mid-measurement.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: branch-probe
+      lru: small_temporal
+  template:
+    metadata:
+      labels:
+        app: branch-probe
+        lru: small_temporal
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: probe
+          image: python:3.12-alpine
+          command: ["/bin/sh", "-c", "apk add --no-cache postgresql-client >/dev/null && exec python3 -u /app/probe.py"]
+          env:
+            - name: LRU_NAME
+              value: small_temporal
+            - name: AMP_POOL
+              value: lru-temporal
+            - name: AMP_CLUSTER
+              value: temporal
+            - name: PGHOST
+              value: small-temporal-endpoint
+            - name: PGPORT
+              value: "55433"
+            - name: PGUSER
+              value: cloud_admin
+            - name: PGPASSWORD
+              value: cloud_admin
+            - name: PGDATABASE
+              value: temporal_lru
+            - name: PROBE_INTERVAL
+              value: "86400"
+            - name: PROBE_KEYS
+              value: "25"
+            - name: EP_CPU
+              value: "2"
+            - name: EP_MEM
+              value: 16Gi
+          ports:
+            - name: metrics
+              containerPort: 9097
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: app
+          configMap:
+            name: small-temporal-branch-probe

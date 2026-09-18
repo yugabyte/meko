@@ -33,7 +33,7 @@
      "type": "prometheus",
      "uid": "lru-prom"
     },
-    "query": "query_result(amp_endpoint_info{pool=\"lru-transferwise\"})",
+    "query": "query_result(amp_endpoint_info{default=\"true\",pool=\"lru-transferwise\"})",
     "refresh": 2,
     "sort": 1,
     "regex": "/endpoint=\"(?<value>[^\"]+)\"/",

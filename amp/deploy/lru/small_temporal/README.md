@@ -19,6 +19,7 @@ Namespace `amp-lru`, every object labelled `lru: small_temporal`.
 | `small-temporal-ui` (Deployment) | `temporalio/ui`, tailnet `http://small-temporal.tail5955.ts.net`. |
 | `small-temporal-omes` (Deployment) | `golang:1.26`; clones and builds Omes at pod start, then loops `run-scenario-with-worker`. Metrics on `:9090` (load generator) and `:9091` (worker process). |
 | `small-temporal-checker` (Deployment) | `checker/check.py`: 12 health rules a minute, exported with `lru="small_temporal"`. |
+| `small-temporal-branch-probe` (Deployment) | `branch-probe/probe.py`: once a day, forks `main`, puts an endpoint on the fork, runs the same queries on both sides, exports the comparison and tears the fork down. |
 | `small-temporal-endpoint` (ExternalName) | points at this LRU's `yb-ep-<id>` Service in `amp-dev`; set by `up.sh`. |
 | `small-temporal-dynamicconfig` (ConfigMap) | Temporal dynamic config the image no longer ships. Without the Nexus callback template and allowed-address rule every Nexus operation in `throughput_stress` fails. |
 | `small-temporal-dashboard` (ConfigMap) | key `small-temporal-dashboard.json` (the sidecar names the file on disk after the key, and all LRUs share one directory), labelled `grafana_dashboard=1`; the shared Grafana shows it as "LRU: small_temporal". |
@@ -29,6 +30,47 @@ Portal row: `small_temporal` at https://amp-qa.dev.yugabyte.com/lru.
 
 `enableServiceLinks: false` on every pod is required: the UI Service would
 otherwise inject `TEMPORAL_UI_PORT=tcp://...` and crash the UI.
+
+## The branch probe
+
+Does the same query cost more on a fork than on its parent? The probe answers it
+daily with this workload's own data, at fork depth 1.
+
+Each cycle forks `main`, puts a 2 vCPU / 16 GiB endpoint on the fork, samples
+predicates **from the fork** (built by Postgres with `format()` so the literals
+are correctly typed), runs the identical statements against the parent and then
+the fork, and drops the fork. The query set is the top of this database's
+`pg_stat_statements`: an `executions` point lookup, a `history_node` range read,
+a `history_tree` scan and a `shards` lookup. A `probe-*` branch left by a crash
+is reaped at the start of the next cycle.
+
+```
+lru_branch_probe_seconds{probe,target,pass}   median, target parent|branch, pass cold|warm
+lru_branch_probe_ratio{probe,pass}            branch / parent
+lru_branch_probe_setup_seconds{phase}         fork, endpoint, teardown
+lru_branch_probe_up                           0 when the last cycle failed
+lru_branch_probe_age_seconds                  since the last SUCCEEDED cycle
+lru_branch_probe_last_attempt_timestamp_seconds
+```
+
+Two dashboard panels plot them, and the checker carries `branch_probe_age_s`
+(FAIL past 3 days, because a probe that stopped forking may have leaked an
+endpoint) and an advisory `branch_warm_latency_ratio`.
+
+Cadence and the fork's size are env on the Deployment: `PROBE_INTERVAL`,
+`PROBE_KEYS`, `EP_CPU`, `EP_MEM`.
+
+Warm has read 0.96-1.00 so far, so a depth-1 fork costs nothing measurable once
+pages are local. Read the warm ratio as the clean comparison. The parent has weeks of file cache
+and a fresh endpoint has none, so the cold ratio is biased in the parent's favour
+by an amount the probe cannot separate out. Sampling on the fork rather than the
+parent is deliberate: whichever side the sampler reads gets those pages faulted
+in, and the fork is the side where that understates the result. Cold is still the
+number to watch, it is the page-miss path that crossing a fork is expected to
+slow down, and reads across levels are not pushed down today.
+
+The probe puts a second endpoint in `lru-temporal` while it runs, so the checker
+resolves its endpoint from the default branch only.
 
 ## Bring up, change, pause
 
