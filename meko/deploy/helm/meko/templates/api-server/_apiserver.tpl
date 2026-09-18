@@ -145,6 +145,16 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
 - name: MEKO_METRICS_URL
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: MEKO_METRICS_URL } }
 {{- end }}
+{{- /* The write side of that address: the BYOC OTLP door this control plane issues,
+       printed in every amp install hint and enforced at enroll. Emitted on the same
+       terms as MEKO_METRICS_URL above. Unlike it, the binary DEFAULTS this (to the
+       devcloud door), so leaving it out is a real choice rather than a disabled
+       route — a prod or srecloud control plane that omits it hands out the devcloud
+       door and then refuses its own agents. */}}
+{{- if $c.config.MEKO_BYOC_METRICS_URL }}
+- name: MEKO_BYOC_METRICS_URL
+  valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: MEKO_BYOC_METRICS_URL } }
+{{- end }}
 {{- if $c.cognito.enabled }}
 - name: COGNITO_REGION
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: COGNITO_REGION } }

@@ -95,6 +95,32 @@ cluster.
    returns its identity. The environment moves to `ATTESTING`. Enrollment is an
    idempotent check-in the agent repeats at every startup, so a restart can never lock
    an agent out.
+
+   An amp agent also **attests its telemetry** here — whether otel and byoc shipping
+   are on, and the metrics endpoint it is configured with, read from the env its chart
+   set from the same values its collectors render from. YCP compares that endpoint
+   against its own `--byoc-metrics-url`, which is the same value it printed in the
+   install hint. This is the only check a customer cannot edit away: a data plane
+   installs from a checkout they have, so the endpoint is not theirs to choose but
+   every rule inside the chart is theirs to edit.
+
+   A mismatch **degrades the environment; it never refuses it.** An environment that
+   cannot ship metrics is still one an operator needs to see, and one we would rather
+   have registered and visibly `DEGRADED` than turned away and invisible — refusing it
+   hides the very thing the refusal is complaining about. It also keeps the invariant
+   above intact: enrolment repeats at every agent startup, so a refusal would be a
+   restart-time lockout, killing a running environment's convergence on its next pod
+   recycle over a telemetry problem. Nothing else enforces it either, for now — the
+   chart warns through NOTES.txt and its post-install preflight reports to its own log
+   without failing the release — because the BYOC door is still being rolled out fleet
+   by fleet, and an install that cannot reach it is as likely to be a fleet problem as
+   an operator mistake.
+
+   The reason rides a synthetic `telemetry` component (0/1, with the reason as its
+   error), because the console already renders a component's error and that needs no
+   new column. An agent too old to attest anything is degraded the same way rather
+   than silently passed.
+
 4. **Reconcile** — on each tick the agent `GET`s `/agent/desired-state`. Desired
    state is a generic, resource-typed set (`{kind, name, spec, generation}`, where the
    control plane bumps `generation` only when a resource's spec changes, so an agent
@@ -117,7 +143,33 @@ cluster.
    healthy-of-total plus the image tag — the only way the console can say what is up,
    since nothing dials in to a BYOC data plane), and the inventory it
    read back. This drives the fleet registry and the console's live view. An amp agent
-   also relays the controller's **task log** here — see below.
+   also relays the controller's **task log** here — see below — and re-sends its
+   telemetry attestation every tick, so a later `helm upgrade` that turns telemetry off
+   shows up as a `DEGRADED` environment with a `telemetry` component saying why, rather
+   than as a dashboard that gradually empties. It is the same `check()` with the same
+   degrade-only outcome as at enrolment — there is no enroll/status distinction to
+   explain.
+
+   That attestation carries **runtime** state as well as configuration, because the two
+   fail independently: a deployment can be configured perfectly and ship nothing when
+   the door goes unreachable, a credential is rotated or a collector crashloops. The
+   agent reads the controller collector's own
+   `otelcol_exporter_sent_metric_points{exporter="otlphttp/byoc"}` each tick and reports
+   how long it has sat still; the control plane degrades an environment whose counter
+   has not moved for `TelemetryPolicy.StaleAfter`. The **delta is computed in the
+   agent** on purpose — detecting a stall needs the previous reading, and the agent is
+   already the thing polling on a loop, so keeping the history server-side would mean a
+   column and a migration to learn the same fact.
+
+   Three details make that check trustworthy rather than noisy. It watches the
+   **controller** collector, which always has a target (the amp controller itself), not
+   the compute one — that scrapes endpoint pods, so an environment owning no endpoints
+   has a legitimately flat counter. The collectors scrape on a fixed clock, so a healthy
+   counter climbs whether or not the environment is busy, which is what lets "flat" mean
+   broken rather than idle. And a probe the agent could not perform is reported as
+   *unknown*, never as a confirmed stall. Queue depth and the failed-send counter ride
+   along as diagnosis: with the counter flat, an empty queue means nothing is reaching
+   the exporter and a full one means the door is not taking it.
 
 Because desired state is resource-typed, adding a new managed resource needs only a
 new case in a backend — no protocol change.

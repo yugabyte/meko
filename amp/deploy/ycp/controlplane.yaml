@@ -19,6 +19,7 @@
 #   ${YCP_IPS}        imagePullSecrets in flow style: [{name: <secret>}] or []
 #   ${YCP_PG_DATA_VOLUME}  the postgres data volume in flow style: `emptyDir: {}`
 #                     (default) or `persistentVolumeClaim: { claimName: ... }`
+#   ${YCP_BYOC_METRICS_URL}  the BYOC metrics door this control plane issues
 # The k8s `$(DB_PASSWORD)` env-var references below are NOT touched (envsubst is
 # scoped to the five vars above), so they interpolate at runtime as intended.
 #
@@ -129,6 +130,10 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "--control-plane-mode"
+            # The door this control plane issues: printed in the install hint and
+            # the only endpoint an enrolling agent may report. up-gke.sh deploys
+            # the data plane with this same value, from the same variable.
+            - "--byoc-metrics-url=${YCP_BYOC_METRICS_URL}"
             - "--admin-api-key=$(ADMIN_API_KEY)"
             - "--mcp-internal-secret=$(MCP_INTERNAL_SECRET)"
             - "--system-db-host=postgres"

@@ -506,6 +506,23 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   YCP_RECONCILE_INTERVAL="${YCP_RECONCILE_INTERVAL:-${YCP_REPORT_INTERVAL:-5s}}"
   YCP_AGENT_SECRET="${YCP_AGENT_SECRET:-amp-agent-api-key}"
   YCP_PLACEMENT="${YCP_PLACEMENT:-cloud}"
+  # A YCP-managed install is expected to ship telemetry to yugabyte-cloud. Neither
+  # the chart nor the control plane enforces that today — both warn — so this path
+  # deploys the real thing and ycp-reconcile-smoke.sh ASSERTS it, which is what keeps
+  # a broken BYOC telemetry path from passing as green.
+  #
+  # BYOC_METRICS_URL must be the SAME value the control plane was started with
+  # (--byoc-metrics-url); ycp-up.sh takes it from this same variable.
+  YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL:-https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics}"
+  : "${YCP_BYOC_PASSWORD:?YCP_ENABLED=1 requires YCP_BYOC_PASSWORD (the BYOC metrics door password)}"
+  : "${YCP_DATADOG_API_KEY:?YCP_ENABLED=1 requires YCP_DATADOG_API_KEY (the logs fan-out key)}"
+  # Both are read by secretKeyRef, so they must exist before the install.
+  kubectl -n "${NS}" create secret generic byoc-metrics-auth \
+    --from-literal=password="${YCP_BYOC_PASSWORD}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "${NS}" create secret generic datadog-api \
+    --from-literal=api-key="${YCP_DATADOG_API_KEY}" \
+    --dry-run=client -o yaml | kubectl apply -f -
   say "YCP reconcile-agent enabled (url=${YCP_URL} env=${YCP_ENV_ID} interval=${YCP_RECONCILE_INTERVAL} image=${REGISTRY}/${AGENT_IMAGE_REPO}:${TAG})"
   HELM_SET+=(
     "agent.enabled=true"
@@ -520,6 +537,9 @@ if [ "${YCP_ENABLED}" = "1" ]; then
     "agent.placement=${YCP_PLACEMENT}"
     "agent.reconcileInterval=${YCP_RECONCILE_INTERVAL}"
     "agent.apiKeySecret.name=${YCP_AGENT_SECRET}"
+    "otel.enabled=true"
+    "otel.byoc.enabled=true"
+    "otel.byoc.metricsEndpoint=${YCP_BYOC_METRICS_URL}"
   )
 fi
 
@@ -529,7 +549,12 @@ fi
 
 # Commas escaped: helm's --set-string splits on them, so a multi-host DSN would
 # arrive as separate fragments and fail the install.
-HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}"
+# --timeout above the preflight hook's own budget (300s + pull/schedule). helm waits
+# on a post-install hook for --timeout, which defaults to exactly 5m, so without this
+# helm abandons the release first and reports a timeout in place of the probe's own
+# verdict — and the pod's log, which is the entire diagnosis, has to be dug out by
+# hand. The install hint prints the same 10m for the same reason.
+HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}" --timeout 10m
            --set-string "controller.databaseUrl=${DB_URL//,/\\,}")
 for s in "${HELM_SET[@]}"; do HELM_ARGS+=(--set "${s}"); done
 

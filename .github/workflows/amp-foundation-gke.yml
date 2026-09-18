@@ -252,6 +252,10 @@ jobs:
       - name: YCP control plane + register
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+          # The door this control plane issues. Set in both steps from the same
+          # value so the hint it prints and the endpoint the data plane deploys
+          # with cannot disagree.
+          YCP_BYOC_METRICS_URL: ${{ vars.BYOC_METRICS_URL || 'https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics' }}
         run: |
           AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
           export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
@@ -259,15 +263,23 @@ jobs:
           YCP_IMAGE="$QUAY_NS/ycp-api-server:$TAG" \
           PULL_SECRET="$PULL_SECRET" \
           YCP_ENV_NAME="foundation-smoke" \
+          YCP_BYOC_METRICS_URL="$YCP_BYOC_METRICS_URL" \
           amp/deploy/ycp-up.sh
 
       # FOUNDATION=operator is the whole point: up-gke.sh skips its yugabyted
       # StatefulSet, runs `foundation up` in this namespace instead, and takes
       # YB_HOST_PORTS/DB_URL from the deployer's output rather than duplicating
       # the Service name, port and DSN shape.
+      # The BYOC telemetry credentials, for the same reason the control-plane
+      # workflow carries them: YCP_ENABLED=1 means agent.enabled=true, which is a
+      # YCP-managed environment, and one that ships no telemetry comes up DEGRADED
+      # — which the reconcile smoke below asserts against.
       - name: Deploy on the operator foundation (up-gke.sh)
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+          YCP_BYOC_METRICS_URL: ${{ vars.BYOC_METRICS_URL || 'https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics' }}
+          YCP_BYOC_PASSWORD: ${{ secrets.BYOC_METRICS_PASSWORD }}
+          YCP_DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
         run: |
           AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
           export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
@@ -284,6 +296,9 @@ jobs:
           CONTROLLER_EXPOSE=none \
           ENDPOINT_SERVICE_TYPE=ClusterIP \
           YCP_ENABLED=1 \
+          YCP_BYOC_METRICS_URL="$YCP_BYOC_METRICS_URL" \
+          YCP_BYOC_PASSWORD="$YCP_BYOC_PASSWORD" \
+          YCP_DATADOG_API_KEY="$YCP_DATADOG_API_KEY" \
           amp/deploy/up-gke.sh
 
       # What the foundation is FOR: the agent declares desired state through YCP

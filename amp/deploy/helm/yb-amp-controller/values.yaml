@@ -434,7 +434,12 @@ otel:
   # and the prometheusremotewrite exporter, i.e. opentelemetry-collector-contrib).
   image: ""
   # -- Prometheus remote-write endpoint of the metrics store (VictoriaMetrics,
-  # Prometheus, Thanos receive, …).
+  # Prometheus, Thanos receive, …). Set it to "" to drop the in-cluster exporter
+  # entirely, which is what a BYOC install does — there is no VictoriaMetrics in a
+  # customer's cluster, and an exporter pointed at one that is not there retries
+  # forever. An explicit "" and an absent key differ on purpose: absent keeps this
+  # default, so `helm upgrade --reuse-values` cannot silently lose a store.
+  # Emptying it with byoc off is refused at render time (nothing would export).
   remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
   # Fleet identity, stamped as a label on EVERY series both metrics collectors
   # scrape (controller/architecture/ac-metrics.md). Normally set by the install
@@ -448,9 +453,15 @@ otel:
   # identically.
   accountId: ""
   # The single switch for shipping telemetry OFF-cluster to the yugabyte-cloud
-  # managed backends, IN ADDITION to the in-cluster stores. Off by default: a
-  # normal install ships only to VictoriaMetrics/VictoriaLogs and needs no external
-  # credentials. When enabled, BOTH fan-outs turn on together, each needing its own
+  # managed backends. Off by default: a normal install ships only to
+  # VictoriaMetrics/VictoriaLogs and needs no external credentials. A BYOC install
+  # turns this on AND empties remoteWriteEndpoint/logsEndpoint, so yugabyte-cloud
+  # is the only destination; leaving those set ships to both.
+  #
+  # EXPECTED for a YCP-managed install (agent.enabled): without it the console can
+  # read nothing about the environment. Not enforced — templates/telemetry-preflight
+  # .yaml warns through NOTES.txt and the control plane marks the environment
+  # DEGRADED. When enabled, BOTH fan-outs turn on together, each needing its own
   # out-of-band Secret:
   #   - metrics also -> YBM Thanos, over the BYOC OTLP door on an AWS PrivateLink
   #     endpoint. Both metrics collectors gain a `basicauth/byoc` extension, a
@@ -478,9 +489,35 @@ otel:
     passwordSecret:
       name: "byoc-metrics-auth"
       key: "password"
+    # The post-install telemetry preflight (templates/telemetry-preflight.yaml).
+    # It runs on every YCP-managed install whose door is configured enough to probe,
+    # and REPORTS rather than enforces: it exits 0 whatever it finds, so a successful
+    # install says nothing about whether metrics flow — its log is the verdict. There
+    # is no flag to change that, deliberately; a flag would be the thing an operator
+    # sets to make the warning go away. Making it fatal later is a one-line change in
+    # ycp/cmd/reconcile-agent/preflight.go. The Job runs the reconcile-agent image
+    # this release
+    # already pulls, with the `preflight` subcommand. An agent tag that predates that
+    # subcommand has no argument handling at all: it falls through to the agent path
+    # and dies at "ENV_NAME is required", so the hook fails with a log that points at
+    # agent config rather than at the tag bump that fixes it.
+    preflight:
+      # -- How long to wait for the first datapoint to reach the BYOC door before
+      # giving up. A timeout, not a switch; a non-positive value is clamped back to
+      # this default rather than refused, since it must not decide whether the Job
+      # exists. The Job's own deadline is this plus headroom, so the probe reports
+      # the verdict rather than the Job controller killing it first.
+      #
+      # RAISING THIS ALONE IS NOT ENOUGH. helm waits on a post-install hook for
+      # --timeout, which defaults to 5m — exactly this default — so a larger value
+      # here just makes helm abandon the release while the Job runs on. Raise
+      # `helm upgrade --timeout` past it too; the install hint prints 10m.
+      timeoutSeconds: 300
   # -- OTLP/HTTP logs endpoint of the log store. Defaults to the VictoriaLogs
   # OTLP ingest path served by the amp-monitoring chart; any OTLP/HTTP logs
-  # receiver works (a central collector, a vendor endpoint, …).
+  # receiver works (a central collector, a vendor endpoint, …). Same empty-string
+  # contract as remoteWriteEndpoint above: "" drops the in-cluster exporter (the
+  # BYOC shape), absent keeps this default.
   logsEndpoint: "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs"
   # -- Tolerations for the logs daemonset. Set these when endpoint pods run on
   # tainted nodes — the daemonset has to be schedulable there or those nodes'

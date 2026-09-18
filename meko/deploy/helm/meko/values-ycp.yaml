@@ -106,6 +106,29 @@ apiServer:
     # cluster's Thanos), and unset leaves the route answering 503 rather than pointing
     # a fleet at a store that is not there. Set it in the deploy that knows, e.g.
     #   MEKO_METRICS_URL: http://thanos-query-frontend.monitoring-core.svc.cluster.local:9090/api/v1
+    #
+    # The WRITE side of that address: the BYOC OTLP door a data plane ships to. Unlike
+    # MEKO_METRICS_URL this one DEFAULTS — to the DEVCLOUD door — because it is printed
+    # in every amp install hint and enforced at enroll, so an unset value would hand
+    # operators a command with no endpoint.
+    #
+    # One door per fleet, and this control plane serves exactly one: devcloud, prod
+    # and srecloud each run their own YCP with their own door. Both consumers read
+    # THIS value — the hint prints it and the enroll check accepts only it — so the
+    # two cannot disagree within a deployment, and an environment registered here can
+    # only ever be told to ship here.
+    #
+    # Devcloud is the default because a control plane never told which fleet it serves
+    # is far more likely to be a dev one. Every other deployment must override it, or
+    # it prints the devcloud door in its install hints and marks every environment
+    # that ships to its own fleet's door DEGRADED:
+    #   MEKO_BYOC_METRICS_URL: https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics   # prod
+    #   MEKO_BYOC_METRICS_URL: <the srecloud door>                                   # srecloud
+    #
+    # The enroll check is already advisory — nothing about telemetry refuses a
+    # registration or an enrolment — so there is no switch to soften, and none to
+    # forget. A fleet that enrolled before agents attested anything needs nothing
+    # either: those agents report no attestation and are marked DEGRADED.
 
 # The data-plane components below are already suppressed by `mode: ycp`; setting
 # enabled=false as well makes the intent explicit and keeps `helm get values`

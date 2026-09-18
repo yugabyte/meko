@@ -34,30 +34,30 @@ type serviceRegistry struct {
 	kbRepo *repository.KnowledgeBaseRepo
 	// freeTierRepo: read by AccountUsageService for /auth/me/usage's
 	// num_conversations counter. Written by meko-mcp-server's quota gate.
-	freeTierRepo       *repository.FreeTierUsageRepo
-	accountUsageSvc    *service.AccountUsageService
-	langfuseSvc        *service.LangfuseService
-	agentSvc           *service.AgentService
-	kbSvc              *service.KnowledgeBaseService
-	ragSvc             *service.RagService
-	memoriesSvc        *service.MemoriesService
-	promoteMemoriesSvc *service.PromoteMemoriesService
-	s3Svc              *service.S3Service
-	sharingRepo        *repository.SharingRepo
-	sharingSvc         *service.SharingService
-	feedbackRepo       *repository.FeedbackRepo
-	mcpPATRepo         *repository.MCPPATRepo
-	mcpPATAuditRepo    *repository.MCPPATAuditRepo
-	mcpPATSvc          *service.MCPPATService
-	billingRepo        *repository.BillingRepo
-	billingSvc         *service.BillingService
-	adminMetricsSvc    *adminsvc.AdminMetricsService
-	adminDataPlaneSvc  *adminsvc.AdminDataPlaneService
-	adminFeedbackSvc   *adminsvc.AdminFeedbackService
-	artifactRepo       *repository.ArtifactRepo
-	artifactSvc        *service.ArtifactService
-	tokenSavingsRepo   *repository.TokenSavingsRepo
-	tokenSavingsSvc    *service.TokenSavingsService
+	freeTierRepo        *repository.FreeTierUsageRepo
+	accountUsageSvc     *service.AccountUsageService
+	langfuseSvc         *service.LangfuseService
+	agentSvc            *service.AgentService
+	kbSvc               *service.KnowledgeBaseService
+	ragSvc              *service.RagService
+	memoriesSvc         *service.MemoriesService
+	promoteMemoriesSvc  *service.PromoteMemoriesService
+	s3Svc               *service.S3Service
+	sharingRepo         *repository.SharingRepo
+	sharingSvc          *service.SharingService
+	feedbackRepo        *repository.FeedbackRepo
+	mcpPATRepo          *repository.MCPPATRepo
+	mcpPATAuditRepo     *repository.MCPPATAuditRepo
+	mcpPATSvc           *service.MCPPATService
+	billingRepo         *repository.BillingRepo
+	billingSvc          *service.BillingService
+	adminMetricsSvc     *adminsvc.AdminMetricsService
+	adminDataPlaneSvc   *adminsvc.AdminDataPlaneService
+	adminFeedbackSvc    *adminsvc.AdminFeedbackService
+	artifactRepo        *repository.ArtifactRepo
+	artifactSvc         *service.ArtifactService
+	tokenSavingsRepo    *repository.TokenSavingsRepo
+	tokenSavingsSvc     *service.TokenSavingsService
 	datapackMetricsRepo *repository.DatapackMetricsRepo
 	// ampSvc is nil unless the AMP feature is enabled (--show-pg-amp); the AMP
 	// datapack-database routes are registered only when it is non-nil. The AMP
@@ -240,10 +240,22 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 			repository.NewEnvironmentRepo(cfg.SystemDB),
 			repository.NewEnvironmentTaskRepo(cfg.SystemDB),
 		)
+		envSvc.SetTelemetryPolicy(service.TelemetryPolicy{
+			MetricsURL: cfg.BYOCMetricsURL,
+			StaleAfter: service.DefaultTelemetryStaleAfter,
+		})
 		metricsSvc = service.NewMetricsService(cfg.MetricsURL)
 		slog.Info("control-plane mode enabled (YCP fleet + agent routes)")
 		if !metricsSvc.Configured() {
 			slog.Warn("environment metrics disabled (set --metrics-url / MEKO_METRICS_URL to enable)")
+		}
+		// The read side and the write side of the same fleet's metrics. A control
+		// plane that queries Thanos but tells data planes to write somewhere else
+		// shows empty dashboards for environments that are shipping perfectly well,
+		// so the pairing is worth saying out loud at startup.
+		if cfg.BYOCMetricsURL == "" {
+			slog.Warn("BYOC telemetry unenforced (set --byoc-metrics-url / MEKO_BYOC_METRICS_URL); " +
+				"install hints will print no metrics endpoint and enrolments are not checked")
 		}
 	}
 

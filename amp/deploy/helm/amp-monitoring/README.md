@@ -32,6 +32,13 @@ For dashboards to show data, the collect step must be running:
 This chart is valid and installable without them — the dashboards and the log
 view are just empty until data arrives.
 
+The converse holds too: a cluster that does **not** run this chart has nowhere to
+point those two values, and should set both to `""` so the collectors drop the
+in-cluster exporters rather than retry against Services that are not there. That is
+the BYOC shape, where `otel.byoc.enabled` sends everything to yugabyte-cloud
+instead — see
+[`ac-metrics.md`](../../../controller/architecture/ac-metrics.md#byoc-shipping-to-yugabyte-cloud).
+
 The **Cache hit/miss** dashboard's LFC row needs the `amp-compute-lfc` scrape
 job, which a collector deployed before it does not have. Either `helm upgrade`
 the `yb-amp-controller` release, or patch the running collector in place — the

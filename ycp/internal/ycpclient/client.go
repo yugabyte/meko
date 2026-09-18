@@ -34,7 +34,9 @@ var ErrUnauthorized = fmt.Errorf("ycp: unauthorized")
 var ErrKindMismatch = fmt.Errorf("ycp: environment kind mismatch")
 
 // codeKindMismatch is the api_server error code for an enrolment whose kind is not
-// the environment's (environment_service.go).
+// the environment's (environment_service.go). Telemetry has no equivalent: the
+// control plane degrades an environment that ships nowhere rather than refusing it,
+// so there is nothing here to be fatal about.
 const codeKindMismatch = "KIND_MISMATCH"
 
 // Client talks to one YCP control plane.
@@ -73,7 +75,7 @@ func (c *Client) SetDevHeaders(adminSecret, apiKeyID string) {
 // nothing to persist between restarts.
 func (c *Client) Enroll(ctx context.Context, req api.EnrollRequest) (api.EnrollResponse, error) {
 	var out api.EnrollResponse
-	code, errCode, err := c.do(ctx, http.MethodPost, "/agent/enroll", req, &out)
+	code, apiError, err := c.do(ctx, http.MethodPost, "/agent/enroll", req, &out)
 	if err != nil {
 		return api.EnrollResponse{}, err
 	}
@@ -84,7 +86,7 @@ func (c *Client) Enroll(ctx context.Context, req api.EnrollRequest) (api.EnrollR
 	// plane says so: the same status can come from a proxy or from YBM's
 	// pass-through, and treating those as a mismatch would make a transient failure
 	// permanently fatal.
-	if code == http.StatusConflict && errCode == codeKindMismatch {
+	if code == http.StatusConflict && apiError.Code == codeKindMismatch {
 		return api.EnrollResponse{}, ErrKindMismatch
 	}
 	if code != http.StatusOK {
@@ -146,23 +148,23 @@ func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) (tasksAccep
 }
 
 // do issues one request and decodes the {"data","error"} envelope. It returns the
-// status, the api_server error CODE when the response carried one
-// (empty otherwise), and a transport/decode error. The code matters because status
-// alone is ambiguous on the shared path an agent's call takes: a 409 can come from
-// the control plane's own kind check or from anything between, and only the code
-// says which.
-func (c *Client) do(ctx context.Context, method, path string, body, out any) (int, string, error) {
+// status, the api_server error the response carried when it carried one (zero
+// otherwise), and a transport/decode error. The error's CODE matters because
+// status alone is ambiguous on the shared path an agent's call takes: a 409 can
+// come from the control plane's own checks or from anything between, and only the
+// code says which. Its message is what a caller passes through to an operator.
+func (c *Client) do(ctx context.Context, method, path string, body, out any) (int, apiErr, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return 0, "", fmt.Errorf("ycp: marshal request: %w", err)
+			return 0, apiErr{}, fmt.Errorf("ycp: marshal request: %w", err)
 		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
 	if err != nil {
-		return 0, "", fmt.Errorf("ycp: build request: %w", err)
+		return 0, apiErr{}, fmt.Errorf("ycp: build request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -175,34 +177,42 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (in
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, "", fmt.Errorf("ycp: %s %s: %w", method, path, err)
+		return 0, apiErr{}, fmt.Errorf("ycp: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return resp.StatusCode, errorCode(raw), nil
+		return resp.StatusCode, errorOf(raw), nil
 	}
 	if out != nil && len(raw) > 0 {
 		if err := decodeBody(raw, out); err != nil {
-			return resp.StatusCode, "", err
+			return resp.StatusCode, apiErr{}, err
 		}
 	}
-	return resp.StatusCode, "", nil
+	return resp.StatusCode, apiErr{}, nil
 }
 
-// errorCode reads the api_server envelope's machine-readable error code. A body
-// that is not the envelope — a proxy's HTML, an empty response — yields "", which
+// apiErr is the api_server envelope's error: a machine-readable code callers
+// branch on, and the human message they pass through to an operator.
+type apiErr struct {
+	Code    string
+	Message string
+}
+
+// errorOf reads that error off a response body. A body that is not the envelope —
+// a proxy's HTML, an empty response — yields a zero apiErr, whose empty Code
 // callers must treat as "no code", never as a match.
-func errorCode(raw []byte) string {
+func errorOf(raw []byte) apiErr {
 	var env struct {
 		Error *struct {
-			Code string `json:"code"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil || env.Error == nil {
-		return ""
+		return apiErr{}
 	}
-	return env.Error.Code
+	return apiErr{Code: env.Error.Code, Message: env.Error.Message}
 }
 
 // decodeBody unwraps the api_server {"data","error"} envelope, identified by the

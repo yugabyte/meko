@@ -119,6 +119,78 @@ type EnrollRequest struct {
 	Placement    string       `json:"placement,omitempty"`
 	Kind         string       `json:"kind,omitempty"` // amp | meko; checked against the environment's kind
 	ClusterFacts ClusterFacts `json:"cluster_facts"`
+	// Telemetry attests what this deployment is configured to ship. The control
+	// plane checks it and degrades the environment on a mismatch — it does not
+	// refuse the enrolment; see Telemetry.
+	Telemetry *Telemetry `json:"telemetry,omitempty"`
+}
+
+// Telemetry is the agent's account of where this deployment's metrics and logs
+// actually go, read from the env the chart set from the same values the collectors
+// render from — so the agent cannot report something the collectors are not doing.
+//
+// It exists because the install runs from a checkout the customer has: values,
+// templates and every rule inside the chart are theirs to edit, so nothing the
+// chart enforces is actually enforced. The metrics endpoint in particular is not
+// the customer's to choose — it is the door YCP minted credentials for. The agent
+// is the one component in that cluster the control plane already trusts, so it is
+// what attests, and the control plane is what decides.
+//
+// Sent on enroll AND on every status report: enroll alone would miss a later
+// `helm upgrade` that turns telemetry off.
+//
+// A nil Telemetry means the agent is too old to report any. The control plane marks
+// those DEGRADED, which is what it does with a mismatch too — nothing here refuses
+// an enrolment, because an environment that cannot ship metrics is still one an
+// operator needs to see.
+type Telemetry struct {
+	// OtelEnabled is otel.enabled: whether the collectors were rendered at all.
+	OtelEnabled bool `json:"otel_enabled"`
+	// ByocEnabled is otel.byoc.enabled: whether anything is shipped off-cluster.
+	ByocEnabled bool `json:"byoc_enabled"`
+	// MetricsEndpoint is otel.byoc.metricsEndpoint verbatim — the value compared
+	// against the one the control plane printed in the install hint.
+	MetricsEndpoint string `json:"metrics_endpoint,omitempty"`
+	// LogsSink names where logs fan out ("datadog"), or is empty when they stay
+	// in-cluster.
+	LogsSink string `json:"logs_sink,omitempty"`
+
+	// Everything below is RUNTIME, not configuration: what the collectors are
+	// actually achieving, rather than what they were told to do. A deployment can
+	// be configured perfectly and ship nothing — the door goes unreachable, the
+	// password is rotated, PrivateLink breaks, the collector crashloops — and the
+	// fields above cannot see any of it.
+	//
+	// The agent computes this itself, on purpose. Detecting "stopped shipping"
+	// needs the PREVIOUS counter value, and the agent is the only party that
+	// already polls on a loop; putting the history server-side would mean a column,
+	// a migration, and state shared across api-server replicas to learn the same
+	// thing.
+
+	// MetricsSent is otelcol_exporter_sent_metric_points for the byoc exporter, as
+	// last read from the controller collector's own telemetry. Reported for the
+	// console, not for the staleness decision — that is StalledSeconds.
+	MetricsSent float64 `json:"metrics_sent,omitempty"`
+	// MetricsSendFailed is the matching send_failed counter. Diagnosis, not
+	// detection: the exporter only counts a failure after its retry budget is
+	// exhausted (300s by default), so this lags a broken door badly.
+	MetricsSendFailed float64 `json:"metrics_send_failed,omitempty"`
+	// MetricsQueued is the exporter's current queue depth. Also diagnosis: with
+	// MetricsSent flat, an empty queue means nothing is being scraped (the fault is
+	// upstream of the exporter) and a growing one means the door is not accepting
+	// what we have (the fault is the door or the network).
+	MetricsQueued float64 `json:"metrics_queued,omitempty"`
+	// StalledSeconds is how long since MetricsSent last advanced, as the agent
+	// observed it. THIS is the detection signal: the collectors scrape on a fixed
+	// clock, so a healthy environment's counter climbs whether or not anyone is
+	// using it, and flat means broken rather than quiet. Zero when it advanced on
+	// this tick, or when the agent has no history yet (a fresh start).
+	StalledSeconds int `json:"stalled_seconds,omitempty"`
+	// ProbeError is why the agent could not read the collector's own telemetry at
+	// all. Distinct from a stall: it says the agent cannot see, not that metrics
+	// have stopped — an unreachable collector Service is itself worth surfacing,
+	// but it must not be reported as a confirmed outage.
+	ProbeError string `json:"probe_error,omitempty"`
 }
 
 // EnrollResponse hands the agent its identity, its endpoints, and the stack to run.
@@ -174,6 +246,10 @@ type StatusReport struct {
 	// The control plane accumulates these deltas, so it is the side that holds the
 	// history; see TaskStatus.
 	Tasks []TaskStatus `json:"tasks,omitempty"`
+	// Telemetry re-attests on every tick what enroll attested once, so a later
+	// `helm upgrade` that turns telemetry off or repoints it shows up in the
+	// console rather than as a gradually emptier dashboard.
+	Telemetry *Telemetry `json:"telemetry,omitempty"`
 }
 
 // ResourceStatus is one item of an amp environment's reported inventory: a

@@ -17,6 +17,11 @@ func hintFor(t *testing.T, kind, path, host, accountID, agentBaseURL string, hea
 	}, path, host, agentBaseURL, headers)
 }
 
+// testBYOCMetricsURL stands in for the control plane's --byoc-metrics-url. The
+// hint prints it and the enroll check accepts only it, so the tests below assert
+// the printed value against the same constant rather than a literal.
+const testBYOCMetricsURL = "https://byoc.example.com/api/v1/otlp/metrics"
+
 func hintForEnv(
 	t *testing.T, e *models.Environment, path, host, agentBaseURL string, headers map[string]string,
 ) string {
@@ -28,7 +33,7 @@ func hintForEnv(
 	}
 	c := echo.New().NewContext(req, httptest.NewRecorder())
 	e.AgentBaseURL = agentBaseURL
-	return installHint(c, e)
+	return installHint(c, e, testBYOCMetricsURL)
 }
 
 // An amp environment gets a different hint: it installs the amp controller chart
@@ -65,7 +70,25 @@ func TestInstallHint_Amp(t *testing.T) {
 		// reach storage, and shipping metrics to a store that is not there.
 		`--set-string controller.endpoint.ybHostPorts="${YB}"`,
 		`--set "imagePullSecrets[0].name=${PULL_SECRET}"`,
-		"--set otel.enabled=false",
+		// Telemetry is the whole point of a YCP-managed install: without these the
+		// console has no metrics for the environment, and the chart's preflight
+		// refuses to render.
+		"--set otel.enabled=true",
+		"--set otel.byoc.enabled=true",
+		"--set-string otel.byoc.metricsEndpoint=" + testBYOCMetricsURL,
+		// Empty, not absent — the chart reads "" as "drop the in-cluster exporter".
+		// Leaving them at their defaults points both collectors at a VictoriaMetrics
+		// and a VictoriaLogs no BYOC cluster runs.
+		"--set-string otel.remoteWriteEndpoint=",
+		"--set-string otel.logsEndpoint=",
+		// Both credentials, created before the install: a missing one fails the
+		// collector that reads it to start.
+		"create secret generic byoc-metrics-auth",
+		"create secret generic datadog-api",
+		// The operator is a hard prerequisite — the collectors are CRs, and without
+		// it they are silently skipped.
+		"opentelemetry-operator",
+		"otel/opentelemetry-collector-contrib",
 		// Tenancy label for every series the collectors scrape (ac-metrics.md).
 		"--set otel.environmentId=amp-acme-prod",
 		// A YCP-driven environment has no UI of its own, and no cloud LB.
@@ -88,6 +111,9 @@ func TestInstallHint_Amp(t *testing.T) {
 		"values-byoc.yaml",
 		"<your YugabyteDB DSN>", "<reconcile-agent tag>",
 		"--set controller.databaseUrl=", // the mis-tokenizing form
+		// The reason the hint existed to print this is gone: a YCP-managed install
+		// that ships no telemetry is refused by the chart and by enroll.
+		"--set otel.enabled=false",
 	} {
 		if strings.Contains(hint, unwanted) {
 			t.Errorf("amp hint contains retired/foreign string %q:\n%s", unwanted, hint)

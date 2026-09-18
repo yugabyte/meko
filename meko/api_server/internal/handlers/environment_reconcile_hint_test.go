@@ -16,7 +16,7 @@ func mekoHint(t *testing.T) string {
 	req := httptest.NewRequest("POST", "/api/v1/environments", nil)
 	req.Host = "ycp.example.com"
 	c := echo.New().NewContext(req, httptest.NewRecorder())
-	return installHint(c, &models.Environment{ID: "acme-prod", Kind: "meko"})
+	return installHint(c, &models.Environment{ID: "acme-prod", Kind: "meko"}, testBYOCMetricsURL)
 }
 
 // The meko hint has to be runnable as printed: the values the operator must supply

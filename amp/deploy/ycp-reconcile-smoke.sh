@@ -660,6 +660,59 @@ done
 [ "$gone" = 1 ] && ok "agent deleted the cluster subtree (cascade)" \
   || bad "cluster/endpoint still present after withdrawal (count=${left:-?})"
 
+# --- telemetry actually flows -------------------------------------------------
+# The chart's preflight only WARNS (it exits 0 whatever it finds), and the control
+# plane only DEGRADES, so nothing in the product fails when metrics stop reaching
+# yugabyte-cloud. This suite is therefore the only thing standing between a broken
+# BYOC telemetry path and a green build, and it asserts both ends of the chain:
+# the collector really exported, and the control plane really saw it.
+hdr "byoc telemetry"
+
+# 1 — the collector's own books. otelcol_exporter_sent_metric_points for the byoc
+# exporter is incremented per successfully sent point, so a non-zero value is proof
+# that data left this cluster for the door — not merely that the config looks right.
+# Polled rather than sampled once: the collectors scrape on a 15s clock and the
+# agent may have only just come up.
+# Named by the OpenTelemetry Operator's convention —
+# <collector CR name>-collector-monitoring — off the CR that otel-collectors.yaml
+# renders as <fullname>-controller, where fullname is up-gke.sh's release name
+# (yb-amp-controller). Verified against a live operator-managed collector; if the
+# operator ever renames it this assertion fails loudly rather than silently passing.
+COLLECTOR_SVC="http://yb-amp-controller-controller-collector-monitoring.${NS}.svc.cluster.local:8888/metrics"
+sent=""
+for ((i=0; i<24; i++)); do
+  kubectl -n "$NS" delete pod byoc-metrics-check --ignore-not-found >/dev/null 2>&1
+  sent=$(kubectl -n "$NS" run byoc-metrics-check --rm -i --restart=Never --request-timeout=60s \
+           --image=curlimages/curl:8.11.1 --command -- \
+           sh -c "curl -sS --max-time 15 '$COLLECTOR_SVC' | awk '/^otelcol_exporter_sent_metric_points\{[^}]*exporter=\"otlphttp\/byoc\"/ {print \$2; exit}'" \
+         2>/dev/null | tr -dc '0-9.')
+  [ -n "$sent" ] && [ "${sent%%.*}" -gt 0 ] 2>/dev/null && break
+  sleep 10
+done
+if [ -n "$sent" ] && [ "${sent%%.*}" -gt 0 ] 2>/dev/null; then
+  ok "the byoc exporter has shipped ${sent%%.*} metric point(s) off-cluster"
+else
+  # Distinguish the two failures an operator would chase differently: nothing
+  # reaching the exporter (upstream) versus the door refusing what it has.
+  kubectl -n "$NS" delete pod byoc-metrics-check --ignore-not-found >/dev/null 2>&1
+  diag=$(kubectl -n "$NS" run byoc-metrics-check --rm -i --restart=Never --request-timeout=60s \
+           --image=curlimages/curl:8.11.1 --command -- \
+           sh -c "curl -sS --max-time 15 '$COLLECTOR_SVC' | grep -E 'otelcol_exporter_(send_failed_metric_points|queue_size)' | head -4" 2>/dev/null)
+  bad "the byoc exporter never shipped a metric point (sent='${sent:-unset}'); exporter counters: ${diag:-unreadable}"
+fi
+
+# 2 — the control plane's view. The agent attests its telemetry on every status
+# report and YCP degrades an environment it does not like, surfacing the reason on a
+# synthetic `telemetry` component. An empty reason here means the whole chain agreed:
+# the values the chart rendered, what the agent read back, and the door YCP issued.
+ej=$(env_json)
+tel_err=$(printf '%s' "$ej" | jq -r '[.components[]?|select(.name=="telemetry")|.error]|join("; ")' 2>/dev/null)
+if [ -z "$tel_err" ]; then
+  ok "the control plane reports no telemetry problem for this environment"
+else
+  bad "the control plane flagged this environment's telemetry: ${tel_err}"
+fi
+
 # --- summary ---
 hdr "summary"
 printf '  passed: %d   failed: %d\n' "$pass" "$fail"

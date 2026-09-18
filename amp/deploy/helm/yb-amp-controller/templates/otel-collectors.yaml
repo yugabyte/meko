@@ -36,6 +36,32 @@ so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
        reference nil-pointers the render. */}}
 {{- $envID := dig "environmentId" "" .Values.otel }}
 {{- $acctID := dig "accountId" "" .Values.otel }}
+{{- /* The in-cluster sinks are OPTIONAL, and the contract is that an empty string
+       is not the same as an absent key. An EXPLICIT "" means "no in-cluster sink"
+       and drops that exporter, which is what makes a BYOC-only install possible; a
+       MISSING key keeps the chart default, so `helm upgrade --reuse-values` on a
+       release predating this cannot silently lose its store. `| default` cannot
+       express that difference — it collapses both onto the default — so `dig` plus
+       an explicit nil guard, for the --reuse-values reason at the logs collector
+       below. */}}
+{{- $rwEndpoint := dig "remoteWriteEndpoint" "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" .Values.otel }}
+{{- if kindIs "invalid" $rwEndpoint }}{{ $rwEndpoint = "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" }}{{ end }}
+{{- /* The single switch for shipping telemetry off-cluster: metrics to Thanos (the
+       metrics collectors below) and logs to Datadog (the logs daemonset). Hoisted
+       here because both halves of the file need it. */}}
+{{- $byocEnabled := dig "byoc" "enabled" false .Values.otel }}
+{{- /* Built as a list, like $ddTags below: with both halves optional an inline
+       [{{if}}...{{end}}{{if}}, ...{{end}}] has to hand-manage the comma. */}}
+{{- $metricsExporters := list }}
+{{- if $rwEndpoint }}{{ $metricsExporters = append $metricsExporters "prometheus_remote_write" }}{{ end }}
+{{- if $byocEnabled }}{{ $metricsExporters = append $metricsExporters "otlphttp/byoc" }}{{ end }}
+{{- /* A pipeline with no exporter at all is rejected by the operator's webhook, so
+       refuse to render rather than apply it. collectors.*.enabled is the supported
+       way to say "run none", and the message names it. */}}
+{{- $metricsWanted := or (dig "collectors" "controller" "enabled" true .Values.otel) (dig "collectors" "compute" "enabled" true .Values.otel) }}
+{{- if and $metricsWanted (eq (len $metricsExporters) 0) }}
+{{- fail "otel.remoteWriteEndpoint is empty and otel.byoc.enabled is false: the metrics collectors would have no exporter at all. Set one of them, or turn the collectors off with otel.collectors.controller.enabled=false and otel.collectors.compute.enabled=false." }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -132,7 +158,7 @@ spec:
   {{- with .Values.otel.image }}
   image: {{ . }}
   {{- end }}
-  {{- if dig "byoc" "enabled" false .Values.otel }}
+  {{- if $byocEnabled }}
   env:
     - name: BYOC_METRICS_PASSWORD
       valueFrom:
@@ -144,7 +170,7 @@ spec:
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
-      {{- if dig "byoc" "enabled" false .Values.otel }}
+      {{- if $byocEnabled }}
       basicauth/byoc:
         client_auth:
           username: {{ .Values.otel.byoc.username | quote }}
@@ -178,7 +204,7 @@ spec:
               - set(attributes["account_id"], {{ $acctID | quote }})
               {{- end }}
       {{- end }}
-      {{- if dig "byoc" "enabled" false .Values.otel }}
+      {{- if $byocEnabled }}
       # Stamp the source label on every datapoint. A datapoint attribute (not a
       # resource attribute) so Prometheus's OTLP receiver promotes it to a label
       # without the control plane needing promote_resource_attributes.
@@ -189,14 +215,16 @@ spec:
               - set(attributes["source"], {{ .Values.otel.byoc.source | quote }})
       {{- end }}
     exporters:
+      {{- if $rwEndpoint }}
       prometheus_remote_write:
-        endpoint: {{ .Values.otel.remoteWriteEndpoint | quote }}
+        endpoint: {{ $rwEndpoint | quote }}
         tls:
           # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
-          insecure: {{ if hasPrefix "https://" .Values.otel.remoteWriteEndpoint }}false{{ else }}true{{ end }}
+          insecure: {{ if hasPrefix "https://" $rwEndpoint }}false{{ else }}true{{ end }}
         resource_to_telemetry_conversion:
           enabled: true
-      {{- if dig "byoc" "enabled" false .Values.otel }}
+      {{- end }}
+      {{- if $byocEnabled }}
       # Fan-out to the BYOC OTLP ingress (Thanos in yugabyte-cloud) over
       # PrivateLink. gzip is mandatory — the ingress nginx returns 415 without
       # Content-Encoding: gzip. TLS verifies against the public LE cert; SNI is
@@ -210,12 +238,12 @@ spec:
           insecure: false
       {{- end }}
     service:
-      extensions: [health_check{{ if dig "byoc" "enabled" false .Values.otel }}, basicauth/byoc{{ end }}]
+      extensions: [health_check{{ if $byocEnabled }}, basicauth/byoc{{ end }}]
       pipelines:
         metrics:
           receivers: [prometheus]
-          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
-          exporters: [prometheus_remote_write{{ if dig "byoc" "enabled" false .Values.otel }}, otlphttp/byoc{{ end }}]
+          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if $byocEnabled }}, transform/byoc{{ end }}]
+          exporters: [{{ $metricsExporters | join ", " }}]
 {{- end }}
 {{- if .Values.otel.collectors.compute.enabled }}
 ---
@@ -231,7 +259,7 @@ spec:
   {{- with .Values.otel.image }}
   image: {{ . }}
   {{- end }}
-  {{- if dig "byoc" "enabled" false .Values.otel }}
+  {{- if $byocEnabled }}
   env:
     - name: BYOC_METRICS_PASSWORD
       valueFrom:
@@ -243,7 +271,7 @@ spec:
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
-      {{- if dig "byoc" "enabled" false .Values.otel }}
+      {{- if $byocEnabled }}
       basicauth/byoc:
         client_auth:
           username: {{ .Values.otel.byoc.username | quote }}
@@ -335,7 +363,7 @@ spec:
               - set(attributes["account_id"], {{ $acctID | quote }})
               {{- end }}
       {{- end }}
-      {{- if dig "byoc" "enabled" false .Values.otel }}
+      {{- if $byocEnabled }}
       # Stamp the source label on every datapoint. A datapoint attribute (not a
       # resource attribute) so Prometheus's OTLP receiver promotes it to a label
       # without the control plane needing promote_resource_attributes.
@@ -346,14 +374,16 @@ spec:
               - set(attributes["source"], {{ .Values.otel.byoc.source | quote }})
       {{- end }}
     exporters:
+      {{- if $rwEndpoint }}
       prometheus_remote_write:
-        endpoint: {{ .Values.otel.remoteWriteEndpoint | quote }}
+        endpoint: {{ $rwEndpoint | quote }}
         tls:
           # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
-          insecure: {{ if hasPrefix "https://" .Values.otel.remoteWriteEndpoint }}false{{ else }}true{{ end }}
+          insecure: {{ if hasPrefix "https://" $rwEndpoint }}false{{ else }}true{{ end }}
         resource_to_telemetry_conversion:
           enabled: true
-      {{- if dig "byoc" "enabled" false .Values.otel }}
+      {{- end }}
+      {{- if $byocEnabled }}
       # Fan-out to the BYOC OTLP ingress (Thanos in yugabyte-cloud) over
       # PrivateLink. gzip is mandatory — the ingress nginx returns 415 without
       # Content-Encoding: gzip. TLS verifies against the public LE cert; SNI is
@@ -367,12 +397,12 @@ spec:
           insecure: false
       {{- end }}
     service:
-      extensions: [health_check{{ if dig "byoc" "enabled" false .Values.otel }}, basicauth/byoc{{ end }}]
+      extensions: [health_check{{ if $byocEnabled }}, basicauth/byoc{{ end }}]
       pipelines:
         metrics:
           receivers: [prometheus]
-          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
-          exporters: [prometheus_remote_write{{ if dig "byoc" "enabled" false .Values.otel }}, otlphttp/byoc{{ end }}]
+          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if $byocEnabled }}, transform/byoc{{ end }}]
+          exporters: [{{ $metricsExporters | join ", " }}]
 {{- end }}
 {{- /*
 `dig` rather than a direct lookup: `helm upgrade --reuse-values` replays the
@@ -381,9 +411,17 @@ that predates this collector leaves otel.collectors.logs unset — a direct
 reference nil-pointers and fails the upgrade outright.
 */}}
 {{- if dig "collectors" "logs" "enabled" true .Values.otel }}
-{{- /* Defaulted for the same --reuse-values reason: an unset logsEndpoint reaches
-       hasPrefix as nil and fails the render on a type error. */}}
-{{- $logsEndpoint := .Values.otel.logsEndpoint | default "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}
+{{- /* Same empty-vs-absent contract as the metrics endpoint above: an explicit ""
+       drops the in-cluster exporter, an unset key keeps the default (and would
+       otherwise reach hasPrefix as nil and fail the render on a type error). */}}
+{{- $logsEndpoint := dig "logsEndpoint" "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" .Values.otel }}
+{{- if kindIs "invalid" $logsEndpoint }}{{ $logsEndpoint = "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}{{ end }}
+{{- $logsExporters := list }}
+{{- if $logsEndpoint }}{{ $logsExporters = append $logsExporters "otlphttp/logs" }}{{ end }}
+{{- if $byocEnabled }}{{ $logsExporters = append $logsExporters "datadog" }}{{ end }}
+{{- if eq (len $logsExporters) 0 }}
+{{- fail "otel.logsEndpoint is empty and otel.byoc.enabled is false: the logs collector would have no exporter at all. Set one of them, or turn the collector off with otel.collectors.logs.enabled=false." }}
+{{- end }}
 {{- /* Datadog logs fan-out — gated on byoc.enabled, the single switch for shipping
        telemetry off-cluster: metrics to Thanos (the metrics collectors above) and
        logs to Datadog (here). The site and api-key Secret are plain config,
@@ -391,7 +429,6 @@ reference nil-pointers and fails the upgrade outright.
        predating these keys has an otel map with no `datadog`/`byoc`, and a direct
        reference nil-pointers the render. $ddTags carries the same fleet identity
        the metrics collectors stamp, so a log and its metrics share one scope. */}}
-{{- $byocEnabled := dig "byoc" "enabled" false .Values.otel }}
 {{- $ddSite := dig "datadog" "site" "us3.datadoghq.com" .Values.otel }}
 {{- $ddSecretName := dig "datadog" "apiKeySecret" "name" "datadog-api" .Values.otel }}
 {{- $ddSecretKey := dig "datadog" "apiKeySecret" "key" "api-key" .Values.otel }}
@@ -574,11 +611,13 @@ spec:
       {{- end }}
       batch: {}
     exporters:
+      {{- if $logsEndpoint }}
       otlphttp/logs:
         logs_endpoint: {{ $logsEndpoint | quote }}
         tls:
           # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
           insecure: {{ if hasPrefix "https://" $logsEndpoint }}false{{ else }}true{{ end }}
+      {{- end }}
       {{- if $byocEnabled }}
       # Fan-out to Datadog IN ADDITION to VictoriaLogs. The api key comes from
       # ${env:DD_API_KEY} (secretKeyRef above). sending_queue + retry_on_failure
@@ -608,6 +647,6 @@ spec:
         logs:
           receivers: [filelog]
           processors: [memory_limiter, k8sattributes{{ if $byocEnabled }}, transform/severity, transform/datadog{{ end }}, batch]
-          exporters: [otlphttp/logs{{ if $byocEnabled }}, datadog{{ end }}]
+          exporters: [{{ $logsExporters | join ", " }}]
 {{- end }}
 {{- end }}

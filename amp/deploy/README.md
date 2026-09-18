@@ -302,6 +302,14 @@ dev-mode credentials into the `amp-agent-api-key` Secret. `up-gke.sh` is then ru
 `YCP_ENABLED=1`, which deploys the reconcile-agent (`agent.*` — `ycpUrl` to the
 in-cluster Service, `envName` to the registered id, `reconcileInterval=5s`, and the
 api-key secret).
+
+Because `agent.enabled` marks the install as a YCP-managed environment, that same
+block must also satisfy the chart's telemetry preflight: it creates the
+`byoc-metrics-auth` and `datadog-api` Secrets and deploys with `otel.byoc.enabled=true`
+against the door `ycp-up.sh` started the control plane with (`YCP_BYOC_METRICS_URL`,
+one variable read by both, so the hint's endpoint and the enroll check cannot
+disagree). It needs the `BYOC_METRICS_PASSWORD` and `DATADOG_API_KEY` repository
+secrets; there is deliberately no flag that skips the check.
 Instead of the API-driven smoke, [`ycp-reconcile-smoke.sh`](ycp-reconcile-smoke.sh)
 runs: it declares a pool→cluster→branch→endpoint through YCP desired state and asserts
 the authoritative agent creates the tree, reports it `READY` in

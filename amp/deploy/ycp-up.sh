@@ -45,6 +45,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/ycp/controlplane.yaml"
+# The metrics door this control plane issues. It prints this in the install hint
+# and accepts only this from an enrolling agent, so it MUST match what up-gke.sh
+# deploys the data plane with — hence one variable read by both.
+YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL:-https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics}"
 
 # --- configuration (override via environment) ---
 NS="${NS:?NS (target namespace) is required}"
@@ -155,7 +159,8 @@ fi
 say "control plane (Postgres + api_server --control-plane-mode)"
 # Scope envsubst to exactly our vars so the k8s $(DB_PASSWORD) refs pass through.
 NS="${NS}" YCP_IMAGE="${YCP_IMAGE}" YCP_ADMIN_KEY="${YCP_ADMIN_KEY}" YCP_IPS="${YCP_IPS}" YCP_PG_DATA_VOLUME="${YCP_PG_DATA_VOLUME}" \
-  envsubst '${NS} ${YCP_IMAGE} ${YCP_ADMIN_KEY} ${YCP_IPS} ${YCP_PG_DATA_VOLUME}' < "${MANIFEST}" \
+  YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL}" \
+  envsubst '${NS} ${YCP_IMAGE} ${YCP_ADMIN_KEY} ${YCP_IPS} ${YCP_PG_DATA_VOLUME} ${YCP_BYOC_METRICS_URL}' < "${MANIFEST}" \
   | kubectl apply -f -
 
 # --- 3. wait for readiness ---

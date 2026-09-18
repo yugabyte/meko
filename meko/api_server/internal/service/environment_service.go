@@ -142,6 +142,10 @@ type EnvironmentService struct {
 	// tick to delete nothing almost every time.
 	pruneMu    sync.Mutex
 	lastPruned time.Time
+
+	// telemetry is what this control plane accepts from an enrolling amp agent.
+	// Zero value checks nothing; SetTelemetryPolicy configures it.
+	telemetry TelemetryPolicy
 }
 
 // pruneEvery is the floor between task-retention passes. Retention is 30 days, so
@@ -226,6 +230,9 @@ type EnrollRequest struct {
 	// attach to a meko environment or vice versa; empty is treated as meko.
 	Kind         string       `json:"kind,omitempty"`
 	ClusterFacts ClusterFacts `json:"cluster_facts"`
+	// Telemetry is the agent's account of where this deployment ships metrics and
+	// logs. Checked against TelemetryPolicy before the enrolment is accepted.
+	Telemetry *Telemetry `json:"telemetry,omitempty"`
 }
 
 // ResourceStatus is one item of an amp environment's observed inventory: a
@@ -267,6 +274,10 @@ type StatusReport struct {
 	// common case -- and writes nothing. The control plane accumulates these deltas,
 	// which is why it, and not the agent, holds the history.
 	Tasks []TaskStatus `json:"tasks,omitempty"`
+	// Telemetry re-attests on every tick what enroll attested once, so a deployment
+	// that stops shipping telemetry after it enrolled is visible. nil from an agent
+	// image that predates attestation — see TelemetryPolicy.check.
+	Telemetry *Telemetry `json:"telemetry,omitempty"`
 }
 
 // TaskStatus is one amp controller task as the agent relays it. Kind-agnostic: the
@@ -422,7 +433,7 @@ func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest) []mo
 // as meko. It must match the kind the environment was registered with, so an amp
 // controller cannot attach to a meko environment (or vice versa) and start
 // reporting or reconciling the wrong thing — a mismatch returns ErrKindMismatch.
-func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind string, f ClusterFacts) (*models.Environment, error) {
+func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind string, f ClusterFacts, t *Telemetry) (*models.Environment, error) {
 	kind, err := normalizeKind(declaredKind)
 	if err != nil {
 		return nil, err
@@ -438,12 +449,27 @@ func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind strin
 	if kind != envKind {
 		return nil, fmt.Errorf("%w: environment %q is kind %q, agent declared %q", ErrKindMismatch, e.ID, envKind, kind)
 	}
+	degraded := s.telemetry.check(kind, t)
 	e.Live = true
 	if placement != "" {
 		e.Placement = placement
 	}
 	mergeFacts(e, f)
 	e.State = StateAttesting
+	if degraded != "" {
+		// Degraded from the moment it checks in, not from its first heartbeat: an
+		// operator reading the console straight after registering should see the
+		// problem, not an ATTESTING row that looks fine for a tick.
+		e.State = StateDegraded
+		// Accepted, but said where an operator looks rather than only in a log: an
+		// environment reporting nowhere is one the console can show no metrics for,
+		// and that has to be visible from the moment it enrolls. Folded into what is
+		// already stored rather than replacing it — enrolment carries no component
+		// report, so overwriting would erase the last good one.
+		if comps, cerr := json.Marshal(withTelemetryComponent(storedComponents(e.Components), degraded)); cerr == nil {
+			e.Components = comps
+		}
+	}
 	// The MCP base URL and cert fingerprint are meko-specific: the meko agent fronts
 	// a per-environment MCP endpoint under mekodata.ai and presents a TLS cert. The
 	// amp controller reports neither, so synthesizing a mekodata.ai hostname and a
@@ -521,13 +547,43 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 	}
 	e.LastHeartbeatAt = &now
 	mergeFacts(e, r.ClusterFacts)
+	// Re-checked every tick, not only at enroll: a later `helm upgrade` that turns
+	// telemetry off or repoints it would otherwise show up as nothing worse than a
+	// gradually emptier dashboard. A refusal cannot un-enroll an environment that is
+	// already running, so here it degrades rather than erroring.
+	// Configuration first, then whether it is actually working. A deployment can
+	// pass every configuration check and still be shipping nothing, which is the
+	// failure the install-time preflight can only catch once.
+	degraded := s.telemetry.check(e.Kind, r.Telemetry)
+	if degraded == "" {
+		degraded = s.telemetry.checkRuntime(e.Kind, r.Telemetry)
+	}
+	if degraded != "" {
+		e.State = StateDegraded
+	}
 	// nil means the agent could not collect (no RBAC, a transient API error) — not
 	// that the environment has no workloads, so the stored list is left alone. Marshal
 	// would write `null`, which is not empty, so the repo's len==0 default never
 	// rescues it and one blip would erase the last good report. Same guard as
 	// Resources below, for the same reason.
-	if r.Components != nil {
-		if comps, err := json.Marshal(r.Components); err == nil {
+	//
+	// A telemetry problem still has to be recorded, and an amp agent reports no
+	// components at all — so it is folded into whatever list survives that rule
+	// rather than written over it.
+	//
+	// The recovery case is why this cannot be `degraded != ""`. For amp r.Components
+	// is ALWAYS nil (the agent's Role cannot list pods, so k8scomponents latches and
+	// reports none), so once the problem clears, both a `degraded != ""` and an
+	// `r.Components != nil` test are false and the stale telemetry row is written
+	// back unchanged, for ever — the state recovers above and the row does not.
+	// hadTelemetryRow is what notices there is something to clean up.
+	stored := storedComponents(e.Components)
+	if r.Components != nil || degraded != "" || hasTelemetryComponent(stored) {
+		base := r.Components
+		if base == nil {
+			base = stored
+		}
+		if comps, err := json.Marshal(withTelemetryComponent(base, degraded)); err == nil {
 			e.Components = comps
 		}
 	}

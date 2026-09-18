@@ -49,6 +49,31 @@ spec:
             - name: RECONCILE_INTERVAL
               value: {{ . | quote }}
             {{- end }}
+            {{- /* What this deployment ships and where, from the same otel values
+                   the collectors render from — so the agent cannot attest to
+                   something the collectors are not doing. The agent sends it on
+                   enroll and on every status tick; the control plane compares the
+                   endpoint against the one it printed in the install hint and
+                   DEGRADES the environment on a mismatch rather than refusing it.
+                   The install runs from a checkout the customer has, so this is the
+                   only side of the check a customer cannot edit away. */}}
+            - name: OTEL_ENABLED
+              value: {{ dig "enabled" true .Values.otel | quote }}
+            - name: OTEL_BYOC_ENABLED
+              value: {{ dig "byoc" "enabled" false .Values.otel | quote }}
+            - name: BYOC_METRICS_ENDPOINT
+              value: {{ dig "byoc" "metricsEndpoint" "" .Values.otel | quote }}
+            - name: OTEL_LOGS_SINK
+              value: {{ if dig "byoc" "enabled" false .Values.otel }}"datadog"{{ else }}""{{ end }}
+            {{- /* The CONTROLLER collector's own-telemetry endpoint, so the agent can
+                   report whether this environment is still SHIPPING rather than only
+                   what it was configured to ship. Deliberately not the compute
+                   collector's: that one scrapes endpoint pods, so an environment with
+                   no endpoints has no targets and a legitimately flat counter. */}}
+            {{- if dig "collectors" "controller" "enabled" true .Values.otel }}
+            - name: OTEL_COLLECTOR_METRICS_URL
+              value: "http://{{ include "yb-amp-controller.fullname" . }}-controller-collector-monitoring.{{ .Release.Namespace }}.svc.cluster.local:8888/metrics"
+            {{- end }}
             {{- $keySecret := .Values.agent.apiKeySecret.name | default "amp-agent-api-key" }}
             - name: YCP_API_KEY
               valueFrom:

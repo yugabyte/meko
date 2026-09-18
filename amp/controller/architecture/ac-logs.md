@@ -124,6 +124,12 @@ the scheme, matching the metrics exporters: plaintext for in-cluster `http://`,
 verified for `https://`. Any OTLP/HTTP logs receiver works — the store is not
 baked in.
 
+An explicit `""` drops this exporter from the pipeline entirely, leaving the
+Datadog fan-out below as the only sink. That is the BYOC shape: a customer cluster
+runs no VictoriaLogs, and an exporter aimed at one that is not there retries
+forever. An *absent* key is different and keeps the default, so
+`--reuse-values` on a release predating this cannot silently lose its store.
+
 ### Datadog fan-out (gated on `otel.byoc.enabled`, off by default)
 
 `otel.byoc.enabled` is the single switch for shipping telemetry off-cluster to
@@ -131,10 +137,11 @@ the yugabyte-cloud managed backends — metrics to Thanos (the metrics collector
 [`ac-metrics.md`](ac-metrics.md)) and, here, logs to Datadog. Off by default: a
 normal install ships only to the in-cluster stores. When on, a second `datadog`
 exporter joins the *same* logs pipeline, so a line reaches both VictoriaLogs and
-Datadog off one tail of the node. This is a *sink*, not a store swap: VictoriaLogs
-stays the in-cluster store (the Loki/CloudWatch/Datadog-as-store decision in the
-[`amp-monitoring` DESIGN](../../deploy/helm/amp-monitoring/DESIGN.md) is
-unchanged); Datadog is where the wider fleet's logs converge. Logs go **direct**
+Datadog off one tail of the node. On a cloud install this is a *sink*, not a store
+swap: VictoriaLogs stays the in-cluster store (the Loki/CloudWatch/Datadog-as-store
+decision in the [`amp-monitoring` DESIGN](../../deploy/helm/amp-monitoring/DESIGN.md)
+is unchanged); Datadog is where the wider fleet's logs converge. On a BYOC install,
+where `logsEndpoint` is empty, Datadog is the only sink there is. Logs go **direct**
 to Datadog's US3 intake (a public SaaS); metrics instead reach the *internal*
 Thanos through the BYOC PrivateLink door — hence two different auth secrets.
 
@@ -206,7 +213,19 @@ kubectl -n amp-dev create secret generic byoc-metrics-auth \
 helm upgrade --install amp deploy/helm/yb-amp-controller -n amp-dev \
   --set otel.enabled=true --set otel.byoc.enabled=true \
   --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
+
+# BYOC: yugabyte-cloud only, no in-cluster stores to ship to. Emptying both
+# endpoints is what drops those exporters; leaving them set ships to both.
+helm upgrade --install amp deploy/helm/yb-amp-controller -n "${NS}" \
+  --set otel.enabled=true --set otel.byoc.enabled=true \
+  --set-string otel.remoteWriteEndpoint= --set-string otel.logsEndpoint= \
+  --set agent.enabled=true ...
 ```
+
+A YCP-managed install (`agent.enabled`) is expected to have all of this, and is told
+when it does not: the chart warns through NOTES.txt and a post-install job reports
+whether metrics actually reach the door. Neither fails the install today — see
+[`ac-metrics.md`](ac-metrics.md#byoc-shipping-to-yugabyte-cloud).
 
 Then Grafana → **Dashboards → amp — Endpoint logs** (uid `amp-endpoint-logs`,
 shipped by the `amp-monitoring` chart). Endpoint / container / free-text

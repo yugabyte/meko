@@ -1,0 +1,135 @@
+suite: install notes
+templates:
+  - templates/NOTES.txt
+# NOTES.txt is what an operator reads immediately after `helm upgrade`, and it is
+# the one template nothing else renders — `helm template --show-only` cannot select
+# it and a dry-run needs a cluster. So it is pinned here.
+tests:
+  # The BYOC shape: no in-cluster store at all, so the old "in addition to the
+  # in-cluster stores" wording would be simply false.
+  - it: says telemetry ships only off-cluster when both endpoints are empty
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.remoteWriteEndpoint: ""
+      otel.logsEndpoint: ""
+    asserts:
+      - matchRegexRaw:
+          pattern: NO in-cluster store
+      - matchRegexRaw:
+          pattern: Logs have no in-cluster store either
+      - notMatchRegexRaw:
+          pattern: in addition to
+      # The preflight is the answer to "did it actually work?", so the notes say
+      # where its verdict is.
+      - matchRegexRaw:
+          pattern: telemetry-preflight
+      - matchRegexRaw:
+          pattern: checks it at enroll
+
+  # A non-BYOC install keeps the wording it had: both stores named, byoc optional.
+  - it: keeps the in-cluster wording for a normal install
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: in addition to
+      - matchRegexRaw:
+          pattern: victoria-metrics-server
+      - matchRegexRaw:
+          pattern: victoria-logs-server
+      # No agent, so no preflight to point at, and byoc stays the opt-in it was.
+      - notMatchRegexRaw:
+          pattern: telemetry-preflight
+      - matchRegexRaw:
+          pattern: Leave otel.byoc.enabled unset
+
+  # The render-time complaints are warnings now, not `fail`s, so NOTES is the ONLY
+  # place an operator is told. Each has to carry its own fix, since nothing stops to
+  # make them read it.
+  - it: warns a YCP-managed install that ships nowhere
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - matchRegexRaw:
+          pattern: "telemetry is\nnot set up to reach yugabyte-cloud"
+      - matchRegexRaw:
+          pattern: otel.byoc.enabled is false
+      - matchRegexRaw:
+          pattern: install was NOT failed
+      - matchRegexRaw:
+          pattern: DEGRADED
+
+  - it: names every configuration problem it found, not just the first
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.enabled: false
+      otel.byoc.metricsEndpoint: ""
+      otel.datadog.apiKeySecret.name: ""
+    asserts:
+      - matchRegexRaw:
+          pattern: otel.enabled is false
+      - matchRegexRaw:
+          pattern: metricsEndpoint is empty
+      - matchRegexRaw:
+          pattern: datadog.apiKeySecret is unset
+
+  # Silence when there is nothing to say: a correctly configured YCP install must not
+  # grow a warning block, or the block stops being read.
+  - it: says nothing when the telemetry is right
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: not set up to reach yugabyte-cloud
+
+  # And a non-YCP install is never warned: it ships to whatever in-cluster store it
+  # was pointed at, and none of the BYOC rules apply to it.
+  - it: never warns an install with no agent
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    asserts:
+      - notMatchRegexRaw:
+          pattern: not set up to reach yugabyte-cloud
+
+  # The probe reports rather than enforces, so NOTES must not claim a successful
+  # install proves anything.
+  - it: does not claim a successful install means metrics are flowing
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: successful install does NOT mean
+      - matchRegexRaw:
+          pattern: telemetry-preflight

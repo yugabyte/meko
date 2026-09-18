@@ -50,12 +50,12 @@ type AdminUser struct {
 // consumers (meko_ui, meko_admin) don't break, but it no longer
 // includes Standard subscribers.
 type AdminMetrics struct {
-	Scope         string  `json:"scope"`
-	TotalUsers    int64   `json:"total_users"`
-	FreeUsers     int64   `json:"free_users"`
-	StandardUsers int64   `json:"standard_users"`
-	ProUsers      int64   `json:"pro_users"`
-	Tier          *string `json:"tier"`
+	Scope              string  `json:"scope"`
+	TotalUsers         int64   `json:"total_users"`
+	FreeUsers          int64   `json:"free_users"`
+	StandardUsers      int64   `json:"standard_users"`
+	ProUsers           int64   `json:"pro_users"`
+	Tier               *string `json:"tier"`
 	Datapacks          int64   `json:"datapacks"`
 	SharedDatapacks    int64   `json:"shared_datapacks"`
 	KBDocuments        int64   `json:"kb_documents"`

@@ -5,7 +5,7 @@
 //
 //   - marketplacemetering.ResolveCustomer — trades the opaque token
 //     AWS posts to /marketplace/register for a stable CustomerIdentifier
-//     + AWS account id + product code.
+//   - AWS account id + product code.
 //   - marketplaceentitlementservice.GetEntitlements — reads which
 //     dimension (tier) the buyer is entitled to right now.
 //
@@ -78,11 +78,11 @@ const (
 // share across goroutines — both AWS clients and the *sql.DB inside
 // the repo are stateless in practice.
 type MarketplaceService struct {
-	cfg              MarketplaceConfig
-	repo             *repository.MarketplaceRepo
-	billingRepo      *repository.BillingRepo
-	meteringClient   *marketplacemetering.Client
-	entitlementCli   *marketplaceentitlementservice.Client
+	cfg            MarketplaceConfig
+	repo           *repository.MarketplaceRepo
+	billingRepo    *repository.BillingRepo
+	meteringClient *marketplacemetering.Client
+	entitlementCli *marketplaceentitlementservice.Client
 }
 
 // NewMarketplaceService builds the service. Returns (nil, nil) when

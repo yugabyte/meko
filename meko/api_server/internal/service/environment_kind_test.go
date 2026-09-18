@@ -143,7 +143,7 @@ func TestEnrollByKey_RejectsKindMismatch(t *testing.T) {
 		WithArgs(keyA).
 		WillReturnRows(envRow("acme-prod", KindMeko))
 
-	e, err := svc.EnrollByKey(keyA, "cloud", KindAmp, ClusterFacts{})
+	e, err := svc.EnrollByKey(keyA, "cloud", KindAmp, ClusterFacts{}, nil)
 	if e != nil {
 		t.Fatal("an amp agent must not enroll into a meko environment")
 	}

@@ -340,6 +340,10 @@ jobs:
         if: env.YCP == '1'
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+          # The control plane issues this door and accepts nothing else from an
+          # enrolling agent; the deploy step below uses the same value. Set it in
+          # one place so the two cannot drift.
+          YCP_BYOC_METRICS_URL: ${{ vars.BYOC_METRICS_URL || 'https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics' }}
         run: |
           AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
           export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
@@ -366,9 +370,16 @@ jobs:
       # Operator admission webhook (failurePolicy: Fail) rejects the whole install
       # when its serving cert is untrusted — if this step starts failing on a
       # webhook error, that is the cause, not the chart.
+      # The YCP path deploys a real BYOC data plane, so it needs the real telemetry
+      # credentials: a YCP-managed install must ship to yugabyte-cloud, and there is
+      # no flag anywhere that skips that. These are only read when YCP=1; a plain
+      # amp_deploy_gke run sets agent.enabled=false and is untouched by any of it.
       - name: Deploy (amp/deploy/up-gke.sh)
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+          YCP_BYOC_METRICS_URL: ${{ vars.BYOC_METRICS_URL || 'https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics' }}
+          YCP_BYOC_PASSWORD: ${{ secrets.BYOC_METRICS_PASSWORD }}
+          YCP_DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
         run: |
           AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
           export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
@@ -385,6 +396,9 @@ jobs:
           OTEL_ENABLED=true \
           YCP_ENABLED="$YCP" \
           TLS="$TLS" \
+          YCP_BYOC_METRICS_URL="$YCP_BYOC_METRICS_URL" \
+          YCP_BYOC_PASSWORD="$YCP_BYOC_PASSWORD" \
+          YCP_DATADOG_API_KEY="$YCP_DATADOG_API_KEY" \
           amp/deploy/up-gke.sh
 
       # Plain amp_deploy_gke (+extensions): the API-driven smoke. Skipped in YCP

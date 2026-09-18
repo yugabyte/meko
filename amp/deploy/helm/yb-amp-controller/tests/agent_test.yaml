@@ -99,3 +99,81 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: quay.io/yugabyte/ycp-reconciler-agent:latest
+
+  # The agent is what attests this deployment's telemetry to the control plane, so
+  # these come from the same otel values the collectors render from: the agent must
+  # not be able to report something the collectors are not doing. The control plane
+  # compares the endpoint against the one it printed in the install hint and marks the
+  # environment DEGRADED on a mismatch — the one check a customer cannot edit away,
+  # since the install runs from a checkout they have.
+  - it: reports the deployment's telemetry configuration to the control plane
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.metricsEndpoint: https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_BYOC_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: BYOC_METRICS_ENDPOINT, value: "https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_LOGS_SINK, value: "datadog"}
+
+  # An agent deployed without byoc still attests — reporting "off" is what lets the
+  # control plane say so, where reporting nothing is indistinguishable from an old
+  # agent image.
+  - it: attests honestly when byoc is off
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_BYOC_ENABLED, value: "false"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_LOGS_SINK, value: ""}
+
+  # The agent watches the CONTROLLER collector's own telemetry so it can report
+  # whether the environment is still shipping, not just what it was configured to
+  # ship. Not the compute collector's: that one scrapes endpoint pods, so an
+  # environment owning no endpoints has no targets and a legitimately flat counter.
+  - it: points the agent at the controller collector's own telemetry
+    release:
+      namespace: amp-acme-prod
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_COLLECTOR_METRICS_URL
+            value: http://RELEASE-NAME-yb-amp-controller-controller-collector-monitoring.amp-acme-prod.svc.cluster.local:8888/metrics
+
+  # With the controller collector off there is nothing whose counter means anything,
+  # so the agent is given no endpoint rather than a URL that answers nothing.
+  - it: omits the watch endpoint when the controller collector is off
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.collectors.controller.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_COLLECTOR_METRICS_URL
+          any: true

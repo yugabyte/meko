@@ -145,6 +145,85 @@ app.kubernetes.io/component: reconcile-agent
 app: amp-reconcile-agent
 {{- end }}
 
+{{- /*
+Everything wrong with a YCP-managed install's telemetry, one per line, or empty when
+there is nothing to say. NOTES.txt prints it — helm has no warn primitive, and NOTES
+is the only channel it gives an operator.
+
+These were `fail`s. They are warnings for now because the BYOC door is still being
+rolled out fleet by fleet: an install that cannot ship is as likely to be a fleet
+problem as an operator mistake, and failing their release over it teaches them to
+work around the check. Each line therefore has to carry the fix, since nothing stops
+to make them read it.
+
+Only rendered for agent.enabled — a non-YCP install ships to whatever in-cluster
+store it was pointed at and none of this applies.
+*/}}
+{{- define "yb-amp-controller.telemetryWarnings" -}}
+{{- $w := list -}}
+{{- if dig "enabled" false .Values.agent -}}
+{{- if not (dig "enabled" true .Values.otel) -}}
+{{- $w = append $w "otel.enabled is false, so nothing collects metrics or logs at all. Set otel.enabled=true." -}}
+{{- end -}}
+{{- if not (dig "byoc" "enabled" false .Values.otel) -}}
+{{- $w = append $w "otel.byoc.enabled is false, so the collectors run but send nowhere the YCP console can read. Take the full --set list from the install hint the console prints." -}}
+{{- end -}}
+{{- if not (.Capabilities.APIVersions.Has "opentelemetry.io/v1beta1") -}}
+{{- $w = append $w "the OpenTelemetry Operator is not installed (no opentelemetry.io/v1beta1 CRDs), so the collectors were skipped entirely and this environment ships nothing. Install it, then helm upgrade." -}}
+{{- end -}}
+{{- if not (or (dig "collectors" "controller" "enabled" true .Values.otel) (dig "collectors" "compute" "enabled" true .Values.otel)) -}}
+{{- $w = append $w "both metrics collectors are disabled, so nothing scrapes amp." -}}
+{{- end -}}
+{{- if not (dig "collectors" "logs" "enabled" true .Values.otel) -}}
+{{- $w = append $w "otel.collectors.logs.enabled is false: byoc ships metrics AND logs, and a YCP-managed environment wants both." -}}
+{{- end -}}
+{{- $ep := dig "byoc" "metricsEndpoint" "" .Values.otel -}}
+{{- if not $ep -}}
+{{- $w = append $w "otel.byoc.metricsEndpoint is empty: there is nowhere to send metrics. Take it from the install hint — the control plane checks this value at enroll." -}}
+{{- else if not (hasPrefix "https://" $ep) -}}
+{{- $w = append $w (printf "otel.byoc.metricsEndpoint is %q: the BYOC door is BasicAuth over TLS, and a plaintext URL would put the password on the wire." $ep) -}}
+{{- end -}}
+{{- if or (not (dig "byoc" "username" "" .Values.otel)) (not (dig "byoc" "passwordSecret" "name" "" .Values.otel)) (not (dig "byoc" "passwordSecret" "key" "" .Values.otel)) -}}
+{{- $w = append $w "otel.byoc.username or otel.byoc.passwordSecret is unset, so the metrics door has no credential and the collectors will not start." -}}
+{{- end -}}
+{{- if or (not (dig "datadog" "apiKeySecret" "name" "" .Values.otel)) (not (dig "datadog" "apiKeySecret" "key" "" .Values.otel)) -}}
+{{- $w = append $w "otel.datadog.apiKeySecret is unset, so the logs fan-out has no credential — and the datadog exporter fails collector startup on an empty key, taking the whole log pipeline down." -}}
+{{- end -}}
+{{- end -}}
+{{- $w | join "\n" -}}
+{{- end }}
+
+{{- /*
+The CONTROLLER collector's own-telemetry endpoint, for the preflight to read
+otelcol_exporter_sent_metric_points off. The OpenTelemetry Operator creates one
+`<collector CR name>-collector-monitoring` Service per collector, serving :8888;
+the CR names come from otel-collectors.yaml, so the two cannot drift.
+
+ONLY the controller collector, and that is load-bearing: awaitExport requires every
+URL it is given to export before it passes, and the compute collector's only targets
+are endpoint pods. A freshly installed environment owns none — which is exactly when
+the console prints this recipe — so listing it would make the probe report a failure
+on every first install, while the door and the controller collector were fine. The
+logs daemonset is out for a related reason: it ships only what containers write, so
+a quiet environment looks identical to a broken one.
+
+telemetrywatch.go and agent-deployment.yaml exclude the same collectors for the same
+reason; the three have to agree.
+
+That Service name is the OPERATOR's convention, not this chart's, so it was
+verified against a live collector rather than assumed (itest-dev, operator-managed
+contrib 0.158.0: `yb-amp-controller-controller-collector-monitoring` :8888). If a
+future operator release renames it the preflight fails every install on a timeout,
+which is loud but misleading — check here first.
+*/}}
+{{- define "yb-amp-controller.preflightCollectorURLs" -}}
+{{- $urls := list -}}
+{{- if dig "collectors" "controller" "enabled" true .Values.otel -}}
+{{- $urls = append $urls (printf "http://%s-controller-collector-monitoring.%s.svc.cluster.local:8888/metrics" (include "yb-amp-controller.fullname" .) .Release.Namespace) -}}
+{{- end -}}
+{{- $urls | join "," -}}
+{{- end }}
+
 {{- define "yb-amp-controller.agentImage" -}}
 {{- printf "%s:%s"
       (include "yb-amp-controller.imageRepo" (dict "repo" .Values.agent.image.repository "ctx" .))

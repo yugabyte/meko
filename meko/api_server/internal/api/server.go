@@ -89,6 +89,18 @@ type ServerConfig struct {
 	// the monitoring wiring says why instead of 404ing.
 	MetricsURL string
 
+	// BYOCMetricsURL is the OTLP/HTTP door a BYOC data plane ships metrics to —
+	// the write side of MetricsURL's read side. ONE value feeds two consumers that
+	// must agree: the install hint prints it, and the enroll check DEGRADES an
+	// environment whose agent reports anything else. That is the point of it being
+	// config rather than two constants — the install runs from a checkout the
+	// customer has, so the endpoint is not theirs to choose and the control plane is
+	// the only side that can say so.
+	//
+	// It defaults to the devcloud door (see main.go), so it is the PROD deployment
+	// that must set this, not a dev one.
+	BYOCMetricsURL string
+
 	// YBAAPIToken authenticates read-only calls to YugabyteDB Anywhere
 	// (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. When empty, the
 	// /admin/dataplane endpoint reports the data plane as not configured.

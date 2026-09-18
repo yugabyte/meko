@@ -29,6 +29,14 @@ const defaultAgentNamespace = "ycp-agent"
 // substitutes the real value; an operator reading the hint raw pastes their own.
 const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder, not a credential
 
+// The two telemetry Secrets the collectors read by secretKeyRef. Named here
+// because the hint creates them, and left at the chart's defaults so the install
+// passes no --set for either: one name, in one place, for the create and the read.
+const (
+	byocMetricsSecretName = "byoc-metrics-auth" //nolint:gosec // a Secret NAME, not a credential
+	datadogSecretName     = "datadog-api"       //nolint:gosec // a Secret NAME, not a credential
+)
+
 // installHint renders the commands that attach an agent to an environment. It is the
 // only place an operator is told how to do this, so it has to be runnable as printed,
 // not a sketch.
@@ -37,10 +45,10 @@ const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder,
 // the amp controller and its reconcile-agent, a meko environment installs the meko
 // stack and the same reconcile-agent. Which components an environment runs is the
 // chart's business either way; desired state declares only what lives inside them.
-func installHint(c echo.Context, e *models.Environment) string {
+func installHint(c echo.Context, e *models.Environment, byocMetricsURL string) string {
 	url := agentURL(c, e.AccountID, e.AgentBaseURL)
 	if e.Kind == "amp" {
-		return ampInstallHint(url, e.ID, e.Placement, e.AccountID)
+		return ampInstallHint(url, e.ID, e.Placement, e.AccountID, byocMetricsURL)
 	}
 	return mekoReconcileInstallHint(url, e.ID, service.DefaultDataPlaneRelease(""))
 }
@@ -195,14 +203,21 @@ func namespaceFor(envID, fallback string) string {
 // to the environment's desired state over the REST API. The controller itself never
 // talks to YCP.
 //
-// Everything the control plane can know is filled in. What is left are four values
-// it cannot — the YugabyteDB endpoint, the image tag, the pull secret, and the
-// namespace if the default does not suit — and those are lifted into a header the
-// operator edits once, rather than left as placeholders inside a command that looks
-// pasteable and is not. The chart's own defaults are not usable as-is: the images
-// resolve to docker.io, otel remote-writes to a store that is not there, and the UI
-// and an internal LoadBalancer would both be deployed for nobody.
-func ampInstallHint(ycpURL, envID, placement, accountID string) string {
+// Everything the control plane can know is filled in. What is left are the values
+// it cannot — the YugabyteDB endpoint, the image tag, the pull secret, the two
+// telemetry credentials, and the namespace if the default does not suit — and those
+// are lifted into a header the operator edits once, rather than left as
+// placeholders inside a command that looks pasteable and is not. The chart's own
+// defaults are not usable as-is: the images resolve to docker.io, the telemetry
+// sinks are in-cluster stores this cluster does not run, and the UI and an internal
+// LoadBalancer would both be deployed for nobody.
+//
+// byocMetricsURL is deliberately NOT in that header. It is the door this control
+// plane minted credentials for, so it is not an install-time choice: it is printed
+// inline, and an agent reporting anything else has its environment marked DEGRADED.
+// Empty (a control plane with no door configured) prints the telemetry lines it can
+// and leaves the endpoint to the chart's default.
+func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) string {
 	ns := namespaceFor(envID, ampInstallNamespace)
 
 	var b strings.Builder
@@ -210,13 +225,25 @@ func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 	fmt.Fprintf(&b, "#   - YugabyteDB up and reachable from this cluster, with a yb_storage database:\n")
 	fmt.Fprintf(&b, "#       CREATE DATABASE yb_storage;\n")
 	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
-	fmt.Fprintf(&b, "#   - a docker-registry Secret for quay.io/yugabyte, in the namespace below\n\n")
+	fmt.Fprintf(&b, "#   - a docker-registry Secret for quay.io/yugabyte, in the namespace below\n")
+	fmt.Fprintf(&b, "#   - the OpenTelemetry Operator, with the contrib collector distro. The\n")
+	fmt.Fprintf(&b, "#     collectors are OpenTelemetryCollector CRs, so nothing ships without it:\n")
+	fmt.Fprintf(&b, "#       helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts\n")
+	fmt.Fprintf(&b, "#       helm upgrade --install opentelemetry-operator open-telemetry/opentelemetry-operator \\\n")
+	fmt.Fprintf(&b, "#         -n opentelemetry-operator-system --create-namespace \\\n")
+	fmt.Fprintf(&b, "#         --set admissionWebhooks.certManager.enabled=false \\\n")
+	fmt.Fprintf(&b, "#         --set admissionWebhooks.autoGenerateCert.enabled=true \\\n")
+	fmt.Fprintf(&b, "#         --set manager.collectorImage.repository=otel/opentelemetry-collector-contrib\n\n")
 
 	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is.\n")
 	fmt.Fprintf(&b, "NS=%s\n", ns)
 	fmt.Fprintf(&b, "YB=<yb-tserver-host>:5433      # YugabyteDB tserver endpoint (host:port)\n")
 	fmt.Fprintf(&b, "TAG=<amp image tag>            # quay.io/yugabyte/amp-* tag, e.g. custom-7f195e43e51f\n")
-	fmt.Fprintf(&b, "PULL_SECRET=<secret name>      # docker-registry Secret for quay.io/yugabyte\n\n")
+	fmt.Fprintf(&b, "PULL_SECRET=<secret name>      # docker-registry Secret for quay.io/yugabyte\n")
+	fmt.Fprintf(&b, "BYOC_PASSWORD=<byoc password>  # BasicAuth password for the metrics door\n")
+	fmt.Fprintf(&b, "DD_API_KEY=<datadog api key>   # logs fan-out to Datadog\n")
+	fmt.Fprintf(&b, "POD_METRICS=true               # per-pod CPU/mem; needs a cluster-scoped ClusterRole\n")
+	fmt.Fprintf(&b, "                               # for node metrics — false to stay namespace-scoped\n\n")
 
 	fmt.Fprintf(&b, "# 1 — hand the cluster the agent's API key (shown once by YBM; revocable\n")
 	fmt.Fprintf(&b, "#      there). The reconcile-agent reads it, not the controller.\n")
@@ -225,9 +252,25 @@ func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 	fmt.Fprintf(&b, "  --from-literal=api-key=%s \\\n", apiKeyPlaceholder)
 	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
 
-	fmt.Fprintf(&b, "# 2 — install the amp controller and its reconcile-agent, from a meko checkout.\n")
+	fmt.Fprintf(&b, "# 2 — hand the cluster the two telemetry credentials. Both must exist BEFORE\n")
+	fmt.Fprintf(&b, "#      the install: the collectors read them by secretKeyRef, and a missing one\n")
+	fmt.Fprintf(&b, "#      fails that collector to start.\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic %s \\\n", byocMetricsSecretName)
+	fmt.Fprintf(&b, "  --from-literal=password=\"${BYOC_PASSWORD}\" \\\n")
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic %s \\\n", datadogSecretName)
+	fmt.Fprintf(&b, "  --from-literal=api-key=\"${DD_API_KEY}\" \\\n")
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
+
+	fmt.Fprintf(&b, "# 3 — install the amp controller and its reconcile-agent, from a meko checkout.\n")
 	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
 	fmt.Fprintf(&b, "helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller -n \"${NS}\" \\\n")
+	// Above the preflight hook's own budget. helm waits on a post-install hook for
+	// --timeout, which defaults to exactly 5m — the same as the preflight's default
+	// deadline — so without this helm abandons the release first and reports a
+	// timeout instead of the probe's verdict, and an upgrade is left failed for a
+	// check that was still running.
+	fmt.Fprintf(&b, "  --timeout 10m \\\n")
 	fmt.Fprintf(&b, "  --set-string imageTag=\"${TAG}\" \\\n")
 	// --set-string, not --set: the DSN's ? and = are mis-tokenized by --set.
 	fmt.Fprintf(&b, "  --set-string controller.databaseUrl=\"postgres://yugabyte@${YB}/yb_storage?sslmode=disable\" \\\n")
@@ -235,7 +278,18 @@ func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 	fmt.Fprintf(&b, "  --set \"imagePullSecrets[0].name=${PULL_SECRET}\" \\\n")
 	fmt.Fprintf(&b, "  --set controller.service.type=none \\\n")
 	fmt.Fprintf(&b, "  --set ui.enabled=false \\\n")
-	fmt.Fprintf(&b, "  --set otel.enabled=false \\\n")
+	fmt.Fprintf(&b, "  --set otel.enabled=true \\\n")
+	fmt.Fprintf(&b, "  --set otel.byoc.enabled=true \\\n")
+	if byocMetricsURL != "" {
+		fmt.Fprintf(&b, "  --set-string otel.byoc.metricsEndpoint=%s \\\n", byocMetricsURL)
+	}
+	// Empty, not absent: the chart reads "" as "no in-cluster sink" and drops that
+	// exporter, while an absent key keeps its default. Without this the collectors
+	// would carry a permanently failing exporter aimed at a VictoriaMetrics and a
+	// VictoriaLogs no BYOC cluster runs.
+	fmt.Fprintf(&b, "  --set-string otel.remoteWriteEndpoint= \\\n")
+	fmt.Fprintf(&b, "  --set-string otel.logsEndpoint= \\\n")
+	fmt.Fprintf(&b, "  --set otel.podMetrics=\"${POD_METRICS}\" \\\n")
 	for _, a := range metricsIdentityArgs(envID, accountID) {
 		fmt.Fprintf(&b, "  --set %s \\\n", a)
 	}
@@ -252,10 +306,14 @@ func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" rollout status deploy/amp-controller\n")
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs -f deploy/amp-reconcile-agent\n")
 	fmt.Fprintf(&b, "#\n")
-	fmt.Fprintf(&b, "# otel is off because its default remote-write endpoint is a metrics store this\n")
-	fmt.Fprintf(&b, "# cluster very likely does not run. Turn it back on with otel.remoteWriteEndpoint\n")
-	fmt.Fprintf(&b, "# set, on a cluster running the OpenTelemetry Operator; the environmentId and\n")
-	fmt.Fprintf(&b, "# accountId above then label every series it scrapes.\n")
+	fmt.Fprintf(&b, "# Telemetry ships to yugabyte-cloud and nowhere else — this cluster runs no\n")
+	fmt.Fprintf(&b, "# in-cluster metrics or log store, which is why both endpoints above are empty.\n")
+	fmt.Fprintf(&b, "# A post-install job checks the metrics door and waits for the collectors to\n")
+	fmt.Fprintf(&b, "# export through it. It does NOT fail the install, so a successful install does\n")
+	fmt.Fprintf(&b, "# not mean metrics are flowing — its log is the verdict:\n")
+	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs job/yb-amp-controller-telemetry-preflight\n")
+	fmt.Fprintf(&b, "# The metrics endpoint is not an install-time choice: this console checks it at\n")
+	fmt.Fprintf(&b, "# enroll, and shows an environment that ships elsewhere as DEGRADED.\n")
 	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# Already running an amp controller in this namespace? Attach the agent to that\n")
 	fmt.Fprintf(&b, "# release instead, leaving every other value untouched:\n")
@@ -267,6 +325,15 @@ func ampInstallHint(ycpURL, envID, placement, accountID string) string {
 		fmt.Fprintf(&b, "--set agent.placement=%s ", placement)
 	}
 	fmt.Fprintf(&b, "\\\n")
+	// --reuse-values replays the old release's values and ignores new chart
+	// defaults, so every telemetry value has to be repeated here: without them the
+	// re-attached release keeps shipping nowhere and the environment comes up
+	// DEGRADED.
+	fmt.Fprintf(&b, "#     --set otel.enabled=true --set otel.byoc.enabled=true \\\n")
+	if byocMetricsURL != "" {
+		fmt.Fprintf(&b, "#     --set-string otel.byoc.metricsEndpoint=%s \\\n", byocMetricsURL)
+	}
+	fmt.Fprintf(&b, "#     --set-string otel.remoteWriteEndpoint= --set-string otel.logsEndpoint= \\\n")
 	for _, a := range metricsIdentityArgs(envID, accountID) {
 		fmt.Fprintf(&b, "#     --set %s \\\n", a)
 	}

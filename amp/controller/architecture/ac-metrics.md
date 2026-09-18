@@ -121,8 +121,60 @@ because cAdvisor lives in the kubelet and has no namespaced equivalent. That pai
 is named `<namespace>-<release>-otel` — unprefixed, two installs on one cluster
 share it and either `uninstall` revokes the other's node access (#888). With
 `podMetrics` off the collectors need no cluster-scoped rights at all. Store is set
-via `otel.remoteWriteEndpoint` (VictoriaMetrics by default). **Requires the OTel
+via `otel.remoteWriteEndpoint` (VictoriaMetrics by default); an explicit `""` drops
+that exporter entirely, which is what a BYOC install does. **Requires the OTel
 Operator** (opentelemetry.io CRDs) in the cluster.
+
+## BYOC: shipping to yugabyte-cloud
+
+`otel.byoc.enabled` adds an `otlphttp/byoc` exporter to both metrics collectors —
+BasicAuth over the BYOC PrivateLink door — and a `datadog` exporter to the logs
+daemonset. A BYOC install pairs it with empty `remoteWriteEndpoint` and
+`logsEndpoint`, so yugabyte-cloud is the only destination; a cloud install leaves
+those set and ships to both.
+
+Three things make that hold in a cluster we do not own.
+
+**The chart tells the operator, and does not stop them.** `agent.enabled` marks the
+environment as YCP-managed, and `yb-amp-controller.telemetryWarnings` then collects
+everything wrong — otel off, byoc off, no operator, nothing scraping, the logs
+collector off, a plaintext or empty endpoint, an unnamed credential — into a block
+NOTES.txt prints after the install. It collects *all* of them rather than stopping at
+the first, because nothing interrupts the operator to make them read it. These were
+`fail`s; they are warnings while the BYOC door is rolled out fleet by fleet, since an
+install that cannot ship is as likely to be a fleet problem as an operator mistake.
+
+**A post-install hook reports whether it works, not just that it is configured.**
+The same file's Job — running the reconcile-agent image with `preflight` — POSTs a
+gzipped OTLP payload to the door (401/403 is a wrong password, a transport error is
+PrivateLink not wired) and then polls the **controller** collector's own
+`otelcol_exporter_sent_metric_points{exporter="otlphttp/byoc"}` until it is non-zero.
+Only that collector: the compute one scrapes endpoint pods, so a freshly installed
+environment owns none and its counter is legitimately flat.
+
+It exits 0 whatever it finds, so a successful install does **not** mean metrics are
+flowing — the Job's log is the verdict, and NOTES.txt says so. There is no flag
+controlling that; making it fatal later is a `return err` in `runPreflight`.
+
+**The control plane watches, because the install runs from a checkout the customer
+has**: every rule inside the chart is theirs to edit. The agent reports its effective
+telemetry config — read from the same values the collectors render from — on enroll
+and on every status tick, and YCP compares the endpoint against its own
+`--byoc-metrics-url`, the same value it printed in the install hint.
+
+A mismatch **degrades the environment, never refuses it**: one that cannot ship
+metrics is still one an operator needs to see, and refusing it would hide exactly
+what the refusal is about. (It would also be a restart-time lockout — enrolment
+repeats at every agent startup.) The reason lands on a synthetic `telemetry`
+component the console already renders.
+
+The agent additionally reports whether metrics are still *flowing*, not just
+configured: it reads the controller collector's
+`otelcol_exporter_sent_metric_points{exporter="otlphttp/byoc"}` each tick and reports
+how long it has sat still, so an environment that breaks after install is degraded
+rather than going quietly dark. The controller collector specifically — the compute
+one scrapes endpoint pods, so an environment with none has a legitimately flat
+counter.
 
 Implementation notes learned deploying this on EKS:
 - Use the **contrib** collector image (the `prometheus` receiver +

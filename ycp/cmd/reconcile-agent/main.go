@@ -59,6 +59,28 @@ const (
 )
 
 func main() {
+	// The one subcommand: the chart's post-install telemetry preflight runs this
+	// same image, so the probe ships with the agent rather than in a curl
+	// container the customer's registry may not be able to pull.
+	//
+	// An agent tag older than this arm has no os.Args handling at all: it falls
+	// through to the agent path and dies at "ENV_NAME is required", because the
+	// preflight Job sets none of the agent's env. The hook still fails, but the log
+	// sends the operator after agent configuration instead of the tag bump that
+	// actually fixes it — worth knowing when triaging a preflight that failed for a
+	// reason nothing here explains.
+	if len(os.Args) > 1 {
+		if os.Args[1] != "preflight" {
+			log.Fatalf("unknown subcommand %q (the only one is \"preflight\"); "+
+				"an older agent image has no subcommands at all, so bump agent.image.tag", os.Args[1])
+		}
+		if err := runPreflight(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("telemetry preflight passed: this environment is shipping metrics to yugabyte-cloud")
+		return
+	}
+
 	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080/api/v1"), "/")
 	// AMP_CONTROLLER_URL must include the API base path (the controller mounts
 	// its REST API at /api/v1).
@@ -75,6 +97,8 @@ func main() {
 	devAdminSecret := os.Getenv("YCP_DEV_ADMIN_SECRET")
 	devAPIKeyID := os.Getenv("YCP_DEV_API_KEY_ID")
 	agentVer := env("AGENT_VERSION", "dev")
+	telemetry := telemetryFromEnv()
+	telWatch := newTelemetryWatch(os.Getenv(envCollectorMetricsURL))
 	interval := 10 * time.Second
 	if d, err := time.ParseDuration(os.Getenv("RECONCILE_INTERVAL")); err == nil && d > 0 {
 		interval = d
@@ -153,6 +177,8 @@ func main() {
 		kind:      kind,
 		placement: placement,
 		agentVer:  agentVer,
+		telemetry: telemetry,
+		telWatch:  telWatch,
 		tasks:     tasks,
 	}
 
@@ -276,6 +302,16 @@ type agent struct {
 	placement string
 	agentVer  string
 
+	// telemetry is what this deployment is configured to ship, read from the env
+	// the chart set from the same values the collectors render from. Reported on
+	// enroll and on every tick; the control plane is what decides whether it is
+	// acceptable. nil for a deployment whose chart sets none of it.
+	telemetry *api.Telemetry
+	// telWatch turns the collectors' own counters into whether this environment is
+	// still SHIPPING, which the configuration above cannot see. nil when the chart
+	// wired no collector endpoint.
+	telWatch *telemetryWatch
+
 	envID    string
 	envUUID  string
 	lastGood api.DesiredState
@@ -303,6 +339,7 @@ func (a *agent) enrollWithRetry(ctx context.Context, st state) error {
 			Name:      a.envName,
 			Placement: a.placement,
 			Kind:      a.kind,
+			Telemetry: a.telemetry,
 		})
 		if err == nil {
 			a.envID = resp.EnvironmentID
@@ -386,11 +423,18 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 	if len(res.Failed) > 0 || len(res.Stuck) > 0 {
 		stateStr = api.StateDegraded
 	}
+	// Read the collectors before reporting, so the control plane sees this tick's
+	// view rather than the previous one's. Two GETs to an in-cluster Service, on a
+	// loop already making several.
+	now := time.Now()
+	a.telWatch.Observe(ctx, now)
+
 	report := api.StatusReport{
 		EnvironmentState: stateStr,
 		AgentVersion:     a.agentVer,
 		AppliedRevision:  ds.Revision,
 		Resources:        inventory(res),
+		Telemetry:        a.telWatch.Report(a.telemetry, now),
 	}
 	// Workload health is additive, like the task log below: the console's components
 	// tab is worth having, but not at the cost of the convergence report that the

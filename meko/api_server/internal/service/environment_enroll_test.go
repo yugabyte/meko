@@ -37,7 +37,7 @@ func TestEnrollByKey_ChecksIn(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	e, err := svc.EnrollByKey(keyA, "cloud", KindMeko, ClusterFacts{Provider: "aws"})
+	e, err := svc.EnrollByKey(keyA, "cloud", KindMeko, ClusterFacts{Provider: "aws"}, nil)
 	if err != nil {
 		t.Fatalf("EnrollByKey: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestEnrollByKey_UnknownKeyIsNil(t *testing.T) {
 		WithArgs(keyB).
 		WillReturnRows(sqlmock.NewRows(envRowCols))
 
-	e, err := svc.EnrollByKey(keyB, "cloud", KindMeko, ClusterFacts{})
+	e, err := svc.EnrollByKey(keyB, "cloud", KindMeko, ClusterFacts{}, nil)
 	if err != nil {
 		t.Fatalf("EnrollByKey: %v", err)
 	}

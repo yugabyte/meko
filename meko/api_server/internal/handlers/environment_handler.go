@@ -65,7 +65,7 @@ func (h *EnvironmentHandler) Get(c echo.Context) error {
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
 	}
-	e.InstallHint = installHint(c, e)
+	e.InstallHint = installHint(c, e, h.svc.BYOCMetricsURL())
 	return ok(c, http.StatusOK, e)
 }
 
@@ -97,7 +97,7 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 	}
 	body := map[string]any{
 		"environment":  e,
-		"install_hint": installHint(c, e),
+		"install_hint": installHint(c, e, h.svc.BYOCMetricsURL()),
 	}
 	return ok(c, http.StatusCreated, body)
 }
@@ -267,7 +267,7 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	if !bindJSON(c, &req) {
 		return nil
 	}
-	e, err := h.svc.EnrollByKey(auth.GetAPIKeyID(c), req.Placement, req.Kind, req.ClusterFacts)
+	e, err := h.svc.EnrollByKey(auth.GetAPIKeyID(c), req.Placement, req.Kind, req.ClusterFacts, req.Telemetry)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())

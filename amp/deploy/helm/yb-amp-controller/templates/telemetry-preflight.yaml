@@ -1,0 +1,125 @@
+{{- /*
+Telemetry preflight for a YCP-managed install.
+
+`agent.enabled` is the mode marker: the reconcile-agent is the environment's sole
+YCP client, so an install with it is a YCP-managed environment and an install
+without it is not. Deliberately NOT a `mode: byoc|inCluster` value — a value that
+can be set to the easy thing gets set to the easy thing. Setting agent.enabled=false
+to dodge these checks deletes the agent, so the environment never enrolls; the
+bypass is indistinguishable from not installing.
+
+NOTHING HERE FAILS AN INSTALL, for now. Telemetry is reported, not enforced: the
+BYOC door is still being rolled out fleet by fleet and the prod one is not verified
+the way devcloud is, so an install that cannot ship is as likely to be a fleet
+problem as an operator mistake — and failing their release over it teaches them to
+work around the check. The configuration complaints are surfaced through NOTES.txt
+(`yb-amp-controller.telemetryWarnings`), which is the only channel helm gives an
+operator; the runtime probe below reports its verdict to its own log and exits 0
+whatever it finds. Making either fatal later is a local change in one place each,
+and there is deliberately no values flag for it — a flag is the thing an operator
+sets to make the warning go away.
+
+`dig` throughout, for the --reuse-values reason documented in otel-collectors.yaml:
+an upgrade replaying an older release's values must see these, not nil-pointer past
+them.
+*/}}
+{{- if dig "enabled" false .Values.agent }}
+{{- $byocEnabled := dig "byoc" "enabled" false .Values.otel }}
+{{- $metricsEndpoint := dig "byoc" "metricsEndpoint" "" .Values.otel }}
+{{- $byocUser := dig "byoc" "username" "" .Values.otel }}
+{{- $pwSecret := dig "byoc" "passwordSecret" "name" "" .Values.otel }}
+{{- $pwKey := dig "byoc" "passwordSecret" "key" "" .Values.otel }}
+{{- $ddSecret := dig "datadog" "apiKeySecret" "name" "" .Values.otel }}
+{{- $ddKey := dig "datadog" "apiKeySecret" "key" "" .Values.otel }}
+{{- /* A non-positive timeout is clamped rather than refused: it is how long to wait
+       for the first export, and a bad value should not decide whether this Job
+       exists at all. */}}
+{{- $timeout := dig "byoc" "preflight" "timeoutSeconds" 300.0 .Values.otel | float64 | int }}
+{{- if le $timeout 0 }}{{ $timeout = 300 }}{{ end }}
+
+{{- /* Rendered only when there is a door to probe. With byoc off, no endpoint, or no
+       credential named, the Job would have nothing to do and its pod would be a
+       confusing failure standing in for the NOTES warning that explains the real
+       problem. The CRD gate is here for the same reason: with no OpenTelemetry
+       Operator there are no collectors, so the export half could never pass. */}}
+{{- $probeable := and $byocEnabled (hasPrefix "https://" $metricsEndpoint) $byocUser $pwSecret $pwKey
+      (dig "enabled" true .Values.otel) (.Capabilities.APIVersions.Has "opentelemetry.io/v1beta1") }}
+{{- if $probeable }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "yb-amp-controller.fullname" . }}-telemetry-preflight
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry-preflight
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  {{- /* The probe exits 0 whatever it finds, so this Job SUCCEEDING says nothing
+         about the verdict — its log is the verdict. backoffLimit 0 so a pod that
+         cannot start is not retried; helm has no way to ignore a failed hook, which
+         is exactly why the credentials below are optional and the probe never exits
+         non-zero. Those two together are what keep this warn-only. */}}
+  backoffLimit: 0
+  {{- /* HEADROOM over the container's own PREFLIGHT_TIMEOUT, not the same number.
+         The Job's clock starts before the container's (image pull, scheduling), so
+         an equal deadline means the Job controller wins the export-wait timeout and
+         deletes the pod, destroying the one log that says WHICH collector never
+         exported — the entire reason hook-delete-policy keeps the pod. */}}
+  activeDeadlineSeconds: {{ add $timeout 120 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yb-amp-controller.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: telemetry-preflight
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: preflight
+          {{- /* The reconcile-agent image this release already pulls, with the
+                 `preflight` subcommand: no new image, the same quay.io registry and
+                 pull secrets as everything else here, and the same Go probe the
+                 agent reuses for its own reporting. The image is distroless-static,
+                 hence a subcommand rather than a shell script. */}}
+          image: {{ include "yb-amp-controller.agentImage" . }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          args: ["preflight"]
+          env:
+            - name: BYOC_METRICS_ENDPOINT
+              value: {{ $metricsEndpoint | quote }}
+            - name: BYOC_METRICS_USERNAME
+              value: {{ $byocUser | quote }}
+            {{- /* optional: a missing Secret must NOT block the pod from starting.
+                   helm cannot ignore a failed hook, so a pod that never starts would
+                   fail the release — the one hard failure a warn-only design has to
+                   avoid. The probe reports an empty credential itself, which is the
+                   same information in the right channel. */}}
+            - name: BYOC_METRICS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pwSecret | quote }}
+                  key: {{ $pwKey | quote }}
+                  optional: true
+            {{- if and $ddSecret $ddKey }}
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ddSecret | quote }}
+                  key: {{ $ddKey | quote }}
+                  optional: true
+            {{- end }}
+            {{- /* The collectors' own telemetry, which the export check polls for
+                   otelcol_exporter_sent_metric_points{exporter="otlphttp/byoc"}. */}}
+            - name: PREFLIGHT_COLLECTOR_URLS
+              value: {{ include "yb-amp-controller.preflightCollectorURLs" . | quote }}
+            - name: PREFLIGHT_TIMEOUT
+              value: {{ printf "%ds" $timeout | quote }}
+{{- end }}
+{{- end }}

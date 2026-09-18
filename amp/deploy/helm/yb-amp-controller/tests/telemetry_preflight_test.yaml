@@ -1,0 +1,232 @@
+suite: telemetry preflight
+templates:
+  - templates/telemetry-preflight.yaml
+# agent.enabled is the mode marker: an install with the reconcile-agent is a
+# YCP-managed environment, and one without it is untouched by any of this.
+#
+# NOTHING here fails an install. The configuration complaints that used to be
+# `fail`s are warnings now, surfaced through NOTES.txt (covered in notes_test.yaml);
+# what this suite pins is the other half — that an unprobeable configuration
+# produces NO Job rather than a failing pod standing in for the warning, and that a
+# complete one produces a Job which cannot fail the release.
+tests:
+  # The whole non-BYOC fleet: local kind, the YCP_ENABLED=0 GKE deploy, every chart
+  # test render. None declare an agent, so none are affected.
+  - it: renders nothing without the agent
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # byoc off: the collectors would scrape and send nowhere, so there is no door to
+  # probe. The operator learns why from NOTES.txt, not from a failing pod.
+  - it: renders no Job when there is no door to probe
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no Job with otel disabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.enabled: false
+      otel.byoc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # No capabilities declared: without the OpenTelemetry Operator there are no
+  # collectors, so the export check could never pass and the Job would only report a
+  # failure indistinguishable from a real one.
+  - it: renders no Job without the OpenTelemetry Operator
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no Job for a plaintext endpoint
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.metricsEndpoint: http://byoc.example/api/v1/otlp/metrics
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no Job when the metrics credential is unnamed
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.passwordSecret.name: ""
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: runs as a post-install hook whose pod survives its own failure
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      # NOT hook-succeeded: the pod's log is the verdict, so it has to survive.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      # HEADROOM over the container's own PREFLIGHT_TIMEOUT, never equal to it. The
+      # Job's clock starts first (scheduling, image pull), so an equal deadline means
+      # the Job controller wins the export-wait timeout and deletes the pod —
+      # destroying the log naming the collector that never exported.
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 420
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PREFLIGHT_TIMEOUT, value: "300s"}
+
+  # A non-positive timeout is clamped, not refused: it says how long to wait for the
+  # first export, and a bad value must not decide whether the Job exists.
+  - it: clamps a non-positive timeout instead of refusing to render
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.preflight.timeoutSeconds: 0
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 420
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PREFLIGHT_TIMEOUT, value: "300s"}
+
+  # The agent's own image, not a curl container: every image in this chart comes from
+  # quay.io with the release's pull secrets, and a docker.io image is the one thing a
+  # restricted customer cluster cannot fetch.
+  - it: runs the reconcile-agent image the release already pulls
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      agent.image.tag: custom-7f195e43e51f
+      otel.byoc.enabled: true
+      imagePullSecrets:
+        - name: quay-pull
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/ycp-reconciler-agent:custom-7f195e43e51f
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [preflight]
+      - contains:
+          path: spec.template.spec.imagePullSecrets
+          content:
+            name: quay-pull
+
+  # OPTIONAL, unlike the collectors' own refs. helm cannot ignore a failed hook, so a
+  # pod that could not start over a missing Secret would fail the release — the one
+  # hard failure a warn-only design has to avoid. The probe reports an empty
+  # credential itself, which is the same information in the right channel.
+  - it: tolerates a missing Secret rather than failing the release
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BYOC_METRICS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: byoc-metrics-auth
+                key: password
+                optional: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DD_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: datadog-api
+                key: api-key
+                optional: true
+
+  # ONLY the controller collector, and that is load-bearing: awaitExport requires
+  # every URL it is given to export before it passes, and the compute collector's
+  # only targets are endpoint pods. A freshly installed environment owns none —
+  # exactly when the console prints this recipe — so listing it would make the probe
+  # report a failure on every first install while the door was fine.
+  - it: points the export check at the controller collector only
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    release:
+      namespace: amp-acme-prod
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PREFLIGHT_COLLECTOR_URLS
+            value: http://RELEASE-NAME-yb-amp-controller-controller-collector-monitoring.amp-acme-prod.svc.cluster.local:8888/metrics

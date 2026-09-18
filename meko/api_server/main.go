@@ -178,6 +178,25 @@ func run() error {
 		"Prometheus-compatible query API root (e.g. http://thanos-query-frontend.monitoring-core.svc.cluster.local:9090/api/v1) "+
 			"for the environment metrics route. Empty makes that route 503.")
 
+	// The write side of metrics-url: the OTLP/HTTP door a BYOC data plane ships to.
+	// One value, two consumers that have to agree — the install hint prints it and
+	// the enroll check accepts only it — because the install runs from a checkout
+	// the customer has, so the endpoint is not theirs to choose.
+	//
+	// Defaults to DEVCLOUD, not prod: a control plane that has not been told which
+	// fleet it serves is far more likely to be a dev or test one, and handing out the
+	// prod door by default is the worse mistake of the two. Nothing refuses either
+	// way — an agent reporting a different door enrols and is marked DEGRADED — so
+	// this decides which door the install hint prints and which one an environment is
+	// judged against, not whether anything comes up. The prod and srecloud
+	// deployments set it explicitly.
+	byocMetricsURL := flag.String("byoc-metrics-url",
+		envOrDefault("MEKO_BYOC_METRICS_URL", "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"),
+		"OTLP/HTTP metrics door a BYOC data plane ships to. Printed in the install hint; an "+
+			"environment whose agent reports a different one is marked DEGRADED, not refused. "+
+			"Defaults to the devcloud door; a prod control plane must set "+
+			"https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics.")
+
 	requireAccountHeader := flag.Bool("require-account-header",
 		envBoolOrDefault("MEKO_REQUIRE_ACCOUNT_HEADER", false),
 		"reject fleet calls that do not carry X-Meko-Account-ID, instead of serving them "+
@@ -487,6 +506,7 @@ func run() error {
 		ConsoleEmbedAdminSecret:            *consoleEmbedAdminSecret,
 		RequireAccountHeader:               *requireAccountHeader,
 		MetricsURL:                         *metricsURL,
+		BYOCMetricsURL:                     *byocMetricsURL,
 		YBAAPIToken:                        *ybaAPIToken,
 		MCPPATFlushInterval:                *mcpPATFlushInterval,
 		PATRateLimitPerMin:                 *patRateLimitPerMin,

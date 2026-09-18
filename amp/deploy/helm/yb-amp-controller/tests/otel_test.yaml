@@ -824,3 +824,165 @@ tests:
       - equal:
           path: spec.tolerations[0].key
           value: amp-compute
+
+  # The in-cluster sinks are optional, and an explicit "" is what drops one. This
+  # is the BYOC shape: a customer cluster runs neither VictoriaMetrics nor
+  # VictoriaLogs, and an exporter aimed at one that is not there retries forever.
+  - it: drops the remote-write exporter when the endpoint is emptied
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.remoteWriteEndpoint: ""
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - notExists:
+          path: spec.config.exporters.prometheus_remote_write
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [otlphttp/byoc]
+
+  - it: drops the remote-write exporter on the compute collector too
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.remoteWriteEndpoint: ""
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - notExists:
+          path: spec.config.exporters.prometheus_remote_write
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [otlphttp/byoc]
+
+  # The log shaping must survive the sink drop: severity and ddtags are what make
+  # a Datadog-only pipeline legible, and they are gated on byoc, not on the sink.
+  - it: drops the in-cluster logs exporter when logsEndpoint is emptied
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.logsEndpoint: ""
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - notExists:
+          path: spec.config.exporters.otlphttp/logs
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [datadog]
+      - equal:
+          path: spec.config.service.pipelines.logs.processors
+          value: [memory_limiter, k8sattributes, transform/severity, transform/datadog, batch]
+
+  # The acceptance case for the whole BYOC shape: three collectors, all of them
+  # shipping only off-cluster.
+  - it: a byoc-only install still renders every collector
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.remoteWriteEndpoint: ""
+      otel.logsEndpoint: ""
+      otel.byoc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 8
+
+  # The defaults are load-bearing for every non-BYOC install, and the endpoint is
+  # otherwise only ever asserted under an override.
+  - it: keeps the in-cluster remote-write endpoint by default
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - equal:
+          path: spec.config.exporters.prometheus_remote_write.endpoint
+          value: http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [prometheus_remote_write]
+
+  # null is NOT "": `helm upgrade --reuse-values` on a release predating these keys
+  # replays values that name neither endpoint, and that must keep its store rather
+  # than silently stop exporting. Twin of the logs case above.
+  - it: falls back to the default remote-write endpoint when the value is unset
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.remoteWriteEndpoint: null
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - equal:
+          path: spec.config.exporters.prometheus_remote_write.endpoint
+          value: http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write
+
+  # A pipeline with no exporter at all is rejected by the operator's webhook, so
+  # this has to fail before anything is applied rather than after.
+  - it: refuses to render metrics collectors with no exporter at all
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.remoteWriteEndpoint: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            otel.remoteWriteEndpoint is empty and otel.byoc.enabled is false: the metrics
+            collectors would have no exporter at all. Set one of them, or turn the collectors
+            off with otel.collectors.controller.enabled=false and
+            otel.collectors.compute.enabled=false.
+
+  - it: refuses to render the logs collector with no exporter at all
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.logsEndpoint: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            otel.logsEndpoint is empty and otel.byoc.enabled is false: the logs collector
+            would have no exporter at all. Set one of them, or turn the collector off with
+            otel.collectors.logs.enabled=false.
+
+  # collectors.*.enabled is the supported way to say "run none", which is what
+  # makes the fail above a guard rather than a trap.
+  - it: an empty remote-write endpoint is fine when the metrics collectors are off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.remoteWriteEndpoint: ""
+      otel.collectors.controller.enabled: false
+      otel.collectors.compute.enabled: false
+    asserts:
+      # SA + Role + RoleBinding + ClusterRole + ClusterRoleBinding + the logs CR.
+      - hasDocuments:
+          count: 6
+
+  - it: an empty logsEndpoint is fine when the logs collector is off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.logsEndpoint: ""
+      otel.collectors.logs.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 7

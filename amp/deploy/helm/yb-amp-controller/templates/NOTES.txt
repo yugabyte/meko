@@ -61,21 +61,46 @@ MCP server disabled (mcp.enabled=false).
 {{- if .Values.otel.enabled }}
 {{- if .Capabilities.APIVersions.Has "opentelemetry.io/v1beta1" }}
 
+{{- /* Same defaults as otel-collectors.yaml, not "". Defaulting an ABSENT key to
+       empty here would describe the --reuse-values upgrade path backwards: the
+       collector defaults it to the in-cluster store and remote-writes there, while
+       these notes would announce that nothing does — and would then suppress the
+       Secret warnings below, telling the operator a missing BYOC Secret has a
+       smaller blast radius than it really has. */}}
+{{- $rw := dig "remoteWriteEndpoint" "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" .Values.otel }}
+{{- $logs := dig "logsEndpoint" "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" .Values.otel }}
+{{- if $rw }}
 Metrics collectors are deployed (otel.enabled), remote-writing to:
 
-    {{ .Values.otel.remoteWriteEndpoint }}
+    {{ $rw }}
+{{- else }}
+Metrics collectors are deployed (otel.enabled) with NO in-cluster store:
+otel.remoteWriteEndpoint is empty, so nothing remote-writes and the BYOC door
+below is the only destination.
+{{- end }}
+{{- if dig "collectors" "logs" "enabled" true .Values.otel }}
+{{- if $logs }}
+
+Logs go to:
+
+    {{ $logs }}
+{{- else }}
+
+Logs have no in-cluster store either (otel.logsEndpoint is empty).
+{{- end }}
+{{- end }}
 {{- if dig "byoc" "enabled" false .Values.otel }}
 
-BYOC off-cluster shipping is ON (otel.byoc.enabled) — in addition to the
-in-cluster stores it also sends:
+BYOC off-cluster shipping is ON (otel.byoc.enabled){{ if or $rw $logs }} — in addition to the
+in-cluster stores above{{ end }}, it sends:
   - metrics -> {{ dig "byoc" "metricsEndpoint" "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics" .Values.otel }} (YBM Thanos)
 {{- if dig "collectors" "logs" "enabled" true .Values.otel }}
   - logs    -> Datadog ({{ dig "datadog" "site" "us3.datadoghq.com" .Values.otel }})
 {{- end }}
 
 This REQUIRES the Secret(s) below in namespace {{ .Release.Namespace }}, read by the
-collectors via secretKeyRef — a missing one fails those pods to start, taking the
-in-cluster VictoriaMetrics/VictoriaLogs export down with them:
+collectors via secretKeyRef — a missing one fails those pods to start{{ if or $rw $logs }}, taking the
+in-cluster VictoriaMetrics/VictoriaLogs export down with them{{ end }}:
 
     kubectl -n {{ .Release.Namespace }} create secret generic {{ dig "byoc" "passwordSecret" "name" "byoc-metrics-auth" .Values.otel }} \
       --from-literal={{ dig "byoc" "passwordSecret" "key" "password" .Values.otel }}='<byoc htpasswd password>'
@@ -83,8 +108,17 @@ in-cluster VictoriaMetrics/VictoriaLogs export down with them:
     kubectl -n {{ .Release.Namespace }} create secret generic {{ dig "datadog" "apiKeySecret" "name" "datadog-api" .Values.otel }} \
       --from-literal={{ dig "datadog" "apiKeySecret" "key" "api-key" .Values.otel }}='<datadog api key>'
 {{- end }}
+{{- if dig "enabled" false .Values.agent }}
 
-Leave otel.byoc.enabled unset (the default) to ship only to the in-cluster stores.
+A post-install job probes that door and waits for the collectors to export
+through it. It does NOT fail this install, so a successful install does NOT mean
+metrics are flowing — its log is the verdict:
+
+    kubectl -n {{ .Release.Namespace }} logs job/{{ include "yb-amp-controller.fullname" . }}-telemetry-preflight
+{{- end }}
+
+{{ if dig "enabled" false .Values.agent }}A YCP-managed install (agent.enabled) wants all of this: the control plane also
+checks it at enroll and flags an environment that ships elsewhere as DEGRADED.{{ else }}Leave otel.byoc.enabled unset (the default) to ship only to the in-cluster stores.{{ end }}
 {{- end }}
 {{- else }}
 
@@ -95,4 +129,19 @@ is scraping amp. Dashboards will stay empty until the operator is installed
 and this chart is upgraded. Install it, or set otel.enabled=false to silence
 this warning.
 {{- end }}
+{{- end }}
+{{- $telWarnings := include "yb-amp-controller.telemetryWarnings" . }}
+{{- if $telWarnings }}
+
+################################################################################
+WARNING: this is a YCP-managed environment (agent.enabled) and its telemetry is
+not set up to reach yugabyte-cloud. The install was NOT failed for this, but the
+control plane will show this environment as DEGRADED and its metrics and logs
+will be missing:
+
+{{ $telWarnings | indent 2 }}
+
+The install hint the YCP console prints for this environment carries the full
+--set list, including both credential Secrets.
+################################################################################
 {{- end }}
