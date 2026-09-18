@@ -1,4 +1,4 @@
-// Behaviour of the REUSED CONVERSATIONS block inside an expanded step row:
+// Behaviour of the MATCHED CONVERSATIONS block inside an expanded step row:
 // a conversation chunk shows a match chip only when the trace carried a score.
 
 import { afterEach, describe, expect, it } from "vitest";

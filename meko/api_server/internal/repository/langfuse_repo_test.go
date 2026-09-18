@@ -126,3 +126,156 @@ func TestParsePlanSteps(t *testing.T) {
 		})
 	}
 }
+
+// MEKO-663: context_search emits one span per leg, and the conversation leg's
+// span has always been dropped by the observation-name filter. These pin the
+// three names the MCP server writes and the payloads they carry, because that
+// pairing is the whole contract behind the decision trace's Preprocess phase.
+func TestProcessingStepFromObservation_ContextSearchLegs(t *testing.T) {
+	cases := []struct {
+		obs  string
+		want string
+	}{
+		{"Knowledge Base Search (Meko MCP)", "knowledgebase_search"},
+		{"Memory Search (Meko MCP)", "memory_search"},
+		{"Conversation Search (Meko MCP)", "conversation_search"},
+	}
+	for _, c := range cases {
+		t.Run(c.obs, func(t *testing.T) {
+			step := processingStepFromObservation(agentReasoningObservation{
+				ID: "obs_1", Name: c.obs, Type: "TOOL",
+			})
+			if step == nil {
+				t.Fatalf("processingStepFromObservation(%q) = nil", c.obs)
+			}
+			if step.Name != c.want {
+				t.Fatalf("step.Name = %q, want %q", step.Name, c.want)
+			}
+		})
+	}
+}
+
+func TestExtractConversationChunks(t *testing.T) {
+	// The shape _conversation_search_core produces, serialized onto the span.
+	output := `{"conversation_hits":[
+		{"content":"further hit","distance":0.30,"conversation_id":"c2","message_id":"m2","user_id":"u2"},
+		{"content":"nearest hit","distance":0.10,"conversation_id":"c1","message_id":"m1","user_id":"u1"}
+	],"thread":[],"count":2}`
+
+	chunks := extractConversationChunks(parseJSONValue(output))
+	if len(chunks) != 2 {
+		t.Fatalf("len(chunks) = %d, want 2", len(chunks))
+	}
+	// Cosine distance, so nearest first regardless of the order it arrived in.
+	if chunks[0].ConversationID != "c1" {
+		t.Fatalf("chunks[0].ConversationID = %q, want c1", chunks[0].ConversationID)
+	}
+	if chunks[0].Content != "nearest hit" || chunks[0].MessageID != "m1" || chunks[0].UserID != "u1" {
+		t.Fatalf("chunks[0] = %+v", chunks[0])
+	}
+	if chunks[0].Score == nil || *chunks[0].Score != 0.9 {
+		t.Fatalf("chunks[0].Score = %v, want 0.9 (1 - distance)", chunks[0].Score)
+	}
+}
+
+// A hit with no distance is a shape surprise, not evidence of irrelevance —
+// keep it, and leave the score unset rather than inventing one.
+func TestExtractConversationChunks_MissingDistanceIsKeptUnscored(t *testing.T) {
+	chunks := extractConversationChunks(parseJSONValue(`{"conversation_hits":[{"content":"no distance"}]}`))
+	if len(chunks) != 1 {
+		t.Fatalf("len(chunks) = %d, want 1", len(chunks))
+	}
+	if chunks[0].Score != nil || chunks[0].Distance != nil {
+		t.Fatalf("expected no score/distance, got %+v", chunks[0])
+	}
+}
+
+func TestExtractConversationChunks_IgnoresEmptyAndMalformed(t *testing.T) {
+	chunks := extractConversationChunks(parseJSONValue(
+		`{"conversation_hits":[{"content":""},"not an object",{"content":"kept"}]}`))
+	if len(chunks) != 1 || chunks[0].Content != "kept" {
+		t.Fatalf("chunks = %+v, want just the one with content", chunks)
+	}
+	// The counts-only output the parent context_search span carries must
+	// produce nothing rather than a phantom chunk.
+	if got := extractConversationChunks(parseJSONValue(
+		`{"conversation_hits":3,"knowledge_base_count":2}`)); len(got) != 0 {
+		t.Fatalf("counts-only output produced %d chunks", len(got))
+	}
+}
+
+// Which chunk list the conversation_search step ends up with. The span now
+// carries the ranked hits on every turn, while user_metadata carries a list
+// only on some — and on the BLENDED path that list is unranked thread turns,
+// so "metadata always wins" would throw away the better data.
+func TestAttachConversationChunks(t *testing.T) {
+	spanChunk := func() []ConversationChunk {
+		d := 0.1
+		s := 0.9
+		return []ConversationChunk{{Content: "ranked hit", Distance: &d, Score: &s}}
+	}
+	metaChunks := []ConversationChunk{
+		{Content: "thread turn one"},
+		{Content: "thread turn two"},
+	}
+	withSpanChunks := func() []ProcessingStep {
+		return []ProcessingStep{{Name: "conversation_search", ConversationChunks: spanChunk()}}
+	}
+
+	t.Run("a real cache hit wins — those chunks are the answer", func(t *testing.T) {
+		steps := attachConversationChunks(withSpanChunks(), metaChunks, "conversation_cache")
+		if len(steps[0].ConversationChunks) != 2 {
+			t.Fatalf("got %d chunks, want the 2 from metadata", len(steps[0].ConversationChunks))
+		}
+		// Regression: Detail kept the span's count beside a different number
+		// of chunks, so the card read "results: 1 hit" over two rows.
+		if steps[0].Detail != "2 hits" {
+			t.Fatalf("Detail = %q, want 2 hits", steps[0].Detail)
+		}
+	})
+
+	// Not a quality judgement: cache-hit metadata is built the same way as
+	// blended (`thread or hits`), so this usually trades scored hits for
+	// unscored turns. It wins because those turns ARE what was summarized.
+	t.Run("a blended turn keeps the span's ranked hits", func(t *testing.T) {
+		steps := attachConversationChunks(withSpanChunks(), metaChunks, "conversation_context")
+		if len(steps[0].ConversationChunks) != 1 || steps[0].ConversationChunks[0].Content != "ranked hit" {
+			t.Fatalf("blended turn took the unranked metadata: %+v", steps[0].ConversationChunks)
+		}
+		if steps[0].ConversationChunks[0].Score == nil {
+			t.Fatal("kept a chunk but lost its score")
+		}
+	})
+
+	t.Run("metadata fills a step the span left empty", func(t *testing.T) {
+		steps := attachConversationChunks(
+			[]ProcessingStep{{Name: "conversation_search"}}, metaChunks, "conversation_context")
+		if len(steps[0].ConversationChunks) != 2 {
+			t.Fatalf("got %d chunks, want 2", len(steps[0].ConversationChunks))
+		}
+	})
+
+	// Traces recorded before the MCP server emitted the span have no step to
+	// attach to; their chunks still have to surface.
+	t.Run("synthesizes the step when the span never landed", func(t *testing.T) {
+		steps := attachConversationChunks(
+			[]ProcessingStep{{Name: "knowledgebase_search", SpanID: "kb_span"}},
+			metaChunks, "conversation_cache")
+		if len(steps) != 2 || steps[1].Name != "conversation_search" {
+			t.Fatalf("steps = %+v", steps)
+		}
+		if steps[1].ParentSpanID != "kb_span" {
+			t.Fatalf("ParentSpanID = %q, want it nested under the KB step", steps[1].ParentSpanID)
+		}
+		if steps[1].Detail != "2 hits" {
+			t.Fatalf("Detail = %q, want 2 hits", steps[1].Detail)
+		}
+	})
+
+	t.Run("no metadata leaves the span's chunks alone", func(t *testing.T) {
+		steps := attachConversationChunks(withSpanChunks(), nil, "")
+		if len(steps) != 1 || len(steps[0].ConversationChunks) != 1 {
+			t.Fatalf("steps = %+v", steps)
+		}
+	})
+}

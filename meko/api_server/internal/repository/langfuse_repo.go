@@ -1295,27 +1295,11 @@ LIMIT  $3 OFFSET $4`
 			header.Thread[i].MemoryHits = agentRes.memoryHits[messageID]
 			header.Thread[i].KBHits = agentRes.kbHits[messageID]
 			header.Thread[i].ProcessingSteps = ensureLLMInvokeStep(agentRes.processingSteps[messageID], header.Thread[i].LLMCalls)
-			// Attach conversation-search chunks to this message's
-			// conversation_search step (or synthesize it if the span didn't land).
-			if chunks, ok := chunksByMsg[messageID]; ok && len(chunks) > 0 {
-				attached := false
-				for j := range header.Thread[i].ProcessingSteps {
-					if header.Thread[i].ProcessingSteps[j].Name == "conversation_search" {
-						header.Thread[i].ProcessingSteps[j].ConversationChunks = chunks
-						attached = true
-						break
-					}
-				}
-				if !attached {
-					header.Thread[i].ProcessingSteps = append(header.Thread[i].ProcessingSteps, ProcessingStep{
-						Name:               "conversation_search",
-						Status:             "ok",
-						Detail:             fmt.Sprintf("%d chunk(s)", len(chunks)),
-						ParentSpanID:       kbSearchSpanID(header.Thread[i].ProcessingSteps),
-						ConversationChunks: chunks,
-					})
-				}
-			}
+			header.Thread[i].ProcessingSteps = attachConversationChunks(
+				header.Thread[i].ProcessingSteps,
+				chunksByMsg[messageID],
+				header.Thread[i].AnsweredFrom,
+			)
 		}
 	}
 
@@ -1631,6 +1615,10 @@ WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
              name ILIKE '%memory%search%'
           OR name ILIKE '%knowledge%search%'
           OR name ILIKE '%knowledgebase%search%'
+          -- Emitted by context_search's conversation leg (and by the
+          -- conversation_search tool). It had no pattern here at all, so
+          -- the step was dropped on every turn that produced one.
+          OR name ILIKE '%conversation%search%'
           OR name ILIKE '%memory%add%'
           OR name ILIKE '%conversation%add%message%'
         ))
@@ -1720,6 +1708,13 @@ ORDER  BY start_time ASC`
 			res.kbHits[messageID] = append(res.kbHits[messageID], hits...)
 			step.KBHits = hits
 			step.Detail = hitDetail(len(hits))
+		case "conversation_search":
+			// The ranked, distance-scored hits the search returned. A real
+			// cache hit replaces them below with what the gateway summarized;
+			// see attachConversationChunks for why only that case does.
+			chunks := extractConversationChunks(parseJSONValue(obs.Output))
+			step.ConversationChunks = chunks
+			step.Detail = hitDetail(len(chunks))
 		}
 
 		// Conversation persistence can show up as both the MCP TOOL span and the
@@ -1855,6 +1850,52 @@ func kbSearchSpanID(steps []ProcessingStep) string {
 		}
 	}
 	return ""
+}
+
+// answeredFromCache is the one `answered_from` value meaning the main LLM was
+// skipped. The gateway writes conversation_chunks on the blended path too
+// (`conversation_context`), where the model did run, so chunk presence says
+// nothing about which happened — only this does.
+const answeredFromCache = "conversation_cache"
+
+// attachConversationChunks settles which chunk list the conversation_search
+// step carries when both the span and the bookmark's user_metadata have one.
+//
+// A real cache hit wins because its chunks are the turns that were SUMMARIZED
+// INTO the answer (chain.py builds them as `thread or hits` and hands the same
+// slice to _summarize_conversation_hits), which is the provenance every
+// "answered from a prior conversation" surface describes, and what the UI's
+// saved-token estimate is calibrated on. Not because they are better data:
+// they are usually thread turns, unranked and carrying no distance, so this
+// deliberately trades the span's scored hits for the ones that produced the
+// answer. The blended path builds its chunks the same way, and there the model
+// ran, so nothing describes them and the span's ranked hits are kept.
+//
+// Synthesizes the step when the span never landed, so a trace recorded before
+// the MCP server emitted one still shows its chunks.
+func attachConversationChunks(
+	steps []ProcessingStep, metaChunks []ConversationChunk, answeredFrom string,
+) []ProcessingStep {
+	if len(metaChunks) == 0 {
+		return steps
+	}
+	for i := range steps {
+		if steps[i].Name != "conversation_search" {
+			continue
+		}
+		if answeredFrom == answeredFromCache || len(steps[i].ConversationChunks) == 0 {
+			steps[i].ConversationChunks = metaChunks
+			steps[i].Detail = hitDetail(len(metaChunks))
+		}
+		return steps
+	}
+	return append(steps, ProcessingStep{
+		Name:               "conversation_search",
+		Status:             "ok",
+		Detail:             hitDetail(len(metaChunks)),
+		ParentSpanID:       kbSearchSpanID(steps),
+		ConversationChunks: metaChunks,
+	})
 }
 
 func processingStepFromObservation(obs agentReasoningObservation) *ProcessingStep {
@@ -2122,6 +2163,58 @@ func extractAgentKBHits(v interface{}) []KBHit {
 		return distanceOrInf(hits[i].Distance) < distanceOrInf(hits[j].Distance)
 	})
 	return hits
+}
+
+// extractConversationChunks reads the hits off a conversation_search span's
+// output. The shape is _conversation_search_core's: content, distance,
+// conversation_id, message_id, user_id — the same fields the gateway writes
+// into a cache hit's user_metadata, so both sources land on ConversationChunk
+// unchanged.
+func extractConversationChunks(v interface{}) []ConversationChunk {
+	var items []interface{}
+	switch payload := v.(type) {
+	case map[string]interface{}:
+		for _, key := range []string{"conversation_hits", "hits", "results"} {
+			if candidate, ok := payload[key].([]interface{}); ok {
+				items = candidate
+				break
+			}
+		}
+	case []interface{}:
+		items = payload
+	}
+
+	chunks := make([]ConversationChunk, 0, len(items))
+	for _, item := range firstN(items, agentReasoningMaxItems) {
+		x, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		content := firstStringField(x, "content", "chunk_text", "text")
+		if content == "" {
+			continue
+		}
+		chunk := ConversationChunk{
+			Content:        content,
+			ConversationID: firstStringField(x, "conversation_id"),
+			MessageID:      firstStringField(x, "message_id"),
+			UserID:         firstStringField(x, "user_id"),
+		}
+		// Same 1 - distance the gateway applies before writing a cache hit's
+		// chunks, so a chunk means the same thing whichever path produced it.
+		if distance, hasDistance := numberField(x, "distance"); hasDistance {
+			d := distance
+			score := 1 - distance
+			chunk.Distance = &d
+			chunk.Score = &score
+		}
+		chunks = append(chunks, chunk)
+	}
+	// Cosine distance, so nearest first; chunks with no distance sort last.
+	sort.SliceStable(chunks, func(i, j int) bool {
+		return distanceOrInf(chunks[i].Distance) < distanceOrInf(chunks[j].Distance)
+	})
+	return chunks
 }
 
 func firstN(items []interface{}, n int) []interface{} {
@@ -2698,27 +2791,9 @@ LEFT JOIN next_root  n  ON true`
 			out.AnsweredFrom = um.AnsweredFrom
 			// Attach chunks to the conversation_search step (their semantic
 			// owner) so the UI can expand that step to show + link them.
-			if len(um.ConversationChunks) > 0 {
-				attached := false
-				for i := range out.ProcessingSteps {
-					if out.ProcessingSteps[i].Name == "conversation_search" {
-						out.ProcessingSteps[i].ConversationChunks = um.ConversationChunks
-						attached = true
-						break
-					}
-				}
-				// MCP's conversation_search span emit is best-effort; if it
-				// didn't land as a step, synthesize one so chunks still surface.
-				if !attached {
-					out.ProcessingSteps = append(out.ProcessingSteps, ProcessingStep{
-						Name:               "conversation_search",
-						Status:             "ok",
-						Detail:             fmt.Sprintf("%d chunk(s)", len(um.ConversationChunks)),
-						ParentSpanID:       kbSearchSpanID(out.ProcessingSteps),
-						ConversationChunks: um.ConversationChunks,
-					})
-				}
-			}
+			out.ProcessingSteps = attachConversationChunks(
+				out.ProcessingSteps, um.ConversationChunks, um.AnsweredFrom,
+			)
 			// Synthesize the conversation_summarize step (Execute phase) so a
 			// loaded conversation shows which small model summarized which
 			// conversation — the gateway's live step isn't a Langfuse span.

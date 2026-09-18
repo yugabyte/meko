@@ -24,12 +24,9 @@ import {
 } from "@/components/ui/tooltip";
 import { formatDuration } from "./helpers";
 
-export type DbBreakdownEntry = {
-  name: string;
-  prettyName: string;
-  count: number;
-  ms: number;
-};
+import type { DbBreakdownEntry } from "./helpers";
+
+export type { DbBreakdownEntry };
 
 export function DecisionTraceHeader({
   totalMs,

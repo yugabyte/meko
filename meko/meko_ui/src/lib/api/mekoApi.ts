@@ -1208,8 +1208,13 @@ export type DatapackThreadMessage = {
   /** Sum of `usage_details.total` across every GENERATION span in this
    *  turn's window. Always present; 0 when no usage was reported. */
   total_tokens: number;
-  /** "conversation_cache" when this turn was answered from a prior
-   *  conversation (LLM skipped); empty otherwise. */
+  /** How this turn was answered. "conversation_cache" means a prior
+   *  conversation answered it and the main LLM was skipped;
+   *  "conversation_context" means prior turns fed the prompt and the model
+   *  still ran; "conversation_cache_rejected" means the user rejected a cache
+   *  answer and it was fully re-answered. Empty when no prior conversation was
+   *  involved. Only the first means anything was saved -- see
+   *  ANSWERED_FROM_CACHE in the decision-trace helpers. */
   answered_from?: string;
   /** LLM identifier sourced from Langfuse's `provided_model_name` on the
    *  matched Reasoning generation. Empty when the agent's harness didn't
@@ -1352,6 +1357,10 @@ export type DatapackMessageDecisionTrace = {
   memory_hits?: MemoryHit[];
   kb_hits?: KbHit[];
   processing_steps?: ProcessingStep[];
+  /** Same values as DatapackThreadMessage.answered_from. The BE has always
+   *  sent it (MessageDecisionTrace.AnsweredFrom); it was missing here, so
+   *  every surface reading a turn through this type saw undefined. */
+  answered_from?: string;
 };
 
 export type GetDatapackMessageDecisionTraceResponse = {

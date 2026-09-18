@@ -211,14 +211,81 @@ export function prettifyStepName(name: string): string {
   }
 }
 
+/** The one `answered_from` value meaning the main model was skipped and the
+ *  conversation_search chunks ARE the answer. `conversation_context` is the
+ *  blended case — the chunks fed the prompt and the model still ran — and
+ *  `conversation_cache_rejected` is a full re-answer. Chunk presence does not
+ *  imply any of the three: the step carries whatever the search retrieved. */
+export const ANSWERED_FROM_CACHE = "conversation_cache";
+
+/** Steps that read or write a datapack DB row, in the order the header's
+ *  `db` chip lists them. Shared with DecisionTrace's breakdown so a step
+ *  cannot be badged `DB` and left out of the count — which is exactly what
+ *  happened to conversation_search once context_search started recording its
+ *  conversation leg on every turn. conversation_add_message is deliberately
+ *  absent: it is badged `LOG`, writing a Langfuse audit row, not a datapack
+ *  row. */
+export const DB_STEP_NAMES = [
+  "memory_search",
+  "knowledgebase_search",
+  "conversation_search",
+  "memory_add",
+] as const;
+
+/** One row of the header's `db` chip breakdown. */
+export type DbBreakdownEntry = {
+  name: string;
+  prettyName: string;
+  count: number;
+  ms: number;
+};
+
+/** Per-step counts and durations behind the header's `db` chip, in
+ *  DB_STEP_NAMES order — the same list `stepKindLabel` badges from, so a step
+ *  cannot be badged `DB` and left out of the count. Steps with no occurrence
+ *  are omitted rather than shown as zero. */
+export function computeDbBreakdown(steps: ProcessingStep[]): DbBreakdownEntry[] {
+  const acc = new Map<string, { count: number; ms: number }>();
+  for (const s of steps) {
+    if (!(DB_STEP_NAMES as readonly string[]).includes(s.name)) continue;
+    const cur = acc.get(s.name) ?? { count: 0, ms: 0 };
+    cur.count += 1;
+    cur.ms += s.duration_ms ?? 0;
+    acc.set(s.name, cur);
+  }
+  return DB_STEP_NAMES.filter((n) => acc.has(n)).map((n) => ({
+    name: n,
+    prettyName: prettifyStepName(n),
+    count: acc.get(n)!.count,
+    ms: acc.get(n)!.ms,
+  }));
+}
+
+/** Rough client-side estimate of the tokens a cache hit saved, from the prior
+ *  conversation content it answered with — what a full regeneration would have
+ *  had to produce, at the usual ~4 chars/token. The BE threads no token count
+ *  for this, deliberately.
+ *
+ *  Gated on `answeredFrom`, not on the chunks being there. Chunk presence used
+ *  to imply a cache hit because only a cache hit wrote them; the step now
+ *  carries whatever the conversation search retrieved, on turns the full model
+ *  answered and on turns from agents that never touch the gateway. The blended
+ *  case (`conversation_context`) is excluded for the same reason: those chunks
+ *  fed the prompt and the model still ran, so nothing was saved. */
+export function estimateTokensSaved(
+  steps: ProcessingStep[],
+  answeredFrom: string | undefined,
+): number {
+  if (answeredFrom !== ANSWERED_FROM_CACHE) return 0;
+  const convStep = steps.find((s) => s.name === "conversation_search");
+  const chunks = convStep?.conversation_chunks ?? [];
+  if (chunks.length === 0) return 0;
+  const chars = chunks.reduce((sum, c) => sum + (c.content?.length ?? 0), 0);
+  return Math.round(chars / 4);
+}
+
 export function stepKindLabel(name: string): string {
-  if (
-    name === "memory_search" ||
-    name === "knowledgebase_search" ||
-    name === "conversation_search" ||
-    name === "memory_add"
-  )
-    return "DB";
+  if ((DB_STEP_NAMES as readonly string[]).includes(name)) return "DB";
   if (name === "llm_invoke" || name === "conversation_summarize" || name === "tool_route")
     return "LLM";
   if (name === "context_assemble") return "FMT";
@@ -235,9 +302,12 @@ export function stepSummary(step: ProcessingStep): string {
     case "knowledgebase_search":
       return query ? `Retrieved chunks for "${query}"` : "Retrieved knowledge chunks";
     case "conversation_search": {
+      // "Matched", not "Reused": these chunks are what the search returned,
+      // which the turn may or may not have answered from. Whether it did is
+      // `answered_from`, which this step does not carry.
       const n = step.conversation_chunks?.length ?? 0;
       return n > 0
-        ? `Reused ${n} prior conversation ${n === 1 ? "answer" : "answers"}`
+        ? `Matched ${n} prior conversation ${n === 1 ? "turn" : "turns"}`
         : "Searched prior conversations";
     }
     case "conversation_summarize": {

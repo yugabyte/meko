@@ -13,17 +13,18 @@ import { Brain, ChevronDown, ChevronRight, Layers, Sparkles, Workflow } from "lu
 import { useQuery } from "@tanstack/react-query";
 import { listDatapackMembers, type DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { normalizeMarkdownText } from "@/features/datapacks/components/conversations-viewer/markdownNormalize";
-import { DecisionTraceHeader, type DbBreakdownEntry } from "./DecisionTraceHeader";
+import { DecisionTraceHeader } from "./DecisionTraceHeader";
 import { PhaseAccordion } from "./PhaseAccordion";
 import { PlanContent } from "./PlanContent";
 import { DecisionTraceProvider } from "./decisionTraceContext";
 import {
+  computeDbBreakdown,
   derivePlanAndReasoning,
+  estimateTokensSaved,
   executeTagline,
   groupStepsByPhase,
   insertSyntheticContextAssemble,
   planTagline,
-  prettifyStepName,
   preprocessTagline,
 } from "./helpers";
 
@@ -116,46 +117,13 @@ export function DecisionTrace({
   );
   const phases = useMemo(() => groupStepsByPhase(stepsWithContext), [stepsWithContext]);
 
-  // Header `db` chip counts every step badge-labelled `DB` by
-  // `stepKindLabel`: memory.search / knowledge.retrieve (reads) plus
-  // memory.add (write). conversation.persist is excluded because it's
-  // badge-labelled `LOG` — it writes a Langfuse audit row, not a
-  // datapack DB row. Keeping the two in sync prevents a turn that has
-  // a visible DB-badged step from showing `db: 0` in the header.
-  const dbBreakdown = useMemo<DbBreakdownEntry[]>(() => {
-    const order = ["memory_search", "knowledgebase_search", "memory_add"];
-    const acc = new Map<string, { count: number; ms: number }>();
-    for (const s of rawSteps) {
-      if (!order.includes(s.name)) continue;
-      const cur = acc.get(s.name) ?? { count: 0, ms: 0 };
-      cur.count += 1;
-      cur.ms += s.duration_ms ?? 0;
-      acc.set(s.name, cur);
-    }
-    return order
-      .filter((n) => acc.has(n))
-      .map((n) => ({
-        name: n,
-        prettyName: prettifyStepName(n),
-        count: acc.get(n)!.count,
-        ms: acc.get(n)!.ms,
-      }));
-  }, [rawSteps]);
+  const dbBreakdown = useMemo(() => computeDbBreakdown(rawSteps), [rawSteps]);
   const dbCalls = useMemo(() => dbBreakdown.reduce((a, b) => a + b.count, 0), [dbBreakdown]);
 
-  // Estimated tokens saved when this turn was answered from the conversation
-  // cache (main LLM skipped). Computed CLIENT-SIDE — we deliberately don't
-  // thread a token count from the backend; instead we approximate from the
-  // reused prior-conversation content (the chunks on the `conversation_search`
-  // step), which is what a full regeneration would have had to produce, at the
-  // usual ~4 chars/token. Zero when this wasn't a cache hit (no chunks).
-  const estimatedTokensSaved = useMemo(() => {
-    const convStep = rawSteps.find((s) => s.name === "conversation_search");
-    const chunks = convStep?.conversation_chunks ?? [];
-    if (chunks.length === 0) return 0;
-    const chars = chunks.reduce((sum, c) => sum + (c.content?.length ?? 0), 0);
-    return Math.round(chars / 4);
-  }, [rawSteps]);
+  const estimatedTokensSaved = useMemo(
+    () => estimateTokensSaved(rawSteps, message.answered_from),
+    [rawSteps, message.answered_from],
+  );
 
   const hasAnythingToShow =
     rawSteps.length > 0 || memoryHits.length > 0 || kbHits.length > 0 || hasReasoning || hasPlan;

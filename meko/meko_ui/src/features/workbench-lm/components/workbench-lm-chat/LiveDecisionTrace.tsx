@@ -100,7 +100,10 @@ export function LiveDecisionTrace({ datapackId, datapackName, conversationId, me
 /** Adapt the slim single-message payload into the `DatapackThreadMessage`
  *  shape `DecisionTrace` consumes. Fields DecisionTrace never reads
  *  (observation_id / started_at / input / output) get inert defaults. */
-function toThreadMessage(dt: DatapackMessageDecisionTrace): DatapackThreadMessage {
+/** Exported for test: a field silently missing here is invisible to the type
+ *  checker (they are all optional) and cost the saved-token chip on this
+ *  surface entirely. */
+export function toThreadMessage(dt: DatapackMessageDecisionTrace): DatapackThreadMessage {
   return {
     message_id: dt.message_id,
     observation_id: "",
@@ -117,5 +120,9 @@ function toThreadMessage(dt: DatapackMessageDecisionTrace): DatapackThreadMessag
     memory_hits: dt.memory_hits,
     kb_hits: dt.kb_hits,
     processing_steps: dt.processing_steps,
+    // Drives the header's "~N saved" chip. Dropping it here left the chip
+    // permanently off on this surface, which is the one that serves the live
+    // cache-hit turn it exists for.
+    answered_from: dt.answered_from,
   };
 }

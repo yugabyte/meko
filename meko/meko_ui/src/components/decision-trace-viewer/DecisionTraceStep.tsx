@@ -185,7 +185,7 @@ export function DecisionTraceStep({
           {step.conversation_chunks && step.conversation_chunks.length > 0 ? (
             <div className="space-y-1.5">
               <div className={cn("text-[10px] uppercase tracking-wider", ACCENT_TEXT[accent])}>
-                REUSED CONVERSATIONS ({step.conversation_chunks.length})
+                MATCHED CONVERSATIONS ({step.conversation_chunks.length})
               </div>
               <div className="space-y-2">
                 {step.conversation_chunks.map((c, i) => {
