@@ -1,9 +1,7 @@
 // TokenBurnTile — the TOKEN BURN tile of the Meko efficiency dashboard.
 // Headline = model-agnostic context-reduction % (tokenBurnPercent); bars = $
 // saved by running GPT-OSS-20B with reduced context vs each premier model.
-// One presentational component drives both the account-wide (Datapacks
-// Overview) and per-datapack (datapack detail) placements — only the data
-// source differs, so scope is passed in.
+// Used in the datapack detail view (DatapackTokenBurnTile).
 
 import { Zap } from "lucide-react";
 import {
@@ -19,7 +17,7 @@ import {
   sourceBreakdown,
   tokenBurnPercent,
 } from "@/lib/tokenSavings";
-import { useAccountTokenSavings, useDatapackTokenSavings } from "@/features/datapacks/hooks/useTokenSavings";
+import { useDatapackTokenSavings } from "@/features/datapacks/hooks/useTokenSavings";
 
 const usdFormatter = new Intl.NumberFormat(undefined, {
   style: "currency",
@@ -84,18 +82,6 @@ function TokenBurnTileView({
       bars={summary ? toBars(summary) : []}
       breakdown={summary ? toBreakdown(summary) : undefined}
       footer={`${OUR_INFERENCE_MODEL.label} vs premier models · illustrative rates`}
-    />
-  );
-}
-
-// Account-wide variant (GET /me/token-savings) — Datapacks Overview.
-export function AccountTokenBurnTile() {
-  const { data, isLoading, error } = useAccountTokenSavings();
-  return (
-    <TokenBurnTileView
-      summary={data}
-      loading={isLoading}
-      error={error ? getApiErrorMessage(error, "Couldn't load token savings.") : null}
     />
   );
 }

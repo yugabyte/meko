@@ -896,11 +896,6 @@ export type TokenSavingsSummary = {
   by_datapack: DatapackTokenSavings[];
 };
 
-// Account-wide token savings across every datapack the caller can access.
-export async function getAccountTokenSavings(options: { signal?: AbortSignal } = {}) {
-  return request<TokenSavingsSummary>("/me/token-savings", "GET", undefined, options);
-}
-
 // Token savings for a single datapack (by UUID).
 export async function getDatapackTokenSavings(
   datapackId: string,

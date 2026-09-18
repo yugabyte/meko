@@ -120,7 +120,8 @@ function DatapackTile({
   const canShare = isDatapackGrantEligibleToShare(dp);
   const sharedByLabel = datapackSharedByLabel(dp);
 
-  // M-01: computed from fields already on the Datapack object (no API needed)
+  // M-01: list endpoint does not enrich knowledge_count/memory_count (MEKO-653),
+  // so m01Tokens is 0 until the backend fix lands. Badge is suppressed when 0.
   const m01Tokens = ((dp.knowledge_count ?? 0) * 1000) + ((dp.memory_count ?? 0) * 200);
   const m01Label = m01Tokens >= 1_000_000
     ? `${(m01Tokens / 1_000_000).toFixed(1)}M ctx`
@@ -203,13 +204,16 @@ function DatapackTile({
             </div>
           ) : null}
 
-          <div className="border-t border-foreground/20" />
-
-          <div className="flex flex-wrap gap-1.5">
-              <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-                {m01Label}
-              </span>
-            </div>
+          {m01Tokens > 0 && (
+            <>
+              <div className="border-t border-foreground/20" />
+              <div className="flex flex-wrap gap-1.5">
+                <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                  {m01Label}
+                </span>
+              </div>
+            </>
+          )}
 
           <div className="flex items-start justify-between gap-3 text-xs text-muted-foreground">
             <div className="min-w-0 space-y-1">

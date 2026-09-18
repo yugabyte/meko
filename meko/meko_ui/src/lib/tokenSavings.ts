@@ -23,8 +23,8 @@ import type { TokenSavingsSummary } from "@/lib/api/mekoApi";
 import { readRuntimeEnv } from "@/lib/runtimeEnv";
 
 // Mirrors the BE/MCP `MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH` flag. The
-// token-savings data is only produced when contextual prominence search is on,
-// so the "Meko efficiency" tiles are hidden otherwise. Off by default.
+// token-savings data is only produced when contextual prominence search is on.
+// Off by default.
 export const CONTEXTUAL_PROMINENCE_SEARCH_ENABLED: boolean = ["1", "true", "yes"].includes(
   (readRuntimeEnv("MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH") ?? "").trim().toLowerCase(),
 );
