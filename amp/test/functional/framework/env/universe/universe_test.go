@@ -425,6 +425,22 @@ func (f *fakeProvisioner) RegionUUIDsForCodes(context.Context, string, ...string
 	return []string{"region-1"}, nil
 }
 
+func (f *fakeProvisioner) ResolvePlacement(_ context.Context, _ string, placement []yba.RegionPlacement) ([]yba.RegionPlacement, error) {
+	if f.regionErr != nil {
+		return nil, f.regionErr
+	}
+	f.ev.add("resolve_placement")
+	out := make([]yba.RegionPlacement, 0, len(placement))
+	for i, r := range placement {
+		r.UUID = fmt.Sprintf("region-%d", i+1)
+		for j := range r.Zones {
+			r.Zones[j].UUID = fmt.Sprintf("zone-%d-%d", i+1, j+1)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 func (f *fakeProvisioner) CreateUniverseFromSpec(context.Context, yba.UniverseSpec) (yba.TaskRef, error) {
 	f.ev.add("create_universe")
 	if f.createErr != nil {

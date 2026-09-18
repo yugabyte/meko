@@ -198,10 +198,37 @@ type CloudInfo struct {
 	Zone      string `json:"az"`
 }
 
-// Cluster is a universe cluster; only userIntent (for the software version) is
-// consumed.
+// Cluster is a universe cluster: its userIntent (software version) and the
+// placement YBA settled on.
 type Cluster struct {
-	UserIntent UserIntent `json:"userIntent"`
+	UserIntent    UserIntent    `json:"userIntent"`
+	PlacementInfo PlacementInfo `json:"placementInfo"`
+}
+
+// PlacementInfo is the per-zone layout of a cluster as YBA holds it.
+type PlacementInfo struct {
+	CloudList []PlacementCloud `json:"cloudList"`
+}
+
+// PlacementCloud is one provider's share of a cluster's placement.
+type PlacementCloud struct {
+	Code       string            `json:"code"`
+	RegionList []PlacementRegion `json:"regionList"`
+}
+
+// PlacementRegion is one region of a cluster's placement.
+type PlacementRegion struct {
+	Code   string        `json:"code"`
+	AZList []PlacementAZ `json:"azList"`
+}
+
+// PlacementAZ is one zone of a cluster's placement. IsAffinitized marks a zone
+// tablet leaders prefer.
+type PlacementAZ struct {
+	Name              string `json:"name"`
+	NumNodesInAZ      int    `json:"numNodesInAZ"`
+	ReplicationFactor int    `json:"replicationFactor"`
+	IsAffinitized     bool   `json:"isAffinitized"`
 }
 
 // UserIntent carries the software version off a cluster.

@@ -183,6 +183,7 @@ type ybaProvisioner interface {
 	AddInstanceType(ctx context.Context, providerUUID string, spec yba.InstanceTypeSpec) error
 	ProviderAccessKeyCode(ctx context.Context, providerUUID string) (string, error)
 	RegionUUIDsForCodes(ctx context.Context, providerUUID string, codes ...string) ([]string, error)
+	ResolvePlacement(ctx context.Context, providerUUID string, placement []yba.RegionPlacement) ([]yba.RegionPlacement, error)
 	CreateUniverseFromSpec(ctx context.Context, s yba.UniverseSpec) (yba.TaskRef, error)
 	WaitTask(ctx context.Context, taskUUID string) (yba.TaskStatus, error)
 	WaitUniverseReady(ctx context.Context, ref string, timeout time.Duration) error
@@ -622,6 +623,7 @@ type ybaControlPlane struct {
 	providerUUID  string
 	accessKeyCode string
 	regionUUIDs   []string
+	placement     []yba.RegionPlacement
 	// The YBA control plane ALWAYS runs in k8s (ybastack), whatever cloud the
 	// universes land on, so its kubecontext identifies both the k8s universe
 	// namespace backstop and the YBA namespace a separate-process teardown reaps.
@@ -734,7 +736,17 @@ func (p *Provider) deployYBA(ctx context.Context, runTag string, specs ybaSpecs)
 			return failure(fmt.Errorf("provision_yba: resolve access key: %w", err))
 		}
 	}
-	cp.regionUUIDs, err = cl.RegionUUIDsForCodes(ctx, cp.providerUUID, uni.Region)
+	// A multi-region placement names its own regions; the single Region is the
+	// legacy shape and stays the default.
+	if len(uni.Placement) > 0 {
+		cp.placement, err = cl.ResolvePlacement(ctx, cp.providerUUID, uni.Placement)
+		if err != nil {
+			return failure(fmt.Errorf("provision_yba: %w", err))
+		}
+		cp.regionUUIDs, err = cl.RegionUUIDsForCodes(ctx, cp.providerUUID, uni.PlacementRegionCodes()...)
+	} else {
+		cp.regionUUIDs, err = cl.RegionUUIDsForCodes(ctx, cp.providerUUID, uni.Region)
+	}
 	if err != nil {
 		return failure(fmt.Errorf("provision_yba: resolve region uuids: %w", err))
 	}
@@ -765,6 +777,9 @@ func (p *Provider) createUniverse(ctx context.Context, cp *ybaControlPlane, uniS
 	uniSpec.ProviderUUID = cp.providerUUID
 	uniSpec.RegionUUIDs = cp.regionUUIDs
 	uniSpec.AccessKeyCode = cp.accessKeyCode
+	if len(cp.placement) > 0 {
+		uniSpec.Placement = cp.placement
+	}
 	universeName := uniSpec.UniverseName()
 	// reap is the airtight backstop, independent of the universe UUID or the YBA
 	// being reachable: AWS terminates EVERY EC2 instance tagged ampqa-run=<runTag>,

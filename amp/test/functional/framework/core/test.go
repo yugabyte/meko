@@ -49,8 +49,13 @@ type Test struct {
 	// the regression suite. The test still reports — as skipped, carrying this
 	// reason — and is gated BEFORE provisioning, so it costs no environment.
 	// Delete the field to re-enable the test once the feature lands.
-	Skip    string
-	Timeout time.Duration // 0 → category default
+	Skip string
+	// Preflight, when set, is asked for a skip reason BEFORE provisioning, with
+	// the run config: a test that needs credentials or an opt-in the run does
+	// not carry skips for free instead of standing an environment up to find
+	// out. An empty reason runs the test.
+	Preflight func(cfg *Config) string
+	Timeout   time.Duration // 0 → category default
 	// Description is a one-line human summary of what the test does, surfaced by
 	// `ampqa describe`/`collect`/`manifest` so both humans and agents can discover
 	// a test without reading its source.

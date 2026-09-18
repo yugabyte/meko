@@ -57,6 +57,14 @@ const (
 	// DefaultGCPArch is x86_64 — GCP universes default to x86 (the stress
 	// add_gcp_provider default), unlike the ARM AWS default.
 	DefaultGCPArch = "x86"
+	// DefaultGCPKeyPairName / DefaultGCPKeyPairFile are the SAME shared keypair
+	// the AWS provider reuses. GCE has no registered-keypair concept — YBA
+	// injects the public half as instance metadata — so the key material is
+	// cloud-agnostic and the stress framework hands its GCP provider this very
+	// key (task_setup_portal.setup_gcp_provider). Reusing it is what stops YBA
+	// minting one per run.
+	DefaultGCPKeyPairName = DefaultKeyPairName
+	DefaultGCPKeyPairFile = DefaultKeyPairFile
 	// DefaultGCPCredentialsSecret is the secret NAME whose Value resolves to a
 	// PATH to the service-account JSON key file (the apps/cloud/gcp env-variant
 	// convention, e.g. GCP_KEY=/path/to/sa.json). Its file CONTENTS are read into
@@ -103,10 +111,12 @@ type GCPProviderSpec struct {
 	CredentialsFile string
 
 	// KeyPairName + KeyPairContent are an EXISTING SSH keypair reused via
-	// allAccessKeys + skipKeyValidateAndUpload (YBA never mints one). Both empty →
-	// no allAccessKeys block (YBA falls back to project/OS-login SSH keys). Empty
-	// by default: no GCP-specific shared key exists yet — set both before a live
-	// run. KeyPairContent is private-key material — never logged.
+	// allAccessKeys + skipKeyValidateAndUpload (YBA never mints one). They
+	// default to the shared yb-dev-aws-2 key, which GCE takes as instance
+	// metadata exactly as EC2 takes it as a keypair. Where that key is not on
+	// disk the block is simply omitted and YBA falls back to project/OS-login
+	// keys — a missing DEFAULT is not an error, only a path someone configured
+	// explicitly is. KeyPairContent is private-key material — never logged.
 	KeyPairName    string
 	KeyPairContent string
 
@@ -142,11 +152,19 @@ func BuildGCPProviderSpec(c ConfigGetter, resolve SecretResolver) (GCPProviderSp
 		return GCPProviderSpec{}, fmt.Errorf("yba gcp credentials_secret %q: read service-account key %q: %w", credSecret, credPath, err)
 	}
 
-	keyName := c.GetString("apps.yba.gcp.keypair_name", "")
+	keyName := c.GetString("apps.yba.gcp.keypair_name", DefaultGCPKeyPairName)
+	keyFile := c.GetString("apps.yba.gcp.keypair_file", DefaultGCPKeyPairFile)
 	var keyContent string
-	if keyFile := c.GetString("apps.yba.gcp.keypair_file", ""); keyFile != "" {
+	if keyFile != "" {
 		keyContent, err = readKeyFile(keyFile)
-		if err != nil {
+		switch {
+		case err == nil:
+		case keyFile == DefaultGCPKeyPairFile:
+			// The shipped default, not a choice this run made. A host without
+			// the shared key still builds a provider; YBA falls back to
+			// project/OS-login keys rather than the run failing here.
+			keyName, keyContent = "", ""
+		default:
 			return GCPProviderSpec{}, fmt.Errorf("yba gcp keypair_file %q: %w", keyFile, err)
 		}
 	}
@@ -365,6 +383,8 @@ func BuildGCPUniverseSpec(c ConfigGetter) UniverseSpec {
 		EnableYbc:         c.GetBool("apps.yba.universe.enable_ybc", false),
 		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
 		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
+		Placement:         readPlacement(c, "apps.yba.gcp.placement"),
+		PreferredRegion:   c.GetString("apps.yba.gcp.preferred_region", ""),
 	}
 }
 

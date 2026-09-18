@@ -199,9 +199,12 @@ type Provider struct {
 	// in Close AFTER the control plane (LIFO).
 	ybDeployCfg *core.Config
 	// backing provisions every backing of the run, the shared one and each
-	// dedicated stack's, off one YBA; built on first use, closed in Close.
-	backingMu sync.Mutex
-	backing   *ybdeploy.Provisioner
+	// dedicated stack's, off one YBA; built on first use, closed in Close. A
+	// stack whose test declares its own BackingConfig gets a provisioner (and
+	// YBA) of its own instead, built by newBackingProvisioner (a seam for tests).
+	backingMu             sync.Mutex
+	backing               backingProvisioner
+	newBackingProvisioner func(cfg *core.Config, mode string) (backingProvisioner, error)
 	// backingPlan reaps the backing this provider provisioned, from a process
 	// that shares no memory with it (an aborted CI build).
 	backingPlan      *reap.Plan
@@ -432,6 +435,13 @@ func New(cfg Config) *Provider {
 		deploy:        cfg.Deploy,
 		newApp:        ampstack.New,
 	}
+	// Not in the literal above because it captures p: a nil sink here silences
+	// the whole own-backing bring-up, which for a multi-region stack is up to
+	// 90 minutes of YBA install, provider create, release import and node
+	// bring-up reporting nothing but its final error.
+	p.newBackingProvisioner = func(c *core.Config, mode string) (backingProvisioner, error) {
+		return ybdeploy.NewProvisioner(c, mode, p.logf)
+	}
 	if cfg.Context != "" {
 		p.kube = k8s.New(k8s.Config{Context: cfg.Context, Namespace: cfg.Namespace})
 	}
@@ -494,7 +504,7 @@ func (p *Provider) prepareYBDeploy() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
 	defer cancel()
-	store, td, plan, err := p.provisionBacking(ctx, p.ampCfg.Namespace)
+	store, td, plan, err := p.provisionBacking(ctx, p.ampCfg.Namespace, core.EnvSpec{})
 	if err != nil {
 		return err
 	}
@@ -507,30 +517,75 @@ func (p *Provider) prepareYBDeploy() error {
 	return nil
 }
 
+// backingProvisioner is the ybdeploy.Provisioner surface this provider drives;
+// an interface so a unit test can stand in for the real one.
+type backingProvisioner interface {
+	Provision(ctx context.Context, runTag string) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error)
+	Plan() *reap.Plan
+	Close(ctx context.Context) error
+}
+
 // provisionBacking stands up the backing env.yb_deploy names, tagged with the
 // namespace of the control plane it serves. A nil store means the built-in
-// yugabyted: nothing external to point the control plane at.
-func (p *Provider) provisionBacking(ctx context.Context, tag string) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
+// yugabyted: nothing external to point the control plane at. The shared control
+// plane passes an empty spec: its backing is knob-only. A dedicated stack passes
+// the test's spec, and a test declaring its own BackingConfig gets that shape on
+// a provisioner (and YBA) of its own, returned as own so the stack closes it.
+func (p *Provider) provisionBacking(ctx context.Context, tag string, spec core.EnvSpec) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
+	store, td, plan, _, err := p.provisionBackingFor(ctx, tag, spec)
+	return store, td, plan, err
+}
+
+func (p *Provider) provisionBackingFor(ctx context.Context, tag string, spec core.EnvSpec) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, backingProvisioner, error) {
 	if p.ybDeployCfg == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
-	mode := ybdeploy.Resolve(p.ybDeployCfg, core.EnvSpec{})
+	cfg := p.ybDeployCfg
+	var own backingProvisioner
+	if spec.BackingConfig != nil && spec.Dedicated() {
+		overlay := spec.BackingConfig(cfg)
+		if len(overlay) > 0 {
+			cfg = cfg.Derive(overlay)
+		}
+	}
+	mode := ybdeploy.Resolve(cfg, spec)
 	if mode == ybdeploy.ModeBuiltin {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
-	b, err := p.backingProvisioner(mode)
-	if err != nil {
-		return nil, nil, nil, err
+	var b backingProvisioner
+	var err error
+	if cfg != p.ybDeployCfg {
+		if b, err = p.newBackingProvisioner(cfg, mode); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("sharedk8s: %s backing for %s: %w", mode, tag, err)
+		}
+		own = b
+	} else if b, err = p.backingProvisioner(mode); err != nil {
+		return nil, nil, nil, nil, err
 	}
 	store, td, plan, err := b.Provision(ctx, tag)
-	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(p.ybDeployCfg) {
+	if err != nil && own != nil {
+		// A backing the test asked for by shape is never downgraded: the test
+		// would run against something other than what it declared.
+		cctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
+		cerr := own.Close(cctx)
+		cancel()
+		if cerr == nil {
+			return nil, nil, nil, nil, core.AsEnvFailure(fmt.Errorf("sharedk8s: the backing %s declared for %s failed: %w", mode, tag, err))
+		}
+		// Close failed, so the YBA it helm-installed is still standing. Hand the
+		// provisioner back with the failure: the caller keeps it on the stack so
+		// its namespace reaches the reap plan, which is the only record of it.
+		p.log("sharedk8s: %s: the declared backing failed AND its YBA could not be torn down (%v); it stays in the reap plan", tag, cerr)
+		return nil, nil, own.Plan(), own, core.AsEnvFailure(fmt.Errorf("sharedk8s: the backing %s declared for %s failed: %w (its YBA could not be torn down either: %v)", mode, tag, err, cerr))
+	}
+	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(cfg) {
 		// The run ASKED for YBA (env.yb_deploy was set explicitly), so a
 		// downgrade would answer a different question than the one it was
 		// launched to answer: a single-node yugabyted is not an RF=3 universe,
 		// and a perf number measured against it is not comparable to one that
 		// was. Three multitenant runs were reported as "YBA RF=3" that way
 		// before this refused.
-		return nil, nil, nil, core.AsEnvFailure(fmt.Errorf("sharedk8s: yba_provisioned backing was requested explicitly and failed; refusing to downgrade to built-in yugabyted: %w", err))
+		return nil, nil, nil, nil, core.AsEnvFailure(fmt.Errorf("sharedk8s: yba_provisioned backing was requested explicitly and failed; refusing to downgrade to built-in yugabyted: %w", err))
 	}
 	if err != nil && mode == ybdeploy.ModeYBAProvisioned {
 		// Merely the default (no explicit knob): it needs a deployable YBA
@@ -538,15 +593,22 @@ func (p *Provider) provisionBacking(ctx context.Context, tag string) (ybbacking.
 		// fall back to ampstack's built-in single-node yugabyted (the proven
 		// default backing) so the run still proceeds instead of failing the env.
 		p.log("sharedk8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", err)
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
+		return nil, nil, nil, nil, fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
 	}
-	return store, td, plan, nil
+	if own != nil && plan != nil {
+		// The universe plan names the YBA only when the universe owns it; a
+		// provisioner-owned YBA is named by the provisioner.
+		if bp := own.Plan(); bp != nil {
+			plan.Namespaces = append(plan.Namespaces, bp.Namespaces...)
+		}
+	}
+	return store, td, plan, own, nil
 }
 
-func (p *Provider) backingProvisioner(mode string) (*ybdeploy.Provisioner, error) {
+func (p *Provider) backingProvisioner(mode string) (backingProvisioner, error) {
 	p.backingMu.Lock()
 	defer p.backingMu.Unlock()
 	if p.backing == nil {
@@ -668,7 +730,7 @@ func (p *Provider) nextLocalPort() int {
 // a live environment bound to the endpoint's Postgres.
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
 	if spec.Shape == core.DedicatedStack {
-		return p.provisionDedicated(ctx, seed)
+		return p.provisionDedicated(ctx, spec, seed)
 	}
 	cl, url, err := p.ctrl.get(ctx)
 	if err != nil {

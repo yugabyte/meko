@@ -489,9 +489,10 @@ type Region struct {
 
 // Zone is one availability zone of a provider region.
 type Zone struct {
-	UUID string `json:"uuid"`
-	Code string `json:"code"`
-	Name string `json:"name"`
+	UUID   string `json:"uuid"`
+	Code   string `json:"code"`
+	Name   string `json:"name"`
+	Subnet string `json:"subnet"`
 }
 
 // GetProviderRegions lists a provider's regions (and their zone UUIDs) — the

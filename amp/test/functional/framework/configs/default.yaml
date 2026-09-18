@@ -834,14 +834,32 @@ apps:
       # Contents go into gceApplicationCredentials (never logged); the path
       # re-auths gcloud for the teardown reap. REQUIRED for a live gcp run.
       credentials_secret: "gcp_key"
-      # keypair_name+keypair_file: an EXISTING key reused (skipKeyValidateAndUpload)
-      # so YBA never mints one. Both empty (default) → no allAccessKeys block (YBA
-      # falls back to project/OS-login keys). Set both before a live SSH run.
-      keypair_name: ""
-      keypair_file: ""
+      # keypair_name+keypair_file: the SAME shared yb-dev-aws-2 key the aws
+      # provider reuses, passed with skipKeyValidateAndUpload so YBA never mints
+      # one. GCE has no registered-keypair concept (YBA injects the public half
+      # as instance metadata), so the key material is cloud-agnostic — this is
+      # what the stress framework hands its own GCP provider. A host without the
+      # key still builds a provider: an unreadable DEFAULT omits the
+      # allAccessKeys block (YBA falls back to project/OS-login keys), while a
+      # path set explicitly here is required and errors when it is absent.
+      keypair_name: "yb-dev-aws-2"
+      keypair_file: "~/.ssh/yb-dev-aws-2.pem"
       # image: optional GCE image (name or family) for the default image bundle;
       # empty → YBA's default GCP image. regions optional; empty → single us-west1.
       image: ""
+      # placement pins tservers per zone per region and preferred_region marks
+      # where tablet leaders sit (isAffinitized on its zones). Every placement
+      # region must be one of `regions` above. Empty → YBA spreads num_nodes
+      # over the single region. The multi-region tests fill both from
+      # multiregion.* (apps/multiregion.Overlay), so they need no hand edit:
+      #   placement:
+      #     - region: us-west1
+      #       zones: [{name: us-west1-b, nodes: 1}]
+      #     - region: us-east1
+      #       zones: [{name: us-east1-b, nodes: 1}]
+      #   preferred_region: us-west1
+      placement: []
+      preferred_region: ""
       # Universe shape (cheap RF1). instance_type is the GCE machine type
       # (n2-standard-4, analogous to AWS m7g.xlarge). storage_type Persistent.
       instance_type: "n2-standard-4"
@@ -1522,6 +1540,26 @@ stress:
     # per index, so the step can be shown to fail (a page cannot be corrupted
     # over the wire). Leave it empty in any real run.
     probe_sql: ""
+  # multiregion_outage (suites/stress/multiregion_region_outage.go): the
+  # backing is the multiregion.* universe stood up for this test alone; every
+  # node of one region is stopped through YBA while tenants write, then started
+  # again. target: preferred (the leader-preferred region, the hard case: every
+  # leader moves), secondary (the first other region) or a region code.
+  multiregion_outage:
+    tenants: 3
+    payload_bytes: 256
+    target: "preferred"
+    # duration is how long the region stays down with the writers running.
+    duration: "5m"
+    # max_write_stall bounds the longest window with no acknowledged row across
+    # every tenant while the region is down: leader election plus amp's
+    # reconnect, not a region's worth of unavailability.
+    max_write_stall: "90s"
+    # settle_timeout bounds each YBA node task and the recovery after the region
+    # is back; a GCE node stop or start is a minutes-long task.
+    settle_timeout: "15m"
+    resume_duration: "30s"
+    control_plane_recovery_max: "2m"
   # backing_unreachable_api: deletes the backing's serving pods, then drives
   # reads and cluster creates on a transport that retries nothing, so the 503 the
   # controller sends for an unreachable store is seen rather than retried away
@@ -2075,6 +2113,66 @@ stress:
     jar_secret: "gh_package"
     # settle_timeout bounds every endpoint answering SQL again once the load stops.
     settle_timeout: "10m"
+
+# --- Multi-region backing (apps/multiregion) ---
+# The shape features/multiregion_backing, stress/multiregion_region_outage,
+# perf/multiregion_sysbench and perf/multiregion_pgbench stand up for
+# themselves: a YBA in the run's GKE cluster (apps.ybastack.*), a gcp provider
+# carrying every region below on the shared yugabyte-network VPC, and one
+# universe spread over them with tablet leaders preferred in preferred_region,
+# which is the region the GKE clusters (and so the amp control plane) live in.
+# GKE pods reach GCE nodes in any US region directly: yugabyte-allow-internal
+# admits 10.0.0.0/8 to every instance in the VPC.
+#
+# The tests are opt-in (enabled) and skip before provisioning without it, or
+# without the gcp_key service-account secret (apps.yba.gcp.credentials_secret)
+# and the quay pull secret the YBA needs. The SSH key is the shared yb-dev-aws-2
+# one the aws provider already reuses (apps.yba.gcp.keypair_*).
+multiregion:
+  enabled: false
+  # regions: code + zone + subnet + tservers. zone defaults to <code>-b and
+  # subnet to subnet-<code> (the VPC's naming); at least two regions.
+  regions:
+    - code: "us-west1"
+      zone: "us-west1-b"
+      subnet: "subnet-us-west1"
+      nodes: 1
+    - code: "us-central1"
+      zone: "us-central1-b"
+      subnet: "subnet-us-central1"
+      nodes: 1
+    - code: "us-east1"
+      zone: "us-east1-b"
+      subnet: "subnet-us-east1"
+      nodes: 1
+  preferred_region: "us-west1"
+  replication_factor: 3
+  # Sized for a regression run, not a benchmark: these tests assert topology and
+  # correctness, and every vCPU is paid for in three regions. Raise both for the
+  # perf variants if a number needs more headroom.
+  instance_type: "n2-standard-4"
+  volume_size_gb: 50
+  # image is the GCE image YBA provisions the nodes from (ssh user centos): the
+  # stress framework's server image, known to work with YBA in this project.
+  image: "projects/yugabyte/global/images/stress-server-base-x86-2025-07-31-235630"
+  # provider_name is its own: a YBA provider is reused by name and its region
+  # list is fixed at create, so the single-region ampqa-gcp cannot serve this.
+  provider_name: "ampqa-gcp-multiregion"
+  # provision_timeout bounds standing the whole backing up — the YBA helm
+  # install, the provider, the DB release import and the GCE VMs YBA provisions
+  # and installs software on. It overrides timeouts.provision_dedicated (45m,
+  # sized for a co-located backing) for these tests only, through the same
+  # overlay that shapes the backing.
+  provision_timeout: "90m"
+  # controller_ready_timeout is the amp controller's own bring-up on this
+  # backing, overriding env.ampstack.controller_ready_timeout (5m, sized for a
+  # co-located database). Its startup migrations are DDL, and every one is a
+  # cross-region consensus round here.
+  controller_ready_timeout: "20m"
+  perf:
+    # provisions is perf.provisions for the multi-region benchmarks: every
+    # extra stack is another universe of Nodes VMs across the regions.
+    provisions: 1
 
 # --- Perf suite (suites/perf) ---
 # perf/tpcc, perf/pgbench, perf/sysbench: provision a co-located RF3

@@ -22,6 +22,13 @@ type stack struct {
 	backingUniverse core.Environment
 	backingPlan     *reap.Plan
 	backingTeardown func(context.Context) error
+	// backingProv is the provisioner (its own YBA) a test with a BackingConfig
+	// got; nil when the run's shared one served. It is closed only once the
+	// backing under it went down cleanly: removing the YBA while its universe's
+	// nodes may still be running strands them with no manager, the same
+	// invariant teardownProvisionedYBA holds. A stack that fails either step
+	// stays in the reap plan instead.
+	backingProv backingProvisioner
 }
 
 // OnReapPlanChange registers fn to run whenever a dedicated stack comes up or
@@ -32,7 +39,7 @@ func (p *Provider) OnReapPlanChange(fn func()) { p.onPlanChange = fn }
 // out of it. ctx is the test's provision budget (timeouts.provision_dedicated),
 // which is why nothing here roots itself in the background the way the shared
 // bring-up does: this stack lives and dies with one test.
-func (p *Provider) provisionDedicated(ctx context.Context, seed *core.Seed) (core.Environment, error) {
+func (p *Provider) provisionDedicated(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
 	if !p.deploy {
 		return nil, &core.UnsupportedShapeError{
 			Provider: "sharedk8s",
@@ -40,17 +47,23 @@ func (p *Provider) provisionDedicated(ctx context.Context, seed *core.Seed) (cor
 			Why:      "an attached control plane cannot stand a stack up per test; run in deploy mode (env.sharedk8s.context without controller_url)",
 		}
 	}
-	st := &stack{ampCfg: p.cfg.AmpStack}
+	st := &stack{ampCfg: p.ampStackFor(spec)}
 	st.ampCfg.Context = p.ampCfg.Context
 	st.ampCfg.Namespace = DefaultNamespacePrefix + "-" + randHex()
 	ns := st.ampCfg.Namespace
 	p.log("sharedk8s: dedicated stack %s: provisioning backing and control plane", ns)
 
-	store, td, plan, err := p.provisionBacking(ctx, ns)
+	store, td, plan, own, err := p.provisionBackingFor(ctx, ns, spec)
+	// Recorded before the error check: a bring-up that failed with its YBA still
+	// standing hands the provisioner back, and the stack is what carries it into
+	// the reap plan.
+	st.backingTeardown, st.backingPlan, st.backingProv = td, plan, own
 	if err != nil {
+		if own != nil || plan != nil {
+			p.trackStack(st, true)
+		}
 		return nil, err
 	}
-	st.backingTeardown, st.backingPlan = td, plan
 	if store != nil {
 		st.ampCfg.Backing = ybbacking.ExternalBacking(store)
 		st.backingUniverse = ybdeploy.UniverseEnvOf(store)
@@ -77,6 +90,34 @@ func (p *Provider) provisionDedicated(ctx context.Context, seed *core.Seed) (cor
 	}
 	p.log("sharedk8s: dedicated stack %s ready", ns)
 	return env, nil
+}
+
+// ampStackFor resolves the control-plane config for one dedicated stack. A test
+// declaring its own backing shape gets the ampstack knobs from the SAME overlay
+// the backing is deployed from, because the shape reaches the control plane too:
+// a controller whose startup migrations run as cross-region DDL needs a
+// readiness budget the shipped one does not give it. Without an overlay this is
+// the provider's own config unchanged.
+func (p *Provider) ampStackFor(spec core.EnvSpec) ampstack.Config {
+	if spec.BackingConfig == nil || p.ybDeployCfg == nil {
+		return p.cfg.AmpStack
+	}
+	overlay := spec.BackingConfig(p.ybDeployCfg)
+	if len(overlay) == 0 {
+		return p.cfg.AmpStack
+	}
+	// Only the keys the overlay actually names are taken; everything else stays
+	// whatever the run resolved, so this cannot quietly re-derive a field the
+	// caller set some other way.
+	derived := p.ybDeployCfg.Derive(overlay)
+	cfg := p.cfg.AmpStack
+	if _, ok := overlay["env.ampstack.controller_ready_timeout"]; ok {
+		cfg.ControllerReadyTimeout = ampstack.FromConfig(derived).ControllerReadyTimeout
+	}
+	if _, ok := overlay["env.ampstack.yb_ready_timeout"]; ok {
+		cfg.YBReadyTimeout = ampstack.FromConfig(derived).YBReadyTimeout
+	}
+	return cfg
 }
 
 // teardownDedicated drops the whole stack; the cluster goes with its namespace,
@@ -109,6 +150,12 @@ func (p *Provider) closeStack(st *stack) error {
 			if firstErr == nil {
 				firstErr = err
 			}
+		}
+	}
+	if st.backingProv != nil && firstErr == nil {
+		if err := st.backingProv.Close(ctx); err != nil {
+			p.log("sharedk8s: dedicated stack %s: teardown own YBA failed: %v", st.ampCfg.Namespace, err)
+			firstErr = err
 		}
 	}
 	// A stack whose teardown failed stays in the plan: the file is the last

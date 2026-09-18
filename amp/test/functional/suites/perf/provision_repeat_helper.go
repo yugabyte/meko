@@ -25,9 +25,17 @@ type benchWorkloadSpec struct {
 	attachPrefix string
 	noTPSMsg     string
 	deliver      func(ctx context.Context, t *core.T, cfg perfConfig, podExec exec.RemoteExecutor) error
-	mkWorkload   workloadFactory
-	specs        func(BenchResult) []metricSpec
-	datapoints   func(BenchResult) (gated, info []core.Datapoint)
+	// backing, when set, stands the store up instead of the co-located ybk8s
+	// deploy: it fills r.ampBacking (and r.kube when the store has a namespace
+	// of its own) and registers its teardown on r.td.
+	backing func(ctx context.Context, r *benchProvision) error
+	// ampOptions configures the amp control plane when the backing shape also
+	// reaches it — the multi-region tests derive one config for both. nil reads
+	// the run's own options.
+	ampOptions *core.Config
+	mkWorkload workloadFactory
+	specs      func(BenchResult) []metricSpec
+	datapoints func(BenchResult) (gated, info []core.Datapoint)
 }
 
 func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc BenchConfig, id Identity) error {
@@ -173,13 +181,16 @@ type benchProvision struct {
 	logf func(string, ...any)
 	sink apps.ArtifactSink
 
-	amp       *ampstack.Config
-	info      ybk8s.Info
-	kube      *k8s.Kubectl
-	endpoint  ampEndpoint
-	podExec   exec.RemoteExecutor
-	sampler   *metrics.Sampler
-	epSampler *metrics.Sampler
+	amp  *ampstack.Config
+	info ybk8s.Info
+	kube *k8s.Kubectl
+	// ampBacking is the store a spec.backing hook provisioned; nil on the
+	// ybk8s path, where it derives from info.
+	ampBacking *ampstack.Backing
+	endpoint   ampEndpoint
+	podExec    exec.RemoteExecutor
+	sampler    *metrics.Sampler
+	epSampler  *metrics.Sampler
 
 	benchResult BenchResult
 }
@@ -248,6 +259,9 @@ func runOneProvision(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc Bench
 }
 
 func (r *benchProvision) provisionBacking(ctx context.Context) error {
+	if r.spec.backing != nil {
+		return r.spec.backing(ctx, r)
+	}
 	info, kube, err := deployYBBacking(ctx, r.t, r.cfg.RF, r.sfx, r.td, r.logf)
 	if err != nil {
 		return err
@@ -258,6 +272,11 @@ func (r *benchProvision) provisionBacking(ctx context.Context) error {
 }
 
 func (r *benchProvision) waitReady(ctx context.Context) error {
+	if r.ampBacking != nil {
+		// A provisioned universe is handed over healthy, and its tservers are
+		// not pods this process could sample.
+		return nil
+	}
 	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout, r.sink, r.logf); err != nil {
 		return err
 	}
@@ -268,15 +287,30 @@ func (r *benchProvision) waitReady(ctx context.Context) error {
 }
 
 func (r *benchProvision) provisionEndpoint(ctx context.Context) error {
-	amp := ampstack.FromConfig(r.t.Options)
+	ampOpts := r.t.Options
+	if r.spec.ampOptions != nil {
+		ampOpts = r.spec.ampOptions
+	}
+	amp := ampstack.FromConfig(ampOpts)
 	if r.amp != nil {
 		amp = *r.amp
 	}
-	ep, err := provisionAmpEndpoint(ctx, r.t, amp, ybk8s.FromConfig(r.t.Options), r.info, r.sfx, r.sink, r.td, r.logf)
+	ybCfg := ybk8s.FromConfig(r.t.Options)
+	var ep ampEndpoint
+	var err error
+	if r.ampBacking != nil {
+		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, *r.ampBacking, r.sfx, r.sink, r.td, r.logf)
+	} else {
+		ep, err = provisionAmpEndpoint(ctx, r.t, amp, ybCfg, r.info, r.sfx, r.sink, r.td, r.logf)
+	}
 	if err != nil {
 		return err
 	}
 	r.endpoint = ep
+	if r.kube == nil {
+		// No namespace of the store's own: the client pod runs beside amp.
+		r.kube = ep.Kube
+	}
 	if r.amp == nil {
 		r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
 	}

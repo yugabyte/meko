@@ -28,6 +28,13 @@ type UniverseSpec struct {
 	Region        string   // region code (used to resolve RegionUUIDs)
 	RegionUUIDs   []string // provider region UUIDs → userIntent.regionList
 
+	// Placement pins nodes per zone per region and PreferredRegion marks where
+	// tablet leaders should sit (placement.go). Empty → YBA spreads NumNodes over
+	// RegionUUIDs itself. With a placement, NumNodes and RegionUUIDs are derived
+	// from it.
+	Placement       []RegionPlacement
+	PreferredRegion string
+
 	InstanceType      string
 	NumCores          int // vCPU of InstanceType, registered on the provider
 	MemSizeGB         int // RAM (GiB) of InstanceType, registered on the provider
@@ -240,6 +247,7 @@ func BuildConfigureRequest(s UniverseSpec) map[string]any {
 		userIntent = awsUserIntent(s)
 	}
 	applyEncryptionInTransit(userIntent, s)
+	applyPlacement(userIntent, s)
 	return map[string]any{
 		"clusters": []any{
 			map[string]any{
@@ -458,11 +466,37 @@ func (c *Client) CreateUniverseFromSpec(ctx context.Context, s UniverseSpec) (Ta
 	if s.ProviderUUID == "" {
 		return TaskRef{}, fmt.Errorf("create universe %q: provider uuid is required", s.UniverseName())
 	}
+	if len(s.Placement) > 0 {
+		return c.createPlacedUniverse(ctx, s)
+	}
 	var ref TaskRef
 	if _, err := c.doJSON(ctx, http.MethodPost, c.custURL("/universes/clusters"), BuildConfigureRequest(s), &ref); err != nil {
 		return TaskRef{}, fmt.Errorf("create universe %q: %w", s.UniverseName(), err)
 	}
 	c.log("yba: creating universe %q (task %s, universe %s)", s.UniverseName(), ref.TaskUUID, ref.ResourceUUID)
+	return ref, nil
+}
+
+// createPlacedUniverse is the two-call flow a multi-region universe needs:
+// /universe_configure lets YBA generate the placement across the regions asked
+// for, the returned body is patched with the leader preference its generator
+// cannot infer, and that is what gets created. The single-call
+// /universes/clusters endpoint takes no placement we can steer.
+//
+// The create response here does not always carry the universe UUID, which is
+// why the caller resolves it by name when it is missing.
+func (c *Client) createPlacedUniverse(ctx context.Context, s UniverseSpec) (TaskRef, error) {
+	var configured map[string]any
+	if _, err := c.doJSON(ctx, http.MethodPost, c.custURL("/universe_configure"), BuildConfigureRequest(s), &configured); err != nil {
+		return TaskRef{}, fmt.Errorf("configure universe %q across %v: %w", s.UniverseName(), s.PlacementRegionCodes(), err)
+	}
+	applyPlacementPreference(configured, s)
+	var ref TaskRef
+	if _, err := c.doJSON(ctx, http.MethodPost, c.custURL("/universes"), configured, &ref); err != nil {
+		return TaskRef{}, fmt.Errorf("create universe %q across %v: %w", s.UniverseName(), s.PlacementRegionCodes(), err)
+	}
+	c.log("yba: creating universe %q across %v (task %s, universe %s)",
+		s.UniverseName(), s.PlacementRegionCodes(), ref.TaskUUID, ref.ResourceUUID)
 	return ref, nil
 }
 

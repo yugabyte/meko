@@ -92,6 +92,15 @@ type EnvSpec struct {
 	// interpreted here — and read only by the deploy selector (apps/ybdeploy).
 	// The run-level env.yb_deploy knob OVERRIDES it: the knob always wins.
 	PreferredYBDeploy string
+	// BackingConfig, when set, is a test's own backing shape: config overrides
+	// (the -o key=value form, typed prefixes allowed) laid over the run config
+	// before the deploy selector reads it. Like PreferredYBDeploy it is opaque
+	// here and read only by the provider standing up a DedicatedStack (and by
+	// the provision-budget resolver, so it must be pure), which
+	// then gives that test a YugabyteDB of its own shape (a multi-region
+	// universe, say) on a YBA of its own. A shared control plane serves every
+	// test off one backing and ignores it.
+	BackingConfig func(cfg *Config) map[string]string
 }
 
 // Dedicated reports a test that owns its whole stack, so nothing it does can

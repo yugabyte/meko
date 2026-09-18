@@ -820,11 +820,15 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 // never went Available — its status conditions (ProgressDeadlineExceeded,
 // MinimumReplicasUnavailable, …) and each controller pod's phase + container
 // waiting/terminated reason (CrashLoopBackOff, ImagePullBackOff, …). This is the
-// only capture: the pods are torn down right after the failure. It reads via
-// jsonpath (NOT `kubectl describe`/`logs`), so it can NEVER echo the backing
-// DSN password the controller carries as an env value (AGENTS.md §7). Runs on a
-// short independent deadline so a cancelled/expired parent ctx still yields
-// evidence; returns "" (never an error) when nothing could be read.
+// only capture: the pods are torn down right after the failure. Alongside the
+// jsonpath reads it collects namespace EVENTS and the controller's own logs,
+// because a pod that is up but not ready is explained by neither status nor
+// silence — a failing readiness probe is reported only as an event. Neither
+// echoes the env block holding the backing DSN the way `kubectl describe` would,
+// and a password that reached the config joins the Masker, which every sink
+// applies to this string (AGENTS.md §7). Runs on a short independent deadline so
+// a cancelled/expired parent ctx still yields evidence; returns "" (never an
+// error) when nothing could be read.
 func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	defer cancel()
@@ -841,6 +845,16 @@ func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
 			b.WriteString("\ncontroller pods:\n" + pods)
 		}
 	}
+	// Why a pod that is UP is not READY is never in its status or its logs — a
+	// failing readiness probe is reported only as an event, and a pod stuck
+	// before its first log line has nothing else to say.
+	if ev, err := a.kube.Events(dctx); err == nil {
+		if ev = strings.TrimSpace(ev); ev != "" {
+			b.WriteString("\nnamespace events:\n" + ev + "\n")
+		}
+	} else {
+		fmt.Fprintf(&b, "\nnamespace events unavailable: %v\n", err)
+	}
 	b.WriteString(a.controllerCrashLogs(dctx))
 	return b.String()
 }
@@ -854,25 +868,39 @@ func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
 func (a *App) controllerCrashLogs(ctx context.Context) string {
 	pods, err := a.kube.ListPods(ctx)
 	if err != nil {
-		return ""
+		return fmt.Sprintf("\ncontroller logs unavailable: list pods: %v\n", err)
 	}
 	var b strings.Builder
+	matched := 0
 	for _, pod := range pods {
 		if !strings.HasPrefix(pod, a.cfg.ControllerName+"-") {
 			continue
 		}
+		matched++
+		// A previous instance only exists once something restarted, so its
+		// absence is normal and not worth reporting; the CURRENT instance's
+		// logs are the ones whose absence has to be explained.
 		if prev, err := a.kube.LogsAllPrevious(ctx, pod, controllerCrashLogLines); err == nil {
 			if prev = strings.TrimSpace(prev); prev != "" {
 				fmt.Fprintf(&b, "\n%s logs (previous instance, last %d lines):\n%s\n",
 					pod, controllerCrashLogLines, prev)
 			}
 		}
-		if cur, err := a.kube.LogsAll(ctx, pod, controllerCrashLogLines); err == nil {
-			if cur = strings.TrimSpace(cur); cur != "" {
-				fmt.Fprintf(&b, "\n%s logs (current instance, last %d lines):\n%s\n",
-					pod, controllerCrashLogLines, cur)
-			}
+		cur, err := a.kube.LogsAll(ctx, pod, controllerCrashLogLines)
+		switch {
+		case err != nil:
+			fmt.Fprintf(&b, "\n%s logs unavailable: %v\n", pod, err)
+		case strings.TrimSpace(cur) == "":
+			// Silence from a pod that is up is itself the finding — it means the
+			// process has not reached its first log line, not that nothing broke.
+			fmt.Fprintf(&b, "\n%s produced no log output at all\n", pod)
+		default:
+			fmt.Fprintf(&b, "\n%s logs (current instance, last %d lines):\n%s\n",
+				pod, controllerCrashLogLines, strings.TrimSpace(cur))
 		}
+	}
+	if matched == 0 {
+		fmt.Fprintf(&b, "\nno pod named %s-* among %v\n", a.cfg.ControllerName, pods)
 	}
 	return b.String()
 }

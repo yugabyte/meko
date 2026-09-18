@@ -124,11 +124,17 @@ func addrPort(addr string, def int) int {
 // image overrides apply), pinning the namespace, the kube-context and the
 // external backing.
 func ampStackConfig(amp ampstack.Config, ybCfg ybk8s.Config, info ybk8s.Info, suffix string) ampstack.Config {
+	return ampStackConfigOn(amp, ybCfg.KubeContext, ampBacking(info), suffix)
+}
+
+// ampStackConfigOn is ampStackConfig for any backing the control plane can
+// dial: a co-located ybk8s store or a universe on VMs.
+func ampStackConfigOn(amp ampstack.Config, kubeContext string, backing ampstack.Backing, suffix string) ampstack.Config {
 	amp.Namespace = ampCPNamespace(suffix)
 	if amp.Context == "" {
-		amp.Context = ybCfg.KubeContext
+		amp.Context = kubeContext
 	}
-	amp.Backing = ampBacking(info)
+	amp.Backing = backing
 	return amp
 }
 
@@ -139,11 +145,17 @@ func ampStackConfig(amp ampstack.Config, ybCfg ybk8s.Config, info ybk8s.Info, su
 // still reclaimed — and because td is LIFO and the backing was pushed first, the
 // control plane always goes down before the cluster it sits on.
 func provisionAmpEndpoint(ctx context.Context, t *core.T, amp ampstack.Config, ybCfg ybk8s.Config, info ybk8s.Info, suffix string, sink apps.ArtifactSink, td *teardownStack, logf func(string, ...any)) (ampEndpoint, error) {
-	cfg := ampStackConfig(amp, ybCfg, info, suffix)
+	return provisionAmpEndpointOn(ctx, t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, ampBacking(info), suffix, sink, td, logf)
+}
+
+// provisionAmpEndpointOn is provisionAmpEndpoint over an already-resolved
+// backing, for a store that is not a co-located ybk8s deploy.
+func provisionAmpEndpointOn(ctx context.Context, t *core.T, amp ampstack.Config, kubeContext, kubeconfig string, backing ampstack.Backing, suffix string, sink apps.ArtifactSink, td *teardownStack, logf func(string, ...any)) (ampEndpoint, error) {
+	cfg := ampStackConfigOn(amp, kubeContext, backing, suffix)
 	app := ampstack.New(cfg).WithLogf(logf)
-	if ybCfg.Kubeconfig != "" {
+	if kubeconfig != "" {
 		app = app.WithKube(k8s.New(k8s.Config{Context: cfg.Context, Namespace: cfg.Namespace}).
-			WithRunner(k8s.KubeconfigRunner(ybCfg.Kubeconfig)))
+			WithRunner(k8s.KubeconfigRunner(kubeconfig)))
 	}
 	td.push("teardown amp control plane (namespace + endpoint)", func(ctx context.Context) error {
 		_ = app.Close(ctx)

@@ -28,6 +28,7 @@ import (
 	awscloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
 	gcpcloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/gcp"
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
+	"github.com/yugabyte/amp/test/functional/framework/apps/multiregion"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sampleapp"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
@@ -745,14 +746,16 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"apps.yba.gcp.credentials_secret": yba.DefaultGCPCredentialsSecret,
 		"apps.yba.gcp.instance_type":      yba.DefaultGCPInstanceType,
 		"apps.yba.gcp.storage_type":       yba.DefaultGCPStorageType,
+		"apps.yba.gcp.keypair_name":       yba.DefaultGCPKeyPairName,
+		"apps.yba.gcp.keypair_file":       yba.DefaultGCPKeyPairFile,
 	}
 	for key, want := range ybaGCPKeys {
 		if got := cfg.GetString(key, "__MISSING__"); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	// keypair_name/keypair_file/image are documented-empty but must be PRESENT.
-	for _, key := range []string{"apps.yba.gcp.keypair_name", "apps.yba.gcp.keypair_file", "apps.yba.gcp.image"} {
+	// image is documented-empty but must be PRESENT.
+	for _, key := range []string{"apps.yba.gcp.image"} {
 		if got := cfg.GetString(key, "__MISSING__"); got != "" {
 			t.Errorf("%s = %q, want present and empty", key, got)
 		}
@@ -1538,6 +1541,56 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if got := cfg.GetDuration("functional.voyager.phase_timeout", -1); got != 25*time.Minute {
 		t.Errorf("functional.voyager.phase_timeout = %s, want 25m", got)
+	}
+
+	// --- stress/multiregion_region_outage + the multiregion.* shape ---
+	if cfg.GetBool("multiregion.enabled", true) {
+		t.Errorf("multiregion.enabled = true, want false (opt-in: GCE VMs across regions)")
+	}
+	mr := multiregion.FromConfig(cfg)
+	if err := mr.Validate(); err != nil {
+		t.Errorf("multiregion.* default shape: %v", err)
+	}
+	if mr.PreferredRegion != multiregion.DefaultPreferredRegion || mr.ReplicationFactor != multiregion.DefaultReplicationFactor ||
+		mr.InstanceType != multiregion.DefaultInstanceType || mr.VolumeSizeGB != multiregion.DefaultVolumeSizeGB ||
+		mr.Image != multiregion.DefaultImage || mr.ProviderName != multiregion.DefaultProviderName {
+		t.Errorf("multiregion.* = %+v, want the apps/multiregion defaults", mr)
+	}
+	if len(mr.Regions) != len(multiregion.DefaultRegions) {
+		t.Errorf("multiregion.regions = %v, want %v", mr.Regions, multiregion.DefaultRegions)
+	}
+	if got := cfg.GetDuration("multiregion.provision_timeout", -1); got != multiregion.DefaultProvisionTimeout {
+		t.Errorf("multiregion.provision_timeout = %s, want %s", got, multiregion.DefaultProvisionTimeout)
+	}
+	if got := cfg.GetDuration("multiregion.controller_ready_timeout", -1); got != multiregion.DefaultControllerReadyTimeout {
+		t.Errorf("multiregion.controller_ready_timeout = %s, want %s", got, multiregion.DefaultControllerReadyTimeout)
+	}
+	if got := cfg.GetInt("multiregion.perf.provisions", -1); got != perf.DefaultMultiRegionProvisions {
+		t.Errorf("multiregion.perf.provisions = %d, want %d", got, perf.DefaultMultiRegionProvisions)
+	}
+	if len(cfg.GetMapSlice("apps.yba.gcp.placement", nil)) != 0 || cfg.GetString("apps.yba.gcp.preferred_region", "x") != "" {
+		t.Errorf("apps.yba.gcp.placement/preferred_region must default empty (single-region)")
+	}
+	if got := cfg.GetString("stress.multiregion_outage.target", ""); got != "preferred" {
+		t.Errorf("stress.multiregion_outage.target = %q, want preferred", got)
+	}
+	outageDurations := map[string]time.Duration{
+		"stress.multiregion_outage.duration":                   5 * time.Minute,
+		"stress.multiregion_outage.max_write_stall":            90 * time.Second,
+		"stress.multiregion_outage.settle_timeout":             15 * time.Minute,
+		"stress.multiregion_outage.resume_duration":            30 * time.Second,
+		"stress.multiregion_outage.control_plane_recovery_max": 2 * time.Minute,
+	}
+	for key, want := range outageDurations {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+	if got := cfg.GetInt("stress.multiregion_outage.tenants", -1); got != 3 {
+		t.Errorf("stress.multiregion_outage.tenants = %d, want 3", got)
+	}
+	if got := cfg.GetInt("stress.multiregion_outage.payload_bytes", -1); got != 256 {
+		t.Errorf("stress.multiregion_outage.payload_bytes = %d, want 256", got)
 	}
 
 	// --- stress/backing_unreachable_api ---

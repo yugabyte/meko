@@ -148,6 +148,11 @@ func RunOne(ctx context.Context, test Test, opts RunOptions) *Result {
 		result.SkipReason = reason
 		return result
 	}
+	if reason := preflightSkip(test, opts.Config); reason != "" {
+		result.Status = StatusSkipped
+		result.SkipReason = reason
+		return result
+	}
 
 	// Version gate — before provisioning (architecture §4.9).
 	if ok, reason := test.Versions.Qualifies(opts.DetectedVersions); !ok {
@@ -218,6 +223,11 @@ func RunOneOnEnv(ctx context.Context, test Test, env Environment, opts RunOption
 	defer finishResult(opts.Sink, test.Name, result, opts.Masker)
 
 	if reason := strings.TrimSpace(test.Skip); reason != "" {
+		result.Status = StatusSkipped
+		result.SkipReason = reason
+		return result
+	}
+	if reason := preflightSkip(test, opts.Config); reason != "" {
 		result.Status = StatusSkipped
 		result.SkipReason = reason
 		return result
@@ -535,3 +545,15 @@ func attestSharedInfraGone(test Test, prov EnvProvider) (string, bool) {
 }
 
 const sharedInfraGoneTimeout = 15 * time.Second
+
+// preflightSkip runs the test's Preflight against the run config; a nil config
+// (a bare unit call) is asked as an empty one.
+func preflightSkip(test Test, cfg *Config) string {
+	if test.Preflight == nil {
+		return ""
+	}
+	if cfg == nil {
+		cfg = NewConfig()
+	}
+	return strings.TrimSpace(test.Preflight(cfg))
+}

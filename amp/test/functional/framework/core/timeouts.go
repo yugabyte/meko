@@ -138,6 +138,15 @@ func ResolveProvisionTimeoutFor(cfg *Config, spec EnvSpec) time.Duration {
 	if cfg == nil {
 		return DefaultDedicatedProvisionTimeout
 	}
+	// A test that declares its own backing shape may also declare what standing
+	// that shape up costs, through the same overlay the provider deploys from —
+	// a universe on cloud VMs across regions does not fit the budget a
+	// co-located one needs.
+	if spec.BackingConfig != nil {
+		if overlay := spec.BackingConfig(cfg); len(overlay) > 0 {
+			cfg = cfg.Derive(overlay)
+		}
+	}
 	return scaleProvision(cfg, cfg.GetDuration("timeouts.provision_dedicated", DefaultDedicatedProvisionTimeout))
 }
 
