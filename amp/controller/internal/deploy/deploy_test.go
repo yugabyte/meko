@@ -643,22 +643,25 @@ func TestStartupProbeBudgetTracksDeployTimeout(t *testing.T) {
 		want    int
 	}{
 		// The binary default, and the chart's standalone default: same budget.
-		{"10m default", 10 * time.Minute, 61},
+		// With a 2s period, 600s of budget is 300 periods, +1 for the immediate
+		// probe = 301.
+		{"10m default", 10 * time.Minute, 301},
 		// What QA actually runs. The chart's hardcoded 10m would have become the
-		// binding constraint here — the whole point of deriving it.
-		{"35m as QA sets it", 35 * time.Minute, 211},
-		// Above the floor AND not a whole number of periods, so this one really
-		// does separate ceil from floor division: 11m is 66 periods exactly, +1
-		// for the immediate probe = 67. A floor-division mutant gives 67 too, so
-		// the case below is the one that pins rounding.
-		{"exactly on a period boundary", 11 * time.Minute, 67},
-		// 11m1s needs 67 periods (ceil), +1 = 68. Floor division yields 67 and a
-		// budget of 660s — under the 661s timeout. This is the rounding case.
-		{"rounds up past a period boundary", 11*time.Minute + time.Second, 68},
+		// binding constraint here — the whole point of deriving it. 2100s / 2s =
+		// 1050 periods, +1 = 1051.
+		{"35m as QA sets it", 35 * time.Minute, 1051},
+		// Above the floor AND a whole number of periods: 11m is 330 periods
+		// exactly (660s / 2s), +1 for the immediate probe = 331. A floor-division
+		// mutant gives 331 too, so the case below is the one that pins rounding.
+		{"exactly on a period boundary", 11 * time.Minute, 331},
+		// 11m1s needs 331 periods (ceil of 661s / 2s), +1 = 332. Floor division
+		// yields 331 and a budget of 660s — under the 661s timeout. This is the
+		// rounding case.
+		{"rounds up past a period boundary", 11*time.Minute + time.Second, 332},
 		// A short timeout must not leave a compute worse off than a plain
 		// `helm install`.
-		{"floored at the chart default", time.Minute, 61},
-		{"zero is the floor, not zero", 0, 61},
+		{"floored at the chart default", time.Minute, 301},
+		{"zero is the floor, not zero", 0, 301},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := startupProbeBudget(tc.timeout)

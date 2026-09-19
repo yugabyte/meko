@@ -77,6 +77,13 @@ const serviceTypeNodePort = "NodePort"
 // slow cloud LB doesn't keep the synchronous create blocked indefinitely.
 const lbAddressPollTimeout = 2 * time.Minute
 
+// lbAddressPollInterval is how often serviceLBAddress re-reads the Service while
+// waiting for that ingress address. Kept short: the address usually lands within
+// a second or two of the first miss, and the create is synchronous, so a coarse
+// interval just adds dead wait to every LB-backed endpoint. The budget above,
+// not this interval, is what bounds a genuinely slow cloud LB.
+const lbAddressPollInterval = 500 * time.Millisecond
+
 // KubernetesConfig is the static configuration of the Helm-backed deployer: the
 // cluster/chart/image coordinates that are the same for every endpoint. The
 // per-endpoint identity (branch id/pg version, the backing YB connection,
@@ -720,7 +727,7 @@ func (k *KubernetesDeployer) serviceLBAddress(ctx context.Context, release strin
 		select {
 		case <-ctx.Done():
 			return ""
-		case <-time.After(3 * time.Second):
+		case <-time.After(lbAddressPollInterval):
 		}
 	}
 }
@@ -1194,11 +1201,17 @@ func startupProbeBudget(timeout time.Duration) startupProbeValues {
 }
 
 // progressDeadlineFor sizes the Deployment's own give-up clock so it outlasts
-// the kubelet's startup budget. Equal would be a race between two clocks started
-// at slightly different moments, so it adds one period.
+// the kubelet's startup budget. The two clocks are not merely skewed: the
+// Deployment's Progressing timer last resets when the pod appears, so pod
+// scheduling, image pull and (with a storageClass) volume attach all run inside
+// it yet outside the kubelet's startup budget — which only starts ticking at
+// container start. The headroom has to cover that pre-container overhead, so it
+// is a fixed margin rather than one probe period: scaling it with the (now
+// short) period would leave a full-budget bootstrap tripping ProgressDeadline
+// over a slow image pull.
 func progressDeadlineFor(timeout time.Duration) int {
 	budget := startupProbeBudgetSeconds(startupProbeBudget(timeout))
-	return int(budget.Seconds()) + startupProbePeriodSeconds
+	return int(budget.Seconds()) + progressDeadlineHeadroomSeconds
 }
 
 // startupProbeBudgetSeconds is what the kubelet actually enforces for these
@@ -1210,10 +1223,22 @@ func startupProbeBudgetSeconds(v startupProbeValues) time.Duration {
 
 const (
 	// startupProbePeriodSeconds matches the chart default; see startupProbeBudget.
-	startupProbePeriodSeconds = 10
+	// Kept short so the kubelet notices a compute that has come up promptly: the
+	// database listens ~3-4s after the container starts, and the startupProbe
+	// period is how often the kubelet checks for that. It gates when the pod
+	// leaves "starting"; readiness then re-probes on its own period, so the total
+	// time-to-Ready is bounded by both, not this alone. The threshold carries the
+	// total budget length instead of the period.
+	startupProbePeriodSeconds = 2
 	// startupProbeMinFailureThreshold is the chart's own default, chosen so the
-	// floor budget is a round 10 minutes: 10 * (61 - 1) = 600s.
-	startupProbeMinFailureThreshold = 61
+	// floor budget is a round 10 minutes: 2 * (301 - 1) = 600s.
+	startupProbeMinFailureThreshold = 301
+	// progressDeadlineHeadroomSeconds is how far the Deployment's give-up clock
+	// sits above the kubelet's startup budget. It covers the pre-container
+	// overhead — pod scheduling, image pull, volume attach — that the Progressing
+	// timer counts but the startup budget does not; a fixed margin, deliberately
+	// not the probe period, so shortening the period does not shrink it.
+	progressDeadlineHeadroomSeconds = 10
 )
 
 type persistenceValues struct {

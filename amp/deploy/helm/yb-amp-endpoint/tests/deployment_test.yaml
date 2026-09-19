@@ -282,18 +282,22 @@ tests:
           value: pg-compute
       # periodSeconds * (failureThreshold - 1) is the bootstrap budget — the
       # prober probes immediately and only then waits on the period, so N
-      # failures span N-1 periods. 10 * 60 = 600s. It must stay at or above the
-      # controller's deploy timeout, or the kubelet gives up on a pod the
-      # controller is still waiting for.
+      # failures span N-1 periods. 2 * 300 = 600s. The period is kept short so
+      # the kubelet notices a compute that came up promptly; the threshold
+      # carries the length. It must stay at or above the controller's deploy
+      # timeout, or the kubelet gives up on a pod the controller is still
+      # waiting for.
       - equal:
           path: spec.template.spec.containers[0].startupProbe.periodSeconds
-          value: 10
+          value: 2
       - equal:
           path: spec.template.spec.containers[0].startupProbe.failureThreshold
-          value: 61
+          value: 301
       # And the Deployment's own clock has to outlast that budget, or a pod the
       # kubelet is still waiting on is reported as a failed rollout at the k8s
-      # default of 600s.
+      # default of 600s. A fixed 10s margin above the 600s budget — it also covers
+      # pre-container overhead (scheduling, image pull, volume attach) and so is
+      # not scaled with the probe period.
       - equal:
           path: spec.progressDeadlineSeconds
           value: 610

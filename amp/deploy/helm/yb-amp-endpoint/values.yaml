@@ -364,13 +364,19 @@ runDir:
 # `helm install` gets, and it doubles as the controller's floor.
 startupProbe:
   enabled: true
-  periodSeconds: 10
-  failureThreshold: 61
+  # Short period so the kubelet notices a compute that has come up promptly (the
+  # database listens ~3-4s after the container starts); the threshold carries the
+  # ~10m floor budget instead: 2 * (301 - 1) = 600s.
+  periodSeconds: 2
+  failureThreshold: 301
 # progressDeadlineSeconds is the Deployment's own give-up clock. Kubernetes
 # defaults it to 600s, which would flip Progressing=False while the kubelet is
 # still legitimately inside a longer startup budget — anything waiting on
 # condition=Available then reports a failed rollout for a pod that is fine. Kept
-# one period above the startup budget; the controller overrides it too.
+# a fixed margin above the startup budget — it also has to cover pre-container
+# overhead (scheduling, image pull, volume attach) that the Progressing timer
+# counts but the startup budget does not, so it is NOT scaled with the probe
+# period. The controller overrides it too.
 progressDeadlineSeconds: 610
 # Liveness and readiness are tcpSocket probes on the compute port.
 livenessProbe:
@@ -382,9 +388,16 @@ livenessProbe:
   failureThreshold: 4
 readinessProbe:
   enabled: true
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  failureThreshold: 6
+  # Readiness is gated behind the startupProbe and probes the same compute port,
+  # so once startup succeeds the port is already open and readiness passes on its
+  # next tick. initialDelaySeconds counts from container start (not from startup
+  # success), so it just needs to be small enough not to become the gate itself;
+  # periodSeconds is what bounds how long after startup the pod is marked Ready.
+  # failureThreshold is scaled with the period so the unready-before-eviction
+  # window stays the original 60s (5 * 12), not 30s (5 * 6).
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  failureThreshold: 12
 
 podAnnotations: {}
 podLabels: {}
