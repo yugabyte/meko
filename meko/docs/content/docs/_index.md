@@ -66,7 +66,7 @@ Meko integrates easily with any agentic framework through MCP servers. It is ser
   {{< card
     href="examples/"
     title="Examples"
-    desc="Real-world scenarios: handoffs, collective learning, and shared team standards."
+    desc="Hands-on labs, plus scenarios for handoffs, collective learning, and shared team standards."
     cta="Browse examples &rarr;"
   >}}
   {{< card

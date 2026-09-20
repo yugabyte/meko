@@ -81,6 +81,7 @@ OAuth (URL only, no API key) works for clients with a custom-connector flow; tha
 
 ## Examples
 
+- [Labs](/examples/labs/): Use when walking a live portal lab — currently Review a PR with AgentK
 - [Enhanced Teaming](/examples/meko-enhances-teaming/): Use when showing handoffs, shared standards, and team memory across agents
 - [Traces and Resumability](/examples/trace-and-resume/): Use when showing decision traces, archived conversations, and resumable agent state
 

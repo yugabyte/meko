@@ -1,11 +1,21 @@
 ---
 title: Examples
 linkTitle: Examples
-description: Real-world scenarios and sample solutions built with Meko
+description: Hands-on labs and real-world scenarios built with Meko
 weight: 2000
 body_class: full-width
 type: docs
 ---
+## Labs
+
+{{< card-group >}}
+  {{< card
+    href="examples/labs/"
+    title="Labs"
+    desc="Guided portal labs: build context, watch an agent use it, take the setup back to your repo."
+  >}}
+{{< /card-group >}}
+
 ## Enhanced team efficiency and productivity
 
 {{< card-group >}}
