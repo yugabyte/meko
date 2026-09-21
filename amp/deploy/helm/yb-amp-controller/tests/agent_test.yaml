@@ -177,3 +177,34 @@ tests:
           content:
             name: OTEL_COLLECTOR_METRICS_URL
           any: true
+
+  # The chart the agent helm-upgrades this release to. It has to be settable here
+  # because the agent's built-in default is an OCI ref nobody has published — an
+  # environment whose controller version comes from YCP cannot resolve it, so
+  # without this value the upgrade fails on every tick with nothing to change.
+  - it: passes agent.controllerChart through as CONTROLLER_CHART
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      agent.controllerChart: https://uploads.dev.yugabyte.com/charts/yb-amp-controller-0.1.0.tgz
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLLER_CHART
+            value: https://uploads.dev.yugabyte.com/charts/yb-amp-controller-0.1.0.tgz
+
+  # Unset means "the binary decides", not "the empty string" — an empty
+  # CONTROLLER_CHART would override the agent's own default with nothing.
+  - it: omits CONTROLLER_CHART when agent.controllerChart is unset
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLLER_CHART
+          any: true

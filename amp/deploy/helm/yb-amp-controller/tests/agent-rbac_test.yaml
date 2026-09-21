@@ -1,0 +1,137 @@
+suite: reconcile-agent rbac
+templates:
+  - templates/agent-rbac.yaml
+tests:
+  - it: renders nothing when the agent is off
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The agent has its own ServiceAccount; it does not share the controller's, so
+  # widening this file widens the agent alone.
+  - it: gives the agent its own identity
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - documentIndex: 0
+        isKind:
+          of: ServiceAccount
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: amp-reconcile-agent
+      - documentIndex: 2
+        equal:
+          path: subjects[0].name
+          value: amp-reconcile-agent
+
+  # The agent upgrades the release it runs in, so its Role has to cover every
+  # object in that release. This is the privilege increase, asserted so a reviewer
+  # sees it change rather than has to notice.
+  - it: can helm-upgrade the release it is a member of
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      # Still its own state Secret and the components tab's read, which the agent
+      # needs whether or not a controller is ever declared.
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: [apps]
+            resources: [deployments, statefulsets]
+            verbs: [list]
+      # Helm 3 stores each revision as a Secret named
+      # sh.helm.release.v1.<release>.v<N>, so the grant cannot be pinned by name
+      # and needs delete for the history limit to be enforced.
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, list, watch, create, update, patch, delete]
+      # Without escalate/bind k8s refuses to let the agent write the release's own
+      # Roles and RoleBindings.
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            resources: [roles]
+            verbs: [get, list, watch, create, update, patch, delete, escalate]
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            resources: [rolebindings]
+            verbs: [get, list, watch, create, update, patch, delete, bind]
+
+  # A namespace-only install stays namespace-only: cluster-scoped rights appear
+  # only once the release actually contains a cluster-scoped object. nodeRead has
+  # to be off for that, because it defaults ON and renders one — which is the
+  # version of this case that a stock install actually has.
+  - it: adds no cluster-scoped rights for a release that has no cluster-scoped object
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      rbac.nodeRead: false
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  # The default install: namespaced apart from nodeRead's ClusterRole pair, which
+  # helm still reads before patching. Without these rights the upgrade is rejected
+  # forbidden and the controller kind never converges.
+  - it: covers the cluster-scoped object a default install does have
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: can write the release's cluster-scoped objects when it has them
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      rbac.clusterScoped: true
+    release:
+      namespace: amp-acme-prod
+    asserts:
+      - hasDocuments:
+          count: 5
+      - documentIndex: 3
+        isKind:
+          of: ClusterRole
+      # Namespaced per install, so two installs in one cluster do not collide.
+      - documentIndex: 3
+        equal:
+          path: metadata.name
+          value: amp-acme-prod-amp-reconcile-agent-release
+      - documentIndex: 4
+        isKind:
+          of: ClusterRoleBinding
+
+  # The cluster-scoped otel collector RBAC is a release member too, on a cluster
+  # that has the operator's CRDs.
+  - it: covers the otel cAdvisor ClusterRole as well
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      otel.podMetrics: true
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    asserts:
+      - hasDocuments:
+          count: 5

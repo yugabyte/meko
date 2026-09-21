@@ -43,7 +43,7 @@ func TestCreatePoolEnsuresOwnerFirst(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestCreatePoolWithoutOwnerSkipsUserCreate(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -120,6 +120,9 @@ func TestListReportsResourceAttrs(t *testing.T) {
 			io.WriteString(w, `{"branches":[{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":false,"pg_version":18,"fork_lsn":"1/2","parent_branch_id":"`+parentID+`","extensions":["pgvector","pg_cron"],"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/clusters"):
 			io.WriteString(w, `{"clusters":[{"id":"`+clusterID+`","name":"recproj","storage_pool_id":"`+poolID+`","extensions":["pgvector","pg_cron"],"created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"created_at":"2026-01-01T00:00:00Z"}}]}`)
+		case p == "/version":
+			// Every List reads the controller row; these tests are not about it.
+			io.WriteString(w, `{"version":"0.0.0","git_commit":"abc1234","build_date":"2026-01-01T00:00:00Z"}`)
 		case strings.HasSuffix(p, "/storage-pools"):
 			io.WriteString(w, `{"storage_pools":[{"id":"`+poolID+`","name":"pool-a","owner_user_id":"11111111-1111-1111-1111-111111111111","created_at":"2026-01-01T00:00:00Z"}]}`)
 		default:
@@ -129,7 +132,7 @@ func TestListReportsResourceAttrs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -355,7 +358,7 @@ func TestBadRequestIsPermanent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -442,6 +445,9 @@ func listedTree(t *testing.T, branchExts []string) (*Backend, *calls) {
 			io.WriteString(w, `{"branches":[{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"extensions":`+string(exts)+`,"pg_settings":{"work_mem":"32MB"},"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/clusters"):
 			io.WriteString(w, `{"clusters":[{"id":"`+clusterID+`","name":"recproj","storage_pool_id":"`+poolID+`","created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"created_at":"2026-01-01T00:00:00Z"}}]}`)
+		case p == "/version":
+			// Every List reads the controller row; these tests are not about it.
+			io.WriteString(w, `{"version":"0.0.0","git_commit":"abc1234","build_date":"2026-01-01T00:00:00Z"}`)
 		case strings.HasSuffix(p, "/storage-pools"):
 			io.WriteString(w, `{"storage_pools":[{"id":"`+poolID+`","name":"pool-a","owner_user_id":"11111111-1111-1111-1111-111111111111","created_at":"2026-01-01T00:00:00Z"}]}`)
 		default:
@@ -451,7 +457,7 @@ func listedTree(t *testing.T, branchExts []string) (*Backend, *calls) {
 	}))
 	t.Cleanup(srv.Close)
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

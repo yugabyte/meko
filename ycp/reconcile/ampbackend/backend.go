@@ -56,16 +56,17 @@ import (
 
 // Resource kinds an operator declares in desired state for an amp environment.
 const (
-	KindPool     = "storage-pool"
-	KindCluster  = "cluster"
-	KindBranch   = "branch"
-	KindEndpoint = "endpoint"
+	KindPool       = "storage-pool"
+	KindCluster    = "cluster"
+	KindBranch     = "branch"
+	KindEndpoint   = "endpoint"
+	KindController = "controller"
 )
 
-// allKinds is every kind this backend maps. TestUpdatableKindsEchoTheirGeneration
-// walks it, so a kind added above without a case in that test fails rather than
-// going unasserted in either direction.
-var allKinds = []string{KindPool, KindCluster, KindBranch, KindEndpoint}
+// controllerName is the only name a controller resource may carry: one
+// environment runs one amp controller, so a second name would be two
+// declarations driving one helm release.
+const controllerName = "controller"
 
 const sep = "/"
 
@@ -83,6 +84,12 @@ type Backend struct {
 	// re-issued regardless, and a task still holding the resource answers 409, which
 	// this path reads as pending.
 	inflight map[reconcile.ResourceKey]openapi_types.UUID
+	// ctl is everything the controller kind needs that is not the REST API. See
+	// ControllerConfig.
+	ctl *controllerState
+	// lastSeen is the key set the last successful tree read returned, guarded by
+	// mu. It is what lets a failed read name what it could not reach.
+	lastSeen []reconcile.ResourceKey
 }
 
 // updateFuncs is every kind Update can converge, mapped to how. It is the one
@@ -91,8 +98,9 @@ type Backend struct {
 // has its applied generation echoed by List — a kind that accepts updates without
 // the echo is the silent latch meko#985 is about.
 var updateFuncs = map[string]func(*Backend, context.Context, api.DesiredResource) error{
-	KindBranch:   (*Backend).updateBranch,
-	KindEndpoint: (*Backend).updateEndpoint,
+	KindBranch:     (*Backend).updateBranch,
+	KindEndpoint:   (*Backend).updateEndpoint,
+	KindController: (*Backend).updateController,
 }
 
 // index maps a resource's hierarchical path to the controller UUIDs its
@@ -126,22 +134,27 @@ func newIndex() index {
 // New builds a Backend against the controller at baseURL. authToken is sent as
 // a bearer when non-empty; the controller API is unauthenticated in-cluster for
 // now, so it is usually empty.
-func New(baseURL, authToken string, httpDoer ampclient.HttpRequestDoer) (*Backend, error) {
-	opts := []ampclient.ClientOption{}
+func New(baseURL, authToken string, httpDoer ampclient.HttpRequestDoer, ctl ControllerConfig) (*Backend, error) {
+	clientOpts := []ampclient.ClientOption{}
 	if httpDoer != nil {
-		opts = append(opts, ampclient.WithHTTPClient(httpDoer))
+		clientOpts = append(clientOpts, ampclient.WithHTTPClient(httpDoer))
 	}
 	if authToken != "" {
-		opts = append(opts, ampclient.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+		clientOpts = append(clientOpts, ampclient.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
 			req.Header.Set("Authorization", "Bearer "+authToken)
 			return nil
 		}))
 	}
-	c, err := ampclient.NewClient(strings.TrimRight(baseURL, "/"), opts...)
+	c, err := ampclient.NewClient(strings.TrimRight(baseURL, "/"), clientOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return &Backend{api: c, idx: newIndex(), inflight: map[reconcile.ResourceKey]openapi_types.UUID{}}, nil
+	return &Backend{
+		api:      c,
+		idx:      newIndex(),
+		inflight: map[reconcile.ResourceKey]openapi_types.UUID{},
+		ctl:      &controllerState{cfg: ctl},
+	}, nil
 }
 
 // Parent returns the resource's parent key derived from its path.
@@ -324,7 +337,56 @@ func endpointAttrs(ep ampclient.Endpoint) map[string]string {
 
 // List traverses pools -> clusters -> branches -> endpoints and returns every
 // YCP-owned resource, rebuilding the id index as it goes.
+//
+// The controller row is read first and kept even when the rest fails. The
+// controller kind converges on helm and the k8s rollout, not on the controller's
+// REST API — which is exactly what a bad controller version takes down — so a
+// plain error here would make the version that rolls it back unappliable and
+// leave recovery to a human with helm on the cluster.
+//
+// What the tree read could not reach is reported per resource rather than
+// dropped (reconcile.Actual.DiscoveryError): a short list would have the engine
+// create every endpoint again.
 func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
+	ctl, haveCtl := b.controllerActual(ctx)
+	out, idx, err := b.listTree(ctx)
+	if err != nil {
+		partial := b.unreadable(err)
+		if haveCtl {
+			partial = append(partial, ctl)
+		}
+		if len(partial) == 0 {
+			return nil, err
+		}
+		return partial, nil
+	}
+	if haveCtl {
+		out = append(out, ctl)
+	}
+	b.mu.Lock()
+	b.idx = idx
+	b.mu.Unlock()
+	return out, nil
+}
+
+// unreadable names what this tick could not read, so the engine can tell it from
+// what is genuinely absent. The keys come from the last good List: a resource
+// seen before and unreachable now is one the engine must not create again.
+//
+// Resources never yet seen are not named, and do not need to be: a create for
+// one is issued against a remote that is down, fails, and is retried with
+// backoff. It is the ones that EXIST that a short list would duplicate.
+func (b *Backend) unreadable(cause error) []reconcile.Actual {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]reconcile.Actual, 0, len(b.lastSeen))
+	for _, k := range b.lastSeen {
+		out = append(out, reconcile.Actual{Key: k, DiscoveryError: cause})
+	}
+	return out
+}
+
+func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, error) {
 	idx := newIndex()
 	var out []reconcile.Actual
 
@@ -332,7 +394,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 	if err := b.getJSON(ctx, func(c context.Context) (*http.Response, error) {
 		return b.api.ListStoragePools(c, &ampclient.ListStoragePoolsParams{})
 	}, &pools); err != nil {
-		return nil, fmt.Errorf("list storage pools: %w", err)
+		return nil, idx, fmt.Errorf("list storage pools: %w", err)
 	}
 	for _, p := range pools.StoragePools {
 		poolPath := p.Name
@@ -348,7 +410,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 		if err := b.getJSON(ctx, func(c context.Context) (*http.Response, error) {
 			return b.api.ListClusters(c, p.Id, &ampclient.ListClustersParams{})
 		}, &clusters); err != nil {
-			return nil, fmt.Errorf("list clusters in %q: %w", poolPath, err)
+			return nil, idx, fmt.Errorf("list clusters in %q: %w", poolPath, err)
 		}
 		for _, cl := range clusters.Clusters {
 			clusterPath := join([]string{poolPath, cl.Name})
@@ -378,7 +440,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 			if err := b.getJSON(ctx, func(c context.Context) (*http.Response, error) {
 				return b.api.ListBranches(c, p.Id, cl.Id, &ampclient.ListBranchesParams{})
 			}, &branches); err != nil {
-				return nil, fmt.Errorf("list branches in %q: %w", clusterPath, err)
+				return nil, idx, fmt.Errorf("list branches in %q: %w", clusterPath, err)
 			}
 			for _, br := range branches.Branches {
 				branchPath := join([]string{poolPath, cl.Name, br.Name})
@@ -397,7 +459,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 				if err := b.getJSON(ctx, func(c context.Context) (*http.Response, error) {
 					return b.api.ListEndpoints(c, p.Id, cl.Id, br.BranchId, &ampclient.ListEndpointsParams{})
 				}, &endpoints); err != nil {
-					return nil, fmt.Errorf("list endpoints in %q: %w", branchPath, err)
+					return nil, idx, fmt.Errorf("list endpoints in %q: %w", branchPath, err)
 				}
 				for _, ep := range endpoints.Endpoints {
 					epName := ep.Name
@@ -425,10 +487,17 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 		}
 	}
 
+	// Remembered so a later tick that cannot reach the controller can name what it
+	// failed to read rather than return a short list (see unreadable).
+	seen := make([]reconcile.ResourceKey, 0, len(out))
+	for _, a := range out {
+		seen = append(seen, a.Key)
+	}
 	b.mu.Lock()
-	b.idx = idx
+	b.lastSeen = seen
 	b.mu.Unlock()
-	return out, nil
+
+	return out, idx, nil
 }
 
 // Create issues the async create task for r. A 409 (already exists / in flight)
@@ -524,13 +593,18 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
 			return b.api.CreateEndpoint(c, poolID, clusterID, branchID, req)
 		})
+	case KindController:
+		// The release exists — this agent runs inside it — so a create is an update
+		// that has not seen a row yet.
+		return b.updateController(ctx, r)
 	}
 	return fmt.Errorf("create: unknown kind %q", r.Kind)
 }
 
 // Update carries the spec changes this agent applies to a resource that already
-// exists: a branch's or endpoint's settings, resizing an endpoint, and enabling
-// externalized extensions on a branch. Clusters have no controller update path at all, and a pool's only
+// exists: a branch's or endpoint's settings, resizing an endpoint, enabling
+// externalized extensions on a branch, and the controller's own version.
+// Clusters have no controller update path at all, and a pool's only
 // one is rename — which is not an update here, since a pool's resource key IS
 // its name, so renaming one reaches the engine as a different resource. Either
 // way a spec change to one is a permanent (non-retryable) error the engine
@@ -1250,6 +1324,9 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
 			return b.api.DeleteEndpoint(c, poolID, clusterID, branchID, endpointID)
 		})
+	case KindController:
+		return reconcile.Permanent(fmt.Errorf(
+			"delete controller %q: the controller is not deleted through desired state — it is the release this agent runs in", key.Name))
 	}
 	return fmt.Errorf("delete: unknown kind %q", key.Kind)
 }

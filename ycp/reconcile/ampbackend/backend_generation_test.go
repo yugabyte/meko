@@ -1,6 +1,7 @@
 package ampbackend
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/google/uuid"
@@ -42,6 +43,13 @@ type genServer struct {
 	// server 404 the task, i.e. "the controller no longer knows it".
 	taskStatus string
 	taskError  string
+	// ctlImageTag is the tag the controller's pod template carries; empty takes it
+	// from whatever helm last deployed. controllerVersion is what GET /version
+	// reports — helm starts at an empty release, so a declared version always
+	// diverges unless a test says otherwise.
+	ctlImageTag       string
+	controllerVersion string
+	helm              *fakeHelm
 	// mutateStatus overrides the status code the two mutating calls return;
 	// mutateError is the error message sent with a non-2xx.
 	mutateStatus int
@@ -80,6 +88,8 @@ func (g *genServer) start(t *testing.T) *Backend {
 		p := r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case p == "/version":
+			io.WriteString(w, `{"version":"`+g.controllerVersion+`","git_commit":"abc1234","build_date":"2026-01-01T00:00:00Z"}`)
 		case strings.HasPrefix(p, "/tasks/"):
 			g.taskGets++
 			if g.taskStatus == "" {
@@ -151,7 +161,23 @@ func (g *genServer) start(t *testing.T) *Backend {
 	}))
 	t.Cleanup(srv.Close)
 
-	b, err := New(srv.URL, "", nil)
+	if g.helm == nil {
+		g.helm = &fakeHelm{}
+	}
+	b, err := New(srv.URL, "", nil, ControllerConfig{
+		Helm: g.helm,
+		Rollout: func(context.Context, string) (bool, string, error) {
+			tag := g.ctlImageTag
+			if tag == "" {
+				tag = g.helm.deployedTag()
+			}
+			return true, tag, nil
+		},
+		Release:    ctlRelease,
+		Namespace:  ctlNamespace,
+		Chart:      ctlChart,
+		Deployment: "amp-controller",
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -412,7 +438,7 @@ func TestCreateConflictStaysSuccess(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -426,14 +452,34 @@ func TestCreateConflictStaysSuccess(t *testing.T) {
 // there is no third option, because a kind that accepts updates without the echo
 // is exactly the silent latch of meko#985.
 //
+// The enumeration guard's own registries. Test-only on purpose: nothing in the
+// backend reads either of these, so declaring them beside the code would make
+// them look like runtime behaviour.
+//
+// allKinds is every kind this backend maps, and observableKinds is the subset
+// that proves convergence by OBSERVATION rather than by an echoed generation —
+// every field of the spec is directly readable on the remote, so an echo would
+// be a second record of something already visible. Those kinds report
+// GenerationNever rather than 0: a kind that always exists is never Created, and
+// at 0 it would sit at effGen 0 against a first declaration's generation 0 and
+// never be updated at all.
+//
+// A kind absent from allKinds, or in none of the three sets, fails the guard
+// below rather than going unasserted in either direction.
+var (
+	allKinds        = []string{KindPool, KindCluster, KindBranch, KindEndpoint, KindController}
+	observableKinds = map[string]bool{KindController: true}
+)
+
 // A kind added to updateFuncs without the plumbing fails here rather than in
 // production.
 func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 	specs := map[string]api.DesiredResource{
-		KindPool:     {Kind: KindPool, Name: "pool-a", Generation: 4, Spec: json.RawMessage(`{}`)},
-		KindCluster:  {Kind: KindCluster, Name: "pool-a/recproj", Generation: 4, Spec: json.RawMessage(`{}`)},
-		KindBranch:   extRes(4),
-		KindEndpoint: resizeRes(4),
+		KindPool:       {Kind: KindPool, Name: "pool-a", Generation: 4, Spec: json.RawMessage(`{}`)},
+		KindCluster:    {Kind: KindCluster, Name: "pool-a/recproj", Generation: 4, Spec: json.RawMessage(`{}`)},
+		KindBranch:     extRes(4),
+		KindEndpoint:   resizeRes(4),
+		KindController: controllerRes(4),
 	}
 	// Every kind this backend maps has to be here, or the guard below silently
 	// covers less than it claims — in either direction, since a kind absent from
@@ -463,6 +509,15 @@ func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 				return
 			}
 			mustIssue(t, err)
+
+			if observableKinds[kind] {
+				// No echo to assert: every field of the spec is directly observable on
+				// the remote, so convergence is read back out of List. What has to hold
+				// instead is that a diverging declaration acts and a converged one does
+				// not — the same guarantee the echo gives, proved the other way.
+				assertObservable(t, kind, res, g)
+				return
+			}
 
 			// It sent a generation...
 			var sent *int64

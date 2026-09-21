@@ -37,9 +37,10 @@ func (k ResourceKey) zero() bool { return k.Kind == "" && k.Name == "" }
 
 func (k ResourceKey) String() string { return k.Kind + "/" + k.Name }
 
-// Actual is one resource as the backend currently observes it. Only
-// YCP-owned resources are reported — YCP is authoritative, so anything the
-// backend lists is a candidate for deletion if it is not also desired.
+// Actual is one resource as the backend currently observes it. YCP is
+// authoritative over what it created, so anything the backend lists is a
+// candidate for deletion if it is not also desired — unless the row says
+// otherwise (Preexisting).
 type Actual struct {
 	Key ResourceKey
 	// Parent is the resource this one hangs off (cluster's pool, branch's
@@ -68,6 +69,24 @@ type Actual struct {
 	// compute, extensions, fork_lsn, addresses) reported to YCP verbatim in the
 	// resource's status inventory. Nil when the backend has none.
 	Attrs map[string]string
+	// Preexisting marks a resource the backend did not create and cannot delete:
+	// it is on the remote whether or not YCP ever asked for it, and it outlives
+	// the declaration that manages it. The amp controller is one — the agent runs
+	// inside the release it converges.
+	//
+	// The engine never plans a Delete for such a row. Without that, the ordinary
+	// GC rule reaches the wrong conclusion the moment nobody declares it: in
+	// actual, not in desired, so collect it — and a backend that refuses (as it
+	// must) latches a permanent drift row on an environment where nothing is
+	// wrong.
+	//
+	// It is a property of the KIND, uniform and independent of what any
+	// environment declares, which is why it rides on the row rather than being
+	// something the backend has to be told. Everything else still applies: a
+	// declared one is updated normally, and an undeclared one is simply reported,
+	// which is worth more than hiding it — an operator can see the controller
+	// their environment runs without YCP claiming to manage its version.
+	Preexisting bool
 	// DiscoveryError, when non-nil, means the backend could not read this
 	// resource. The row asserts nothing about it — not its state, not its
 	// generation, not even that it exists — only that the environment could not be
@@ -277,6 +296,16 @@ type Action struct {
 	Resource api.DesiredResource
 }
 
+// GenerationNever is the ObservedGen of a resource the backend has applied
+// nothing to. Below every declared generation, including the 0 a first
+// declaration carries, so the update is always planned and the backend's own
+// Update decides whether there is anything to do.
+//
+// Distinct from the zero an echo-less backend reports: a kind that always exists
+// is never Created, so with zero it would sit at effGen 0 against a first
+// declaration's generation 0 and never be updated at all.
+const GenerationNever int64 = -1
+
 // Diff computes the per-resource plan purely from desired, actual, and the
 // engine's last-applied generation cache — no ordering, gating, or I/O. This is
 // the heart of the engine and is unit-tested in isolation.
@@ -291,6 +320,10 @@ type Action struct {
 //
 //   - desired, in actual with a DiscoveryError     -> Unreadable (not Create/Update)
 //   - in actual with a DiscoveryError, not desired -> Unreadable (not Delete)
+//
+// And a Preexisting row is never collected, declared or not:
+//
+//   - in actual with Preexisting, not desired      -> nothing (not Delete)
 //
 // effGen is max(actual.ObservedGen, cached), so the engine converges whether or
 // not the backend echoes an observed generation. The cache is safe as a floor
@@ -341,6 +374,9 @@ func Diff(desired []api.DesiredResource, actual []Actual, cache map[ResourceKey]
 			// claim a revision whose deletion it never issued.
 			actions = append(actions, Action{Type: ActionUnreadable, Key: a.Key})
 			continue
+		}
+		if a.Preexisting {
+			continue // not YCP's to collect; reported, never deleted
 		}
 		actions = append(actions, Action{Type: ActionDelete, Key: a.Key})
 	}

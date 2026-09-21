@@ -6,12 +6,18 @@ metadata:
   labels:
     {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 4 }}
 ---
-# The agent persists its identity (environment id, uuid and name) in its own state
-# Secret in its own namespace (create on first check-in, merge-patch after) so a
-# restart that cannot reach the control plane still knows which environment it
-# is. Its credential lives in a separate, operator-planted Secret
-# (amp-agent-api-key) that the agent never writes; this Role's get/create/patch
-# grant is for the state Secret only.
+# The base grant is the agent's own state Secret: it persists the environment id,
+# uuid and name (create on first check-in, merge-patch after) so a restart that
+# cannot reach the control plane still knows which environment it is. Its
+# credential lives in a separate, operator-planted Secret (amp-agent-api-key) that
+# the agent never writes.
+#
+# The rest is what `helm upgrade` of THIS release needs, because the agent is what
+# upgrades the controller from desired state (ycp/architecture/byoc_upgrades.md).
+# Worth being explicit about what that adds up to: an agent that can rewrite this
+# release can rewrite the controller's own Deployment and RBAC, so it ends up at
+# least as privileged as the controller. The two do not share a ServiceAccount, so
+# this widens the agent alone — but it is a real privilege increase.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -19,9 +25,6 @@ metadata:
   labels:
     {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 4 }}
 rules:
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, create, patch]
   # Read-only workload status, for the console's components tab: the agent reads
   # readyReplicas and the container image off each object. Same grant the meko chart
   # gives its agent — one binary, one collector. An agent whose Role predates this
@@ -29,6 +32,35 @@ rules:
   - apiGroups: [apps]
     resources: [deployments, statefulsets]
     verbs: [list]
+  # Helm 3 stores each revision as a Secret named sh.helm.release.v1.<release>.v<N>,
+  # so resourceNames cannot pin them and the history limit needs delete.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [services, serviceaccounts, configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apps"]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # escalate/bind, because the release contains Roles and RoleBindings: without
+  # them k8s refuses to let the agent write a Role granting anything the agent
+  # does not already hold, and the alternative — mirroring every verb the
+  # controller's Role grants — would hand the agent direct power over pods, PVCs
+  # and Jobs it has no reason to touch.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles]
+    verbs: [get, list, watch, create, update, patch, delete, escalate]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete, bind]
+  # The otel collectors are release members too when the CRDs are installed.
+  # Granted whenever the upgrade rights are: RBAC does not validate the group, so a
+  # cluster without the operator is unaffected, and an install that adds it later
+  # does not need the agent's Role rewritten first.
+  - apiGroups: ["opentelemetry.io"]
+    resources: [opentelemetrycollectors]
+    verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -44,4 +76,46 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "yb-amp-controller.agentName" . }}
     namespace: {{ .Release.Namespace }}
+{{- $otelClusterRBAC := and .Values.otel.enabled .Values.otel.podMetrics (.Capabilities.APIVersions.Has "opentelemetry.io/v1beta1") }}
+{{- if or .Values.rbac.clusterScoped .Values.rbac.nodeRead $otelClusterRBAC }}
+---
+# Cluster-scoped members of the release — the controller's namespaces and nodes
+# ClusterRoles and the otel cAdvisor one — cannot be written from a namespaced
+# Role, and escalate/bind on them is likewise cluster-scoped. Rendered only when
+# the release actually contains such an object, so a namespace-only install stays
+# namespace-only.
+#
+# nodeRead is in the list because it defaults ON: a stock install is namespaced
+# apart from that one pair, and helm reads every target object before patching, so
+# leaving it out fails the upgrade forbidden on clusterroles — which strands the
+# controller kind rather than merely narrowing it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.agentName" . }}-release
+  labels:
+    {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 4 }}
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterroles]
+    verbs: [get, list, watch, create, update, patch, delete, escalate]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterrolebindings]
+    verbs: [get, list, watch, create, update, patch, delete, bind]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.agentName" . }}-release
+  labels:
+    {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.agentName" . }}-release
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "yb-amp-controller.agentName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

@@ -338,6 +338,11 @@ type ResourceStatus struct {
 	// cluster_ip; only when it is present does a missing cidr key mean "no load
 	// balancer to restrict". Reading absence as the default would silently drop
 	// the warning for the internet-exposed case this encoding exists to surface.
+	//
+	// The controller singleton reports its own: its running version, the image_tag
+	// its pod template carries, and target_version. The tag is the one compared
+	// against a declared version — the running version is the binary's own stamp,
+	// which is never an image tag.
 	Attrs map[string]string `json:"attrs,omitempty"`
 }
 

@@ -138,7 +138,7 @@ func mustUUID(s string) openapi_types.UUID {
 func collectorOn(t *testing.T, f *taskFeed, now time.Time) (*TaskCollector, func()) {
 	t.Helper()
 	srv := f.serve()
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		srv.Close()
 		t.Fatalf("New: %v", err)
@@ -409,7 +409,7 @@ func TestCollectHoldsTheWatermarkOnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestCollectCommitsOnlyWhatItRead(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(srv.URL, "", nil)
+	b, err := New(srv.URL, "", nil, noCtl())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -35,6 +35,10 @@ spec:
           image: {{ include "yb-amp-controller.agentImage" . }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           env:
+            {{- with .Values.agent.controllerChart }}
+            - name: CONTROLLER_CHART
+              value: {{ . | quote }}
+            {{- end }}
             - name: YCP_URL
               value: {{ .Values.agent.ycpUrl | quote }}
             - name: AMP_CONTROLLER_URL

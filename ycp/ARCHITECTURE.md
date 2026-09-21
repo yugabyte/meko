@@ -36,7 +36,7 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
+| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. It also converges the software the environment runs: a declared `controller` kind is a `helm upgrade` of the release the agent is itself a member of. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
 | `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (`reconcile/ampbackend`, `reconcile/mekobackend`). Level-triggered, so a missed tick self-heals. |
 | `reconcile/mekobackend` | — | The `Backend` for meko's tenant API: the `agent` and `datapack` kinds, converged over `api_server`'s PAT-authenticated routes. Its verbs are synchronous, so unlike amp it needs no applied-generation echo. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
@@ -140,6 +140,12 @@ cluster.
    which would be written blind; no delete, even of a withdrawn resource, since
    the row is no evidence it is still there — and the tick reports DEGRADED,
    because it converged only the part it could see.
+
+   The other exception to "listed and not desired means collect it" is a resource
+   the backend did not create and cannot delete — the amp controller, which the
+   agent runs inside. Such a row is marked `Preexisting` and is reported but never
+   collected, so an environment that has never declared one is not perpetually
+   told its controller is drift.
 
    Because the agent obeys an empty set, the *write* side has to be sure the operator
    meant one. On top of the body checks every write shares (below),

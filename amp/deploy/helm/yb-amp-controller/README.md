@@ -47,32 +47,28 @@ scripts work:
 reads a bare-numeric tag as a number.
 
 The chart does **not** create the namespace, the backing YugabyteDB, or the
-image pull secret — those are prerequisites.
-
-It **does** create ten cluster-scoped `traefik.io` CRDs, from `crds/`, which an
-ingress shard's proxy watches. That happens on every fresh install whether or not
-`controller.endpoint.ingress.enabled` is set, and Helm gives a `crds/` directory
-no values-level opt-out: an install that may hold no cluster-scoped rights (see
-`rbac.nodeRead` / `rbac.clusterScoped` below) has to pass `--skip-crds`, and then
-the `ingress_*` connectivity modes are unavailable until someone installs the
-CRDs another way. Note also that Helm processes `crds/` on **install only** — an
-existing release upgraded in place never receives them, which is why the deploy
-scripts apply the directory explicitly. It installs **once per namespace**, and a
+image pull secret — those are prerequisites. It installs **once per namespace**, and a
 cluster can hold several installs, one environment each with its own backing database;
 the cluster-scoped RBAC it creates is namespace-prefixed so the copies do not collide.
 
 ## What it renders
 
-- **CRDs** (`crds/`, install-time only, no opt-out but `--skip-crds`) — the ten
-  `traefik.io` kinds, vendored from traefik-helm-chart v37.1.2. All ten rather
-  than the two an endpoint route uses: Traefik builds an informer per kind and a
-  failed sync on any one publishes no configuration at all.
 - **RBAC** — `ServiceAccount`, `Role`+`RoleBinding` `amp-controller` (full access
   to pods/services/configmaps/secrets/pvc/endpoints/events/serviceaccounts and
   apps deployments/replicasets/statefulsets in the release namespace), and
   `ClusterRole`+`ClusterRoleBinding` `amp-controller-namespaces` (cluster-scoped
   namespaces get/list/create + nodes get/list). The controller drives endpoint
   workloads via the Kubernetes/Helm driver, so it needs this.
+
+  With `agent.enabled`, a second `Role`+`RoleBinding` `amp-reconcile-agent` — and
+  a `ClusterRole` pair when the release holds a cluster-scoped object, which a
+  stock install does through `rbac.nodeRead`. **This is a real privilege
+  increase and worth reading before you enable the agent**: the agent upgrades the
+  release it is itself a member of (`ycp/architecture/byoc_upgrades.md`), which
+  means write access to every object in it plus `escalate`/`bind` on its Roles —
+  what Kubernetes requires of anything rewriting RBAC it does not already hold. So
+  an installed agent ends up at least as privileged as the controller. The two do
+  not share a ServiceAccount, so nothing else widens.
 - **Controller Deployment** `amp-controller` — one pod, container port `api`
   (8080: REST API + UI + `/healthz`/`/readyz`). Carries the full `AMP_*` env
   block; readiness
@@ -205,61 +201,12 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `agent.placement` | `cloud` | `ENV_PLACEMENT` (`cloud` \| `onprem`); must match what the environment was registered with |
 | `agent.controllerUrl` | _(empty)_ | `AMP_CONTROLLER_URL`; empty ⇒ the in-cluster controller Service DNS **with** `/api/v1` |
 | `agent.reconcileInterval` | _(empty)_ | `RECONCILE_INTERVAL`; empty ⇒ the binary's default (10s) |
+| `agent.controllerChart` | _(empty)_ | `CONTROLLER_CHART`, the chart the agent helm-upgrades this release to when YCP declares a controller version. Empty ⇒ the agent's default OCI ref, which is not published yet — so driving the controller version from YCP requires naming a chart the agent can pull (an https `.tgz` URL, or a path) |
 | `agent.apiKeySecret.name` / `.key` | `amp-agent-api-key` / `api-key` | Secret the agent reads the YBM API key from. Create it before install — the chart holds no credentials |
 | `otel.environmentId` | _(empty)_ | stamped as an `environment_id` label on every series both metrics collectors scrape. The YCP environment id (same value as `agent.envName`); the install hint sets it |
 | `otel.accountId` | _(empty)_ | stamped as an `account_id` label alongside it. The install hint omits it for a standalone YCP, which has no account |
-| `otel.remoteWriteEndpoint` | in-cluster VictoriaMetrics | Prometheus remote-write store. An explicit `""` **drops** the exporter (the BYOC shape); an absent key keeps this default, so `--reuse-values` cannot silently lose a store |
-| `otel.logsEndpoint` | in-cluster VictoriaLogs | OTLP/HTTP log store, same `""`-vs-absent contract |
-| `otel.byoc.enabled` | `false` | also ship off-cluster: metrics to YBM Thanos, logs to Datadog. **Required** when `agent.enabled` |
-| `otel.byoc.metricsEndpoint` | devcloud BYOC door | the OTLP/HTTP door. Not an install-time choice for a YCP-managed install — the control plane prints it in the install hint and marks an environment reporting anything else `DEGRADED` |
-| `otel.byoc.passwordSecret.name` / `.key` | `byoc-metrics-auth` / `password` | BasicAuth password for that door. Create it before install |
-| `otel.datadog.apiKeySecret.name` / `.key` | `datadog-api` / `api-key` | Datadog key for the logs fan-out. Create it before install |
-| `otel.byoc.preflight.timeoutSeconds` | `300` | how long the post-install preflight waits for the first export. A timeout, not a switch — non-positive is clamped to the default. Raising it needs helm's own `--timeout` raised past it too |
 
 See [`values.yaml`](values.yaml) for the full set.
-
-## A YCP-managed install should ship telemetry
-
-`agent.enabled` marks the install as a YCP-managed environment, and
-`templates/telemetry-preflight.yaml` then checks its telemetry. **Nothing it finds
-fails the install** — the BYOC door is still being rolled out fleet by fleet, so an
-install that cannot ship is as likely to be a fleet problem as an operator mistake,
-and failing their release over it teaches them to work around the check.
-
-Two things report instead. Configuration problems — otel off, byoc off, no
-OpenTelemetry Operator, nothing scraping, the logs collector off, a plaintext or
-empty endpoint, an unnamed credential — are collected by
-`yb-amp-controller.telemetryWarnings` and printed by NOTES.txt after the install,
-all of them rather than the first, each carrying its own fix.
-
-Then a post-install hook Job proves whether it actually works: both credentials
-non-blank, the BYOC door reachable and accepting them, and the **controller**
-collector having exported at least one datapoint through it. It exits 0 whatever it
-finds, so a successful install does not mean metrics are flowing — read its log:
-
-```sh
-kubectl -n <ns> logs job/<release>-telemetry-preflight
-```
-
-The pod is kept on failure (`hook-delete-policy: before-hook-creation` only) because
-that log is the whole diagnosis. The Job is skipped entirely when there is no door to
-probe, so a broken configuration produces the NOTES warning rather than a confusing
-pod failure.
-
-The Job runs the **reconcile-agent image this release already pulls**, with a
-`preflight` subcommand — not a curl container. Every image here comes from quay.io
-with the release's own pull secrets, and a docker.io image is the one thing a
-restricted customer cluster cannot fetch. A consequence worth knowing: an
-`agent.image.tag` older than that subcommand has no argument handling at all, falls
-through to the agent path and dies on `ENV_NAME is required`, so the log points at
-agent configuration rather than at the tag bump that fixes it.
-
-The chart is not the last word, because a BYOC install runs from a checkout the
-customer has — values and templates included. The agent therefore reports the same
-telemetry config to the control plane on enroll and on every status tick, plus
-whether metrics are still flowing; the control plane marks an environment shipping
-anywhere but the door it issued as `DEGRADED`. It does not refuse it. See
-[`ac-metrics.md`](../../../controller/architecture/ac-metrics.md).
 
 ## Unit tests
 

@@ -49,6 +49,50 @@ pool the backend ensures that user (`POST /api/v1/users` with the explicit id,
 idempotent on it); the owner UUID carried in the pool spec becomes a controller
 user on first use.
 
+## Upgrade kinds
+
+Two kinds sit outside that hierarchy and move software rather than resources. Both
+are singletons with a fixed name, so a second declaration is unambiguous drift.
+
+| Kind | Name | What the agent does |
+|------|------|--------------------|
+| `controller` | `controller` | `helm upgrade` of the release the agent itself is a member of, setting `controller.image.tag`, `agent.image.tag` and `controller.endpoint.image.tag` — the last is the pin new endpoints are created at, so an upgrade that skipped it would move the controller and nothing it deploys. Never `--wait`: the rollout replaces the pod running the client, and a client killed mid-wait leaves the release `pending-upgrade`, blocking every later upgrade. The release name is read off helm's own `meta.helm.sh/release-name` annotation rather than configured, since the chart does not fix it. |
+| `fleet-version` | `fleet` | `PUT /fleet/version` for the default new endpoints are created at, then `POST /endpoint-upgrades` to move the ones already running. The wave plan, its soaks and its approval gate ride in the spec and are executed by the controller. |
+
+`Parent(fleet-version)` is `controller`, so a declared controller upgrade runs
+first and the roll waits until the controller is Ready at its version.
+
+Neither kind echoes a generation — there is nothing to stamp. They are **observable**
+instead, and `Update` returns nil only once the read agrees with the spec, because
+returning nil writes the engine's last-applied cache and latches the resource as a
+no-op until its spec changes.
+
+What is read back differs by kind. For `controller` it is the **image tag on the
+controller Deployment's pod template**, plus a completed rollout; `GET /api/v1/version`
+is consulted only for whether the controller answers at all, because it reports the
+binary's ldflags stamp (`0.260714.0-199ec1a`) and a spec declares an image tag
+(`custom-28386c402c60`) — comparing those never converges. For `fleet-version` it is
+`GET /fleet` and each endpoint's recorded `version`.
+
+The roll itself is read from the task routes (`GET /tasks?kind=upgrade_endpoints`,
+then its subtasks for progress), not from `/fleet`, which reports settings only: the
+newest such task is the only one that can be in flight, because the controller
+refuses to plan a second while one is non-terminal.
+
+Three properties keep them from destabilising the rest of the tick:
+
+- **The singleton rows are listed only when desired state declares them**, which the
+  engine supplies through `DesiredObserver` before each `List`. Emitted
+  unconditionally they would plan a delete every tick on every environment that never
+  opted in.
+- **A controller upgrade takes the controller down**, so a failed `List` of the amp
+  API returns the controller row with `reconcile.Partial` rather than an error. A
+  plain error aborts the whole tick, which would freeze reconciliation for exactly as
+  long as the upgrade it is supposed to be driving.
+- **A roll that is soaking or awaiting approval is progress, not a stall**, so those
+  states are exempt from `StuckAfter` in both of the engine's stuck paths. A roll
+  whose task nothing has claimed reports `queued` and stays eligible.
+
 ## Convergence status
 
 Each heartbeat carries per-resource health, not just the inventory, so an
@@ -67,26 +111,17 @@ onto the resource's `ResourceStatus.Error` (`ycp/internal/api`):
   non-Ready in the same backend state (an endpoint that never provisions), or an
   update stayed `Updating` that long — a wedged worker, the one case reading the
   task's status cannot detect. Also `DEGRADED`, with a "no progress" reason.
-- **Permanent** — a verb that cannot succeed for the spec as declared. The engine
-  reports it and stops re-issuing it (no backoff flap) rather than treating an
-  unfixable call as a failure; it does **not** by itself degrade the environment.
-  The mark is held against the resource's **generation**, so a rewritten spec
-  retires it and the verb is asked again — otherwise a refused create would wedge
-  the resource for the life of the agent process, since its action stays planned
-  every tick.
-
-  It reports as one of **three** states, because they ask different things of
-  whoever reads the row and the console renders a different sentence for each:
-
-  | state | `reconcile.` | what it is |
-  |---|---|---|
-  | `drift` | `Permanent` | no verb exists: a storage pool has no delete, pools and clusters have no update, a branch's `extensions` cannot be removed, an endpoint spec declares `connectivity`, `role` or `extended_config` (below) |
-  | `rejected` | `Rejected` | this declaration cannot be applied but another could. Either the controller refused the body with a `400` — a compute shape under the memory-per-vCPU floor, an unknown extension, a setting Postgres will not take — or the agent refused it before sending: a spec that does not parse, and `extensions` / `write_token_settings` on a branch *create*, which are declared in a later write (below). `Error` says what to write instead |
-  | `blocked` | `Blocked` | the agent is not permitted: the meko backend's 401/403 and its free-tier cap, which no rewrite clears. The amp controller's calls are not authenticated per-resource |
-
-  An update that hits both at once reports `rejected`: that is the half an operator
-  can act on, and burying it under `drift` costs them the controller's message
-  (CLOUDGA-36992).
+- **Permanent drift** — a verb that cannot succeed for the spec as declared: a
+  storage pool has no delete, pools and clusters have no update, a branch's
+  `extensions` cannot be removed (and is the one field it cannot be *created*
+  with — below), an endpoint spec declares anything but `resources` (below), and
+  the controller refuses some bodies outright with a `400`.
+  The engine reports it and stops re-issuing it (no backoff flap) rather than
+  treating an unfixable call as a failure; it does **not** by itself degrade the
+  environment. Backends flag these with `reconcile.Permanent`. The mark is held
+  against the resource's **generation**, so a rewritten spec retires it and the
+  verb is asked again — otherwise a refused create would wedge the resource for
+  the life of the agent process, since its action stays planned every tick.
 
 Each inventory row also carries `ResourceStatus.Attrs`, kind-specific details the
 backend read while listing: every resource's amp `id` (a UUID, distinct from the
@@ -146,8 +181,8 @@ empty, it is a blank editor for a resource full of settings and every one of the
 deleted on save.
 
 `extended_config` is reported although the settings PATCH cannot write it. It is
-declarable at endpoint create, so a spec that disagrees is `drift`, and this is the
-only way to see what it disagrees with.
+declarable at endpoint create, so a spec that disagrees is permanent drift, and this
+is the only way to see what it disagrees with.
 
 ## The applied generation
 
@@ -261,9 +296,9 @@ catch — the cluster create materializes `main`, so the agent never issues a br
 create for it, and declaring `extensions` on `main` in the same write that creates
 its cluster is inert until a later edit. Seed it through the cluster spec instead.
 
-An unknown name is a `400`, which the backend reports as `rejected`, so a typo
-surfaces as a reason on the resource rather than an endless backoff. The update
-sends only the names the controller does not already report, because the add
+An unknown name is a `400`, which the backend already treats as permanent drift, so
+a typo surfaces as a reason on the resource rather than an endless backoff. The
+update sends only the names the controller does not already report, because the add
 **redeploys the endpoints that are behind** — the ImageVolume set is fixed at pod
 start — so expect a compute bounce on the tick that applies one. Only endpoints
 whose recorded mount set differs from the branch's are rolled: the task records what
@@ -272,16 +307,18 @@ endpoints a failed run never reached, and a task whose set is already applied
 everywhere deploys nothing. (Names only, so a catalog revision that moves an
 extension's *image* without renaming it does not land through this path — the fleet
 upgrade re-renders extensions for that.) The endpoint's
-recorded address is never blanked, so the agent's readiness check — address
-non-empty — stays true throughout. The endpoint therefore never reads as non-Ready
-or stuck across a redeploy, and never as failed if one goes wrong: what an endpoint
-actually mounts is not in the amp API, so the agent cannot check it.
+recorded address is never blanked (the redeploy re-records it, since a ClusterIP
+address is the pod IP and the old one is dead), so the agent's readiness check —
+address non-empty — stays true throughout, including the window where the row still
+names a retired pod. The endpoint therefore never reads as non-Ready or stuck across
+a redeploy, and never as failed if one goes wrong: what an endpoint actually mounts
+is not in the amp API, so the agent cannot check it.
 
 A branch's set only grows: there is no remove API, so a fork's endpoints always mount
 a superset of what its inherited objects need. Dropping a name from the spec is
-therefore `drift`, named in the resource's `Error`. Omitting `extensions` altogether
-leaves the branch's set unmanaged, which is what a fork inheriting its parent's set
-wants.
+therefore permanent drift, named in the resource's `Error`. Omitting `extensions`
+altogether leaves the branch's set unmanaged, which is what a fork inheriting its
+parent's set wants.
 
 ### Settings are replaced, not merged
 
@@ -305,7 +342,7 @@ and no create request carries it — so, like `extensions`, `Create` refuses a b
 spec that declares it rather than dropping the field, and it is declared in a later
 write once the branch exists.
 
-A setting the controller refuses is `rejected`, not a retry: the `400` stored
+A setting the controller refuses is permanent drift, not a retry: the `400` stored
 nothing, so every retry would send the same rejected body. Two independent checks
 produce one — Postgres itself refusing a `pg_settings` name or value, and the
 controller's generated key set refusing a daemon key — and the agent reports either
@@ -320,8 +357,9 @@ pod, where most `pg_settings` reload in place.
 ### What an endpoint spec can declare and not get
 
 An endpoint converges `resources` and its three settings surfaces. What is left
-over — `connectivity`, `role`, `extended_config` — is `drift` on an **existing**
-endpoint, named in the resource's `Error`. Omitting a field leaves it unmanaged.
+over — `connectivity`, `role`, `extended_config` — is permanent drift on an
+**existing** endpoint, named in the resource's `Error`. Omitting a field leaves it
+unmanaged.
 
 The reasons differ. `connectivity` and `role` are create-time in the controller:
 no update verb carries them, so they can never converge and recreating the endpoint

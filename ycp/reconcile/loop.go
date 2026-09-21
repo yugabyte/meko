@@ -183,7 +183,7 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 			plannedUpdates[a.Key] = a.Resource.Generation
 		}
 	}
-	stuck := e.trackStuck(actual, plannedUpdates)
+	stuck := e.trackStuck(actual, plannedUpdates, desiredByKey)
 	e.mu.Unlock()
 
 	res := Result{
@@ -294,7 +294,8 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 // that long. plannedUpdates is this tick's wanted updates, used to retire the
 // in-flight mark of a resource that has converged or had its spec rewritten.
 // Caller holds e.mu.
-func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int64) map[ResourceKey]time.Duration {
+func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int64,
+	desired map[ResourceKey]api.DesiredResource) map[ResourceKey]time.Duration {
 	now := e.now()
 	seen := make(map[ResourceKey]bool, len(actual))
 	stuck := map[ResourceKey]time.Duration{}
@@ -304,6 +305,13 @@ func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int6
 			// Unread, so its State says nothing to time. Every such row — declared or
 			// withdrawn — is reported through Result.Unreadable instead, which names
 			// the right cause: "could not be read" rather than "has not progressed".
+			continue
+		}
+		if _, want := desired[a.Key]; a.Preexisting && !want {
+			// Reported but not managed: nobody asked YCP for this resource's state, so
+			// there is no progress it owes anyone and a timer on it is a false alarm.
+			// A pre-existing resource that IS declared stays timed — that one is
+			// converging, or failing to.
 			continue
 		}
 		prev, ok := e.seenState[a.Key]

@@ -38,6 +38,7 @@
 #   PULL_SECRET=quay-pull-secret PULL_SECRET_DOCKERCONFIGJSON="$(cat cfg.json)" deploy/up-gke.sh  # mint from a docker config.json
 #   FOUNDATION=operator deploy/up-gke.sh                          # operator-managed universe instead of yugabyted
 #   TLS=1 deploy/up-gke.sh                                        # TLS + certificate auth (see TLS below)
+#   EXTRA_HELM_SET="otel.enabled=false" deploy/up-gke.sh          # override any value this script sets
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -523,6 +524,12 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   kubectl -n "${NS}" create secret generic datadog-api \
     --from-literal=api-key="${YCP_DATADOG_API_KEY}" \
     --dry-run=client -o yaml | kubectl apply -f -
+  # The chart the agent helm-upgrades this release to when YCP declares a
+  # controller version. Empty leaves the agent's own default, an OCI ref that is
+  # not published — so a deploy that wants the controller driven from YCP must
+  # name a chart the agent can pull. ycp/test/local/controller-chart-publish.sh
+  # produces one.
+  YCP_CONTROLLER_CHART="${YCP_CONTROLLER_CHART:-}"
   say "YCP reconcile-agent enabled (url=${YCP_URL} env=${YCP_ENV_ID} interval=${YCP_RECONCILE_INTERVAL} image=${REGISTRY}/${AGENT_IMAGE_REPO}:${TAG})"
   HELM_SET+=(
     "agent.enabled=true"
@@ -541,6 +548,9 @@ if [ "${YCP_ENABLED}" = "1" ]; then
     "otel.byoc.enabled=true"
     "otel.byoc.metricsEndpoint=${YCP_BYOC_METRICS_URL}"
   )
+  if [ -n "${YCP_CONTROLLER_CHART}" ]; then
+    HELM_SET+=("agent.controllerChart=${YCP_CONTROLLER_CHART}")
+  fi
 fi
 
 # The chart declares cert-manager as a subchart, and helm refuses to render a
@@ -556,6 +566,9 @@ fi
 # hand. The install hint prints the same 10m for the same reason.
 HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}" --timeout 10m
            --set-string "controller.databaseUrl=${DB_URL//,/\\,}")
+# Last, so it overrides anything above it — including a value a mode block forces
+# (the YCP block's otel.enabled, say). Newline- or space-separated key=value pairs.
+for s in ${EXTRA_HELM_SET:-}; do HELM_SET+=("${s}"); done
 for s in "${HELM_SET[@]}"; do HELM_ARGS+=(--set "${s}"); done
 
 # internal-lb Service annotations contain dots (--set would mis-tokenize them),

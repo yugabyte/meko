@@ -141,7 +141,8 @@ func main() {
 	var tasks *ampbackend.TaskCollector
 	switch kind {
 	case kindAmp:
-		b, berr := ampbackend.New(ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), nil)
+		b, berr := ampbackend.New(ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), nil,
+			controllerConfig(context.Background(), kc))
 		if berr != nil {
 			log.Fatalf("amp backend: %v", berr)
 		}
@@ -582,4 +583,32 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 func leaf(name string) string {
 	segs := strings.Split(name, "/")
 	return segs[len(segs)-1]
+}
+
+// controllerConfig is everything the controller kind needs that does not come
+// from the controller's REST API.
+//
+// The release name cannot be a constant: the chart does not fix it, and a wrong
+// guess fails as "release: not found" once a tick, for as long as a controller is
+// declared. So it is read from the annotation helm stamps on every object it
+// manages, with the chart's own default as the fallback for an install whose
+// objects helm did not apply.
+//
+// CONTROLLER_CHART is the one other override, and it exists because the default
+// chart reference is not published yet: without a way to point the agent at a
+// chart it can pull, this kind cannot be exercised against a real cluster at all.
+func controllerConfig(ctx context.Context, kc *k8s) ampbackend.ControllerConfig {
+	release := kc.releaseName(ctx)
+	if release == "" {
+		release = defaultControllerRelease
+		log.Printf("no helm release annotation found in %s; assuming release %q", kc.ns, release)
+	}
+	return ampbackend.ControllerConfig{
+		Helm:       helmRunner{bin: defaultHelmBin},
+		Rollout:    kc.rolledOut,
+		Release:    release,
+		Namespace:  kc.ns,
+		Chart:      env("CONTROLLER_CHART", defaultControllerChart),
+		Deployment: defaultControllerDeployment,
+	}
 }

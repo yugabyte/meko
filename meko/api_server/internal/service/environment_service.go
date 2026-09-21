@@ -720,7 +720,9 @@ func (s *EnvironmentService) Entitlement() models.Entitlement {
 // storing a resource nothing converges.
 var resourceKinds = map[string][]string{
 	KindMeko: {"agent", "datapack"},
-	KindAmp:  {"storage-pool", "cluster", "branch", "endpoint"},
+	// "controller" is the odd one out: it moves software rather than resources —
+	// the version the environment's amp controller release itself runs.
+	KindAmp: {"storage-pool", "cluster", "branch", "endpoint", "controller"},
 }
 
 // checkKinds refuses a declared set naming a kind this environment's agent does not
