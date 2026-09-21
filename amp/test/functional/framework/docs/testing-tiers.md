@@ -41,7 +41,8 @@ untagged and run on demand — see the Perf bullet):
   `sysbench`), with version/image comparison + bisect + history/trend, plus the
   measured-number tests that gate against portal history rather than a workload
   baseline (`lifecycle`, `ops_latency`, `chain_depth_read`, `branch_depth`,
-  `idle_footprint`). Those five each provision a stack of their own.
+  `idle_footprint`, `latency_topology`). Those six each provision a stack of
+  their own.
 
 The `scale` tests in `suites/perf` fit no scheduled lane and run on demand by
 name or `--testr`.
@@ -95,40 +96,6 @@ Under `--fake-env` every regression test skips cleanly.
 The PR gate is: all `regression` tests pass. Exit `0` = green; non-zero blocks the
 merge (note exit `4` = all-skipped, which the gate must treat as a failure).
 
-`multiregion_backing` is the one `regression` test that provisions cloud VMs: a
-YBA universe over three GCE regions (`multiregion.*`) on a stack of its own. It
-is opt-in and skips before provisioning unless `multiregion.enabled` and the
-`gcp_key` secret are set, so the PR gate never pays for it.
-
-From the portal or Jenkins the credentials come from the job — the SA key and
-the shared `yb-dev-aws-2` key are bound in `pipeline_amp_run.groovy` — so the
-opt-in is the only thing to pass:
-
-```
-yb amp run trigger --test features/multiregion_backing \
-  --branch <branch> --image-version <release> --yb-version <portal default> \
-  --option multiregion.enabled=bool:true
-```
-
-Running ONLY multi-region tests, add `--option env.yb_deploy=builtin_yugabyted`.
-The run-scoped control plane otherwise stands up a second YBA and a universe
-that nothing uses, because each of these tests brings its own; the knob is
-run-level and the per-test overlay still forces `yba_provisioned` for the stack
-that needs it.
-
-Locally the same run needs the two credentials supplied by hand:
-
-```
-ampqa run --testr 'multiregion' -c gke.yaml \
-  -o multiregion.enabled=bool:true \
-  -o secrets.gcp_key=env:GCP_KEY_FILE \
-  -o apps.yba.gcp.keypair_file=<path to the yb-dev-aws-2 private key>
-```
-
-> Add to the gate by tagging a test `regression` — keep it fast and make it assert
-> something a real regression would break, not a tautology; depend only on `pgEnv`
-> (or `computeRestarter`) so it stays env-portable.
-
 ---
 
 ## Extended tests — on demand, by name
@@ -158,12 +125,12 @@ tests need (a single run would demand every cloud credential at once):
   under SIGSTOP), attempt a second writer while it is stalled, and resume it.
   The tier also carries the two `suites/features` failed-create reclaim tests,
   which are here for their runtime rather than for any fault they inject.
-  `multiregion_region_outage` is the one test on a backing of its own shape: a
-  YBA universe over three GCE regions (`multiregion.*`), one region stopped
-  through YBA while tenants write, the write path held to
-  `stress.multiregion_outage.max_write_stall`, the region started again and
-  every acknowledged row read back. Opt-in (`multiregion.enabled`) and needs the
-  `gcp_key` service-account secret; it skips before provisioning without them.
+  `backing_node_partition_multi_region` is `backing_node_partition` with the
+  tservers and the tenants' endpoints first placed a multi-region deployment's
+  round trips apart (`apps/netshape`, tc netem in the pods' own network
+  namespaces, `stress.backing_node_partition.multi_region_topology`): one
+  region's tserver cut off while the surviving quorum is tens of milliseconds
+  apart.
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
   each gated against a LIVE baseline by default (`perf.baseline.live`): a second
   set of stacks on the prior release runs the same workload concurrently, and
@@ -190,10 +157,12 @@ tests need (a single run would demand every cloud credential at once):
   and asserts the first fork's cold p50 within `perf.branch_depth.max_ratio` of
   the root's, and `idle_footprint` reads /proc inside an untouched
   endpoint's container for its per-process idle CPU and RSS.
-  `multiregion_sysbench` and `multiregion_pgbench` drive the same two
-  workloads on a multi-region universe (`multiregion.*`, one YBA per test, a
-  universe per arm, `multiregion.perf.provisions` stacks) and keep their own
-  history; opt-in like the stress test.
+  `latency_topology` benchmarks one sysbench (or pgbench,
+  `perf.latency_topology.workload`) stack unshaped and then under each
+  `perf.latency_topology.topologies` entry, with tc netem delay injected into
+  the tservers' and the endpoint's network namespaces so the sites are the
+  configured round trips apart (multi-AZ, multi-region, the endpoint remote
+  from its universe), every round trip verified with ping first.
 
 Example (one env at a time):
 

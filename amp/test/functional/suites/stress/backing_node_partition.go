@@ -5,14 +5,23 @@
 // and amp's storage daemons must find the new leaders: a COMMIT that hangs past
 // the stall limit while a quorum serves is the finding (the meko#727 shape),
 // as is any acknowledged row missing once the node is back.
+//
+// stress/backing_node_partition_multi_region is the same fault with the
+// backing's tservers and the tenants' endpoints first placed the round trips
+// of a multi-region deployment apart (apps/netshape, tc netem in the pods'
+// own network namespaces): a region cut off while the surviving quorum is
+// tens of milliseconds apart, which is the outage a real multi-region universe
+// has and a co-located one cannot show.
 package stress
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/netshape"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -28,7 +37,21 @@ func init() {
 		Description: "Cut one backing tserver pod off the network (iptables in its own network namespace dropping every packet, the pod stays up) while tenants write through amp, and hold the write path to never stalling past the stall limit: with a quorum left, writes must keep flowing. Lift the partition, demand the node rejoins, every acknowledged row reads back, writes flow, and the control plane still creates a tenant.",
 		Params:      []string{"stress.backing_node_partition", "stress.consistency", "stress.fault_metrics"},
 		Timeout:     90 * time.Minute,
-		Run:         runBackingNodePartition,
+		Run:         func(t *core.T) error { return runBackingNodePartition(t, "") },
+	})
+	core.Register(core.Test{
+		Name:        "stress/backing_node_partition_multi_region",
+		Suite:       "stress",
+		Category:    core.Stress,
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, FaultsSharedInfra: true},
+		Tags:        []string{"stress"},
+		OwningTeam:  core.TeamControlPlane,
+		Description: "stress/backing_node_partition with the backing tservers and the tenants' endpoints first placed a multi-region deployment's round trips apart (tc netem in their own network namespaces, stress.backing_node_partition.multi_region_topology, every round trip verified with ping): one region's tserver cut off while tenants write through amp and the surviving quorum is tens of milliseconds apart, the write path held to the stall limit, the node rejoined, every acknowledged row read back.",
+		Params:      []string{"stress.backing_node_partition", "stress.partition", "stress.consistency", "stress.fault_metrics"},
+		Timeout:     2 * time.Hour,
+		Run: func(t *core.T) error {
+			return runBackingNodePartition(t, t.Options.GetString("stress.backing_node_partition.multi_region_topology", "multi_region: 0-1=12 0-2=47 1-2=60"))
+		},
 	})
 }
 
@@ -64,7 +87,10 @@ func backingNodePartitionParamsFromConfig(c *core.Config) backingNodePartitionPa
 	}
 }
 
-func runBackingNodePartition(t *core.T) error {
+// topologySpec, when non-empty, is the netshape topology the backing and the
+// endpoints are shaped into before any write; tserver N by name order is site
+// N, the endpoints sit in the topology's endpoint site.
+func runBackingNodePartition(t *core.T, topologySpec string) error {
 	env, ok := t.Env.(ampTenantEnv)
 	if !ok {
 		t.Skip("requires an env exposing a standing amp control plane (sharedk8s)")
@@ -84,6 +110,18 @@ func runBackingNodePartition(t *core.T) error {
 	var ampKube *k8s.Kubectl
 	if ae, ok := t.Env.(ampKubeEnv); ok {
 		ampKube = ae.AmpKube()
+	}
+	var topo *netshape.Topology
+	if topologySpec != "" {
+		tp, err := netshape.ParseTopology(topologySpec)
+		if err != nil {
+			return err
+		}
+		if ampKube == nil {
+			t.Skip("requires a kube handle for the control-plane namespace: the endpoint pods are shaped too")
+			return nil
+		}
+		topo = &tp
 	}
 
 	ips, err := backingPodIPs(t, bkube)
@@ -120,6 +158,21 @@ func runBackingNodePartition(t *core.T) error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if topo != nil {
+		var shaped *netshape.Fleet
+		if err := t.Step("shape_"+topo.Name, func(s *core.StepHandle) error {
+			var err error
+			shaped, err = shapeBackingAndEndpoints(t, s, bkube, ampKube, fleet.Tenants, ips, *topo)
+			return err
+		}); err != nil {
+			if shaped != nil {
+				closeShaping(t.Context, shaped)
+			}
+			return err
+		}
+		defer closeShaping(t.Context, shaped)
 	}
 
 	if err := t.Step("seed_writes", func(s *core.StepHandle) error {
@@ -315,4 +368,80 @@ func runBackingNodePartition(t *core.T) error {
 	}
 
 	return faults.Assert(t)
+}
+
+// shapeBackingAndEndpoints places the backing pods (site = name order) and
+// every tenant's endpoint pod (the topology's endpoint site) the topology's
+// round trips apart, and measures each separated pair from inside the pods. The
+// returned fleet is non-nil once any helper exists, so a caller can close it.
+func shapeBackingAndEndpoints(t *core.T, s *core.StepHandle, bkube, ampKube *k8s.Kubectl, tenants []tenant, ips map[string]string, tp netshape.Topology) (*netshape.Fleet, error) {
+	c := t.Options
+	f := &netshape.Fleet{
+		Device:    c.GetString("stress.partition.device", "eth0"),
+		Pings:     c.GetInt("stress.partition.shape_verify_pings", 10),
+		Tolerance: c.GetFloat("stress.partition.shape_tolerance", 0.3),
+	}
+	pods := make([]string, 0, len(ips))
+	for pod := range ips {
+		pods = append(pods, pod)
+	}
+	sort.Strings(pods)
+	if tp.MaxSite() > len(pods) {
+		return nil, fmt.Errorf("topology %q names site %d, but the backing has %d pod(s): sites 0..%d, plus %d for the endpoints", tp.Name, tp.MaxSite(), len(pods), len(pods)-1, len(pods))
+	}
+	type target struct {
+		kube *k8s.Kubectl
+		m    *netshape.Member
+	}
+	var targets []target
+	for i, pod := range pods {
+		targets = append(targets, target{bkube, &netshape.Member{Label: pod, Pod: pod, IP: ips[pod], Site: i}})
+	}
+	for i := range tenants {
+		ten := &tenants[i]
+		pod, err := endpointPodFor(t, ampKube, ten.Endpoint)
+		if err != nil {
+			return nil, err
+		}
+		ip, err := ampKube.Get(t.Context, "pod", pod, "{.status.podIP}")
+		if err != nil || ip == "" {
+			return nil, fmt.Errorf("read the IP of endpoint pod %s: %v", pod, err)
+		}
+		targets = append(targets, target{ampKube, &netshape.Member{Label: "endpoint-" + ten.Name, Pod: pod, IP: ip, Site: tp.EndpointSite}})
+	}
+	image := helperImage(c)
+	for i, tg := range targets {
+		f.Members = append(f.Members, tg.m)
+		h, err := netshape.Attach(t.Context, tg.kube, tg.m.Pod, fmt.Sprintf("%s-s%d", t.ResourceSuffix(), i), image)
+		if err != nil {
+			return f, core.EnvFail("attach a netshape helper to %s: %w", tg.m.Pod, err)
+		}
+		tg.m.Helper = h
+		s.Set(fmt.Sprintf("site_%d", tg.m.Site)+"_"+tg.m.Label, tg.m.IP)
+	}
+	native, err := f.Baseline(t.Context)
+	if err != nil {
+		return f, core.EnvFail("%w", err)
+	}
+	for _, m := range native {
+		s.Set(fmt.Sprintf("native_rtt_%s_%s", m.From, m.To), m.Got.Round(10*time.Microsecond).String())
+	}
+	if err := f.Apply(t.Context, tp); err != nil {
+		return f, core.EnvFail("%w", err)
+	}
+	ms, err := f.Verify(t.Context, tp)
+	for _, m := range ms {
+		s.Set(fmt.Sprintf("rtt_%s_%s", m.From, m.To), fmt.Sprintf("%s (want %s)", m.Got.Round(10*time.Microsecond), m.Want))
+	}
+	if err != nil {
+		return f, core.EnvFail("the injected latency did not take, so nothing below would run under %q: %w", tp.Name, err)
+	}
+	return f, nil
+}
+
+// closeShaping is Fleet.Close on a context that survives the run's cancellation.
+func closeShaping(ctx context.Context, f *netshape.Fleet) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+	defer cancel()
+	f.Close(ctx)
 }

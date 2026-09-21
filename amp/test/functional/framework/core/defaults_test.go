@@ -28,7 +28,7 @@ import (
 	awscloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
 	gcpcloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/gcp"
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
-	"github.com/yugabyte/amp/test/functional/framework/apps/multiregion"
+	"github.com/yugabyte/amp/test/functional/framework/apps/netshape"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sampleapp"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
@@ -1543,54 +1543,52 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("functional.voyager.phase_timeout = %s, want 25m", got)
 	}
 
-	// --- stress/multiregion_region_outage + the multiregion.* shape ---
-	if cfg.GetBool("multiregion.enabled", true) {
-		t.Errorf("multiregion.enabled = true, want false (opt-in: GCE VMs across regions)")
+	// --- perf/latency_topology + stress/backing_node_partition_multi_region ---
+	latencyStrings := map[string]string{
+		"perf.latency_topology.workload":     perf.DefaultLatencyWorkload,
+		"perf.latency_topology.helper_image": perf.DefaultLatencyHelperImage,
+		"perf.latency_topology.device":       perf.DefaultLatencyDevice,
+		"stress.partition.device":            perf.DefaultLatencyDevice,
 	}
-	mr := multiregion.FromConfig(cfg)
-	if err := mr.Validate(); err != nil {
-		t.Errorf("multiregion.* default shape: %v", err)
-	}
-	if mr.PreferredRegion != multiregion.DefaultPreferredRegion || mr.ReplicationFactor != multiregion.DefaultReplicationFactor ||
-		mr.InstanceType != multiregion.DefaultInstanceType || mr.VolumeSizeGB != multiregion.DefaultVolumeSizeGB ||
-		mr.Image != multiregion.DefaultImage || mr.ProviderName != multiregion.DefaultProviderName {
-		t.Errorf("multiregion.* = %+v, want the apps/multiregion defaults", mr)
-	}
-	if len(mr.Regions) != len(multiregion.DefaultRegions) {
-		t.Errorf("multiregion.regions = %v, want %v", mr.Regions, multiregion.DefaultRegions)
-	}
-	if got := cfg.GetDuration("multiregion.provision_timeout", -1); got != multiregion.DefaultProvisionTimeout {
-		t.Errorf("multiregion.provision_timeout = %s, want %s", got, multiregion.DefaultProvisionTimeout)
-	}
-	if got := cfg.GetDuration("multiregion.controller_ready_timeout", -1); got != multiregion.DefaultControllerReadyTimeout {
-		t.Errorf("multiregion.controller_ready_timeout = %s, want %s", got, multiregion.DefaultControllerReadyTimeout)
-	}
-	if got := cfg.GetInt("multiregion.perf.provisions", -1); got != perf.DefaultMultiRegionProvisions {
-		t.Errorf("multiregion.perf.provisions = %d, want %d", got, perf.DefaultMultiRegionProvisions)
-	}
-	if len(cfg.GetMapSlice("apps.yba.gcp.placement", nil)) != 0 || cfg.GetString("apps.yba.gcp.preferred_region", "x") != "" {
-		t.Errorf("apps.yba.gcp.placement/preferred_region must default empty (single-region)")
-	}
-	if got := cfg.GetString("stress.multiregion_outage.target", ""); got != "preferred" {
-		t.Errorf("stress.multiregion_outage.target = %q, want preferred", got)
-	}
-	outageDurations := map[string]time.Duration{
-		"stress.multiregion_outage.duration":                   5 * time.Minute,
-		"stress.multiregion_outage.max_write_stall":            90 * time.Second,
-		"stress.multiregion_outage.settle_timeout":             15 * time.Minute,
-		"stress.multiregion_outage.resume_duration":            30 * time.Second,
-		"stress.multiregion_outage.control_plane_recovery_max": 2 * time.Minute,
-	}
-	for key, want := range outageDurations {
-		if got := cfg.GetDuration(key, -1); got != want {
-			t.Errorf("%s = %s, want %s", key, got, want)
+	for key, want := range latencyStrings {
+		if got := cfg.GetString(key, ""); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	if got := cfg.GetInt("stress.multiregion_outage.tenants", -1); got != 3 {
-		t.Errorf("stress.multiregion_outage.tenants = %d, want 3", got)
+	if got := cfg.GetInt("perf.latency_topology.verify_pings", -1); got != perf.DefaultLatencyVerifyPings {
+		t.Errorf("perf.latency_topology.verify_pings = %d, want %d", got, perf.DefaultLatencyVerifyPings)
 	}
-	if got := cfg.GetInt("stress.multiregion_outage.payload_bytes", -1); got != 256 {
-		t.Errorf("stress.multiregion_outage.payload_bytes = %d, want 256", got)
+	if got := cfg.GetFloat("perf.latency_topology.tolerance", -1); got != perf.DefaultLatencyTolerance {
+		t.Errorf("perf.latency_topology.tolerance = %v, want %v", got, perf.DefaultLatencyTolerance)
+	}
+	if got := cfg.GetInt("stress.partition.shape_verify_pings", -1); got != perf.DefaultLatencyVerifyPings {
+		t.Errorf("stress.partition.shape_verify_pings = %d, want %d", got, perf.DefaultLatencyVerifyPings)
+	}
+	if got := cfg.GetFloat("stress.partition.shape_tolerance", -1); got != perf.DefaultLatencyTolerance {
+		t.Errorf("stress.partition.shape_tolerance = %v, want %v", got, perf.DefaultLatencyTolerance)
+	}
+	// Every shipped topology must parse and name only sites a stack occupies;
+	// a typo here ships a test that benchmarks an unshaped stack under a
+	// topology's name.
+	shipped := cfg.GetStringSlice("perf.latency_topology.topologies", nil)
+	if len(shipped) == 0 {
+		t.Error("perf.latency_topology.topologies is empty: the test has nothing to compare the unshaped run with")
+	}
+	tps, err := netshape.ParseTopologies(shipped)
+	if err != nil {
+		t.Errorf("perf.latency_topology.topologies: %v", err)
+	}
+	for _, tp := range tps {
+		occupied := map[int]bool{tp.EndpointSite: true}
+		for i := 0; i < cfg.GetInt("perf.rf", 3); i++ {
+			occupied[i] = true
+		}
+		if err := tp.CheckSites(occupied); err != nil {
+			t.Errorf("shipped topology: %v", err)
+		}
+	}
+	if _, err := netshape.ParseTopology(cfg.GetString("stress.backing_node_partition.multi_region_topology", "")); err != nil {
+		t.Errorf("stress.backing_node_partition.multi_region_topology: %v", err)
 	}
 
 	// --- stress/backing_unreachable_api ---

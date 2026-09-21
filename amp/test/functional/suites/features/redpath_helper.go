@@ -454,9 +454,13 @@ func (c *backingCut) teardown(ctx context.Context) error {
 
 func (c *backingCut) exec() *k8s.Kubectl { return c.kube.ForPod(c.helper, "") }
 
+// The LOWEST pid by number, not the first of /proc/[0-9]*: the oldest process
+// is a container init, while glob order can pick a backend that exits before
+// nsenter opens its namespace. apps/netshape holds the same scan, and this
+// copy is the third of the privileged hostPID pattern in the tree.
 func (c *backingCut) podPID(ctx context.Context) (string, error) {
-	script := fmt.Sprintf(`uid=%s; u2=$(echo "$uid" | tr - _); for p in /proc/[0-9]*; do `+
-		`grep -qs -e "$uid" -e "$u2" "$p/cgroup" && { echo "${p#/proc/}"; exit 0; }; done; echo %s`, c.uid, redpathNoPID)
+	script := fmt.Sprintf(`uid=%s; u2=$(echo "$uid" | tr - _); for p in $(ls /proc | grep -E '^[0-9]+$' | sort -n); do `+
+		`grep -qs -e "$uid" -e "$u2" "/proc/$p/cgroup" && { echo "$p"; exit 0; }; done; echo %s`, c.uid, redpathNoPID)
 	res, err := c.exec().Run(ctx, script)
 	if err != nil {
 		return "", fmt.Errorf("scan /proc on node %s for pod %s: %w", c.node, c.pod, err)

@@ -850,8 +850,7 @@ apps:
       # placement pins tservers per zone per region and preferred_region marks
       # where tablet leaders sit (isAffinitized on its zones). Every placement
       # region must be one of `regions` above. Empty → YBA spreads num_nodes
-      # over the single region. The multi-region tests fill both from
-      # multiregion.* (apps/multiregion.Overlay), so they need no hand edit:
+      # over the single region.
       #   placement:
       #     - region: us-west1
       #       zones: [{name: us-west1-b, nodes: 1}]
@@ -1540,26 +1539,6 @@ stress:
     # per index, so the step can be shown to fail (a page cannot be corrupted
     # over the wire). Leave it empty in any real run.
     probe_sql: ""
-  # multiregion_outage (suites/stress/multiregion_region_outage.go): the
-  # backing is the multiregion.* universe stood up for this test alone; every
-  # node of one region is stopped through YBA while tenants write, then started
-  # again. target: preferred (the leader-preferred region, the hard case: every
-  # leader moves), secondary (the first other region) or a region code.
-  multiregion_outage:
-    tenants: 3
-    payload_bytes: 256
-    target: "preferred"
-    # duration is how long the region stays down with the writers running.
-    duration: "5m"
-    # max_write_stall bounds the longest window with no acknowledged row across
-    # every tenant while the region is down: leader election plus amp's
-    # reconnect, not a region's worth of unavailability.
-    max_write_stall: "90s"
-    # settle_timeout bounds each YBA node task and the recovery after the region
-    # is back; a GCE node stop or start is a minutes-long task.
-    settle_timeout: "15m"
-    resume_duration: "30s"
-    control_plane_recovery_max: "2m"
   # backing_unreachable_api: deletes the backing's serving pods, then drives
   # reads and cluster creates on a transport that retries nothing, so the 503 the
   # controller sends for an unreachable store is seen rather than retried away
@@ -1661,6 +1640,13 @@ stress:
   # NetworkPolicy. helper_image needs nsenter, iptables, bash-less sh, grep, sed.
   partition:
     helper_image: "nicolaka/netshoot:v0.13"
+    # device, shape_verify_pings and shape_tolerance are the netem shaping
+    # knobs of backing_node_partition_multi_region: the interface delayed, the
+    # echoes each round-trip check averages, and the fraction of the requested
+    # round trip (never under 1 ms) a measured one may deviate.
+    device: "eth0"
+    shape_verify_pings: 10
+    shape_tolerance: 0.3
   # backing_node_partition: cuts ONE backing tserver pod off the network
   # (every packet in and out dropped; the pod stays up, so peers and clients sit
   # in RPC timeouts instead of seeing a connection refused) while tenants write
@@ -1685,6 +1671,11 @@ stress:
     resume_duration: "30s"
     payload_bytes: 256
     control_plane_recovery_max: "2m"
+    # multi_region_topology is the netshape topology
+    # backing_node_partition_multi_region shapes the backing and the endpoints
+    # into before writing: tserver N by name order is site N, the endpoints sit
+    # in the @ site (0 when absent). Format as perf.latency_topology.topologies.
+    multi_region_topology: "multi_region: 0-1=12 0-2=47 1-2=60"
   # endpoint_backing_partition: cuts ONE tenant's endpoint pod off the backing
   # (its egress to every backing pod and Service IP dropped; the pod stays up
   # and reachable for clients) while journaled writes run. The write lease
@@ -2114,66 +2105,6 @@ stress:
     # settle_timeout bounds every endpoint answering SQL again once the load stops.
     settle_timeout: "10m"
 
-# --- Multi-region backing (apps/multiregion) ---
-# The shape features/multiregion_backing, stress/multiregion_region_outage,
-# perf/multiregion_sysbench and perf/multiregion_pgbench stand up for
-# themselves: a YBA in the run's GKE cluster (apps.ybastack.*), a gcp provider
-# carrying every region below on the shared yugabyte-network VPC, and one
-# universe spread over them with tablet leaders preferred in preferred_region,
-# which is the region the GKE clusters (and so the amp control plane) live in.
-# GKE pods reach GCE nodes in any US region directly: yugabyte-allow-internal
-# admits 10.0.0.0/8 to every instance in the VPC.
-#
-# The tests are opt-in (enabled) and skip before provisioning without it, or
-# without the gcp_key service-account secret (apps.yba.gcp.credentials_secret)
-# and the quay pull secret the YBA needs. The SSH key is the shared yb-dev-aws-2
-# one the aws provider already reuses (apps.yba.gcp.keypair_*).
-multiregion:
-  enabled: false
-  # regions: code + zone + subnet + tservers. zone defaults to <code>-b and
-  # subnet to subnet-<code> (the VPC's naming); at least two regions.
-  regions:
-    - code: "us-west1"
-      zone: "us-west1-b"
-      subnet: "subnet-us-west1"
-      nodes: 1
-    - code: "us-central1"
-      zone: "us-central1-b"
-      subnet: "subnet-us-central1"
-      nodes: 1
-    - code: "us-east1"
-      zone: "us-east1-b"
-      subnet: "subnet-us-east1"
-      nodes: 1
-  preferred_region: "us-west1"
-  replication_factor: 3
-  # Sized for a regression run, not a benchmark: these tests assert topology and
-  # correctness, and every vCPU is paid for in three regions. Raise both for the
-  # perf variants if a number needs more headroom.
-  instance_type: "n2-standard-4"
-  volume_size_gb: 50
-  # image is the GCE image YBA provisions the nodes from (ssh user centos): the
-  # stress framework's server image, known to work with YBA in this project.
-  image: "projects/yugabyte/global/images/stress-server-base-x86-2025-07-31-235630"
-  # provider_name is its own: a YBA provider is reused by name and its region
-  # list is fixed at create, so the single-region ampqa-gcp cannot serve this.
-  provider_name: "ampqa-gcp-multiregion"
-  # provision_timeout bounds standing the whole backing up — the YBA helm
-  # install, the provider, the DB release import and the GCE VMs YBA provisions
-  # and installs software on. It overrides timeouts.provision_dedicated (45m,
-  # sized for a co-located backing) for these tests only, through the same
-  # overlay that shapes the backing.
-  provision_timeout: "90m"
-  # controller_ready_timeout is the amp controller's own bring-up on this
-  # backing, overriding env.ampstack.controller_ready_timeout (5m, sized for a
-  # co-located database). Its startup migrations are DDL, and every one is a
-  # cross-region consensus round here.
-  controller_ready_timeout: "20m"
-  perf:
-    # provisions is perf.provisions for the multi-region benchmarks: every
-    # extra stack is another universe of Nodes VMs across the regions.
-    provisions: 1
-
 # --- Perf suite (suites/perf) ---
 # perf/tpcc, perf/pgbench, perf/sysbench: provision a co-located RF3
 # YugabyteDB-in-k8s cluster, stand an amp control plane + ONE compute endpoint on
@@ -2389,6 +2320,34 @@ perf:
     table_size: 100000
     # threads is sysbench --threads (concurrent client threads) for each run.
     threads: 8
+  # latency_topology is perf/latency_topology: the perf tier's sysbench stack,
+  # benchmarked unshaped and then under each topology below, with tc netem
+  # delay injected into the tservers' and the endpoint's own network namespaces
+  # (apps/netshape). Tserver N is site N; the endpoint sits in the site after
+  # the @ (site 0 when absent). Each pair's round trip is split in half and
+  # applied as egress delay on both ends, then measured with ping before the
+  # benchmark runs. The default round trips are the ones measured between the
+  # AWS regions the multi-region amp environment spans.
+  latency_topology:
+    # workload is the benchmark driven under every topology: sysbench
+    # (perf.sysbench.*) or pgbench (perf.pgbench.*).
+    workload: "sysbench"
+    # helper_image needs nsenter, tc, ping and sh.
+    helper_image: "nicolaka/netshoot:v0.13"
+    device: "eth0"
+    # topologies: "<name>[@<endpoint site>]: <i>-<j>=<round trip ms> ...".
+    # Unlisted pairs are co-located. Site RF (3) is one with no tserver in it,
+    # for an endpoint remote from its whole universe.
+    topologies:
+      - "multi_az: 0-1=1 0-2=1 1-2=1"
+      - "multi_region: 0-1=12 0-2=47 1-2=60"
+      - "amp_cross_az@3: 0-3=1 1-3=1 2-3=1"
+      - "amp_cross_region@3: 0-3=12 1-3=12 2-3=12"
+    # verify_pings is how many echoes each round-trip check averages.
+    verify_pings: 10
+    # tolerance is the fraction of the requested round trip (never under 1 ms)
+    # a measured one may deviate before the shape counts as not taken.
+    tolerance: 0.3
   # microbench is the phase-timed workload (perf/microbench): labelled DDL/bulk-DML
   # statements, each one timed Exec, each a `microbench.<phase>` datapoint in ms.
   # Unlike the rest of the tier it needs NO backing of its own and NO client pod —

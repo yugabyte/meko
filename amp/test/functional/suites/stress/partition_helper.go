@@ -5,12 +5,14 @@
 // NetworkPolicy is no route either: amp-dev runs kube-proxy with no enforcing
 // CNI, so a policy there is accepted and ignored (run 0d091c20).
 //
-// What every k8s node does have is the target pod's network namespace. A
-// privileged, hostPID helper pod pinned to the same node finds one of the target
-// pod's processes through /proc and runs iptables inside that namespace with
-// nsenter, so the rules live in the pod's own stack, wherever the CNI's happen
-// to be. Every partition is then probed from inside the target before a test
-// relies on it: a rule that dropped nothing fails the step, never the product.
+// What every k8s node does have is the target pod's network namespace, and
+// apps/netshape is the single home for entering it: a privileged, hostPID
+// helper pod on the same node finds one of the target's processes through /proc
+// and runs a command inside that namespace with nsenter, so rules live in the
+// pod's own stack wherever the CNI's happen to be. This file adds only the
+// iptables and tc vocabulary on top. Every partition is then probed from inside
+// the target before a test relies on it: a rule that dropped nothing fails the
+// step, never the product.
 package stress
 
 import (
@@ -23,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/netshape"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -52,85 +55,22 @@ func helperImage(c *core.Config) string {
 	return c.GetString("stress.partition.helper_image", "nicolaka/netshoot:v0.13")
 }
 
-// netnsHelper is the privileged pod through which one target pod's network
-// namespace is reached, and the target's uid the pid is resolved from.
-type netnsHelper struct {
-	kube *k8s.Kubectl
-	name string
-	uid  string
-	node string
-	pod  string
+// attachNetns stands a netshape helper beside pod; any pid of the pod does.
+func attachNetns(t *core.T, kube *k8s.Kubectl, pod, suffix string) (*netshape.Helper, error) {
+	return netshape.Attach(t.Context, kube, pod, suffix, helperImage(t.Options))
 }
 
-// attachNetns stands a helper up on the target's node; any pid of the pod does.
-func attachNetns(t *core.T, kube *k8s.Kubectl, pod, suffix string) (*netnsHelper, error) {
-	node, err := kube.Get(t.Context, "pod", pod, "{.spec.nodeName}")
-	if err != nil {
-		return nil, fmt.Errorf("read the node of pod %s: %w", pod, err)
-	}
-	uid, err := kube.Get(t.Context, "pod", pod, "{.metadata.uid}")
-	if err != nil {
-		return nil, fmt.Errorf("read the uid of pod %s: %w", pod, err)
-	}
-	if node == "" || uid == "" {
-		return nil, fmt.Errorf("pod %s has no node or uid yet (node %q, uid %q)", pod, node, uid)
-	}
-	h := &netnsHelper{kube: kube, name: "ampqa-netns-" + suffix, uid: uid, node: node, pod: pod}
-	if err := kube.Apply(t.Context, h.manifest(node, helperImage(t.Options))); err != nil {
-		return nil, fmt.Errorf("create the netns helper pod %s on node %s: %w", h.name, node, err)
-	}
-	if err := kube.WaitFor(t.Context, "pod/"+h.name, "condition=Ready", helperReadyTimeout); err != nil {
-		h.Close(t.Context)
-		return nil, fmt.Errorf("netns helper pod %s never became Ready on node %s: %w (%s)", h.name, node, err, kube.PodTrouble(t.Context, h.name))
-	}
-	if _, err := h.podPID(t.Context); err != nil {
-		h.Close(t.Context)
-		return nil, err
-	}
-	return h, nil
-}
-
-func (h *netnsHelper) exec() *k8s.Kubectl { return h.kube.ForPod(h.name, "") }
-
-// errNoPodProcess: no process left, so the namespace and its rules are gone.
-var errNoPodProcess = errors.New("no process on the node belongs to the target pod")
-
-// Resolved per call: a liveness restart retires the pid, not the namespace.
-func (h *netnsHelper) podPID(ctx context.Context) (string, error) {
-	res, err := h.exec().Run(ctx, findPodPIDScript(h.uid))
-	if err != nil {
-		return "", fmt.Errorf("scan /proc on node %s for pod %s: %w", h.node, h.pod, err)
-	}
-	out := strings.TrimSpace(res.Stdout)
-	// A non-zero exit is kubectl's, not the script's: OSRun reports a dead
-	// helper pod the same way, and that must never read as "rules are gone".
-	if res.ExitCode != 0 {
-		return "", fmt.Errorf("scan /proc on node %s for pod %s exited %d: %s", h.node, h.pod, res.ExitCode, strings.TrimSpace(res.Stderr))
-	}
-	if out == noPodPIDSentinel {
-		return "", fmt.Errorf("%w: pod %s (uid %s) on node %s, so the helper cannot enter its network namespace",
-			errNoPodProcess, h.pod, h.uid, h.node)
-	}
-	if out == "" {
-		return "", fmt.Errorf("scan /proc on node %s for pod %s printed nothing (stderr %q)", h.node, h.pod, strings.TrimSpace(res.Stderr))
-	}
-	return out, nil
-}
-
-// iptables runs one iptables invocation inside the target's network namespace,
-// erroring on a non-zero exit. iptables-legacy is preferred where the kernel
-// serves it (COS does, for kube-proxy) and iptables-nft is the fallback.
-func (h *netnsHelper) iptables(ctx context.Context, args string) error {
-	pid, err := h.podPID(ctx)
-	if err != nil {
-		return err
-	}
-	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s %s'", pid, iptablesPick, args))
+// iptablesIn runs one iptables invocation inside the target's network
+// namespace, erroring on a non-zero exit. iptables-legacy is preferred where
+// the kernel serves it (COS does, for kube-proxy) and iptables-nft is the
+// fallback.
+func iptablesIn(ctx context.Context, h *netshape.Helper, args string) error {
+	res, err := h.Run(ctx, iptablesPick+" "+args)
 	if err != nil {
 		return err
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("iptables %s in the pod's netns exited %d: %s", args, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("iptables %s in the netns of pod %s exited %d: %s", args, h.Pod(), res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return nil
 }
@@ -139,74 +79,27 @@ func (h *netnsHelper) iptables(ctx context.Context, args string) error {
 // the caller's arguments through it.
 const iptablesPick = `IPT=iptables-legacy; $IPT -L -n >/dev/null 2>&1 || IPT=iptables; $IPT`
 
-// clearRules deletes every rule the partitions tagged, whichever chain holds it.
-func (h *netnsHelper) clearRules(ctx context.Context) error {
+// clearTaggedRules deletes every rule the partitions tagged, whichever chain
+// holds it. A pod with no process left has no namespace and so no rules.
+func clearTaggedRules(ctx context.Context, h *netshape.Helper) error {
 	script := fmt.Sprintf(`IPT=iptables-legacy; $IPT -L -n >/dev/null 2>&1 || IPT=iptables; `+
 		`$IPT -S | grep -- "--comment %s" | sed "s/^-A/-D/" | while read -r r; do $IPT $r || exit 1; done`, iptablesComment)
-	pid, err := h.podPID(ctx)
-	if errors.Is(err, errNoPodProcess) {
+	res, err := h.Run(ctx, script)
+	if errors.Is(err, netshape.ErrNoPodProcess) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s'", pid, script))
-	if err != nil {
-		return err
-	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("deleting the %s rules in the pod's netns exited %d: %s", iptablesComment, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("deleting the %s rules in the netns of pod %s exited %d: %s", iptablesComment, h.Pod(), res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return nil
 }
 
-// Close deletes the helper pod. Rooted in a context that survives the run's
-// cancellation, like every teardown.
-func (h *netnsHelper) Close(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
-	_ = h.kube.DeleteNow(ctx, h.name)
-}
-
-func (h *netnsHelper) manifest(node, image string) string {
-	return fmt.Sprintf(`apiVersion: v1
-kind: Pod
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    app: ampqa-netns-helper
-spec:
-  nodeName: %s
-  hostPID: true
-  restartPolicy: Never
-  terminationGracePeriodSeconds: 0
-  tolerations:
-    - operator: Exists
-  containers:
-    - name: helper
-      image: %s
-      command: ["sleep", "infinity"]
-      securityContext:
-        privileged: true
-`, h.name, h.kube.Namespace(), node, image)
-}
-
-// noPodPIDSentinel is how a scan that RAN and matched nothing reports itself,
-// which an exec that never ran cannot forge.
-const noPodPIDSentinel = "ampqa-no-pid"
-
-// findPodPIDScript prints the first host pid whose cgroup path carries the pod
-// uid, in either spelling the cgroup drivers use (dashes, or underscores under
-// systemd slices), and the sentinel when none does.
-func findPodPIDScript(uid string) string {
-	return fmt.Sprintf(`uid=%s; u2=$(echo "$uid" | tr - _); for p in /proc/[0-9]*; do `+
-		`grep -qs -e "$uid" -e "$u2" "$p/cgroup" && { echo "${p#/proc/}"; exit 0; }; done; echo %s`, uid, noPodPIDSentinel)
-}
-
 // podPartition is one set of rules applied in one pod's network namespace.
 type podPartition struct {
-	helper *netnsHelper
+	helper *netshape.Helper
 	pod    string
 	healed bool
 }
@@ -224,7 +117,7 @@ func isolatePod(t *core.T, kube *k8s.Kubectl, pod, suffix string) (*podPartition
 		"-I INPUT ! -i lo -j DROP -m comment --comment " + iptablesComment,
 		"-I OUTPUT ! -o lo -j DROP -m comment --comment " + iptablesComment,
 	} {
-		if err := h.iptables(t.Context, rule); err != nil {
+		if err := iptablesIn(t.Context, h, rule); err != nil {
 			_ = p.Heal(t.Context)
 			return nil, fmt.Errorf("isolate pod %s: %w", pod, err)
 		}
@@ -247,7 +140,7 @@ func cutPodFromBacking(t *core.T, kube *k8s.Kubectl, pod, suffix string, bkube *
 	}
 	p := &podPartition{helper: h, pod: pod}
 	for _, ip := range addrs {
-		if err := h.iptables(t.Context, fmt.Sprintf("-I OUTPUT -d %s -j DROP -m comment --comment %s", ip, iptablesComment)); err != nil {
+		if err := iptablesIn(t.Context, h, fmt.Sprintf("-I OUTPUT -d %s -j DROP -m comment --comment %s", ip, iptablesComment)); err != nil {
 			_ = p.Heal(t.Context)
 			return nil, fmt.Errorf("cut pod %s off %s: %w", pod, ip, err)
 		}
@@ -264,7 +157,7 @@ func (p *podPartition) Heal(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	err := p.helper.clearRules(ctx)
+	err := clearTaggedRules(ctx, p.helper)
 	if err == nil {
 		p.healed = true
 		p.helper.Close(ctx)
@@ -446,7 +339,7 @@ func partitionWriters(ctx context.Context, env ampTenantEnv, tenants []tenant, j
 }
 
 type podSlowdown struct {
-	helper *netnsHelper
+	helper *netshape.Helper
 	pod    string
 	dev    string
 	healed bool
@@ -462,7 +355,7 @@ func slowPodToPeers(t *core.T, kube *k8s.Kubectl, pod, suffix string, port int, 
 	if err != nil {
 		return nil, err
 	}
-	dev, err := h.defaultDev(t.Context)
+	dev, err := defaultDev(t.Context, h)
 	if err != nil {
 		h.Close(t.Context)
 		return nil, err
@@ -473,14 +366,14 @@ func slowPodToPeers(t *core.T, kube *k8s.Kubectl, pod, suffix string, port int, 
 		fmt.Sprintf("tc qdisc add dev %s parent 1:3 handle 30: netem delay %dms", dev, delay.Milliseconds()),
 		fmt.Sprintf("tc filter add dev %s protocol ip parent 1:0 prio 3 u32 match ip dport %d 0xffff flowid 1:3", dev, port),
 	} {
-		if err := h.inNetns(t.Context, cmd); err != nil {
+		if _, err := h.RunOutput(t.Context, cmd); err != nil {
 			_ = p.Heal(t.Context)
 			return nil, fmt.Errorf("slow pod %s toward port %d: %w", pod, port, err)
 		}
 	}
 	// A qdisc the kernel accepted but did not install would slow nothing, and
 	// the operation would then pass on a fault that never happened.
-	out, err := h.outputInNetns(t.Context, "tc qdisc show dev "+dev)
+	out, err := h.RunOutput(t.Context, "tc qdisc show dev "+dev)
 	if err != nil {
 		_ = p.Heal(t.Context)
 		return nil, err
@@ -502,16 +395,18 @@ func (p *podSlowdown) Heal(ctx context.Context) error {
 	p.healed = true
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	err := p.helper.inNetns(ctx, "tc qdisc del dev "+p.dev+" root")
-	if errors.Is(err, errNoPodProcess) {
+	_, err := p.helper.RunOutput(ctx, "tc qdisc del dev "+p.dev+" root")
+	if errors.Is(err, netshape.ErrNoPodProcess) {
 		err = nil
 	}
 	p.helper.Close(ctx)
 	return err
 }
 
-func (h *netnsHelper) defaultDev(ctx context.Context) (string, error) {
-	out, err := h.outputInNetns(ctx, "ip -o -4 route show default")
+// defaultDev is the device the pod's default route leaves by, which is what a
+// qdisc has to attach to.
+func defaultDev(ctx context.Context, h *netshape.Helper) (string, error) {
+	out, err := h.RunOutput(ctx, "ip -o -4 route show default")
 	if err != nil {
 		return "", err
 	}
@@ -521,25 +416,5 @@ func (h *netnsHelper) defaultDev(ctx context.Context) (string, error) {
 			return fields[i+1], nil
 		}
 	}
-	return "", fmt.Errorf("pod %s has no default route to slow (%q)", h.pod, strings.TrimSpace(out))
-}
-
-func (h *netnsHelper) inNetns(ctx context.Context, cmd string) error {
-	_, err := h.outputInNetns(ctx, cmd)
-	return err
-}
-
-func (h *netnsHelper) outputInNetns(ctx context.Context, cmd string) (string, error) {
-	pid, err := h.podPID(ctx)
-	if err != nil {
-		return "", err
-	}
-	res, err := h.exec().Run(ctx, fmt.Sprintf("nsenter -t %s -n -- sh -c '%s'", pid, cmd))
-	if err != nil {
-		return "", err
-	}
-	if res.ExitCode != 0 {
-		return res.Stdout, fmt.Errorf("%q in pod %s's netns exited %d: %s", cmd, h.pod, res.ExitCode, strings.TrimSpace(res.Stderr))
-	}
-	return res.Stdout, nil
+	return "", fmt.Errorf("pod %s has no default route to slow (%q)", h.Pod(), strings.TrimSpace(out))
 }
