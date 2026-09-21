@@ -124,21 +124,26 @@ func TestRenderPassesTheSpecThrough(t *testing.T) {
 	}
 }
 
-// `name` is the object's identity, not part of YBProvider.spec — leaving it in
-// the body would send a field the CRD does not declare.
-func TestRenderLiftsNameOutOfTheSpec(t *testing.T) {
-	body := map[string]any{"name": "foundation", "cloudInfo": map[string]any{"kubernetesProvider": "gke"}}
-	cr := Render(KindProvider, "foundation", "amp", body)
+// TestRenderKeepsTheBodysOwnName: metadata.name and spec.name are two
+// different fields, and spec.name is REQUIRED by KMSConfig, PitrConfig and
+// DrConfig and real on StorageConfig and BackupSchedule.
+//
+// Render used to strip it, which was harmless while only YBProvider and
+// YBUniverse existed — neither declares one — and silently broke every one of
+// those kinds the moment a spec could name them.
+func TestRenderKeepsTheBodysOwnName(t *testing.T) {
+	body := map[string]any{"name": "foundation-kms", "provider": "AWS"}
+	cr := Render("KMSConfig", "foundation-kms-object", "amp", body)
 
-	if _, leaked := cr["spec"].(map[string]any)["name"]; leaked {
-		t.Error("name was left in spec; the CRD does not declare it there")
+	if got := cr["spec"].(map[string]any)["name"]; got != "foundation-kms" {
+		t.Errorf("spec.name = %v, want the body's own name passed through", got)
 	}
-	if cr["metadata"].(map[string]any)["name"] != "foundation" {
-		t.Error("name did not reach metadata")
+	if got := cr["metadata"].(map[string]any)["name"]; got != "foundation-kms-object" {
+		t.Errorf("metadata.name = %v, want the object name the caller passed", got)
 	}
-	// The caller's map must not be mutated — Render is called twice by
-	// validate-then-render paths.
-	if _, gone := body["name"]; !gone {
+	// Render is called twice by validate-then-render paths, so it must not
+	// touch the caller's map.
+	if body["name"] != "foundation-kms" {
 		t.Error("Render mutated the caller's map")
 	}
 }

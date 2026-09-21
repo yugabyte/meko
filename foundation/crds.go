@@ -37,10 +37,4 @@ func (d *Deployer) applyCRDs(ctx context.Context) error {
 	return nil
 }
 
-// crdSource is the local override when set, else the pinned URL.
-func (d *Deployer) crdSource() string {
-	if d.spec.CRDPath != "" {
-		return d.spec.CRDPath
-	}
-	return CRDURL(d.spec.ChartVersion)
-}
+func (d *Deployer) crdSource() string { return d.spec.CRDSource() }

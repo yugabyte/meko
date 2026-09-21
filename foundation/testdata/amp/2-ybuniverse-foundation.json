@@ -1,0 +1,64 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "YBUniverse",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
+    "name": "foundation",
+    "namespace": "amp"
+  },
+  "spec": {
+    "enableClientToNodeEncrypt": false,
+    "enableLoadBalancer": true,
+    "enableNodeToNodeEncrypt": false,
+    "enableYCQL": false,
+    "enableYSQL": true,
+    "enableYSQLAuth": false,
+    "gFlags": {
+      "masterGFlags": {
+        "allowed_preview_flags_csv": "ysql_yb_enable_mage",
+        "ysql_yb_enable_mage": "true"
+      },
+      "tserverGFlags": {
+        "allowed_preview_flags_csv": "ysql_yb_enable_mage",
+        "ysql_yb_enable_mage": "true"
+      }
+    },
+    "kubernetesOverrides": {
+      "serviceEndpoints": [
+        {
+          "app": "yb-tserver",
+          "name": "yb-tserver-conn",
+          "ports": {
+            "tcp-rpc-port": "9100",
+            "tcp-ysql-port": "5433"
+          },
+          "scope": "Namespaced",
+          "type": "ClusterIP"
+        }
+      ]
+    },
+    "numNodes": 3,
+    "placementInfo": {
+      "regions": [
+        {
+          "code": "us-west1",
+          "zones": [
+            {
+              "code": "us-west1-b",
+              "numNodes": 3
+            }
+          ]
+        }
+      ]
+    },
+    "providerName": "foundation",
+    "replicationFactor": 3,
+    "tserverVolume": {
+      "volumeSize": 100
+    },
+    "universeName": "foundation",
+    "ybSoftwareVersion": "2026.1.2.0-b137"
+  }
+}

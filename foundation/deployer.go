@@ -27,6 +27,7 @@ type Deployer struct {
 
 	ybaTimeout      time.Duration
 	universeTimeout time.Duration
+	noPrune         bool
 	pollInterval    time.Duration
 }
 
@@ -141,6 +142,9 @@ func (d *Deployer) Preflight(ctx context.Context) error {
 	if err := d.spec.checkDefaultUser(); err != nil {
 		return err
 	}
+	if err := d.checkLocalPaths(); err != nil {
+		return err
+	}
 	if err := d.checkHelmVersion(ctx); err != nil {
 		return err
 	}
@@ -192,6 +196,16 @@ func (d *Deployer) Preflight(ctx context.Context) error {
 	return nil
 }
 
+// WithoutPrune leaves objects the spec no longer declares on the cluster.
+//
+// An escape hatch, not a mode: the default has to be that the spec is the
+// source of truth, or removing a key means something different from adding
+// one.
+func (d *Deployer) WithoutPrune() *Deployer {
+	d.noPrune = true
+	return d
+}
+
 // Up stands a foundation up from nothing and returns how to reach it.
 func (d *Deployer) Up(ctx context.Context) (*Info, error) {
 	return d.converge(ctx, true)
@@ -226,6 +240,19 @@ func (d *Deployer) converge(ctx context.Context, initial bool) (*Info, error) {
 	}
 	if err := d.waitUniverse(ctx); err != nil {
 		return nil, err
+	}
+	// After the universe has SETTLED, not merely after the applies. One edit
+	// can both stop the universe using a KMSConfig and drop the key; disabling
+	// encryption at rest is a YBA task, so deleting the config before that task
+	// finishes races a reference that is still live.
+	if !d.noPrune {
+		manifests, err := d.spec.Render()
+		if err != nil {
+			return nil, err
+		}
+		if err := d.prune(ctx, manifests); err != nil {
+			return nil, err
+		}
 	}
 	if err := d.checkTServerService(ctx); err != nil {
 		return nil, err
@@ -263,6 +290,6 @@ func (d *Deployer) ensureNamespace(ctx context.Context) error {
 		return err
 	}
 	_, err = d.kubectlCluster(ctx, nil, "label", "namespace", d.spec.Namespace,
-		"app.kubernetes.io/managed-by=meko-foundation", "--overwrite")
+		ManagedByLabel+"="+ManagedByValue, "--overwrite")
 	return err
 }

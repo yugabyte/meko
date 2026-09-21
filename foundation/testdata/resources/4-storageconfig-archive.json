@@ -1,0 +1,17 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "StorageConfig",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
+    "name": "archive",
+    "namespace": "amp"
+  },
+  "spec": {
+    "config": {
+      "BACKUP_LOCATION": "s3://example-test/archive"
+    },
+    "name": "archive"
+  }
+}

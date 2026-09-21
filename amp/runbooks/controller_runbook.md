@@ -375,13 +375,35 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   `helm uninstall` the release so a fresh install runs the hook. `foundation up` now fails
   at the install with this reason rather than waiting the universe out.
 
+- **`FOUNDATION=operator`: the yugaware pod sits in `Init:ImagePullBackOff` and the install
+  times out.** Not the DB image — the chart's own. A chart bump can move an image to a
+  registry the pull secret does not cover: 2026.1.2 switched the postgres init container
+  from Docker Hub to `quay.io/yugabyte/hardened-postgres` AND `hardened-prometheus`. Read
+  which image off the pod (`kubectl -n "$NS" describe pod -l release=$NS-yugaware`), then
+  either grant the robot behind `quay-pull-secret` access to that repo, or override it in
+  the spec's `yba.values` — the checked-in spec does both under `image:`.
+
+  Do not fix one image at a time: each attempt costs a 40-minute `ybaTimeout`. Render the
+  chart and check every image at once — authoritative, offline, and it sees subcharts,
+  which a `values.yaml` diff does not:
+
+  ```
+  helm template t ./yugaware -f <yba.values> | grep -oE '^ *image: .*' | sort -u
+  ```
+
+  Watch the tag as well as the registry (`prom/prometheus` prefixes versions with `v`,
+  the hardened repo does not), and watch for whole SUBCHARTS: 2026.1.2 added Perf
+  Advisor, enabled by default, pulling under its own `imagePullSecretName`. `helm --wait`
+  waits for every workload in the release, so one such pod times the install out with
+  yugaware itself up and healthy. The checked-in spec disables it.
+
 - **`FOUNDATION=operator`: DB pods in `ImagePullBackOff`, or a universe that never leaves
-  `Creating`.** The DB image registry comes from the foundation spec's `provider` block,
+  `Creating`.** The DB image registry comes from the foundation spec's `YBProvider` entry,
   and its pull secret is **YBA's**: YBA derives one from its own
   (`yba.values.image.pullSecret`, which `up-gke.sh` mints from `PULL_SECRET`) and copies it
   beside the DB pods. So the usual cause is that robot lacking pull access to the DB image
   repo, not a name mismatch — do **not** add
-  `universe.kubernetesOverrides.Image.pullSecretName`, which would name a Secret that need
+  `kubernetesOverrides.Image.pullSecretName` in the universe body, which would name a Secret that need
   not exist where the DB pods run. Read the reason off the CRs, which is where YBA puts it:
   `kubectl -n "$NS" get ybprovider,ybuniverse -o yaml` (`status.actions[]` carries the
   failing task and its message), then the operator's own log —

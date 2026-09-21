@@ -5,8 +5,11 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"meko/foundation/ybuniverse"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -20,7 +23,16 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // assertions. Regenerate with `go test ./... -update` and READ THE DIFF — a
 // changed golden file is a changed thing applied to a cluster.
 func TestRenderGolden(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	for _, example := range []string{"amp.yaml", "resources.yaml"} {
+		t.Run(example, func(t *testing.T) {
+			checkGolden(t, example, strings.TrimSuffix(example, ".yaml"))
+		})
+	}
+}
+
+func checkGolden(t *testing.T, example, dir string) {
+	t.Helper()
+	spec := loadExample(t, example)
 	manifests, err := spec.Render()
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -28,8 +40,16 @@ func TestRenderGolden(t *testing.T) {
 	if len(manifests) == 0 {
 		t.Fatal("Render produced nothing")
 	}
+	// Cleared first, so a renamed or removed manifest does not leave an
+	// orphan golden behind. An orphan is invisible otherwise: nothing compares
+	// against it, and `git diff` sees an unchanged tracked file.
+	if *update {
+		if err := os.RemoveAll(filepath.Join("testdata", dir)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, m := range manifests {
-		golden := filepath.Join("testdata", "amp", m.Name)
+		golden := filepath.Join("testdata", dir, m.Name)
 		if *update {
 			if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
 				t.Fatal(err)
@@ -55,7 +75,7 @@ func TestRenderGolden(t *testing.T) {
 // unchanged object.
 func TestRenderIsDeterministic(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	spec.Universe["gFlags"] = map[string]any{"tserverGFlags": map[string]any{
+	spec.universe()["gFlags"] = map[string]any{"tserverGFlags": map[string]any{
 		"allowed_preview_flags_csv": "ysql_yb_enable_mage",
 		"ysql_yb_enable_mage":       "true",
 		"ysql_log_statement":        "all",
@@ -92,7 +112,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 //     choice, and not in the CRD's kubernetesOverrides schema)
 func TestServiceEndpointOverrideAsksTheChartForTheService(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	crSpec := renderedSpec(t, spec, "ybuniverse.json")
+	crSpec := renderedSpec(t, spec, ybuniverse.KindUniverse)
 
 	// Required gate, and NOT a request for public exposure: overriding the
 	// endpoint list replaces the chart's three LoadBalancer defaults, so nothing
@@ -224,25 +244,25 @@ func TestCRDURLUsesRawGithubusercontent(t *testing.T) {
 	}
 }
 
-// renderedSpec is the spec body of one rendered manifest.
-func renderedSpec(t *testing.T, spec *Spec, name string) map[string]any {
+// renderedSpec is the spec body of the one rendered manifest of a kind.
+func renderedSpec(t *testing.T, spec *Spec, kind string) map[string]any {
 	t.Helper()
 	manifests, err := spec.Render()
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	for _, m := range manifests {
-		if m.Name != name {
+		if m.Kind != kind {
 			continue
 		}
 		var cr map[string]any
 		if err := json.Unmarshal(m.JSON, &cr); err != nil {
-			t.Fatalf("parse %s: %v", name, err)
+			t.Fatalf("parse %s: %v", m.Name, err)
 		}
 		body, _ := cr["spec"].(map[string]any)
 		return body
 	}
-	t.Fatalf("Render produced no %s", name)
+	t.Fatalf("Render produced no %s", kind)
 	return nil
 }
 
@@ -252,11 +272,11 @@ func renderedSpec(t *testing.T, spec *Spec, name string) map[string]any {
 func TestPassthroughReachesTheCR(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
 	// Real CRD fields this package has no knowledge of.
-	spec.Universe["paused"] = false
-	spec.Universe["useYbdbInbuiltYbc"] = true
-	spec.Universe["masterResourceSpec"] = map[string]any{"cpu": 2, "memory": 8}
+	spec.universe()["paused"] = false
+	spec.universe()["useYbdbInbuiltYbc"] = true
+	spec.universe()["masterResourceSpec"] = map[string]any{"cpu": 2, "memory": 8}
 
-	body := renderedSpec(t, spec, "ybuniverse.json")
+	body := renderedSpec(t, spec, ybuniverse.KindUniverse)
 	if body["paused"] != false || body["useYbdbInbuiltYbc"] != true {
 		t.Errorf("passthrough fields did not reach the CR: %v", body)
 	}
@@ -292,7 +312,7 @@ func TestProviderZonesGetTheSpecNamespace(t *testing.T) {
 
 	// Render must not mutate the caller's spec: the CLI renders and then applies
 	// the same Spec, and `up` renders twice.
-	original, _ := spec.Provider["regions"].([]any)
+	original, _ := spec.provider()["regions"].([]any)
 	region, _ := original[0].(map[string]any)
 	zs, _ := region["zones"].([]any)
 	z0, _ := zs[0].(map[string]any)
@@ -334,7 +354,7 @@ func TestAZoneCanPutTheUniverseInItsOwnNamespace(t *testing.T) {
 // refusing it beats picking silently.
 func TestProviderZonesMustAgreeOnOneNamespace(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	regions, _ := spec.Provider["regions"].([]any)
+	regions, _ := spec.provider()["regions"].([]any)
 	region, _ := regions[0].(map[string]any)
 	zoneCloudInfo(t, spec)["kubeNamespace"] = "yb-amp-a"
 	region["zones"] = append(asList(region["zones"]), map[string]any{
@@ -357,7 +377,7 @@ func TestProviderZonesMustAgreeOnOneNamespace(t *testing.T) {
 // at it.
 func zoneCloudInfo(t *testing.T, spec *Spec) map[string]any {
 	t.Helper()
-	regions, _ := spec.Provider["regions"].([]any)
+	regions, _ := spec.provider()["regions"].([]any)
 	region, _ := regions[0].(map[string]any)
 	zs, _ := region["zones"].([]any)
 	z0, _ := zs[0].(map[string]any)
@@ -394,4 +414,160 @@ func renderedZones(t *testing.T, spec *Spec) []map[string]any {
 		}
 	}
 	return out
+}
+
+// TestRenderFollowsDocumentOrder: Render walks the spec's resources in the
+// order they were written, and nothing sorts. Two specs differing only in the
+// position of one kind must render in different orders.
+func TestRenderFollowsDocumentOrder(t *testing.T) {
+	kinds := func(yaml string) []string {
+		spec, err := Load([]byte(yaml))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		manifests, err := spec.Render()
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		var out []string
+		for _, m := range manifests {
+			out = append(out, m.Kind)
+		}
+		return out
+	}
+	const prov = "YBProvider:\n  name: p\n  spec: {}\n"
+	const univ = "YBUniverse:\n  name: u\n  spec:\n" + testVersion
+	const rel = "Release:\n  name: r\n  spec: {}\n"
+
+	if got := kinds("namespace: amp\n" + prov + rel + univ); !reflect.DeepEqual(got,
+		[]string{"YBProvider", "Release", "YBUniverse"}) {
+		t.Errorf("kinds = %v, want the Release in the middle", got)
+	}
+	if got := kinds("namespace: amp\n" + prov + univ + rel); !reflect.DeepEqual(got,
+		[]string{"YBProvider", "YBUniverse", "Release"}) {
+		t.Errorf("kinds = %v, want the Release last", got)
+	}
+}
+
+// TestResourceFileNamesCarryTheApplyOrder: the file names are what `render -o
+// DIR` writes and what the goldens are compared against, so they are indexed —
+// an alphabetical `ls` would otherwise misreport apply order.
+func TestResourceFileNamesCarryTheApplyOrder(t *testing.T) {
+	spec, err := Load([]byte("namespace: amp\n" +
+		"YBProvider:\n  name: p\n  spec: {}\n" +
+		"YBUniverse:\n  name: u\n  spec:\n" + testVersion +
+		"StorageConfig:\n  - name: backups\n    spec: {}\n  - name: archive\n    spec: {}\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	manifests, err := spec.Render()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var names []string
+	for _, m := range manifests {
+		names = append(names, m.Name)
+	}
+	want := []string{
+		"1-ybprovider-p.json",
+		"2-ybuniverse-u.json",
+		"3-storageconfig-backups.json",
+		"4-storageconfig-archive.json",
+	}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("names = %v, want %v", names, want)
+	}
+}
+
+// TestAResourceSpecKeepsItsOwnName is the regression test for the one real bug
+// this change had to fix: Render stripped `name` from every body, which is
+// right for the provider and fatal for KMSConfig, PitrConfig and DrConfig,
+// where spec.name is a REQUIRED field.
+func TestAResourceSpecKeepsItsOwnName(t *testing.T) {
+	spec, err := Load([]byte(minimalSpec("") +
+		"KMSConfig:\n  name: foundation-kms\n  spec:\n    name: foundation-kms\n    provider: AWS\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	manifests, err := spec.Render()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, m := range manifests {
+		if m.Kind != "KMSConfig" {
+			continue
+		}
+		var cr map[string]any
+		if err := json.Unmarshal(m.JSON, &cr); err != nil {
+			t.Fatal(err)
+		}
+		if got := cr["spec"].(map[string]any)["name"]; got != "foundation-kms" {
+			t.Errorf("spec.name = %v, want it passed through — the CRD requires it", got)
+		}
+		if got := cr["metadata"].(map[string]any)["name"]; got != "foundation-kms" {
+			t.Errorf("metadata.name = %v", got)
+		}
+		return
+	}
+	t.Fatal("Render produced no KMSConfig")
+}
+
+// TestTheBodyIsPassedThroughEvenWhenItHasAName: nothing lifts `name` out of a
+// spec body any more, for any kind. That is required for KMSConfig,
+// PitrConfig and DrConfig, where spec.name is a field of the CRD.
+//
+// The cost is that a spec migrated by moving the old provider: block under
+// YBProvider.spec still carries a body-level name, which the YBProvider CRD
+// does not declare — and that is the API server's to reject on apply, with a
+// message naming the field, rather than something to re-implement here.
+func TestTheBodyIsPassedThroughEvenWhenItHasAName(t *testing.T) {
+	spec, err := Load([]byte("namespace: amp\n" +
+		"YBProvider:\n  name: entry\n  spec:\n    name: in-the-body\n" +
+		"YBUniverse:\n  name: u\n  spec:\n" + testVersion))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	body := renderedSpec(t, spec, ybuniverse.KindProvider)
+	if body["name"] != "in-the-body" {
+		t.Errorf("spec.name = %v, want the body passed through untouched", body["name"])
+	}
+	// The object is still named from the entry, which is what kubectl
+	// addresses and what ProviderName returns.
+	if spec.ProviderName() != "entry" {
+		t.Errorf("ProviderName = %q, want the entry's name", spec.ProviderName())
+	}
+}
+
+// TestTheExampleKeepsItsNamesOutOfTheBodies guards the migration the examples
+// went through: with the body passed through verbatim, a leftover body-level
+// name would reach the API server and be rejected there rather than here.
+func TestTheExampleKeepsItsNamesOutOfTheBodies(t *testing.T) {
+	for _, example := range []string{"amp.yaml", "resources.yaml"} {
+		spec := loadExample(t, example)
+		for _, kind := range []string{ybuniverse.KindProvider, ybuniverse.KindUniverse} {
+			if body := renderedSpec(t, spec, kind); body["name"] != nil {
+				t.Errorf("%s: %s body carries a name the CRD does not declare: %v",
+					example, kind, body["name"])
+			}
+		}
+	}
+}
+
+// TestCrdSourceHonoursTheOverride: `render` prints the CRD apply command it is
+// deliberately not running, and it used to print CRDURL directly — which
+// ignored crdPath and told the reader to apply a bundle the spec had
+// overridden. The two must not be able to disagree.
+func TestCrdSourceHonoursTheOverride(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	if got := spec.CRDSource(); got != CRDURL(spec.ChartVersion) {
+		t.Errorf("CRDSource = %q, want the version's bundle when no override is set", got)
+	}
+	spec.CRDPath = "https://example.test/crds.yaml"
+	if got := spec.CRDSource(); got != spec.CRDPath {
+		t.Errorf("CRDSource = %q, want the override %q", got, spec.CRDPath)
+	}
+	d := New(spec, (&Recorder{}).Runner())
+	if got := d.crdSource(); got != spec.CRDPath {
+		t.Errorf("the deployer and the CLI disagree: %q vs %q", got, spec.CRDPath)
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -18,10 +19,10 @@ func TestLoadExampleAmp(t *testing.T) {
 	if spec.Namespace != "amp" {
 		t.Errorf("namespace = %q, want amp", spec.Namespace)
 	}
-	if n, _ := intField(spec.Universe, "numNodes"); n != 3 {
+	if n, _ := intField(spec.universe(), "numNodes"); n != 3 {
 		t.Errorf("universe.numNodes = %d, want 3", n)
 	}
-	if rf, _ := intField(spec.Universe, "replicationFactor"); rf != 3 {
+	if rf, _ := intField(spec.universe(), "replicationFactor"); rf != 3 {
 		t.Errorf("universe.replicationFactor = %d, want 3", rf)
 	}
 	if got := spec.Databases; len(got) != 1 || got[0] != "yb_storage" {
@@ -29,24 +30,24 @@ func TestLoadExampleAmp(t *testing.T) {
 	}
 	// The controller's DSN is passwordless and sslmode=disable today, so both of
 	// these staying off is what keeps the example working against it.
-	if spec.Universe["enableYSQLAuth"] == true {
+	if spec.universe()["enableYSQLAuth"] == true {
 		t.Error("enableYSQLAuth is on; the existing controller DSN is passwordless")
 	}
 	// TLS cannot be changed after creation, and the existing DSNs are
 	// sslmode=disable.
-	if spec.Universe["enableNodeToNodeEncrypt"] == true || spec.Universe["enableClientToNodeEncrypt"] == true {
+	if spec.universe()["enableNodeToNodeEncrypt"] == true || spec.universe()["enableClientToNodeEncrypt"] == true {
 		t.Error("TLS is on; the existing DSNs are sslmode=disable")
 	}
 	// The provider is what carries the DB image registry, its pull secret and
 	// the per-zone storage class — none of which the operator's auto-provider
 	// can infer, so the example must ship one.
-	if len(spec.Provider) == 0 {
+	if len(spec.provider()) == 0 {
 		t.Fatal("the example has no provider block")
 	}
 	if spec.ProviderName() == "" {
 		t.Error("the universe does not reference the provider")
 	}
-	ci, _ := spec.Provider["cloudInfo"].(map[string]any)
+	ci, _ := spec.provider()["cloudInfo"].(map[string]any)
 	if ci["kubernetesImageRegistry"] == nil {
 		t.Error("the provider names no image registry; k8s universes pull the DB image from one")
 	}
@@ -62,11 +63,20 @@ func TestLoadExampleAmp(t *testing.T) {
 // testVersion is the universe line every terse fixture needs: an empty or
 // absent ybSoftwareVersion is a hard error, because YBA parses it and rejects
 // the universe with no reason attached.
-const testVersion = "  ybSoftwareVersion: 2026.1.1.1-b2\n"
+const testVersion = "    ybSoftwareVersion: 2026.1.1.1-b2\n"
+
+// minimalSpec is the smallest complete spec: both required kinds, in order,
+// with the universe body the caller cares about. Every terse fixture goes
+// through it so a test says only what it is actually about.
+func minimalSpec(universeBody string) string {
+	return "namespace: amp\n" +
+		"YBProvider:\n  name: p\n  spec: {}\n" +
+		"YBUniverse:\n  name: foundation\n  spec:\n" + testVersion + universeBody
+}
 
 // the worst kind of failure, because it looks like success.
 func TestLoadRejectsUnknownFields(t *testing.T) {
-	_, err := Load([]byte("namespace: amp\nuniverze: {}\n"))
+	_, err := Load([]byte(minimalSpec("") + "univerze: {}\n"))
 	if err == nil {
 		t.Fatal("Load accepted an unknown field")
 	}
@@ -76,18 +86,15 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 }
 
 func TestDefaults(t *testing.T) {
-	spec, err := Load([]byte("namespace: amp\nuniverse:\n  providerName: p\n" + testVersion))
+	spec, err := Load([]byte(minimalSpec("")))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if spec.ChartVersion != DefaultChartVersion {
 		t.Errorf("chartVersion = %q, want %q", spec.ChartVersion, DefaultChartVersion)
 	}
-	if spec.ChartSource != ChartRepo {
-		t.Errorf("chartSource = %q, want %q", spec.ChartSource, ChartRepo)
-	}
-	if spec.YBA.Chart != DefaultChartRepo {
-		t.Errorf("yba.chart = %q, want %q", spec.YBA.Chart, DefaultChartRepo)
+	if spec.ChartSource != DefaultChartSource {
+		t.Errorf("chartSource = %q, want %q", spec.ChartSource, DefaultChartSource)
 	}
 	if spec.UniverseName() != DefaultUniverseName {
 		t.Errorf("universeName = %q, want %q", spec.UniverseName(), DefaultUniverseName)
@@ -101,37 +108,36 @@ func TestValidate(t *testing.T) {
 		wantErr string
 	}{{
 		name:    "namespace is required",
-		yaml:    "universe:\n  numNodes: 3\n",
+		yaml:    strings.Replace(minimalSpec(""), "namespace: amp\n", "", 1),
 		wantErr: "namespace is required",
 	}, {
 		// RF 3 across 1 node cannot place replicas, and YBA would reject it
 		// asynchronously — much later and much less clearly.
 		name:    "numNodes below RF",
-		yaml:    "namespace: amp\nuniverse:\n  providerName: p\n  numNodes: 1\n  replicationFactor: 3\n",
+		yaml:    minimalSpec("    numNodes: 1\n    replicationFactor: 3\n"),
 		wantErr: "below replicationFactor",
 	}, {
-		name:    "even RF",
-		yaml:    "namespace: amp\nuniverse:\n  providerName: p\n  numNodes: 4\n  replicationFactor: 4\n",
-		wantErr: "not supported",
-	}, {
 		name:    "bad chart source",
-		yaml:    "namespace: amp\nchartSource: ftp\nuniverse:\n  providerName: p\n" + testVersion,
-		wantErr: "not one of repo, s3, path",
+		yaml:    "chartSource: ftp\n" + minimalSpec(""),
+		wantErr: "not one of repo, path",
+	}, {
+		// The s3 source only ever built a releases.yugabyte.com URL, which is
+		// an ordinary path to helm. A spec still saying it should be told
+		// what to write, not just that the value is unknown.
+		name:    "the retired s3 source names its replacement",
+		yaml:    "chartSource: s3\n" + minimalSpec(""),
+		wantErr: "use chartSource: path with yba.chart",
 	}, {
 		name:    "path source needs a chart",
-		yaml:    "namespace: amp\nchartSource: path\nuniverse:\n  providerName: p\n" + testVersion,
+		yaml:    "chartSource: path\n" + minimalSpec(""),
 		wantErr: "needs yba.chart",
 	}, {
-		// Neither a provider block nor a providerName: the auto-provider cannot
-		// supply the image registry, pull secret or storage class, so this has to
-		// be an error rather than a surprise on the cluster.
-		name:    "no provider at all",
-		yaml:    "namespace: amp\nuniverse:\n  numNodes: 1\n  replicationFactor: 1\n" + testVersion,
-		wantErr: "must name a preexisting provider",
+		name:    "no ybSoftwareVersion",
+		yaml:    "namespace: amp\nYBProvider:\n  name: p\n  spec: {}\nYBUniverse:\n  name: u\n  spec: {}\n",
+		wantErr: "ybSoftwareVersion is required",
 	}, {
 		name: "RF 1 single node is allowed",
-		yaml: "namespace: amp\nuniverse:\n  providerName: p\n" + testVersion +
-			"  numNodes: 1\n  replicationFactor: 1\n",
+		yaml: minimalSpec("    numNodes: 1\n    replicationFactor: 1\n"),
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Load([]byte(tc.yaml))
@@ -179,13 +185,13 @@ func loadExample(t *testing.T, name string) *Spec {
 // failed task tens of minutes into a bring-up.
 func TestExampleIsThreeNodeRF3WithPlacement(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	if got := universeInt(spec.Universe, "numNodes"); got != 3 {
+	if got := universeInt(spec.universe(), "numNodes"); got != 3 {
 		t.Errorf("numNodes = %d, want 3", got)
 	}
-	if got := universeInt(spec.Universe, "replicationFactor"); got != 3 {
+	if got := universeInt(spec.universe(), "replicationFactor"); got != 3 {
 		t.Errorf("replicationFactor = %d, want 3", got)
 	}
-	placement, ok := spec.Universe["placementInfo"].(map[string]any)
+	placement, ok := spec.universe()["placementInfo"].(map[string]any)
 	if !ok {
 		t.Fatal("the example declares no placementInfo")
 	}
@@ -195,7 +201,7 @@ func TestExampleIsThreeNodeRF3WithPlacement(t *testing.T) {
 		for _, z := range asList(region["zones"]) {
 			zone, _ := z.(map[string]any)
 			code, _ := zone["code"].(string)
-			if !providerZones(spec.Provider)[code] {
+			if !providerZones(spec.provider())[code] {
 				t.Errorf("placement zone %q is not one the provider defines", code)
 			}
 			n, _ := intField(zone, "numNodes")
@@ -217,7 +223,7 @@ func TestExampleIsThreeNodeRF3WithPlacement(t *testing.T) {
 // YBA rejects a CSV that does not cover them, and that is the right authority.
 func TestExampleSeedsTheMageGFlag(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	g, _ := spec.Universe["gFlags"].(map[string]any)
+	g, _ := spec.universe()["gFlags"].(map[string]any)
 	for _, role := range []string{"masterGFlags", "tserverGFlags"} {
 		flags, _ := g[role].(map[string]any)
 		if fmt.Sprint(flags["ysql_yb_enable_mage"]) != "true" {
@@ -240,24 +246,35 @@ func TestValidateRejectsAPlacementTheProviderCannotSatisfy(t *testing.T) {
 			"zones": []any{map[string]any{"code": zone, "numNodes": nodes}},
 		}}}
 	}
-	for _, tc := range []struct {
-		name, zone, want string
-		nodes            int
-	}{
-		{"zone the provider lacks", "us-west1-c", "the provider does not have", 3},
-		{"node count that does not add up", "us-west1-b", "does not add up", 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spec := loadExample(t, "amp.yaml")
-			spec.Universe["placementInfo"] = placement(tc.zone, tc.nodes)
-			err := spec.Validate()
-			if err == nil {
-				t.Fatal("Validate accepted a placement YBA would reject")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error %q does not say %q", err, tc.want)
-			}
-		})
+	spec := loadExample(t, "amp.yaml")
+	spec.universe()["placementInfo"] = placement("us-west1-c", 3)
+	err := spec.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted a placement naming a zone the provider does not define")
+	}
+	if !strings.Contains(err.Error(), "the provider does not have") {
+		t.Errorf("error %q does not say which zone is missing", err)
+	}
+}
+
+// TestValidateLeavesYBAsOwnRulesToYBA: which replication factors YBA supports,
+// and how it wants a placement to add up, are YBA's to decide and move between
+// releases. A copy of either here goes stale and starts rejecting specs YBA
+// would accept — the same argument that keeps the CRD schema check and the
+// preview-gflag check out of this package.
+//
+// This is here so the checks are not quietly reinstated: a removal needs a
+// test as much as an addition does.
+func TestValidateLeavesYBAsOwnRulesToYBA(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	spec.universe()["replicationFactor"] = 4
+	spec.universe()["numNodes"] = 4
+	spec.universe()["placementInfo"] = map[string]any{"regions": []any{map[string]any{
+		"code":  "us-west1",
+		"zones": []any{map[string]any{"code": "us-west1-b", "numNodes": 99}},
+	}}}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate second-guessed YBA: %v", err)
 	}
 }
 
@@ -292,10 +309,12 @@ func TestStorageClassesIncludesYugawareOwn(t *testing.T) {
 // the only explanation was a RuntimeException in the yugaware log.
 func TestValidateRejectsAnEmptyDBVersion(t *testing.T) {
 	for _, universe := range []string{
-		"  providerName: p\n",                          // absent
-		"  providerName: p\n  ybSoftwareVersion: \"\"", // explicitly empty
+		"{}",                        // absent
+		"{ybSoftwareVersion: \"\"}", // explicitly empty
 	} {
-		_, err := Load([]byte("namespace: amp\nuniverse:\n" + universe))
+		_, err := Load([]byte("namespace: amp\n" +
+			"YBProvider:\n  name: p\n  spec: {}\n" +
+			"YBUniverse:\n  name: u\n  spec: " + universe + "\n"))
 		if err == nil {
 			t.Fatalf("Load accepted a spec with no DB version: %q", universe)
 		}
@@ -310,12 +329,18 @@ func TestValidateRejectsAnEmptyDBVersion(t *testing.T) {
 // this too. Both are read off the same release line, which is what this pins.
 func TestExampleDBVersionMatchesTheChart(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	version := universeString(spec.Universe, "ybSoftwareVersion")
-	// 2026.1.1 -> 2026.1.1.1-b2: the release line has to agree, or the version
-	// is not one `ls /opt/yugabyte/releases` in that yugaware would print.
-	if !strings.HasPrefix(version, spec.ChartVersion+".") {
-		t.Errorf("ybSoftwareVersion %q is not on chartVersion %q's release line; the yugaware that "+
-			"chart installs bundles only its own release, so the universe would be created "+
+	version := universeString(spec.universe(), "ybSoftwareVersion")
+	// The yugaware a chart installs bundles only its own release, so the two
+	// have to agree or the universe is created against a version YBA does not
+	// have. How they agree depends on what chartVersion names:
+	//
+	//   a published line ("2026.1.1")  -> the DB version is ON it ("2026.1.1.2-b9")
+	//   a full build ("2026.1.2.0-b137") -> the chart's appVersion IS that build,
+	//                                       so the two are equal
+	onTheLine := strings.HasPrefix(version, spec.ChartVersion+".")
+	if version != spec.ChartVersion && !onTheLine {
+		t.Errorf("ybSoftwareVersion %q does not match chartVersion %q; the yugaware that chart "+
+			"installs bundles only its own release, so the universe would be created "+
 			"against a version YBA does not have", version, spec.ChartVersion)
 	}
 }
@@ -324,7 +349,7 @@ func TestExampleDBVersionMatchesTheChart(t *testing.T) {
 // that produced a plaintext universe with an sslmode=require DSN.
 //
 // Every default this deployer owns for the universe is applied at parse time,
-// so s.Universe and the rendered YBUniverse spec are the SAME map. Anything
+// so the YBUniverse entry's Spec and the rendered body are the SAME map. Anything
 // reading the Spec — Connect's sslMode, the storage-class preflight, Validate —
 // therefore sees exactly what the cluster gets. Move a default back into
 // rendering and this fails.
@@ -350,12 +375,12 @@ func TestTheSpecIsTheRenderedBody(t *testing.T) {
 	// Same key set, both ways: a field only the CR has is a default applied too
 	// late for a Spec reader to see, and one only the Spec has would be dropped.
 	for key := range cr.Spec {
-		if _, ok := spec.Universe[key]; !ok {
+		if _, ok := spec.universe()[key]; !ok {
 			t.Errorf("the CR has %q but the Spec does not: a default applied at render time is "+
 				"invisible to everything that reads the Spec", key)
 		}
 	}
-	for key := range spec.Universe {
+	for key := range spec.universe() {
 		if _, ok := cr.Spec[key]; !ok {
 			t.Errorf("the Spec has %q but the CR does not", key)
 		}
@@ -374,7 +399,7 @@ func TestLoadIsIdempotent(t *testing.T) {
 	first.withDefaults()
 	first.withDefaults()
 
-	overrides, _ := first.Universe["kubernetesOverrides"].(map[string]any)
+	overrides, _ := first.universe()["kubernetesOverrides"].(map[string]any)
 	eps := asList(overrides["serviceEndpoints"])
 	if len(eps) != 1 {
 		t.Errorf("serviceEndpoints has %d entries after repeated defaulting, want 1", len(eps))
@@ -383,9 +408,381 @@ func TestLoadIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	a, _ := json.Marshal(first.Universe)
-	b, _ := json.Marshal(second.Universe)
+	a, _ := json.Marshal(first.universe())
+	b, _ := json.Marshal(second.universe())
 	if string(a) != string(b) {
 		t.Errorf("defaulting twice differs from once:\n once: %s\ntwice: %s", b, a)
+	}
+}
+
+// TestATildePathIsExpandedInChartAndCrdPath pins the one thing that makes a
+// locally downloaded release usable from a spec written the way a person
+// writes a path.
+//
+// Neither Go, helm nor kubectl expands ~: a YAML value is not a shell word. So
+// before this, "~/yb/yugaware.tgz" was looked up as a directory literally named
+// "~" and the error named a path that visibly exists.
+func TestATildePathIsExpandedInChartAndCrdPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	spec, err := Load([]byte("chartSource: path\n" +
+		"crdPath: ~/yb/concatenated_crd.yaml\n" +
+		"yba:\n  chart: ~/yb/yugaware-2026.1.1.tgz\n" + minimalSpec("")))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if want := filepath.Join(home, "yb/yugaware-2026.1.1.tgz"); spec.YBA.Chart != want {
+		t.Errorf("yba.chart = %q, want %q", spec.YBA.Chart, want)
+	}
+	if want := filepath.Join(home, "yb/concatenated_crd.yaml"); spec.CRDPath != want {
+		t.Errorf("crdPath = %q, want %q", spec.CRDPath, want)
+	}
+}
+
+// TestOnlyALeadingTildeIsExpanded keeps the expansion from touching a chart
+// NAME, which is what yba.chart holds under chartSource repo, or a URL.
+func TestOnlyALeadingTildeIsExpanded(t *testing.T) {
+	for _, in := range []string{
+		"yugabytedb/yugaware",
+		"https://example.test/yugaware.tgz",
+		"/abs/~/yugaware.tgz",
+		"~user/yugaware.tgz",
+		"",
+	} {
+		if got := expandHome(in); got != in {
+			t.Errorf("expandHome(%q) = %q, want it untouched", in, got)
+		}
+	}
+}
+
+// TestLoadKeepsDocumentOrder is the contract the whole apply and teardown
+// order rests on: keys are applied top to bottom and deleted bottom to top, so
+// the order the file was written in has to survive parsing.
+//
+// Go randomises map iteration, so decoding the document into a map would pass
+// this once in a while and fail the rest of the time. It walks a yaml.Node
+// instead, and this is the test that catches a map creeping back in.
+func TestLoadKeepsDocumentOrder(t *testing.T) {
+	both := func(first, second string) []string {
+		spec, err := Load([]byte("namespace: amp\n" +
+			"YBProvider:\n  name: p\n  spec: {}\n" +
+			first + "\n" +
+			"YBUniverse:\n  name: u\n  spec:\n" + testVersion +
+			second + "\n"))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		var kinds []string
+		for _, r := range spec.Resources {
+			kinds = append(kinds, r.Kind)
+		}
+		return kinds
+	}
+	release := "Release:\n  name: r\n  spec: {}"
+	backup := "BackupSchedule:\n  name: b\n  spec: {}"
+
+	// Repeated, because a map would give the right answer some of the time.
+	for i := 0; i < 20; i++ {
+		if got := both(release, backup); !reflect.DeepEqual(got,
+			[]string{"YBProvider", "Release", "YBUniverse", "BackupSchedule"}) {
+			t.Fatalf("kinds = %v, want document order", got)
+		}
+		if got := both(backup, release); !reflect.DeepEqual(got,
+			[]string{"YBProvider", "BackupSchedule", "YBUniverse", "Release"}) {
+			t.Fatalf("kinds = %v, want the reordered document's order", got)
+		}
+	}
+}
+
+// TestUppercaseKeysAreCRKinds and TestLowercaseTyposAreStillParseErrors are
+// the two halves of the rule that lets any kind be declared without this
+// package knowing it.
+//
+// The case split is what keeps KnownFields working: without it a mistyped
+// `namespaec:` would quietly become a CR named "namespaec" instead of an
+// error, which is the worst failure shape there is.
+func TestUppercaseKeysAreCRKinds(t *testing.T) {
+	spec, err := Load([]byte(minimalSpec("") +
+		"KMSConfig:\n  name: kms\n  spec:\n    name: kms\n    provider: AWS\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	r := spec.find("KMSConfig")
+	if r == nil {
+		t.Fatal("KMSConfig was not read as a CR kind")
+	}
+	if r.Name != "kms" || r.Spec["provider"] != "AWS" {
+		t.Errorf("entry = %+v, want the body passed through", r)
+	}
+	// The kind's own spec.name must survive: it is required by this CRD.
+	if r.Spec["name"] != "kms" {
+		t.Errorf("spec.name = %v, want it kept", r.Spec["name"])
+	}
+}
+
+func TestLowercaseTyposAreStillParseErrors(t *testing.T) {
+	_, err := Load([]byte(minimalSpec("") + "namespaec: amp\n"))
+	if err == nil {
+		t.Fatal("Load accepted a lowercase typo")
+	}
+	if !strings.Contains(err.Error(), "namespaec") {
+		t.Errorf("error %q does not name the offending key", err)
+	}
+}
+
+// TestSeveralOfOneKindAsAList: two backup targets are an ordinary thing to
+// want, and a mapping key can only appear once.
+func TestSeveralOfOneKindAsAList(t *testing.T) {
+	spec, err := Load([]byte(minimalSpec("") +
+		"StorageConfig:\n" +
+		"  - name: backups\n    spec: {bucket: a}\n" +
+		"  - name: archive\n    spec: {bucket: b}\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var names []string
+	for _, r := range spec.Resources {
+		if r.Kind == "StorageConfig" {
+			names = append(names, r.Name)
+		}
+	}
+	if !reflect.DeepEqual(names, []string{"backups", "archive"}) {
+		t.Errorf("names = %v, want the list's own order", names)
+	}
+}
+
+func TestASingleEntryNeedNotBeAList(t *testing.T) {
+	spec, err := Load([]byte(minimalSpec("") + "Release:\n  name: r\n  spec: {version: v}\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if spec.count("Release") != 1 {
+		t.Fatalf("Release count = %d, want 1", spec.count("Release"))
+	}
+}
+
+func TestAnUnknownKeyInsideAnEntryIsAParseError(t *testing.T) {
+	_, err := Load([]byte(minimalSpec("") + "Release:\n  nmae: r\n  spec: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "nmae") {
+		t.Fatalf("err = %v, want it to name the misspelled key", err)
+	}
+}
+
+func TestACRValueMustBeAMapOrAListOfMaps(t *testing.T) {
+	for _, bad := range []string{
+		"Release: just-a-string\n",
+		"Release:\n  - just-a-string\n",
+	} {
+		_, err := Load([]byte(minimalSpec("") + bad))
+		if err == nil || !strings.Contains(err.Error(), "Release") {
+			t.Errorf("err = %v for %q, want it to name the kind", err, bad)
+		}
+	}
+}
+
+// TestLegacyKeysNameTheirReplacement: provider: and universe: were spec fields
+// until they became CR kinds like every other. KnownFields would reject them
+// anyway, but with "field not found", which does not tell you what to write.
+func TestLegacyKeysNameTheirReplacement(t *testing.T) {
+	for old, want := range map[string]string{"provider": "YBProvider", "universe": "YBUniverse"} {
+		_, err := Load([]byte("namespace: amp\n" + old + ":\n  name: x\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v for %q, want it to name %q", err, old, want)
+		}
+	}
+}
+
+// TestValidateStructure covers the rules about the CR set itself, each of
+// which is something the API server either accepts happily or rejects while
+// naming nothing the author can find in their file.
+func TestValidateStructure(t *testing.T) {
+	const prov = "YBProvider:\n  name: p\n  spec: {}\n"
+	const univ = "YBUniverse:\n  name: u\n  spec:\n" + testVersion
+
+	for _, tc := range []struct {
+		name, yaml, wantErr string
+	}{{
+		// A provider is optional: the operator has an auto-provider, and a
+		// universe can name one somebody else registered.
+		name: "no provider is fine",
+		yaml: "namespace: amp\n" + univ,
+	}, {
+		name:    "two providers",
+		yaml:    "namespace: amp\n" + prov + "YBProvider:\n  name: p2\n  spec: {}\n" + univ,
+		wantErr: "declared more than once",
+	}, {
+		name:    "no universe",
+		yaml:    "namespace: amp\n" + prov,
+		wantErr: "exactly one YBUniverse",
+	}, {
+		name:    "two universes",
+		yaml:    "namespace: amp\n" + prov + univ + "YBUniverse:\n  name: u2\n  spec: {}\n",
+		wantErr: "exactly one YBUniverse",
+	}, {
+		name:    "provider below universe",
+		yaml:    "namespace: amp\n" + univ + prov,
+		wantErr: "must be declared above",
+	}, {
+		name:    "an entry with no name",
+		yaml:    "namespace: amp\n" + prov + univ + "Release:\n  spec: {}\n",
+		wantErr: "name is required",
+	}, {
+		name:    "an entry with no spec",
+		yaml:    "namespace: amp\n" + prov + univ + "Release:\n  name: r\n",
+		wantErr: "spec is required",
+	}, {
+		name: "the same kind and name twice",
+		yaml: "namespace: amp\n" + prov + univ +
+			"StorageConfig:\n  - name: dup\n    spec: {}\n  - name: dup\n    spec: {}\n",
+		wantErr: "declared twice",
+	}, {
+		name: "several distinct extras are fine",
+		yaml: "namespace: amp\n" + prov + "Release:\n  name: r\n  spec: {}\n" + univ +
+			"StorageConfig:\n  - name: a\n    spec: {}\n  - name: b\n    spec: {}\n",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load([]byte(tc.yaml))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestChartVersionIsRequiredForTheRepoSource guards the rule against a future
+// change to withDefaults. It goes through Validate rather than Load because
+// the default is filled in first, so a spec cannot express the empty case.
+// TestTheDefaultChartIsResolvable: the default version and the default source
+// have to agree, and the pairing is easy to break one half at a time. The
+// repo source resolves a PUBLISHED version, and only released lines are
+// published — so a default naming a build would be a helm lookup that cannot
+// succeed.
+func TestTheDefaultChartIsResolvable(t *testing.T) {
+	spec, err := Load([]byte(minimalSpec("")))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if spec.ChartSource != ChartRepo {
+		t.Fatalf("the default chart source is %q; this test only knows how to check repo",
+			spec.ChartSource)
+	}
+	if len(strings.Split(spec.ChartVersion, ".")) > 3 {
+		t.Errorf("chartVersion %q is a build, and the repo source can only resolve a published "+
+			"line — a build is deployed by naming its tarball in yba.chart", spec.ChartVersion)
+	}
+	if spec.YBA.Chart == "" {
+		t.Error("the repo source needs a chart name")
+	}
+}
+
+func TestChartVersionIsRequiredForTheRepoSource(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	spec.ChartSource = ChartRepo
+	spec.ChartVersion = ""
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "chartVersion is required") {
+		t.Fatalf("err = %v, want it to require chartVersion", err)
+	}
+	spec.ChartSource = ChartPath
+	spec.YBA.Chart = "/tmp/chart.tgz"
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("a path source should not need a chartVersion: %v", err)
+	}
+}
+
+// TestNamesInTheBodyMustMatchTheEntry: metadata.name and the body's own name
+// field are different fields that both name the same object, and nothing
+// couples them — Render names the CR from the entry while YBA reads the body.
+//
+// Spelling them differently is the natural mistake when migrating from the old
+// provider:/universe: blocks, where the name lived in the body. Uncaught, it
+// burns the full universe timeout reporting "waiting for universe X to appear"
+// while X is healthy under the other name.
+func TestNamesInTheBodyMustMatchTheEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name, yaml, wantErr string
+	}{{
+		name: "universeName disagrees with the entry",
+		yaml: "namespace: amp\nYBProvider:\n  name: p\n  spec: {}\n" +
+			"YBUniverse:\n  name: foundation\n  spec:\n" + testVersion +
+			"    universeName: something-else\n",
+		wantErr: "spec.universeName says",
+	}, {
+		name: "providerName disagrees with the provider entry",
+		yaml: "namespace: amp\nYBProvider:\n  name: foundation\n  spec: {}\n" +
+			"YBUniverse:\n  name: u\n  spec:\n" + testVersion +
+			"    providerName: something-else\n",
+		wantErr: "providerName says",
+	}, {
+		name: "agreeing is fine",
+		yaml: "namespace: amp\nYBProvider:\n  name: foundation\n  spec: {}\n" +
+			"YBUniverse:\n  name: u\n  spec:\n" + testVersion +
+			"    universeName: u\n    providerName: foundation\n",
+	}, {
+		// No provider of our own: providerName names someone else's, and
+		// there is no entry to disagree with.
+		name: "a preexisting provider is not cross-checked",
+		yaml: "namespace: amp\nYBUniverse:\n  name: u\n  spec:\n" + testVersion +
+			"    providerName: shared-gke\n",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load([]byte(tc.yaml))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestKubectlNamesComeFromTheEntry: every lookup addresses metadata.name, so
+// the accessors have to return the entry's name rather than the body's.
+func TestKubectlNamesComeFromTheEntry(t *testing.T) {
+	spec, err := Load([]byte("namespace: amp\nYBProvider:\n  name: prov\n  spec: {}\n" +
+		"YBUniverse:\n  name: univ\n  spec:\n" + testVersion))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if spec.UniverseName() != "univ" {
+		t.Errorf("UniverseName = %q, want the entry's name", spec.UniverseName())
+	}
+	if spec.ProviderName() != "prov" {
+		t.Errorf("ProviderName = %q, want the entry's name", spec.ProviderName())
+	}
+}
+
+// TestPlacementIsNotCheckedAgainstAProviderWeDoNotDeclare: the zone check is a
+// cross-reference between two halves of the spec file, so it needs both
+// halves. With a preexisting provider the zones live in YBA, where nothing
+// here can see them — checking against an empty set rejected every zone with
+// "which the provider does not have (it has )".
+func TestPlacementIsNotCheckedAgainstAProviderWeDoNotDeclare(t *testing.T) {
+	placement := "    placementInfo:\n      regions:\n        - code: us-west1\n" +
+		"          zones:\n            - {code: us-west1-b, numNodes: 3}\n"
+
+	// No YBProvider: the placement is YBA's to judge.
+	if _, err := Load([]byte("namespace: amp\nYBUniverse:\n  name: u\n  spec:\n" +
+		testVersion + "    providerName: shared-gke\n" + placement)); err != nil {
+		t.Fatalf("a placement against a preexisting provider was rejected: %v", err)
+	}
+	// With one, the cross-reference is checkable and still checked.
+	_, err := Load([]byte("namespace: amp\n" +
+		"YBProvider:\n  name: p\n  spec:\n    regions:\n      - code: us-west1\n" +
+		"        zones:\n          - {code: us-west1-a}\n" +
+		"YBUniverse:\n  name: u\n  spec:\n" + testVersion + placement))
+	if err == nil || !strings.Contains(err.Error(), "the provider does not have") {
+		t.Fatalf("err = %v, want the zone mismatch", err)
 	}
 }

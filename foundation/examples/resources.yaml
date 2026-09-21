@@ -1,0 +1,134 @@
+# Any operator CR the chart ships, declared in one spec file.
+#
+# The bundle carries 12 kinds at chart 2026.1.1 and 15 at 2026.1.2. This
+# deployer owns two of them and can apply all of them: an UPPERCASE top-level
+# key is a CR kind, and its value is {name, spec} — name is metadata.name, spec
+# is the CR's spec body VERBATIM. Nothing here models a kind, so one shipped in
+# a future chart works the day its CRD does.
+#
+#   foundation validate -c examples/resources.yaml     # offline
+#   foundation render   -c examples/resources.yaml -o manifests/
+#
+# REMOVING a key deletes the object on the next `apply` — omission is deletion.
+# Only objects this deployer created are candidates, and `--no-prune` opts out.
+#
+# Four rules, and that is the whole vocabulary:
+#
+#   1. Uppercase key = CR kind. Lowercase = one of this deployer's own
+#      settings, still strictly checked, so `namespaec:` is an error.
+#   2. Order matters. Keys are applied TOP TO BOTTOM and deleted BOTTOM TO TOP,
+#      so put a thing above whatever references it. YBUniverse is required and
+#      every other kind is optional, but a YBProvider must come above it.
+#   3. A list under a key declares several objects of one kind.
+#   4. A CR's own spec.name (KMSConfig, PitrConfig and DrConfig require one) is
+#      a different field from the entry's name and is passed through untouched.
+#
+# An entry that references the universe — BackupSchedule, PitrConfig, a Backup —
+# belongs BELOW it, and wants the universe actually up: apply succeeds either
+# way, but YBA reconciles it asynchronously and reports the problem in
+# status.message, so the recovery is to re-apply once the universe is Ready.
+
+namespace: amp
+
+# An unpublished 2026.1.2 build, from the release bucket. It carries the
+# 15-kind CRD bundle — KMSConfig, TelemetryProvider and UniverseKeyRotation are
+# not in 2026.1.1's 12 — and a yugaware whose operator knows those kinds, which
+# installing the CRD alone would not give you.
+#
+# No crdPath: the build is tagged in yugabyte/charts, so chartVersion resolves
+# as a git ref too and the CRDs come from the same version as the chart.
+chartVersion: "2026.1.2.0-b137"
+chartSource: path
+
+yba:
+  # The release bucket is public for reads and helm fetches a URL directly, so
+  # an unpublished build needs no download step and no credentials.
+  chart: https://releases.yugabyte.com/2026.1.2.0-b137/helm/yugaware-2026.1.2.tgz
+  values:
+    rbac: {create: true}
+    image:
+      repository: quay.io/yugabyte/yugaware-itest
+      pullSecret: quay-pull-secret
+    yugaware:
+      defaultUser: {username: admin, email: amp@yugabyte.com, password: Password#123}
+      service: {type: ClusterIP}
+      storageClass: yb-standard
+
+YBProvider:
+  name: foundation
+  spec:
+    cloudInfo:
+      kubernetesProvider: gke
+      kubernetesImageRegistry: quay.io/yugabyte/yugabyte-itest
+    regions:
+      - code: us-west1
+        zones:
+          - code: us-west1-b
+            cloudInfo:
+              kubernetesStorageClass: yb-standard
+
+# Imports a DB release YBA does not already carry. OPTIONAL, and the common
+# case is to omit it: ybSoftwareVersion is usually the release the yugaware
+# image already bundles, which is what checkDBRelease verifies.
+#
+# YBA performs this download itself, from inside the yugaware pod, so the paths
+# must be reachable FROM THE CLUSTER — the CRD takes s3, gcs or http and there
+# is no local-file option. A release on your laptop is not reachable; the chart
+# and the CRD bundle are the ones that can be local (chartSource: path).
+# Exactly one source must supply each of x86_64 and helmChart.
+#
+# Above YBUniverse because the universe is created from the release.
+Release:
+  name: meko-db
+  spec:
+    config:
+      version: "2026.1.2.0-b137"
+      downloadConfig:
+        http:
+          paths:
+            x86_64: https://releases.example.test/2026.1.2.0-b137/yugabyte-2026.1.2.0-b137-linux-x86_64.tar.gz
+            helmChart: https://releases.example.test/2026.1.2.0-b137/helm/yugabyte-2026.1.2.tgz
+
+# Two backup targets, which is what the list form is for — a mapping key can
+# only appear once, so several objects of one kind go in a list and keep its
+# order.
+StorageConfig:
+  - name: backups
+    spec:
+      name: backups            # the CR's OWN spec.name, not the object's
+      config: {BACKUP_LOCATION: s3://example-test/backups}
+  - name: archive
+    spec:
+      name: archive
+      config: {BACKUP_LOCATION: s3://example-test/archive}
+
+# Encryption at rest — the motivating case for being able to declare any kind,
+# and unreachable before this: KMSConfig does not exist in the 2026.1.1 bundle.
+#
+# Above YBUniverse because the universe references it. Note spec.name: the CRD
+# REQUIRES one, and it is a different field from the entry's name above, which
+# is metadata.name.
+KMSConfig:
+  name: foundation-kms
+  spec:
+    name: foundation-kms
+    provider: AWS
+
+YBUniverse:
+  name: foundation
+  spec:
+    universeName: foundation
+    providerName: foundation
+    numNodes: 3
+    replicationFactor: 3
+    ybSoftwareVersion: "2026.1.2.0-b137"
+    placementInfo:
+      regions:
+        - code: us-west1
+          zones:
+            - code: us-west1-b
+              numNodes: 3
+    tserverVolume: {volumeSize: 100}
+
+databases:
+  - yb_storage

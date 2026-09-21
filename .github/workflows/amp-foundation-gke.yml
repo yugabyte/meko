@@ -45,6 +45,22 @@ on:
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      chart_version:
+        description: >-
+          Full yugaware build to deploy, e.g. 2026.1.2.0-b137. Its tarball is
+          downloaded from releases.yugabyte.com and handed to the deployer as
+          a local path, and the same string is the CRD bundle's git ref.
+          Empty deploys whatever the spec file names.
+        required: false
+        type: string
+      db_version:
+        description: >-
+          universe ybSoftwareVersion, overriding the spec. Leave empty with a
+          chart_version set and the chart's own appVersion is used, which is
+          the release its yugaware image bundles.
+        required: false
+        type: string
   pull_request:
     branches: [main]
     # No paths filter: the `/ci amp_deploy_gke_foundation` directive is the
@@ -274,6 +290,58 @@ jobs:
       # workflow carries them: YCP_ENABLED=1 means agent.enabled=true, which is a
       # YCP-managed environment, and one that ships no telemetry comes up DEGRADED
       # — which the reconcile smoke below asserts against.
+      # A dispatch can name a build the spec file does not. The deployer takes
+      # a spec and nothing else, so this writes one: the example with three
+      # values replaced, which FOUNDATION_SPEC then points at. Doing it here
+      # rather than with deployer flags keeps the YAML the only input.
+      #
+      # The release bucket is public, so the download is a plain curl — no
+      # credentials, and nothing in the deployer has to know where charts
+      # come from.
+      - name: Build a spec for this chart
+        if: inputs.chart_version != ''
+        env:
+          CHART_VERSION: ${{ inputs.chart_version }}
+          DB_VERSION: ${{ inputs.db_version }}
+        run: |
+          LINE=$(echo "$CHART_VERSION" | cut -d- -f1 | cut -d. -f1-3)
+          URL="https://releases.yugabyte.com/$CHART_VERSION/helm/yugaware-${LINE}.tgz"
+          echo "fetching $URL"
+          # LIST is denied on the bucket, so a build that does not exist
+          # answers 403 rather than 404 — --fail turns either into a named
+          # failure here instead of helm choking on an XML error document.
+          curl -fsSL -o /tmp/yugaware.tgz "$URL" || {
+            echo "::error::$URL is not fetchable (403 here usually means the build does not exist)"
+            exit 1
+          }
+
+          # The DB release a yugaware has is decided by its image, which the
+          # chart pins with appVersion — so the chart is the authority on what
+          # the universe may ask for. Without this, naming only a chart runs
+          # it against the spec's DB version and the release check fails
+          # twenty minutes in, correctly but expensively.
+          if [ -z "$DB_VERSION" ]; then
+            CHART_YAML=$(tar tzf /tmp/yugaware.tgz | grep -m1 -E '^[^/]+/Chart.yaml$')
+            DB_VERSION=$(tar xzOf /tmp/yugaware.tgz "$CHART_YAML" \
+              | awk '/^appVersion:/{print $2}' | tr -d '"')
+            [ -n "$DB_VERSION" ] || { echo "::error::no appVersion in $CHART_YAML"; exit 1; }
+            echo "db_version not given; using the chart's appVersion $DB_VERSION"
+          fi
+
+          # Written next to the example so the `foundation down` step, which
+          # resolves FOUNDATION_SPEC relative to the repo root, finds it too.
+          # One line rather than a heredoc: this is inside an indented YAML
+          # block, and a heredoc body would carry that indentation into the
+          # Python source.
+          OUT=foundation/examples/.ci-dispatch.yaml
+          CHART_VERSION="$CHART_VERSION" DB_VERSION="$DB_VERSION" OUT="$OUT" python3 -c 'import os,sys,yaml; s=yaml.safe_load(open(sys.argv[1])); s["chartVersion"]=os.environ["CHART_VERSION"]; s["chartSource"]="path"; s.setdefault("yba",{})["chart"]="/tmp/yugaware.tgz"; s["YBUniverse"]["spec"]["ybSoftwareVersion"]=os.environ["DB_VERSION"]; yaml.safe_dump(s,open(os.environ["OUT"],"w"),sort_keys=False)' "$FOUNDATION_SPEC"
+
+          # Proves the generated spec parses before a 25-minute bring-up
+          # depends on it.
+          (cd foundation && go run ./cmd/foundation validate -c "../$OUT")
+          echo "FOUNDATION_SPEC=$OUT" >> "$GITHUB_ENV"
+          echo "chart=$CHART_VERSION db=$DB_VERSION spec=$OUT"
+
       - name: Deploy on the operator foundation (up-gke.sh)
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
@@ -378,7 +446,15 @@ jobs:
           # clear it. One left behind after `down` means the namespace can never
           # finish Terminating — unrecoverable, and NS is per-PR, so the next
           # push would land on it.
-          LEFT=$(kubectl -n "$NS" get ybuniverse,ybprovider -o name 2>/dev/null || true)
+          # Every kind the operator has, not just the two this deployer used
+          # to be able to declare: a spec can now name any of them, so a
+          # leaked StorageConfig or KMSConfig strands the namespace exactly
+          # like a leaked universe would, and naming two kinds here made that
+          # invisible.
+          KINDS=$(kubectl api-resources --api-group=operator.yugabyte.io \
+            --namespaced=true -o name 2>/dev/null | paste -sd, -)
+          [ -n "$KINDS" ] || { echo "::error::could not list operator.yugabyte.io kinds"; exit 1; }
+          LEFT=$(kubectl -n "$NS" get "$KINDS" -o name 2>/dev/null || true)
           if [ -n "$LEFT" ]; then
             echo "::error::foundation down left CRs behind; their finalizers will strand $NS:"
             echo "$LEFT"
@@ -441,16 +517,43 @@ jobs:
       - name: Teardown
         if: always()
         run: |
-          # The provider carries a finalizer too, and it is deleted after the
-          # universe that references it.
-          for KIND in ybuniverse ybprovider; do
+          # Every operator kind, not just the two a spec used to be able to
+          # declare: a leaked StorageConfig or KMSConfig strands the namespace
+          # exactly like a leaked universe would, and it is this step — not
+          # `foundation down`, which a failed run never reaches — that is the
+          # belt-and-braces path before the helm uninstall and the namespace
+          # delete below.
+          #
+          # Ordered so the universe goes first and the provider last, the same
+          # reason `down` has: the operator deletes the DB before its RBAC
+          # disappears, and the provider can only go once the universe
+          # referencing it has. Everything else is a registration in between.
+          KINDS=$(kubectl api-resources --api-group=operator.yugabyte.io \
+            --namespaced=true -o name 2>/dev/null | grep -vxE 'ybuniverses|ybproviders' | tr '\n' ' ')
+          #
+          # Six minutes, not two: deleting a Ready universe is a YBA task, and
+          # a budget shorter than the task guarantees the warning below on
+          # every failed run rather than only on a genuinely stuck one.
+          for KIND in ybuniverses $KINDS ybproviders; do
             kubectl -n "$NS" delete "$KIND" --all --wait=false --ignore-not-found || true
-            for _ in $(seq 1 24); do
+            for _ in $(seq 1 72); do
               kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q . || break
               sleep 5
             done
-            kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q . \
-              && echo "::warning::a $KIND is still present; its finalizer may strand the namespace"
+            # Last resort, and deliberately destructive. Only the operator can
+            # clear its finalizer, so anything still holding one here will hold
+            # it forever — the namespace never finishes Terminating, and NS is
+            # derived from the PR number, so EVERY later run on this PR dies on
+            # a namespace it cannot create into. Orphaning whatever the
+            # finalizer was tearing down is the lesser harm: the namespace is
+            # going away regardless, and this runs only on the way out.
+            if kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q .; then
+              echo "::warning::$KIND still present after 6m; removing its finalizer so the namespace can drain"
+              for OBJ in $(kubectl -n "$NS" get "$KIND" -o name); do
+                kubectl -n "$NS" patch "$OBJ" --type merge \
+                  -p '{"metadata":{"finalizers":null}}' || true
+              done
+            fi
           done
 
           helm -n "$NS" uninstall yb-amp-controller || true

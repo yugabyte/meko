@@ -54,8 +54,20 @@ func (d *Deployer) Down(ctx context.Context, opts DownOptions) error {
 	fail := func(format string, args ...any) {
 		errs = append(errs, fmt.Sprintf(format, args...))
 	}
+	// Set when a CR could not be deleted, which is the one failure that makes
+	// carrying on worse than stopping — see the guard before the uninstall.
+	stuck := false
 
-	// The tserver Service is NOT deleted here. It is a Namespaced-scope
+	// Reverse of the apply order, which is the order the spec was written in.
+	// That gives the universe first and the provider last for free, and both
+	// positions matter: the operator has to delete the DB before the helm
+	// uninstall takes its RBAC away, and the provider can only go once the
+	// universe referencing it has. Everything between them is a registration
+	// the universe may hold — a KMSConfig, a StorageConfig, the Release it was
+	// created from — which YBA refuses to drop while the universe is still
+	// there. Nothing here names a kind: the ordering is the author's.
+	//
+	// The tserver Service is NOT deleted. It is a Namespaced-scope
 	// serviceEndpoint, which the chart deliberately does not own: it is shared
 	// across releases (only the owning release re-renders it —
 	// `yugabyte.should_render_service`) and carries helm.sh/resource-policy:
@@ -67,25 +79,88 @@ func (d *Deployer) Down(ctx context.Context, opts DownOptions) error {
 	//
 	// The foundation CI asserts it is gone afterwards, so if YBA turns out not
 	// to reclaim it, the run says so rather than leaking silently.
-	d.log("deleting YBUniverse %s", d.spec.UniverseName())
-	if err := d.deleteCR(ctx, "ybuniverse", d.spec.UniverseName(), opts.FinalizerTimeout); err != nil {
-		fail("%v", err)
+	manifests, err := d.spec.Render()
+	if err != nil {
+		// Returned, not collected. Everything below removes the operator —
+		// the helm uninstall, then its cluster RBAC — and with nothing
+		// deleted first that strands a finalizer on every CR the spec
+		// declares, which is the exact case deleteCR exists to prevent. A
+		// spec that loads can still fail to render, so this is reachable:
+		// `down` would be destructive rather than merely failed.
+		return fmt.Errorf("foundation down: render the spec to know what to delete: %w", err)
+	}
+	for i := len(manifests) - 1; i >= 0; i-- {
+		m := manifests[i]
+		d.log("deleting %s", m)
+		if err := d.deleteCR(ctx, m, opts.FinalizerTimeout); err != nil {
+			fail("%v", err)
+			stuck = true
+		}
 	}
 
-	// The provider goes after the universe (which references it) and before the
-	// helm uninstall, for the same finalizer reason: only the operator can clear
-	// it, so removing the operator first strands it — and a stranded finalizer
-	// on a namespaced object is what leaves a namespace Terminating forever.
+	// Then anything else we own. Teardown cannot delete only what the CURRENT
+	// spec renders: a CR an earlier spec created and this one dropped is
+	// still on the cluster (prune is skippable with --no-prune, and can fail),
+	// and the helm uninstall below would take the operator holding its
+	// finalizer — leaving the namespace permanently Terminating.
 	//
-	// Only one we created. A spec that just NAMES a provider shares it with
-	// every other universe on the cluster, and deleting that would take them
-	// with it.
-	if len(d.spec.Provider) > 0 {
-		name := d.spec.ProviderName()
-		d.log("deleting YBProvider %s", name)
-		if err := d.deleteCR(ctx, "ybprovider", name, opts.FinalizerTimeout); err != nil {
-			fail("%v", err)
+	// Same labelled query prune uses, so this owns no kinds either. A
+	// discovery failure is collected rather than returned: every rendered CR
+	// has at least been ASKED to go by here (a delete that failed or timed
+	// out was collected above, so some may still be present), and carrying on
+	// to the uninstall is better than leaving the release installed on top of
+	// them.
+	if kinds, err := d.operatorKinds(ctx); err != nil {
+		fail("%v", err)
+	} else if strays, err := d.ownedObjects(ctx, kinds); err != nil {
+		fail("%v", err)
+	} else {
+		rendered := make(map[string]bool, len(manifests))
+		for _, m := range manifests {
+			rendered[m.String()] = true
 		}
+		// Every delete is issued before any of them is waited on, for the
+		// reason prune gives: these are gone from the spec, so there is no
+		// declared order left, and two of them can still reference each
+		// other. Waiting on one at a time would block on a live reference
+		// for the whole FinalizerTimeout and then uninstall the operator
+		// with the pair still there.
+		var pending []Manifest
+		for _, m := range sortedByNameDesc(strays) {
+			if rendered[m.String()] {
+				continue
+			}
+			d.log("deleting %s, which this spec no longer declares", m)
+			if err := d.requestDelete(ctx, m); err != nil {
+				fail("%v", err)
+				stuck = true
+				continue
+			}
+			pending = append(pending, m)
+		}
+		for _, m := range pending {
+			if err := d.awaitGone(ctx, m, opts.FinalizerTimeout); err != nil {
+				fail("%v", err)
+				stuck = true
+			}
+		}
+	}
+
+	// A CR that did not go still holds a finalizer only the operator can
+	// clear, so uninstalling now is what turns a failed teardown into an
+	// unrecoverable namespace: nothing is left that can ever release it, and
+	// a namespace being deleted then sits Terminating forever.
+	//
+	// Leaving the release installed is recoverable by comparison — the
+	// operator keeps working on the finalizer, and `down` is idempotent, so
+	// re-running it finishes the job once whatever blocked it is resolved.
+	// Errors are otherwise collected rather than returned precisely so a
+	// partial failure does not leave the release behind; this is the one case
+	// where leaving it behind is the better outcome.
+	if stuck {
+		errs = append(errs, "left the helm release and its cluster RBAC in place: a CR above "+
+			"still holds a finalizer, and only the operator in that release can clear it")
+		return fmt.Errorf("foundation down: %s", strings.Join(errs, "; "))
 	}
 
 	release := d.spec.HelmRelease()
@@ -140,32 +215,49 @@ func (d *Deployer) Down(ctx context.Context, opts DownOptions) error {
 //
 // --wait=false plus an explicit poll rather than a blocking delete, so the
 // timeout is ours and its message can say what a stuck finalizer means.
-func (d *Deployer) deleteCR(ctx context.Context, kind, name string, timeout time.Duration) error {
-	res, err := d.kubectl(ctx, nil, "delete", kind, name, "--ignore-not-found", "--wait=false")
+func (d *Deployer) deleteCR(ctx context.Context, m Manifest, timeout time.Duration) error {
+	if err := d.requestDelete(ctx, m); err != nil {
+		return err
+	}
+	return d.awaitGone(ctx, m, timeout)
+}
+
+// requestDelete asks for the object to go, without waiting.
+//
+// Split from the wait so a caller with several objects and no dependency
+// order between them can issue every delete first — see prune.
+func (d *Deployer) requestDelete(ctx context.Context, m Manifest) error {
+	res, err := d.kubectl(ctx, m.JSON, "delete", "-f", "-", "--ignore-not-found", "--wait=false")
 	if err != nil {
 		return err
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("delete %s %s: %s", kind, name, strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("delete %s: %s", m, strings.TrimSpace(res.Stderr))
 	}
+	return nil
+}
 
+// awaitGone polls until the object is really gone, which is not the same as
+// the delete being accepted: the operator's finalizer holds it until whatever
+// it was tearing down is finished.
+func (d *Deployer) awaitGone(ctx context.Context, m Manifest, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(d.pollInterval)
 	defer ticker.Stop()
 	for {
-		present, err := d.crPresent(ctx, kind, name)
+		present, err := d.crPresent(ctx, m)
 		if err != nil {
 			return err
 		}
 		if !present {
-			d.log("%s %s is gone", kind, name)
+			d.log("%s is gone", m)
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s %s still present after %s; its finalizer has not cleared "+
+			return fmt.Errorf("%s still present after %s; its finalizer has not cleared "+
 				"(the operator may be unable to delete it — check its logs before removing the "+
 				"finalizer by hand, which orphans whatever it was still tearing down)",
-				kind, name, timeout)
+				m, timeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -179,8 +271,8 @@ func (d *Deployer) deleteCR(ctx context.Context, kind, name string, timeout time
 // than an error — it is what the caller is waiting for. Anything else (no such
 // CRD, no permission, unreachable cluster) is a real failure, because reading it
 // as absence would report a leaked CR as reclaimed.
-func (d *Deployer) crPresent(ctx context.Context, kind, name string) (bool, error) {
-	res, err := d.kubectl(ctx, nil, "get", kind, name, "-o", "name")
+func (d *Deployer) crPresent(ctx context.Context, m Manifest) (bool, error) {
+	res, err := d.kubectl(ctx, m.JSON, "get", "-f", "-", "-o", "name")
 	if err != nil {
 		return false, err
 	}
@@ -190,7 +282,7 @@ func (d *Deployer) crPresent(ctx context.Context, kind, name string) (bool, erro
 	if strings.Contains(res.Stderr, "NotFound") || strings.Contains(res.Stderr, "not found") {
 		return false, nil
 	}
-	return false, fmt.Errorf("get %s %s: %s", kind, name, strings.TrimSpace(res.Stderr))
+	return false, fmt.Errorf("get %s: %s", m, strings.TrimSpace(res.Stderr))
 }
 
 // deleteNamespace removes the namespace, but only one this package created.
@@ -207,7 +299,7 @@ func (d *Deployer) deleteNamespace(ctx context.Context) error {
 	if res.ExitCode != 0 {
 		return nil // already gone
 	}
-	if got := strings.TrimSpace(res.Stdout); got != "meko-foundation" {
+	if got := strings.TrimSpace(res.Stdout); got != ManagedByValue {
 		return fmt.Errorf("refusing to delete namespace %s: it is not foundation-managed "+
 			"(app.kubernetes.io/managed-by=%q), so it may hold workloads this deployer did not create",
 			d.spec.Namespace, got)

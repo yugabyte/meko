@@ -95,10 +95,19 @@ why — the object graph, the ordering constraints, the address contract, what i
 deliberately absent — is [`foundation/ARCHITECTURE.md`](foundation/ARCHITECTURE.md). The
 bullets below are the things a reader would otherwise re-derive the hard way.
 
+`examples/amp.yaml` deploys the **unpublished build `2026.1.2.0-b137`**, for the 15-kind
+CRD bundle. There is no special chart source for that: `releases.yugabyte.com` is public
+for reads and helm fetches a chart from a URL, so it is `chartSource: path` with the
+tarball's URL in `yba.chart` — nothing to download first, no credentials. The defaults
+stay on the newest published line under `repo`, the only pairing that works with nothing
+else set. The spec file is the deployer's **only** input — deploying a different build
+means a different spec, which is what the foundation workflow's `chart_version` dispatch
+writes for itself.
+
 **The spec file is the source of truth and an update is a re-apply of it.** `render` emits the
-`YBProvider` and `YBUniverse` CRs and applies nothing, which is what makes a
-change reviewable as a manifest diff and the output consumable by GitOps. Nothing wraps the
-CR in a REST API or a task system, deliberately: it is already a declarative surface with
+CRs and applies nothing, which is what makes a change reviewable as a manifest diff and the
+output consumable by GitOps. Omission is deletion: removing a key deletes the object on the
+next `apply`. Nothing wraps the CR in a REST API or a task system, deliberately: it is already a declarative surface with
 server-side apply and a status the operator reconciles level-triggered.
 
 ```bash
@@ -120,17 +129,24 @@ cluster with them.
 Things a reader will otherwise re-derive the hard way:
 
 - **The Spec IS the rendered body.** Every universe default this deployer owns is applied
-  at parse time (`Spec.universeDefaults`), so `s.Universe` and the `YBUniverse` spec are
-  the same map and anything reading the Spec sees what the cluster gets. When those
-  defaults were applied at render time instead, `sslMode` read the raw map, missed
+  at parse time (`Spec.universeDefaults`), so the `YBUniverse` entry's `Spec` and the
+  rendered body are the same map and anything reading the Spec sees what the cluster gets.
+  When those defaults were applied at render time instead, `sslMode` read the raw map, missed
   `enableClientToNodeEncrypt`, fell back to the CRD's `true` and emitted `sslmode=require`
   against a universe rendered with TLS off. `TestTheSpecIsTheRenderedBody` compares the
   two key sets so a default cannot drift back. The one exception is the provider's
   `kubeNamespace`, which defaults from `s.Namespace` — overridden by `--namespace` *after*
   `Load` — so `providerSpec` fills it in at render time on a deep copy.
-- **`spec.provider` and `spec.universe` are the CR spec bodies VERBATIM.** Nothing is
-  modelled as Go structs, so every field the pinned release has is reachable and a new
-  operator release needs no code change. Nothing re-checks them against the CRD's schema
+- **Every CR is a top-level key naming its KIND**, whose value is `{name, spec}` — `name` is
+  `metadata.name`, `spec` is the CR's spec body VERBATIM, and a list under the key declares
+  several objects of one kind. `YBProvider` and `YBUniverse` are two such keys and nothing
+  more (only `YBUniverse` is required), so any of the bundle's kinds — 12 at chart 2026.1.1,
+  15 at 2026.1.2, which `examples/amp.yaml` now deploys — is reachable with no code change. An UPPERCASE-initial key is a kind and everything else must be a Spec field,
+  which is what keeps `KnownFields` on for the settings — with free-form keys a mistyped
+  `namespaec:` would become a CR rather than an error. **Key order is apply order** and
+  teardown is its reverse, so `Load` walks a `yaml.Node` rather than decoding into a map.
+  Nothing is modelled as Go structs, so every field the pinned release has is reachable and a
+  new operator release needs no code change. Nothing re-checks them against the CRD's schema
   either: `kubectl apply` sends strict field validation, so the API server rejects an
   undeclared field, a wrong type and a bad enum on its own —
 
@@ -143,10 +159,10 @@ Things a reader will otherwise re-derive the hard way:
   say the same thing slightly earlier, which is not a trade worth making. What `Validate`
   does check is only what no schema can express — YBA's own rules, which it enforces
   asynchronously inside the operator with nothing written back to the CR.
-- **A provider CR is not optional in practice, and its storage class wins.** The operator
-  has an auto-provider, but a Kubernetes provider is what carries the DB image registry
-  and the per-zone storage class — neither of which the auto-provider can infer, and on
-  itest-dev both are non-default (`quay.io/yugabyte/yugabyte-itest`, `yb-standard`). The
+- **A `YBProvider` is optional, and its storage class wins.** The operator has an
+  auto-provider, and a universe can name one somebody else registered — but a Kubernetes
+  provider is what carries the DB image registry and the per-zone storage class, neither
+  of which the auto-provider can infer, and on itest-dev both are non-default (`quay.io/yugabyte/yugabyte-itest`, `yb-standard`). The
   zone's `kubernetesStorageClass` takes precedence over the universe's own, per the CRD.
   The pull secret is on neither: see the bullet below.
 - **Three storage classes can be in play and they are not the same one.** The provider's
@@ -156,10 +172,17 @@ Things a reader will otherwise re-derive the hard way:
   `Immediate`-binding class provisions the disk first and zone-pins the ~4.5 CPU yugaware
   pod before it can schedule.
 - **`placementInfo` is declared, and its zone codes must be ones the provider defines.**
-  YBA rejects a mismatch, and a bad placement or a per-zone count that does not sum to
-  `numNodes` surfaces as a failed task tens of minutes into a bring-up — so `Validate`
-  checks both offline. itest-dev is single-zone, so the example places all three RF3 nodes
+  YBA rejects a mismatch as a failed task tens of minutes into a bring-up, and it is a
+  cross-reference between two halves of the same file, so `Validate` checks it offline.
+  Whether the per-zone counts add up, and which replication factors are supported, are YBA's
+  own rules and are deliberately NOT mirrored here — a copy goes stale and starts rejecting
+  specs YBA would take. itest-dev is single-zone, so the example places all three RF3 nodes
   in `us-west1-b`.
+- **`apply` prunes.** Anything carrying `app.kubernetes.io/managed-by=meko-foundation` in the
+  namespace that the spec no longer declares is deleted, after the universe settles. The
+  candidate kinds come from `kubectl api-resources`, not from a list in Go, so nothing here
+  needs keeping in step with the bundle. The label is the ownership boundary — a CR somebody
+  else created is never touched — and `--no-prune` opts out.
 - **The MAGE gflag is seeded at CREATE, and drags a second gflag with it.**
   `ysql_yb_enable_mage` is a start-time gflag on both the master and the tserver — the
   extension will not install without it and turning it on later is a rolling restart — and

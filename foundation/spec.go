@@ -16,10 +16,18 @@
 //
 // # The spec IS the CRs
 //
-// `provider:` and `universe:` are the YBProvider and YBUniverse `spec` bodies
-// VERBATIM, and `yba.values:` is yugaware chart values verbatim. None of the
-// three is a translated subset: this package defaults a few keys and validates
-// a few, and does not own the field list.
+// Every CR is a top-level key naming its KIND, whose value is {name, spec}:
+// name is metadata.name and spec is the CR's spec body VERBATIM. YBProvider and
+// YBUniverse are two such keys and nothing more, so any kind in the operator's
+// bundle is reachable the day its CRD ships. `yba.values:` is yugaware chart
+// values verbatim on the same principle. None is a translated subset: this
+// package defaults a few keys and validates a few, and does not own the field
+// list.
+//
+// An UPPERCASE-initial key is a kind; everything else must be one of the Spec's
+// own fields. That split is what keeps KnownFields on for the settings — with
+// free-form keys a mistyped `namespaec:` would become a CR rather than an
+// error. Key order is apply order, and teardown is its reverse.
 //
 // The alternative is what it replaces — a Go struct per CR mapped field by
 // field, extended every time someone needs a field nobody modelled, and
@@ -39,16 +47,29 @@
 package foundation
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+
+	"meko/foundation/ybuniverse"
 )
 
 // Defaults, shared by the examples and the golden-file tests.
 const (
+	// The default is the newest PUBLISHED line, because it is the only thing
+	// that works with no other field set. A build is deployed by naming its
+	// tarball in yba.chart, which is a choice the spec has to make explicitly
+	// — see examples/amp.yaml.
 	DefaultChartVersion = "2026.1.1"
+	DefaultChartSource  = ChartRepo
 	DefaultChartRepo    = "yugabytedb/yugaware"
 	DefaultUniverseName = "foundation"
 	DefaultProviderName = "foundation"
@@ -79,6 +100,11 @@ const (
 	// override took.
 	TServerEndpointName = "yb-tserver-conn"
 
+	// KindRelease is the one kind name this package knows beyond the two it is
+	// built around, and only because checkDBRelease has to ask whether the
+	// spec imports a release of its own.
+	KindRelease = "Release"
+
 	// TServerServiceLabels finds that Service. It is DISCOVERED, not named,
 	// and the reason is worth stating because the name looks predictable and
 	// is not: a Namespaced-scope endpoint is named
@@ -102,11 +128,14 @@ const (
 	// ChartRepo pulls from the public helm repo, which carries RELEASED
 	// versions only.
 	ChartRepo ChartSource = "repo"
-	// ChartS3 pulls the release tarball, which is the only place unreleased
-	// itest builds exist (the path ampqa's apps/ybastack uses).
-	ChartS3 ChartSource = "s3"
-	// ChartPath is a local tarball or directory — air-gapped runs, and a chart
-	// under test.
+	// ChartPath is whatever helm takes: a tarball, an unpacked chart
+	// directory, or a URL.
+	//
+	// There is deliberately no separate source for the release bucket. An
+	// unreleased build lives at a releases.yugabyte.com URL (the path ampqa's
+	// apps/ybastack uses), that bucket is public for reads, and helm fetches
+	// a URL itself — so it is a path like any other, and a second enum value
+	// would only be a second name for the same thing.
 	ChartPath ChartSource = "path"
 )
 
@@ -124,27 +153,36 @@ type Spec struct {
 
 	YBA YBASpec `yaml:"yba"`
 
-	// Provider is YBProvider.spec verbatim, plus a `name` key for the object's
-	// metadata.
-	//
-	// A k8s provider carries what the operator's auto-provider cannot infer and
-	// what the universe cannot override: the DB image registry (k8s universes
-	// pull the DB image from a registry rather than a release tarball), its pull
-	// secret, and the per-zone storage class — which takes PRECEDENCE over any
-	// storageClass on the universe's volumes, so this is where a storage class
-	// actually gets decided.
-	//
-	// Empty means "use a preexisting provider", and then universe.providerName
-	// must name it.
-	Provider map[string]any `yaml:"provider"`
-
-	// Universe is YBUniverse.spec verbatim. See the package doc.
-	Universe map[string]any `yaml:"universe"`
-
 	// Databases are created after the universe reports Ready. The amp
 	// controller's db.Connect targets yb_storage AT STARTUP, so it must exist
 	// before the controller rolls out.
 	Databases []string `yaml:"databases"`
+
+	// Resources is every operator CR the spec declares, IN DOCUMENT ORDER.
+	//
+	// A slice rather than a map keyed by kind, because apply order is the order
+	// written and delete order is its reverse, and Go's map iteration would
+	// lose both. Filled by Load from the uppercase top-level keys; never a yaml
+	// field of its own.
+	Resources []Resource `yaml:"-"`
+}
+
+// Resource is one operator CR: the kind it was declared under, the object's
+// name, and a spec body passed through exactly as written.
+//
+// Name is separate from Spec rather than lifted out of it, because spec.name is
+// a REQUIRED field of KMSConfig, PitrConfig and DrConfig and a real field of
+// StorageConfig and BackupSchedule. Folding the object name into the body would
+// collide with the CR's own.
+type Resource struct {
+	Kind string         `yaml:"-"`
+	Name string         `yaml:"name"`
+	Spec map[string]any `yaml:"spec"`
+
+	// specGiven records whether the file actually had a `spec:` key, which
+	// Validate needs: the universe's own defaults are written into Spec before
+	// Validate runs, so emptiness alone can no longer tell.
+	specGiven bool `yaml:"-"`
 }
 
 // YBASpec configures the yugaware (YBA) control plane install.
@@ -165,17 +203,48 @@ type YBASpec struct {
 
 // Load parses a Spec from YAML and fills in defaults.
 //
-// KnownFields is on for the Spec's own keys, so a typo in `namespace` or
-// `chartVersion` is an error rather than a silently ignored field. It
-// deliberately does not reach inside provider/universe/values, which are
-// passthrough — a typo there is caught by the API server on apply.
+// A top-level key whose first letter is UPPERCASE is an operator CR kind and
+// its value is passed through; anything else must be one of the Spec's own
+// fields. That split is what lets any CRD in the bundle be declared without
+// this package knowing the kind, while keeping KnownFields on for the
+// settings — so a typo in `namespace` is still an error rather than a silently
+// ignored key that would otherwise become a CR named "namespaec".
+//
+// It reaches a node at a time rather than decoding the whole document into a
+// map, because the map would lose the key order that apply and delete both
+// depend on.
 func Load(data []byte) (*Spec, error) {
-	var s Spec
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&s); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse spec: %w", err)
 	}
+	root := mappingRoot(&doc)
+	if root == nil {
+		return nil, fmt.Errorf("parse spec: expected a YAML mapping at the top level")
+	}
+
+	settings := &yaml.Node{Kind: yaml.MappingNode}
+	var s Spec
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, value := root.Content[i], root.Content[i+1]
+		if replacement, ok := renamedKeys[key.Value]; ok {
+			return nil, fmt.Errorf("parse spec: %q is no longer a spec field — declare it as the "+
+				"CR kind %q, whose value is {name, spec}", key.Value, replacement)
+		}
+		if !isCRKind(key.Value) {
+			settings.Content = append(settings.Content, key, value)
+			continue
+		}
+		entries, err := decodeResources(key.Value, value)
+		if err != nil {
+			return nil, fmt.Errorf("parse spec: %w", err)
+		}
+		s.Resources = append(s.Resources, entries...)
+	}
+	if err := strictDecode(settings, &s); err != nil {
+		return nil, fmt.Errorf("parse spec: %w", err)
+	}
+
 	s.withDefaults()
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -183,37 +252,209 @@ func Load(data []byte) (*Spec, error) {
 	return &s, nil
 }
 
+// renamedKeys are the two spec fields that became CR kinds, kept so the
+// migration is a message naming the replacement rather than a bare "field not
+// found".
+var renamedKeys = map[string]string{
+	"provider": ybuniverse.KindProvider,
+	"universe": ybuniverse.KindUniverse,
+}
+
+// mappingRoot unwraps the document node, returning nil for anything that is
+// not a mapping — an empty file included.
+func mappingRoot(doc *yaml.Node) *yaml.Node {
+	node := doc
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		node = node.Content[0]
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	return node
+}
+
+// isCRKind reports whether a top-level key names an operator CR rather than a
+// setting.
+//
+// Case is the whole rule: every field of Spec is lowerCamel and every kind in
+// the operator's bundle is UpperCamel, so this needs no list of kinds — which
+// is the point, since a kind shipped in a future chart has to work with no
+// change here.
+func isCRKind(key string) bool {
+	r, _ := utf8.DecodeRuneInString(key)
+	return unicode.IsUpper(r)
+}
+
+// decodeResources reads one kind's value: a single entry, or a list of them
+// when a spec declares several of the same kind.
+func decodeResources(kind string, value *yaml.Node) ([]Resource, error) {
+	switch value.Kind {
+	case yaml.MappingNode:
+		r, err := decodeResource(kind, value)
+		if err != nil {
+			return nil, err
+		}
+		return []Resource{r}, nil
+	case yaml.SequenceNode:
+		out := make([]Resource, 0, len(value.Content))
+		for _, item := range value.Content {
+			if item.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("%s: every entry must be a mapping of {name, spec}", kind)
+			}
+			r, err := decodeResource(kind, item)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, r)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be a mapping of {name, spec}, or a list of them for "+
+			"several objects of one kind", kind)
+	}
+}
+
+// decodeResource reads one {name, spec} entry, strictly — so a typo in `name`
+// is an error here, while the spec body underneath stays passthrough.
+func decodeResource(kind string, node *yaml.Node) (Resource, error) {
+	var r Resource
+	if err := strictDecode(node, &r); err != nil {
+		return Resource{}, fmt.Errorf("%s: %w", kind, err)
+	}
+	r.Kind = kind
+	r.specGiven = r.Spec != nil
+	if r.Spec == nil {
+		r.Spec = map[string]any{}
+	}
+	return r, nil
+}
+
+// strictDecode decodes a node with KnownFields on.
+//
+// It goes back through Marshal because KnownFields lives on the Decoder and
+// Node.Decode has no equivalent — there is no cheaper way to keep unknown-key
+// rejection once the document has been walked by hand.
+func strictDecode(node *yaml.Node, out any) error {
+	raw, err := yaml.Marshal(node)
+	if err != nil {
+		return err
+	}
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+// find returns the single entry of a kind, or nil.
+func (s *Spec) find(kind string) *Resource {
+	for i := range s.Resources {
+		if s.Resources[i].Kind == kind {
+			return &s.Resources[i]
+		}
+	}
+	return nil
+}
+
+// count returns how many entries of a kind the spec declares.
+func (s *Spec) count(kind string) int {
+	n := 0
+	for i := range s.Resources {
+		if s.Resources[i].Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// body returns a kind's spec body, or nil when the spec does not declare it.
+// Callers read through it rather than a field, so a missing YBUniverse is a
+// validation error rather than a panic.
+func (s *Spec) body(kind string) map[string]any {
+	if r := s.find(kind); r != nil {
+		return r.Spec
+	}
+	return nil
+}
+
+// DeclaresRelease reports whether the spec imports a DB release itself, which
+// is what makes checkDBRelease's probe inconclusive.
+func (s *Spec) DeclaresRelease() bool { return s.count(KindRelease) > 0 }
+
+func (s *Spec) provider() map[string]any { return s.body(ybuniverse.KindProvider) }
+func (s *Spec) universe() map[string]any { return s.body(ybuniverse.KindUniverse) }
+
 func (s *Spec) withDefaults() {
 	if s.ChartVersion == "" {
 		s.ChartVersion = DefaultChartVersion
 	}
 	if s.ChartSource == "" {
-		s.ChartSource = ChartRepo
+		s.ChartSource = DefaultChartSource
 	}
 	if s.YBA.Chart == "" && s.ChartSource == ChartRepo {
 		s.YBA.Chart = DefaultChartRepo
 	}
-	if s.Universe == nil {
-		s.Universe = map[string]any{}
+	s.expandPaths()
+	// Nil-safe throughout: a spec missing either required kind still has to
+	// reach Validate, which is what names the omission.
+	provider, universe := s.find(ybuniverse.KindProvider), s.find(ybuniverse.KindUniverse)
+	if provider != nil && provider.Name == "" {
+		provider.Name = DefaultProviderName
 	}
-	setDefault(s.Universe, "universeName", DefaultUniverseName)
-
-	// A provider block means we create one, so the universe has to reference it
-	// by whatever name it got. Without a block, the operator uses the
-	// providerName already set (Validate requires one).
-	if len(s.Provider) > 0 {
-		setDefault(s.Provider, "name", DefaultProviderName)
-		setDefault(s.Universe, "providerName", s.Provider["name"])
+	if universe == nil {
+		return
+	}
+	if universe.Name == "" {
+		universe.Name = DefaultUniverseName
+	}
+	// metadata.name and the body's own universeName are two different fields
+	// and YBA reads the second, so the entry's name is what they agree on.
+	setDefault(universe.Spec, "universeName", universe.Name)
+	if provider != nil {
+		setDefault(universe.Spec, "providerName", provider.Name)
 	}
 	s.universeDefaults()
 }
 
+// expandPaths expands a leading ~ in the two fields that name something on
+// disk.
+//
+// Neither Go, helm nor kubectl does this: a YAML value is not a shell word, so
+// "~/yb/yugaware.tgz" is looked up as a directory literally named "~" and the
+// failure is a confusing "no such file" naming a path that visibly exists.
+//
+// Safe to run unconditionally. Under chartSource repo, yba.chart is a chart
+// NAME ("yugabytedb/yugaware") and cannot start with ~; a URL cannot either.
+func (s *Spec) expandPaths() {
+	s.YBA.Chart = expandHome(s.YBA.Chart)
+	s.CRDPath = expandHome(s.CRDPath)
+}
+
+// expandHome resolves a leading ~ against the user's home directory, leaving
+// everything else — including a bare "~foo" username form this does not
+// support — untouched.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
+}
+
 // universeDefaults fills in the universe fields this deployer decides, so that
-// s.Universe IS the body that gets rendered.
+// the YBUniverse entry's Spec IS the body that gets rendered. It is a no-op
+// when the spec declares no universe; Validate is what reports that.
 //
 // It lives here rather than in Render because a reader has to be able to answer
 // "what will the universe have" from the Spec alone. When these were applied at
-// render time instead, s.Universe silently disagreed with the CR and
+// render time instead, the Spec's own copy silently disagreed with the CR and
 // Deployer.sslMode read the wrong one: it saw no enableClientToNodeEncrypt,
 // fell back to the CRD's default of true, and emitted sslmode=require against a
 // universe rendered with TLS off.
@@ -224,11 +465,15 @@ func (s *Spec) withDefaults() {
 // overrides after Load, so providerSpec fills it in at render time. That is the
 // same reason the check on it could not live in Validate.
 func (s *Spec) universeDefaults() {
+	u := s.universe()
+	if u == nil {
+		return
+	}
 	// YSQL on, YCQL off: every consumer in this repo speaks the Postgres wire
 	// protocol, and an interface nothing uses is a listener to secure for no
 	// benefit.
-	setDefault(s.Universe, "enableYSQL", true)
-	setDefault(s.Universe, "enableYCQL", false)
+	setDefault(u, "enableYSQL", true)
+	setDefault(u, "enableYCQL", false)
 
 	// TLS off, written rather than left to the CRD, which defaults BOTH to
 	// true. Two reasons, one of which is a hard blocker:
@@ -247,8 +492,8 @@ func (s *Spec) universeDefaults() {
 	// either on later REBUILDS the universe rather than editing it. A spec that
 	// wants TLS has to say so from the start and solve the RPC cert problem
 	// above — tracked in github.com/yugabyte/meko/issues/1241.
-	setDefault(s.Universe, "enableNodeToNodeEncrypt", false)
-	setDefault(s.Universe, "enableClientToNodeEncrypt", false)
+	setDefault(u, "enableNodeToNodeEncrypt", false)
+	setDefault(u, "enableClientToNodeEncrypt", false)
 
 	// Always on, and NOT a request for public exposure: the chart gates its
 	// whole serviceEndpoints template on this value, so without it the
@@ -256,12 +501,12 @@ func (s *Spec) universeDefaults() {
 	// a LoadBalancer-type endpoint, and this declares none — and because
 	// overriding the endpoint list REPLACES it, the chart's three default
 	// LoadBalancer endpoints are dropped too.
-	setDefault(s.Universe, "enableLoadBalancer", true)
+	setDefault(u, "enableLoadBalancer", true)
 
-	overrides, ok := s.Universe["kubernetesOverrides"].(map[string]any)
+	overrides, ok := u["kubernetesOverrides"].(map[string]any)
 	if !ok {
 		overrides = map[string]any{}
-		s.Universe["kubernetesOverrides"] = overrides
+		u["kubernetesOverrides"] = overrides
 	}
 	// Only when the spec declares none: overriding the list replaces it, so a
 	// spec carrying its own serviceEndpoints has taken responsibility for the
@@ -289,15 +534,27 @@ func setDefault(m map[string]any, key string, value any) {
 }
 
 // ProviderName is the provider this foundation's universe references.
+// It is the ENTRY's name, not the universe body's providerName: kubectl
+// addresses the object by metadata.name, which Render takes from the entry.
+// Validate keeps the two from disagreeing.
 func (s *Spec) ProviderName() string {
-	name, _ := s.Universe["providerName"].(string)
+	if r := s.find(ybuniverse.KindProvider); r != nil {
+		return r.Name
+	}
+	// No provider of our own — the universe names a preexisting one, and that
+	// is the only name there is.
+	name, _ := s.universe()["providerName"].(string)
 	return name
 }
 
-// UniverseName is the CR's name and metadata.name.
+// UniverseName is the CR's metadata.name, which is what every kubectl lookup
+// here addresses — NOT the body's universeName, which is a different field
+// that YBA reads. Validate keeps the two from disagreeing.
 func (s *Spec) UniverseName() string {
-	name, _ := s.Universe["universeName"].(string)
-	return name
+	if r := s.find(ybuniverse.KindUniverse); r != nil {
+		return r.Name
+	}
+	return ""
 }
 
 // Validate rejects a spec that cannot produce a working foundation.
@@ -312,31 +569,31 @@ func (s *Spec) Validate() error {
 		return fmt.Errorf("namespace is required")
 	}
 	switch s.ChartSource {
-	case ChartRepo, ChartS3, ChartPath:
+	case ChartRepo, ChartPath:
+	case "s3":
+		// There was an s3 source once. It only ever built a
+		// releases.yugabyte.com URL, which helm fetches as an ordinary path.
+		return fmt.Errorf("chartSource s3 is gone: the release bucket is public over HTTPS and " +
+			"helm fetches a URL like any other chart, so use chartSource: path with yba.chart " +
+			"set to https://releases.yugabyte.com/<build>/helm/yugaware-<line>.tgz")
 	default:
-		return fmt.Errorf("chartSource %q is not one of repo, s3, path", s.ChartSource)
+		return fmt.Errorf("chartSource %q is not one of repo, path", s.ChartSource)
 	}
 	if s.ChartSource == ChartPath && s.YBA.Chart == "" {
 		return fmt.Errorf("chartSource path needs yba.chart set to the tarball or directory")
 	}
-	nodes, hasNodes := intField(s.Universe, "numNodes")
-	rf, hasRF := intField(s.Universe, "replicationFactor")
-	if hasRF {
-		switch rf {
-		case 1, 3, 5, 7:
-		default:
-			return fmt.Errorf("universe.replicationFactor %d is not supported (use 1, 3, 5 or 7)", rf)
-		}
+	if s.ChartSource == ChartRepo && s.ChartVersion == "" {
+		return fmt.Errorf("chartVersion is required with chartSource repo: it is the published " +
+			"version helm resolves, and an empty one is a failed lookup rather than \"latest\"")
 	}
+	if err := s.validateResources(); err != nil {
+		return err
+	}
+	nodes, hasNodes := intField(s.universe(), "numNodes")
+	rf, hasRF := intField(s.universe(), "replicationFactor")
 	if hasNodes && hasRF && nodes < rf {
 		return fmt.Errorf("universe.numNodes (%d) is below replicationFactor (%d): the universe cannot place its replicas",
 			nodes, rf)
-	}
-
-	if len(s.Provider) == 0 && s.ProviderName() == "" {
-		return fmt.Errorf("with no provider block, universe.providerName must name a preexisting " +
-			"provider: a k8s provider carries the DB image registry, its pull secret and the " +
-			"per-zone storage class, none of which the operator's auto-provider can infer")
 	}
 
 	// YBA parses this and compares it against its own bundled release, so an
@@ -344,7 +601,7 @@ func (s *Spec) Validate() error {
 	// universe then reports universeState "Error Creating" with no message and
 	// a still-queued action, and the only explanation is a RuntimeException in
 	// the yugaware log: "Unable to parse YB version strings".
-	if universeString(s.Universe, "ybSoftwareVersion") == "" {
+	if universeString(s.universe(), "ybSoftwareVersion") == "" {
 		return fmt.Errorf("universe.ybSoftwareVersion is required and must be a release this YBA " +
 			"has: an empty value is not \"whatever YBA bundles\", it fails to parse and the " +
 			"universe comes back \"Error Creating\" with no reason attached. The bundled release " +
@@ -355,48 +612,143 @@ func (s *Spec) Validate() error {
 	if err := s.validateProviderZones(); err != nil {
 		return err
 	}
-	if err := s.validatePlacement(nodes, hasNodes); err != nil {
+	if err := s.validatePlacement(); err != nil {
 		return err
 	}
 	return nil
 }
 
-// validatePlacement checks universe.placementInfo against the provider and the
-// node count.
+// validateResources checks the shape of the declared CR set — what the API
+// server either accepts happily or rejects in a way that names nothing the
+// author can find in their file.
 //
-// Both halves are things YBA rejects, but asynchronously and from inside the
-// operator: a placement naming a zone the provider does not have, and a
-// per-zone node count that does not add up to numNodes. Either arrives as a
-// failed action on the universe tens of minutes into a bring-up, which is a
-// bad place to read "you typed the zone code wrong".
-func (s *Spec) validatePlacement(nodes int, hasNodes bool) error {
-	placement, ok := s.Universe["placementInfo"].(map[string]any)
+// It deliberately checks nothing ABOUT a kind beyond the two this module is
+// built around. Which fields a KMSConfig needs is the CRD's business, and a
+// table of kinds here would be the thing that goes stale on the next chart.
+func (s *Spec) validateResources() error {
+	if s.count(ybuniverse.KindUniverse) != 1 {
+		// connstr, ensureDatabases and the tserver-Service lookup all resolve
+		// one universe in one namespace.
+		return fmt.Errorf("exactly one %s is required; this spec declares %d",
+			ybuniverse.KindUniverse, s.count(ybuniverse.KindUniverse))
+	}
+	// A provider is OPTIONAL: the operator has an auto-provider, and a universe
+	// can also name one somebody else registered. Declaring one is how you
+	// control the DB image registry, its pull secret and the per-zone storage
+	// class — which the auto-provider cannot infer and the universe cannot
+	// override — but that is a reason to want one, not a reason to require it.
+	if s.count(ybuniverse.KindProvider) > 1 {
+		return fmt.Errorf("%s is declared more than once, and a universe references exactly one",
+			ybuniverse.KindProvider)
+	}
+	// Apply order is document order, and YBA rejects a universe naming a
+	// provider that has not registered yet — which arrives asynchronously, as a
+	// failed action on the universe, tens of minutes in.
+	if s.count(ybuniverse.KindProvider) == 1 &&
+		s.indexOf(ybuniverse.KindProvider) > s.indexOf(ybuniverse.KindUniverse) {
+		return fmt.Errorf("%s must be declared above %s: keys are applied top to bottom, and YBA "+
+			"rejects a universe whose provider has not registered",
+			ybuniverse.KindProvider, ybuniverse.KindUniverse)
+	}
+
+	// metadata.name and the body's own name field are different fields, and
+	// nothing outside this check couples them: Render names the object from
+	// the entry while every cluster lookup here reads... the entry too, so a
+	// spec that spells the body field differently would have the object
+	// created under one name and YBA know it under another. That is the
+	// natural mistake when migrating from the old provider:/universe: blocks,
+	// where the name lived in the body — and it costs the full universe
+	// timeout, reporting "waiting for universe X to appear" while X is
+	// healthy under the other name.
+	if u := s.find(ybuniverse.KindUniverse); u != nil {
+		if body, ok := u.Spec["universeName"].(string); ok && body != u.Name {
+			return fmt.Errorf("YBUniverse is named %q but spec.universeName says %q; they are "+
+				"different fields and both name this universe, so they have to agree",
+				u.Name, body)
+		}
+	}
+	if p := s.find(ybuniverse.KindProvider); p != nil {
+		if body, ok := s.universe()["providerName"].(string); ok && body != p.Name {
+			return fmt.Errorf("YBProvider is named %q but the universe's providerName says %q; "+
+				"the universe would be placed against a provider that does not exist",
+				p.Name, body)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, r := range s.Resources {
+		if r.Name == "" {
+			return fmt.Errorf("%s: name is required — it is the object's metadata.name, and the "+
+				"API server's own complaint about an empty one names no key in this file", r.Kind)
+		}
+		// The universe's own defaults are written into Spec before Validate
+		// runs, so emptiness cannot be the test.
+		if !r.specGiven {
+			return fmt.Errorf("%s/%s: spec is required — it is the CR's spec body, passed through "+
+				"verbatim", r.Kind, r.Name)
+		}
+		// The API server accepts both and treats the second as a server-side
+		// apply UPDATE of the first, so one entry silently does nothing.
+		if key := r.Kind + "/" + r.Name; seen[key] {
+			return fmt.Errorf("%s is declared twice: the second would be a server-side apply of "+
+				"the first, so one of them would silently have no effect", key)
+		} else {
+			seen[key] = true
+		}
+	}
+	return nil
+}
+
+// indexOf is where a kind first appears in document order, or len(Resources)
+// when it does not appear at all.
+func (s *Spec) indexOf(kind string) int {
+	for i := range s.Resources {
+		if s.Resources[i].Kind == kind {
+			return i
+		}
+	}
+	return len(s.Resources)
+}
+
+// validatePlacement checks universe.placementInfo against the provider.
+//
+// A placement naming a zone the provider does not have is a cross-reference
+// between two halves of THIS file — so it is checked only when both halves are
+// here, i.e. when the spec declares a YBProvider rather than naming somebody
+// else's. YBA
+// rejects it asynchronously, from inside the operator, as a failed action on
+// the universe tens of minutes into a bring-up. That is a bad place to read
+// "you typed the zone code wrong".
+//
+// It deliberately does not check that the per-zone counts add up to numNodes,
+// nor that replicationFactor is one YBA supports. Both are YBA's own rules,
+// and which values it accepts moves between releases — a copy here goes stale
+// and starts rejecting specs YBA would take. Same reason the CRD schema check
+// and the preview-gflag check are not here either.
+func (s *Spec) validatePlacement() error {
+	placement, ok := s.universe()["placementInfo"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	known := providerZones(s.Provider)
-	total, counted := 0, false
+	// Only when this spec declares the provider. With a preexisting one the
+	// zones live in YBA, where nothing here can see them — checking against
+	// an empty set would reject every zone in the placement.
+	provider := s.provider()
+	if provider == nil {
+		return nil
+	}
+	known := providerZones(provider)
 	for _, r := range asList(placement["regions"]) {
 		region, _ := r.(map[string]any)
 		for _, z := range asList(region["zones"]) {
 			zone, _ := z.(map[string]any)
 			code, _ := zone["code"].(string)
-			// Only when there IS a provider block: with a preexisting provider
-			// its zones live in YBA, where nothing here can see them.
-			if len(s.Provider) > 0 && code != "" && !known[code] {
+			if code != "" && !known[code] {
 				return fmt.Errorf("universe.placementInfo names zone %q, which the provider does not "+
 					"have (it has %s): a placement can only use zones its provider defines",
 					code, strings.Join(sortedKeys(known), ", "))
 			}
-			if n, has := intField(zone, "numNodes"); has {
-				total += n
-				counted = true
-			}
 		}
-	}
-	if hasNodes && counted && total != nodes {
-		return fmt.Errorf("universe.placementInfo places %d node(s) but universe.numNodes is %d: "+
-			"YBA rejects a placement that does not add up", total, nodes)
 	}
 	return nil
 }
@@ -472,11 +824,11 @@ func storageClasses(s *Spec) []string {
 		}
 	}
 	for _, key := range []string{"tserverVolume", "masterVolume", "deviceInfo", "masterDeviceInfo"} {
-		if vol, ok := s.Universe[key].(map[string]any); ok {
+		if vol, ok := s.universe()[key].(map[string]any); ok {
 			add(vol["storageClass"])
 		}
 	}
-	for _, r := range asList(s.Provider["regions"]) {
+	for _, r := range asList(s.provider()["regions"]) {
 		region, _ := r.(map[string]any)
 		for _, z := range asList(region["zones"]) {
 			zone, _ := z.(map[string]any)
@@ -558,7 +910,7 @@ func (s *Spec) UniverseNamespace() string {
 // none is set. It returns the first when they disagree; validateProviderZones
 // is what refuses that, so this stays a plain accessor.
 func (s *Spec) declaredUniverseNamespace() string {
-	for _, r := range asList(s.Provider["regions"]) {
+	for _, r := range asList(s.provider()["regions"]) {
 		region, _ := r.(map[string]any)
 		for _, z := range asList(region["zones"]) {
 			zone, _ := z.(map[string]any)
@@ -580,7 +932,7 @@ func (s *Spec) declaredUniverseNamespace() string {
 // to be first.
 func (s *Spec) validateProviderZones() error {
 	var first, firstCode string
-	for _, r := range asList(s.Provider["regions"]) {
+	for _, r := range asList(s.provider()["regions"]) {
 		region, _ := r.(map[string]any)
 		for _, z := range asList(region["zones"]) {
 			zone, _ := z.(map[string]any)

@@ -1,0 +1,15 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "KMSConfig",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
+    "name": "foundation-kms",
+    "namespace": "amp"
+  },
+  "spec": {
+    "name": "foundation-kms",
+    "provider": "AWS"
+  }
+}

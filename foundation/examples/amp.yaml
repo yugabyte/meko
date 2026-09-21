@@ -8,27 +8,75 @@
 # Every day-2 change — scale, software upgrade, gflags, disk grow, pause — is an
 # edit to this file followed by `apply`.
 #
-# `provider:` and `universe:` are the YBProvider and YBUniverse *spec* bodies
-# VERBATIM, so anything the pinned CRD has is settable here with no code change.
-# Nothing here re-implements the CRD's schema: a typo, a wrong type or a bad
-# enum is rejected by the API server on apply
-# (".spec.numNodez: field not declared in schema").
+# REMOVING a CR key deletes the object on the next `apply`: this file is the
+# source of truth, so omission is deletion. Only objects this deployer created
+# are candidates (they carry app.kubernetes.io/managed-by=meko-foundation), and
+# `--no-prune` opts out.
 #
-# Moving chartVersion means moving universe.ybSoftwareVersion onto the new
-# release line too, since the yugaware that chart installs bundles only its own
-# DB release.
+# Each CR is an UPPERCASE top-level key naming its kind, with {name, spec}
+# under it — see YBProvider and YBUniverse below. The spec body is VERBATIM, so
+# anything the pinned CRD has is settable with no code change, and nothing here
+# re-implements the CRD's schema: a typo, a wrong type or a bad enum is
+# rejected by the API server on apply (".spec.numNodez: field not declared in
+# schema"). The old lowercase `provider:`/`universe:` keys are rejected at
+# parse time, naming their replacement.
+#
+# Moving chartVersion means moving the universe's ybSoftwareVersion with it,
+# since the yugaware that chart installs bundles only its own DB release.
 
 kubeContext: ""            # empty = current context
 namespace: amp             # yugaware + operator + CRs + DB pods + amp pods
 
-# Doubles as a git ref for the CRD bundle and as the helm chart version, so it
-# must resolve as both — a published release does, a `-bNNN` build tag does not.
-# 2026.1.1 is the first line that carries the YBProvider CRD at all.
-chartVersion: "2026.1.1"
-chartSource: repo
+# Doubles as the release-bucket key and as the git ref for the CRD bundle, so
+# it must resolve as both. A full build resolves as both when the build was
+# tagged in yugabyte/charts, which is what lets this be an unpublished one:
+# 2026.1.2 carries KMSConfig, TelemetryProvider and UniverseKeyRotation, which
+# 2026.1.1's 12-kind bundle does not.
+chartVersion: "2026.1.2.0-b137"
+
+# Where the yugaware chart comes from, and what yba.chart means for each:
+#
+#   repo   yba.chart is a chart NAME in charts.yugabyte.com ("yugabytedb/yugaware").
+#          chartVersion is REQUIRED — it is the published version helm resolves,
+#          and only RELEASED lines are there (2026.1.1 is the newest).
+#   path   yba.chart is anything helm takes: a packaged .tgz, an unpacked chart
+#          directory (the one holding Chart.yaml, under any name), or an http(s)
+#          URL. chartVersion is then only the CRD git ref, and crdPath overrides
+#          even that.
+#
+# An UNPUBLISHED build is just a URL under path — see yba.chart below. There
+# is no separate source for the release bucket: it is public for reads, helm
+# fetches a URL itself, and a second enum value would be a second name for the
+# same thing. (The bucket denies LIST, so a key that does not exist answers
+# 403 rather than 404 — a 403 means the version is wrong, not that you lack
+# access.)
+#
+# A build tagged in yugabyte/charts (this one is) resolves as a git ref too, so
+# the CRDs come from the same version and crdPath is unnecessary. Set crdPath
+# when it does not, or when the cluster has no egress to raw.githubusercontent.
+#
+# Entirely local instead — an air-gapped run, or a chart under test:
+#
+#   chartSource: path
+#   crdPath: /home/me/yb/concatenated_crd.yaml   # or a directory of manifests
+#   yba:
+#     chart: /home/me/yb/yugaware-2026.1.2.tgz   # or the untarred directory
+#
+# A leading ~ is expanded. Anything else relative resolves against the process
+# CWD, not against this file. A crdPath directory is applied NON-recursively.
+#
+# This file is the deployer's only input — there are no flags that override
+# any of it. CI deploys a different build by writing a spec, not by passing
+# one.
+chartSource: path
 
 yba:
-  chart: yugabytedb/yugaware
+  # The release bucket, which is where an unpublished build lives. Just a URL:
+  # it is public for reads and helm fetches a chart from a URL itself, so
+  # there is nothing to download first and no credentials involved. A released
+  # line would instead be chartSource: repo with chart: yugabytedb/yugaware,
+  # which is the default.
+  chart: https://releases.yugabyte.com/2026.1.2.0-b137/helm/yugaware-2026.1.2.tgz
   # yugaware chart values verbatim — the whole chart surface is available here.
   # Three settings are NOT: the deployer appends
   # yugaware.kubernetesOperatorEnabled, yugaware.kubernetesOperatorNamespace and
@@ -57,6 +105,36 @@ yba:
     image:
       repository: quay.io/yugabyte/yugaware-itest
       pullSecret: quay-pull-secret
+      # 2026.1.2 moved these two to quay.io/yugabyte/hardened-*, which the
+      # pull secret above cannot reach; put back on the public images.
+      # Prometheus needs its TAG too, not just the registry — the public repo
+      # prefixes versions with `v` and the hardened one does not.
+      #
+      # Drop these once the robot can pull hardened-*; a hardened build is
+      # presumably the point.
+      #
+      # After ANY chart bump, check every image at once by rendering:
+      #   helm template t <chart> -f <these values> | grep -oE '^ *image: .*'
+      # A values diff misses subcharts, which bring their own.
+      postgres:
+        registry: ""
+        name: postgres
+      prometheus:
+        registry: ""
+        name: prom/prometheus
+        tag: v3.13.2
+
+    # Perf Advisor is new in 2026.1.2: a subchart, enabled by default, whose
+    # image pulls under its OWN imagePullSecretName (yugabyte-k8s-pull-secret)
+    # that nothing here creates. `helm --wait` waits for every workload in the
+    # release, so its one pod times the whole install out with yugaware up and
+    # healthy.
+    #
+    # Off because a foundation has no use for YBA's query-tuning UI. Enabling
+    # it means creating that secret and a second ~2 CPU pod.
+    perf-advisor-chart:
+      yugaware:
+        enabled: false
     yugaware:
       # NOT just a UI login. YBA's operator refuses every CR unless YBA has
       # EXACTLY ONE customer, and the chart's customer-create post-install Job
@@ -89,122 +167,141 @@ yba:
       # ~4.5 CPU yugaware pod before it can schedule.
       storageClass: yb-standard
 
-# YBProvider.spec, plus `name` for the object's metadata.
+# An UPPERCASE top-level key is an operator CR kind, and its value is
+# {name, spec}: name is metadata.name, spec is the CR's spec body VERBATIM. Any
+# kind in the bundle works this way with no code change — use a list under the
+# key for several objects of one kind.
 #
-# This is not optional detail: a k8s provider carries what the operator's
-# auto-provider cannot infer AND what the universe cannot override — the DB
-# image registry (k8s universes pull the DB image from a registry, not a release
-# tarball), its pull secret, and the per-zone storage class, which takes
-# PRECEDENCE over any storageClass on the universe's volumes.
-provider:
+# Keys are applied TOP TO BOTTOM and deleted bottom to top, so put a thing above
+# whatever references it. YBUniverse is required; every other kind, YBProvider
+# included, is optional — but a provider must come above the universe when it
+# is there.
+#
+# A provider is optional because the operator has an auto-provider and a
+# universe can also name one somebody else registered. Declaring one is how you
+# take control: it carries what the operator's auto-provider cannot infer AND what
+# the universe cannot override — the DB image registry (k8s universes pull the
+# DB image from a registry, not a release tarball), its pull secret, and the
+# per-zone storage class, which takes PRECEDENCE over any storageClass on the
+# universe's volumes.
+YBProvider:
   name: foundation
-  cloudInfo:
-    kubernetesProvider: gke
-    # k8s universes pull the DB image from here. The itest registry carries
-    # unreleased builds; Docker Hub has released ones only.
-    kubernetesImageRegistry: quay.io/yugabyte/yugabyte-itest
-    # Omitted on purpose: "will use in-cluster credentials if empty", which is
-    # what the operator's own ServiceAccount already has.
-    # kubeConfigSecret: {name: ..., namespace: ...}
-  regions:
-    - code: us-west1
-      zones:
-        - code: us-west1-b
-          cloudInfo:
-            # itest-dev's class, and the one that actually decides — a
-            # storageClass on the universe's volumes loses to this.
-            kubernetesStorageClass: yb-standard
-
-universe:
-  universeName: foundation
-  providerName: foundation   # defaulted from provider.name when omitted
-  numNodes: 3
-  replicationFactor: 3
-  # The DB release, which must be BOTH a release this YBA knows and a tag in the
-  # provider's kubernetesImageRegistry. Not optional and not blankable: YBA
-  # parses it against its own version, so "" fails with "Unable to parse YB
-  # version strings" and the universe comes back "Error Creating" carrying no
-  # reason at all — the explanation is only in the yugaware log.
-  #
-  # This is the release chart 2026.1.1 bundles — `ls /opt/yugabyte/releases` in
-  # the yugaware pod prints exactly this one, and installYBA checks it before
-  # the universe is applied.
-  #
-  # It has to be updated when it drifts, and drift does NOT require bumping
-  # chartVersion: a published chart version is MUTABLE. 2026.1.1 was re-cut on
-  # 2026-09-10 with appVersion 2026.1.1.1-b2 -> 2026.1.1.2-b9, which moved the
-  # yugaware image and with it the bundled release, and YBA then rejected the
-  # universe with "Helm Package path not found for release: 2026.1.1.1-b2".
-  ybSoftwareVersion: "2026.1.1.2-b9"
-
-  # RF3 over three nodes in one zone, which is what itest-dev has — the cluster
-  # is single-zone, so spreading across three would place nodes nowhere.
-  # Declared rather than left to YBA so the layout is reviewable in the diff and
-  # a zone typo fails validation instead of a task tens of minutes in; the codes
-  # must be ones the provider above defines.
-  placementInfo:
+  spec:
+    cloudInfo:
+      kubernetesProvider: gke
+      # k8s universes pull the DB image from here. The itest registry carries
+      # unreleased builds; Docker Hub has released ones only.
+      kubernetesImageRegistry: quay.io/yugabyte/yugabyte-itest
+      # Omitted on purpose: "will use in-cluster credentials if empty", which is
+      # what the operator's own ServiceAccount already has.
+      # kubeConfigSecret: {name: ..., namespace: ...}
     regions:
       - code: us-west1
         zones:
           - code: us-west1-b
-            numNodes: 3
+            cloudInfo:
+              # itest-dev's class, and the one that actually decides — a
+              # storageClass on the universe's volumes loses to this.
+              kubernetesStorageClass: yb-standard
 
-  # Replaces deviceInfo, which the CRD declares mutually exclusive with it.
-  tserverVolume:
-    volumeSize: 100
+YBUniverse:
+  name: foundation
+  spec:
+    universeName: foundation   # defaulted from the entry's name when omitted
+    providerName: foundation   # defaulted from the YBProvider entry's name
+    numNodes: 3
+    replicationFactor: 3
+    # The DB release, which must be BOTH a release this YBA knows and a tag in the
+    # provider's kubernetesImageRegistry. Not optional and not blankable: YBA
+    # parses it against its own version, so "" fails with "Unable to parse YB
+    # version strings" and the universe comes back "Error Creating" carrying no
+    # reason at all — the explanation is only in the yugaware log.
+    #
+    # This is the release the chart bundles — it equals the chart's appVersion,
+    # `ls /opt/yugabyte/releases` in the yugaware pod prints exactly this one,
+    # and checkDBRelease verifies it immediately before the YBUniverse is
+    # applied (from applyCRs, so a Release key above has already had its
+    # chance to import one). It must also be a tag in the provider's
+    # kubernetesImageRegistry.
+    #
+    # A PUBLISHED chart version is mutable, so this can drift with nothing here
+    # changing: 2026.1.1 was re-cut on 2026-09-10 with appVersion
+    # 2026.1.1.1-b2 -> 2026.1.1.2-b9, which moved the yugaware image and with
+    # it the bundled release, and YBA then rejected the universe with "Helm
+    # Package path not found for release: 2026.1.1.1-b2". A full build like the
+    # one above is immutable and cannot drift, but the check stays because
+    # chartVersion can go back to a published line at any time.
+    ybSoftwareVersion: "2026.1.2.0-b137"
 
-  enableYSQLAuth: false      # keeps the existing passwordless yugabyte DSNs working
+    # RF3 over three nodes in one zone, which is what itest-dev has — the cluster
+    # is single-zone, so spreading across three would place nodes nowhere.
+    # Declared rather than left to YBA so the layout is reviewable in the diff and
+    # a zone typo fails validation instead of a task tens of minutes in; the codes
+    # must be ones the provider above defines. Whether the counts add up is YBA's
+    # to judge, not ours.
+    placementInfo:
+      regions:
+        - code: us-west1
+          zones:
+            - code: us-west1-b
+              numNodes: 3
 
-  # TLS off, spelled out because the CRD defaults BOTH to true and both are
-  # create-time only (self == oldSelf) — turning either on later rebuilds the
-  # universe rather than editing it.
-  #
-  # Client-to-node off keeps the DSN's sslmode=disable, matching what every
-  # consumer is built against; the deployer derives sslmode from this field, so
-  # flipping it to true does produce a working `require` DSN.
-  #
-  # Node-to-node is the one that cannot simply be turned on: it encrypts the
-  # tserver RPC port, and the compute hot path speaks pggate to 9100 directly
-  # with no way for the deploy path to hand it cert material
-  # (endpoint_supervisor writes sslrootcert for the YSQL lane only). Left on,
-  # the first run failed with
-  #   FATAL: no pg_hba.conf entry for host "...", user "yugabyte",
-  #          database "yb_storage", no encryption
-  #
-  # Encrypted-universe support is tracked in
-  # https://github.com/yugabyte/meko/issues/1241, behind the compute-side cert
-  # work in https://github.com/yugabyte/meko/issues/1114.
-  enableNodeToNodeEncrypt: false
-  enableClientToNodeEncrypt: false
+    # Replaces deviceInfo, which the CRD declares mutually exclusive with it.
+    tserverVolume:
+      volumeSize: 100
 
-  # No Image.pullSecretName here on purpose, though the DB registry above is
-  # private. YBA derives the DB pull secret from its OWN (yba.values.image
-  # .pullSecret) and propagates it into the namespace it deploys nodes into —
-  # the only thing that can work, since the YBProvider CRD has no field for
-  # pull-secret content, so a CR could name a Secret but never put one there.
-  # Naming one here just risks naming something absent beside the DB pods.
-  #
-  # The robot behind that yugaware secret therefore needs pull access to the DB
-  # image repo as well as the YBA one.
-  #
-  # kubernetesOverrides is otherwise free: it is helm values for the universe's
-  # own chart, and the deployer only injects serviceEndpoints when none is
-  # declared.
+    enableYSQLAuth: false      # keeps the existing passwordless yugabyte DSNs working
 
-  # MAGE is seeded at CREATE because it is a start-time gflag on both processes:
-  # the extension will not install without it, and turning it on later is a
-  # rolling restart of the universe. `ysql_yb_enable_mage` is a preview flag, so
-  # YBA rejects it unless allowed_preview_flags_csv names it — that CSV is
-  # itself an ordinary gflag, and it must list EVERY preview flag in use, so
-  # adding a second one means rewriting the value to carry both rather than
-  # adding a key. YBA is what enforces this; nothing in the deployer does.
-  gFlags:
-    masterGFlags:
-      allowed_preview_flags_csv: ysql_yb_enable_mage
-      ysql_yb_enable_mage: "true"
-    tserverGFlags:
-      allowed_preview_flags_csv: ysql_yb_enable_mage
-      ysql_yb_enable_mage: "true"
+    # TLS off, spelled out because the CRD defaults BOTH to true and both are
+    # create-time only (self == oldSelf) — turning either on later rebuilds the
+    # universe rather than editing it.
+    #
+    # Client-to-node off keeps the DSN's sslmode=disable, matching what every
+    # consumer is built against; the deployer derives sslmode from this field, so
+    # flipping it to true does produce a working `require` DSN.
+    #
+    # Node-to-node is the one that cannot simply be turned on: it encrypts the
+    # tserver RPC port, and the compute hot path speaks pggate to 9100 directly
+    # with no way for the deploy path to hand it cert material
+    # (endpoint_supervisor writes sslrootcert for the YSQL lane only). Left on,
+    # the first run failed with
+    #   FATAL: no pg_hba.conf entry for host "...", user "yugabyte",
+    #          database "yb_storage", no encryption
+    #
+    # Encrypted-universe support is tracked in
+    # https://github.com/yugabyte/meko/issues/1241, behind the compute-side cert
+    # work in https://github.com/yugabyte/meko/issues/1114.
+    enableNodeToNodeEncrypt: false
+    enableClientToNodeEncrypt: false
+
+    # No Image.pullSecretName here on purpose, though the DB registry above is
+    # private. YBA derives the DB pull secret from its OWN (yba.values.image
+    # .pullSecret) and propagates it into the namespace it deploys nodes into —
+    # the only thing that can work, since the YBProvider CRD has no field for
+    # pull-secret content, so a CR could name a Secret but never put one there.
+    # Naming one here just risks naming something absent beside the DB pods.
+    #
+    # The robot behind that yugaware secret therefore needs pull access to the DB
+    # image repo as well as the YBA one.
+    #
+    # kubernetesOverrides is otherwise free: it is helm values for the universe's
+    # own chart, and the deployer only injects serviceEndpoints when none is
+    # declared.
+
+    # MAGE is seeded at CREATE because it is a start-time gflag on both processes:
+    # the extension will not install without it, and turning it on later is a
+    # rolling restart of the universe. `ysql_yb_enable_mage` is a preview flag, so
+    # YBA rejects it unless allowed_preview_flags_csv names it — that CSV is
+    # itself an ordinary gflag, and it must list EVERY preview flag in use, so
+    # adding a second one means rewriting the value to carry both rather than
+    # adding a key. YBA is what enforces this; nothing in the deployer does.
+    gFlags:
+      masterGFlags:
+        allowed_preview_flags_csv: ysql_yb_enable_mage
+        ysql_yb_enable_mage: "true"
+      tserverGFlags:
+        allowed_preview_flags_csv: ysql_yb_enable_mage
+        ysql_yb_enable_mage: "true"
 
 # The amp controller's db.Connect targets yb_storage at STARTUP, so it must
 # exist before the controller rolls out.

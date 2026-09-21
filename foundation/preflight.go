@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -19,6 +20,37 @@ const (
 	MinK8sMajor  = 1
 	MinK8sMinor  = 27
 )
+
+// checkLocalPaths rejects a spec naming a chart or a CRD bundle that is not
+// there.
+//
+// Both are handed straight to helm and kubectl, which take a file, a directory
+// or a URL — so the only thing worth checking here is the local case, and
+// checking it early turns "Error: path not found" from helm, tens of seconds
+// into an install that has already applied CRDs, into a named field in a
+// preflight failure.
+func (d *Deployer) checkLocalPaths() error {
+	if d.spec.ChartSource == ChartPath && !isRemote(d.spec.YBA.Chart) {
+		if _, err := os.Stat(d.spec.YBA.Chart); err != nil {
+			return fmt.Errorf("yba.chart %q does not exist: with chartSource path it is a "+
+				"packaged chart (.tgz), an unpacked chart directory (the one holding "+
+				"Chart.yaml) or an http(s) URL", d.spec.YBA.Chart)
+		}
+	}
+	if d.spec.CRDPath != "" && !isRemote(d.spec.CRDPath) {
+		if _, err := os.Stat(d.spec.CRDPath); err != nil {
+			return fmt.Errorf("crdPath %q does not exist: it is a manifest file, a directory of "+
+				"manifests (applied non-recursively) or an http(s) URL", d.spec.CRDPath)
+		}
+	}
+	return nil
+}
+
+// isRemote reports whether a path is a URL for helm and kubectl to fetch
+// rather than something on this filesystem.
+func isRemote(path string) bool {
+	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
+}
 
 // checkHelmVersion rejects a helm too old for the chart.
 func (d *Deployer) checkHelmVersion(ctx context.Context) error {

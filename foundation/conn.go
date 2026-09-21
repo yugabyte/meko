@@ -67,8 +67,8 @@ func (d *Deployer) Connect(ctx context.Context) (*Info, error) {
 		Namespace:       d.spec.Namespace,
 		UniverseName:    d.spec.UniverseName(),
 		State:           status.UniverseState,
-		SoftwareVersion: universeString(d.spec.Universe, "ybSoftwareVersion"),
-		NumNodes:        universeInt(d.spec.Universe, "numNodes"),
+		SoftwareVersion: universeString(d.spec.universe(), "ybSoftwareVersion"),
+		NumNodes:        universeInt(d.spec.universe(), "numNodes"),
 		// One host, both lanes: YSQL on 5433 as given, and the direct-RPC lane
 		// derives 9100 from the same host.
 		YSQLHostPorts: fmt.Sprintf("%s:%d", host, DefaultYSQLPort),
@@ -281,11 +281,13 @@ fi
 	return nil
 }
 
-// sslMode is the DSN's sslmode, read off the RENDERED universe body.
+// sslMode is the DSN's sslmode, read off the universe body.
 //
-// Rendered, not the raw spec: universeSpec fills in enableClientToNodeEncrypt
-// when a spec omits it, so reading the raw map would answer for a universe that
-// was never applied. Both directions of that mismatch are a DSN the database
+// There is only one body to read: universeDefaults fills enableClientToNodeEncrypt
+// in at PARSE time, so the YBUniverse entry's Spec is the map that was applied.
+// It was not always so — the defaults were once applied into a copy at render
+// time, and this read the raw one, answering for a universe that was never
+// applied. Both directions of that mismatch are a DSN the database
 // refuses — `disable` against a TLS universe gives
 //
 //	FATAL: no pg_hba.conf entry for host "...", user "yugabyte",
@@ -299,7 +301,7 @@ fi
 // broken DSN for another. Encryption without authentication of the server is
 // what is actually available here.
 func (d *Deployer) sslMode() string {
-	if tls, _ := d.spec.universeSpec()["enableClientToNodeEncrypt"].(bool); tls {
+	if tls, _ := d.spec.universe()["enableClientToNodeEncrypt"].(bool); tls {
 		return "require"
 	}
 	return "disable"

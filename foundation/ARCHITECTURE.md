@@ -113,11 +113,12 @@ deployer is testable without a cluster.
 
 | Object | Created by | Scope | Removed by |
 |---|---|---|---|
-| CRDs (15 in the bundle; we use 2) | `applyCRDs` | **cluster** | nothing, by default |
+| CRDs (12 at chart 2026.1.1, 15 at 2026.1.2; we own 2 and can apply any) | `applyCRDs` | **cluster** | nothing, by default |
 | `<ns>-yugaware` helm release | `installYBA` | namespace | `down` |
 | ClusterRole/Binding `<ns>-yugaware` | the chart | **cluster** | `down`, by name |
 | the single YBA customer | the chart's post-install Job | — | with the release |
 | `YBProvider` / `YBUniverse` | `applyCRs` | namespace | `down`, in order |
+| every other CR the spec names | `applyCRs`, in document order | namespace | `down`, in reverse |
 | master/tserver pods, PVCs | **YBA**, from the CRs | universe namespace | YBA, on CR delete |
 | the tserver `ClusterIP` Service | **the YugabyteDB chart** | universe namespace | YBA, with the universe |
 | `yb_storage` | `ensureDatabases` | in the DB | — |
@@ -149,12 +150,40 @@ what scopes it to one universe. Consequences worth knowing:
 
 ## The spec, and where validation lives
 
-`provider:` and `universe:` are the `YBProvider` and `YBUniverse` **spec bodies
-verbatim**, and `yba.values:` is yugaware chart values verbatim. None is a
-translated subset. The alternative — a Go struct per CR, extended every time
-someone needs a field nobody modelled and re-extended on every operator release —
-is what this replaced. With passthrough, `chartVersion` alone decides which
-release's fields are legal and a new field needs no code.
+**Every CR is a top-level key naming its kind**, whose value is `{name, spec}`:
+`name` is `metadata.name`, `spec` is the CR's spec body verbatim, and a list
+under the key declares several objects of one kind. `YBProvider` and
+`YBUniverse` are two such keys: no Go struct and no field list, so any kind in
+the bundle is reachable the day its CRD ships. They are not *entirely*
+unprivileged, and the exceptions are worth knowing — `Render` fills the
+provider's `kubeNamespace`, `universeDefaults` defaults the universe body,
+`Validate` requires one universe and puts any provider above it, and
+`applyCRs` waits on the provider and runs the release check before the
+universe. Each of those exists because the deployer has to *do* something
+about that object — wait, connect, create databases — not because the kind is
+modelled. `yba.values:` is yugaware chart values verbatim on the
+same principle.
+
+`name` sits beside `spec` rather than inside it because they are different
+fields: `spec.name` is **required** by `KMSConfig`, `PitrConfig` and `DrConfig`
+and real on `StorageConfig` and `BackupSchedule`, so a body whose `name` was
+lifted into metadata would be missing a required field.
+
+**Case is what separates the two halves of the file.** An uppercase-initial key
+is a CR kind; everything else must be one of the Spec's own fields, which keeps
+`KnownFields` on for the settings — without that split, a mistyped `namespaec:`
+would become a CR named "namespaec" instead of a parse error. Every Spec field
+is lowerCamel and every operator kind is UpperCamel, so nothing has to enumerate
+kinds to tell them apart.
+
+**Key order is apply order**, and teardown is its exact reverse. `Load` walks
+the document as a `yaml.Node` rather than decoding into a map, because Go
+randomises map iteration and would lose it.
+
+The alternative — a Go struct per CR, extended every time someone needs a field
+nobody modelled and re-extended on every operator release — is what this
+replaced. With passthrough, `chartVersion` alone decides which release's fields
+are legal and a new field needs no code.
 
 Nothing here re-implements the CRD's schema. `kubectl apply` sends strict field
 validation, so the API server rejects an undeclared field, a wrong type, a bad
@@ -170,6 +199,12 @@ say the same thing slightly earlier, and would go stale between bumps. The cost
 of not having it is that a passthrough typo surfaces on apply rather than in a
 cluster-less test.
 
+The same argument rules out mirroring **YBA's** rules, not just the CRD's:
+which replication factors it supports, and how it wants a placement to add up,
+move between releases, so a copy here starts rejecting specs YBA would accept.
+What survives is only the cross-reference nothing outside this file can make —
+a placement naming a zone the provider does not define.
+
 `Spec.Validate` therefore covers only what no schema can express — things the CRD
 happily accepts and **YBA then rejects asynchronously**, often with nothing
 written back to the CR:
@@ -178,21 +213,25 @@ written back to the CR:
 |---|---|
 | `ybSoftwareVersion` non-empty | `universeState: "Error Creating"`, action still `queued`, reason only in the yugaware log |
 | `ybSoftwareVersion` is a release YBA has (`installYBA`, not `Validate` — it needs the cluster) | the same opaque `Error Creating`, from `Helm Package path not found for release` |
-| `replicationFactor` ∈ {1,3,5,7}, `numNodes ≥ RF` | the CRD constrains neither |
-| `placementInfo` zones exist in the provider, counts sum to `numNodes` | a failed task, tens of minutes in |
-| a provider block or a `providerName` | the auto-provider cannot supply registry or storage class |
+| `numNodes ≥ replicationFactor` | the CRD constrains neither |
+| `placementInfo` zones exist in the provider | a failed task, tens of minutes in |
+| exactly one `YBUniverse`, and at most one `YBProvider` | `connstr`/`ensureDatabases`/the tserver lookup each resolve one universe, and a universe references one provider |
+| `YBProvider` above `YBUniverse` | keys apply top to bottom, and YBA rejects a universe whose provider has not registered |
+| every entry has a `name` and a `spec` | the API server rejects an empty name while naming no key in the file |
+| no `(kind, name)` twice | the API server treats the second as a server-side apply of the first, so one entry silently does nothing |
+| `chartVersion` set under `chartSource: repo` | an empty one is a failed helm lookup, not "latest" |
 | provider zones agree on one `kubeNamespace` | this deployer's lookups run in exactly one |
 
 ### The Spec is the rendered body
 
 Every universe default this deployer owns is applied at **parse time**
-(`Spec.universeDefaults`), so `s.Universe` and the rendered `YBUniverse` spec are
-the same map. Anything reading the Spec — `sslMode`, the storage-class preflight,
+(`Spec.universeDefaults`), so the `YBUniverse` entry's `Spec` and the rendered
+`YBUniverse` spec body are the same map. Anything reading the Spec — `sslMode`, the storage-class preflight,
 `Validate` — sees exactly what the cluster gets.
 
 This is load-bearing rather than tidy. When those defaults were applied at render
-time into a copy, `s.Universe` was authoritative for some fields and stale for
-others, and `sslMode` read the stale one: it saw no `enableClientToNodeEncrypt`,
+time into a copy, the Spec's own copy was authoritative for some fields and
+stale for others, and `sslMode` read the stale one: it saw no `enableClientToNodeEncrypt`,
 fell back to the CRD's default of `true`, and emitted `sslmode=require` for a
 universe rendered with TLS off. `TestTheSpecIsTheRenderedBody` compares the two
 key sets in both directions so a default cannot drift back.
@@ -209,10 +248,92 @@ to be no-ops.
 
 1. **Preflight** — binaries on PATH, cluster reachable, helm ≥ 3.11, k8s ≥ 1.27,
    every storage class the spec names exists (and warns unless it binds
-   `WaitForFirstConsumer`), every pull secret the spec names exists, and
-   `yba.values.yugaware.defaultUser.password` is set.
+   `WaitForFirstConsumer`), every pull secret the spec names exists,
+   `yba.values.yugaware.defaultUser.password` is set, and any local `yba.chart`
+   or `crdPath` is actually there.
 2. **CRDs** — `kubectl apply --server-side -f <bundle for chartVersion>`, with a
    local-path override for a cluster with no egress.
+
+   ### Where the chart and the CRDs come from
+
+   `chartSource` decides what `yba.chart` means, and whether `chartVersion` is
+   resolved at all:
+
+   | `chartSource` | `yba.chart` is | `chartVersion` |
+   |---|---|---|
+   | `repo` (default) | a chart name in charts.yugabyte.com | **required** — the published version helm resolves, and the CRD git ref |
+   | `path` | anything helm takes: a `.tgz`, an unpacked chart directory, or a **URL** | the CRD git ref only, and `crdPath` overrides even that |
+
+   An **unpublished build** has no published chart, so it comes from
+   `releases.yugabyte.com` — which is just a URL under `path`. The bucket is
+   public for reads and helm fetches a chart from a URL itself, so there is
+   nothing to download first and no credentials involved. There is
+   deliberately **no separate source for it**: a second enum value would be a
+   second name for the same thing, and one existed briefly before being
+   removed (`Validate` still names the replacement for a spec that uses it).
+   The bucket denies LIST, so a key that does not exist answers **403 rather
+   than 404** — a 403 means the version is wrong, not that you lack access.
+
+   A build tagged in `yugabyte/charts` resolves as a git ref too, so the CRDs
+   come from the same version and `crdPath` is unnecessary; set it when the
+   build is untagged, or the cluster has no egress.
+
+   **A chart bump can move images the pull secret does not cover.** 2026.1.2
+   switched postgres and prometheus from Docker Hub to
+   `quay.io/yugabyte/hardened-*`, which the itest robot cannot pull — the
+   yugaware pod sits in `Init:ImagePullBackOff` and the install burns the full
+   `ybaTimeout` before saying so. `examples/amp.yaml` overrides both back.
+
+   2026.1.2 also added **Perf Advisor**, a subchart enabled by default that
+   pulls under its own `imagePullSecretName` (`yugabyte-k8s-pull-secret`,
+   which nothing here creates). `helm --wait` waits for every workload in the
+   release, so its pod alone times the install out with yugaware up and
+   healthy. The spec turns it off — a foundation has no use for YBA's
+   query-tuning UI.
+
+   **Render the chart to find these, do not diff `values.yaml`.** Rendering is
+   authoritative and offline, and it sees subcharts, which a values diff does
+   not — that miss cost a 40-minute run on its own:
+
+   ```
+   helm template t ./yugaware -f <your yba.values> | grep -oE '^ *image: .*' | sort -u
+   ```
+
+   Then check each image is pullable with the secret this cluster has, tag
+   included: the public prometheus repo prefixes versions with `v` and the
+   hardened one does not, so moving only the registry resolves to a tag that
+   does not exist.
+
+   This is what `examples/amp.yaml` deploys: `2026.1.2.0-b137`, for the
+   15-kind bundle — `KMSConfig`, `TelemetryProvider` and `UniverseKeyRotation`
+   are not in 2026.1.1's 12, and installing their CRDs is not enough on its
+   own, since reconciling one needs a yugaware whose operator knows the kind.
+   A full build is also **immutable**, unlike a published line, which is what
+   `checkDBRelease` exists to catch drifting.
+
+   The **defaults** stay on the newest published line under `repo`, because
+   that is the only pairing that works with nothing else set; deploying a
+   build is a choice a spec makes explicitly.
+
+   **The spec file is the only input.** There are no chart flags: the
+   foundation workflow's `chart_version` dispatch input curls the tarball and
+   writes a spec with three values replaced, then points `FOUNDATION_SPEC` at
+   it. Leave its `db_version` empty and the chart's own `appVersion` is used,
+   because the release a yugaware has is decided by its image and the chart
+   pins that — naming only a chart would otherwise fail `checkDBRelease`
+   twenty minutes in. Leave its
+   `db_version` empty and the chart's own `appVersion` is used, because the
+   release a yugaware has is decided by its image and the chart pins that —
+   so the chart is the authority on what the universe may ask for, and naming
+   only a chart would otherwise fail `checkDBRelease` twenty minutes in.
+
+   A build that is **local** instead goes through `path` plus `crdPath` — the two halves of a downloaded release,
+   each of which helm and kubectl already accept as a file, a directory or a
+   URL. Nothing about the layout is assumed: the chart is identified by the
+   `Chart.yaml` inside it, not by its path, and a `crdPath` directory is applied
+   **non-recursively**. A leading `~` is expanded, because a YAML value is not a
+   shell word and nothing downstream expands it; anything else relative resolves
+   against the process CWD.
 3. **Namespace** — created if absent, otherwise left exactly as it is. It is
    shared with the consumer's own pods, so the `managed-by` label records only
    that a foundation lives there; it is not an ownership claim.
@@ -221,14 +342,32 @@ to be no-ops.
    settings in `HelmSets` must not be switchable off by a values file.
 5. **Customer check** — YBA must have exactly one, or the operator refuses every
    CR. See below.
-6. **Provider**, then wait for it to register. Separate from the universe's wait
-   because YBA rejects a universe naming an unregistered provider
-   *asynchronously, in the universe's status* — a much worse place to read "the
-   provider wasn't ready yet".
-7. **Universe**, then wait for it to settle.
+6. **Every CR the spec names, top to bottom.** A provider is waited for as
+   soon as it is applied — which is before the universe but not necessarily
+   before everything, since `Validate` only requires it above the
+   `YBUniverse`, so a `Release` declared higher goes out first. Separate from
+   the universe's wait because
+   YBA rejects a universe naming an unregistered provider *asynchronously, in
+   the universe's status*, a much worse place to read "the provider wasn't
+   ready yet". The release check runs immediately before the universe.
+7. **Wait** for the universe to settle, then **prune** what the spec no longer
+   declares.
 8. **Service check**, **databases**, **connection info**.
 
-### Three ordering constraints that are not obvious
+### Four ordering constraints that are not obvious
+
+**Apply order is document order, and delete order is its reverse.** Nothing
+sorts and no dependency table exists in Go: the spec author knows what
+references what and says so by position. `Load` therefore walks a `yaml.Node`
+rather than decoding into a map, which would lose it to Go's randomised
+iteration. The one rule enforced is `YBProvider` above `YBUniverse`.
+
+This is safe for everything else because the bundle ships **no admission
+webhook and no conversion strategy**: a schema-valid CR applies whether or not
+what it references exists, and the operator reports the problem asynchronously
+in `status.message` and requeues. So a `BackupSchedule` declared below a
+universe that is not up yet is accepted rather than blocking the converge, and
+the recovery is to re-`apply` once it is.
 
 **The customer must exist before any CR is applied.** The chart creates YBA's one
 customer from a **post-install hook** gated on `yugaware.defaultUser.enabled`,
@@ -257,16 +396,36 @@ nothing in it changed. `checkDBRelease` lists `/opt/yugabyte/releases` in the po
 before the universe is applied, naming both versions. Pinning `image.tag` would trade this
 for a chart-vs-image mismatch, so the check is the fix rather than more pinning.
 
+It runs immediately before the universe is applied rather than at the end of
+`installYBA`, so a `Release` key earlier in the spec has already had its chance
+to import one. And when the spec declares a `Release` it **warns rather than
+fails**: the probe lists what the yugaware image bundles, while a `Release`
+registers one in YBA's own metadata from a URL with no guarantee it lands in
+that directory, so a hard failure there would reject a correct spec. Only a
+definitive answer fails a deploy, which is the same rule the other probes in
+`yba.go` follow. A spec with no `Release` keeps the hard failure — the case
+that caught the re-cut.
+
 **`yb_storage` must exist before the consumer rolls out.** The amp controller's
 `db.Connect` targets it at startup, which is why database creation is a step of
 the bring-up rather than something the consumer does.
 
 **Teardown order is the reverse, and stranding a finalizer is unrecoverable.**
-Both CRs carry the operator's finalizer and only the operator can clear it, so
-`down` deletes the universe, then the provider, then uninstalls yugaware. Doing it
-the other way leaves a finalizer with nothing to satisfy it and the namespace
-hangs in `Terminating` forever — `kubectl delete ns` is a no-op on a Terminating
+Every CR carries the operator's finalizer and only the operator can clear it, so
+`down` walks the spec backwards, then sweeps for objects it owns that the spec
+no longer declares, and only then uninstalls yugaware. Doing it the other way
+leaves a finalizer with nothing to satisfy it and the namespace hangs in
+`Terminating` forever — `kubectl delete ns` is a no-op on a Terminating
 namespace, so nothing recovers it.
+
+For the same reason, **a CR that did not go stops the uninstall.** `down`
+otherwise collects failures and carries on, so that one bad object does not
+leave the release installed — but a CR still holding its finalizer is the case
+where leaving the release is the *better* outcome: uninstalling removes the
+only thing that can ever clear it. Leaving it is recoverable, because the
+operator keeps working and `down` is idempotent, so re-running finishes the
+job. Failures are still collected first, so every other CR is attempted before
+it gives up.
 
 ## Namespaces
 
@@ -395,6 +554,65 @@ becomes `Error Creating`; matching only the action status would wait that out fo
 the full timeout. The CRD documents four states as examples with no enum, and
 `Error Creating` is not among them, so the match is on the `Error` prefix.
 
+## Pruning: omission is deletion
+
+`apply` deletes every operator CR this deployer created that the spec no longer
+declares. Without it, removing a key would stop *sending* an object without
+removing it, and the file would stop being the source of truth — which is the
+whole point of being able to declare any kind in it.
+
+Nothing about it owns a kind. The candidate set comes from the cluster:
+
+```
+kubectl api-resources --api-group=operator.yugabyte.io --namespaced=true -o name
+kubectl -n <ns> get <those> -l app.kubernetes.io/managed-by=meko-foundation -o json
+```
+
+Anything that comes back and is not in what `Render` just produced is deleted,
+through the same `deleteCR` teardown uses, so it gets the same
+`--wait=false`-then-poll-for-absence finalizer discipline. Only `YBUniverse` is
+guaranteed rendered and so never a candidate — a provider is optional, so a
+spec that drops one leaves a labelled `YBProvider` that prune reclaims like
+anything else. `down` is still how a whole foundation goes.
+
+Three things keep it from deleting more than it should:
+
+- **The label is the ownership boundary.** Every rendered object carries
+  `app.kubernetes.io/managed-by=meko-foundation` — the same label
+  `down --delete-namespace` already refuses to proceed without — so a CR
+  somebody else put in this shared namespace is never a candidate.
+- **The query is namespace-scoped**, so one foundation cannot reach another's.
+- **A discovery failure is an error, never an empty result.** "I could not list
+  anything" and "there is nothing to delete" must not look the same to a delete
+  loop, and the empty answer is the dangerous one: it reads as success and would
+  silently stop pruning forever. An empty kind list right after `applyCRDs`
+  installed them cannot be right, so it fails too.
+
+**It runs after `waitUniverse`, not merely after the applies**, and that
+position is the correctness argument rather than a detail. One edit can both
+stop the universe using a `KMSConfig` and drop the key; disabling encryption at
+rest is a YBA *task*, so a prune before the universe settled would delete a
+config a running edit still references. Remove the key but forget the
+reference and the delete is refused or the CR sits on its finalizer, which
+`deleteCR` already reports by name.
+
+`--no-prune` opts out.
+
+**Objects predating the label are never reclaimed, and not just on the first
+run.** Only `applyCRs` stamps it, and it sends only what the spec currently
+declares — so a CR an earlier foundation created acquires the label the next
+time an `apply` sends it, and one the spec has *already* dropped never does.
+It is invisible to `ownedObjects`, so neither `prune` nor `down`'s sweep will
+touch it, on any run.
+
+That is the label doing its job rather than failing at it: the boundary is
+what stops this deleting a CR somebody else put in a shared namespace, and it
+cannot tell one of those from an old one of ours. The case to know about is a
+kind dropped in the same edit as the upgrade — it keeps its finalizer, and
+`down`'s helm uninstall then removes the operator that would have cleared it.
+`kubectl delete` it by hand, or re-add the key, `apply` (which labels it), and
+drop it again.
+
 ## Day-2
 
 Edit the spec file and `apply`. Reviewable as a manifest diff via `render`, which
@@ -409,6 +627,7 @@ is the review gate GitOps gives for free.
 | disk grow | `tserverVolume` / `masterVolume` — in-place grow only |
 | pause / resume | `paused` |
 | helm overrides | `kubernetesOverrides` |
+| anything else YBA has — a backup target, a certificate, a telemetry export, encryption at rest | a new top-level key naming the kind |
 
 **Create-time only** — changing these rebuilds the universe rather than editing
 it, because the CRD marks them `self == oldSelf`: `enableClientToNodeEncrypt`,
@@ -432,6 +651,11 @@ cert work in [#1114](https://github.com/yugabyte/meko/issues/1114).
   level-triggered. Wrapping it in an imperative write-ahead task system is *less*
   standard, not more.
 - **A CRD schema check.** See [above](#the-spec-and-where-validation-lives).
+- **Go structs for any CR kind, the two required ones included.** The whole
+  point of the top-level-key form is that a kind shipped in a future chart is
+  usable the day its CRD is, with no drift check and nothing here to update.
+  Generating structs from the CRD schemas would recreate exactly the per-CR type
+  maintenance this module was built to replace.
 - **TLS.** See [Day-2](#day-2).
 - **Cross-cluster addressing.** See [The address contract](#the-address-contract).
 - **Foundation as a YCP desired-state resource.** `ycp/reconcile`'s contract maps

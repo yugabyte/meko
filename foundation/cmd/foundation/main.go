@@ -113,6 +113,10 @@ func (c *common) load() (*foundation.Spec, error) {
 	if *c.namespace != "" {
 		spec.Namespace = *c.namespace
 	}
+	// --namespace can move the universe, so the zone rule is re-checked.
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
 	return spec, nil
 }
 
@@ -158,7 +162,7 @@ func cmdRender(args []string) error {
 	// The CRDs are cluster-scoped and shared, and are applied by version rather
 	// than rendered, so name the URL instead of silently omitting the step.
 	fmt.Printf("\nCRDs (cluster-scoped, apply once per cluster):\n  kubectl apply --server-side -f %s\n",
-		foundation.CRDURL(spec.ChartVersion))
+		spec.CRDSource())
 	return nil
 }
 
@@ -216,6 +220,8 @@ func cmdConverge(ctx context.Context, args []string, initial bool) error {
 	ybaTimeout := fs.Duration("yba-timeout", 0, "how long to wait for the yugaware install")
 	univTimeout := fs.Duration("universe-timeout", 0, "how long to wait for the universe to settle")
 	shell := fs.Bool("shell", false, "emit connection details as shell exports instead of JSON")
+	noPrune := fs.Bool("no-prune", false,
+		"leave operator CRs the spec no longer declares on the cluster")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -224,6 +230,9 @@ func cmdConverge(ctx context.Context, args []string, initial bool) error {
 		return err
 	}
 	d := deployer(spec).WithTimeouts(*ybaTimeout, *univTimeout, 0)
+	if *noPrune {
+		d = d.WithoutPrune()
+	}
 
 	start := time.Now()
 	var info *foundation.Info

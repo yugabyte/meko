@@ -9,6 +9,16 @@ import (
 	"meko/foundation/ybuniverse"
 )
 
+// The label every rendered object carries, and the one `down
+// --delete-namespace` already checks before it will touch a namespace.
+//
+// It is what makes pruning safe: the delete set is drawn from a labelled
+// query, so nothing this deployer did not create can be in it.
+const (
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	ManagedByValue = "meko-foundation"
+)
+
 // Manifest is one rendered Kubernetes object, ready to apply.
 type Manifest struct {
 	// Name is the file `render` writes it to, and the label an apply logs.
@@ -19,7 +29,19 @@ type Manifest struct {
 	JSON []byte
 	// Kind is what the object is, so an apply can order and report by it.
 	Kind string
+	// ObjectName is metadata.name, so a log line and an error can name the
+	// object rather than just its kind.
+	ObjectName string
 }
+
+// String is how every log line and error names an object.
+//
+// Worth having because these objects are addressed on the command line by
+// their manifest on stdin ("kubectl delete -f -"), which is kind-agnostic —
+// SupportBundle's singular really is "support-bundle", and deriving a resource
+// name from a kind string is per-kind knowledge this package does not have. So
+// the argv says nothing about what is being deleted and the message has to.
+func (m Manifest) String() string { return m.Kind + "/" + m.ObjectName }
 
 // Render builds every object a foundation needs, in apply order.
 //
@@ -43,30 +65,47 @@ type Manifest struct {
 // kubernetesOverrides.serviceEndpoints entry, selector included — so it is
 // asked for here (see TServerEndpointName) but never built here.
 func (s *Spec) Render() ([]Manifest, error) {
-	var manifests []Manifest
-
-	// The provider first: the universe references it by name, and YBA cannot
-	// place a universe against a provider that does not exist yet.
-	if len(s.Provider) > 0 {
-		name, _ := s.Provider["name"].(string)
-		provider, err := s.providerSpec()
-		if err != nil {
-			return nil, err
+	manifests := make([]Manifest, 0, len(s.Resources))
+	for i, r := range s.Resources {
+		body := r.Spec
+		if r.Kind == ybuniverse.KindProvider {
+			var err error
+			if body, err = s.providerSpec(r); err != nil {
+				return nil, err
+			}
 		}
-		cr := ybuniverse.Render(ybuniverse.KindProvider, name, s.Namespace, provider)
-		body, err := marshal(cr)
+		cr := ybuniverse.Render(r.Kind, r.Name, s.Namespace, body)
+		// The ownership boundary for pruning. Only a labelled object is a
+		// candidate for deletion, so a CR somebody else put in this namespace
+		// is never touched — and neither is one created before the label
+		// existed, which is a gap rather than a feature: anything the spec
+		// still declares is re-labelled by the next apply, but an object
+		// dropped in the same edit that introduced the label never is. See
+		// ARCHITECTURE.md's Pruning section.
+		md := cr["metadata"].(map[string]any)
+		md["labels"] = map[string]any{ManagedByLabel: ManagedByValue}
+		doc, err := marshal(cr)
 		if err != nil {
-			return nil, fmt.Errorf("render YBProvider: %w", err)
+			return nil, fmt.Errorf("render %s %s: %w", r.Kind, r.Name, err)
 		}
-		manifests = append(manifests, Manifest{Name: "ybprovider.json", JSON: body, Kind: ybuniverse.KindProvider})
+		manifests = append(manifests, Manifest{
+			Name:       resourceFile(i, r),
+			JSON:       doc,
+			Kind:       r.Kind,
+			ObjectName: r.Name,
+		})
 	}
+	return manifests, nil
+}
 
-	universe := ybuniverse.Render(ybuniverse.KindUniverse, s.UniverseName(), s.Namespace, s.universeSpec())
-	body, err := marshal(universe)
-	if err != nil {
-		return nil, fmt.Errorf("render YBUniverse: %w", err)
-	}
-	return append(manifests, Manifest{Name: "ybuniverse.json", JSON: body, Kind: ybuniverse.KindUniverse}), nil
+// resourceFile names the file `render -o DIR` writes and the golden the tests
+// compare.
+//
+// Index first, because declaration order IS apply order and `ls` would
+// otherwise sort alphabetically and lie about it. Name included because two
+// objects of one kind are legal.
+func resourceFile(i int, r Resource) string {
+	return fmt.Sprintf("%d-%s-%s.json", i+1, strings.ToLower(r.Kind), r.Name)
 }
 
 // providerSpec is the provider body with this deployer's one default filled in:
@@ -84,9 +123,9 @@ func (s *Spec) Render() ([]Manifest, error) {
 // deployer follows it (Spec.UniverseNamespace). The default is co-location,
 // which is what every consumer in this repo wants — amp's controller and
 // endpoints share the namespace with their database.
-func (s *Spec) providerSpec() (map[string]any, error) {
-	out := make(map[string]any, len(s.Provider))
-	for k, v := range s.Provider {
+func (s *Spec) providerSpec(r Resource) (map[string]any, error) {
+	out := make(map[string]any, len(r.Spec))
+	for k, v := range r.Spec {
 		out[k] = v
 	}
 	regions := deepCopyList(asList(out["regions"]))
@@ -143,13 +182,6 @@ func deepCopyValue(v any) any {
 	return v
 }
 
-// universeSpec is the YBUniverse spec body.
-//
-// It is s.Universe as-is: the defaults this deployer owns are applied at parse
-// time (Spec.universeDefaults), so there is exactly one map and no way for a
-// reader of the Spec to disagree with the CR that gets applied.
-func (s *Spec) universeSpec() map[string]any { return s.Universe }
-
 // marshal renders obj as indented JSON with sorted keys.
 //
 // encoding/json sorts map keys, which is what makes a rendered manifest
@@ -162,6 +194,19 @@ func marshal(obj map[string]any) ([]byte, error) {
 		return nil, err
 	}
 	return append(b, '\n'), nil
+}
+
+// CRDSource is where this spec's CRD bundle comes from: the local or remote
+// override when set, else the bundle for the chart version.
+//
+// Exported because `render` has to print the apply command it is deliberately
+// not running, and printing CRDURL directly there ignored crdPath — telling
+// the reader to apply a bundle the spec had overridden.
+func (s *Spec) CRDSource() string {
+	if s.CRDPath != "" {
+		return s.CRDPath
+	}
+	return CRDURL(s.ChartVersion)
 }
 
 // CRDURL is where the CRD bundle for a chart version lives.

@@ -10,8 +10,12 @@ import (
 	"meko/foundation/ybuniverse"
 )
 
-// applyCRs server-side applies the provider and the universe, in that order,
-// waiting for the provider to register in between.
+// applyCRs server-side applies every CR the spec declares, in the order the
+// spec declares them.
+//
+// Two kinds get something extra, and only because the deployer has to do
+// something about them rather than because they are privileged: it waits for
+// a YBProvider to register, and runs the release check before a YBUniverse.
 //
 // force=true takes ownership of fields another manager set. Without it, a CR
 // somebody once edited with `kubectl edit` comes back as a field-manager
@@ -24,12 +28,19 @@ func (d *Deployer) applyCRs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Render returns them in dependency order — provider before universe, since
-	// YBA cannot place a universe against a provider that does not exist. The
-	// provider is also waited on before the universe is applied, because YBA
-	// rejects a universe naming a provider that has not finished registering.
+	// Document order, which Validate has already checked puts any YBProvider
+	// above the YBUniverse — YBA cannot place a universe against a provider
+	// that does not exist, and it rejects one whose provider has not finished
+	// registering, hence the wait rather than just the ordering.
 	for _, m := range manifests {
-		d.log("applying %s from %s", m.Kind, m.Name)
+		if m.Kind == ybuniverse.KindUniverse {
+			// Last thing before the universe asks for the release, so a
+			// Release entry above has already had its chance to import it.
+			if err := d.checkDBRelease(ctx); err != nil {
+				return err
+			}
+		}
+		d.log("applying %s from %s", m, m.Name)
 		res, err := d.kubectl(ctx, m.JSON, "apply", "--server-side", "--force-conflicts", "-f", "-")
 		if err != nil {
 			return err
@@ -107,7 +118,7 @@ func (d *Deployer) waitProvider(ctx context.Context) error {
 // go through.
 //
 // Nothing here creates it: it is declared as a serviceEndpoints entry in the CR
-// (see Spec.universeSpec), and the chart renders it with its own selector. This
+// (see Spec.universeDefaults), and the chart renders it with its own selector. This
 // only verifies the result, because two chart values have to line up for that
 // endpoint to render at all and neither is ours to set:
 //

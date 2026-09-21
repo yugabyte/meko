@@ -1,0 +1,4 @@
+# The spec the foundation CI dispatch writes for a build the committed spec
+# does not name. A slash anchors a pattern to this directory, so the path is
+# relative to foundation/, not to the repo root.
+examples/.ci-dispatch.yaml

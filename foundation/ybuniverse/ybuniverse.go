@@ -53,20 +53,18 @@ const (
 	ActionFailed  = "failed"
 )
 
-// Render builds a CR object of kind from a spec body passed through as given.
+// Render builds a CR object of kind from a spec body passed through UNTOUCHED.
 //
-// `name` is a parameter rather than read from the body, because the two CRs
-// spell their name differently — YBUniverse has spec.universeName, YBProvider
-// has none at all. Keeping metadata.name and the body in step is the caller's
-// job; render.go does it at both call sites.
+// `name` is a parameter because it is metadata.name, which is a different
+// field from whatever the body calls itself — YBUniverse has spec.universeName,
+// and spec.name is a required field of KMSConfig, PitrConfig and DrConfig and a
+// real one on StorageConfig and BackupSchedule. So the body's own `name` is the
+// CR's, never the object's, and stripping it would break those kinds.
 func Render(kind, name, namespace string, spec map[string]any) map[string]any {
 	body := make(map[string]any, len(spec))
 	for k, v := range spec {
 		body[k] = v
 	}
-	// `name` is the object's identity, not part of YBProvider.spec, so it is
-	// lifted into metadata rather than sent as a spec field the CRD would reject.
-	delete(body, "name")
 	return map[string]any{
 		"apiVersion": APIVersion,
 		"kind":       kind,

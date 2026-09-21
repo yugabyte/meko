@@ -467,6 +467,23 @@ jobs:
       - name: Tests
         run: go test -race ./...
 
+      # A golden committed out of step with the renderer is invisible: the test
+      # passes against the file it should have failed against. Regenerating and
+      # requiring a clean tree is the only thing that catches it.
+      #
+      # `git status`, not `git diff`: a renamed manifest adds a golden as well
+      # as removing one, and diff does not report an untracked file. (It does
+      # report the deletion — that half is fine either way.)
+      - name: Goldens are committed in sync
+        run: |
+          go test . -update
+          if [ -n "$(git status --porcelain -- testdata/)" ]; then
+            echo "::error::testdata/ is stale — run 'go test . -update' in foundation/ and commit the result"
+            git status --porcelain -- testdata/
+            git diff -- testdata/
+            exit 1
+          fi
+
   meko_ycp_e2e:
     name: Meko YCP — build & deploy (kind)
     needs: changes

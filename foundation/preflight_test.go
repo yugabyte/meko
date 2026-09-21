@@ -2,6 +2,8 @@ package foundation
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -192,7 +194,7 @@ func TestPullSecretsIsOnlyYugawares(t *testing.T) {
 	}
 	// Naming one on the universe must not add a requirement: that Secret has to
 	// exist beside the DB pods, which may be in a namespace we never touch.
-	spec.Universe["kubernetesOverrides"] = map[string]any{
+	spec.universe()["kubernetesOverrides"] = map[string]any{
 		"Image": map[string]any{"pullSecretName": "somewhere-elses-secret"},
 	}
 	for _, name := range spec.PullSecrets() {
@@ -200,5 +202,56 @@ func TestPullSecretsIsOnlyYugawares(t *testing.T) {
 			t.Error("PullSecrets requires the DB image's secret in the foundation's namespace; " +
 				"YBA propagates that one into the universe's namespace itself")
 		}
+	}
+}
+
+// TestPreflightNamesAMissingChartOrCrdPath turns a path typo into a named
+// field rather than a helm or kubectl failure after the CRDs have already been
+// applied.
+func TestPreflightNamesAMissingChartOrCrdPath(t *testing.T) {
+	dir := t.TempDir()
+	chart := filepath.Join(dir, "yugaware-2026.1.1.tgz")
+	if err := os.WriteFile(chart, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	crds := filepath.Join(dir, "crds")
+	if err := os.Mkdir(crds, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name          string
+		chart, crdDir string
+		source        ChartSource
+		wantErr       string
+	}{
+		{name: "both present, tarball and directory", chart: chart, crdDir: crds, source: ChartPath},
+		{name: "chart missing", chart: filepath.Join(dir, "nope.tgz"), crdDir: crds, source: ChartPath,
+			wantErr: "yba.chart"},
+		{name: "crdPath missing", chart: chart, crdDir: filepath.Join(dir, "nope"), source: ChartPath,
+			wantErr: "crdPath"},
+		// A URL is helm's and kubectl's to fetch, so there is nothing local to
+		// stat and no reason to fail.
+		{name: "URLs are not checked", chart: "https://example.test/yugaware.tgz",
+			crdDir: "https://example.test/crds.yaml", source: ChartPath},
+		// Under repo, yba.chart is a chart NAME, not a path.
+		{name: "a repo chart name is not a path", chart: "yugabytedb/yugaware", crdDir: crds, source: ChartRepo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := loadExample(t, "amp.yaml")
+			spec.ChartSource = tc.source
+			spec.YBA.Chart = tc.chart
+			spec.CRDPath = tc.crdDir
+			err := New(spec, (&Recorder{}).Runner()).WithLogger(func(string, ...any) {}).checkLocalPaths()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkLocalPaths: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to name %q", err, tc.wantErr)
+			}
+		})
 	}
 }

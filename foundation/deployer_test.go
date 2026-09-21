@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -97,11 +98,20 @@ func TestApplyCRDsHonoursLocalPath(t *testing.T) {
 // TestInstallYBAArgv pins the three settings that make this an operator-driven
 // foundation, and the release naming that keeps concurrent foundations from
 // clobbering each other's cluster-scoped RBAC.
+// repoChartVersion is a published line, which is the only thing the repo
+// source can resolve. The example deploys an unpublished build from the
+// release bucket, so this test sets the repo source explicitly rather than
+// inheriting whatever the example happens to name.
+const repoChartVersion = "2026.1.1"
+
 func TestInstallYBAArgv(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "get statefulset", Result: Result{Stdout: "amp-yugaware"}},
 	}}
 	d, spec := testDeployer(t, rec)
+	spec.ChartSource = ChartRepo
+	spec.ChartVersion = repoChartVersion
+	spec.YBA.Chart = DefaultChartRepo
 	if err := d.installYBA(context.Background()); err != nil {
 		t.Fatalf("installYBA: %v", err)
 	}
@@ -121,7 +131,7 @@ func TestInstallYBAArgv(t *testing.T) {
 		"upgrade --install amp-yugaware yugabytedb/yugaware",
 		"--namespace amp",
 		"--wait",
-		"--version 2026.1.1",
+		"--version " + repoChartVersion,
 		"--set-string yugaware.defaultUser.enabled=true",
 		"--set-string yugaware.kubernetesOperatorEnabled=true",
 		"--set-string yugaware.kubernetesOperatorNamespace=amp",
@@ -161,35 +171,6 @@ func TestInstallYBAOmitsVersionForALocalChart(t *testing.T) {
 		}
 		if strings.Contains(a, "repo add") {
 			t.Error("added the chart repo for a local chart")
-		}
-	}
-}
-
-// The s3 source needs credentials this package does not manage, so it must fail
-// with the fix rather than half-attempt a download.
-func TestInstallYBARejectsS3WithTheFix(t *testing.T) {
-	rec := &Recorder{}
-	d, spec := testDeployer(t, rec)
-	spec.ChartSource = ChartS3
-	err := d.installYBA(context.Background())
-	if err == nil {
-		t.Fatal("installYBA accepted chartSource s3")
-	}
-	for _, want := range []string{"s3://releases.yugabyte.com/2026.1.1/helm/yugaware-2026.1.1.tgz", "chartSource: path"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q is missing %q", err, want)
-		}
-	}
-}
-
-func TestShortVersion(t *testing.T) {
-	for in, want := range map[string]string{
-		"2025.2.1.0-b141": "2025.2.1",
-		"2025.1.0":        "2025.1.0",
-		"2.20":            "2.20",
-	} {
-		if got := ShortVersion(in); got != want {
-			t.Errorf("ShortVersion(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -437,9 +418,12 @@ func TestEnsureDatabasesNamesTheSelectorWhenNoPodMatches(t *testing.T) {
 // nothing else reclaims.
 func TestDownOrderAndClusterScopedCleanup(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
-		// The CR is gone on the first poll, so the finalizer wait returns.
-		{Match: "get ybuniverse", Result: Result{ExitCode: 1, Stderr: `Error from server (NotFound)`}},
-		{Match: "get ybprovider", Result: Result{ExitCode: 1, Stderr: `Error from server (NotFound)`}},
+		// Down addresses every object by its manifest on stdin, so one stub
+		// answers each finalizer poll: the CR is gone on the first one.
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: `Error from server (NotFound)`}},
+		// Down also sweeps for objects we own that the spec dropped.
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
 	}}
 	d, spec := testDeployer(t, rec)
 	if err := d.Down(context.Background(), DownOptions{}); err != nil {
@@ -456,21 +440,18 @@ func TestDownOrderAndClusterScopedCleanup(t *testing.T) {
 		return -1
 	}
 	// The universe goes first: the operator deletes the DB before its own RBAC
-	// disappears, so uninstalling the release first would strand the pods.
-	del, uninstall := idx("delete ybuniverse"), idx("uninstall")
-	if del < 0 || uninstall < 0 || del > uninstall {
-		t.Errorf("universe delete must precede helm uninstall; argv order: %v", argvs)
-	}
-	// The provider is between them: after the universe that references it, and
-	// before the operator that holds its finalizer is uninstalled. Stranding
+	// disappears, so uninstalling the release first would strand the pods. The
+	// provider goes last of the CRs, after the universe that references it and
+	// before the operator holding its finalizer is uninstalled — stranding
 	// that finalizer is what leaves a namespace Terminating with no way back.
-	prov := idx("delete ybprovider")
-	if prov < 0 {
-		t.Fatalf("teardown never deleted the YBProvider it created; argv order: %v", argvs)
+	//
+	// Neither position is coded: teardown walks the spec backwards, and the
+	// spec requires YBProvider above YBUniverse.
+	if got, want := deletedObjects(t, rec), []string{"YBUniverse/foundation", "YBProvider/foundation"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("deleted %v, want %v", got, want)
 	}
-	if prov < del || prov > uninstall {
-		t.Errorf("provider delete must fall between the universe delete and the helm uninstall; "+
-			"argv order: %v", argvs)
+	if del, uninstall := idx("delete -f -"), idx("uninstall"); del < 0 || uninstall < 0 || del > uninstall {
+		t.Errorf("CR deletes must precede the helm uninstall; argv order: %v", argvs)
 	}
 	// The chart's ClusterRole/ClusterRoleBinding are named after the release and
 	// a namespace delete never reclaims a cluster-scoped object.
@@ -482,14 +463,16 @@ func TestDownOrderAndClusterScopedCleanup(t *testing.T) {
 			t.Errorf("teardown never ran %q; that object leaks and collides with the next foundation", want)
 		}
 	}
-	if crb := idx("delete clusterrolebinding"); crb >= 0 && crb < uninstall {
+	if crb := idx("delete clusterrolebinding"); crb >= 0 && crb < idx("uninstall") {
 		t.Error("cluster RBAC was deleted before the helm uninstall that owns it")
 	}
 	// Both destructive-beyond-this-foundation steps must be off by default.
 	if i := idx("delete namespace"); i >= 0 {
 		t.Error("Down deleted the namespace by default; it is shared with the consumer's workloads")
 	}
-	if i := idx("delete -f"); i >= 0 {
+	// Not "delete -f", which the CR deletes now use too: the CRDs are
+	// addressed by their bundle source.
+	if i := idx("delete -f " + d.crdSource()); i >= 0 {
 		t.Error("Down deleted the CRDs by default; they are cluster-scoped and shared")
 	}
 }
@@ -513,9 +496,7 @@ func TestDownFailsOnANonZeroDelete(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &Recorder{Responses: []Response{
-				{Match: "get ybuniverse", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
-				{Match: "get ybprovider", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
-				{Match: "get ybprovider", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+				{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 				{Match: "get namespace", Result: Result{Stdout: "meko-foundation"}},
 				{Match: tc.match, Result: Result{ExitCode: 1, Stderr: "forbidden: User cannot delete"}},
 			}}
@@ -536,8 +517,7 @@ func TestDownFailsOnANonZeroDelete(t *testing.T) {
 // controller and its endpoints.
 func TestDownRefusesAForeignNamespace(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
-		{Match: "get ybuniverse", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
-		{Match: "get ybprovider", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "get namespace", Result: Result{Stdout: ""}}, // no managed-by label
 	}}
 	d, _ := testDeployer(t, rec)
@@ -559,8 +539,7 @@ func TestDownRefusesAForeignNamespace(t *testing.T) {
 // the cluster-scoped objects are last.
 func TestDownContinuesPastAFailureAndReportsAll(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
-		{Match: "get ybuniverse", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
-		{Match: "get ybprovider", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "uninstall", Result: Result{ExitCode: 1, Stderr: "release not loaded"}},
 	}}
 	d, spec := testDeployer(t, rec)
@@ -679,18 +658,22 @@ func TestCheckTServerServiceWarnsOnNoEndpoints(t *testing.T) {
 	}
 }
 
-// TestDownLeavesAPreexistingProviderAlone: a spec that only NAMES a provider
-// shares it with every other universe on the cluster, so a teardown that
-// deleted it would take them with it.
-func TestDownLeavesAPreexistingProviderAlone(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
-	spec.Provider = nil
-	spec.Universe["providerName"] = "shared-gke"
+// TestDownLeavesAProviderTheSpecDoesNotDeclare: a provider is optional — the
+// operator has an auto-provider, and a universe can name one somebody else
+// registered. Teardown walks what the spec renders, so a provider it never
+// declared is simply not in the list. Deleting a shared one would take every
+// other universe on the cluster with it.
+func TestDownLeavesAProviderTheSpecDoesNotDeclare(t *testing.T) {
+	spec, err := Load([]byte("namespace: amp\n" +
+		"YBUniverse:\n  name: foundation\n  spec:\n" + testVersion +
+		"    providerName: shared-gke\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
 	rec := &Recorder{Responses: []Response{
-		{Match: "get ybuniverse", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
-		// Answered so that a Down which wrongly deletes the provider fails on
-		// the argv assertion below rather than blocking on a finalizer wait.
-		{Match: "get ybprovider", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
 	}}
 	d := New(spec, rec.Runner()).
 		WithTimeouts(time.Second, time.Second, time.Millisecond).
@@ -698,11 +681,56 @@ func TestDownLeavesAPreexistingProviderAlone(t *testing.T) {
 	if err := d.Down(context.Background(), DownOptions{}); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
-	for _, a := range rec.Argvs() {
-		if strings.Contains(a, "ybprovider") {
-			t.Fatalf("Down touched a provider it did not create: %q", a)
-		}
+	if got := deletedObjects(t, rec); !reflect.DeepEqual(got, []string{"YBUniverse/foundation"}) {
+		t.Errorf("deleted %v, want only the universe", got)
 	}
+}
+
+// TestDownDeletesADeclaredProvider: the other half — one this spec created
+// goes, after the universe that references it.
+func TestDownDeletesADeclaredProvider(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.Down(context.Background(), DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if got := deletedObjects(t, rec); !reflect.DeepEqual(got,
+		[]string{"YBUniverse/foundation", "YBProvider/foundation"}) {
+		t.Errorf("deleted %v, want the universe then the provider", got)
+	}
+}
+
+// deletedObjects is every object a run deleted, as "Kind/name", in order.
+//
+// Read off the manifest each delete sent on stdin, because the argv is
+// kind-agnostic now: objects are addressed by `-f -` so that nothing has to
+// derive a resource name from a kind string.
+func deletedObjects(t *testing.T, rec *Recorder) []string {
+	t.Helper()
+	var out []string
+	for _, c := range rec.Calls {
+		if !strings.Contains(strings.Join(c.Argv, " "), "delete -f -") {
+			continue
+		}
+		var cr struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(c.Stdin), &cr); err != nil {
+			t.Fatalf("a delete sent something that is not a manifest: %v", err)
+		}
+		out = append(out, cr.Kind+"/"+cr.Metadata.Name)
+	}
+	return out
 }
 
 // TestInstallYBAFailsWhenYBAHasNoCustomer: the operator refuses every CR
@@ -852,7 +880,7 @@ func TestCustomerCheckFailsWhenItCannotRun(t *testing.T) {
 // enableClientToNodeEncrypt have to come from one place: `disable` against a
 // TLS universe gives `no pg_hba.conf entry ... no encryption`, and `require`
 // against a plaintext one fails just as hard. An earlier version read the raw
-// spec while universeSpec filled the field in, so a spec that omitted it
+// spec while the defaults filled the field in, so a spec that omitted it
 // rendered a plaintext universe and a require DSN.
 func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 	for _, tc := range []struct {
@@ -861,7 +889,7 @@ func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 	}{
 		{"off, as the spec sets it", false},
 		{"on", true},
-		{"absent, so universeSpec decides", nil},
+		{"absent, so universeDefaults decides", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &Recorder{Responses: []Response{
@@ -870,9 +898,9 @@ func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 			}}
 			d, spec := testDeployer(t, rec)
 			if tc.tls == nil {
-				delete(spec.Universe, "enableClientToNodeEncrypt")
+				delete(spec.universe(), "enableClientToNodeEncrypt")
 			} else {
-				spec.Universe["enableClientToNodeEncrypt"] = tc.tls
+				spec.universe()["enableClientToNodeEncrypt"] = tc.tls
 			}
 			info, err := d.Connect(context.Background())
 			if err != nil {
@@ -880,7 +908,7 @@ func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 			}
 			// The assertion is the agreement, not a fixed string: whatever the
 			// CR ends up carrying is what the DSN has to say.
-			rendered, _ := spec.universeSpec()["enableClientToNodeEncrypt"].(bool)
+			rendered, _ := spec.universe()["enableClientToNodeEncrypt"].(bool)
 			want := "sslmode=disable"
 			if rendered {
 				want = "sslmode=require"
@@ -900,29 +928,27 @@ func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 // to tserver 9100 with no cert material available.
 //
 // Loaded rather than poked, because the defaults are applied at parse time now:
-// s.Universe is the rendered body, which is what stops a reader of the Spec
+// the universe body is the rendered body, which is what stops a reader of the Spec
 // disagreeing with the CR.
 func TestTLSIsOffByDefaultOnALoadedSpec(t *testing.T) {
-	spec, err := Load([]byte("namespace: amp\nuniverse:\n  providerName: p\n" +
-		"  ybSoftwareVersion: 2026.1.1.1-b2\n"))
+	spec, err := Load([]byte(minimalSpec("")))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	for _, key := range []string{"enableNodeToNodeEncrypt", "enableClientToNodeEncrypt"} {
-		if spec.Universe[key] != false {
+		if spec.universe()[key] != false {
 			t.Errorf("%s = %v, want false written explicitly (the CRD defaults it true)",
-				key, spec.Universe[key])
+				key, spec.universe()[key])
 		}
 	}
 	// A spec that asks for TLS keeps it.
-	withTLS, err := Load([]byte("namespace: amp\nuniverse:\n  providerName: p\n" +
-		"  ybSoftwareVersion: 2026.1.1.1-b2\n  enableClientToNodeEncrypt: true\n"))
+	withTLS, err := Load([]byte(minimalSpec("    enableClientToNodeEncrypt: true\n")))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if withTLS.Universe["enableClientToNodeEncrypt"] != true {
+	if withTLS.universe()["enableClientToNodeEncrypt"] != true {
 		t.Errorf("enableClientToNodeEncrypt = %v, want the spec's own true",
-			withTLS.Universe["enableClientToNodeEncrypt"])
+			withTLS.universe()["enableClientToNodeEncrypt"])
 	}
 }
 
@@ -939,19 +965,108 @@ func TestTLSIsOffByDefaultOnALoadedSpec(t *testing.T) {
 func TestInstallYBAFailsWhenYBALacksTheDBRelease(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
-		{Match: "customer_count", Result: Result{Stdout: `{"count":1}`}},
 		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.9-b99\n"}},
 	}}
 	d, _ := testDeployer(t, rec)
-	err := d.installYBA(context.Background())
+	err := d.checkDBRelease(context.Background())
 	if err == nil {
-		t.Fatal("installYBA succeeded against a YBA without the spec's DB release")
+		t.Fatal("the check passed against a YBA without the spec's DB release")
 	}
 	// Both versions and the cause, or the reader cannot tell drift from a typo.
-	for _, want := range []string{"2026.1.1.9-b99", "ybSoftwareVersion", "MUTABLE"} {
+	for _, want := range []string{"2026.1.1.9-b99", "2026.1.2.0-b137", "MUTABLE"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing %q", err, want)
 		}
+	}
+}
+
+// TestDBReleaseCheckRunsBeforeTheUniverseApply: it used to be the last step of
+// installYBA, which is before any CR is applied — and a Release entry exists
+// precisely to import a release YBA does not have, so the check would have
+// rejected the thing that fixes it. It now runs as late as it can, immediately
+// before the universe asks for the release.
+func TestDBReleaseCheckRunsBeforeTheUniverseApply(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.2-b9\n"}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.applyCRs(context.Background()); err != nil {
+		t.Fatalf("applyCRs: %v", err)
+	}
+	check, universeApply, releaseApply := -1, -1, -1
+	for i, c := range rec.Calls {
+		joined := strings.Join(c.Argv, " ")
+		if strings.Contains(joined, "ls /opt/yugabyte/releases") {
+			check = i
+		}
+		if !strings.Contains(joined, "apply --server-side") {
+			continue
+		}
+		if strings.Contains(c.Stdin, `"kind": "YBUniverse"`) {
+			universeApply = i
+		}
+		if strings.Contains(c.Stdin, `"kind": "Release"`) {
+			releaseApply = i
+		}
+	}
+	if check < 0 || universeApply < 0 || releaseApply < 0 {
+		t.Fatalf("missing a step: check=%d universe=%d release=%d", check, universeApply, releaseApply)
+	}
+	if !(releaseApply < check && check < universeApply) {
+		t.Errorf("the release check must fall between the Release apply and the universe apply; "+
+			"release=%d check=%d universe=%d", releaseApply, check, universeApply)
+	}
+}
+
+// TestDBReleaseCheckWarnsWhenTheSpecImportsARelease: the probe lists what the
+// yugaware IMAGE bundles, while a Release CR registers one in YBA's own
+// metadata from a URL — so once a spec declares one, a mismatch here is no
+// longer definitive and failing on it would reject a correct spec.
+func TestDBReleaseCheckWarnsWhenTheSpecImportsARelease(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	if !spec.DeclaresRelease() {
+		t.Fatal("the fixture no longer declares a Release")
+	}
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.9-b99\n"}},
+	}}
+	var logged []string
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
+	if err := d.checkDBRelease(context.Background()); err != nil {
+		t.Fatalf("the check failed a spec that imports its own release: %v", err)
+	}
+	joined := strings.Join(logged, "\n")
+	if !strings.Contains(joined, "warning") || !strings.Contains(joined, "2026.1.1.9-b99") {
+		t.Errorf("no warning naming what YBA actually has; logged: %v", logged)
+	}
+}
+
+// TestDBReleaseCheckStillFailsWithoutAReleaseEntry: the half that must not be
+// weakened. This is the case that caught chart 2026.1.1 being re-cut with a
+// new appVersion, which moved the bundled release underneath a spec that had
+// been green for days.
+func TestDBReleaseCheckStillFailsWithoutAReleaseEntry(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	if spec.DeclaresRelease() {
+		t.Fatal("the fixture should not declare a Release")
+	}
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.9-b99\n"}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.checkDBRelease(context.Background()); err == nil {
+		t.Fatal("drift under a spec that imports nothing must still fail the deploy")
 	}
 }
 
@@ -959,7 +1074,7 @@ func TestInstallYBAFailsWhenYBALacksTheDBRelease(t *testing.T) {
 // than fatal — a check we cannot run must not break a deploy.
 func TestDBReleaseCheckIsInconclusiveWhenItCannotRun(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
-	version := universeString(spec.Universe, "ybSoftwareVersion")
+	version := universeString(spec.universe(), "ybSoftwareVersion")
 	for _, probe := range []Result{
 		{Stdout: "some-other\n" + version + "\n"},
 		{ExitCode: 1, Stderr: "error: unable to upgrade connection"},
@@ -974,5 +1089,300 @@ func TestDBReleaseCheckIsInconclusiveWhenItCannotRun(t *testing.T) {
 		if err := d.installYBA(context.Background()); err != nil {
 			t.Errorf("installYBA failed on probe %+v: %v", probe, err)
 		}
+	}
+}
+
+// TestApplyAppliesEveryDeclaredKindInOrder: the apply loop is kind-agnostic,
+// so a spec naming a Release and two StorageConfigs applies all of them, in
+// the order the file wrote them.
+func TestApplyAppliesEveryDeclaredKindInOrder(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.applyCRs(context.Background()); err != nil {
+		t.Fatalf("applyCRs: %v", err)
+	}
+	var applied []string
+	for _, c := range rec.Calls {
+		if !strings.Contains(strings.Join(c.Argv, " "), "apply --server-side") {
+			continue
+		}
+		var cr struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(c.Stdin), &cr); err != nil {
+			t.Fatalf("an apply sent something that is not a manifest: %v", err)
+		}
+		applied = append(applied, cr.Kind+"/"+cr.Metadata.Name)
+	}
+	want := []string{
+		"YBProvider/foundation",
+		"Release/meko-db",
+		"StorageConfig/backups",
+		"StorageConfig/archive",
+		"KMSConfig/foundation-kms",
+		"YBUniverse/foundation",
+	}
+	if !reflect.DeepEqual(applied, want) {
+		t.Errorf("applied %v, want %v", applied, want)
+	}
+}
+
+// TestDownIsTheSpecReadBackwards: teardown reverses the spec, and no kind name
+// appears in Down at all. Moving a key in the file moves it in the teardown.
+func TestDownIsTheSpecReadBackwards(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.Down(context.Background(), DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	want := []string{
+		"YBUniverse/foundation",
+		"KMSConfig/foundation-kms",
+		"StorageConfig/archive",
+		"StorageConfig/backups",
+		"Release/meko-db",
+		"YBProvider/foundation",
+	}
+	if got := deletedObjects(t, rec); !reflect.DeepEqual(got, want) {
+		t.Errorf("deleted %v, want the spec read backwards %v", got, want)
+	}
+}
+
+// TestDownAttemptsEveryCRPastAFailedDelete: one failed delete must not stop
+// the others being attempted — that half of the accumulate-all contract still
+// holds, and dropping it would leave objects nobody even asked to remove.
+//
+// What it no longer does is carry on to the uninstall: a refused delete means
+// the object is still there holding a finalizer, and removing the operator
+// then makes it unclearable. TestDownKeepsTheReleaseWhenACRIsStuck covers
+// that half.
+func TestDownAttemptsEveryCRPastAFailedDelete(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "delete -f -", Once: true, Result: Result{ExitCode: 1, Stderr: "webhook denied the request"}},
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	err := d.Down(context.Background(), DownOptions{})
+	if err == nil {
+		t.Fatal("Down hid a failed delete")
+	}
+	if !strings.Contains(err.Error(), "webhook denied") {
+		t.Errorf("error %q does not carry the reason", err)
+	}
+	// Every CR was still attempted, not just the ones before the failure.
+	if got, want := deletedObjects(t, rec), len(rendered(t, spec)); len(got) != want {
+		t.Errorf("attempted %v, want all %d", got, want)
+	}
+}
+
+// TestDownRefusesToUninstallWhenItCannotRenderIsNotDestructive: a render
+// failure used to be collected and the teardown carried on — deleting nothing,
+// then uninstalling the release and its cluster RBAC, which takes away the
+// operator holding every CR's finalizer. The namespace is then permanently
+// Terminating with nothing left that can clear it.
+func TestDownRefusesToUninstallWhenItCannotRender(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	// A body JSON cannot marshal: a non-string map key.
+	spec.universe()["gFlags"] = map[any]any{1: "x"}
+	rec := &Recorder{}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+
+	if err := d.Down(context.Background(), DownOptions{}); err == nil {
+		t.Fatal("Down hid a render failure")
+	}
+	for _, a := range rec.Argvs() {
+		if strings.Contains(a, "uninstall") || strings.Contains(a, "delete clusterrole") {
+			t.Fatalf("Down removed the operator without deleting the CRs first: %q", a)
+		}
+	}
+}
+
+// TestDownReclaimsALabelledStrayTheSpecDropped: teardown cannot delete only
+// what the CURRENT spec renders. Remove a key without pruning — `--no-prune`,
+// or a prune that failed — and the object is still on the cluster; the helm
+// uninstall would then take the operator holding its finalizer and strand the
+// namespace.
+func TestDownReclaimsALabelledStrayTheSpecDropped(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\nkmsconfigs\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: ownedList(
+			"YBProvider/foundation", "YBUniverse/foundation", "KMSConfig/dropped")}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.Down(context.Background(), DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	want := []string{
+		"YBUniverse/foundation",
+		"YBProvider/foundation",
+		"KMSConfig/dropped", // the stray, after everything the spec declares
+	}
+	if got := deletedObjects(t, rec); !reflect.DeepEqual(got, want) {
+		t.Errorf("deleted %v, want %v", got, want)
+	}
+}
+
+// TestDownDeletesEachRenderedObjectOnce: the stray sweep must not re-delete
+// what the reversed spec walk already handled.
+func TestDownDeletesEachRenderedObjectOnce(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: ownedList(
+			"YBProvider/foundation", "YBUniverse/foundation")}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.Down(context.Background(), DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if got := deletedObjects(t, rec); len(got) != 2 {
+		t.Errorf("deleted %v, want each object once", got)
+	}
+}
+
+// TestDownIssuesEveryStrayDeleteBeforeWaiting: the strays are gone from the
+// spec, so there is no declared order left and two of them can still
+// reference each other. Waiting on one at a time blocks on a live reference
+// for the whole FinalizerTimeout and then uninstalls the operator with the
+// pair still there — the same reason prune issues all of its deletes first.
+func TestDownIssuesEveryStrayDeleteBeforeWaiting(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\nstorageconfigs\nbackupschedules\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: ownedList(
+			"YBProvider/foundation", "YBUniverse/foundation",
+			"StorageConfig/backups", "BackupSchedule/nightly")}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.Down(context.Background(), DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	// The labelled query is the boundary: everything before it is the
+	// declared walk, everything after is the stray sweep. Within the sweep,
+	// every delete must precede every wait.
+	boundary := -1
+	for i, c := range rec.Calls {
+		if strings.Contains(strings.Join(c.Argv, " "), "-l "+ManagedByLabel) {
+			boundary = i
+		}
+	}
+	if boundary < 0 {
+		t.Fatalf("Down never ran the labelled query; argv: %v", rec.Argvs())
+	}
+	var strayDeletes, strayWaits []int
+	for i, c := range rec.Calls {
+		if i <= boundary {
+			continue
+		}
+		joined := strings.Join(c.Argv, " ")
+		if strings.Contains(joined, "delete -f -") {
+			strayDeletes = append(strayDeletes, i)
+		}
+		if strings.Contains(joined, "get -f -") {
+			strayWaits = append(strayWaits, i)
+		}
+	}
+	if len(strayDeletes) != 2 || len(strayWaits) == 0 {
+		t.Fatalf("expected two stray deletes and some waits; argv: %v", rec.Argvs())
+	}
+	if strayWaits[0] < strayDeletes[len(strayDeletes)-1] {
+		t.Errorf("a stray was waited on before the others were asked for; argv: %v", rec.Argvs())
+	}
+}
+
+// TestDownKeepsTheReleaseWhenACRIsStuck: a CR that did not go still holds a
+// finalizer only the operator can clear, so uninstalling the release is what
+// turns a failed teardown into an unrecoverable namespace — nothing is left
+// that can ever release it.
+//
+// Leaving the release is recoverable by comparison: the operator keeps
+// working, and `down` is idempotent. Errors are otherwise collected so a
+// partial failure does not strand the release; this is the one case where
+// stranding it is the better outcome.
+func TestDownKeepsTheReleaseWhenACRIsStuck(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	rec := &Recorder{Responses: []Response{
+		// Never goes: the finalizer is stuck.
+		{Match: "get -f -", Result: Result{Stdout: "ybuniverse.operator.yugabyte.io/foundation"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+
+	err := d.Down(context.Background(), DownOptions{FinalizerTimeout: 10 * time.Millisecond})
+	if err == nil {
+		t.Fatal("Down reported success with a CR still holding its finalizer")
+	}
+	if !strings.Contains(err.Error(), "left the helm release") {
+		t.Errorf("error %q does not say the release was left in place", err)
+	}
+	for _, a := range rec.Argvs() {
+		for _, destructive := range []string{"uninstall", "delete clusterrole", "delete namespace"} {
+			if strings.Contains(a, destructive) {
+				t.Errorf("Down ran %q while a CR still holds its finalizer; "+
+					"that leaves nothing able to clear it", a)
+			}
+		}
+	}
+}
+
+// TestDownStillUninstallsWhenEveryCRWent: the guard above must not fire on a
+// clean teardown, or `down` would stop reclaiming the release at all.
+func TestDownStillUninstallsWhenEveryCRWent(t *testing.T) {
+	spec := loadExample(t, "amp.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
+		{Match: "-l " + ManagedByLabel, Result: Result{Stdout: `{"items":[]}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.Down(context.Background(), DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	var uninstalled bool
+	for _, a := range rec.Argvs() {
+		if strings.Contains(a, "uninstall") {
+			uninstalled = true
+		}
+	}
+	if !uninstalled {
+		t.Error("a clean teardown did not uninstall the release")
 	}
 }

@@ -78,10 +78,7 @@ func (d *Deployer) installYBA(ctx context.Context) error {
 	if err := d.waitYugawareReady(ctx); err != nil {
 		return err
 	}
-	if err := d.checkYBACustomer(ctx); err != nil {
-		return err
-	}
-	return d.checkDBRelease(ctx)
+	return d.checkYBACustomer(ctx)
 }
 
 // checkDBRelease confirms YBA has the DB release the spec asks for.
@@ -99,8 +96,12 @@ func (d *Deployer) installYBA(ctx context.Context) error {
 // with appVersion 2026.1.1.1-b2 -> 2026.1.1.2-b9, and a spec that had been
 // green for days started failing with nothing in it changed. So this is not a
 // belt-and-braces check on our own input; it catches drift underneath us.
+//
+// It runs immediately before the universe is applied rather than at the end of
+// installYBA, so a Release entry earlier in the spec has already had its
+// chance to import one.
 func (d *Deployer) checkDBRelease(ctx context.Context) error {
-	want := universeString(d.spec.Universe, "ybSoftwareVersion")
+	want := universeString(d.spec.universe(), "ybSoftwareVersion")
 	if want == "" {
 		return nil // Validate already rejects this; nothing to compare.
 	}
@@ -138,12 +139,31 @@ func (d *Deployer) checkDBRelease(ctx context.Context) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("this YBA has no DB release %q — it bundles %s. YBA needs a helm package "+
+	msg := fmt.Sprintf("this YBA has no DB release %q — it bundles %s. YBA needs a helm package "+
 		"for the release, not just the version, and rejects the universe asynchronously with "+
 		"\"Helm Package path not found\" otherwise. Note a published chart version is MUTABLE: "+
 		"chart %s can be re-cut with a new appVersion, which moves the yugaware image and the "+
-		"release it carries. Set universe.ybSoftwareVersion to one of the above",
+		"release it carries",
 		want, strings.Join(have, ", "), d.spec.ChartVersion)
+
+	// A Release entry is there precisely to import a release YBA does not
+	// have, so this probe has stopped being definitive: it lists what the
+	// yugaware IMAGE bundles, while a Release registers one in YBA's own
+	// metadata from a URL, with no guarantee it lands in that directory.
+	// Failing here would be a false negative on a correct spec, and the rule
+	// in this file is that only a definitive answer fails a deploy.
+	//
+	// The cost, worth naming: a spec importing an UNRELATED release — a later
+	// one staged for an upgrade — loses drift detection on the version it is
+	// actually running.
+	if d.spec.DeclaresRelease() {
+		d.log("warning: %s. The spec declares a Release, which is what imports it, so this is "+
+			"not fatal — but if the import does not take, the universe will come back "+
+			"\"Error Creating\"", msg)
+		return nil
+	}
+	return fmt.Errorf("%s. Set ybSoftwareVersion to one of the above, or declare a Release that "+
+		"imports the one you want", msg)
 }
 
 // checkYBACustomer confirms YBA has exactly one customer, which every CR the
@@ -240,35 +260,10 @@ func (d *Deployer) resolveChart(ctx context.Context) (string, error) {
 		}
 		return d.spec.YBA.Chart, nil
 
-	case ChartS3:
-		// Unreleased itest builds exist only as release tarballs, which is the
-		// path ampqa's ybastack takes. Fetching one needs credentials this
-		// package does not manage, so it is fetched out of band and handed over
-		// as a path rather than downloaded here.
-		return "", fmt.Errorf("chartSource s3 needs the tarball fetched out of band: "+
-			"download %s and set chartSource: path with yba.chart pointing at it",
-			ChartS3URL(d.spec.ChartVersion))
-
 	case ChartPath:
 		return d.spec.YBA.Chart, nil
 	}
 	return "", fmt.Errorf("unknown chartSource %q", d.spec.ChartSource)
-}
-
-// ChartS3URL is where a yugaware release tarball lives, mirroring the layout
-// amp/test/functional/framework/apps/ybastack uses.
-func ChartS3URL(version string) string {
-	return fmt.Sprintf("s3://releases.yugabyte.com/%s/helm/yugaware-%s.tgz", version, ShortVersion(version))
-}
-
-// ShortVersion trims a build suffix to the chart's three-part version:
-// "2025.2.1.0-b141" names a chart published as "yugaware-2025.2.1.tgz".
-func ShortVersion(version string) string {
-	parts := strings.Split(strings.SplitN(version, "-", 2)[0], ".")
-	if len(parts) < 3 {
-		return version
-	}
-	return strings.Join(parts[:3], ".")
 }
 
 // yugawareSelector is the label every object the chart renders carries.

@@ -2,6 +2,9 @@
   "apiVersion": "operator.yugabyte.io/v1alpha1",
   "kind": "YBProvider",
   "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
     "name": "foundation",
     "namespace": "amp"
   },

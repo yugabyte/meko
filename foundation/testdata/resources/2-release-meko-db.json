@@ -1,0 +1,24 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "Release",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
+    "name": "meko-db",
+    "namespace": "amp"
+  },
+  "spec": {
+    "config": {
+      "downloadConfig": {
+        "http": {
+          "paths": {
+            "helmChart": "https://releases.example.test/2026.1.2.0-b137/helm/yugabyte-2026.1.2.tgz",
+            "x86_64": "https://releases.example.test/2026.1.2.0-b137/yugabyte-2026.1.2.0-b137-linux-x86_64.tar.gz"
+          }
+        }
+      },
+      "version": "2026.1.2.0-b137"
+    }
+  }
+}

@@ -2,6 +2,9 @@
   "apiVersion": "operator.yugabyte.io/v1alpha1",
   "kind": "YBUniverse",
   "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
     "name": "foundation",
     "namespace": "amp"
   },
@@ -11,17 +14,6 @@
     "enableNodeToNodeEncrypt": false,
     "enableYCQL": false,
     "enableYSQL": true,
-    "enableYSQLAuth": false,
-    "gFlags": {
-      "masterGFlags": {
-        "allowed_preview_flags_csv": "ysql_yb_enable_mage",
-        "ysql_yb_enable_mage": "true"
-      },
-      "tserverGFlags": {
-        "allowed_preview_flags_csv": "ysql_yb_enable_mage",
-        "ysql_yb_enable_mage": "true"
-      }
-    },
     "kubernetesOverrides": {
       "serviceEndpoints": [
         {
@@ -56,6 +48,6 @@
       "volumeSize": 100
     },
     "universeName": "foundation",
-    "ybSoftwareVersion": "2026.1.1.2-b9"
+    "ybSoftwareVersion": "2026.1.2.0-b137"
   }
 }
