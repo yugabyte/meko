@@ -988,12 +988,20 @@ paths:
     post:
       tags: [endpoints]
       operationId: upgradeEndpoints
-      summary: Roll endpoints onto a target version
+      summary: Roll endpoints onto the controller's endpoint version
       description: |
         Plans an asynchronous `upgrade_endpoints` task that moves every live
-        endpoint — or the subset named by `endpoint_ids` — onto `version` (an
-        opaque string the deployer knows how to run; today the endpoint image
-        tag). Returns `202` + the `Task` with a `Location` header.
+        endpoint — or the subset named by `endpoint_ids` — onto the endpoint
+        version this controller release deploys. Returns `202` + the `Task` with
+        a `Location` header.
+
+        The target is not a parameter. It is the controller's own endpoint image
+        (`--endpoint-image-tag`, or the tag of `--deploy-endpoint-image`), which
+        is already what an endpoint created by this controller runs. So a fleet
+        upgrade is two steps in a fixed order: upgrade the controller, then call
+        this. Running it twice does nothing the second time — every endpoint is
+        already at the target, so they are all skipped. The version it resolved
+        to is recorded in the task's params and result.
 
         The task is one parent that owns a child per endpoint and runs them
         itself, at most `max_parallel` at a time, persisting the target version
@@ -1007,22 +1015,23 @@ paths:
         **Fail-fast**: the first child failure stops new children from starting;
         the ones already running finish, and the task fails. **One roll at a
         time**: while an `upgrade_endpoints` task is non-terminal a second roll
-        is refused with `409` rather than queued, since two rolls naming
-        different versions would flip the fleet twice. Re-run once the first
+        is refused with `409` rather than queued — both would take the same
+        no-wait fleet lock. Re-run once the first
         reaches a terminal status; a roll that raced the check is refused when
         it executes and fails naming the roll that beat it.
 
-        A whole-fleet roll skips endpoints already recorded at `version`; an
+        A whole-fleet roll skips endpoints already recorded at the target; an
         endpoint named in `endpoint_ids` is **never** skipped, which is how an
         operator re-runs what a partial roll left behind (the recorded version is
         what was asked for, not what is running). Only the request is validated —
         an id that no longer exists comes back as a `skipped` line, not a `404`,
         since a roll is never refused because one of its endpoints cannot move.
-        `400` for a missing `version` or an out-of-range `max_parallel`; `409`
-        when a roll is already in flight. Requires the endpoint deployer
-        (`--deploy`); returns `501` otherwise.
+        `400` for an out-of-range `max_parallel`; `409` when a roll is already in
+        flight. Requires the endpoint deployer (`--deploy`); returns `501`
+        otherwise, and also when this controller's endpoint image is pinned to a
+        digest, which names no version to roll to.
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -2686,17 +2695,16 @@ components:
 
     UpgradeEndpointsRequest:
       type: object
-      required: [version]
       description: |
-        Request to move endpoints onto a target version. The version is opaque to
-        the controller — the deployer decides what it selects; today it is the
-        endpoint image tag verbatim.
+        Request to roll endpoints onto the version this controller release
+        deploys. Every field is optional: the empty body rolls the whole fleet at
+        the default parallelism.
+
+        There is no `version` field. The target is the controller's own endpoint
+        image, so an environment has exactly one endpoint version and no way to
+        express an inconsistent one. Moving it means upgrading the controller
+        first, then calling this.
       properties:
-        version:
-          type: string
-          description: |
-            The target version. Required and non-empty: an empty version would
-            clear the endpoint's pinned desired state rather than leave it alone.
         endpoint_ids:
           type: array
           description: |

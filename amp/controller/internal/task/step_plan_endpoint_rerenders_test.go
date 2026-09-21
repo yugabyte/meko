@@ -40,6 +40,7 @@ func newRerenderFixture(t *testing.T, seed ...uuid.UUID) *rerenderFixture {
 	}
 	deps := childDeps
 	deps.Subtasks = NewSubtaskRunner(w, store.Subtasks())
+	deps.Tasks = store
 	return &rerenderFixture{store: store, parent: parent, owner: w.owner, state: state, dep: dep, deps: deps}
 }
 
@@ -195,5 +196,36 @@ func TestUpgradeEndpointsRefusedWhileARerenderRolls(t *testing.T) {
 	}
 	if !errors.Is(err, ErrFleetRollInProgress) {
 		t.Fatalf("err = %v, want ErrFleetRollInProgress", err)
+	}
+}
+
+// A re-render is operator-driven (POST /endpoint-rerenders) and plans a single
+// step, so the worker's between-steps cancel check never fires while it runs.
+// Without the poll between children, a cancel on one is accepted and then does
+// nothing for the roll's whole duration.
+func TestRerenderRollStopsWhenCancelled(t *testing.T) {
+	f := newRerenderFixture(t, ep1, ep2, ep3)
+	if err := f.store.RequestCancel(t.Context(), f.parent.ID); err != nil {
+		t.Fatalf("RequestCancel: %v", err)
+	}
+
+	res := f.execute(t, PlanEndpointRerendersArgs{MaxParallel: 1})
+	if res.Err == nil {
+		t.Fatal("a cancelled re-render succeeded; it must fail so the task is not recorded as converged")
+	}
+	if !errors.Is(res.Err, ErrCancelled) {
+		t.Errorf("re-render error = %v, want it to wrap ErrCancelled", res.Err)
+	}
+	if n := len(f.dep.created); n != 0 {
+		t.Errorf("%d endpoints were redeployed after the cancel; the poll runs BEFORE a child starts", n)
+	}
+	subs, err := f.store.Subtasks().ByParent(t.Context(), f.parent.ID)
+	if err != nil {
+		t.Fatalf("ByParent: %v", err)
+	}
+	for _, s := range subs {
+		if s.Status == StatusPending || s.Status == StatusRunning {
+			t.Errorf("child %s left %s under a terminal parent", s.ID, s.Status)
+		}
 	}
 }

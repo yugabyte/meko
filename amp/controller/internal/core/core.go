@@ -226,14 +226,20 @@ type Endpoint struct {
 // endpoint id, the branch it serves, and its pinned pg version + compute size
 // (read back from the stored config). It is a core type so *PgBackend can return
 // it while task.StateStore stays free of the domain layer.
-// No cluster id: branch_id is the primary key of what a render needs, and the
-// two enumerations that build this record join through the branch.
+// The cluster id and role below are NOT part of what a render needs — branch_id
+// is — and are carried only for the fleet roll's ordering; see the field comment.
 type EndpointDeploy struct {
 	ID        uuid.UUID
 	BranchID  uuid.UUID
 	PgVersion int
 	CPU       string
 	Memory    string
+	// ClusterID is the cluster the endpoint's branch sits under, and Role its
+	// endpoint_role. Neither is rendered onto a deploy spec: they are what lets a
+	// fleet roll spread its bounded pool across clusters and move a branch's
+	// readers before its writer (ac-endpoint-upgrade.md §5.7).
+	ClusterID uuid.UUID
+	Role      string
 	// Version is the endpoint's own version (the `version` column), rendered onto
 	// the deploy spec so a redeploy keeps it. Empty means unknown, which renders
 	// as "whatever the deployer is configured with" — the behaviour of every

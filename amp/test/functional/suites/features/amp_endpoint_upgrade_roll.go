@@ -73,6 +73,9 @@ type rollRun struct {
 	pods     map[string]string
 	version  string
 	previous string
+	// pinned is true when this controller resolves the roll target from its own
+	// release rather than taking one on the request (see rollTargetIsPinned).
+	pinned bool
 }
 
 // seed puts a read_write endpoint on the default branch and one on a fork, each
@@ -83,6 +86,12 @@ func (r *rollRun) seed(ctx context.Context) error {
 		return err
 	}
 	r.cl = cl
+	// Which upgrade contract this controller serves. Probed once, before anything
+	// is rolled: a pinned controller takes no target on the request, so the
+	// scenarios below that name one have to know.
+	if pinned, ok := cl.RollTargetIsPinned(ctx); ok {
+		r.pinned = pinned
+	}
 	proj := r.a.proj
 
 	base, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
@@ -185,6 +194,13 @@ func (r *rollRun) resolvePrevious(ctx context.Context) error {
 	if r.version == "" {
 		return nil
 	}
+	if r.pinned {
+		// Nothing to resolve: this controller rolls to its own release's endpoint
+		// image and takes no target, so a second version is not something a roll can
+		// be pointed at. Reading the release list here would fail the scenario as an
+		// environment failure over a version it can no longer use.
+		return nil
+	}
 	opts := r.a.f.t.Options
 	if from := strings.TrimSpace(opts.GetString("functional.upgrade.from_endpoint_image", "")); from != "" {
 		r.previous = imageTag(from)
@@ -260,17 +276,27 @@ func (r *rollRun) refusals(ctx context.Context) error {
 	if r.version == "" {
 		return nil
 	}
-	_, _, err := r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: "", EndpointIDs: []string{r.eps[0].ID}})
+	// Both contracts reject this one, so it starts no roll either way; which of
+	// the two 400s comes back is what says whether the target is the caller's to
+	// choose. An empty version is a 400 only where `version` still exists.
+	_, _, err := r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: "", MaxParallel: 51})
 	switch status := apiErrorStatus(err); status {
 	case http.StatusBadRequest:
 	case http.StatusNotImplemented:
-		r.a.f.t.Skip("this controller has no endpoint deployer, so it cannot roll endpoints: " + err.Error())
+		r.a.f.t.Skip("this controller cannot roll endpoints: " + err.Error())
 		return nil
 	case http.StatusNotFound, http.StatusMethodNotAllowed:
 		r.a.f.t.Skip("this controller has no POST /endpoint-upgrades route: " + err.Error())
 		return nil
 	default:
-		return fmt.Errorf("a roll with an empty version returned HTTP %d (%v), want 400", status, err)
+		return fmt.Errorf("a roll with an empty version and max_parallel 51 returned HTTP %d (%v), want 400", status, err)
+	}
+	if !r.pinned {
+		// The version-carrying contract: an empty version is refused on its own.
+		_, _, err := r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: "", EndpointIDs: []string{r.eps[0].ID}})
+		if status := apiErrorStatus(err); status != http.StatusBadRequest {
+			return fmt.Errorf("a roll with an empty version returned HTTP %d (%v), want 400", status, err)
+		}
 	}
 	_, _, err = r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: r.version, EndpointIDs: []string{r.eps[0].ID}, MaxParallel: 51})
 	if status := apiErrorStatus(err); status != http.StatusBadRequest {
@@ -284,6 +310,17 @@ func (r *rollRun) refusals(ctx context.Context) error {
 // also proves a concurrent roll is refused.
 func (r *rollRun) roll(ctx context.Context, target string, checkConcurrent bool) error {
 	if r.version == "" {
+		return nil
+	}
+	if r.pinned {
+		// This controller's roll has exactly one possible target — its own release's
+		// endpoint image — so there is no second version to move between, and a roll
+		// to the version already running replaces no pod and changes no recorded
+		// version. What this scenario asserts is therefore not expressible here; a
+		// roll that genuinely moves the fleet is what amp_upgrade and
+		// amp_mixed_versions cover, since upgrading the controller is what moves the
+		// pin. The request-level refusals and the unknown-id line above still run.
+		r.a.f.logf("roll to %q skipped: this controller pins the endpoint version to its own release", target)
 		return nil
 	}
 	ids := []string{r.eps[0].ID, r.eps[1].ID}
@@ -380,7 +417,9 @@ func (r *rollRun) roll(ctx context.Context, target string, checkConcurrent bool)
 }
 
 // unknownSkipped: an id that no longer exists is a skipped line, not a refusal
-// and not a failure, and it fans out to no child.
+// and not a failure, and it fans out to no child. True under both contracts —
+// a pinned controller ignores the version below and rolls to its own pin, and
+// the endpoint named still does not exist.
 func (r *rollRun) unknownSkipped(ctx context.Context) error {
 	if r.version == "" {
 		return nil

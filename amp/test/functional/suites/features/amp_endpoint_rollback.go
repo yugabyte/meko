@@ -133,6 +133,16 @@ func (r *rollbackRun) rollBack(ctx context.Context) error {
 	if r.version == "" {
 		return nil
 	}
+	// A rollback here means rolling one endpoint to an older tag. A controller that
+	// pins the endpoint version to its own release cannot be asked for that: moving
+	// an environment back means deploying the older CONTROLLER, whose pin is the
+	// older endpoint image, and the roll then follows. That is a different
+	// operation from the one this scenario drives, so it is not run here rather
+	// than re-aimed at something it does not assert.
+	if pinned, ok := r.cl.RollTargetIsPinned(ctx); ok && pinned {
+		r.a.f.t.Skip("this controller pins the endpoint version to its own release, so an endpoint cannot be rolled to an older tag; rollback is a controller-release operation (meko#1140)")
+		return nil
+	}
 	proj := r.a.proj
 	task, loc, err := r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{
 		Version: r.previous, EndpointIDs: []string{r.ep.ID},

@@ -504,8 +504,7 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
 ## `409` on `POST /endpoint-upgrades` — a fleet roll is already in flight
 
 At most one `upgrade_endpoints` task may be non-terminal at a time, and a second
-roll is **refused rather than queued** — two rolls naming different versions would
-flip the fleet twice
+roll is **refused rather than queued**
 ([`ac-endpoint-upgrade.md`](../controller/architecture/ac-endpoint-upgrade.md) §5.6).
 The check is per kind, so re-firing an *identical* roll is refused too. Find the one
 holding it:
@@ -525,16 +524,18 @@ curl -s "$BASE/tasks/$TASK/subtasks" \
   **never reaches terminal**, so it blocks every later roll indefinitely. The resize
   `409`'s advice — wait for the in-flight task — is wrong for this one.
 
-There is no `force`, and `POST /tasks/{taskId}/cancel` reaches **neither** state above.
-A `pending` roll is missed because the request is only read inside the worker's step
-loop, which runs after a claim, so a roll nobody claimed keeps both the request and
-its status. A `running` roll is missed too: `upgrade_endpoints` plans a single step,
-so once a worker is inside it there is no later boundary to stop at and the fleet runs
-to completion — a 202 here means the request was recorded, not that the roll stopped.
-What cancel does reach is a roll whose owner died and which has since been reclaimed,
-caught before its step restarts. Otherwise retire the row by hand — and only after
-confirming nothing is executing it, or you are stamping a status over a live roll. The
-escape hatch that would cover both is
+There is no `force`. `POST /tasks/{taskId}/cancel` reaches a **`running`** roll: it
+re-reads its own task row between children, so it stops without finishing the fleet.
+Children already deploying run to completion — killing one mid-`helm --wait` leaves a
+release the next roll has to clean up — and everything not yet started is closed out.
+The task ends `failed` carrying `task cancelled by request`, which is what releases
+the fleet lock. **Use cancel for a running roll; it is the supported way to stop one.**
+
+It does not reach a **`pending`** roll, which is the stuck case above: the request is
+only read inside the worker's step loop, which runs after a claim, so a roll nobody
+claimed keeps both the request and its status. That one still means retiring the row
+by hand — and only after confirming nothing is executing it, or you are stamping a
+status over a live roll. The escape hatch that would cover it is
 [meko#1007](https://github.com/yugabyte/meko/issues/1007):
 
 ```sql

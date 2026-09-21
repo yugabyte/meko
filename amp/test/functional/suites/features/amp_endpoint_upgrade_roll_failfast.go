@@ -136,6 +136,15 @@ func (r *failfastRun) poisonedRoll(ctx context.Context) error {
 	if r.version == "" {
 		return nil
 	}
+	// Poisoning a roll means aiming it at a tag no registry has. A controller that
+	// pins the target to its own release takes no aim, so the roll would go to the
+	// image it is already running and succeed — there is no way to make a child
+	// fail through this API any more, and asserting fail-fast here would assert the
+	// opposite of what happens.
+	if pinned, ok := r.cl.RollTargetIsPinned(ctx); ok && pinned {
+		r.a.f.t.Skip("this controller pins the endpoint version to its own release, so a roll cannot be aimed at a missing tag")
+		return nil
+	}
 	task, loc, err := r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: r.poison, EndpointIDs: r.ids(), MaxParallel: failfastParallel})
 	switch status := apiErrorStatus(err); {
 	case err == nil:

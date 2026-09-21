@@ -516,11 +516,12 @@ ever run, and unlike the claim-loop hazard in §5.2 the schema cannot prevent it
 
 ### 5.6 One roll at a time — refused, not queued
 
-Two concurrent fleet rolls have no sensible interleaving, and the bad case is not
-symmetric with ordinary lock contention: two rolls naming **different** versions
-roll the whole fleet twice, the second walking every endpoint back off the version
-the first just landed. Queueing hides that — the second caller is told `202` and
-finds out only after it has happened. So a second roll is **refused**.
+Two concurrent fleet rolls have no sensible interleaving. The endpoint lock already
+stops two of them redeploying one endpoint at once, so what is left is the shape of
+the operation: a roll is an operator moving a whole fleet and watching it. Queueing
+a second one means it fires whenever the first finishes, against a fleet that has
+since moved, with its caller told `202` and finding out afterwards. So a second roll
+is **refused**.
 
 Not with an index. [867](https://github.com/yugabyte/meko/pull/867) enforced it
 with a second partial unique index on `tasks`, which dragged in the
@@ -590,10 +591,10 @@ and there is no `force`. Two shapes:
   (`controller_runbook.md`), and the escape hatch that would cover it is
   [meko#1007](https://github.com/yugabyte/meko/issues/1007).
 
-Re-firing an **identical** roll is refused too — the check is per kind, not per
-version — which is the one case queueing handled better. Making it version-aware
-would mean comparing `params` at plan time and would still be racy, so it is not
-worth the second rule.
+Re-firing a roll while one is in flight is refused too — the check is per kind —
+which is the one case queueing handled better. There is nothing to distinguish
+them by: every roll on this controller has the same target, so a "is this the
+same roll?" rule would have nothing to compare and would still be racy.
 
 A no-wait lock denied by another holder fails the task with
 `ErrFleetRollInProgress` — *another fleet upgrade is already running* — and
@@ -615,6 +616,37 @@ What the operator does about a `409`: wait for the roll in flight
 the common case, and the one queueing was better for — is a re-run once the first
 is terminal, which is when the second one has something to converge anyway.
 
+### 5.7 Order, and stopping
+
+**Order.** The enumeration comes back grouped by cluster, so a bounded pool would
+put `max_parallel` endpoints of the *same* cluster in flight at once — one
+customer's whole fleet down together. `orderRoll` interleaves: round-robin across
+clusters, and within a cluster the read-only endpoints before the `read_write` one,
+so a branch's spare read capacity moves before the thing every write goes through.
+Ties break on the endpoint id and cluster order is the cluster ids', so a reclaimed
+parent re-derives the identical sequence rather than retrying the fleet in a
+different order than the one that failed. It needs `cluster_id` and `role` on
+`core.EndpointDeploy`, which are carried for this and are not rendered onto a
+deploy spec.
+
+**Stopping.** A roll is ONE step that can run for hours, and the worker checks for a
+cancellation only *between* steps — so without something more a claimed roll runs
+the whole fleet regardless of what an operator asks for. The roll therefore re-reads
+its own task row before starting each child, through `Deps.Tasks` (`TaskReader`);
+the gap between children is the only boundary an unstaged roll has. A running step
+cannot see this any other way: the registry decodes the persisted args into the step
+struct **by value**, so a cancel that lands afterwards reaches the row and nothing
+else.
+
+On a cancel, children already deploying finish — for the same reason fail-fast lets
+them finish — and every child not yet started is abandoned, because the parent is
+about to go terminal and a pending row under one is work nothing will ever run. The
+step fails wrapping `ErrCancelled`, so the worker records "an operator stopped this"
+rather than "this broke", and the error carries the counts: a failed step records no
+result, so that is the only place the account can go. A read that fails reports "not
+cancelled" — cancellation is cooperative, and a database blip must not stop a roll
+that is otherwise converging.
+
 ## 6. API
 
 ```
@@ -628,16 +660,37 @@ nested under pool/cluster/branch. Kebab-case noun, matching `/storage-pools` and
 
 | field | default | meaning |
 |---|---|---|
-| `version` (required) | — | target version; today, the endpoint image tag |
 | `endpoint_ids` | — | explicit subset; **absent = the whole fleet** |
 | `max_parallel` | `4` | endpoints rolled at once (§5.4) |
 
-`202` + the `Task` + `Location`, like every other mutation. `400` for a missing
-version or an out-of-range `max_parallel`; `409` while a roll is already in flight
-(§5.6); `501` with no deployer.
+Both fields are optional, so the body is: an empty request rolls the whole fleet at
+the default parallelism.
+
+**There is no `version`.** The target is the endpoint image this controller release
+deploys — `--endpoint-image-tag`, or the tag of `--deploy-endpoint-image` — which is
+already what an endpoint created by this controller runs. Naming it as *the*
+endpoint version of an environment is what makes a fleet upgrade two steps in a
+fixed order: upgrade the controller, then roll. Nothing enforces the order because
+nothing needs to — rolling first finds every endpoint already at the unmoved pin and
+does nothing, and so does a second roll after a successful one. "Once per controller
+version" falls out of the filter the roll already has.
+
+It is resolved **once, in the handler, and frozen into the task's args**
+(`api.Provisioning.EndpointVersion`). Reading it per child instead would let a
+controller upgraded *while a roll is running* move the target underneath it, and the
+roll would finish with the fleet split across two versions. Freezing also keeps the
+step a pure function of its args, which is what makes a replay converge: a roll
+reclaimed by a newly upgraded controller finishes the roll it was planned for, and
+the next roll moves the rest.
+
+`202` + the `Task` + `Location`, like every other mutation. `400` for an
+out-of-range `max_parallel`; `409` while a roll is already in flight (§5.6); `501`
+with no deployer, and also when the configured endpoint image is pinned to a digest
+— a digest names no version, and that is a fact about how the controller was
+configured rather than about the request.
 
 **Beyond the `409`, the handler checks only what is true of the request** — the
-version is present, the knobs are in range. Whether a given endpoint can move is
+knobs are in range. Whether a given endpoint can move is
 the planner's, answered once at Execute time when it is still true. Answering it in
 the handler too would be N reads of a fleet that moves in between. So an id that no
 longer exists, and one already at the target, are `skipped` lines in the task
@@ -771,6 +824,11 @@ unknown id.
 - **Per-cluster pinning, maintenance windows, canary, auto-upgrade on release.** All
   are different planners over the same `upgrade_endpoint` child, which is the reason
   the child is a subtask rather than a loop body.
+- **Waves, soaks and approval gates.** A staged roll that moves a percentage of the
+  fleet, waits, and holds for an operator before continuing is the natural next
+  thing to want, and §5.7's ordering is already what a wave would be cut from. It is
+  a later PR: it needs somewhere to record where a roll is holding and an API to
+  release it, and neither is worth designing until the unstaged roll is in use.
 
 ## 10. Decisions
 
@@ -813,9 +871,12 @@ Settled while building §5–6, because the design did not say:
   so it cannot be planned into args at all.
 
 - **A second fleet roll is REFUSED, not queued (§5.6).** Queueing was better for
-  the idempotent re-run and wrong for the case that actually costs something: two
-  rolls at different versions both run, the fleet is flipped twice, and the second
-  caller learns nothing until after the fact. Refusal is two layers — a plan-time
+  the idempotent re-run and wrong for the case that actually costs something: the
+  queued roll fires whenever the first finishes, against a fleet that has since
+  moved, and its caller learns nothing until after the fact. (The original reason
+  was stronger — two rolls at *different versions* flipping the fleet twice — but
+  the request no longer carries a version, so that case cannot be expressed.)
+  Refusal is two layers — a plan-time
   query behind a `409`, and the no-wait `fleet:endpoints` lease that decides a race
   — rather than the unique index
   [867](https://github.com/yugabyte/meko/pull/867) used, so the

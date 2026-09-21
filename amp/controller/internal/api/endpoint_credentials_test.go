@@ -202,7 +202,7 @@ func TestCreateClusterCredentialsTheWriter(t *testing.T) {
 // its clients hold.
 func TestRedeployDoesNotResetThePassword(t *testing.T) {
 	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep}
+	prov := api.Provisioning{Deployer: dep, EndpointVersion: testEndpointVersion}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 	poolID, clusterID, branchID := seedBranchForCreds(t, client, backend, "redeploy-pool")
@@ -213,7 +213,7 @@ func TestRedeployDoesNotResetThePassword(t *testing.T) {
 	}
 	drainTasks(t, store, backend, prov)
 
-	rolled, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "ep-v9.9.9"})
+	rolled, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}

@@ -622,10 +622,12 @@ func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) End
 	return EndpointDeploy{
 		ID:           id,
 		BranchID:     e.BranchID,
+		ClusterID:    m.branches[e.BranchID].ClusterID,
 		PgVersion:    pgVersion,
 		CPU:          e.CPU,
 		Memory:       e.Memory,
 		Version:      e.Version,
+		Role:         e.Role,
 		Connectivity: e.Connectivity,
 		AllowedCIDRs: e.AllowedCIDRs,
 		Extensions:   m.endpointExts[id],

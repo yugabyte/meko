@@ -61,6 +61,18 @@ type Provisioning struct {
 	// fills in the memory for a request naming only CPU, and is the floor a
 	// request naming both must meet. 0 = the built-in 8 GiB/vCPU.
 	MemoryGiBPerVCPU int
+
+	// EndpointVersion is the endpoint image version this controller release
+	// deploys — the tag of --deploy-endpoint-image (Docker) or
+	// --endpoint-image-tag (Kubernetes). It is already what an endpoint created
+	// here runs; naming it here makes it the environment's endpoint version, and
+	// the only target a fleet roll has.
+	//
+	// Empty whenever the configuration names no tag: a digest-pinned or tagless
+	// --deploy-endpoint-image, and the local driver, which sets none. A roll then
+	// refuses with 501 rather than inventing one — an endpoint still deploys, it
+	// just has no version anyone can name.
+	EndpointVersion string
 }
 
 // Controllers implements the generated StrictServerInterface: the controller's
@@ -851,7 +863,6 @@ var (
 const (
 	errMsgCPUQuantity    = `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`
 	errMsgMemoryQuantity = `resources.memory must be a Kubernetes memory quantity with an explicit unit, Mi or larger (e.g. "4Gi", "512Mi"); a unitless "4" means four bytes`
-	errMsgUpgradeVersion = "a non-empty version is required"
 	errMsgTaskTerminal   = "the task has already finished and cannot be cancelled"
 )
 
@@ -1317,28 +1328,38 @@ func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpo
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
 	}
-	if request.Body == nil {
-		return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsgUpgradeVersion))}, nil
-	}
-	version := strings.TrimSpace(request.Body.Version)
+	// The target is the controller's own endpoint image — the pin — not something
+	// the caller names. Resolved HERE, at plan time, and frozen into the task's
+	// args: reading it per child instead would let a controller upgraded while a
+	// roll is running move the target underneath it and finish the fleet split
+	// across two versions.
+	version := strings.TrimSpace(c.prov.EndpointVersion)
 	if version == "" {
-		return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsgUpgradeVersion))}, nil
+		// Not a bad request — the caller sent nothing wrong. This controller is
+		// configured with no endpoint version to roll to: a digest-pinned or
+		// tagless image reference names none, and the local driver sets none at all.
+		return nil, echo.NewHTTPError(http.StatusNotImplemented,
+			"this controller is not configured with an endpoint image version, so it has nothing to roll the fleet to")
 	}
 	// The spec's minimum/maximum are documentation: there is no wire-level
 	// validator middleware, so an out-of-range value has to be rejected here or it
 	// reaches the step and fails the task instead of the request. Absent means the
 	// default; 0 is an out-of-range value like any other, never "unbounded".
 	maxParallel := task.DefaultRollParallel
-	if request.Body.MaxParallel != nil {
-		maxParallel = *request.Body.MaxParallel
-		if maxParallel < 1 || maxParallel > task.MaxRollParallel {
-			return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
-				fmt.Sprintf("max_parallel must be between 1 and %d", task.MaxRollParallel)))}, nil
-		}
-	}
 	var endpointIDs []uuid.UUID
-	if request.Body.EndpointIds != nil {
-		endpointIDs = *request.Body.EndpointIds
+	// A body at all is optional: with no version to carry, an empty request is the
+	// whole fleet at the default parallelism.
+	if request.Body != nil {
+		if request.Body.MaxParallel != nil {
+			maxParallel = *request.Body.MaxParallel
+			if maxParallel < 1 || maxParallel > task.MaxRollParallel {
+				return UpgradeEndpoints400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+					fmt.Sprintf("max_parallel must be between 1 and %d", task.MaxRollParallel)))}, nil
+			}
+		}
+		if request.Body.EndpointIds != nil {
+			endpointIDs = *request.Body.EndpointIds
+		}
 	}
 
 	t, err := c.tasks.UpgradeEndpoints(ctx, task.UpgradeEndpointsInput{

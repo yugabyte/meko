@@ -155,6 +155,7 @@ func newRollFixture(t *testing.T, ctl *rollControl, locks Locks, seed ...uuid.UU
 		ctl:    ctl,
 		deps: Deps{
 			State:    state,
+			Tasks:    store,
 			Deployer: &fakeDeployer{},
 			Subtasks: NewSubtaskRunner(w, store.Subtasks()),
 		},

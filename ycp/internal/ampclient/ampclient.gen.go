@@ -1771,9 +1771,14 @@ type UpdateStoragePoolRequest struct {
 	Name string `json:"name"`
 }
 
-// UpgradeEndpointsRequest Request to move endpoints onto a target version. The version is opaque to
-// the controller — the deployer decides what it selects; today it is the
-// endpoint image tag verbatim.
+// UpgradeEndpointsRequest Request to roll endpoints onto the version this controller release
+// deploys. Every field is optional: the empty body rolls the whole fleet at
+// the default parallelism.
+//
+// There is no `version` field. The target is the controller's own endpoint
+// image, so an environment has exactly one endpoint version and no way to
+// express an inconsistent one. Moving it means upgrading the controller
+// first, then calling this.
 type UpgradeEndpointsRequest struct {
 	// EndpointIds The endpoints to roll. Absent or empty means the whole fleet.
 	// Repeated ids are collapsed. An endpoint named here is rolled even if
@@ -1788,10 +1793,6 @@ type UpgradeEndpointsRequest struct {
 	// apply to them. Defaults to 4; 0 is rejected rather than read as
 	// unbounded.
 	MaxParallel *int `json:"max_parallel,omitempty"`
-
-	// Version The target version. Required and non-empty: an empty version would
-	// clear the endpoint's pinned desired state rather than leave it alone.
-	Version string `json:"version"`
 }
 
 // User defines model for User.

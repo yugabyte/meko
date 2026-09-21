@@ -129,15 +129,20 @@ unfinished children and calls `FailStep` on the step that would have run next. S
 a cancel takes effect at a **step boundary** — nothing in flight is killed, and a
 task whose last step is already done still succeeds.
 
-**What that does not reach.** A step already running is never interrupted. Most
-kinds plan a single step, so for those the only boundary is the one before that
-step starts, and neither a task whose step is running nor one still `pending` is
-stopped: the flag is read inside `execute`, which runs only after a claim, so a
+**What that does not reach.** A step already running is never interrupted, the
+fleet roll below aside. Most kinds plan a single step, so for those the only
+boundary is the one before that step starts, and neither a task whose step is
+running nor one still `pending` is stopped: the flag is read inside `execute`, which runs only after a claim, so a
 task no worker claims keeps both the request and its status indefinitely. That
 last case is the wedge [meko#1007](https://github.com/yugabyte/meko/issues/1007)
 is about, and this does not clear it — retiring the row by hand is still the
 remedy (`controller_runbook.md`). `abandonChildren` is likewise reachable only on
 a *reclaimed* fan-out parent, never on one this process is running.
+
+**Where the reach is wider.** An `upgrade_endpoints` roll re-reads the flag
+between its children (§5), so the longest-running task there is can be stopped
+mid-flight instead of running the whole fleet regardless. It is the one kind with
+a real boundary inside a step.
 
 **What it reaches but does not clean up.** The check sits inside the step loop,
 after the skip for already-succeeded steps, so it fires before *every* unfinished
@@ -148,8 +153,7 @@ those leave state nothing converges: a cancelled `voyager_start_migration_run`
 wedges its migration behind `run_in_progress`, and a cancelled
 `voyager_create_migration_target` leaks a live endpoint past both GC sweepers.
 [meko#1385](https://github.com/yugabyte/meko/issues/1385) is the fix; until it
-lands, do not cancel a voyager task. The reach widens further as work gains real
-boundaries: a fan-out roll polling between its children can stop mid-flight.
+lands, do not cancel a voyager task.
 
 It ends `failed`, not under a status of its own: terminal-ness is spelled out as
 the literal `status IN ('pending','running')` across the claim predicate, both
@@ -165,7 +169,9 @@ tells a cancelled task apart from a broken one.
 API caller who is not the owner, and a `pending` task has no owner at all, so a
 fence would make it a permanent no-op. It is guarded on non-terminal status alone
 and never writes `status`, `owner` or `error` — taking a task terminal stays the
-fenced worker's write. It is not the only unfenced write on `tasks`: `Store.Claim`
+fenced worker's write. A running step cannot see the request through its own args
+(the registry decodes them into the step by value), so a step long enough to want
+it re-reads the row through `Deps.Tasks` (`TaskReader`). It is not the only unfenced write on `tasks`: `Store.Claim`
 is status-only too, because re-stamping `owner` *is* the reclaim. What every
 fenced write has in common is that it takes a task terminal.
 

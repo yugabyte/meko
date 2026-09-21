@@ -52,8 +52,8 @@ type endpointRoll struct {
 }
 
 // rollSubtasks runs a parent's children through a bounded pool and returns a
-// line for each. `succeeded` is the outcome word a child that returns cleanly
-// gets.
+// line for each, plus whether it stopped because a cancel was requested.
+// `succeeded` is the outcome word a child that returns cleanly gets.
 //
 // A pool, not waves: a child starts as soon as a slot frees, which is what lets
 // fail-fast halt precisely (ac-endpoint-upgrade.md §5.4).
@@ -63,12 +63,17 @@ type endpointRoll struct {
 // release the next roll has to clean up. A child refused its endpoint lock is not
 // a real failure — ErrLockHeld says somebody else holds the endpoint, not that
 // the work would fail.
-func rollSubtasks(ctx context.Context, runner Subtasks, owner string, subs []*Subtask, maxParallel int, succeeded string) []*endpointRoll {
+//
+// cancelRequested is polled before each child starts and may be nil. That gap is
+// the only place a roll can notice a cancel: the worker's own check runs between
+// STEPS, and a roll is one step that can run for hours.
+func rollSubtasks(ctx context.Context, runner Subtasks, owner string, subs []*Subtask,
+	maxParallel int, succeeded string, cancelRequested func() bool) ([]*endpointRoll, bool) {
 	out := make(chan *endpointRoll, len(subs))
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	halted := false
+	halted, cancelled := false, false
 
 	// rest reports the children from i on, which never started. abandon says whether
 	// their subtask ROWS must also be closed: only on an exit that makes the parent
@@ -119,6 +124,15 @@ func rollSubtasks(ctx context.Context, runner Subtasks, owner string, subs []*Su
 			rest(i, "not started: the roll stopped after an earlier failure", true)
 			break
 		}
+		if cancelRequested != nil && cancelRequested() {
+			<-sem
+			cancelled = true
+			// Abandoned, like the fail-fast exit: a cancelled roll fails the parent, and
+			// a terminal parent is never reclaimed, so a child left pending under one is
+			// work nothing will ever run.
+			rest(i, "not started: the roll was cancelled", true)
+			break
+		}
 
 		wg.Add(1)
 		go func(sub *Subtask) {
@@ -149,7 +163,26 @@ func rollSubtasks(ctx context.Context, runner Subtasks, owner string, subs []*Su
 	for line := range out {
 		lines = append(lines, line)
 	}
-	return lines
+	return lines, cancelled
+}
+
+// cancelRequested reports whether a cancel has been asked for on a roll's own
+// task. Both roll kinds poll it between children: each plans a single step, so
+// the worker's between-steps check never fires while one is running, and this is
+// the only boundary either has.
+//
+// A nil reader, or a read that fails, reports "no" — cancellation is cooperative,
+// and a database blip must not stop a roll that is otherwise converging.
+func cancelRequested(ctx context.Context, tasks TaskReader, taskID uuid.UUID) bool {
+	if tasks == nil {
+		return false
+	}
+	t, err := tasks.Get(ctx, taskID)
+	if err != nil {
+		applog.FromContext(ctx).Warn("re-reading the roll's task", "error", err)
+		return false
+	}
+	return t != nil && t.CancelRequested()
 }
 
 // endpointOf reads the endpoint a child was created for back out of its args, so

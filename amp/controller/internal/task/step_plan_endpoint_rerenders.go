@@ -44,6 +44,10 @@ type planEndpointRerendersStep struct {
 	state    StateStore
 	subtasks Subtasks
 	deployer deploy.Deployer
+	// tasks re-reads this roll's own task row, which is the only way a running
+	// step sees a cancel (see TaskReader). Nil disables the poll rather than
+	// failing: a roll that cannot be cancelled still converges.
+	tasks TaskReader
 }
 
 // NewPlanEndpointRerendersStep binds plan_endpoint_rerenders args + its deps
@@ -54,6 +58,7 @@ func NewPlanEndpointRerendersStep(args PlanEndpointRerendersArgs, deps Deps) Ste
 		state:                     deps.State,
 		subtasks:                  deps.Subtasks,
 		deployer:                  deps.Deployer,
+		tasks:                     deps.Tasks,
 	}
 }
 
@@ -88,13 +93,22 @@ func (s *planEndpointRerendersStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(err)
 	}
-	lines := append(done, rollSubtasks(ctx, s.subtasks, run.owner, subs, s.MaxParallel, rollRerendered)...)
+	rolled, cancelled := rollSubtasks(ctx, s.subtasks, run.owner, subs, s.MaxParallel, rollRerendered,
+		func() bool { return cancelRequested(ctx, s.tasks, run.taskID) })
+	lines := append(done, rolled...)
 	sort.Slice(lines, func(i, j int) bool { return lines[i].EndpointID < lines[j].EndpointID })
 
 	counts := rollTally(lines, rollRerendered)
 	logger.Info("endpoint re-render roll finished",
 		rollRerendered, counts[rollRerendered], rollSkipped, counts[rollSkipped],
 		rollFailed, counts[rollFailed], rollUnattempted, counts[rollUnattempted])
+	if cancelled {
+		// Wrapped in ErrCancelled so the worker records "an operator stopped this"
+		// rather than "this broke"; the counts say how far it got, since a failed
+		// step records its cause and not its result.
+		return Fail(fmt.Errorf("%w: endpoint re-render roll stopped after %d re-rendered, %d skipped, %d failed",
+			ErrCancelled, counts[rollRerendered], counts[rollSkipped], counts[rollFailed]))
+	}
 	if counts[rollFailed] > 0 || counts[rollUnattempted] > 0 {
 		return Fail(rerenderFailure(lines, counts))
 	}

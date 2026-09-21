@@ -44,6 +44,11 @@ type planEndpointUpgradesStep struct {
 	state    StateStore
 	subtasks Subtasks
 	deployer deploy.Deployer
+	// tasks re-reads this roll's own task row, which is the only way a running
+	// step sees a cancel (see TaskReader). Nil disables the poll rather than
+	// failing: every other roll dep is required because the work cannot be done
+	// without it, and a roll that cannot be cancelled still converges.
+	tasks TaskReader
 }
 
 // NewPlanEndpointUpgradesStep binds plan_endpoint_upgrades args + its deps into
@@ -54,6 +59,7 @@ func NewPlanEndpointUpgradesStep(args PlanEndpointUpgradesArgs, deps Deps) Step 
 		state:                    deps.State,
 		subtasks:                 deps.Subtasks,
 		deployer:                 deps.Deployer,
+		tasks:                    deps.Tasks,
 	}
 }
 
@@ -96,13 +102,22 @@ func (s *planEndpointUpgradesStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(err)
 	}
-	lines := append(done, rollSubtasks(ctx, s.subtasks, run.owner, subs, s.MaxParallel, rollUpgraded)...)
+	rolled, cancelled := rollSubtasks(ctx, s.subtasks, run.owner, subs, s.MaxParallel, rollUpgraded,
+		func() bool { return cancelRequested(ctx, s.tasks, run.taskID) })
+	lines := append(done, rolled...)
 	sort.Slice(lines, func(i, j int) bool { return lines[i].EndpointID < lines[j].EndpointID })
 
 	report, counts := rollReport(s.Version, lines)
 	logger.Info("endpoint upgrade roll finished", "version", s.Version,
 		rollUpgraded, counts[rollUpgraded], rollSkipped, counts[rollSkipped],
 		rollFailed, counts[rollFailed], rollUnattempted, counts[rollUnattempted])
+	if cancelled {
+		// Wrapped in ErrCancelled so the worker records "an operator stopped this"
+		// rather than "this broke"; the counts say how far it got, since a failed
+		// step records its cause and not its result.
+		return Fail(fmt.Errorf("%w: endpoint upgrade roll to %s stopped after %d upgraded, %d skipped, %d failed",
+			ErrCancelled, s.Version, counts[rollUpgraded], counts[rollSkipped], counts[rollFailed]))
+	}
 	if counts[rollFailed] > 0 || counts[rollUnattempted] > 0 {
 		// The report is lost on this path — a failed step records its cause, not its
 		// output — so the error carries the counts and the first failure. The
@@ -167,7 +182,7 @@ func (s *planEndpointUpgradesStep) plan(ctx context.Context, taskID uuid.UUID) (
 	explicit := len(s.EndpointIDs) > 0
 
 	subs := make([]*Subtask, 0, len(targets))
-	for _, d := range targets {
+	for _, d := range orderRoll(targets) {
 		// Whole-fleet enumeration only: naming an endpoint is the operator's remedy
 		// after a partial roll, and skipping a named one would drop exactly the
 		// endpoint that needs re-running. Safe on a replay because `version` is what
@@ -205,6 +220,57 @@ func (s *planEndpointUpgradesStep) plan(ctx context.Context, taskID uuid.UUID) (
 		subs = append(subs, sub)
 	}
 	return subs, done, nil
+}
+
+// orderRoll puts the work set in the order the pool consumes it: round-robin
+// across clusters, and within a cluster the readers before the writer.
+//
+// Both matter because the pool is bounded, not because of any staging. The
+// enumeration comes back grouped by cluster, so `max_parallel` endpoints in
+// flight would otherwise all belong to one cluster — every one of a single
+// customer's endpoints down at the same moment. Round-robin makes that the
+// pathological case rather than the default one, and writer-last means a
+// branch's spare read capacity moves before the thing every write goes through.
+//
+// Ties break on the endpoint id and cluster order is the cluster ids', so a
+// reclaimed parent re-derives the identical sequence.
+func orderRoll(members []core.EndpointDeploy) []core.EndpointDeploy {
+	byCluster := make(map[uuid.UUID][]core.EndpointDeploy, len(members))
+	clusters := make([]uuid.UUID, 0, len(members))
+	for _, m := range members {
+		if _, seen := byCluster[m.ClusterID]; !seen {
+			clusters = append(clusters, m.ClusterID)
+		}
+		byCluster[m.ClusterID] = append(byCluster[m.ClusterID], m)
+	}
+	sort.Slice(clusters, func(i, j int) bool { return clusters[i].String() < clusters[j].String() })
+	for _, id := range clusters {
+		g := byCluster[id]
+		sort.Slice(g, func(i, j int) bool {
+			if a, b := writerLast(g[i].Role), writerLast(g[j].Role); a != b {
+				return a < b
+			}
+			return g[i].ID.String() < g[j].ID.String()
+		})
+	}
+	out := make([]core.EndpointDeploy, 0, len(members))
+	for i := 0; len(out) < len(members); i++ {
+		for _, id := range clusters {
+			if g := byCluster[id]; i < len(g) {
+				out = append(out, g[i])
+			}
+		}
+	}
+	return out
+}
+
+// writerLast ranks a role within its cluster: the read_write endpoint is the last
+// thing the roll takes down.
+func writerLast(role string) int {
+	if role == core.RoleReadWrite {
+		return 1
+	}
+	return 0
 }
 
 // rollReport marshals the per-endpoint report and tallies the outcomes.

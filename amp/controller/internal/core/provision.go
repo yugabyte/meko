@@ -262,7 +262,8 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 }
 
 // endpointDeploySelect projects an endpoint's renderable desired state: its id,
-// the branch it serves, the pinned pg version, the compute size and the version.
+// the branch it serves, that branch's cluster, the pinned pg version, the
+// compute size, the version and the endpoint's role.
 // The pg version comes from the joined branch row, not from the endpoint — an
 // endpoint row has no such column, deliberately, so the two can never disagree;
 // cpu/memory come out of the endpoint's config blob and version off its own
@@ -278,9 +279,9 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // zero slot, the deployer formats its address as ":0", and SetEndpointAddress
 // overwrites the address clients are using. LEFT, because every non-ingress
 // endpoint has no allocation and must still project.
-const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.pg_version,
+const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.cluster_id::text, eb.pg_version,
 	        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
-	        COALESCE(e.version, ''),
+	        COALESCE(e.version, ''), e.role::text,
 	        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs',
 	        e.config->'extensions',
 	        COALESCE(ia.shard, ''), COALESCE(ia.port, 0), COALESCE(ia.dns_name, ''),
@@ -293,12 +294,13 @@ const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.pg_versio
 
 func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) {
 	var (
-		id, branchID string
-		cidrsRaw     []byte
-		extsRaw      []byte
-		d            EndpointDeploy
+		id, branchID, clusterID string
+		cidrsRaw                []byte
+		extsRaw                 []byte
+		d                       EndpointDeploy
 	)
-	if err := r.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Connectivity, &cidrsRaw, &extsRaw,
+	if err := r.Scan(&id, &branchID, &clusterID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Role,
+		&d.Connectivity, &cidrsRaw, &extsRaw,
 		&d.IngressShard, &d.IngressPort, &d.IngressDNSName, &d.IngressShardHost, &d.IngressRecordType); err != nil {
 		return EndpointDeploy{}, err
 	}
@@ -327,6 +329,9 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 	}
 	if d.BranchID, err = uuid.Parse(branchID); err != nil {
 		return EndpointDeploy{}, fmt.Errorf("parse branch id: %w", err)
+	}
+	if d.ClusterID, err = uuid.Parse(clusterID); err != nil {
+		return EndpointDeploy{}, fmt.Errorf("parse cluster id: %w", err)
 	}
 	return d, nil
 }

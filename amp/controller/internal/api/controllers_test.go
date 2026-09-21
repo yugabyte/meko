@@ -117,6 +117,10 @@ func soleTask(t *testing.T, store *task.MemStore) *task.Task {
 	return tasks[0]
 }
 
+// testEndpointVersion is the endpoint image tag the test controller is pinned
+// to, and so the version every roll in these tests converges on.
+const testEndpointVersion = "ep-v9.9.9"
+
 // newTestServer stands up the real server (NewServer) over httptest, backed by
 // an in-memory backend and an in-memory task store, and returns the generated
 // client pointed at it.
@@ -131,6 +135,10 @@ func newTestServerDeploy(t *testing.T, deployEnabled bool) (*api.ClientWithRespo
 	var prov api.Provisioning
 	if deployEnabled {
 		prov.Deployer = &fakeDeployer{}
+		// The pin a roll targets. Set explicitly rather than derived from the
+		// deployer: a real one can be configured with a reference that names no tag,
+		// which is what TestUpgradeEndpointsDigestPinnedImage covers.
+		prov.EndpointVersion = testEndpointVersion
 	}
 	return newTestServerWith(t, core.NewMemBackend(), prov)
 }

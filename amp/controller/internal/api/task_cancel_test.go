@@ -17,7 +17,7 @@ import (
 func TestCancelTaskAcceptsAnInFlightTask(t *testing.T) {
 	client, _, tasks := newTestServer(t)
 
-	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{Version: "v2"})
+	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestCancelTaskRejectsAnUnknownTask(t *testing.T) {
 func TestCancelTaskRejectsATerminalTask(t *testing.T) {
 	client, backend, tasks := newTestServer(t)
 
-	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{Version: "v2"})
+	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{})
 	if err != nil || resp.JSON202 == nil {
 		t.Fatalf("UpgradeEndpoints: err=%v body=%s", err, resp.Body)
 	}

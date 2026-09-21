@@ -21,7 +21,7 @@ import (
 func TestUpgradeEndpointsReturnsTask(t *testing.T) {
 	client, _, _ := newTestServer(t)
 
-	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{Version: "v2"})
+	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -32,20 +32,18 @@ func TestUpgradeEndpointsReturnsTask(t *testing.T) {
 }
 
 // TestUpgradeEndpointsRejectsABadRequest: the handler validates what is true of
-// the REQUEST. A missing version and an out-of-range max_parallel are 400s; 0 is
-// out of range rather than "unbounded", which would fire the whole fleet at once.
+// the REQUEST, and max_parallel is now the only thing in it that can be wrong —
+// the target comes from the controller, not the caller. 0 is out of range rather
+// than "unbounded", which would fire the whole fleet at once.
 func TestUpgradeEndpointsRejectsABadRequest(t *testing.T) {
 	client, _, store := newTestServer(t)
 	ctx := context.Background()
 
-	zero, tooMany, negative, ok := 0, 51, -1, 4
+	zero, tooMany, negative := 0, 51, -1
 	for name, body := range map[string]api.UpgradeEndpointsRequest{
-		"no version":       {Version: ""},
-		"blank version":    {Version: "   "},
-		"max_parallel 0":   {Version: "v2", MaxParallel: &zero},
-		"max_parallel 51":  {Version: "v2", MaxParallel: &tooMany},
-		"max_parallel -1":  {Version: "v2", MaxParallel: &negative},
-		"blank + in range": {Version: "", MaxParallel: &ok},
+		"max_parallel 0":  {MaxParallel: &zero},
+		"max_parallel 51": {MaxParallel: &tooMany},
+		"max_parallel -1": {MaxParallel: &negative},
 	} {
 		resp, err := client.UpgradeEndpointsWithResponse(ctx, body)
 		if err != nil {
@@ -66,9 +64,9 @@ func TestUpgradeEndpointsRejectsABadRequest(t *testing.T) {
 }
 
 // TestUpgradeEndpointsRefusesASecondRoll: while an upgrade_endpoints task is
-// non-terminal the route answers 409 instead of planning another. Two rolls
-// naming different versions would otherwise both run — flipping the fleet twice,
-// with the second caller learning nothing until after it had happened.
+// non-terminal the route answers 409 instead of planning another. Both would
+// take the same no-wait fleet lock, so the second would otherwise be a 202 and a
+// task that dies in the worker.
 //
 // The refusal is a query over `tasks`, which is why the PENDING roll below is
 // enough to trigger it: nothing has claimed it, so it holds no `fleet:endpoints`
@@ -77,7 +75,7 @@ func TestUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
 	client, _, store := newTestServer(t)
 	ctx := context.Background()
 
-	first, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "v2"})
+	first, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -85,7 +83,7 @@ func TestUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
 		t.Fatalf("first roll: status = %d, want 202; body = %s", first.StatusCode(), first.Body)
 	}
 
-	second, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "v3"})
+	second, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -111,7 +109,7 @@ func TestUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
 	if err := store.CompleteTask(ctx, first.JSON202.Id, "owner-1"); err != nil {
 		t.Fatalf("CompleteTask: %v", err)
 	}
-	third, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "v3"})
+	third, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -125,7 +123,7 @@ func TestUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
 func TestUpgradeEndpointsDeployDisabled(t *testing.T) {
 	client, _, _ := newTestServerDeploy(t, false)
 
-	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{Version: "v2"})
+	resp, err := client.UpgradeEndpointsWithResponse(context.Background(), api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -134,12 +132,35 @@ func TestUpgradeEndpointsDeployDisabled(t *testing.T) {
 	}
 }
 
+// TestUpgradeEndpointsDigestPinnedImage: a deployer whose endpoint image is
+// pinned by digest names no version, so there is nothing to roll to. That is a
+// property of how this controller was configured, not of the request, so it is a
+// 501 like the no-deployer case rather than a 400 blaming the caller.
+func TestUpgradeEndpointsDigestPinnedImage(t *testing.T) {
+	client, _, store := newTestServerWith(t, core.NewMemBackend(),
+		api.Provisioning{Deployer: &fakeDeployer{}, EndpointVersion: ""})
+	ctx := context.Background()
+
+	resp, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
+	if err != nil {
+		t.Fatalf("UpgradeEndpoints: %v", err)
+	}
+	if resp.StatusCode() != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501; body = %s", resp.StatusCode(), resp.Body)
+	}
+	if _, total, err := store.List(ctx, task.TaskFilter{}, 100, 0); err != nil {
+		t.Fatalf("list tasks: %v", err)
+	} else if total != 0 {
+		t.Errorf("%d tasks planned behind the 501", total)
+	}
+}
+
 // TestUpgradeEndpointsRoll drives a whole-fleet roll through the worker and
 // asserts what an operator actually reads back: the endpoint's recorded version,
 // the per-endpoint result on the parent, and the child row behind each line.
 func TestUpgradeEndpointsRoll(t *testing.T) {
 	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep}
+	prov := api.Provisioning{Deployer: dep, EndpointVersion: testEndpointVersion}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 
@@ -163,7 +184,7 @@ func TestUpgradeEndpointsRoll(t *testing.T) {
 	}
 	drainTasks(t, store, backend, prov)
 
-	rolled, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "ep-v9.9.9"})
+	rolled, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
@@ -183,8 +204,9 @@ func TestUpgradeEndpointsRoll(t *testing.T) {
 	if !ok {
 		t.Fatalf("roll result = %v, want the per-endpoint report", taskResp.JSON200.Result)
 	}
-	if res["version"] != "ep-v9.9.9" || res["upgraded"] != float64(2) {
-		t.Errorf("roll result = %v, want version ep-v9.9.9 and 2 upgraded", res)
+	// Nobody asked for a version; the report says which one the controller resolved.
+	if res["version"] != testEndpointVersion || res["upgraded"] != float64(2) {
+		t.Errorf("roll result = %v, want version %s and 2 upgraded", res, testEndpointVersion)
 	}
 	lines, ok := res["endpoints"].([]any)
 	if !ok || len(lines) != 2 {
@@ -203,8 +225,8 @@ func TestUpgradeEndpointsRoll(t *testing.T) {
 		t.Fatalf("ListEndpoints: body = %s", list.Body)
 	}
 	for _, ep := range list.JSON200.Endpoints {
-		if ep.Version == nil || *ep.Version != "ep-v9.9.9" {
-			t.Errorf("endpoint %s version = %v, want ep-v9.9.9", ep.Id, ep.Version)
+		if ep.Version == nil || *ep.Version != testEndpointVersion {
+			t.Errorf("endpoint %s version = %v, want %s", ep.Id, ep.Version, testEndpointVersion)
 		}
 	}
 
@@ -241,9 +263,10 @@ func TestUpgradeEndpointsRoll(t *testing.T) {
 		}
 	}
 
-	// Re-rolling to the same version converges on a no-op: every endpoint is now
-	// recorded at the target, so the whole-fleet filter skips them all.
-	again, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{Version: "ep-v9.9.9"})
+	// Re-rolling converges on a no-op: the target is the controller's pin, which has
+	// not moved, so the whole-fleet filter skips every endpoint. This is what makes
+	// "a roll is once per controller version" fall out rather than need enforcing.
+	again, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
 		t.Fatalf("UpgradeEndpoints (again): %v", err)
 	}

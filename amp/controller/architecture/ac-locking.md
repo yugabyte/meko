@@ -223,16 +223,16 @@ wrapper the queueing path uses rather than a sentence about fleet upgrades.
 takes it like any other resource lock.
 
 Two declarers, one lease, and the lease is `NoWait`: the second roll's step
-fails rather than queueing. That is deliberate — two rolls naming different
-versions would flip the fleet twice — but it means the refusal a caller should
-see has to come earlier, so `Service.UpgradeEndpoints` and
+fails rather than queueing. But that failure happens in the worker, so the
+refusal a caller should see has to come earlier — `Service.UpgradeEndpoints` and
 `Service.RerenderEndpoints` both call `noFleetRollInFlight` at plan time and
 return `ErrFleetRollInProgress` (the API's 409) for either kind.
 
 It is what makes it **one fleet roll at a time**, and it is `NoWait`: a second
-roll is **refused**, not queued. Queueing would let two rolls naming different
-versions both run — the second walking the fleet back off the version the first
-landed — with the caller told `202` and finding out afterwards.
+roll is **refused**, not queued. Two rolls redeploying one endpoint at once is
+what the endpoint lock already stops; what queueing would add is a roll firing
+long after its caller asked for it, against a fleet that has since moved, with
+the caller told `202` and finding out afterwards.
 
 This lease is the **authority** on that; the `409` the API returns comes from a
 plan-time query over `tasks` for a non-terminal `upgrade_endpoints` task, which is

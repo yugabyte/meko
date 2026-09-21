@@ -229,9 +229,18 @@ func (f *fakeStateStore) seedEndpoint(endpointID, clusterID, branchID uuid.UUID)
 func (f *fakeStateStore) seedEndpointDeploy(clusterID uuid.UUID, d core.EndpointDeploy) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The backends read both off the row, so a seeded record carries them too: the
+	// fleet roll orders its work by (cluster, role), and an unset cluster id would
+	// collapse every endpoint into one group with nothing to interleave.
+	if d.ClusterID == uuid.Nil {
+		d.ClusterID = clusterID
+	}
+	if d.Role == "" {
+		d.Role = core.RoleReadOnly
+	}
 	f.endpointBranch[d.ID] = d
 	f.endpointCluster[d.ID] = clusterID
-	f.createdEndpoints[d.ID] = "read_only"
+	f.createdEndpoints[d.ID] = d.Role
 }
 
 // seedEndpointWithConnectivity is seedEndpoint for an endpoint whose exposure a

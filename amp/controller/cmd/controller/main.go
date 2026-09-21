@@ -176,6 +176,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				BackingYBTLSCertRenewBefore:   cfg.Deploy.BackingYBTLSCertRenewBefore,
 				Timeout:                       cfg.Deploy.Timeout,
 			}, logger)
+			prov.EndpointVersion = cfg.Deploy.EndpointImageTag
 			// Externalized extensions are mounted as ImageVolumes, which only the
 			// Kubernetes runtime supports; the service resolves a branch's set to
 			// pinned images for the endpoint spec (compute/architecture/extensions.md).
@@ -199,6 +200,10 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ExternalHost:  cfg.Deploy.ExternalHost,
 				ReadyTimeout:  cfg.Deploy.Timeout,
 			}, logger)
+			// The tag of the one configured reference, where Kubernetes configures a
+			// repo and a tag apart. Empty for a digest-pinned image, which names no
+			// version — the upgrade route refuses rather than inventing one.
+			prov.EndpointVersion = deploy.ImageRefTag(cfg.Deploy.EndpointImage)
 			logger.Info("docker endpoint deployer enabled",
 				"image", cfg.Deploy.EndpointImage, "network", cfg.Deploy.Network,
 				"backing_yb", cfg.Deploy.BackingYBHostPorts,
@@ -382,6 +387,7 @@ func runServe(args []string) error {
 
 	deps := task.Deps{
 		State:         backend,
+		Tasks:         store,
 		Deployer:      prov.Deployer,
 		EndpointYB:    prov.EndpointYB,
 		ControllerURL: prov.ControllerURL,

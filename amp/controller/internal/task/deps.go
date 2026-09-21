@@ -196,6 +196,21 @@ type StateStore interface {
 	DeleteCluster(ctx context.Context, clusterID uuid.UUID) error
 }
 
+// TaskReader re-reads the row of the task a step is running under.
+//
+// A running step cannot see its own task change: the Registry decodes the
+// persisted args into the step struct BY VALUE at build time, so a cancel that
+// lands afterwards reaches the row and nothing else. The worker checks for one
+// between steps, which is enough for every task planned as a sequence of short
+// steps — but a fleet roll is ONE step that can run for hours, so it polls
+// through here at a boundary where stopping is safe.
+//
+// Read-only on purpose. Writing the task is the fenced worker's job, and a step
+// that wrote its own status would race the worker recording its result.
+type TaskReader interface {
+	Get(ctx context.Context, id uuid.UUID) (*Task, error)
+}
+
 // BranchRecipe is the pending-init recipe a freshly-declared branch carries until
 // an endpoint materializes it (controller/architecture/controller-cluster-create.md).
 // It keeps the task package decoupled from the storage-layer store's types; the
@@ -254,7 +269,10 @@ type IngressAllocator interface {
 // accordingly (a create_endpoint task is only planned when a deployer is
 // configured — see plan.go / the API wiring, #113).
 type Deps struct {
-	State         StateStore
+	State StateStore
+	// Tasks re-reads the row of the task a step runs under (see TaskReader). Both
+	// Store implementations satisfy it, so it is the same store the worker drives.
+	Tasks         TaskReader
 	Recipes       RecipeStore
 	Deployer      deploy.Deployer
 	EndpointYB    deploy.YBConn

@@ -620,6 +620,11 @@ func (r *clientWindowRun) settingsUpdate(ctx context.Context) (time.Time, error)
 }
 
 // The version has to change for the pod to move: a roll onto the version already recorded re-renders an identical release and helm leaves the pod alone.
+//
+// Which is why this pair cannot run against a controller that pins the endpoint
+// version to its own release: both rolls would name that one version, helm would
+// leave the pod where it is, and the step would report a client window of zero
+// that no client ever saw.
 func (r *clientWindowRun) upgradeRollAway(ctx context.Context) (time.Time, error) {
 	ep, err := r.cl.GetEndpoint(ctx, r.poolID, r.ten.ClusterID, r.ten.BranchID, r.ten.Endpoint.ID)
 	if err != nil {
@@ -639,6 +644,10 @@ func (r *clientWindowRun) upgradeRollAway(ctx context.Context) (time.Time, error
 	prev, err := cwPreviousRelease(list, ep.Version)
 	if err != nil {
 		return time.Time{}, core.EnvFail("%w", err)
+	}
+	if pinned, ok := r.cl.RollTargetIsPinned(ctx); ok && pinned {
+		r.t.Skip("this controller pins the endpoint version to its own release, so a roll cannot move an endpoint between two versions and this step would measure no window")
+		return time.Time{}, nil
 	}
 	r.homeVersion = ep.Version
 	r.logf("client_window: rolling endpoint %s from %s to %s and back", ep.ID, ep.Version, prev.Tag)

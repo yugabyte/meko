@@ -195,6 +195,18 @@ func validImageTag(version string) bool {
 	return true
 }
 
+// ImageRefTag is the version a full image reference names: its tag, or "" when
+// the reference carries none — either because it is pinned to a digest or
+// because it names no tag at all, which `docker run` reads as `:latest`.
+//
+// Exported because the Docker runtime configures one full reference where
+// Kubernetes configures a repository and a tag separately, so the wiring needs
+// this to state the controller's endpoint version uniformly.
+func ImageRefTag(ref string) string {
+	_, tag, _ := splitImageRef(ref)
+	return tag
+}
+
 // splitImageRef splits a Docker image reference into its name, its tag and its
 // digest, any of the latter two being empty when absent.
 //

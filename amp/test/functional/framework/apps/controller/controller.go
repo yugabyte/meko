@@ -412,14 +412,60 @@ func (t Task) InPlaceResize() (outcome, message string) {
 	return r.Outcome, r.Message
 }
 
-// UpgradeEndpointsRequest rolls endpoints onto a version (POST
-// /endpoint-upgrades). Empty EndpointIDs means the whole fleet; an id named
-// here is rolled even when already recorded at Version. MaxParallel 0 sends the
-// field absent, so the controller applies its default.
+// UpgradeEndpointsRequest rolls endpoints (POST /endpoint-upgrades). Empty
+// EndpointIDs means the whole fleet; an id named here is rolled even when
+// already recorded at the target. MaxParallel 0 sends the field absent, so the
+// controller applies its default.
+//
+// Version is honoured only by a controller old enough to take one. A controller
+// that pins the endpoint version to its own release ignores the field and rolls
+// to its pin — so a test that depends on choosing the target has to ask which
+// contract it is talking to first (rollTargetIsPinned). Kept with omitempty so
+// one client speaks to both: a pinned controller drops it, and an older one
+// still needs it present.
 type UpgradeEndpointsRequest struct {
-	Version     string   `json:"version"`
+	Version     string   `json:"version,omitempty"`
 	EndpointIDs []string `json:"endpoint_ids,omitempty"`
 	MaxParallel int      `json:"max_parallel,omitempty"`
+}
+
+// RollTargetIsPinned reports which POST /endpoint-upgrades contract this
+// controller serves. Two are in the field:
+//
+//   - version-carrying: the caller names the target and `version` is required,
+//     so a roll can be aimed at any tag — an older one (rollback), or one no
+//     registry has (poisoning a roll to exercise fail-fast).
+//   - pinned: the target is the controller's own endpoint image. `version` is
+//     gone from the request, so a roll has one possible target and none of those
+//     three things can be asked for.
+//
+// Scenarios built on aiming a roll have to detect which they are talking to
+// rather than assume, the same way they already skip a controller with no
+// deployer.
+//
+// The probe is a request BOTH contracts reject, so it starts no roll on either:
+// an empty version and an out-of-range max_parallel. A version-carrying
+// controller validates the version first and says so; a pinned one has no
+// version to validate and reaches the max_parallel check. The 400 is the same;
+// the message is what separates them.
+//
+// ok is false for anything but that pair of 400s — no route, no deployer, a
+// controller configured with no endpoint version at all — leaving the caller's
+// existing skip paths to classify it.
+func (c *Client) RollTargetIsPinned(ctx context.Context) (pinned, ok bool) {
+	_, _, err := c.UpgradeEndpoints(ctx, UpgradeEndpointsRequest{Version: "", MaxParallel: 51})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return false, false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "max_parallel"):
+		return true, true
+	case strings.Contains(msg, "version"):
+		return false, true
+	}
+	return false, false
 }
 
 // Roll outcomes an upgrade_endpoints task reports per endpoint.
