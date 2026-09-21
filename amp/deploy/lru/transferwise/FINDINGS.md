@@ -4,6 +4,45 @@ What the workload has shown on amp, newest first. One dated entry per finding,
 with the evidence and the issue it became.
 
 
+## 2026-09-19 - the driver's own ANALYZE was the thing timing out, not autovacuum
+
+93 `one-shot analyze failed: context deadline exceeded` in 24h, on `fin_txn` 56,
+`evt_audit` 34, `fin_step` 3. Mark asked whether that was background autovacuum.
+It was not, and the distinction matters.
+
+`runOneShotAnalyze` is the driver's: one minute into every 15m cycle it ANALYZEs
+each benchmark table in turn under a **single 5-minute client-side deadline for
+the whole loop**, and `return`s on the first failure, so every table after the
+one that exhausts the budget is skipped entirely. That is why the failures
+cluster on the two largest tables and why `evt_audit` reached 28h stale.
+
+How little of the analyzing autovacuum was doing, from `pg_stat_user_tables`:
+
+    table         live rows   manual   auto   last autoanalyze
+    fin_step      265.7M         782     30   2026-09-10 21:13
+    evt_audit     221.3M         560     31   2026-09-12 06:43
+    acct_ledger   132.9M         787     29   2026-09-10 21:13
+    fin_txn        44.3M         715     44   2026-09-10 22:31
+
+Autovacuum is on with stock `autovacuum_analyze_scale_factor` 0.1, so autoanalyze
+fires at 10% of the table: 22.1M modifications for `evt_audit`, which sat at
+15.8M. Nothing was overdue by Postgres's own policy. The driver was doing
+hundreds of times more analyzing than the policy asks for, and failing at it.
+
+**Change:** the call is disabled in `to_amp_ddl.py`, which already owns every
+deviation from the vendored source, with a guard that fails the rewrite if an
+upstream refresh brings the call back. ANALYZE is now autovacuum's alone.
+
+What this tests, which is why Mark asked for it: if autoanalyze on a 221M-row
+table also struggles with no client deadline in the way, that is amp's problem
+rather than the workload's. If it keeps up, the 5-minute budget was simply too
+small for tables this size and the driver was the only thing failing.
+
+Watch `lru_pg_table_mod_since_analyze` and `autoanalyze_count`. Planner stats
+will be materially staler than they have been for the last week, so a plan change
+on the read path is expected rather than surprising, and is worth separating from
+the 18 Sep step below before drawing a conclusion from either.
+
 ## 2026-09-17 - latency is drifting up with nothing else moving
 
 `latency_vs_7d_baseline` has climbed steadily since the rule was added: 1.87 on

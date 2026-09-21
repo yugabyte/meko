@@ -17,6 +17,16 @@ import sys
 # Order matters: the hash-prefix column has to go before ASC/DESC keywords are
 # touched, and SPLIT INTO before the statement terminator is normalised.
 SUBS = [
+    # The one deviation that changes behaviour rather than syntax. The driver
+    # ANALYZEs every benchmark table a minute into each 15m cycle under a single
+    # 5-minute client deadline, and returns on the first failure, so every table
+    # after the one that blows the budget is skipped. At 221M and 265M rows that
+    # produced 93 timeouts a day and left evt_audit 28h stale. Analyze is
+    # autovacuum's job here, and it has no deadline. FINDINGS 2026-09-19.
+    (
+        re.compile(r"^\tgo runOneShotAnalyze\(.*\)$", re.M),
+        "\t// runOneShotAnalyze disabled for amp by to_amp_ddl.py; autovacuum owns ANALYZE",
+    ),
     # `SPLIT INTO 6 TABLETS;` closes a CREATE TABLE on YB. Drop it, keep the `;`.
     (re.compile(r"\nSPLIT INTO \d+ TABLETS;", re.I), ";"),
     (re.compile(r"\s+SPLIT INTO \d+ TABLETS", re.I), ""),
@@ -68,6 +78,8 @@ def convert(sql):
 if __name__ == "__main__":
     src = open(sys.argv[1]).read() if len(sys.argv) > 1 else sys.stdin.read()
     out = convert(src)
+    if "go runOneShotAnalyze(" in out:
+        sys.exit("to_amp_ddl: the driver ANALYZE call survived the rewrite")
     for token in ("yb_hash_code", "SPLIT INTO", "USING lsm", "NONCONCURRENTLY"):
         if re.search(token, out, re.I):
             sys.exit(f"to_amp_ddl: {token} survived the rewrite")
