@@ -62,6 +62,11 @@ scrape_configs:
   # only reading is a point-in-time kubectl top, which cannot tell a leak from
   # a working set that is still filling.
   - job_name: cadvisor
+    # 29 nodes x ~3.4k series parsed to keep 831: the drop happens after the
+    # parse, so the cost is the scrape rate, not the kept series. At the global
+    # 15s this put a quarter more samples per cycle through Prometheus than
+    # everything else combined and OOMKilled it inside a day.
+    scrape_interval: 60s
     scheme: https
     tls_config:
       ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
