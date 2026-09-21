@@ -1,4 +1,4 @@
-{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") .Values.mekoUi.ingress.enabled }}
 {{- $c := .Values.mekoUi }}
 {{- include "meko.managedCertificate" (dict "root" $ "name" $c.ingress.gke.managedCert "namespace" (include "meko.ns" (dict "root" $ "ns" $c.namespace)) "host" $c.ingress.host) }}
 apiVersion: networking.k8s.io/v1

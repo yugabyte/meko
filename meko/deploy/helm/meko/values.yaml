@@ -503,6 +503,12 @@ mekoUi:
     requests: { cpu: "1", memory: "2Gi" }
     limits: { cpu: "2", memory: "4Gi" }
   ingress:
+    # Public Ingress; set false for a self-contained install. Without this the UI
+    # claims `host` in whatever namespace it lands in, and `host` comes from whichever
+    # env preset was composed in — app.mekodev.com under values-dev, this default with
+    # values-prod or none — so a throwaway release can take a shared name from the real
+    # deployment.
+    enabled: true
     host: cloud.mekodata.ai
     healthcheckPath: /
     acmCertArn: ""               # per-component override; falls back to global

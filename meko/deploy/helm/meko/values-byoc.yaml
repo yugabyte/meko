@@ -180,6 +180,11 @@ mekoUi:
     registry: quay.io/yugabyte
     repository: meko-ui
   ingress:
+    # This was already set here and was silently ignored: the template gated only on
+    # the component being enabled, so a BYOC release created an Ingress claiming
+    # whatever host the composed env preset carries — app.mekodev.com under
+    # values-dev, which is the compose the install hint prints. The template now
+    # reads it.
     enabled: false
 
 # Off until each has a BYOC story of its own:

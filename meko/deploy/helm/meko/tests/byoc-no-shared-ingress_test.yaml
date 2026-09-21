@@ -1,0 +1,41 @@
+suite: byoc claims no shared hostname
+templates:
+  - templates/meko-ui/ingress.yaml
+  - templates/api-server/ingress.yaml
+tests:
+  # A BYOC release is one namespace in someone else's cluster. The hosts in
+  # values.yaml are ours — cloud.mekodata.ai, api.mekodata.ai — so an Ingress
+  # rendered there claims a name that belongs to the real deployment. The
+  # api-server's was already off; the UI's had no switch at all until now.
+  - it: renders no Ingress under the byoc preset
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      mekoMcpServer.image.tag: t
+      mekoUi.image.tag: t
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The switch must not change the SaaS deployment, which is the only place these
+  # hostnames are meant to be claimed.
+  - it: still renders the UI Ingress without the byoc preset
+    template: templates/meko-ui/ingress.yaml
+    # The template includes meko.managedCertificate ahead of the Ingress body and that
+    # helper closes with `---`, so on GKE the certificate is always document 0 and the
+    # Ingress document 1. Fixed by the template, not by the render path.
+    documentIndex: 1
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      mekoUi.image.tag: t
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.rules[0].host
+          value: app.mekodev.com

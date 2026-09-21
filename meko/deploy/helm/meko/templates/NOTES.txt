@@ -7,7 +7,7 @@ Enabled components:
   - api-server        ns={{ .Values.apiServer.namespace }}{{ if eq (include "meko.mode" .) "ycp" }} (control-plane mode{{ if .Values.apiServer.lb.enabled }}, console on internal LB svc/meko-api-server-lb{{ end }}){{ else }} host={{ .Values.apiServer.ingress.host }}{{ end }}{{ if .Values.apiServer.migrate.enabled }} (migration hook ON, scope={{ .Values.apiServer.migrate.scope }}){{ end }}
 {{- end }}
 {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true" }}
-  - meko-ui           ns={{ .Values.mekoUi.namespace }} host={{ .Values.mekoUi.ingress.host }}
+  - meko-ui           ns={{ .Values.mekoUi.namespace }}{{ if .Values.mekoUi.ingress.enabled }} host={{ .Values.mekoUi.ingress.host }}{{ else }} (no Ingress; reach it with kubectl port-forward svc/meko-ui-service){{ end }}
 {{- end }}
 {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true" }}
   - meko-mcp-server   ns={{ .Values.mekoMcpServer.namespace }}
