@@ -130,6 +130,17 @@ cluster.
    a desired state that was actually read: the agent cannot know what an operator
    withdrew from a response it never got.
 
+   The mirror of that rule applies to **actual**, and a backend author implementing
+   `List` has to know it: the engine derives creates from a resource's *absence*
+   from actual and deletes from its *presence*, so a reading that is missing part
+   of the environment cannot be returned as if it were whole. A backend that can
+   reach only part of its remote returns a row per resource it could not read
+   (`Actual.DiscoveryError`) rather than a short list. Nothing is issued for such a
+   row — no create, which would duplicate whatever is really there; no update,
+   which would be written blind; no delete, even of a withdrawn resource, since
+   the row is no evidence it is still there — and the tick reports DEGRADED,
+   because it converged only the part it could see.
+
    Because the agent obeys an empty set, the *write* side has to be sure the operator
    meant one. On top of the body checks every write shares (below),
    `POST /environments/{id}/desired` requires an explicit `resources` and rejects
@@ -191,6 +202,14 @@ differs, because only the state reaches the console, which renders a different
 sentence for each: a refused declaration reported as `drift` gets an operator "this
 resource type cannot be changed in place" in place of the reason (CLOUDGA-36992). A
 reader that meets a state it does not know must show `error`, not that sentence.
+
+A fourth state, `unreadable`, is not one of these and behaves the opposite way. It
+means the agent could not read the resource at all, so nothing was attempted rather
+than attempted and refused — and it **does** degrade the environment, because a tick
+that converged only what it could see has not converged what was declared. It is also
+the one state that overrides the row's `attrs`, clearing them: a resource nobody could
+read has nothing currently observed to report, and leaving the last reading in place
+would present it as fresh.
 
 ### Tasks: the operations behind the inventory
 

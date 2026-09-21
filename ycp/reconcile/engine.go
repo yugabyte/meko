@@ -68,6 +68,29 @@ type Actual struct {
 	// compute, extensions, fork_lsn, addresses) reported to YCP verbatim in the
 	// resource's status inventory. Nil when the backend has none.
 	Attrs map[string]string
+	// DiscoveryError, when non-nil, means the backend could not read this
+	// resource. The row asserts nothing about it — not its state, not its
+	// generation, not even that it exists — only that the environment could not be
+	// discovered in full and this is one of the parts that is missing.
+	//
+	// It exists because "absent" and "unread" are otherwise the same shape, and
+	// the engine derives creates from absence: a backend that silently returned
+	// the rows it managed to read would have every unread resource created again,
+	// duplicating whatever the unreachable half still holds. So a backend that
+	// cannot enumerate says so per resource rather than returning a short list.
+	//
+	// Naming the rows is the backend's problem, and it has two sources that do not
+	// need the remote: the resources YCP declares, and the ones its own last good
+	// List returned. What no such backend can name is a resource that exists but
+	// is NOT declared and was never seen — and that is exactly the set a short
+	// list cannot hurt, since deletes are derived from what IS in actual.
+	//
+	// Omitting the row instead is only safe for a resource YCP does not declare:
+	// for a declared one, absence IS the create signal, which is the duplicate
+	// this field exists to prevent. A backend that cannot read a declared
+	// resource must say so with a row; one it cannot read and nobody declared may
+	// be dropped, since nothing is derived from its absence.
+	DiscoveryError error
 }
 
 // Backend is the pluggable target the engine drives. Implementations translate
@@ -78,6 +101,13 @@ type Actual struct {
 type Backend interface {
 	// List returns every YCP-owned resource the backend currently holds. A
 	// failed List aborts the tick (the engine will not delete on stale data).
+	//
+	// A backend that can reach only part of its remote has a third option: return
+	// the rows it did read, plus an Actual carrying a DiscoveryError for each declared
+	// resource it could not, and no error. The tick then converges what was read
+	// and issues nothing for the rest. Returning a SHORT list with no error is
+	// the one thing a backend must not do — absence is how the engine decides to
+	// create, so an unread resource reported that way is created again.
 	List(ctx context.Context) ([]Actual, error)
 	// Create/Update/Delete may be asynchronous: the engine issues them once and
 	// re-checks via List on the next tick, so an in-flight create is seen as
@@ -215,6 +245,13 @@ const (
 	ActionCreate
 	ActionUpdate
 	ActionDelete
+	// ActionUnreadable is the non-verb for a resource the backend could not read
+	// (Actual.DiscoveryError). Nothing is issued for it: a create would duplicate
+	// what may already be there, an update would be written blind, and a delete
+	// would collect a resource nobody confirmed exists. It is an action rather
+	// than a silent omission so the tick can report which resources it could not
+	// account for — otherwise a partial reading could be reported as converged.
+	ActionUnreadable
 )
 
 func (a ActionType) String() string {
@@ -225,6 +262,8 @@ func (a ActionType) String() string {
 		return "update"
 	case ActionDelete:
 		return "delete"
+	case ActionUnreadable:
+		return "unreadable"
 	default:
 		return "noop"
 	}
@@ -246,6 +285,12 @@ type Action struct {
 //   - desired, in actual, effGen < desiredGen  -> Update
 //   - desired, in actual, effGen >= desiredGen -> Noop (the cheap path)
 //   - in actual, not desired                   -> Delete
+//
+// A row carrying a DiscoveryError overrides all four: the backend could not read
+// it, so there is no state to diff and nothing may be issued for it either way.
+//
+//   - desired, in actual with a DiscoveryError     -> Unreadable (not Create/Update)
+//   - in actual with a DiscoveryError, not desired -> Unreadable (not Delete)
 //
 // effGen is max(actual.ObservedGen, cached), so the engine converges whether or
 // not the backend echoes an observed generation. The cache is safe as a floor
@@ -269,6 +314,11 @@ func Diff(desired []api.DesiredResource, actual []Actual, cache map[ResourceKey]
 			actions = append(actions, Action{Type: ActionCreate, Key: k, Resource: d})
 			continue
 		}
+		if a.DiscoveryError != nil {
+			// Unread, not absent: this row carries no state to diff against.
+			actions = append(actions, Action{Type: ActionUnreadable, Key: k, Resource: d})
+			continue
+		}
 		effGen := a.ObservedGen
 		if c, ok := cache[k]; ok && c > effGen {
 			effGen = c
@@ -280,9 +330,19 @@ func Diff(desired []api.DesiredResource, actual []Actual, cache map[ResourceKey]
 		}
 	}
 	for _, a := range actual {
-		if _, ok := desiredByKey[a.Key]; !ok {
-			actions = append(actions, Action{Type: ActionDelete, Key: a.Key})
+		if _, ok := desiredByKey[a.Key]; ok {
+			continue // already planned by the desired loop above
 		}
+		if a.DiscoveryError != nil {
+			// Withdrawn AND unread. Never a delete — the row does not say the resource
+			// is there, and GC on a reading this uncertain is the one mistake that
+			// cannot be undone. But not converged either: the collection was never
+			// confirmed, so it is reported rather than dropped, or the tick would
+			// claim a revision whose deletion it never issued.
+			actions = append(actions, Action{Type: ActionUnreadable, Key: a.Key})
+			continue
+		}
+		actions = append(actions, Action{Type: ActionDelete, Key: a.Key})
 	}
 	return actions
 }

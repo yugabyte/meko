@@ -121,6 +121,17 @@ type Result struct {
 	Deferred int // eligible next tick (parent not ready, or backing off)
 	// Failed maps a resource to the retryable error from its attempt this tick.
 	Failed map[ResourceKey]error
+	// Unreadable maps a resource the backend could not read this tick
+	// (Actual.DiscoveryError) to why. Nothing was issued for it — not a create,
+	// which would duplicate whatever is really there; not an update, which would
+	// be written without knowing the current state; and not a delete, even for one
+	// desired state has withdrawn, since the row is no evidence it is still there.
+	//
+	// Reported separately from Failed because nothing was attempted: the
+	// environment was discovered in part, and these are the parts missing from
+	// that reading. A tick with any of these has not converged the environment,
+	// whatever it managed to do to the rest.
+	Unreadable map[ResourceKey]error
 	// Permanent maps a resource to a non-retryable error (a verb the kind does
 	// not support, a declaration the backend refused, a call it is not permitted).
 	// The engine does not re-issue these until the resource's spec changes, and
@@ -176,11 +187,12 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	e.mu.Unlock()
 
 	res := Result{
-		Failed:    map[ResourceKey]error{},
-		Permanent: map[ResourceKey]error{},
-		Updating:  map[ResourceKey]error{},
-		Stuck:     stuck,
-		Actual:    actual,
+		Failed:     map[ResourceKey]error{},
+		Permanent:  map[ResourceKey]error{},
+		Updating:   map[ResourceKey]error{},
+		Unreadable: map[ResourceKey]error{},
+		Stuck:      stuck,
+		Actual:     actual,
 	}
 
 	// Partition and order. Creates/updates go parent-first; deletes bottom-up
@@ -191,6 +203,8 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 		switch a.Type {
 		case ActionNoop:
 			res.NoOp++
+		case ActionUnreadable:
+			res.Unreadable[a.Key] = actualByKey[a.Key].DiscoveryError
 		case ActionCreate, ActionUpdate:
 			mutate = append(mutate, a)
 		case ActionDelete:
@@ -215,8 +229,26 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	for _, a := range mutate {
 		planned[a.Key] = a.Resource.Generation
 	}
+	// An unreadable resource has nothing planned, but it has not converged either
+	// — it was never looked at. All three prunes below read "nothing planned" as
+	// "done with", so each has to hold these keys out or an unread tick silently
+	// resets state that is still live:
+	//
+	//   - failures: the outage producing these rows is the outage that just failed
+	//     the in-flight verbs, so wiping the ladder pins a repeatedly-restarting
+	//     remote at rung 1 and re-issues its work at full rate (meko#985).
+	//   - updating: dropping the mark restarts the wedged-task clock, so a task
+	//     that never terminates can never reach StuckAfter if an unread tick lands
+	//     in between.
+	//   - permanent: the mark would retire without the spec's generation changing,
+	//     against permMark's contract, so a refused declaration is re-issued on the
+	//     next readable tick.
+	unread := func(k ResourceKey) bool { _, ok := res.Unreadable[k]; return ok }
 	e.mu.Lock()
 	for k, m := range e.permanent {
+		if unread(k) {
+			continue
+		}
 		if gen, still := planned[k]; !still || gen != m.gen {
 			delete(e.permanent, k)
 		}
@@ -230,11 +262,17 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	// makes the resource a no-op and so never reaches dispatch. Left behind, a stale
 	// ladder would delay the resource's NEXT update by up to MaxBackoff.
 	for k := range e.failures {
+		if unread(k) {
+			continue
+		}
 		if _, still := planned[k]; !still {
 			delete(e.failures, k)
 		}
 	}
 	for k := range e.updating {
+		if unread(k) {
+			continue
+		}
 		if _, still := planned[k]; !still {
 			delete(e.updating, k)
 		}
@@ -262,6 +300,12 @@ func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int6
 	stuck := map[ResourceKey]time.Duration{}
 	for _, a := range actual {
 		seen[a.Key] = true
+		if a.DiscoveryError != nil {
+			// Unread, so its State says nothing to time. Every such row — declared or
+			// withdrawn — is reported through Result.Unreadable instead, which names
+			// the right cause: "could not be read" rather than "has not progressed".
+			continue
+		}
 		prev, ok := e.seenState[a.Key]
 		if !ok || prev.state != a.State {
 			e.seenState[a.Key] = stateStamp{state: a.State, since: now}
@@ -313,7 +357,9 @@ func (e *Engine) filterEligible(actions []Action, actualByKey map[ResourceKey]Ac
 		if a.Type == ActionCreate || a.Type == ActionUpdate {
 			if parent, ok := e.backend.Parent(a.Resource); ok {
 				pa, present := actualByKey[parent]
-				if !present || !pa.Ready {
+				if !present || !pa.Ready || pa.DiscoveryError != nil {
+					// Unread counts as not ready: a parent nobody could read cannot be
+					// said to be healthy, whatever Ready carries on a row like that.
 					continue // parent not ready yet; try next tick
 				}
 			}
@@ -486,7 +532,16 @@ func (e *Engine) Run(ctx context.Context, src Source, rep Reporter, interval tim
 		res, rerr := e.Reconcile(ctx, state.Resources, fresh && err == nil)
 		if rerr != nil {
 			logf("reconcile: tick: %v", rerr)
-		} else if rep != nil {
+		} else {
+			// Outside the reporter branch: a run without one still has an operator
+			// reading its log, and this is the tick saying it converged only part of
+			// the environment. The cause also reaches the inventory as the resource's
+			// own error, so this is the local copy rather than the only record.
+			for k, uerr := range res.Unreadable {
+				logf("reconcile: %s could not be read, so nothing was issued for it: %v", k, uerr)
+			}
+		}
+		if rerr == nil && rep != nil {
 			if err := rep.Report(ctx, state, res); err != nil {
 				logf("reconcile: report: %v", err)
 			}

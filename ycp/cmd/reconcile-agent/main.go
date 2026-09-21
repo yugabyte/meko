@@ -415,12 +415,21 @@ func (a *agent) fallback(err error) (api.DesiredState, bool, error) {
 }
 
 // Report implements reconcile.Reporter: post a status heartbeat with the
-// reconciled inventory and applied revision. A retryable failure or a stuck
-// resource makes the environment DEGRADED; a permanent verdict (drift, rejected
-// or blocked) is reported per-resource but does not by itself degrade the env.
+// reconciled inventory and applied revision. A retryable failure, a stuck
+// resource, or a resource the backend could not read makes the environment
+// DEGRADED; a permanent verdict (drift, rejected or blocked) is reported
+// per-resource but does not by itself degrade the env.
+//
+// Unreadable degrades because a tick that converged only the part of the
+// environment it could see has not converged the environment: reporting READY
+// off a partial reading would say the declared state holds when most of it was
+// never checked. It covers a withdrawn resource too — one whose collection
+// could not be confirmed is as unconverged as a declared one that could not be
+// created — so a partial reading cannot post AppliedRevision for a revision
+// whose deletes were never issued.
 func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.Result) error {
 	stateStr := api.StateReady
-	if len(res.Failed) > 0 || len(res.Stuck) > 0 {
+	if len(res.Failed) > 0 || len(res.Stuck) > 0 || len(res.Unreadable) > 0 {
 		stateStr = api.StateDegraded
 	}
 	// Read the collectors before reporting, so the control plane sees this tick's
@@ -512,7 +521,14 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 			State:  act.State,
 			Attrs:  act.Attrs,
 		}
-		if err, ok := res.Failed[act.Key]; ok {
+		if err, ok := res.Unreadable[act.Key]; ok {
+			// Overrides State and clears Attrs, unlike the reasons below: a row the
+			// backend could not read carries neither by contract, so passing them
+			// through would present the last reading — or nothing at all — as
+			// currently observed. ApplyStatus replaces the stored inventory, so that
+			// would be a stale attr shown as fresh.
+			rs.State, rs.Attrs, rs.Error = "unreadable", nil, err.Error()
+		} else if err, ok := res.Failed[act.Key]; ok {
 			rs.Error = err.Error()
 		} else if d, ok := res.Stuck[act.Key]; ok {
 			rs.Error = fmt.Sprintf("no progress: %q for %s", act.State, d.Round(time.Second))
