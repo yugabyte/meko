@@ -106,12 +106,14 @@ spec:
             - name: data
               mountPath: /prometheus
           resources:
+            # Steady at 2.4-2.95 GiB with a 411k-series head, most of it Temporal's.
+            # The request matches that so the scheduler reserves what it uses.
             requests:
               cpu: 200m
-              memory: 512Mi
+              memory: 3Gi
             limits:
               cpu: "1"
-              memory: 4Gi
+              memory: 8Gi
           readinessProbe:
             httpGet:
               path: /-/ready
