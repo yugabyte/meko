@@ -279,7 +279,10 @@ func (r *clientWindowRun) startJava(td *teardownStack) error {
 	if err != nil {
 		return err
 	}
-	conn := endpointConn(r.kube.Namespace(), r.ten.Endpoint.ID, r.ten.Endpoint.Address)
+	conn, err := authedEndpointConn(ctx, r.kube, r.ten.Endpoint.ID, r.ten.Endpoint.Address, r.logf)
+	if err != nil {
+		return err
+	}
 	props := sampleAppProps(mixSqlTransactions, conn)
 	props["metrics_trace_timeout"] = fmt.Sprintf("%d", r.params.SampleInterval.Milliseconds())
 	app := sampleapp.New(podExec, sampleapp.RunSpec{
@@ -748,10 +751,11 @@ func (r *clientWindowRun) gate(s *core.StepHandle) error {
 		return fmt.Errorf("no operation was measured, so there is nothing to gate")
 	}
 	var gated, info []core.Datapoint
+	secFloor := r.params.StatementTimeout.Seconds()
 	for _, res := range r.results {
 		gated = append(gated,
-			core.Datapoint{Name: cwPrefix + res.Op + ".error_seconds", Value: res.ErrorSeconds, Unit: "s", Direction: core.LowerIsBetter},
-			core.Datapoint{Name: cwPrefix + res.Op + ".first_success_after_seconds", Value: res.FirstSuccessAfter, Unit: "s", Direction: core.LowerIsBetter},
+			core.Datapoint{Name: cwPrefix + res.Op + ".error_seconds", Value: res.ErrorSeconds, Unit: "s", Direction: core.LowerIsBetter, MinDelta: secFloor},
+			core.Datapoint{Name: cwPrefix + res.Op + ".first_success_after_seconds", Value: res.FirstSuccessAfter, Unit: "s", Direction: core.LowerIsBetter, MinDelta: secFloor},
 			core.Datapoint{Name: cwPrefix + res.Op + ".errors_total", Value: float64(res.Errors), Unit: "count", Direction: core.LowerIsBetter},
 		)
 		info = append(info,

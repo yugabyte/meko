@@ -2,6 +2,7 @@ package ampstack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -54,6 +55,66 @@ func EndpointPodName(ctx context.Context, kube *k8s.Kubectl, endpointID string) 
 		return "", fmt.Errorf("no pod matched %s", sel)
 	}
 	return pod, nil
+}
+
+type EndpointAuth struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	Database string
+}
+
+const (
+	endpointContainer        = "endpoint"
+	endpointAuthProbeTimeout = 30 * time.Second
+)
+
+var endpointAuthPoll = 5 * time.Second
+
+func WaitEndpointAuth(ctx context.Context, kube *k8s.Kubectl, endpointID string, a EndpointAuth, timeout time.Duration, logf func(string, ...any)) error {
+	deadline := time.Now().Add(timeout)
+	probe := fmt.Sprintf("PGPASSWORD=%s timeout %d psql -h %s -p %d -U %s -d %s -tAc 'select 1'",
+		shellQuote(a.Password), int(endpointAuthProbeTimeout.Seconds()),
+		a.Host, a.Port, a.User, a.Database)
+	var last error
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, last)
+		}
+		pod, err := EndpointPodName(ctx, kube, endpointID)
+		if err != nil {
+			last = fmt.Errorf("resolve a compute pod of endpoint %s: %w", endpointID, err)
+		} else {
+			res, rerr := kube.ForPod(pod, endpointContainer).Run(ctx, probe)
+			switch {
+			case rerr != nil:
+				last = fmt.Errorf("exec psql in %s: %w", pod, rerr)
+			case res.ExitCode != 0:
+				last = fmt.Errorf("psql in %s exited %d: %s", pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+			case strings.TrimSpace(res.Stdout) == "1":
+				if attempt > 0 && logf != nil {
+					logf("endpoint %s authenticated %s after %d attempt(s)", endpointID, a.User, attempt+1)
+				}
+				return nil
+			default:
+				last = fmt.Errorf("psql in %s answered %q, want 1", pod, strings.TrimSpace(res.Stdout))
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("endpoint %s never authenticated %s at %s:%d within %s: %w",
+				endpointID, a.User, a.Host, a.Port, timeout, last)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), last)
+		case <-time.After(endpointAuthPoll):
+		}
+	}
+}
+
+func shellQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
 func isNotFound(err error) bool {

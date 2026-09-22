@@ -189,6 +189,9 @@ func (r *soakRun) startWorkloads(s *core.StepHandle, ctx context.Context) error 
 	} {
 		ten := &r.fleet.Tenants[i]
 		host, port := addr.EndpointInClusterAddr(ten.Endpoint)
+		if err := awaitTenantAuth(ctx, r.kube, ten.Endpoint.ID, host, port, r.cfg.Creds, r.logf); err != nil {
+			return err
+		}
 		r.loads.workloads = append(r.loads.workloads, sampleAppOnEndpoint(podExec, jarPath, spec.wl, i,
 			host, port, r.cfg.Creds, wlCfg,
 			fmt.Sprintf("%s-%s-t%d", spec.label, r.t.ResourceSuffix(), i),

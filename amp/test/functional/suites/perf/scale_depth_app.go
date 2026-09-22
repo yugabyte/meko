@@ -136,7 +136,10 @@ func runDepthAppLadder(t *core.T) error {
 		if err := ensureProbeTable(t.Context, ten.Conn); err != nil {
 			return fmt.Errorf("create the probe table: %w", err)
 		}
-		conn := endpointConn(kube.Namespace(), ten.Endpoint.ID, ten.Endpoint.Address)
+		conn, err := authedEndpointConn(t.Context, kube, ten.Endpoint.ID, ten.Endpoint.Address, logf)
+		if err != nil {
+			return err
+		}
 		podName := "ampqa-da-" + t.ResourceSuffix()
 		ex, err = startPerfClientPod(t.Context, kube, attachSink{t: t, logf: logf}, td,
 			podName, cfg.ClientImage, cfg.ClientPullSecret)

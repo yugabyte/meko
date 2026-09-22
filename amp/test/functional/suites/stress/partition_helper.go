@@ -207,21 +207,32 @@ func tcpOpen(ctx context.Context, ex *k8s.Kubectl, ip string, port int) (bool, e
 // awaitLink polls the pod's view of ip:port until it is open (want=true) or
 // closed (want=false), and reports how long that took. A partition that never
 // bites, or never lifts, is an error here, not a passing step.
-func awaitLink(t *core.T, ex *k8s.Kubectl, pod, ip string, port int, want bool, timeout time.Duration) (time.Duration, error) {
+func awaitLink(t *core.T, ex *k8s.Kubectl, pod string, addr func() string, port int, want bool, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
 	state := "closed"
 	if want {
 		state = "open"
 	}
-	err := t.WaitFor(fmt.Sprintf("%s:%d to be %s from pod %s", ip, port, state, pod),
+	err := t.WaitFor(fmt.Sprintf("%s:%d to be %s from pod %s", addr(), port, state, pod),
 		timeout, partitionProbeInterval, func() (bool, error) {
-			open, err := tcpOpen(t.Context, ex, ip, port)
+			open, err := tcpOpen(t.Context, ex, addr(), port)
 			if err != nil {
 				return false, err
 			}
 			return open == want, nil
 		})
 	return time.Since(start), err
+}
+
+func podIPNow(ctx context.Context, kube *k8s.Kubectl, pod, last string) func() string {
+	return func() string {
+		ip, err := kube.Get(ctx, "pod", pod, "{.status.podIP}")
+		if err != nil || strings.TrimSpace(ip) == "" {
+			return last
+		}
+		last = strings.TrimSpace(ip)
+		return last
+	}
 }
 
 // backingPodIPs maps every backing serving pod to its IP.

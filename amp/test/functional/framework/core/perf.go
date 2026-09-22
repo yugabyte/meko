@@ -28,6 +28,7 @@ type Datapoint struct {
 	// 0 when there was one sample. A gate must not accuse a delta smaller than
 	// this: the run could not measure the difference it is being blamed for.
 	SpreadPct float64
+	MinDelta  float64
 }
 
 // BaselineComparison is a Datapoint's comparison against its baseline value:

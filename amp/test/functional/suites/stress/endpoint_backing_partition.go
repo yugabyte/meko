@@ -100,11 +100,12 @@ func runEndpointBackingPartition(t *core.T) error {
 	if len(ips) == 0 {
 		return fmt.Errorf("no backing pod matched any known selector in namespace %q", bkube.Namespace())
 	}
-	var anyBackingIP string
-	for _, ip := range ips {
-		anyBackingIP = ip
+	var anyBackingPod, anyBackingIP string
+	for pod, ip := range ips {
+		anyBackingPod, anyBackingIP = pod, ip
 		break
 	}
+	backingAddr := podIPNow(t.Context, bkube, anyBackingPod, anyBackingIP)
 
 	fleet, err := newTenantFleet(t, env, logf)
 	if err != nil {
@@ -174,18 +175,18 @@ func runEndpointBackingPartition(t *core.T) error {
 			if err != nil {
 				return err
 			}
-			open, err := tcpOpen(t.Context, ex, anyBackingIP, ysqlPort)
+			open, err := tcpOpen(t.Context, ex, backingAddr(), ysqlPort)
 			if err != nil {
 				return err
 			}
 			if !open {
-				return fmt.Errorf("endpoint pod %s cannot reach the backing at %s:%d before any cut, so the probe would prove nothing", pod, anyBackingIP, ysqlPort)
+				return fmt.Errorf("endpoint pod %s cannot reach the backing at %s:%d before any cut, so the probe would prove nothing", pod, backingAddr(), ysqlPort)
 			}
 			part, err = cutPodFromBacking(t, kube, pod, fmt.Sprintf("%s-%d", t.ResourceSuffix(), r), bkube)
 			if err != nil {
 				return err
 			}
-			took, err := awaitLink(t, ex, pod, anyBackingIP, ysqlPort, false, partitionEnforceTimeout)
+			took, err := awaitLink(t, ex, pod, backingAddr, ysqlPort, false, partitionEnforceTimeout)
 			if err != nil {
 				return fmt.Errorf("the DROP rules cutting %s off the backing never bit: no partition was injected: %w", pod, err)
 			}
@@ -260,9 +261,9 @@ func runEndpointBackingPartition(t *core.T) error {
 			if err := part.Heal(t.Context); err != nil {
 				return fmt.Errorf("lift the cut on %s: %w", pod, err)
 			}
-			took, err := awaitLink(t, ex, pod, anyBackingIP, ysqlPort, true, params.SettleTimeout)
+			took, err := awaitLink(t, ex, pod, backingAddr, ysqlPort, true, params.SettleTimeout)
 			if err != nil {
-				return fmt.Errorf("endpoint pod %s still cannot reach %s:%d after its DROP rules were deleted: %w", pod, anyBackingIP, ysqlPort, err)
+				return fmt.Errorf("endpoint pod %s still cannot reach the backing at %s:%d after its DROP rules were deleted: %w", pod, backingAddr(), ysqlPort, err)
 			}
 			s.Set("reachable_after", took.Round(time.Second).String())
 			s.Set("cut_lasted", time.Since(cutAt).Round(time.Second).String())

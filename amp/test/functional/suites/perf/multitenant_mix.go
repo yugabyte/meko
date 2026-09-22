@@ -160,7 +160,10 @@ func startTenantClients(ctx context.Context, t *core.T, cfg perfConfig, kube *k8
 	//    nothing inside a pod.
 	clients := make([]tenantClient, 0, len(tenants))
 	for i := range tenants {
-		conn := endpointConn(kube.Namespace(), tenants[i].Endpoint.ID, tenants[i].Endpoint.Address)
+		conn, err := authedEndpointConn(ctx, kube, tenants[i].Endpoint.ID, tenants[i].Endpoint.Address, logfFor(t))
+		if err != nil {
+			return nil, fmt.Errorf("tenant %d: %w", i, err)
+		}
 		w, err := mixWorkloadFor(names[i], cfg, t.Options, conn,
 			mixDeps{jarPath: jarPath, marker: fmt.Sprintf("mt-%s-%d", t.ResourceSuffix(), tenants[i].Index), logf: logfFor(t)})
 		if err != nil {

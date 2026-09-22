@@ -211,10 +211,14 @@ func runScaleDepth(t *core.T) error {
 		stage := fmt.Sprintf("stage_%02d_wh%d_t%d", i+1, wh, term)
 		var tps float64
 		err := t.Step(stage, func(s *core.StepHandle) error {
+			conn, err := authedEndpointConn(t.Context, kube, tenants[0].Endpoint.ID, tenants[0].Endpoint.Address, logf)
+			if err != nil {
+				return err
+			}
 			// Growing the wals table is the variable under test.
 			w := &tpccWorkload{
 				runDir:     path.Join(cfg.RemoteDir, benchbase.DefaultSubdir),
-				conn:       endpointConn(kube.Namespace(), tenants[0].Endpoint.ID, tenants[0].Endpoint.Address),
+				conn:       conn,
 				benchmark:  benchbase.TPCC,
 				warehouses: wh,
 				terminals:  term,

@@ -208,6 +208,7 @@ func runBackingNodePartition(t *core.T, topologySpec string) error {
 	for r := 1; r <= params.Rounds; r++ {
 		victim := pods[order[(r-1)%len(pods)]]
 		var peer, peerIP string
+		var peerAddr func() string
 		for _, pod := range pods {
 			if pod != victim {
 				peer, peerIP = pod, ips[pod]
@@ -225,18 +226,19 @@ func runBackingNodePartition(t *core.T, topologySpec string) error {
 				return err
 			}
 			ex := bkube.ForPod(victim, "")
-			open, err := tcpOpen(t.Context, ex, peerIP, tserverRPCPort)
+			peerAddr = podIPNow(t.Context, bkube, peer, peerIP)
+			open, err := tcpOpen(t.Context, ex, peerAddr(), tserverRPCPort)
 			if err != nil {
 				return err
 			}
 			if !open {
-				return fmt.Errorf("pod %s cannot reach its peer %s at %s:%d before any partition is applied, so the probe would prove nothing", victim, peer, peerIP, tserverRPCPort)
+				return fmt.Errorf("pod %s cannot reach its peer %s at %s:%d before any partition is applied, so the probe would prove nothing", victim, peer, peerAddr(), tserverRPCPort)
 			}
 			part, err = isolatePod(t, bkube, victim, fmt.Sprintf("%s-%d", t.ResourceSuffix(), r))
 			if err != nil {
 				return err
 			}
-			took, err := awaitLink(t, ex, victim, peerIP, tserverRPCPort, false, partitionEnforceTimeout)
+			took, err := awaitLink(t, ex, victim, peerAddr, tserverRPCPort, false, partitionEnforceTimeout)
 			if err != nil {
 				return fmt.Errorf("the DROP rules in %s's network namespace never bit: no partition was injected: %w", victim, err)
 			}
@@ -280,9 +282,9 @@ func runBackingNodePartition(t *core.T, topologySpec string) error {
 			if err := part.Heal(t.Context); err != nil {
 				return fmt.Errorf("lift the partition of %s: %w", victim, err)
 			}
-			took, err := awaitLink(t, bkube.ForPod(victim, ""), victim, peerIP, tserverRPCPort, true, params.SettleTimeout)
+			took, err := awaitLink(t, bkube.ForPod(victim, ""), victim, peerAddr, tserverRPCPort, true, params.SettleTimeout)
 			if err != nil {
-				return fmt.Errorf("pod %s still cannot reach %s:%d after its DROP rules were deleted: %w", victim, peerIP, tserverRPCPort, err)
+				return fmt.Errorf("pod %s still cannot reach peer %s at %s:%d after its DROP rules were deleted: %w", victim, peer, peerAddr(), tserverRPCPort, err)
 			}
 			s.Set("reachable_after", took.Round(time.Second).String())
 			faults.Close()

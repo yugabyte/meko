@@ -88,10 +88,38 @@ func (k *K8s) Start(ctx context.Context, spec Spec) error {
 	if timeout == 0 {
 		timeout = DefaultReadyTimeout
 	}
-	if err := k.kube.WaitFor(ctx, "pod/"+spec.Name, "condition=Ready", timeout); err != nil {
+	if err := waitPodReady(ctx, k.kube, spec.Name, timeout); err != nil {
 		return fmt.Errorf("wait ready %s: %w", spec.Name, err)
 	}
 	return nil
+}
+
+var podVisiblePoll = 2 * time.Second
+
+func waitPodReady(ctx context.Context, kube *k8s.Kubectl, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("pod %s never became visible within %s", name, timeout)
+		}
+		err := kube.WaitFor(ctx, "pod/"+name, "condition=Ready", remaining)
+		if err == nil || !isNotFound(err) {
+			return err
+		}
+		if time.Now().Add(podVisiblePoll).After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(podVisiblePoll):
+		}
+	}
+}
+
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found")
 }
 
 // Exec returns a RemoteExecutor bound to the started pod, so a workload driver

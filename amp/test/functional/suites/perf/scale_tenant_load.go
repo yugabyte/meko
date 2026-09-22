@@ -147,7 +147,10 @@ func runTenantLoadLadder(t *core.T, ladder, workload string) error {
 			}
 		}
 
-		conn := endpointConn(kube.Namespace(), ten.Endpoint.ID, ten.Endpoint.Address)
+		conn, err := authedEndpointConn(t.Context, kube, ten.Endpoint.ID, ten.Endpoint.Address, logf)
+		if err != nil {
+			return 0, fmt.Errorf("tenant %d: %w", i, err)
+		}
 		podName := fmt.Sprintf("ampqa-tl-%s-%d", t.ResourceSuffix(), i)
 		ex, err := startPerfClientPod(t.Context, kube, attachSink{t: t, logf: logf}, td,
 			podName, cfg.ClientImage, cfg.ClientPullSecret)

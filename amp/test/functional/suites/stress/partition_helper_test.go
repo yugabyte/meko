@@ -8,6 +8,7 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/netshape"
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Entering the pod's network namespace is apps/netshape's job and is tested
@@ -77,5 +78,28 @@ func TestDefaultDevReadsTheRoute(t *testing.T) {
 	sp = &scriptedPod{results: []execpkg.Result{{Stdout: "100078\n"}, {Stdout: "\n"}}}
 	if _, err := defaultDev(context.Background(), testHelper(sp)); err == nil {
 		t.Error("defaultDev with no default route = nil, want an error")
+	}
+}
+
+func scriptedKube(sp *scriptedPod) *k8s.Kubectl {
+	return k8s.New(k8s.Config{Namespace: "ampqa-backing-t"}).WithRunner(sp.runner())
+}
+
+func TestPodIPNowFollowsAReplacedPod(t *testing.T) {
+	sp := &scriptedPod{results: []execpkg.Result{{Stdout: "10.21.135.99\n"}}}
+	addr := podIPNow(context.Background(), scriptedKube(sp), "yb-tserver-1", "10.21.135.36")
+	if got := addr(); got != "10.21.135.99" {
+		t.Errorf("addr = %q, want the pod's current IP", got)
+	}
+}
+
+func TestPodIPNowKeepsTheLastAddressWhenTheLookupFails(t *testing.T) {
+	sp := &scriptedPod{results: []execpkg.Result{{ExitCode: 1, Stderr: "the server was unable to return a response"}, {Stdout: "\n"}}}
+	addr := podIPNow(context.Background(), scriptedKube(sp), "yb-tserver-1", "10.21.135.36")
+	if got := addr(); got != "10.21.135.36" {
+		t.Errorf("addr after a failed lookup = %q, want the last known IP", got)
+	}
+	if got := addr(); got != "10.21.135.36" {
+		t.Errorf("addr after an empty IP (pod rescheduling) = %q, want the last known IP", got)
 	}
 }

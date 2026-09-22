@@ -325,7 +325,7 @@ func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]fl
 		// port-forwards jitter by tens of ms, so a violation must also clear an
 		// absolute floor. Ordered after the allowance so "floor" marks only the
 		// rows the floor actually suppressed.
-		case dp.Unit == "ms" && math.Abs(dp.Value-rdp.Value) < liveArmNoiseFloorMS:
+		case math.Abs(dp.Value-rdp.Value) < noiseFloorOf(dp):
 			verdict = "floor"
 		default:
 			verdict = liveArmSuspect(dp, d, allowed, curBest, baseBest)
@@ -357,6 +357,16 @@ func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]fl
 		fmt.Fprintf(&b, "below the %d-datapoint quorum, reported but not failed: %s\n", max(pol.MinViolations, 1), m)
 	}
 	return b.String(), moderate, nil
+}
+
+func noiseFloorOf(dp core.Datapoint) float64 {
+	if dp.MinDelta > 0 {
+		return dp.MinDelta
+	}
+	if dp.Unit == "ms" {
+		return liveArmNoiseFloorMS
+	}
+	return 0
 }
 
 // liveArmSuspect classifies a delta that already cleared its allowance.

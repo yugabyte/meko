@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -245,5 +246,62 @@ func TestK8sExecBindsToStartedPod(t *testing.T) {
 		if !strings.Contains(last, want) {
 			t.Errorf("exec argv missing %q: %q", want, last)
 		}
+	}
+}
+
+type sequenceRunner struct {
+	waits []execpkg.Result
+	n     int
+	calls []string
+}
+
+func (s *sequenceRunner) run(_ context.Context, _ io.Reader, argv []string) (execpkg.Result, error) {
+	joined := strings.Join(argv, " ")
+	s.calls = append(s.calls, joined)
+	if !strings.Contains(joined, " wait ") {
+		return execpkg.Result{}, nil
+	}
+	if s.n < len(s.waits) {
+		res := s.waits[s.n]
+		s.n++
+		return res, nil
+	}
+	return execpkg.Result{}, nil
+}
+
+const podNotFound = `Error from server (NotFound): pods "ampqa-health-1" not found`
+
+func TestK8sStartRetriesWhileThePodIsNotVisibleYet(t *testing.T) {
+	prev := podVisiblePoll
+	podVisiblePoll = time.Millisecond
+	t.Cleanup(func() { podVisiblePoll = prev })
+
+	sr := &sequenceRunner{waits: []execpkg.Result{{ExitCode: 1, Stderr: podNotFound}}}
+	k := NewK8s(k8s.New(k8s.Config{Namespace: "amp-x"}).WithRunner(sr.run))
+	if err := k.Start(context.Background(), Spec{Name: "ampqa-health-1", Image: "img"}); err != nil {
+		t.Fatalf("Start over a not-yet-visible pod: %v", err)
+	}
+	if sr.n != 1 {
+		t.Errorf("want the NotFound wait retried, got %d scripted wait(s) consumed", sr.n)
+	}
+}
+
+func TestK8sStartFailsWhenThePodNeverAppears(t *testing.T) {
+	prev := podVisiblePoll
+	podVisiblePoll = time.Millisecond
+	t.Cleanup(func() { podVisiblePoll = prev })
+
+	sr := &sequenceRunner{}
+	for i := 0; i < 50; i++ {
+		sr.waits = append(sr.waits, execpkg.Result{ExitCode: 1, Stderr: podNotFound})
+	}
+	k := NewK8s(k8s.New(k8s.Config{Namespace: "amp-x"}).WithRunner(sr.run))
+	k.ReadyTimeout = 20 * time.Millisecond
+	err := k.Start(context.Background(), Spec{Name: "ampqa-health-1", Image: "img"})
+	if err == nil {
+		t.Fatal("want a failure when the pod never becomes visible")
+	}
+	if !strings.Contains(err.Error(), "ampqa-health-1") {
+		t.Errorf("error must name the pod, got %v", err)
 	}
 }

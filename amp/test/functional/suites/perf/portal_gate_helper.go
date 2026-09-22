@@ -144,9 +144,11 @@ func historyBands(t *core.T, pg portalGateConfig, testName string, gated []core.
 func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGateConfig) []portalGateItem {
 	dirByName := map[string]core.Direction{}
 	spreadByName := map[string]float64{}
+	floorByName := map[string]float64{}
 	for _, dp := range gated {
 		dirByName[dp.Name] = dp.Direction
 		spreadByName[dp.Name] = dp.SpreadPct
+		floorByName[dp.Name] = dp.MinDelta
 	}
 	out := make([]portalGateItem, len(items))
 	for i, it := range items {
@@ -165,6 +167,8 @@ func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGat
 		out[i].Threshold = band
 		out[i].ThresholdFrom = "framework"
 		switch {
+		case d > band && math.Abs(it.Value-it.Prev.Median) < floorByName[it.Name]:
+			out[i].Verdict = verdictBelowFloor
 		case d > band && d <= spreadByName[it.Name]:
 			// The run's own iterations disagreed by more than the delta, so it
 			// never measured the difference it would be accusing. Distinct from
@@ -184,6 +188,8 @@ func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGat
 // verdictSpreadVetoed marks a datapoint whose delta cleared the history band but
 // not the run's own iteration spread.
 const verdictSpreadVetoed = "spread_vetoed"
+
+const verdictBelowFloor = "below_min_delta"
 
 func gateCounts(items []portalGateItem) (regressed, improved, noSignal int) {
 	for _, it := range items {
@@ -226,14 +232,15 @@ func portalGateSummary(testName string, out *portalGateResponse) string {
 	if out.Regressed > 0 {
 		verdict = "fail"
 	}
-	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history, %d inside their own run spread (window %d, train %s)",
-		verdict, testName, out.Regressed, out.Total, out.Improved, out.NoSignal, spreadVetoed(out.Items), out.Window, orNone(out.YBTrain))
+	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history, %d inside their own run spread, %d below what the measurement resolves (window %d, train %s)",
+		verdict, testName, out.Regressed, out.Total, out.Improved, out.NoSignal,
+		countVerdict(out.Items, verdictSpreadVetoed), countVerdict(out.Items, verdictBelowFloor), out.Window, orNone(out.YBTrain))
 }
 
-func spreadVetoed(items []portalGateItem) int {
+func countVerdict(items []portalGateItem, verdict string) int {
 	n := 0
 	for _, it := range items {
-		if it.Verdict == verdictSpreadVetoed {
+		if it.Verdict == verdict {
 			n++
 		}
 	}

@@ -351,6 +351,9 @@ func (r *maintenanceRun) startEndpointWorkloads(ctx context.Context) error {
 	for i := range r.fleet.Tenants {
 		ten := &r.fleet.Tenants[i]
 		host, port := addr.EndpointInClusterAddr(ten.Endpoint)
+		if err := awaitTenantAuth(ctx, kube, ten.Endpoint.ID, host, port, creds, r.logf); err != nil {
+			return err
+		}
 		label := fmt.Sprintf("%s-t%d", r.t.ResourceSuffix(), i)
 		switch i % 3 {
 		case 0:

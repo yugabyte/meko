@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/benchbase"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sampleapp"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Markers meaning the workload found something WRONG, not a retryable reset.
@@ -253,6 +255,14 @@ type endpointCreds struct {
 	User     string
 	Password string
 	Database string
+}
+
+const tenantAuthTimeout = 5 * time.Minute
+
+func awaitTenantAuth(ctx context.Context, kube *k8s.Kubectl, endpointID, host string, port int, creds endpointCreds, logf func(string, ...any)) error {
+	return ampstack.WaitEndpointAuth(ctx, kube, endpointID, ampstack.EndpointAuth{
+		Host: host, Port: port, User: creds.User, Password: creds.Password, Database: creds.Database,
+	}, tenantAuthTimeout, logf)
 }
 
 // benchbaseLog is best-effort: the file does not exist until the run writes.

@@ -132,3 +132,81 @@ func TestEndpointPodNameFallsBackWhileRescheduling(t *testing.T) {
 		t.Error("want an error when the selector matches no pod")
 	}
 }
+
+type authRec struct {
+	calls    []string
+	psqlExit []int
+}
+
+func (r *authRec) run(_ context.Context, _ io.Reader, argv []string) (exec.Result, error) {
+	joined := strings.Join(argv, " ")
+	r.calls = append(r.calls, joined)
+	if strings.Contains(joined, "get pod") {
+		return exec.Result{Stdout: "yb-ep-ep-1-pod0"}, nil
+	}
+	code := 0
+	if len(r.psqlExit) > 0 {
+		code = r.psqlExit[0]
+		r.psqlExit = r.psqlExit[1:]
+	}
+	if code != 0 {
+		return exec.Result{ExitCode: code, Stderr: `FATAL:  password authentication failed for user "cloud_admin"`}, nil
+	}
+	return exec.Result{Stdout: "1\n"}, nil
+}
+
+func fastAuthPoll(t *testing.T) {
+	t.Helper()
+	prev := endpointAuthPoll
+	endpointAuthPoll = time.Millisecond
+	t.Cleanup(func() { endpointAuthPoll = prev })
+}
+
+func testAuth() EndpointAuth {
+	return EndpointAuth{Host: "yb-ep-ep-1.amp.svc.cluster.local", Port: 55433, User: "cloud_admin", Password: "cloud_admin", Database: "postgres"}
+}
+
+func TestWaitEndpointAuthProbesRemotelyNotLoopback(t *testing.T) {
+	rec := &authRec{}
+	kube := k8s.New(k8s.Config{Namespace: "amp"}).WithRunner(rec.run)
+
+	if err := WaitEndpointAuth(context.Background(), kube, "ep-1", testAuth(), time.Minute, nil); err != nil {
+		t.Fatalf("WaitEndpointAuth: %v", err)
+	}
+	probe := rec.calls[len(rec.calls)-1]
+	if strings.Contains(probe, "127.0.0.1") || !strings.Contains(probe, "-h yb-ep-ep-1.amp.svc.cluster.local") {
+		t.Errorf("probe must dial the Service name, got %q", probe)
+	}
+	if !strings.Contains(probe, "PGPASSWORD='cloud_admin'") {
+		t.Errorf("probe must present the password, got %q", probe)
+	}
+	if !strings.Contains(probe, "-c "+endpointContainer) {
+		t.Errorf("probe must run in the %q container, got %q", endpointContainer, probe)
+	}
+}
+
+func TestWaitEndpointAuthRetriesUntilAuthenticated(t *testing.T) {
+	fastAuthPoll(t)
+	rec := &authRec{psqlExit: []int{2}}
+	kube := k8s.New(k8s.Config{Namespace: "amp"}).WithRunner(rec.run)
+
+	if err := WaitEndpointAuth(context.Background(), kube, "ep-1", testAuth(), time.Minute, nil); err != nil {
+		t.Fatalf("WaitEndpointAuth after one refusal: %v", err)
+	}
+	if got := len(rec.calls); got != 4 {
+		t.Fatalf("want a refused attempt then a successful one (4 calls), got %d: %v", got, rec.calls)
+	}
+}
+
+func TestWaitEndpointAuthTimeoutCarriesTheRefusal(t *testing.T) {
+	rec := &authRec{psqlExit: []int{2}}
+	kube := k8s.New(k8s.Config{Namespace: "amp"}).WithRunner(rec.run)
+
+	err := WaitEndpointAuth(context.Background(), kube, "ep-1", testAuth(), time.Nanosecond, nil)
+	if err == nil {
+		t.Fatal("want a failure when the compute never authenticates")
+	}
+	if !strings.Contains(err.Error(), "ep-1") || !strings.Contains(err.Error(), "password authentication failed") {
+		t.Errorf("error must name the endpoint and what it refused, got %v", err)
+	}
+}

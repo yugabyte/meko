@@ -206,7 +206,10 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 		return err
 	}
 
-	base := endpointConn(kube.Namespace(), tenants[0].Endpoint.ID, tenants[0].Endpoint.Address)
+	base, err := authedEndpointConn(t.Context, kube, tenants[0].Endpoint.ID, tenants[0].Endpoint.Address, logf)
+	if err != nil {
+		return err
+	}
 	var drivers []ladderDriver
 
 	// Own database per driver: benchbase always names its tables the same, so

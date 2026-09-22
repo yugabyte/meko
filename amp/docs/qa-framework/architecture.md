@@ -1140,7 +1140,11 @@ cross-provision **MAD** emitted as `<metric>.mad` (the run's own resolution)
 and the CV as a variance guard. The verdict comes from the **report portal's
 gate** (`POST /perf/gate`) when the run streams to one: the rolling median of
 the last N comparable stored runs (same load signature + YugabyteDB train,
-latest run per build) with a spread-aware band of max(3·MAD, 5% floor). The
+latest run per build) with a spread-aware band of max(3·MAD, 5% floor). That
+band is a percentage, so a datapoint whose measurement is quantized (an error
+window ended by a client retry moves in whole statement timeouts) declares the
+smallest change it can resolve, `core.Datapoint.MinDelta`, and the portal and
+live-arm gates veto a delta below it; the baseline-file fallback does not. The
 portal is the only store that persists between CI runs; `baselines/perf.json`
 (workspace-local, gitignored) is the fallback for portal-less runs. Each run
 also **appends** its aggregate to a run-history store

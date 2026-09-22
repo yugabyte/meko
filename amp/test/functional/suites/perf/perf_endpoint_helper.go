@@ -45,11 +45,7 @@ const (
 	perfClusterPrefix  = "ampqa-perf-"
 	perfCPNamespaceFmt = "ampqa-perf-cp-%s"
 
-	// endpointSettle is a short pause after the compute workload reports ready.
-	// The chart's readiness probe is a TCP check on the compute port, which can
-	// answer a beat before Postgres completes its own startup — and BenchBase's
-	// create phase connects ONCE, with no retry.
-	endpointSettle = 10 * time.Second
+	endpointAuthTimeout = 5 * time.Minute
 )
 
 // ampEndpoint is the provisioned control plane plus its single compute endpoint:
@@ -104,6 +100,26 @@ func endpointConn(namespace, endpointID, reportedAddr string) pg.ConnInfo {
 		Database: endpointComputeDB,
 		SSLMode:  "disable",
 	}
+}
+
+func waitEndpointAuth(ctx context.Context, ep ampEndpoint, timeout time.Duration, logf func(string, ...any)) error {
+	return ampstack.WaitEndpointAuth(ctx, ep.Kube, ep.EndpointID, ampstack.EndpointAuth{
+		Host:     ep.Conn.Host,
+		Port:     ep.Conn.Port,
+		User:     ep.Conn.User,
+		Password: ep.Conn.Password,
+		Database: ep.Conn.Database,
+	}, timeout, logf)
+}
+
+func authedEndpointConn(ctx context.Context, kube *k8s.Kubectl, endpointID, reportedAddr string, logf func(string, ...any)) (pg.ConnInfo, error) {
+	conn := endpointConn(kube.Namespace(), endpointID, reportedAddr)
+	if err := ampstack.WaitEndpointAuth(ctx, kube, endpointID, ampstack.EndpointAuth{
+		Host: conn.Host, Port: conn.Port, User: conn.User, Password: conn.Password, Database: conn.Database,
+	}, endpointAuthTimeout, logf); err != nil {
+		return pg.ConnInfo{}, err
+	}
+	return conn, nil
 }
 
 // addrPort extracts the port of a "host:port" address, falling back to def.
@@ -183,11 +199,10 @@ func provisionAmpEndpointOn(ctx context.Context, t *core.T, amp ampstack.Config,
 	if err := ampstack.WaitEndpointWorkloadReady(ctx, app.Kube(), ep.ID, cfg.ControllerReadyTimeout); err != nil {
 		return fail("endpoint %s compute never became ready: %w", ep.ID, err)
 	}
-	if err := sleepCtx(ctx, endpointSettle); err != nil {
-		return ampEndpoint{}, err
-	}
-
 	out := ampEndpoint{Namespace: cfg.Namespace, Kube: app.Kube(), EndpointID: ep.ID, Conn: endpointConn(cfg.Namespace, ep.ID, ep.Address)}
+	if err := waitEndpointAuth(ctx, out, endpointAuthTimeout, logf); err != nil {
+		return fail("%w", err)
+	}
 	logf("perf: workload targets amp endpoint %s at %s", ep.ID, out.Conn.Addr())
 	return out, nil
 }

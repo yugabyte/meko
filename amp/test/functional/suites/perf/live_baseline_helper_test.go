@@ -135,3 +135,47 @@ func TestLocalGateItemsSpreadVetoesRegression(t *testing.T) {
 		t.Errorf("the same delta from a steady run must still regress, got %q", got)
 	}
 }
+
+func TestLocalGateItemsMinDeltaVetoesSubResolutionRegression(t *testing.T) {
+	pg := portalGateConfig{MADK: 3, FloorPct: 5, MinRuns: 5}
+	prev := portalGatePrev{N: 5, Median: 4.112, MAD: 0.05}
+	items := []portalGateItem{{Name: "client_window.compute_restart.error_seconds", Value: 4.961, Prev: prev}}
+	declared := []core.Datapoint{{Name: items[0].Name, Value: 4.961, Unit: "s", Direction: core.LowerIsBetter, MinDelta: 15}}
+	bare := []core.Datapoint{{Name: items[0].Name, Value: 4.961, Unit: "s", Direction: core.LowerIsBetter}}
+
+	if got := localGateItems(declared, items, pg)[0].Verdict; got != verdictBelowFloor {
+		t.Errorf("a +20.7%% delta of 0.85s under a 15s resolution: verdict %q, want %s", got, verdictBelowFloor)
+	}
+	if got := localGateItems(bare, items, pg)[0].Verdict; got != "regressed" {
+		t.Errorf("a datapoint declaring no resolution keeps the percentage verdict, got %q", got)
+	}
+	real := []portalGateItem{{Name: items[0].Name, Value: 604, Prev: prev}}
+	realDP := []core.Datapoint{{Name: items[0].Name, Value: 604, Unit: "s", Direction: core.LowerIsBetter, MinDelta: 15}}
+	if got := localGateItems(realDP, real, pg)[0].Verdict; got != "regressed" {
+		t.Errorf("4.1s -> 604s must still regress, got %q", got)
+	}
+}
+
+func TestMinDeltaVetoIsNotCountedAsRegressed(t *testing.T) {
+	pg := portalGateConfig{MADK: 3, FloorPct: 5, MinRuns: 5}
+	items := []portalGateItem{{Name: "client_window.settings_update.error_seconds", Value: 1.36, Prev: portalGatePrev{N: 5, Median: 1.226, MAD: 0.01}}}
+	gated := []core.Datapoint{{Name: items[0].Name, Value: 1.36, Unit: "s", Direction: core.LowerIsBetter, MinDelta: 15}}
+
+	out := localGateItems(gated, items, pg)
+	if r, _, n := gateCounts(out); r != 0 || n != 0 {
+		t.Errorf("counts = %d regressed / %d no_signal, want neither for a floor veto", r, n)
+	}
+	if countVerdict(out, verdictBelowFloor) != 1 {
+		t.Errorf("the veto must be reported, got %v", out[0].Verdict)
+	}
+}
+
+func TestHistoryGateKeepsMsMetricsWithoutADeclaredMinDelta(t *testing.T) {
+	pg := portalGateConfig{MADK: 3, FloorPct: 5, MinRuns: 5}
+	items := []portalGateItem{{Name: "tpcc.latency_p95", Value: 205, Prev: portalGatePrev{N: 5, Median: 5, MAD: 0.1}}}
+	gated := []core.Datapoint{{Name: items[0].Name, Value: 205, Unit: "ms", Direction: core.LowerIsBetter}}
+
+	if got := localGateItems(gated, items, pg)[0].Verdict; got != "regressed" {
+		t.Errorf("5ms -> 205ms: verdict %q, want regressed; the 250ms floor belongs to the live arm", got)
+	}
+}
