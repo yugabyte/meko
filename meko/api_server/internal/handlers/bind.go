@@ -61,9 +61,15 @@ func JSONBodyGuard() echo.MiddlewareFunc {
 
 // bindJSON decodes a JSON request body, refusing an absent body and reporting a
 // wrong media type as the 415 it is. It returns false having already written the
-// error response -- the same convention as resolveAgent, and the reason it cannot
-// return an error instead: apiError's own return is nil on success, so a caller
-// testing it for nil would run on past a request it had just rejected.
+// error response -- the same convention as resolveAgent. A caller testing
+// apiError's own return for nil would run on past a request it had just
+// rejected: apiError's return is c.JSON's write error, nil on any successful
+// write regardless of status. writeAndFail (response.go) fixes that trap for
+// new call sites by returning a real sentinel instead of apiError's own
+// result (see MEKO-656/MEKO-690, where trusting that result let a rejected
+// request fall through to the real handler logic). bindJSON/resolveAgent
+// predate writeAndFail and solve the same problem their own way, with a bool
+// return -- either shape is fine, this one just isn't obligated to switch.
 //
 // Handlers call it even on routes JSONBodyGuard already covers: a handler invoked
 // directly (as most tests in this package do) or registered outside a guarded group

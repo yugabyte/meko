@@ -72,7 +72,7 @@ func RequireDatapackOwnerOrMaintainer(
 		return "", err
 	}
 	if !models.IsOwnerOrMaintainerGrant(dp.Grant) {
-		return "", apiError(c, http.StatusForbidden, "FORBIDDEN",
+		return "", writeAndFail(c, http.StatusForbidden, "FORBIDDEN",
 			"only datapack owners and maintainers are allowed")
 	}
 	return accountID, nil
@@ -88,27 +88,27 @@ func resolveDatapackMembership(
 ) (dp *models.Datapack, accountID string, err error) {
 	datapackID = strings.TrimSpace(datapackID)
 	if datapackID == "" {
-		return nil, "", apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
+		return nil, "", writeAndFail(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
 	}
 	if _, parseErr := uuid.Parse(datapackID); parseErr != nil {
-		return nil, "", apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id must be a valid UUID")
+		return nil, "", writeAndFail(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id must be a valid UUID")
 	}
 	account, authErr := auth.GetAccount(c)
 	if authErr != nil || account == nil {
-		return nil, "", apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+		return nil, "", writeAndFail(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
 	}
 	dp, dpErr := dpLookup.GetByID(account.ID, datapackID)
 	if dpErr != nil {
-		return nil, "", apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", dpErr.Error())
+		return nil, "", writeAndFail(c, http.StatusInternalServerError, "INTERNAL_ERROR", dpErr.Error())
 	}
 	if dp == nil {
 		dp, dpErr = dpLookup.GetByIDForSharedAccess(account.ID, datapackID)
 		if dpErr != nil {
-			return nil, "", apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", dpErr.Error())
+			return nil, "", writeAndFail(c, http.StatusInternalServerError, "INTERNAL_ERROR", dpErr.Error())
 		}
 	}
 	if dp == nil {
-		return nil, "", apiError(c, http.StatusNotFound, "NOT_FOUND", "datapack not found")
+		return nil, "", writeAndFail(c, http.StatusNotFound, "NOT_FOUND", "datapack not found")
 	}
 	return dp, account.ID, nil
 }

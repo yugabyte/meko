@@ -36,6 +36,28 @@ func apiError(c echo.Context, status int, code, message string) error {
 	})
 }
 
+// writeAndFail writes the given error response via apiError and returns a
+// real, non-nil sentinel independent of apiError's own return value.
+// apiError returns c.JSON's encode/write error, which is nil on any
+// successful write regardless of `status` -- so a caller checking
+// `if _, err := someGate(...); err != nil { return err }` never actually
+// stopped (MEKO-656 / MEKO-690, see datapack_access.go's RequireDatapackAccess
+// and auth_handler.go's extractAccessToken): the error body was written, but
+// execution fell through into the real query/mutation, which then wrote a
+// second, real response onto the same already-committed one. Since the
+// response is already committed by the time this returns, the sentinel never
+// reaches CustomHTTPErrorHandler's own write path below -- it checks
+// c.Response().Committed and no-ops.
+//
+// bindJSON/resolveAgent predate this and solve the same problem a different
+// way (returning bool, not error -- see bind.go's own comment on bindJSON).
+// Either shape is fine for new code; what doesn't work is returning
+// apiError's own result and trusting it as a signal.
+func writeAndFail(c echo.Context, status int, code, message string) error {
+	_ = apiError(c, status, code, message)
+	return echo.NewHTTPError(status, message)
+}
+
 // respondTierLimit sends the standard 402 for a tier-cap hit (datapack, KB
 // storage, AMP compute, …). The (code, message) come from the service's
 // per-tier dispatch (DatapackLimitResponse / KBStorageLimitResponse /

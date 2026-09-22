@@ -24,6 +24,13 @@ internal/
 - **Handlers** never touch repos or SQL; they use `ok(c, status, data)` /
   `apiError(c, status, code, msg)` (see `handlers/response.go`) and pull HTTP
   request-scoped context via `auth.GetAccount(c)` / `auth.GetDatapack(c)`.
+  A helper that gates a handler on something failing (an access check, a
+  malformed request) cannot signal that failure via `apiError`'s own return
+  value -- it's `nil` on any successful write, regardless of status. Use
+  `writeAndFail(c, status, code, msg)` (`handlers/response.go`), which writes
+  the response and returns a real, checkable error, or return `bool` the way
+  `bindJSON`/`resolveAgent` do -- never propagate `apiError`'s own result as
+  if it were one.
 - **Services** hold logic and call repos + clients. External-system vocabulary
   stays at the edge — translate a third party's terms to Meko's at the service
   boundary rather than leaking them inward. (The AMP client used to be the

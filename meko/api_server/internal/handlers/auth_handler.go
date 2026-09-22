@@ -214,9 +214,10 @@ func (h *AuthHandler) ChangePassword(c echo.Context) error {
 // clients post-login) and falls back to `Authorization: Bearer …` for
 // headless clients (CLI, scripts).
 //
-// Returns `(token, nil)` on success. On failure, returns `("", err)`
-// where `err` is already an `apiError` with HTTP 401 — callers should
-// `return err` directly. Used by Logout and ChangePassword today, and
+// Returns `(token, nil)` on success. On failure, writes a 401 response and
+// returns `("", err)` with a real non-nil `err` (via writeAndFail) — callers
+// should `return err` directly. Used by Logout, ChangePassword,
+// StartEmailChange, ResendEmailChangeCode, and VerifyEmailChange today, and
 // anything else that needs the raw Cognito token outside of the standard
 // `requireAuth` middleware path (e.g. operations that call Cognito APIs
 // directly which require AccessToken as a parameter, like ChangePassword
@@ -235,7 +236,7 @@ func (h *AuthHandler) extractAccessToken(c echo.Context) (string, error) {
 			}
 		}
 	}
-	return "", apiError(c, http.StatusUnauthorized,
+	return "", writeAndFail(c, http.StatusUnauthorized,
 		"UNAUTHORIZED", "access token is required")
 }
 
@@ -328,10 +329,10 @@ func (h *AuthHandler) CompleteNewPassword(c echo.Context) error {
 //	@Router		/auth/logout [post]
 func (h *AuthHandler) Logout(c echo.Context) error {
 	accessToken, err := h.extractAccessToken(c)
-	if err != nil || accessToken == "" {
-		// extractAccessToken already wrote a 401 when there's no usable token
-		// (it commits the response and returns a nil error). Nothing to revoke
-		// and no cookies exist to clear, so just return.
+	if err != nil {
+		// extractAccessToken already wrote a 401 when there's no usable token,
+		// and returns a real, non-nil error here -- nothing to revoke and no
+		// cookies exist to clear, so just propagate it.
 		return err
 	}
 
