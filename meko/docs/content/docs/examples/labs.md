@@ -25,7 +25,15 @@ The following lab is available (with more in development).
 
 Learn how an agent reviews a pull request against your org's coding standards, live. You start with a sample project that has no standards yet, build that context in a [datapack](../../architecture/core-concepts/datapacks/), then watch [AgentK](https://github.com/yugabyte/canned-agents/tree/main/adlc-review-agent) use it.
 
-The lab takes about five minutes across four chapters: give the agent context, share it with AgentK, read the review, and close the loop on a pull request of your own. AgentK runs on AWS Bedrock AgentCore.
+The lab takes about five minutes across five chapters:
+
+1. **Give your agent context.** Watch AgentK review a pull request with no standards, then build the datapack it was missing: a standards document, a memory, and a conversation.
+1. **Share it with AgentK.** Grant the agent read access to that datapack and choose the model and sources for the run.
+1. **Read the review.** Run the review and compare it with the review that had no context.
+1. **Close the loop.** Save the findings into the datapack, then promote one memory so other agents on the team can read it.
+1. **See it in production.** Look at the same loop running on Yugabyte's repositories, then optionally point AgentK at a pull request of your own.
+
+AgentK runs on AWS Bedrock AgentCore.
 
 ## Limitations
 

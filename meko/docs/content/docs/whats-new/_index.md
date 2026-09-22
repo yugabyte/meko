@@ -29,7 +29,7 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
 
 - **Track usage against your plan** — a dedicated Usage page shows live consumed versus plan limits for datapacks, conversations, workbench tokens, knowledge-base storage, and MCP memory and search activity.
 - **Find generated files and follow indexing progress** — each datapack now has an Artifacts page, while knowledge-base files show their progress from queued through ready.
-- **See what Meko saves you** — contextual prominence search is live in production. Each datapack detail page shows the context reduction from unified retrieval across conversation, memory, and knowledge base, with a per-model estimate of the resulting cost savings.
+- **See what a datapack holds and what retrieval costs** — each datapack detail page opens with Total Context, Context Efficiency, and Context Quality. The Analytics tab breaks those into stored context, query volume, tokens saved per query, and match quality (High, Mid, and Low).
 - **Conversation-embedding quotas** — conversation search and embedding usage is governed by plan-tier quotas as the conversation-search rollout continues.
 - **Claude Desktop recall works on plain questions** — the Meko skill now activates for simple recall prompts, and adding messages to a conversation from Claude Desktop no longer errors.
 - **AMP cluster tools, opt-in** — cluster, branch, and compute management tools are available behind an early-access flag, prefixed with `amp_`.
