@@ -127,6 +127,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if cfg.GetBool("stress.settle.non_target_restart_is_failure", true) {
 		t.Errorf("stress.settle.non_target_restart_is_failure = true, want false (a pod nobody targeted is env damage)")
 	}
+	if !cfg.GetBool("stress.backing_disk_full.non_target_restart_is_failure", false) {
+		t.Errorf("stress.backing_disk_full.non_target_restart_is_failure = false, want true (a cascade out of a full backing is that test's subject)")
+	}
 
 	// And through the resolution helpers actually used by lifecycle/scheduler.
 	for _, cat := range []core.Category{core.Functional, core.Stress, core.Perf, core.LongRunning} {

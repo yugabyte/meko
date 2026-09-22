@@ -44,6 +44,8 @@ type diskFullParams struct {
 	PayloadBytes     int
 }
 
+const diskFullRestartIsFailKey = "stress.backing_disk_full.non_target_restart_is_failure"
+
 func diskFullParamsFromConfig(c *core.Config) diskFullParams {
 	return diskFullParams{
 		Tenants:          c.GetInt("stress.backing_disk_full.tenants", 2),
@@ -184,7 +186,7 @@ func runBackingDiskFull(t *core.T) error {
 		if err != nil {
 			return err
 		}
-		gate.asProductFailure(t.Options)
+		gate.asProductFailure(t.Options, diskFullRestartIsFailKey)
 		pods, err = backingPods(t, kube)
 		if err != nil {
 			return err

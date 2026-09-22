@@ -351,9 +351,16 @@ func (r *clientWindowRun) operations() []cwOp {
 	add(cwOp{Name: cwResize, Run: r.resize})
 	add(cwOp{Name: cwSettingsUpdate, Run: r.settingsUpdate})
 	if r.params.wants(cwUpgradeRoll) {
-		ops = append(ops,
-			cwOp{Name: cwUpgradeRoll, Run: r.upgradeRollAway},
-			cwOp{Name: cwUpgradeRollBack, Run: r.upgradeRollBack})
+		away := cwOp{Name: cwUpgradeRoll, Run: r.upgradeRollAway}
+		back := cwOp{Name: cwUpgradeRollBack, Run: r.upgradeRollBack}
+		// Decided here, not inside the step: t.Skip there exits the body with the
+		// step's idle transaction still holding a pool connection, and the
+		// teardown's pool Close waits on it forever.
+		if pinned, ok := r.cl.RollTargetIsPinned(r.t.Context); ok && pinned {
+			away.Skip = "this controller pins the endpoint version to its own release, so a roll cannot move an endpoint between two versions and this step would measure no window"
+			back.Skip = away.Skip
+		}
+		ops = append(ops, away, back)
 	}
 	if r.params.wants(cwPauseResume) {
 		op := cwOp{Name: cwPauseResume, Run: r.pauseResume}
@@ -647,10 +654,6 @@ func (r *clientWindowRun) upgradeRollAway(ctx context.Context) (time.Time, error
 	prev, err := cwPreviousRelease(list, ep.Version)
 	if err != nil {
 		return time.Time{}, core.EnvFail("%w", err)
-	}
-	if pinned, ok := r.cl.RollTargetIsPinned(ctx); ok && pinned {
-		r.t.Skip("this controller pins the endpoint version to its own release, so a roll cannot move an endpoint between two versions and this step would measure no window")
-		return time.Time{}, nil
 	}
 	r.homeVersion = ep.Version
 	r.logf("client_window: rolling endpoint %s from %s to %s and back", ep.ID, ep.Version, prev.Tag)

@@ -37,7 +37,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "The mixed-version window: deploy the control plane at the previous release, upgrade the controller alone so the endpoints stay on the old image, and hold that pair for functional.mixed_versions.hold under a write load, then roll the fleet onto the current image. Writes must not stop for longer than functional.mixed_versions.max_hold_gap during the hold or max_roll_gap across the roll, the new controller must keep serving GET /tasks with every task in a state it knows, the endpoints must still be on the old image throughout the hold, and every acknowledged write must be there afterwards with the bank total unchanged.",
+		Description: "The mixed-version window: deploy the control plane at the previous release, upgrade the controller (and its endpoint pin) so the running endpoints stay on the old image, and hold that pair for functional.mixed_versions.hold under a write load, then roll the fleet onto the current image. Writes must not stop for longer than functional.mixed_versions.max_hold_gap during the hold or max_roll_gap across the roll, the new controller must keep serving GET /tasks with every task in a state it knows, the endpoints must still be on the old image throughout the hold, and every acknowledged write must be there afterwards with the bank total unchanged.",
 		Params:      []string{"functional", "functional.upgrade", "functional.mixed_versions", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     80 * time.Minute,
 		Run:         runAmpMixedVersions,
@@ -143,10 +143,12 @@ func (m *mixedRun) startLoad(ctx context.Context) error {
 	return nil
 }
 
-// The endpoint image is left where it was, or the computes become roll candidates.
+// The controller's endpoint pin moves with it: a controller that pins the roll
+// target to its own release rolls onto nothing else. The running endpoints must
+// still stay where they are until the roll.
 func (m *mixedRun) upgradeControllerOnly(ctx context.Context) error {
-	if err := m.f.ampApp.UpgradeImages(ctx, m.u.toController, ""); err != nil {
-		return fmt.Errorf("upgrade the controller alone from %s to %s: %w", m.u.fromController, m.u.toController, err)
+	if err := m.f.ampApp.UpgradeImages(ctx, m.u.toController, m.u.toEndpoint); err != nil {
+		return fmt.Errorf("upgrade the controller from %s to %s: %w", m.u.fromController, m.u.toController, err)
 	}
 	if err := m.u.controllerRunsNewImage(ctx); err != nil {
 		return err

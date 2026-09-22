@@ -1475,8 +1475,9 @@ stress:
     pod_ready_timeout: "5m"
     # false → a pod the test never aimed at restarting or being replaced during
     # the fault window is environment damage (env_failed, the pod named).
-    # true → it is a product failure. stress/backing_disk_full sets true in
-    # code: a backing out of disk cascading into other pods IS its subject.
+    # true → it is a product failure. stress/backing_disk_full has its own
+    # key, defaulting true: a backing out of disk cascading into other pods IS
+    # its subject.
     non_target_restart_is_failure: false
   # load_sustain: RandomOps phase length (suites/stress/load_sustain.go).
   duration: "60s"
@@ -1571,6 +1572,9 @@ stress:
     settle_timeout: "10m"
     resume_duration: "30s"
     payload_bytes: 256
+    # A tenant endpoint or other pod going down while the disks are full is a
+    # product failure (meko#1110), not environment damage.
+    non_target_restart_is_failure: true
   # commit_durability: journals every commit's acknowledgement per id under faults,
   # then holds storage to the EXACT acked set. A count check cannot do this: a lost
   # acked row net-cancelled by an unacknowledged one passes it.

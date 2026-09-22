@@ -277,10 +277,11 @@ func sortedKeys(m map[string]k8s.PodState) []string {
 	return out
 }
 
-// An explicitly set stress.settle.non_target_restart_is_failure still wins.
-func (g *settleGate) asProductFailure(c *core.Config) *settleGate {
+// key is the test's own switch: the shared stress.settle one is always set by
+// the embedded defaults, so it cannot carry a per-test default of true.
+func (g *settleGate) asProductFailure(c *core.Config, key string) *settleGate {
 	if g != nil {
-		g.p.RestartIsFail = c.GetBool("stress.settle.non_target_restart_is_failure", true)
+		g.p.RestartIsFail = c.GetBool(key, true)
 	}
 	return g
 }
