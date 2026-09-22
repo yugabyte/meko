@@ -29,41 +29,46 @@ import {
   type DatapackDetailTab,
 } from "@/features/datapacks/components/datapack-detail/types";
 
-// Tile gradient tones — one per tab. Theme-aware: the default (light
-// mode) is a soft tinted card with the accent colour suggesting which
-// pipeline stage it represents; the `dark:` variant restores the
-// original brand-art dark gradient where the deep `from-X-950/Y`
-// corner glows against navy. Both modes keep the same colored border
-// so the section identity (purple = learnings, blue = memories, etc.)
-// reads at a glance in either theme.
+// Tile gradient tones — one per tab. A soft tinted card whose accent says
+// which pipeline stage it is, over the dark brand-art gradient in dark mode.
+//
+// Every colour here is a `--context-*` token, NOT a palette class, because
+// this diagram and the Analytics metrics name the same five concepts and used
+// to define them twice: two hard-coded sets that agreed only by hand. The
+// `-soft` stop is already "near-surface tint" in both modes, which is exactly
+// what the gradient's `from` corner wants, so one class covers light and dark.
 const toneStyles: Record<DatapackDetailTab, string> = {
   conversations:
-    "border-slate-300 bg-gradient-to-br from-slate-100 via-card to-card " +
-    "dark:border-slate-500/35 dark:from-slate-900/80 dark:via-meko-navy-900 dark:to-meko-navy-950",
+    "border-context-conversation/50 bg-gradient-to-br from-context-conversation-soft via-card to-card " +
+    "dark:via-meko-navy-900 dark:to-meko-navy-950",
   memories:
-    "border-blue-300 bg-gradient-to-br from-blue-50 via-card to-card " +
-    "dark:border-blue-500/40 dark:from-blue-950/70 dark:via-meko-navy-900 dark:to-meko-navy-950",
+    "border-context-memory/50 bg-gradient-to-br from-context-memory-soft via-card to-card " +
+    "dark:via-meko-navy-900 dark:to-meko-navy-950",
   learnings:
-    "border-purple-400 bg-gradient-to-br from-purple-50 via-card to-card " +
-    "dark:border-purple-500/50 dark:from-purple-950/65 dark:via-[#141228] dark:to-meko-navy-950 dark:shadow-[0_0_24px_rgba(168,85,247,0.12)]",
+    "border-context-learning/60 bg-gradient-to-br from-context-learning-soft via-card to-card " +
+    // token-exempt: a brand-art gradient MIDPOINT, the one case index.css
+    // sanctions a literal. No `--context-*` stop is this dark; the nearest
+    // (`-soft`, #37205a) reads as a purple wash rather than the near-black
+    // the Learnings tile fades through under its glow.
+    "dark:via-[#141228] dark:to-meko-navy-950 " +
+    "dark:shadow-[0_0_24px_hsl(var(--context-learning)/0.12)]",
   knowledge:
-    "border-emerald-300 bg-gradient-to-br from-emerald-50 via-card to-card " +
-    "dark:border-emerald-900/50 dark:from-emerald-950/55 dark:via-meko-navy-900 dark:to-meko-navy-950",
+    "border-context-knowledge/50 bg-gradient-to-br from-context-knowledge-soft via-card to-card " +
+    "dark:via-meko-navy-900 dark:to-meko-navy-950",
   "collective-memory":
-    "border-sky-300 bg-gradient-to-br from-sky-50 via-card to-card " +
-    "dark:border-sky-500/40 dark:from-sky-950/65 dark:via-meko-navy-900 dark:to-meko-navy-950",
+    "border-context-collective/50 bg-gradient-to-br from-context-collective-soft via-card to-card " +
+    "dark:via-meko-navy-900 dark:to-meko-navy-950",
 };
 
 const titleTone: Record<DatapackDetailTab, string> = {
-  // Slate-700 reads as muted grey against the other accent-saturated
-  // titles (blue/purple/emerald-700). Using the semantic foreground
-  // token gives it the same visual weight in light mode while still
-  // pairing with the slate-200/95 pastel in dark mode.
-  conversations: "text-foreground dark:text-slate-200/95",
-  memories: "text-blue-700 dark:text-blue-200/95",
-  learnings: "text-purple-700 dark:text-purple-200/95",
-  knowledge: "text-emerald-700 dark:text-emerald-200/95",
-  "collective-memory": "text-sky-700 dark:text-sky-200/95",
+  // Conversations is the one exception: its slate stop reads as muted grey
+  // beside four saturated accents, so light mode borrows the plain foreground
+  // to keep the row balanced, and only dark mode takes the token.
+  conversations: "text-foreground dark:text-context-conversation",
+  memories: "text-context-memory",
+  learnings: "text-context-learning",
+  knowledge: "text-context-knowledge",
+  "collective-memory": "text-context-collective",
 };
 
 type StageShellProps = {
@@ -74,7 +79,8 @@ type StageShellProps = {
   delta?: string;
   subtitle: string;
   cornerBadge?: ReactNode;
-  cornerBadgeTone?: "purple" | "green";
+  /** Named for the concept it carries, not the colour it happens to be. */
+  cornerBadgeTone?: "learning" | "knowledge";
   cornerBadgePulse?: boolean;
   titleIcon?: ReactNode;
   titleClassName?: string;
@@ -95,7 +101,7 @@ function StageShell({
   delta,
   subtitle,
   cornerBadge,
-  cornerBadgeTone = "purple",
+  cornerBadgeTone = "learning",
   cornerBadgePulse = false,
   titleIcon,
   titleClassName,
@@ -117,7 +123,7 @@ function StageShell({
     flexGrow ? "flex-1" : "w-full flex-none",
     toneStyles[tone],
     interactive &&
-      "cursor-pointer transition hover:brightness-[1.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50",
+      "cursor-pointer transition hover:brightness-[1.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
   );
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -129,9 +135,9 @@ function StageShell({
   };
 
   const badgeClass =
-    cornerBadgeTone === "green"
-      ? "border-emerald-400/45 bg-emerald-500/20 text-emerald-700 dark:text-emerald-100"
-      : "border-purple-400/40 bg-purple-500/25 text-purple-700 dark:text-purple-100";
+    cornerBadgeTone === "knowledge"
+      ? "border-context-knowledge/45 bg-context-knowledge/20 text-context-knowledge"
+      : "border-context-learning/40 bg-context-learning/25 text-context-learning";
 
   return (
     <div
@@ -148,11 +154,11 @@ function StageShell({
             "absolute right-2 top-2 z-[1] inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-semibold tabular-nums tracking-wide",
             badgeClass,
             cornerBadgePulse &&
-              cornerBadgeTone === "purple" &&
-              "animate-pulse shadow-[0_0_14px_rgba(168,85,247,0.55)] ring-1 ring-purple-400/30",
+              cornerBadgeTone === "learning" &&
+              "animate-pulse shadow-[0_0_14px_hsl(var(--context-learning)/0.55)] ring-1 ring-context-learning/30",
             cornerBadgePulse &&
-              cornerBadgeTone === "green" &&
-              "animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.35)] ring-1 ring-emerald-400/25",
+              cornerBadgeTone === "knowledge" &&
+              "animate-pulse shadow-[0_0_12px_hsl(var(--context-knowledge)/0.35)] ring-1 ring-context-knowledge/25",
           )}
         >
           {cornerBadge}
@@ -192,7 +198,7 @@ function StageShell({
             {title}
           </span>
           {delta ? (
-            <span className="text-xs font-medium text-blue-700 dark:text-blue-300/90">{delta}</span>
+            <span className="text-xs font-medium text-context-memory">{delta}</span>
           ) : null}
         </div>
       </div>
@@ -416,12 +422,9 @@ export function CollectiveLearningPipeline({
               titleIcon={
                 <MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />
               }
-              // No `titleClassName` override — let it inherit the
-              // default `text-foreground` so the Conversations title
-              // matches the visual weight of the other accent titles
-              // (Memories/blue, Learnings/purple, etc.). The previous
-              // `text-slate-400` override rendered as faded light-grey
-              // in light mode, throwing off the row balance.
+              // No `titleClassName` override — inherits `text-foreground`
+              // so the Conversations title carries the same visual weight
+              // as the four accent-coloured ones beside it.
               loading={statusLoading}
               loadingLabel="Loading conversations count"
               onSelect={
@@ -440,7 +443,7 @@ export function CollectiveLearningPipeline({
               value={memoryCount}
               delta=""
               subtitle=""
-              titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
+              titleIcon={<Sparkles className="h-4 w-4 text-context-collective" aria-hidden />}
               loading={statusLoading}
               loadingLabel="Loading memories count"
               onSelect={
@@ -458,7 +461,7 @@ export function CollectiveLearningPipeline({
               subtitle=""
               cornerBadge={learningsReadyBadge || undefined}
               cornerBadgePulse={Boolean(learningsReadyBadge)}
-              titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
+              titleIcon={<ArrowLeftRight className="h-4 w-4 text-context-learning" aria-hidden />}
               loading={statusLoading || learningsCountLoading}
               loadingLabel="Loading learnings count"
               onSelect={
@@ -468,26 +471,18 @@ export function CollectiveLearningPipeline({
               <Button
                 type="button"
                 size="sm"
-                // `text-white` (not `text-foreground`) so the CTA stays
-                // light-text-on-purple in both modes — the standard
-                // colored-button convention. Stepped one stop darker
-                // (purple-700 → -800 hover) so it doesn't shout against
-                // the soft purple-50 tile in light mode while still
-                // reading as the section's accent in dark mode.
-                // "Subtle in light, saturated in dark" — light mode shows
-                // a soft purple-tint pill with dark purple text so the
-                // button doesn't shout against the soft purple-50 tile
-                // background; dark mode keeps the original saturated
-                // purple CTA on the dark gradient tile. Same pattern as
-                // the other "promote" CTAs (`Promote to Ko`,
-                // `Promote to Knowledge`).
+                // Subtle in light, saturated in dark: a soft learning-tint
+                // pill with dark accent text so it doesn't shout against
+                // the already-tinted tile, then the full accent as the CTA
+                // fill on the dark gradient. Same pattern as the other
+                // "promote" CTAs (`Promote to Ko`, `Promote to Knowledge`).
                 // `min-w-0 whitespace-normal h-auto py-2 leading-tight`
                 // lets "Review N promotions →" wrap onto two lines inside
                 // the tile when the viewport is narrow, instead of
                 // overflowing the tile's border (shadcn Button defaults
                 // to `whitespace-nowrap` + fixed height, which is what
                 // pushed the text out the sides at narrow widths).
-                className="w-full min-w-0 whitespace-normal h-auto py-2 leading-tight border-0 bg-purple-100 text-xs font-semibold text-purple-700 shadow-md hover:bg-purple-200 dark:bg-purple-500 dark:text-white dark:hover:bg-purple-600 disabled:opacity-60"
+                className="w-full min-w-0 whitespace-normal h-auto py-2 leading-tight border-0 bg-context-learning-soft text-xs font-semibold text-context-learning shadow-md transition hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110 disabled:opacity-60"
                 disabled={learningsCountLoading || !onSelectSection}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -534,7 +529,7 @@ export function CollectiveLearningPipeline({
                 title="Collective Memory"
                 value={collectiveMemoryCount}
                 subtitle=""
-                titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
+                titleIcon={<Sparkles className="h-4 w-4 text-context-collective" aria-hidden />}
                 loading={statusLoading}
                 loadingLabel="Loading collective memory count"
                 afterValue={
@@ -560,8 +555,8 @@ export function CollectiveLearningPipeline({
                 delta=""
                 subtitle=""
                 cornerBadge={knowledgeFileBadge}
-                cornerBadgeTone="green"
-                titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
+                cornerBadgeTone="knowledge"
+                titleIcon={<BookOpen className="h-4 w-4 text-context-knowledge" aria-hidden />}
                 loading={statusLoading}
                 loadingLabel="Loading knowledge count"
                 onSelect={

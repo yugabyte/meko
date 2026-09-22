@@ -892,8 +892,8 @@ export default function FileUpload({
             the button up against the description. */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
-              <Upload className="w-5 h-5 text-emerald-400" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-context-knowledge/10">
+              <Upload className="w-5 h-5 text-context-knowledge" />
             </div>
             <div className="min-w-0">
               <h3 className="text-sm font-medium text-foreground">
@@ -942,8 +942,8 @@ export default function FileUpload({
             batchFull
               ? "border-border/60 opacity-50 cursor-not-allowed"
               : isDragOver
-                ? "border-emerald-400 bg-emerald-500/10 cursor-pointer"
-                : "border-emerald-500/50 bg-emerald-500/[0.04] hover:border-emerald-400 hover:bg-emerald-500/10 cursor-pointer",
+                ? "border-context-knowledge bg-context-knowledge/10 cursor-pointer"
+                : "border-context-knowledge/50 bg-context-knowledge/[0.04] hover:border-context-knowledge hover:bg-context-knowledge/10 cursor-pointer",
           )}
           onDragOver={(e) => {
             e.preventDefault();
@@ -962,7 +962,7 @@ export default function FileUpload({
               `${KNOWLEDGE_UPLOAD_MAX_BATCH} files in progress — wait for one to finish or remove a pending file to add more`
             ) : (
               <>
-                Drag & drop files here, or <span className="text-emerald-400 underline">browse</span>
+                Drag & drop files here, or <span className="text-context-knowledge underline">browse</span>
               </>
             )}
           </p>
@@ -994,7 +994,7 @@ export default function FileUpload({
         )}
 
         {doneCount > 0 && !isUploading && (
-          <div className="flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2 text-xs text-green-700 dark:text-green-300">
+          <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-4 py-2 text-xs text-success">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             {doneCount} file{doneCount > 1 ? "s" : ""} uploaded successfully.
             {errorCount > 0 && ` ${errorCount} failed.`} You can add more files.
@@ -1053,12 +1053,12 @@ export default function FileUpload({
                   <div className="flex items-center gap-2 shrink-0">
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING &&
                       (entry.progress > 0 ? (
-                        <span className="text-xs text-emerald-700 dark:text-emerald-300 tabular-nums">
+                        <span className="text-xs text-context-knowledge tabular-nums">
                           {entry.progress.toFixed(1)}%
                         </span>
                       ) : (
                         // 0% while hashing/presigning, before S3 reports bytes.
-                        <span className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
+                        <span className="flex items-center gap-1.5 text-xs text-context-knowledge">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           Preparing…
                         </span>
@@ -1070,7 +1070,7 @@ export default function FileUpload({
                       </span>
                     )}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
-                      <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                      <CheckCircle2 className="w-4 h-4 text-success" />
                     )}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && (
                       <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
@@ -1120,7 +1120,7 @@ export default function FileUpload({
                   <div className="h-1.5 w-full rounded-full bg-foreground/10 overflow-hidden">
                     <div
                       className={cn(
-                        "h-full rounded-full bg-emerald-500 transition-all duration-200",
+                        "h-full rounded-full bg-context-knowledge transition-all duration-200",
                         // Pulse at 0% so the bar doesn't look frozen while presigning.
                         entry.progress > 0 ? "w-full" : "w-1/4 animate-pulse",
                       )}

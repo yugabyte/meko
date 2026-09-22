@@ -112,12 +112,12 @@ export default function MemoryPromotionPanel({
       <div className="rounded-xl border border-border bg-card p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-500/15 ring-1 ring-purple-500/10">
-              {/* Mirror the `text-blue-700 dark:text-blue-200` convention
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-context-learning/15 ring-1 ring-context-learning/10">
+              {/* Same concept-token convention as every other accent icon
                   used by `<MemoryReadOnlySummaryPanel>`'s header icon —
                   hard-coded `text-white` rendered as greyed-out white on
                   the light purple tint in light mode. */}
-              <ArrowLeftRight className="h-5 w-5 text-purple-700 dark:text-purple-200" strokeWidth={1.75} aria-hidden />
+              <ArrowLeftRight className="h-5 w-5 text-context-learning" strokeWidth={1.75} aria-hidden />
             </div>
             <div className="min-w-0">
               <h3 className="text-base font-semibold tracking-tight text-foreground">
@@ -200,7 +200,7 @@ export default function MemoryPromotionPanel({
               </span>
             </label>
             {<Button
-              className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
+              className="gap-2 bg-context-learning-soft text-context-learning hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110"
               onClick={() => void promote()}
               disabled={promoting || selected.size < 2 || !isPromotionAllowed}
             >
@@ -249,7 +249,7 @@ export default function MemoryPromotionPanel({
           </div>
         )}
         {lastOutcome && (
-          <div className="flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2 text-xs text-green-300">
+          <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-4 py-2 text-xs text-success">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             Promoted {lastOutcome.attempted} selected · {lastOutcome.inserted} inserted · {lastOutcome.updated}{" "}
             updated
@@ -346,7 +346,7 @@ export default function MemoryPromotionPanel({
                       // to ~10px → one-char-per-line wrap.
                       // Desktop (md+): original single-row layout.
                       "flex flex-col gap-3 rounded-lg border bg-card px-4 py-3 md:flex-row md:items-start",
-                      checked ? "border-purple-500/50 bg-purple-500/5" : "border-border",
+                      checked ? "border-context-learning/50 bg-context-learning/5" : "border-border",
                     )}
                   >
                     {/* Group checkbox + body so they stay on row 1
@@ -370,7 +370,7 @@ export default function MemoryPromotionPanel({
                             <Button
                               type="button"
                               size="sm"
-                              className="gap-1.5 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
+                              className="gap-1.5 bg-context-learning-soft text-context-learning hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110"
                               onClick={() => promoteOne(m.id)}
                               disabled={rowPromoteDisabled}
                             >

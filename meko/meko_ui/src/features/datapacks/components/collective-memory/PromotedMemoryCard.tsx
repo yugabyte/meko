@@ -84,7 +84,7 @@ export function PromotedMemoryCard({
           {/* "Me → Ko" identity pill. Me = mem0 (raw memory), Ko = the
               KnowledgeObject for this datapack. Sky-tinted to match the
               collective-memory accent this surface uses. */}
-          <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+          <span className="inline-flex items-center gap-1 rounded-full border border-context-collective/30 bg-context-collective/10 px-2 py-0.5 text-[11px] font-medium text-context-collective">
             Me <span aria-hidden>→</span> Ko
           </span>
           {agent ? (
@@ -92,7 +92,7 @@ export function PromotedMemoryCard({
               title={`Agent: ${agent}`}
               className="inline-flex items-center gap-1 rounded-full border border-border bg-background/40 px-2 py-0.5 text-[11px] font-medium text-foreground/85"
             >
-              <Cpu className="h-3 w-3 text-sky-700 dark:text-sky-300" aria-hidden />
+              <Cpu className="h-3 w-3 text-context-collective" aria-hidden />
               {agent}
             </span>
           ) : null}
@@ -123,10 +123,10 @@ export function PromotedMemoryCard({
 
       {/* The promoted memory itself. Emerald accent ring + label matches
           the SharedKnowledge color language (BookOpen, file-complete pills). */}
-      <section className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.03] p-3">
+      <section className="rounded-lg border border-context-knowledge/20 bg-context-knowledge/[0.03] p-3">
         <div className="mb-2 flex items-center gap-1.5">
-          <BookOpen className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200/95">
+          <BookOpen className="h-3.5 w-3.5 text-context-knowledge" aria-hidden />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-context-knowledge">
             Shared knowledge entry
           </span>
         </div>
@@ -147,7 +147,7 @@ export function PromotedMemoryCard({
             aria-expanded={sourceOpen}
           >
             <span className="flex items-center gap-1.5">
-              <Sparkles className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />
+              <Sparkles className="h-3.5 w-3.5 text-context-collective" aria-hidden />
               <span className="font-semibold uppercase tracking-wider text-foreground/80">
                 Source memory
               </span>
@@ -175,7 +175,7 @@ export function PromotedMemoryCard({
             // scrubbing, etc.) when they land.
             <div className="space-y-3 border-t border-border/60 px-3 py-3 text-[11px] text-muted-foreground">
               <div>
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-200/95">
+                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-context-collective">
                   Original memory (Me)
                 </div>
                 <p className="text-sm italic leading-relaxed text-foreground/90 break-words">
@@ -200,12 +200,12 @@ export function PromotedMemoryCard({
                       )
                     }
                     title={`Open conversation ${conversationId}`}
-                    className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-300 hover:underline"
+                    className="inline-flex items-center gap-1.5 text-context-collective hover:underline"
                   >
                     <MessageSquare className="h-3.5 w-3.5" aria-hidden />
                     <span>
                       From conversation:{" "}
-                      <span className="text-sky-700 dark:text-sky-200">
+                      <span className="text-context-collective">
                         {conversationId.split("-")[0] ?? conversationId.slice(0, 8)}
                       </span>
                     </span>

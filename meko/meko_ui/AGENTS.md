@@ -14,6 +14,7 @@ src/
     pages/                       # route-level screens
     hooks/                       # feature-scoped hooks (use*)
   components/ui/                 # shadcn primitives — shared, presentation-only
+    charts/                      # SVG chart primitives + the series→concept colour map
   lib/
     api/                         # HTTP client layer: mekoApi.ts (core) + one module per domain (ampApi.ts, …)
     <util>.ts                    # cross-cutting utils (runtimeEnv, utils/cn, telemetry, …)
@@ -65,6 +66,16 @@ meko_admin, the Fleet pool filter).
   `bg-primary`, `bg-input`) — never raw hex; both light and `.dark` must work.
   Merge classes with `cn()`. Custom brand SVG icons live in `public/` as plain
   `.svg` and are referenced via `<img src="/name.svg">`.
+- **The five context concepts have one hue each, app-wide**: knowledge/emerald,
+  memory/blue, conversation/slate, learning/purple, collective/sky. Consume them
+  as `--context-*` tokens through `lib/contextTones.ts` (`CONTEXT_TONE` for
+  classes, `contextColorVar` for SVG `fill`/`stroke`), never as palette classes —
+  a surface that picks its own emerald drifts from the pipeline diagram and the
+  metrics dashboard, which is what these tokens exist to stop. Status is a
+  separate axis: `success` / `warning` / `destructive` / `info`.
+  `lib/contextTokens.test.ts` fails the build if a migrated file names a colour;
+  add a file to its list when you migrate one, and justify a genuine exception
+  with a `token-exempt:` comment on the line above.
 - Feature flags come from **`runtimeEnv`** (e.g. `SHOW_PG_AMP`), not hardcoded.
 
 ## Naming

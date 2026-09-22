@@ -55,14 +55,14 @@ function TitleRow({ datapackName }: { datapackName: string }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-3">
-        <BookOpen className="h-8 w-8 shrink-0 text-emerald-700 dark:text-emerald-300" aria-hidden />
+        <BookOpen className="h-8 w-8 shrink-0 text-context-knowledge" aria-hidden />
         <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
           Shared Knowledge
         </h1>
         {/* "Ko" pill: short label for the knowledge object, matches the
             design spec. Bright outline + transparent fill so it reads
             as identity, not status. */}
-        <span className="inline-flex items-center rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-sky-700 dark:text-sky-200">
+        <span className="inline-flex items-center rounded-full border border-context-collective/40 bg-context-collective/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-context-collective">
           Ko
         </span>
       </div>
@@ -80,10 +80,10 @@ function DescriptionTile({ description, loading }: { description: string; loadin
   // language (the BookOpen icon in the title is emerald; the file
   // type pills downstream lean green for COMPLETED).
   return (
-    <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.04] p-5">
+    <section className="rounded-xl border border-context-knowledge/25 bg-context-knowledge/[0.04] p-5">
       <header className="mb-3 flex items-center gap-2">
-        <Sparkles className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
-        <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200/95">
+        <Sparkles className="h-3.5 w-3.5 text-context-knowledge" aria-hidden />
+        <span className="text-xs font-semibold uppercase tracking-wider text-context-knowledge">
           Auto-generated description
         </span>
       </header>
@@ -126,22 +126,22 @@ function StatsTile({
     <section className="rounded-xl border border-border bg-card">
       <div className="grid grid-cols-1 divide-y divide-border/60 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
         <StatCell
-          icon={<Layers className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />}
+          icon={<Layers className="h-3.5 w-3.5 text-context-collective" aria-hidden />}
           label="Vector chunks"
           value={fmt(summary?.total_chunks)}
         />
         <StatCell
-          icon={<FileText className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />}
+          icon={<FileText className="h-3.5 w-3.5 text-context-knowledge" aria-hidden />}
           label="Files"
           value={fmt(summary?.total_files)}
         />
         <StatCell
-          icon={<Sparkles className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />}
+          icon={<Sparkles className="h-3.5 w-3.5 text-context-collective" aria-hidden />}
           label="Promoted memories"
           value={fmt(summary?.promoted_memories_count)}
         />
         <StatCell
-          icon={<Clock className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300" aria-hidden />}
+          icon={<Clock className="h-3.5 w-3.5 text-warning" aria-hidden />}
           label="Last activity"
           value={lastActivityLabel}
           valueClassName="text-base font-medium"

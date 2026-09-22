@@ -111,10 +111,10 @@ export type StatusFilter = (typeof STATUS_FILTERS)[number]["id"];
 
 const STATUS_TONE: Record<string, string> = {
   muted: "border-border/60 bg-muted/30 text-muted-foreground",
-  blue: "border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-200",
-  yellow: "border-yellow-500/35 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300",
-  green: "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-  red: "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-200",
+  blue: "border-info/35 bg-info/10 text-info",
+  yellow: "border-warning/35 bg-warning/10 text-warning",
+  green: "border-success/35 bg-success/10 text-success",
+  red: "border-destructive/35 bg-destructive/10 text-destructive",
 };
 
 /** Solid dot color per status tone, used as a small leading indicator in
@@ -122,10 +122,10 @@ const STATUS_TONE: Record<string, string> = {
  *  without repeating the full pill treatment inside the menu). */
 const STATUS_DOT: Record<string, string> = {
   muted: "bg-muted-foreground/50",
-  blue: "bg-blue-500",
-  yellow: "bg-yellow-500",
-  green: "bg-emerald-500",
-  red: "bg-red-500",
+  blue: "bg-info",
+  yellow: "bg-warning",
+  green: "bg-success",
+  red: "bg-destructive",
 };
 
 /** UI status label. We surface "indexed" instead of "Completed" when
@@ -760,7 +760,7 @@ function ChunksValue({
           <span
             className={cn(
               "inline-flex items-center gap-1 tabular-nums text-foreground/90 transition-colors duration-700 cursor-default",
-              justSettled && "text-emerald-600 dark:text-emerald-400",
+              justSettled && "text-success",
             )}
           >
             {justSettled && <Check className="h-3 w-3 shrink-0" aria-hidden />}
@@ -889,7 +889,7 @@ const FileRow = memo(function FileRow({
       ref={rowRef}
       className={cn(
         "relative overflow-hidden transition-shadow duration-300",
-        shimmer && "z-10 rounded-lg ring-2 ring-emerald-500/60 dark:ring-emerald-400/60",
+        shimmer && "z-10 rounded-lg ring-2 ring-success/60",
       )}
     >
       {/* One-time flash for a deep-linked arrival from the preview tile.
@@ -912,7 +912,7 @@ const FileRow = memo(function FileRow({
       {clicked ? (
         <span
           aria-hidden
-          className="absolute inset-0 z-10 animate-in fade-in bg-emerald-500/15 duration-100"
+          className="absolute inset-0 z-10 animate-in fade-in bg-success/15 duration-100"
         />
       ) : null}
       {/* Header row — clicking the chevron expands the panel below (or,
@@ -925,7 +925,7 @@ const FileRow = memo(function FileRow({
           "grid grid-cols-1 gap-1 px-4 py-3 md:gap-3 md:px-5",
           rowGridClass(compact, showChunks),
           clickToNavigate && "cursor-pointer transition-colors hover:bg-accent/40",
-          clicked && "bg-emerald-500/10",
+          clicked && "bg-success/10",
         )}
         {...(clickToNavigate ? { onClick: handleClick } : {})}
       >
@@ -1049,8 +1049,8 @@ function FileExpandPanel({
       <div className="ml-9 grid grid-cols-1 gap-3 lg:grid-cols-[2fr_4fr]">
         <section>
           <header className="mb-2 flex items-center gap-1.5">
-            <Sparkles className="h-3 w-3 text-emerald-700 dark:text-emerald-300" aria-hidden />
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200/95">
+            <Sparkles className="h-3 w-3 text-context-knowledge" aria-hidden />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-context-knowledge">
               Auto-summary
             </span>
           </header>

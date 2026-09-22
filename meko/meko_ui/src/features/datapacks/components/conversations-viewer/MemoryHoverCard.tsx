@@ -65,8 +65,8 @@ export function MemoryHoverCard({
         className={cn(
           "inline-flex cursor-pointer select-none items-center gap-1 rounded px-1 py-0.5 transition-colors",
           open
-            ? "bg-blue-500/15 text-blue-700 dark:text-blue-300"
-            : "hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-300",
+            ? "bg-context-memory/15 text-context-memory"
+            : "hover:bg-context-memory/10 hover:text-context-memory",
         )}
         onMouseEnter={openPopover}
         onMouseLeave={closePopover}
@@ -79,7 +79,7 @@ export function MemoryHoverCard({
           <span className="text-muted-foreground/60">·</span>
         ) : null}
         {promotedLabel ? (
-          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+          <span className="inline-flex items-center gap-1 text-context-knowledge">
             <BookUp className="h-3 w-3" aria-hidden />
             {promotedLabel}
           </span>
@@ -88,19 +88,19 @@ export function MemoryHoverCard({
 
       {open ? (
         <div
-          className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-xl border border-blue-500/25 bg-input shadow-2xl"
+          className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-xl border border-context-memory/25 bg-input shadow-2xl"
           onMouseEnter={openPopover}
           onMouseLeave={closePopover}
           onClick={onClickOpenTrace}
         >
           {/* Caret */}
-          <div className="absolute -bottom-1.5 left-4 h-3 w-3 rotate-45 border-b border-r border-blue-500/25 bg-input" />
+          <div className="absolute -bottom-1.5 left-4 h-3 w-3 rotate-45 border-b border-r border-context-memory/25 bg-input" />
 
           <div className="px-3.5 py-3">
-            <p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
+            <p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-medium text-context-memory">
               <MemoryIcon className="text-[13px]" />
               Extracted memories
-              <span className="ml-auto text-[10px] font-normal text-blue-700 dark:text-blue-300/50">
+              <span className="ml-auto text-[10px] font-normal text-context-memory/50">
                 Click to open trace
               </span>
             </p>
@@ -116,7 +116,7 @@ export function MemoryHoverCard({
                     {memories.map((text, i) => (
                       // eslint-disable-next-line react/no-array-index-key
                       <li key={i} className="flex items-start gap-2">
-                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400/70" />
+                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-context-memory/70" />
                         <span className="text-[12px] leading-relaxed text-foreground/85">
                           {preview(text)}
                         </span>
@@ -129,7 +129,7 @@ export function MemoryHoverCard({
                   <div
                     className={cn(memories.length > 0 && "mt-3 border-t border-border/60 pt-2.5")}
                   >
-                    <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                    <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-context-knowledge">
                       <BookUp className="h-3 w-3" aria-hidden />
                       Promoted to KB
                     </p>
@@ -137,7 +137,7 @@ export function MemoryHoverCard({
                       {promotedMemories.map((text, i) => (
                         // eslint-disable-next-line react/no-array-index-key
                         <li key={i} className="flex items-start gap-2">
-                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/70" />
+                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-context-knowledge/70" />
                           <span className="text-[12px] leading-relaxed text-foreground/85">
                             {preview(text)}
                           </span>
