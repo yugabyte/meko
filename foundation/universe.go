@@ -234,17 +234,35 @@ func (d *Deployer) waitUniverse(ctx context.Context) error {
 	ticker := time.NewTicker(d.pollInterval)
 	defer ticker.Stop()
 
+	// Stateful, and one per wait: it reports a failure the first time it sees
+	// one, and ends the wait only for the one failure nothing can retry (see
+	// ybuniverse.FailureWatch).
+	watch := ybuniverse.FailureWatch{Window: d.failureWindow}
 	var lastReason string
+	var hinted bool
 	for {
 		status, present, err := d.getUniverseStatus(ctx)
 		if err != nil {
 			return err
 		}
 		if present {
-			// Check failure before settled: a failed action is terminal, and
-			// reporting it now beats waiting out the timeout to say nothing.
-			if failed, why := ybuniverse.Failed(status); failed {
-				return fmt.Errorf("universe %s: %s", d.spec.UniverseName(), why)
+			// Report the failure whether or not it ends the wait. This side
+			// cannot tell a dead create from one YBA is retrying, so it mostly
+			// keeps waiting — and an operator watching it needs to know it is
+			// going badly, and where to look, without waiting for a verdict.
+			report, stop := watch.Observe(status, time.Now())
+			if report != "" {
+				d.log("universe %s: %s", d.spec.UniverseName(), report)
+				if !hinted {
+					// Once per wait: the reason names the yugaware log, this
+					// says how to read it on THIS install.
+					d.log("%s", d.yugawareLogHint(ctx))
+					hinted = true
+				}
+			}
+			if stop {
+				return fmt.Errorf("universe %s: %s\n%s",
+					d.spec.UniverseName(), watch.Reason(), d.yugawareLogHint(ctx))
 			}
 			if settled, why := ybuniverse.Settled(status); settled {
 				d.log("universe %s is Ready", d.spec.UniverseName())
@@ -259,8 +277,16 @@ func (d *Deployer) waitUniverse(ctx context.Context) error {
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("universe %s did not settle within %s (last: %s)\n%s",
-				d.spec.UniverseName(), d.universeTimeout, lastReason, d.diagnose(ctx))
+			// The failure goes in the message: a timeout that happened while
+			// the CR was reporting one is a different thing from a universe
+			// that was merely slow, and the reason is what someone reading a
+			// CI log has.
+			failure := ""
+			if r := watch.Reason(); r != "" {
+				failure = "\nthe CR was reporting: " + r
+			}
+			return fmt.Errorf("universe %s did not settle within %s (last: %s)%s\n%s",
+				d.spec.UniverseName(), d.universeTimeout, lastReason, failure, d.diagnose(ctx))
 		}
 		select {
 		case <-ctx.Done():

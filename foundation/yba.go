@@ -347,3 +347,18 @@ func writeValuesFile(values map[string]any) (path string, cleanup func(), err er
 	}
 	return f.Name(), cleanup, nil
 }
+
+// yugawareLogHint is the command that reads the operator's log on THIS install.
+//
+// The StatefulSet is looked up rather than named, for the same reason
+// yugawareStatefulSets exists: the chart has renamed it across versions, so a
+// hint that guesses `<release>-yugaware` sends the reader to a pod that is not
+// there. If the lookup fails, the label selector is still correct and finds it.
+func (d *Deployer) yugawareLogHint(ctx context.Context) string {
+	target := "-l " + d.yugawareSelector()
+	if names, err := d.yugawareStatefulSets(ctx); err == nil && len(names) > 0 {
+		target = "statefulset/" + names[0]
+	}
+	return fmt.Sprintf("read the yugaware log: kubectl -n %s logs %s -c yugaware --tail=200",
+		d.spec.Namespace, target)
+}

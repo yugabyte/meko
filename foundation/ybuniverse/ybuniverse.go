@@ -21,6 +21,7 @@ package ybuniverse
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // APIVersion and the kinds this package renders.
@@ -32,8 +33,8 @@ const (
 
 // Universe states. The CRD's description lists these four as examples ("e.g.")
 // and declares no enum, so they are NOT the whole set — a real universe whose
-// create was rejected reports "Error Creating", which is why Failed matches on
-// the prefix below rather than on a known value.
+// create was rejected reports "Error Creating", which is why FailureWatch
+// matches on the prefix below rather than on a known value.
 const (
 	StateReady    = "Ready"
 	StateCreating = "Creating"
@@ -42,7 +43,8 @@ const (
 )
 
 // StateErrorPrefix is what YBA prepends to the operation it could not do:
-// "Error Creating", "Error Updating". Terminal, and not in the CRD's list.
+// "Error Creating", "Error Updating". Not in the CRD's list, and NOT a failure
+// on sight — a healthy create flickers through one. See FailureWatch.
 const StateErrorPrefix = "Error"
 
 // Action statuses. Note there is no "succeeded": a finished action leaves the
@@ -133,36 +135,105 @@ func Settled(st Status) (bool, string) {
 	return true, ""
 }
 
-// Failed reports whether the universe is in a terminal failure, with whatever
-// reason is available. A rejected spec fails asynchronously inside the
-// operator, so without this a bad spec presents as a wait that times out and
-// the actual reason stays in a CR nobody read.
+// FailureSettleWindow is how long the one terminal signal must hold before the
+// wait acts on it. It exists only to outlast the stale-generation read, so it
+// is short.
+const FailureSettleWindow = 2 * time.Minute
+
+// FailureWatch reads what the CR says is wrong and decides the one case where
+// the wait should stop early. It is deliberately not clever: a rejected spec
+// fails asynchronously inside the operator, so without reading the CR back the
+// failure presents as a wait that times out with the reason left somewhere
+// nobody looked — and REPORTING that reason is the job. Adjudicating it is
+// mostly not.
 //
-// Two shapes, and the second is not optional. An action can carry status
-// "failed" with a message and a task UUID — the good case. But YBA can also
-// reject a create BEFORE it submits a task, and then the action stays "queued"
-// with no message and no UUID while universeState becomes "Error Creating":
+// A failed task is reported and nothing more, because this side cannot tell a
+// dead create from one YBA is retrying. It retries with a backoff, and a retry
+// keeps the SAME task UUID (only a re-run gets a new one), so neither elapsed
+// time nor a count of tasks separates the two. Guessing costs a working
+// install; waiting costs the rest of the universe timeout, which the operator
+// can cut short themselves once the log has told them what broke.
+//
+// The exception is a spec YBA rejected BEFORE it submitted a task: the action
+// stays "queued" with no UUID while universeState becomes "Error Creating" —
 // observed on a spec whose ybSoftwareVersion was empty, where the only
-// explanation was a RuntimeException in the yugaware log. Matching just the
-// action status would wait that out for the full timeout.
-func Failed(st Status) (bool, string) {
+// explanation was a RuntimeException in the yugaware log. Nothing will retry
+// that, because YBA never accepted it, so the wait ends. It still has to
+// outlast FailureSettleWindow: universeState has no observedGeneration behind
+// it (see Settled), so a reading taken just after an apply can belong to the
+// previous generation, and a healthy create was seen flickering through
+// "Error Creating" seconds before its task appeared.
+//
+// The zero value is ready to use, and it is stateful: one per wait.
+type FailureWatch struct {
+	// Window overrides FailureSettleWindow. Zero uses it.
+	Window time.Duration
+
+	since  time.Time
+	reason string
+}
+
+// Reason is the failure the CR currently shows, or "" when it shows none.
+func (w *FailureWatch) Reason() string { return w.reason }
+
+// Observe folds one status reading, taken at now, into the watch.
+//
+// report is non-empty the FIRST time a given failure is seen, for the caller to
+// log — a failure is worth telling someone about whether or not it ends the
+// wait. stop reports whether to give up.
+//
+// now is a parameter rather than time.Now() so this package stays free of
+// ambient state, and so a test can advance time without sleeping.
+func (w *FailureWatch) Observe(st Status, now time.Time) (report string, stop bool) {
+	reason, terminal := failureSignal(st)
+	if reason == "" {
+		w.since, w.reason = time.Time{}, ""
+		return "", false
+	}
+	if reason != w.reason {
+		w.reason, w.since = reason, now
+		report = reason
+	}
+	if !terminal {
+		return report, false
+	}
+	window := w.Window
+	if window <= 0 {
+		window = FailureSettleWindow
+	}
+	return report, now.Sub(w.since) >= window
+}
+
+// failureSignal reports what the CR says is wrong, and whether it is a failure
+// nothing can retry.
+func failureSignal(st Status) (reason string, terminal bool) {
 	for _, a := range st.Actions {
 		if a.Status == ActionFailed {
 			msg := a.Message
 			if msg == "" {
 				msg = "no message"
 			}
-			return true, fmt.Sprintf("%s failed: %s (task %s)", describeAction(a), msg, a.TaskUUID)
+			return fmt.Sprintf("%s failed: %s (task %s) — YBA may retry it; the cause is in the "+
+				"yugaware log", describeAction(a), msg, a.TaskUUID), false
 		}
 	}
-	if strings.HasPrefix(st.UniverseState, StateErrorPrefix) {
-		// No message to quote: YBA writes the state and nothing else, so say
-		// where the reason actually is rather than implying we have it.
-		return true, fmt.Sprintf("universeState is %q and no action carries a reason — YBA rejected "+
-			"the spec before it created a task, so the explanation is only in the yugaware log "+
-			"(kubectl logs statefulset/<release>-yugaware -c yugaware)", st.UniverseState)
+	// No task anywhere is what separates a rejection from a create in trouble:
+	// YBA writes a UUID as soon as it accepts the work.
+	if strings.HasPrefix(st.UniverseState, StateErrorPrefix) && !hasTask(st) {
+		return fmt.Sprintf("universeState is %q and no action carries a task — YBA rejected the "+
+			"spec before it created one, so the explanation is only in the yugaware log",
+			st.UniverseState), true
 	}
-	return false, ""
+	return "", false
+}
+
+func hasTask(st Status) bool {
+	for _, a := range st.Actions {
+		if a.TaskUUID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func describeAction(a Action) string {

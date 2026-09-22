@@ -3,8 +3,10 @@ package foundation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,8 @@ func testDeployer(t *testing.T, rec *Recorder) (*Deployer, *Spec) {
 	d := New(spec, rec.Runner()).
 		WithTimeouts(time.Second, time.Second, time.Millisecond).
 		WithLogger(func(string, ...any) {})
+	// Scaled for the same reason as the timeouts.
+	d.failureWindow = 10 * time.Millisecond
 	return d, spec
 }
 
@@ -43,6 +47,12 @@ const tserverServiceJSON = `{"spec":{"type":"ClusterIP",` +
 // returns. The chart writes the selector; we only ever read it, to find a pod to
 // run ysqlsh in.
 const tserverSelectorJSON = `{"app":"yb-tserver","release":"foundation-dfac"}`
+
+// rejectedStatus is the shape YBA leaves when it rejects a spec BEFORE it
+// submits a task: the action stays queued with no message and, crucially, no
+// taskUUID, while universeState goes to "Error Creating".
+const rejectedStatus = `{"status":{"universeState":"Error Creating",` +
+	`"actions":[{"action_type":"CreateKubernetesUniverse","status":"queued"}]}}`
 
 // readyStatus is a CR document whose universe has settled.
 func readyStatus() string {
@@ -261,21 +271,193 @@ func TestWaitUniverseBlocksOnQueuedActionsThenSucceeds(t *testing.T) {
 	}
 }
 
-// A failed action is terminal, so the wait must report the operator's reason
-// immediately instead of burning the whole timeout to say nothing.
-func TestWaitUniverseFailsFastWithTheOperatorsReason(t *testing.T) {
+// TestWaitUniverseRidesOutATransientErrorState is the regression test for an
+// `up` that aborted a healthy install.
+//
+// Seconds after the YBUniverse was applied the CR read "Error Creating"; the
+// wait called it terminal and exited non-zero, while the create went on in the
+// background to Ready with six healthy pods. universeState has no
+// observedGeneration behind it, so a reading taken right after an apply is
+// exactly the one that cannot be believed.
+func TestWaitUniverseRidesOutATransientErrorState(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Once: true, Result: Result{
+			Stdout: `{"status":{"universeState":"Error Creating","actions":[]}}`}},
+		{Match: "get ybuniverse", Once: true, Result: Result{
+			Stdout: statusWithAction("Creating", "CreateKubernetesUniverse", "running", "")}},
+		{Match: "get ybuniverse", Result: Result{Stdout: readyStatus()}},
+	}}
+	d, _ := testDeployer(t, rec)
+	if err := d.waitUniverse(context.Background()); err != nil {
+		t.Fatalf("waitUniverse aborted a create that reached Ready: %v", err)
+	}
+}
+
+// TestWaitUniverseRidesOutAFailedFirstAttempt: YBA retries, so the first
+// attempt failing is not the end of the create. While the retry is queued or
+// running the failed entry beside it is history — aborting there would fail an
+// install that recovers a few minutes later.
+func TestWaitUniverseRidesOutAFailedFirstAttempt(t *testing.T) {
+	const firstAttemptFailed = `{"status":{"universeState":"Error Creating","actions":[` +
+		`{"action_type":"CreateKubernetesUniverse","status":"failed","message":"task failed","taskUUID":"t1"}]}}`
+	// The retry, beside the failure that is now history. It carries a task
+	// UUID, so it is work YBA accepted rather than a rejection.
+	const retryQueued = `{"status":{"universeState":"Error Creating","actions":[` +
+		`{"action_type":"CreateKubernetesUniverse","status":"failed","message":"task failed","taskUUID":"t1"},` +
+		`{"action_type":"CreateKubernetesUniverse","status":"queued","taskUUID":"t2"}]}}`
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Once: true, Result: Result{Stdout: firstAttemptFailed}},
+		{Match: "get ybuniverse", Once: true, Result: Result{Stdout: retryQueued}},
+		{Match: "get ybuniverse", Once: true, Result: Result{
+			Stdout: statusWithAction("Creating", "CreateKubernetesUniverse", "running", "")}},
+		{Match: "get ybuniverse", Result: Result{Stdout: readyStatus()}},
+	}}
+	d, _ := testDeployer(t, rec)
+	if err := d.waitUniverse(context.Background()); err != nil {
+		t.Fatalf("waitUniverse aborted a create that succeeded on the retry: %v", err)
+	}
+}
+
+// TestWaitUniverseReportsFailuresWhileItWaits is the answer to "how does
+// anyone find out?" when the wait deliberately does not adjudicate.
+//
+// A failed task does not end the wait — YBA may be retrying it, and a retry
+// keeps the same task UUID, so nothing here can tell the difference. What the
+// operator gets instead is the failure, reported when it appears and again
+// whenever it changes, and carried into the timeout so a CI log has it too.
+func TestWaitUniverseReportsFailuresWhileItWaits(t *testing.T) {
+	attempt := func(task, msg string) string {
+		return fmt.Sprintf(`{"status":{"universeState":"Error Creating","actions":[`+
+			`{"action_type":"CreateKubernetesUniverse","status":"failed","message":%q,"taskUUID":%q},`+
+			`{"action_type":"CreateKubernetesUniverse","status":"queued","taskUUID":"next"}]}}`, msg, task)
+	}
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Once: true, Result: Result{Stdout: attempt("t-1", "no capacity")}},
+		{Match: "get ybuniverse", Result: Result{Stdout: attempt("t-2", "still no capacity")}},
+	}}
+	var logged []string
+	d, _ := testDeployer(t, rec)
+	d.WithLogger(func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	})
+	d.universeTimeout = 50 * time.Millisecond
+	err := d.waitUniverse(context.Background())
+	if err == nil {
+		t.Fatal("waitUniverse succeeded on a create that kept failing")
+	}
+	// Both failures, reported while the wait was still running.
+	for _, want := range []string{"no capacity", "still no capacity"} {
+		found := false
+		for _, line := range logged {
+			if strings.Contains(line, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("failure %q was never logged; the operator learns nothing until the end:\n%v",
+				want, logged)
+		}
+	}
+	// Not once per poll, though — only when it appears or changes.
+	reports := 0
+	for _, line := range logged {
+		if strings.Contains(line, "capacity") {
+			reports++
+		}
+	}
+	if reports > 2 {
+		t.Errorf("logged %d failure reports for 2 distinct failures; it is repeating itself", reports)
+	}
+	// And the timeout says what the CR was reporting, not just that time passed.
+	for _, want := range []string{"the CR was reporting", "still no capacity", "yugaware log"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("timeout error is missing %q:\n%s", want, err)
+		}
+	}
+}
+
+// The other half: a state that does NOT clear is still terminal, and still
+// well before the timeout — a genuinely rejected spec must not become a
+// 45-minute wait.
+//
+// The action is queued with NO taskUUID, which is the shape YBA leaves behind
+// when it rejects a spec before submitting a task. With a UUID it would be
+// accepted work, and waiting would be right.
+func TestWaitUniverseFailsOnAnErrorStateThatHolds(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Result: Result{Stdout: rejectedStatus}},
+	}}
+	d, _ := testDeployer(t, rec)
+	d.universeTimeout = time.Second
+	err := d.waitUniverse(context.Background())
+	if err == nil {
+		t.Fatal("waitUniverse succeeded on a universe stuck in Error Creating")
+	}
+	if strings.Contains(err.Error(), "did not settle") {
+		t.Errorf("reported as a timeout rather than a rejection: %v", err)
+	}
+	if !strings.Contains(err.Error(), "yugaware log") {
+		t.Errorf("error %q does not say where the explanation is", err)
+	}
+}
+
+// TestWaitUniverseHintsTheRealYugawareStatefulSet.
+//
+// The reason says the cause is in the yugaware log; this is the command that
+// reads it. The name is LOOKED UP rather than guessed, because the chart has
+// renamed the StatefulSet across versions — the same reason
+// yugawareStatefulSets exists — so a hint built from the release name sends the
+// reader to a pod that is not there.
+func TestWaitUniverseHintsTheRealYugawareStatefulSet(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Result: Result{Stdout: rejectedStatus}},
+		{Match: "get statefulset", Result: Result{Stdout: "amp-yugaware-yugaware"}},
+	}}
+	d, spec := testDeployer(t, rec)
+	d.universeTimeout = time.Second
+	err := d.waitUniverse(context.Background())
+	if err == nil {
+		t.Fatal("waitUniverse succeeded on a rejected spec")
+	}
+	want := "kubectl -n " + spec.Namespace + " logs statefulset/amp-yugaware-yugaware -c yugaware"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error does not carry a usable log command (want %q):\n%s", want, err)
+	}
+
+	// With no StatefulSet to be found, the label selector is still correct.
+	rec = &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Result: Result{Stdout: rejectedStatus}},
+		{Match: "get statefulset", Result: Result{Stdout: ""}},
+	}}
+	d, spec = testDeployer(t, rec)
+	d.universeTimeout = time.Second
+	err = d.waitUniverse(context.Background())
+	if err == nil {
+		t.Fatal("waitUniverse succeeded on a rejected spec")
+	}
+	if !strings.Contains(err.Error(), "-l release="+spec.HelmRelease()) {
+		t.Errorf("error does not fall back to the label selector:\n%s", err)
+	}
+}
+
+// A failed action must NOT end the wait: YBA retries, and a retry reuses the
+// task UUID, so there is nothing here that separates a dead create from one
+// about to succeed. Guessing costs a working install; the cost of not guessing
+// is the rest of the timeout, which the operator can cut short once the report
+// has told them what broke.
+func TestWaitUniverseKeepsWaitingOnAFailedTask(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybuniverse", Result: Result{
 			Stdout: statusWithAction("Editing", "EditGFlags", "failed", "preview flag not allowed")}},
 	}}
 	d, _ := testDeployer(t, rec)
-	start := time.Now()
+	d.universeTimeout = 50 * time.Millisecond
 	err := d.waitUniverse(context.Background())
 	if err == nil {
-		t.Fatal("waitUniverse succeeded on a failed action")
+		t.Fatal("waitUniverse succeeded on a universe whose edit failed")
 	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Errorf("took %s; a failed action should not wait out the timeout", elapsed)
+	if !strings.Contains(err.Error(), "did not settle") {
+		t.Errorf("ended the wait on the failed task rather than waiting: %v", err)
 	}
 	if !strings.Contains(err.Error(), "preview flag not allowed") {
 		t.Errorf("error %q does not carry the operator's message", err)
@@ -1384,5 +1566,90 @@ func TestDownStillUninstallsWhenEveryCRWent(t *testing.T) {
 	}
 	if !uninstalled {
 		t.Error("a clean teardown did not uninstall the release")
+	}
+}
+
+// TestUpNamesTheStepsItSkipped is the regression test for a bring-up that
+// aborted at the universe wait and said nothing about the steps after it.
+//
+// The universe was Ready and every pod healthy, so the foundation looked
+// finished — but `ensureDatabases` never ran, so yb_storage did not exist and
+// the omission surfaced much later as the amp controller failing to open its
+// state store.
+func TestUpNamesTheStepsItSkipped(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "helm version", Result: Result{Stdout: "v3.20.0"}},
+		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
+		{Match: "get storageclass", Result: Result{Stdout: "WaitForFirstConsumer"}},
+		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.2.0-b137\n"}},
+		// The universe wait is where it dies.
+		{Match: "get ybuniverse", Result: Result{
+			Stdout: statusWithAction("Error Creating", "CreateKubernetesUniverse", "failed", "rejected")}},
+	}}
+	d, _ := testDeployer(t, rec)
+	_, err := d.Up(context.Background())
+	if err == nil {
+		t.Fatal("Up succeeded on a universe that never came up")
+	}
+	var incomplete *IncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("error is not an *IncompleteError, so a caller cannot tell a half-built foundation "+
+			"from a rejected one: %v", err)
+	}
+	if incomplete.Step != "wait for the universe to settle" {
+		t.Errorf("Step = %q, want the step that actually failed", incomplete.Step)
+	}
+	// The one that mattered: the databases the consumer opens at startup.
+	if !slices.Contains(incomplete.Skipped, "create the databases") {
+		t.Errorf("Skipped = %v, missing the database step", incomplete.Skipped)
+	}
+	if !strings.Contains(err.Error(), "rejected") {
+		t.Errorf("error %q dropped the operator's own reason", err)
+	}
+	if !strings.Contains(err.Error(), "resumes") {
+		t.Errorf("error %q does not say the foundation is resumable", err)
+	}
+}
+
+// Preflight changes nothing, so its failure must NOT be dressed up as a
+// half-built foundation — there is nothing to resume.
+func TestUpDoesNotReportPreflightAsIncomplete(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "helm version", Result: Result{Stdout: "v3.20.0"}},
+		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
+		{Match: "get storageclass", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+	}}
+	d, _ := testDeployer(t, rec)
+	_, err := d.Up(context.Background())
+	if err == nil {
+		t.Fatal("Up succeeded with a storage class that does not exist")
+	}
+	var incomplete *IncompleteError
+	if errors.As(err, &incomplete) {
+		t.Errorf("a preflight failure was reported as an incomplete foundation: %v", err)
+	}
+}
+
+// TestIncompleteErrorWithNothingSkipped: the last step is `create the
+// databases`, which is the case this error type exists for — and it skips
+// nothing, so there is no list to print. The message must not trail off after
+// "did not run:".
+func TestIncompleteErrorWithNothingSkipped(t *testing.T) {
+	err := &IncompleteError{Step: "create the databases", Err: errors.New("connection refused")}
+	msg := err.Error()
+	if strings.Contains(msg, "did not run") {
+		t.Errorf("printed an empty skipped-step list:\n%s", msg)
+	}
+	for _, want := range []string{"create the databases", "connection refused", "incomplete", "resumes"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message is missing %q:\n%s", want, msg)
+		}
+	}
+	// With steps skipped it still names them.
+	err.Skipped = []string{"verify the tserver Service", "create the databases"}
+	if msg := err.Error(); !strings.Contains(msg, "did not run: verify the tserver Service, create the databases") {
+		t.Errorf("message does not list the skipped steps:\n%s", msg)
 	}
 }

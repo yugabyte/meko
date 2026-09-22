@@ -29,6 +29,10 @@ type Deployer struct {
 	universeTimeout time.Duration
 	noPrune         bool
 	pollInterval    time.Duration
+	// failureWindow is how long the terminal failure signal must hold before
+	// the wait acts on it. Zero uses ybuniverse.FailureSettleWindow; only tests
+	// set it.
+	failureWindow time.Duration
 }
 
 // New builds a Deployer for spec. A nil runner uses the real binaries.
@@ -222,47 +226,55 @@ func (d *Deployer) Apply(ctx context.Context) (*Info, error) {
 	return d.converge(ctx, false)
 }
 
+// step is one unit of a converge. The sequence is a list rather than a chain of
+// calls so that a failure can name what it skipped — see IncompleteError.
+type step struct {
+	name string
+	run  func(context.Context) error
+}
+
 func (d *Deployer) converge(ctx context.Context, initial bool) (*Info, error) {
-	if err := d.Preflight(ctx); err != nil {
-		return nil, err
+	steps := []step{
+		{"preflight", d.Preflight},
+		{"install the operator CRDs", d.applyCRDs},
+		{"ensure the namespace", d.ensureNamespace},
+		{"install YBA", d.installYBA},
+		{"apply the custom resources", d.applyCRs},
+		{"wait for the universe to settle", d.waitUniverse},
 	}
-	if err := d.applyCRDs(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.ensureNamespace(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.installYBA(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.applyCRs(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.waitUniverse(ctx); err != nil {
-		return nil, err
-	}
-	// After the universe has SETTLED, not merely after the applies. One edit
-	// can both stop the universe using a KMSConfig and drop the key; disabling
-	// encryption at rest is a YBA task, so deleting the config before that task
-	// finishes races a reference that is still live.
 	if !d.noPrune {
-		manifests, err := d.spec.Render()
-		if err != nil {
-			return nil, err
-		}
-		if err := d.prune(ctx, manifests); err != nil {
-			return nil, err
-		}
+		// After the universe has SETTLED, not merely after the applies. One
+		// edit can both stop the universe using a KMSConfig and drop the key;
+		// disabling encryption at rest is a YBA task, so deleting the config
+		// before that task finishes races a reference that is still live.
+		steps = append(steps, step{"prune objects the spec no longer declares", d.pruneDeclared})
 	}
-	if err := d.checkTServerService(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.ensureDatabases(ctx); err != nil {
-		return nil, err
+	steps = append(steps,
+		step{"verify the tserver Service", d.checkTServerService},
+		step{"create the databases", d.ensureDatabases},
+	)
+
+	for i, s := range steps {
+		err := s.run(ctx)
+		if err == nil {
+			continue
+		}
+		// Nothing has run yet when the FIRST step fails, so there is no
+		// half-built foundation to report — just the reason. It is the
+		// position that makes it safe, not the step: several later steps are
+		// read-only too, but they run after ones that are not.
+		if i == 0 {
+			return nil, fmt.Errorf("%s: %w", s.name, err)
+		}
+		inc := &IncompleteError{Step: s.name, Err: err}
+		for _, rest := range steps[i+1:] {
+			inc.Skipped = append(inc.Skipped, rest.name)
+		}
+		return nil, inc
 	}
 	info, err := d.Connect(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read the connection details: %w", err)
 	}
 	if initial {
 		d.log("foundation %q is up in namespace %s", d.spec.UniverseName(), d.spec.Namespace)
@@ -270,6 +282,46 @@ func (d *Deployer) converge(ctx context.Context, initial bool) (*Info, error) {
 		d.log("foundation %q converged in namespace %s", d.spec.UniverseName(), d.spec.Namespace)
 	}
 	return info, nil
+}
+
+// IncompleteError is a converge that aborted partway, naming the steps after
+// the failure that therefore did not run.
+//
+// It exists because the steps that get skipped are invisible: the universe can
+// be Ready and every pod healthy while `ensureDatabases` never ran, and the
+// omission then surfaces much later and somewhere else — as the amp controller
+// failing to open the state store in a database nobody created.
+//
+// It also says the foundation is resumable, which is not obvious: every step is
+// create-or-apply, so Apply picks up from where this stopped.
+type IncompleteError struct {
+	Step    string
+	Skipped []string
+	Err     error
+}
+
+func (e *IncompleteError) Error() string {
+	// The last step failing — `create the databases`, the case this type exists
+	// for — skips nothing, so there is no list to print. The foundation is
+	// still incomplete and still resumable.
+	steps := ""
+	if len(e.Skipped) > 0 {
+		steps = "these steps did not run: " + strings.Join(e.Skipped, ", ") + "\n"
+	}
+	return fmt.Sprintf("%s: %v\nthe foundation is incomplete — %sconverging it again resumes "+
+		"from here; every step is create-or-apply", e.Step, e.Err, steps)
+}
+
+func (e *IncompleteError) Unwrap() error { return e.Err }
+
+// pruneDeclared removes the objects this foundation owns that the spec no
+// longer declares.
+func (d *Deployer) pruneDeclared(ctx context.Context) error {
+	manifests, err := d.spec.Render()
+	if err != nil {
+		return err
+	}
+	return d.prune(ctx, manifests)
 }
 
 func (d *Deployer) ensureNamespace(ctx context.Context) error {

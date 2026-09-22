@@ -108,6 +108,10 @@ StorageConfig:
 # Above YBUniverse because the universe references it. Note spec.name: the CRD
 # REQUIRES one, and it is a different field from the entry's name above, which
 # is metadata.name.
+#
+# Verify EAR with `yb-admin -master_addresses <masters> is_encryption_enabled`,
+# not with this CR's status.state: the CRD lists "InUse" among its values, but
+# on a universe whose encryption is genuinely active it stays "Ready".
 KMSConfig:
   name: foundation-kms
   spec:

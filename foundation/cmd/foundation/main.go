@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -240,6 +241,29 @@ func cmdConverge(ctx context.Context, args []string, initial bool) error {
 		info, err = d.Up(ctx)
 	} else {
 		info, err = d.Apply(ctx)
+	}
+	// An aborted converge names the steps it skipped; only here is the spec
+	// path known, so the resume command is spelled out here.
+	//
+	// It echoes the EFFECTIVE namespace and context, not just the spec path.
+	// The spec file stays checked in while CI supplies the namespace per run
+	// (amp/deploy/up-gke.sh passes --namespace and --kube-context), so a
+	// resume command without them names a different foundation than the one
+	// that aborted — and running it would stand a second one up.
+	//
+	// Namespace needs no emptiness guard: Validate requires one, and load runs
+	// it before anything here. The context does — it is legitimately empty,
+	// meaning whatever context is current.
+	var incomplete *foundation.IncompleteError
+	if errors.As(err, &incomplete) {
+		resume := fmt.Sprintf("foundation apply -c %s --namespace %s", *c.specPath, spec.Namespace)
+		if spec.KubeContext != "" {
+			resume += " --kube-context " + spec.KubeContext
+		}
+		if *noPrune {
+			resume += " --no-prune"
+		}
+		return fmt.Errorf("%w\n  %s", err, resume)
 	}
 	if err != nil {
 		return err

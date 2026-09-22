@@ -246,6 +246,15 @@ callable twice with the same result.
 `up` and `apply` share one path; the split is only about which steps are expected
 to be no-ops.
 
+The steps are a named list rather than a chain of calls, because aborting in the
+middle leaves a foundation that *looks* finished — universe `Ready`, every pod
+healthy — while a later step never ran. A bring-up that died at the universe wait
+never created `yb_storage`, and the omission surfaced much later as the amp controller
+failing to open its state store. An aborted converge therefore returns an
+`IncompleteError` naming the steps it skipped, and the CLI adds the command that
+resumes it: every step is create-or-apply, so `apply` picks up from where the
+failure stopped.
+
 1. **Preflight** — binaries on PATH, cluster reachable, helm ≥ 3.11, k8s ≥ 1.27,
    every storage class the spec names exists (and warns unless it binds
    `WaitForFirstConsumer`), every pull secret the spec names exists,
@@ -547,12 +556,40 @@ applied before it starts. `ybuniverse.Settled` therefore also requires no
 `status.actions` entry to be `queued` or `running`; the operator enqueues an
 action before it begins work, which is what closes the hole.
 
-`ybuniverse.Failed` covers two shapes. An action can carry `failed` with a message
-and a task UUID — the good case. But YBA can also reject a create *before* it
-submits a task, leaving the action `queued` with no message while `universeState`
-becomes `Error Creating`; matching only the action status would wait that out for
-the full timeout. The CRD documents four states as examples with no enum, and
-`Error Creating` is not among them, so the match is on the `Error` prefix.
+`ybuniverse.FailureWatch` reads what the CR says is wrong. Its job is mostly to
+**report**, not to adjudicate: without reading the CR back, a rejected spec
+presents as a wait that times out with the reason left where nobody looked.
+
+**A failed task is reported and nothing more.** YBA retries with a backoff, and
+a retry keeps the *same* task UUID — only a re-run gets a new one — so neither
+elapsed time nor a count of tasks separates a dead create from one about to
+succeed. Guessing costs a working install; not guessing costs the rest of the
+universe timeout, which an operator can cut short themselves once the report has
+told them what broke. So the wait logs the failure when it appears, logs it
+again when it changes, and carries it into the timeout alongside the pods and
+events dump — with the command that reads the yugaware log on *this* install.
+That StatefulSet is looked up by label rather than named, for the same reason
+`yugawareStatefulSets` exists: the chart has renamed it across versions, so a
+hint built from the release name sends the reader to a pod that is not there.
+
+**One failure does end the wait: a spec YBA rejected before it made a task.**
+The action stays `queued` with no UUID while `universeState` becomes
+`Error Creating`, and nothing will retry it because YBA never accepted it — a
+task UUID anywhere is the evidence that it did. That one has to hold for
+`FailureSettleWindow` (2 minutes) first, because `universeState` has no
+`observedGeneration` behind it: a reading taken just after an apply can belong
+to the previous generation, and a healthy create was seen flickering through
+`Error Creating` seconds before its task appeared. The CRD documents four states
+as examples with no enum, and `Error Creating` is not among them, so the match is
+on the `Error` prefix.
+
+**And a CR's status is not the authority on what YBA did.** `KMSConfig.status.state`
+exists and its CRD lists `InUse` among its values, but on a universe whose
+encryption at rest is genuinely active it reaches `Ready` and stays there —
+`yb-admin -master_addresses <masters> is_encryption_enabled` reports `ENABLED`
+with the key id while the CR never advances. Verify encryption at rest against
+`yb-admin`; reading it off the CR gives a false negative, which for an
+encryption feature is the wrong direction to be wrong in.
 
 ## Pruning: omission is deletion
 
