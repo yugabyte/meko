@@ -104,7 +104,7 @@ const (
 // its names are not resolvable publicly (ac-ingress.md, "Dependencies outside
 // the controller"). A single shared zone would publish an internal endpoint's
 // name into whichever zone happened to be configured — and dns_name is durable
-// (0018 stores it on the row), so correcting that later means reissuing
+// (0007 stores it on the row), so correcting that later means reissuing
 // addresses customers already hold, not a config change.
 //
 // Either may be empty. A family with no zone still gets a name allocated — an
@@ -213,7 +213,7 @@ func publishable(dnsName string) bool { return strings.Contains(dnsName, ".") }
 // dnsNameFor derives the published name from the endpoint's id.
 //
 // From the ID, never from the endpoint's name or its cluster's or pool's: those
-// are renameable (0016_storage_pool_name_live), and an address that breaks when
+// are renameable (storage_pools_name_live, in 0002_resource_model), and an address that breaks when
 // somebody renames a project is a broken address. `attempt` widens the prefix on
 // the astronomically unlikely collision, so the pretty short form is what almost
 // every endpoint gets while uniqueness stays guaranteed rather than probable.
@@ -239,7 +239,7 @@ func (a *Allocator) dnsNameFor(endpointID uuid.UUID, family Family, attempt int)
 //
 // One statement rather than select-then-insert on purpose: between a read and a
 // write, a concurrent create can take the slot we just chose. Here the unique
-// indexes from 0018 are the arbiter — the loser gets a 23505 and retries — so
+// indexes from 0007 are the arbiter — the loser gets a 23505 and retries — so
 // correctness does not depend on the allocator being the only writer.
 //
 // `used` is computed once per shard rather than once per candidate port, which
@@ -298,7 +298,7 @@ RETURNING id, endpoint_id, shard, port, dns_name, created_at,
 // allocation IS the record of where an endpoint answers, so re-deriving an
 // address a client may already hold would change it. Moving an endpoint to
 // another family is therefore not something this does — Release first, then
-// Allocate, which is the order 0018's live-per-endpoint index forces anyway.
+// Allocate, which is the order 0007's live-per-endpoint index forces anyway.
 //
 // The existing-slot check runs BEFORE the insert rather than classifying the
 // error after it, because after it we cannot tell which constraint fired. On

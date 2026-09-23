@@ -274,8 +274,8 @@ default, with memory following CPU at the control plane's memory-per-vCPU ratio
 — 8 GiB per core unless `--deploy-memory-gib-per-vcpu` says otherwise — and a
 pair below that ratio refused with a `400`. `memory` must also carry an explicit
 Mi-or-larger unit, because Kubernetes reads a bare `4` as four *bytes* and an
-endpoint sized that way can never be resized in place afterwards — meko#492,
-whose migration `0009` also normalized the values already stored), validates the
+endpoint sized that way can never be resized in place afterwards — meko#492),
+validates the
 optional `connectivity` block and stores it in the endpoint's `config` jsonb so a
 replay recreates the same exposure, then plans a `create_endpoint` task
 (`task.Service.CreateEndpoint`) and returns `202` + `Task` + `Location`. The

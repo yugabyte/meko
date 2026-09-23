@@ -34,7 +34,21 @@ CREATE TABLE tasks (
     owner        text,                   -- which instance holds the task (§8.2)
     lease_expiry timestamptz,            -- ownership lease; expiry => reclaimable
     created_at   timestamptz NOT NULL DEFAULT now(),
-    updated_at   timestamptz NOT NULL DEFAULT now()
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+
+    -- The YCP desired-state update this task applies, so the worker can stamp the
+    -- resource row on completion rather than each planner remembering to (meko#985;
+    -- ac-ycp.md "Convergence status"). NULL means "not YCP-driven": every task an
+    -- operator or the UI plans directly. `ycp_resource` is plain text validated in
+    -- Go — the worker switches on it anyway, and one rejection site beats two.
+    ycp_resource    text,        -- 'endpoint' | 'branch'
+    ycp_resource_id uuid,
+    ycp_generation  bigint,
+
+    -- Cooperative cancellation. A timestamp rather than a fifth task_status value:
+    -- a cancelled task ends `failed` carrying the cancel as its error, and this
+    -- column is what distinguishes that from having genuinely broken.
+    cancel_requested_at timestamptz
 );
 
 -- The idempotent steps of one task; written write-ahead, marked as they run. Each
@@ -78,3 +92,27 @@ CREATE INDEX tasks_by_status ON tasks (status);
 CREATE UNIQUE INDEX tasks_one_active_resize_per_endpoint
     ON tasks (target_ref)
     WHERE kind = 'resize_endpoint' AND status IN ('pending', 'running');
+
+-- The same first-writer-wins lock for add_branch_extensions (`target_ref` is the
+-- branch id). The YCP agent re-issues an update until the row confirms it, and the
+-- extensions task redeploys every endpoint on the branch, so without this an agent
+-- restart mid-pass would plan concurrent helm upgrades of one release.
+--
+-- The two predicates are kind-DISJOINT, which is what keeps taskLockViolation's
+-- structural classification exact: a unique violation from Create's task INSERT
+-- can only be the index for that task's own kind.
+CREATE UNIQUE INDEX tasks_one_active_ext_add_per_branch
+    ON tasks (target_ref)
+    WHERE kind = 'add_branch_extensions' AND status IN ('pending', 'running');
+
+-- The task change feed (GET /api/v1/tasks?updated_since=...), which the YCP agent
+-- polls every reconcile tick for every environment and which orders by updated_at
+-- rather than the default listing's created_at.
+--
+-- `updated_at ASC` is load-bearing: YSQL defaults a secondary index's leading
+-- column to HASH, which serves neither the `updated_at >= $n` seek nor the ORDER BY
+-- — both degrade to a filter over the whole task log plus a sort (measured on the
+-- sibling branches_gc_due: HASH scanned 10k rows in 627 ms, ASC seeked 5 in 2 ms).
+-- `id ASC` second so the tiebreak is served from the index too; tasks stamped by
+-- the same now() do tie.
+CREATE INDEX tasks_by_updated_at ON tasks (updated_at ASC, id ASC);

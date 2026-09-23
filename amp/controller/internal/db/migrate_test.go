@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -96,4 +97,27 @@ func TestMigrateRoundTrip(t *testing.T) {
 		step(fmt.Sprintf("migration %d down", i), func() error { return m.Steps(-1) })
 		step(fmt.Sprintf("migration %d up again", i), func() error { return m.Steps(1) })
 	}
+}
+
+// migrationVersion finds a migration by filename suffix, so a renumber cannot
+// silently turn a test into a test of some other migration.
+func migrationVersion(t *testing.T, suffix string) uint {
+	t.Helper()
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("read embedded migrations: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.SplitN(name, "_", 2)[0], 10, 64)
+		if err != nil {
+			t.Fatalf("parse version from %q: %v", name, err)
+		}
+		return uint(v)
+	}
+	t.Fatalf("no *%s in the embedded migrations", suffix)
+	return 0
 }

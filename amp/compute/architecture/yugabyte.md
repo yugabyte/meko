@@ -17,9 +17,9 @@ All subsystems share **one** database, `yb_storage`. Within it:
 | Schema | Tables | Provisioned by |
 |---|---|---|
 | `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `wals`, `blobs` (+ the `blob_namespace` ENUM), and `branch_state` — the per-branch row the pageserver and safekeeper share | migration `0003_compute_storage` |
-| `amp_registry` | the control plane's resource model: `users`, `storage_pools`, `clusters`, `user_pool_grants`, `user_cluster_grants`, `branches`, `endpoints` (plus the `grant_role` and `endpoint_role` ENUMs). One branch table and one endpoint table, serving both the product API and the storage-layer control surface | migration `0002_resource_model` (`0005_endpoint_daemon_settings` repairs databases that applied it before the endpoint's `pageserver_settings` / `safekeeper_settings` columns were added to it; `0009_endpoint_memory_units` rewrites endpoint memory reservations stored without a unit, which Kubernetes reads as a byte count; `0010_cluster_engine` adds `clusters.engine`, the engine a cluster was provisioned as; `0011_endpoint_version` adds the endpoint's `version` and `target_version` columns, NULL for every endpoint predating them; `0013_ycp_generation` adds the applied-YCP-generation column to `branches` and `endpoints`; `0015_storage_pool_tombstone` adds `storage_pools.dropped_at` and makes the name index partial on it; `0019_registered_extensions` adds `extensions`, the extension images an operator registered — the half of the extension catalog that is not compiled into the controller) |
-| `amp_registry` | the write-fencing lease store: `resource_token` plus `token_acquire` / `token_release` / `token_holder` and the epoch-micros helpers `now_us` / `us_add_ms` / `us_to_ms`. See [`compute-fencing.md`](compute-fencing.md) | migration `0006_resource_token` |
-| `controller` | the write-ahead task log: `tasks`, `task_steps` (plus the `task_status` / `step_status` ENUMs), and `subtasks` — the children a fan-out parent owns and runs itself, deliberately outside `tasks` so the claim loop cannot see them | migrations `0001_task_log`, `0012_subtasks`, `0013_ycp_generation` (the YCP stamp a task declares), `0014_ycp_task_lock` (the add_branch_extensions first-writer-wins index — split out because on YB a CREATE INDEX sharing a transaction with the writes it must cover is downgraded to a non-concurrent build that skips them), `0017_tasks_updated_at_index` (the `updated_since` change feed the YCP agent polls) |
+| `amp_registry` | the control plane's resource model: `users`, `storage_pools`, `clusters`, `user_pool_grants`, `user_cluster_grants`, `branches`, `endpoints` (plus the `grant_role` and `endpoint_role` ENUMs). One branch table and one endpoint table, serving both the product API and the storage-layer control surface | migration `0002_resource_model`; `extensions`, the extension images an operator registered — the half of the extension catalog not compiled into the controller — is `0008_registered_extensions` |
+| `amp_registry` | the write-fencing lease store: `resource_token` plus `token_acquire` / `token_release` / `token_holder` and the epoch-micros helpers `now_us` / `us_add_ms` / `us_to_ms`. See [`compute-fencing.md`](compute-fencing.md) | migration `0004_resource_token` |
+| `controller` | the write-ahead task log: `tasks`, `task_steps` (plus the `task_status` / `step_status` ENUMs), and `subtasks` — the children a fan-out parent owns and runs itself, deliberately outside `tasks` so the claim loop cannot see them | migrations `0001_task_log`, `0006_subtasks` |
 
 ### Provisioning — controller migrations on startup
 
@@ -830,7 +830,7 @@ Semantics are documented in
 The write-ahead task framework's `tasks` / `task_steps` / `subtasks` tables
 (plus their status enums) that drive the create/delete/upgrade workflows —
 the controller's own operational machinery, not a user resource, which is
-why it sits outside the resource model. `subtasks` (`0012`) holds the
+why it sits outside the resource model. `subtasks` (`0006`) holds the
 children a fan-out task owns and runs in-process; they are deliberately
 not rows in `tasks`, so the claim loop cannot pick one up behind its
 parent's back. Unlike `amp_registry` this schema name is fixed, not

@@ -448,7 +448,7 @@ func TestUnitExpiresAtIsZeroWhenUnset(t *testing.T) {
 	}
 }
 
-// The rule lives in migration 0006, and the point of this package is that it is
+// The rule lives in migration 0004, and the point of this package is that it is
 // not restated here. These assertions are what stops it creeping back: a future
 // edit that inlines the predicate to "save a function call" would reintroduce the
 // second copy that can drift out of step with the Rust client.

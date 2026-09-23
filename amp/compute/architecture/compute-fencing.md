@@ -78,7 +78,7 @@ as a 1970 timestamp and reject every write — fail-closed, but broken.
 
 The token store lives in `amp_registry` — it is control-plane state, not
 data-plane state — and is defined by
-[`controller/migrations/0006_resource_token.up.sql`](../../controller/migrations/0006_resource_token.up.sql),
+[`controller/migrations/0004_resource_token.up.sql`](../../controller/migrations/0004_resource_token.up.sql),
 which is the source of truth: the `resource_token` table, `token_acquire` /
 `token_release` / `token_holder`, and the epoch-micros helpers.
 

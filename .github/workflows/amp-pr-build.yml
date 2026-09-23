@@ -721,8 +721,8 @@ jobs:
           exit 1
 
       # TestMigrateRoundTrip walks every migration up/down/up; the other TestMigrate*
-      # tests cover statements it cannot, since it runs against an empty database
-      # and so never matches a data-repair UPDATE.
+      # tests pin schema invariants (index predicates, uniqueness, ingress
+      # allocation) against a migrated database.
       - name: Migration up/down/up round-trip
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
@@ -776,7 +776,7 @@ jobs:
       # only once the lease was given up.
       #
       # Unlike the steps above this does NOT share their database: the package
-      # calls migration 0006's functions, so its TestMain provisions a migrated
+      # calls migration 0004's functions, so its TestMain provisions a migrated
       # scratch database of its own and drops it after, using the URL below only
       # to reach the server. That is a CREATE plus a DROP DATABASE added to this
       # job, and DROP costs ~70s on YugabyteDB. The unit and process-death tests

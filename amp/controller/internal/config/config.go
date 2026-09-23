@@ -741,7 +741,7 @@ func (d *DeployConfig) validateIngress() error {
 
 	// Both families in one zone is the one ingress misconfiguration a later
 	// config change cannot undo: the allocator stores the name it mints on the
-	// allocation row (0018), so an internal endpoint published into the public
+	// allocation row (0007), so an internal endpoint published into the public
 	// zone stays there until its address is reissued. Cheap to refuse, and the
 	// reason the zones are two flags rather than one.
 	if d.IngressZoneInternal != "" && d.IngressZoneInternal == d.IngressZoneExternal {

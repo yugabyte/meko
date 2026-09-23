@@ -332,7 +332,7 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 
 // Candidates asks token_holder whether a running task's lease is live, and only for
 // running rows — pending is the common path. "No row" already means free to a new
-// owner, so this reuses migration 0006's definition instead of restating it.
+// owner, so this reuses migration 0004's definition instead of restating it.
 //
 // The skew must match the one PgLocks acquires under, or the two disagree about when
 // a lapsed lease is takeable; both take pglease's default.

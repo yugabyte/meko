@@ -53,12 +53,11 @@ fired at the whole fleet at once.
 
 ## 2. Recording what an endpoint runs
 
-Migration `0011`:
+Two columns on `amp_registry.endpoints` (`0002_resource_model`):
 
 ```sql
-ALTER TABLE amp_registry.endpoints
-    ADD COLUMN IF NOT EXISTS version text,
-    ADD COLUMN IF NOT EXISTS target_version text;
+    version        text,
+    target_version text,
 ```
 
 `version` is what the endpoint is recorded as **running**, written after a deploy
@@ -252,7 +251,7 @@ re-drives the roll.
 
 ### 5.1 Shape: a subtask is not a task
 
-Migration `0012` adds a table, and changes nothing about `tasks`:
+Migration `0006` adds a table, and changes nothing about `tasks`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS subtasks (
@@ -744,7 +743,7 @@ That size is itself a design input. **This should land as a stack, not one PR:**
    them. Pure refactor, no behaviour change, and it makes every PR after it smaller.
 2. **The version column and deploy-spec override** (§2–3).
 3. **`upgrade_endpoint`** (§4) — the per-endpoint step, usable on its own.
-4. **The `subtasks` table and runner** (§5) — migration `0012`; the numbers are
+4. **The `subtasks` table and runner** (§5) — migration `0006`; the numbers are
    assigned in stack order, since two migrations claiming one version wedges the
    controller's startup.
 5. **The API** (§6).
@@ -786,7 +785,7 @@ deploy is the only thing that covers it, so an end-to-end check that the `versio
 column is populated after a create belongs in whatever exercises a live cluster.
 
 **What a live run can cover today, and what it cannot.** Exercised on the docker
-driver against a real YugabyteDB: migration `0011` applying, the subtasks being
+driver against a real YugabyteDB: the `version` columns being written, the subtasks being
 created with derived ids and reported per endpoint, the parent's outcome list, the
 already-at-target skip, an explicitly named endpoint *not* being skipped, and the
 requested version reaching the deployer's command line. **Not** covered: that the
@@ -799,7 +798,7 @@ proving them.
 
 Live-database (`internal/task/store_pg_test.go` / `internal/task/locks_pg_test.go`,
 `AMP_TEST_DATABASE_URL`):
-`TestMigrateRoundTrip` with 0012; the subtask store's idempotent create against real
+`TestMigrateRoundTrip` with 0006; the subtask store's idempotent create against real
 SQL; `Store.ActiveByKind`'s `status IN ('pending','running')` predicate — layer 1,
 including that a **pending** roll is found, which is the case a lease probe would
 miss and the reason this is a query; and `fleet:endpoints` **refusing** a second

@@ -167,7 +167,7 @@ So the catalog has two halves, and they meet in
 
 | | built-in | registered |
 |---|---|---|
-| lives in | `catalog.go`, compiled in | `amp_registry.extensions` (migration 0019) |
+| lives in | `catalog.go`, compiled in | `amp_registry.extensions` (migration 0008) |
 | image | derived: `<registry>/amp-ext-<name>:<version>` | the reference as registered |
 | built by | `deploy/extensions` | someone else |
 | added by | a controller release | `PUT /extensions/{name}` |
@@ -612,7 +612,7 @@ example.
 - Engines: [`controller/internal/extensions/engines.go`](../../controller/internal/extensions/engines.go)
   (the bundles), `engine` on `CreateClusterRequest` / `Cluster` in
   [`openapi_spec.yaml`](../../controller/internal/api/openapi_spec.yaml),
-  [migration 0010](../../controller/migrations/0010_cluster_engine.up.sql)
+  [migration 0002](../../controller/migrations/0002_resource_model.up.sql)
   (`amp_registry.clusters.engine`).
 - Patches: [`compute/image/patches/`](../image/patches/) (reused verbatim).
 - Registration: [`controller/internal/extensions/service.go`](../../controller/internal/extensions/service.go)
@@ -620,7 +620,7 @@ example.
   [`controller/internal/api/extensions.go`](../../controller/internal/api/extensions.go)
   (the handlers and the admin gate),
   [`controller/internal/core/registered_extensions.go`](../../controller/internal/core/registered_extensions.go)
-  (`amp_registry.extensions`), [migration 0019](../../controller/migrations/0019_registered_extensions.up.sql).
+  (`amp_registry.extensions`), [migration 0008](../../controller/migrations/0008_registered_extensions.up.sql).
 - ABI waiver: `yb_amp_abi_extra_exempt_libraries` in the forked Postgres
   (`compute/vendor/postgres-v18`: `src/backend/utils/fmgr/dfmgr.c`
   `module_abi_compatible` / `abi_extra_exempt`, `src/backend/utils/misc/guc_tables.c`).

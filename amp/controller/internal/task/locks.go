@@ -14,7 +14,7 @@ import (
 	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
-// Three leases from pkg/pglease over amp_registry.resource_token (migration 0006):
+// Three leases from pkg/pglease over amp_registry.resource_token (migration 0004):
 // `task:<id>` held by the process, `endpoint:<id>` held by the task, and
 // `fleet:endpoints` held by a fleet roll. All three namespaces are disjoint from
 // the compute write fence's `branch:<id>` in the same table.

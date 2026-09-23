@@ -47,7 +47,7 @@ type StoreConfig struct {
 	// the holder, and never a release.
 	//
 	// Zero means DefaultSkew (500ms), matching YugabyteDB's own
-	// max_clock_skew_usec and the DEFAULT 500 that migration 0006's
+	// max_clock_skew_usec and the DEFAULT 500 that migration 0004's
 	// token_acquire declares, so the lease inherits a bound the database already
 	// enforces rather than adding an assumption of its own. Otherwise it must be
 	// in [MinTTL, MaxSkew], or DisableSkew to turn the grace off.
@@ -133,8 +133,8 @@ func microsToTime(us int64) time.Time {
 }
 
 // Store is the durable side of a lease: one row per key in
-// amp_registry.resource_token, which migration 0006 owns and the compute write
-// fence shares. The decision is 0006's conditional upsert, not ours.
+// amp_registry.resource_token, which migration 0004 owns and the compute write
+// fence shares. The decision is 0004's conditional upsert, not ours.
 type Store struct {
 	pool     *pgxpool.Pool
 	ownsPool bool

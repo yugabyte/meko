@@ -20,7 +20,7 @@ const (
 	// StateDraining is on its way out: no new allocations, and reclaimable once
 	// empty. Nothing writes it yet — the reclaimer is not built (ac-ingress.md,
 	// "Not yet built") — so it exists here to keep the enum and this type in
-	// step with 0018 rather than because anything transitions into it.
+	// step with 0007 rather than because anything transitions into it.
 	StateDraining ShardState = "draining"
 )
 
@@ -73,7 +73,7 @@ var ErrShardPortRangeChanged = errors.New("ingress shard port range differs from
 // The port range is the field worth being explicit about, because reconciling it
 // from config looks harmless and is not. The range describes the listeners the
 // shard's installed release actually serves; it is provisioned in full when the
-// load balancer is built and never widened afterwards (0018). So a controller
+// load balancer is built and never widened afterwards (0007). So a controller
 // restarted with an edited --deploy-ingress-port-range, before anything upgrades
 // that release, would widen the row and the allocator would start handing out
 // ports nothing is listening on — endpoints that deploy and are simply
@@ -251,7 +251,7 @@ func (a *Allocator) verifyShardRelease(ctx context.Context, look AddressLookup, 
 //
 // Nothing marks it special in the schema, and nothing protects it yet: the
 // intended floor is "never drain a family's last ready shard", which would cover
-// this one without recording that it was first — but 0018 states that rule is
+// this one without recording that it was first — but 0007 states that rule is
 // deliberately not in the schema, and the reclaimer that would enforce it does
 // not exist.
 const FirstShardName = "pgin-0"

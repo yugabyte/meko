@@ -27,7 +27,7 @@ write-once binding endpoint the agent pins itself to.
   │  4. report inventory ───────────┼───────────┼──────────────┼─────────►│ POST /agent/status     │
   └─────────────────────────────────┘           └──────────────┘          └────────────────────────┘
                                                   ycp_binding                environments.kind='amp'
-                                                  (migration 0007)           environments.resources=[…]
+                                                  (migration 0005)           environments.resources=[…]
 ```
 
 Every agent → YCP call authenticates with the environment's YBM API key
@@ -405,7 +405,7 @@ cannot quietly take it over.
   pins the controller after it enrolls. First write wins; an identical re-bind is
   idempotent (200); a bind that differs from the incumbent is rejected (409, body
   carries the incumbent). **`GET`** returns the current binding or 404.
-- State lives in `ycp_binding` (migration 0007), a singleton row in the
+- State lives in `ycp_binding` (migration 0005), a singleton row in the
   controller's own schema. The routes sit outside the OpenAPI spec, like
   `/healthz` and `/metrics` — the binding is operational state, not a resource.
 
@@ -415,12 +415,12 @@ the binding is a durable record and a bind-time tripwire.
 ## History: the retired outbound loop
 
 The controller used to enroll and report to YCP itself, on a background goroutine
-(`ycp.Loop`) with its identity persisted in `ycp_identity` (migration 0004). That
+(`ycp.Loop`) with its identity persisted in a `ycp_identity` table. That
 was the "register + report" half of a design that always intended reconciliation
 to follow. When the standalone agent landed — which must be the *sole* YCP client
 (one API key drives one environment) — the controller loop was retired
-(migration 0008 drops `ycp_identity`; the `--ycp-*` flags and `controller.ycp.*`
-Helm values are gone). The binding endpoint is all that remains on the controller.
+(its table, the `--ycp-*` flags and the `controller.ycp.*` Helm values are
+gone). The binding endpoint is all that remains on the controller.
 
 ## Deploying YCP itself
 

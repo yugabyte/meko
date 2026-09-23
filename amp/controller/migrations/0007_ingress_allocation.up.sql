@@ -1,4 +1,4 @@
--- 0018: shared Postgres ingress — shards, and the port each endpoint holds on one.
+-- 0007: shared Postgres ingress — shards, and the port each endpoint holds on one.
 --
 -- An endpoint reachable through the shared ingress is addressed as
 -- `<dns_name>:<port>` on a SHARD: one cloud load balancer plus a proxy tier,
@@ -7,12 +7,12 @@
 -- the cloud, which is the whole point of the design — see
 -- controller/architecture/ac-ingress.md.
 --
--- Kept in ONE file, unlike the 0013/0014 and 0015/0016 splits. Those exist
--- because golang-migrate runs each file in one transaction and YugabyteDB
--- downgrades a CREATE INDEX inside a transaction block to a non-concurrent build
--- (yugabyte-db#6240) whose backfill does not see rows written earlier in that
--- same transaction. Both tables here are created empty by this migration, so
--- there are no earlier rows for a backfill to miss and the hazard cannot arise.
+-- The indexes share one transaction with the tables they cover: golang-migrate
+-- runs each file in one, and YugabyteDB downgrades a CREATE INDEX inside a
+-- transaction block to a non-concurrent build (yugabyte-db#6240) whose backfill
+-- does not see rows written earlier in that same transaction. Both tables are
+-- created empty here, so there is nothing for a backfill to miss. An index added
+-- later to a table that already holds rows does not have that luxury.
 
 DO $$ BEGIN
     CREATE TYPE amp_registry.ingress_family AS ENUM ('internal', 'external');
@@ -153,7 +153,7 @@ CREATE INDEX IF NOT EXISTS ingress_allocations_slot
 -- is a range scan on released_at.
 --
 -- `ASC` is load-bearing rather than decoration, for the reason 0002 measured on
--- branches_gc_due and 0017 hit again: YSQL defaults a secondary index's leading
+-- branches_gc_due and tasks_by_updated_at (0001) hit again: YSQL defaults a secondary index's leading
 -- column to HASH, and a hash-partitioned column cannot serve a range predicate,
 -- so the scan degrades to a storage filter plus sort (10k rows in 627 ms there,
 -- against 5 due rows in 2 ms with ASC). Added now rather than alongside the

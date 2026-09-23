@@ -101,6 +101,25 @@ PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
 (The SC's `--database-url` typically pins `options=-csearch_path%3Dcontroller`.) Same idea
 if an `amp_storage` schema is expected and missing.
 
+## B2. Migration: "no migration found for version N"
+The database was migrated under the controller's old numbering. The twenty migrations were
+folded into eight and renumbered ([#1490](https://github.com/yugabyte/meko/pull/1490)), and
+golang-migrate records only a version number, so a database migrated before that carries a
+number from the old scheme:
+```bash
+PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
+  "host=$YB_HOST port=$YB_PORT user=yugabyte dbname=$YB_DB sslmode=require" \
+  -c "SELECT version, dirty FROM controller.schema_migrations;"
+```
+Above 8 (an up-to-date old database is at 20), the controller refuses to start with this
+error. At 8 or below it starts, taking the database as already migrated with a schema that
+may not match. Either way the only fix is to **drop and recreate the controller's
+database**. That database also holds `amp_storage`, so every branch on it goes too.
+
+Do not stamp the version to 8 instead. `0002` and `0003` were edited in place after they
+shipped, so a long-lived database can carry an older form of them that no version number
+reveals.
+
 ## C. Safekeeper: "unexpected argument '--<flag>'"
 Build drift removes/renames flags. The safekeeper's whole config surface now lives in
 `<datadir>/safekeeper.toml` (written by the launcher; the analogue of `pageserver.toml`), so the

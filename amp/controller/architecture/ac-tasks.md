@@ -62,7 +62,7 @@ sketch in §8.1 of the high-level doc):
   keeps "the steps of this task" a cheap lookup. The `args` are written when the
   task is created; `result` and `status` are updated as it runs. These rows **are**
   the write-ahead log.
-- **`subtasks`** (migration `0012`) — a third kind of row, and the exception to
+- **`subtasks`** (migration `0006`) — a third kind of row, and the exception to
   everything above. A task that fans out over a set it cannot know until Execute time
   creates one subtask per item and **runs them itself**, in its own process. A subtask
   is *one registered step* — `kind` is a `task_step.kind`, there is no step list — with
@@ -122,7 +122,7 @@ expires and it is reclaimed and replayed (§8.2) — durably failing a task over
 graceful shutdown would strand it. Only a genuine step error on a live context
 fails the task.
 
-**Cancellation is cooperative** (`POST /tasks/{taskId}/cancel`, migration 0020).
+**Cancellation is cooperative** (`POST /tasks/{taskId}/cancel`).
 The API stamps `tasks.cancel_requested_at`; the worker re-reads the row at the top
 of each step iteration and, if the request is there, abandons the task's
 unfinished children and calls `FailStep` on the step that would have run next. So
@@ -247,7 +247,7 @@ double-apply or error.
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
 | `delete_branch` | cluster, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
 | `delete_cluster` | cluster id | Cascade-delete a cluster: enumerate **all** the cluster's endpoints, retire each (instance + record), then delete the cluster — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForCluster`). Cascade order is **endpoints → branches → cluster**; `DeleteCluster` nulls the branches' in-cluster parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
-| `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy the endpoints whose recorded mount set is behind it** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. **First-writer-wins lock**: `tasks_one_active_ext_add_per_branch` (migration 0014) admits at most one non-terminal `add_branch_extensions` per branch (`target_ref`); a concurrent one is `ErrBranchExtensionsInProgress` → `409`. Needed because two concurrent adds would redeploy overlapping endpoint sets — concurrent helm upgrades of the same release. |
+| `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy the endpoints whose recorded mount set is behind it** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. **First-writer-wins lock**: `tasks_one_active_ext_add_per_branch` (migration 0001) admits at most one non-terminal `add_branch_extensions` per branch (`target_ref`); a concurrent one is `ErrBranchExtensionsInProgress` → `409`. Needed because two concurrent adds would redeploy overlapping endpoint sets — concurrent helm upgrades of the same release. |
 | `plan_endpoint_rerenders` | endpoint ids (optional), max_parallel | The re-render roll: enumerate the fleet (or the named subset) and own a `rerender_endpoint` **subtask** per endpoint, run through the same bounded pool `plan_endpoint_upgrades` uses (`internal/task/endpointroll.go`). What an operator runs after enabling TLS (`ac-endpoint-tls.md`). | Self-contained and re-enumerating, like the upgrade roll. Holds `fleet:endpoints`, which is `NoWait` — so one fleet roll of either kind at a time, and the plan-time `noFleetRollInFlight` check is what turns the second into a 409 rather than a task that fails in the worker; each child holds its own endpoint lock. Nothing is filtered — the endpoint row does not record which configuration it was rendered with — and a re-render of a converged endpoint is a no-op Helm upgrade. |
 | `rerender_endpoint` | endpoint id | *(a subtask, not a task step)* Redeploy one endpoint from its stored record, unchanged, so deployer-level configuration (TLS mode, CA bundle, image) reaches a release rendered before it (`internal/task/step_rerender_endpoint.go`). Re-records the address. | `upgrade_endpoint` with no mutation, and the same create-or-upgrade keyed by the endpoint's stable name, so a replay converges. An endpoint deleted since planning is a skipped success rather than a fail-fast trip. |
 
@@ -264,7 +264,7 @@ A few invariants worth calling out:
 
 - **A task can declare the YCP generation it applies, and the *worker* stamps it
   after the last step succeeds.** `tasks.ycp_resource` / `ycp_resource_id` /
-  `ycp_generation` (migration 0013) name the endpoint or branch row and the
+  `ycp_generation` (migration 0001) name the endpoint or branch row and the
   generation; `execute` writes it through `StateStore` between the step loop and
   `CompleteTask`, so the recorded value means the work landed rather than that the
   handler returned `202` ([ac-ycp.md](ac-ycp.md)). Not a step, deliberately: a step
@@ -389,7 +389,7 @@ not the list path.
 
 `TaskFilter.UpdatedSince` turns the same endpoint into a **change feed**: only tasks
 whose `updated_at` is at or after it, ordered `updated_at` ASC instead of the default
-`created_at` DESC, backed by `tasks_by_updated_at` (`0017_tasks_updated_at_index`).
+`created_at` DESC, backed by `tasks_by_updated_at` (`0001_task_log`).
 The ordering has to change with the filter, which is why it is one field and not two.
 
 It exists for the YCP reconcile agent, which relays this log to the control plane so a

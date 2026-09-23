@@ -1,4 +1,4 @@
--- 0012: `subtasks` — the children a fan-out parent task owns and runs itself
+-- 0006: `subtasks` — the children a fan-out parent task owns and runs itself
 -- (controller/architecture/ac-endpoint-upgrade.md §5).
 --
 -- A fleet roll is one parent task that records a row here per endpoint and runs

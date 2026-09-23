@@ -1,6 +1,6 @@
 package pglease
 
-// The lease rule lives in SQL, in migration 0006_resource_token: `token_acquire`
+// The lease rule lives in SQL, in migration 0004_resource_token: `token_acquire`
 // decides a grant in one atomic upsert, `token_release` frees a lease the caller
 // owns, and `token_holder` reports whoever is keeping others out. This package
 // calls those functions rather than restating them, so there is one definition of
@@ -9,7 +9,7 @@ package pglease
 // here would be a second thing to keep in step, and the two could disagree while
 // both looked right.
 //
-// The consequence is a hard dependency: migration 0006 must have run against the
+// The consequence is a hard dependency: migration 0004 must have run against the
 // database this package is pointed at. There is no DDL here and no table of our
 // own — leases live in `amp_registry.resource_token`, keyed by the caller's
 // resource id, alongside every other holder.

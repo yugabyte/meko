@@ -39,10 +39,20 @@ CREATE TABLE amp_registry.users (                           -- "user" is reserve
 -- is recorded as its owner; others reach it only via a user_pool_grants row.
 CREATE TABLE amp_registry.storage_pools (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name           text        NOT NULL UNIQUE,
+    name           text        NOT NULL,
     owner_user_id  uuid        NOT NULL REFERENCES amp_registry.users (id),
-    created_at     timestamptz NOT NULL DEFAULT now()
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    -- Tombstone, the way a cluster or a branch is: a pool's clusters are themselves
+    -- tombstoned and keep their storage_pool_id FK, so the pool row has to outlive
+    -- them.
+    dropped_at     timestamptz
 );
+
+-- Name unique among LIVE pools only, so deleting a pool frees its name for reuse
+-- (clusters_name_per_pool below does the same for cluster names). Not a UNIQUE on
+-- the column: that would span tombstones and hold a deleted pool's name forever.
+CREATE UNIQUE INDEX storage_pools_name_live ON amp_registry.storage_pools (name)
+    WHERE dropped_at IS NULL;
 
 -- A cluster is a "database": one cluster, one default branch. id is a
 -- control-plane id only (no storage object maps to a cluster anymore).
@@ -55,7 +65,15 @@ CREATE TABLE amp_registry.clusters (
     storage_pool_id  uuid        NOT NULL REFERENCES amp_registry.storage_pools (id),
     name             text        NOT NULL,
     created_at       timestamptz NOT NULL DEFAULT now(),
-    dropped_at       timestamptz
+    dropped_at       timestamptz,
+    -- The engine the cluster was provisioned as: a named bundle of externalized
+    -- extensions (compute/architecture/extensions.md) — `aidb` seeds pgvector + age
+    -- + pg_cron, `oracle` seeds hexabridge, `postgres` seeds nothing. The controller
+    -- resolves it at create and seeds it onto the default branch's `extensions`, so
+    -- this records what the cluster was created as, not a constraint the branch is
+    -- held to. Extensions are add-only, so the bundle stays a subset of the branch's
+    -- set for the cluster's whole life and a stored engine cannot become a lie.
+    engine           text        NOT NULL DEFAULT 'postgres'
 );
 
 -- Name unique within its pool, among LIVE clusters: dropping a cluster frees its
@@ -101,7 +119,7 @@ CREATE TABLE amp_registry.user_cluster_grants (
 --
 -- There is deliberately NO fencing state on a branch row. Write fencing is a
 -- lease on the branch held by the endpoint that writes it, in
--- `amp_registry.resource_token` (migration 0006), not a column here — see
+-- `amp_registry.resource_token` (migration 0004), not a column here — see
 -- compute/architecture/compute-fencing.md.
 --
 -- A dropped branch is TOMBSTONED, not deleted: `dropped_at` is stamped and the
@@ -154,7 +172,17 @@ CREATE TABLE amp_registry.branches (
     -- stored drop time so a later change to the flag cannot move a deadline already
     -- written. `gc_completed_at` says the rows are gone; the row itself stays.
     reap_after          timestamptz,
-    gc_completed_at     timestamptz
+    gc_completed_at     timestamptz,
+
+    -- The highest YCP desired-state generation FULLY applied to this row, which the
+    -- reconcile agent reads back to tell a converged update from one whose task
+    -- failed after planning (meko#985). Written by the worker once every step of
+    -- the carrying task succeeds, monotonically (GREATEST), so a task with an older
+    -- generation finishing late cannot drag it back. NULL means no YCP update has
+    -- been applied. Deliberately NOT copied into a fork: registry.RecordBranch
+    -- inherits a parent's `extensions`/`pg_settings`, but a new branch is a new YCP
+    -- resource at generation 0.
+    ycp_generation      bigint
 );
 
 -- "The branches of this cluster" is the list endpoint, the storage-layer
@@ -246,7 +274,21 @@ CREATE TABLE amp_registry.endpoints (
     pageserver_settings jsonb  NOT NULL DEFAULT '{}'::jsonb,
     safekeeper_settings jsonb  NOT NULL DEFAULT '{}'::jsonb,
 
-    created_at   timestamptz   NOT NULL DEFAULT now()
+    created_at   timestamptz   NOT NULL DEFAULT now(),
+
+    -- The version the endpoint is recorded as RUNNING (written after a deploy
+    -- reports back) and the one it SHOULD run (written before the deploy): an
+    -- opaque string the deployer knows how to run — today the image tag verbatim,
+    -- hence `text`. Every controller-driven redeploy renders from `version`, so an
+    -- endpoint stays where it is instead of reverting to whatever the controller is
+    -- configured with, and the two differing is an upgrade that has not converged.
+    -- NULL means unknown, which is upgradeable: there is nothing to compare against.
+    version        text,
+    target_version text,
+
+    -- The highest YCP generation fully applied to this endpoint; see
+    -- branches.ycp_generation.
+    ycp_generation bigint
 );
 
 -- The single-writer rule, enforced in the schema rather than only in code. It

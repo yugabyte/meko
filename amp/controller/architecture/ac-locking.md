@@ -6,7 +6,7 @@
 How the controller decides who runs a task and who may touch an endpoint, once
 more than one controller process exists. Both answers are leases from
 [`pkg/pglease`](../pkg/pglease/README.md) ([meko#920](https://github.com/yugabyte/meko/issues/920)) over the
-`amp_registry.resource_token` table migration 0006 already owns.
+`amp_registry.resource_token` table migration 0004 already owns.
 
 The locks are in `internal/task` — `locks.go` (the ports and `PgLocks`),
 `memlocks.go` (the in-memory model the unit tests run against). The **resize
@@ -22,7 +22,7 @@ with `409` by `tasks_one_active_resize_per_endpoint`, and turning that into a
 | **endpoint fleet** | `fleet:endpoints` | a fleet roll's parent task — `plan_endpoint_upgrades` or `plan_endpoint_rerenders` | a second fleet roll **of either kind**, which is **refused** rather than made to wait (the one exception to "contention waits") |
 
 No new table and no new migration: the compute write fence keys the same table as
-`branch:<id>`, so the four namespaces coexist. Sharing 0006 is also what keeps
+`branch:<id>`, so the four namespaces coexist. Sharing 0004 is also what keeps
 one definition of the rule — `token_acquire` decides every grant, for these locks
 and for the Rust write-fence client both.
 
@@ -104,7 +104,7 @@ LIMIT $k
 ```
 
 `token_holder` reports a row for as long as takeover is blocked, so "no row"
-already means *free to a new owner*: this reuses 0006's definition instead of
+already means *free to a new owner*: this reuses 0004's definition instead of
 restating it, and it is a point lookup on a hash primary key. It stays a **hint**
 regardless — the acquire is what decides, so a candidate whose read raced a
 takeover is refused and the loop moves on.

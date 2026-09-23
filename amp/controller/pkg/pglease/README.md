@@ -7,13 +7,13 @@ process when the lease can no longer be proven held.
 dependency. Under `pkg/`, not `internal/`, so it is importable on its own;
 nothing in the controller depends on it yet.
 
-It is a **client for migration 0006**, not a second implementation of it. The
+It is a **client for migration 0004**, not a second implementation of it. The
 rule lives in `amp_registry.token_acquire` / `token_release` / `token_holder`,
 which this package calls and the Rust write-fence client
 (`compute/libs/utils/src/write_fence.rs`) calls too, so there is one definition
 for both to share rather than two that can drift apart.
 
-**It therefore requires migration 0006 to have run**, and there is no table of
+**It therefore requires migration 0004 to have run**, and there is no table of
 its own: leases live in `amp_registry.resource_token`, keyed by the caller's
 resource id, alongside every other holder — the compute write fence keys its own
 as `branch:<id>`. Pick a key prefix that will not collide.
@@ -23,7 +23,7 @@ as `branch:<id>`. Pick a key prefix that will not collide.
 A lease is an **absolute expiry in epoch microseconds, read from the database
 clock**. Why that one value carries both "you hold the lease" and "stop writing at
 this instant", and why the grant is a fact about a write rather than a conclusion
-from a read, is in `compute-fencing.md` and migration 0006 — the definitions, not
+from a read, is in `compute-fencing.md` and migration 0004 — the definitions, not
 a retelling of them.
 
 The rule:

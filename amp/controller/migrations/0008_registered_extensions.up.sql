@@ -1,4 +1,4 @@
--- 0019: extensions an operator registers, as opposed to the ones compiled in.
+-- 0008: extensions an operator registers, as opposed to the ones compiled in.
 --
 -- The externalized-extension catalog has until now been a Go table
 -- (controller/internal/extensions/catalog.go): the set of images this repo

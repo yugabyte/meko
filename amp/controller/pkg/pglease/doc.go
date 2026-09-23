@@ -1,5 +1,5 @@
 // Package pglease is a Go client for the resource lease defined in migration
-// 0006_resource_token: it calls amp_registry.token_acquire / token_release /
+// 0004_resource_token: it calls amp_registry.token_acquire / token_release /
 // token_holder rather than restating the rule, so this client and the Rust write
 // fence share one definition. It requires that migration to have run.
 //

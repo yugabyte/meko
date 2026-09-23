@@ -1,4 +1,4 @@
--- 0006: the resource-token (lease) store in `amp_registry`.
+-- 0004: the resource-token (lease) store in `amp_registry`.
 --
 -- Implements the design in compute/architecture/compute-fencing.md. A token is
 -- a point in time: microseconds since the Unix epoch, at which the lease

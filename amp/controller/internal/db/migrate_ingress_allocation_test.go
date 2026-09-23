@@ -13,7 +13,7 @@ import (
 	"github.com/yugabyte/amp/controller/migrations"
 )
 
-// TestMigrateIngressAllocationInvariants pins the three properties of 0018 that
+// TestMigrateIngressAllocationInvariants pins the three properties of 0007 that
 // a round-trip walk cannot see, because each one is silent when broken and each
 // one is the sort of thing a later "tidy-up" removes in good faith.
 //

@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// These cover cooperative cancellation (migration 0020): the unfenced store write
+// These cover cooperative cancellation (`tasks.cancel_requested_at`): the unfenced store write
 // an API caller makes, and what the worker does with a request it finds at a step
 // boundary.
 

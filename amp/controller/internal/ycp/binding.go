@@ -19,7 +19,7 @@ type Binding struct {
 }
 
 // BindingStore persists the write-once binding in the controller's own schema
-// (the ycp_binding singleton from migration 0007), over the same pool as the
+// (the ycp_binding singleton from migration 0005), over the same pool as the
 // task log.
 type BindingStore struct {
 	pool *pgxpool.Pool

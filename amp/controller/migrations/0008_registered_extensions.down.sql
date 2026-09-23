@@ -1,4 +1,4 @@
--- Reverse 0019.
+-- Reverse 0008.
 --
 -- A real drop: this migration is the table's definition, so dropping it destroys
 -- nothing another migration made. The registrations go with it, which is what

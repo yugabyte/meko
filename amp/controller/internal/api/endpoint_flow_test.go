@@ -509,9 +509,8 @@ var memoryWithUnit = []string{"4Gi", "512Mi", "1500M", "1.5Gi"}
 const memoryUnitCPU = "62m"
 
 // TestEndpointMemoryRequiresUnit: create and resize both reject a memory quantity
-// with no unit, and accept the same intent expressed with one. Endpoints an older
-// controller already stored a unitless value for are repaired by migration 0009,
-// not at read time — every reader of the field agrees on what it says.
+// with no unit, and accept the same intent expressed with one. Nothing repairs a
+// unitless value at read time, so every reader of the field agrees on what it says.
 func TestEndpointMemoryRequiresUnit(t *testing.T) {
 	dep := &fakeDeployer{}
 	prov := api.Provisioning{Deployer: dep}
@@ -1359,8 +1358,8 @@ func TestResizeGrandfathersAnEndpointBelowTheFloor(t *testing.T) {
 }
 
 // An endpoint created before resources were tracked at all stores "" for both,
-// not "2"/"4Gi" — `core/pg.go` COALESCEs to empty and migration 0009 leaves an
-// empty memory alone as the "unset" marker. Those rows are the oldest ones, and
+// not "2"/"4Gi" — `core/pg.go` COALESCEs to empty, which reads as the "unset"
+// marker. Those rows are the oldest ones, and
 // the grandfathering exists for them most of all.
 //
 // Reading the floor decision off the raw pair gets them exactly backwards: "" and

@@ -26,7 +26,7 @@ import (
 // database.
 //
 // The package under test calls amp_registry.token_acquire and friends, so these
-// need migration 0006 applied: TestMain provisions ONE migrated database for the
+// need migration 0004 applied: TestMain provisions ONE migrated database for the
 // whole package rather than one per test, because DROP DATABASE costs ~70s on
 // YugabyteDB. Importing internal/db is a test-only dependency — the library
 // itself imports nothing from internal/, which is what keeps it importable.
@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	// "controller", like every other caller: this argument is the migration
 	// search_path, so it decides where UNQUALIFIED DDL lands — 0001's tasks and
-	// task_steps, the enums, schema_migrations. 0006's objects are schema-qualified
+	// task_steps, the enums, schema_migrations. 0004's objects are schema-qualified
 	// (amp_registry.resource_token and its functions), so naming amp_registry here
 	// would buy nothing and drag the task log into the resource-model schema.
 	url, drop, err := db.ScratchMigrated(ctx, admin, "amp_test_pglease", "controller")
@@ -108,7 +108,7 @@ type leaseITEnv struct {
 
 // leaseITSetup opens a pool on the package's migrated database (see TestMain).
 // Tests isolate from each other by resource key, not by schema: every lease lives
-// in the one amp_registry.resource_token that migration 0006 creates, so a key
+// in the one amp_registry.resource_token that migration 0004 creates, so a key
 // nothing else uses is the unit of isolation.
 func leaseITSetup(t *testing.T) *leaseITEnv {
 	t.Helper()
@@ -129,7 +129,7 @@ func leaseITSetup(t *testing.T) *leaseITEnv {
 }
 
 // store builds a Store with the given takeover grace. There is no table to
-// create: migration 0006 owns it.
+// create: migration 0004 owns it.
 func (e *leaseITEnv) store(skew time.Duration) *Store {
 	e.t.Helper()
 	s, err := NewStore(e.pool, StoreConfig{Skew: skew})

@@ -12,7 +12,7 @@ import (
 )
 
 // This file implements extensions.Store for both backends: the extensions an
-// operator registered through the API (amp_registry.extensions, migration 0019),
+// operator registered through the API (amp_registry.extensions, migration 0008),
 // as distinct from the built-in table compiled into the binary.
 
 // scanExtension reads one row into an extensions.Extension. The three JSON

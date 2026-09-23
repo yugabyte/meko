@@ -21,7 +21,7 @@
 //! This module is both halves of that:
 //!
 //! - [`TokenStore`] — the client for `amp_registry.token_acquire` /
-//!   `token_release` / `token_holder` (migration `0006_resource_token`).
+//!   `token_release` / `token_holder` (migration `0004_resource_token`).
 //!   Whoever holds the lease (today: the endpoint supervisor) uses this.
 //! - [`WriteFence`] / [`global`] — the process-wide "may I still write?"
 //!   check the pageserver and safekeeper make against the token that was
@@ -670,7 +670,7 @@ mod tests {
     ///
     /// The mutual-exclusion guarantee lives in one SQL statement, not in Rust,
     /// so the only way to know it holds is to race it on a real cluster. These
-    /// need `amp_registry` migrated (migration `0006_resource_token`) and
+    /// need `amp_registry` migrated (migration `0004_resource_token`) and
     /// default to a developer cluster on 5433/yb_storage;
     /// `test/integration/compute/run.sh unit` points them at its own
     /// ephemeral, freshly-migrated one instead.

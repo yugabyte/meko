@@ -35,7 +35,7 @@ Four properties, each a deliberate choice rather than a consequence:
   an implementation detail: an endpoint can be moved between shards by
   re-pointing a record, without reissuing anyone's address. The name derives from
   the endpoint's **id**, never from its name or its cluster's or pool's — those
-  are renameable (see `0016_storage_pool_name_live`), and an address that breaks
+  are renameable (see `storage_pools_name_live` in `0002_resource_model`), and an address that breaks
   on a rename is a broken address.
 - **TLS terminates at the pod.** Traefik forwards bytes; nothing in the path
   holds a key or can read customer traffic. This is what rules out every
@@ -88,7 +88,7 @@ is for user-facing resources, whereas a shard is capacity the control plane
 manages on its own behalf, and this is the one place a bug hands two customers
 the same address.
 
-`0018_ingress_allocation` defines both tables. Two schema decisions carry weight
+`0007_ingress_allocation` defines both tables. Two schema decisions carry weight
 beyond their size, and `migrate_ingress_allocation_test.go` pins both:
 
 - **`ingress_allocations.endpoint_id` has no foreign key.** Endpoints are

@@ -1,4 +1,4 @@
--- 0007: write-once YCP binding. Records the single YCP environment this
+-- 0005: write-once YCP binding. Records the single YCP environment this
 -- controller is bound to, so a second reconcile-agent pointed at a different YCP
 -- cannot quietly take it over — the bind endpoint (POST /api/v1/ycp/binding)
 -- rejects a conflicting (ycp_url, environment_id). See ac-ycp.md.

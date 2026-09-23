@@ -23,8 +23,8 @@
 //     (`POST /endpoint-upgrades`, meko#809), so a hop moves the control plane and
 //     leaves the fleet where it was. That is why their data surviving is the
 //     interesting assertion and their pod image is recorded, not asserted.
-//     Rolling the fleet per hop is a different test, and since `0011` recorded
-//     each endpoint's version it is a writable one.
+//     Rolling the fleet per hop is a different test, and since `endpoints.version`
+//     records each endpoint's version it is a writable one.
 //   - The Helm CHART is this checkout's, at every hop. Only the images move. So
 //     this covers image rollout and registry-database migration across releases,
 //     not chart evolution across them. A chart change that a released controller

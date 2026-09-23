@@ -1,4 +1,4 @@
--- 0006 down: drop the resource-token (lease) store.
+-- 0004 down: drop the resource-token (lease) store.
 --
 -- The epoch-micros helpers go too: nothing outside this migration uses them.
 
