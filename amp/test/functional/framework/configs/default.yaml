@@ -181,8 +181,9 @@ env:
     ghcr_token: ""
     # yb_image: the built-in yugabyted image. A fully-qualified ref always wins.
     # Empty (default) → derived version-aware as "<yb_image_registry>:<version>"
-    # where version is versions.yb (run override) or versions.yugabytedb — so a
-    # plain run pins yugabytedb/yugabyte to the versions{} build instead of :latest.
+    # where version is versions.yb (run override) or ampstack.DefaultYBVersion.
+    # NOT versions.yugabytedb: that is the awsvm provisioners' LTS pin, and amp's
+    # endpoint needs a tserver carrying ThinClientService (2026.1.2 and later).
     # yb_image_registry: the registry+repo the derived image uses. PREVIEW trains
     # (odd 2.N builds) live at the PRIVATE quay.io/yugabyte/yugabyte-itest — to run
     # a preview build set yb_image_registry there, versions.yb to the -bNNN build,

@@ -36,7 +36,7 @@ set -euo pipefail
 
 # Keep this default in sync with .github/workflows/amp-pr-build.yml (env: YB_IMAGE),
 # so a local dev box and CI run byte-identical YugabyteDB builds.
-YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:2026.1.0.0-b118}"
+YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:2026.1.2.0-b137}"
 YB_PORT="${YB_PORT:-5433}"
 YB_CONTAINER="${YB_CONTAINER:-amp-yb}"
 YB_TLS="${YB_TLS:-0}"

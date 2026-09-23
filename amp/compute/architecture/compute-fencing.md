@@ -66,13 +66,13 @@ const HT_LOGICAL_BITS: u32 = 12;
 let ignore_after_ht: u64 = token << HT_LOGICAL_BITS;
 ```
 
-**That client does not exist yet** — nothing in this stack shifts the value, and
-nothing needs to: the daemons compare the token against their own wall clock,
-where micros are the natural unit. The encoding lands with the thin-client
-change that introduces `ignore_after_hybrid_time`. Keeping it in one place, on
-the client, is what stops two implementations drifting apart; sending raw micros
-to the server would be read as a 1970 timestamp and reject every write —
-fail-closed, but broken.
+The field now exists: `ybthin_upsert_row.ignore_after_hybrid_time`, added by the
+2026.1.2 shim. **No caller sets it yet** — `TsClient::upsert` sends `0`, which
+means "no fence" — so the encoding above is still unwritten, and the daemons go
+on comparing the token against their own wall clock, where micros are the
+natural unit. Keeping the shift in one place, on the client, is what stops two
+implementations drifting apart; sending raw micros to the server would be read
+as a 1970 timestamp and reject every write — fail-closed, but broken.
 
 ## Schema
 
@@ -392,18 +392,22 @@ it is consistent with the answer rather than with a later clock read.
 
 ## Known gaps / follow-ups
 
-1. **The token is not yet a fence at the Raft layer.** Nothing on the YB write
-   path is checked against it server-side, so the fence is cooperative: it stops
-   a *well-behaved* writer that notices its lease lapsed, not a wedged one that
-   resumes mid-write after a long stall. Closing it needs a tserver-side check
-   before the op reaches the preparer — tracked upstream in
-   [yugabyte-db#33175](https://github.com/yugabyte/yugabyte-db/issues/33175).
-   The precedent exists but only for object locks: `ignore_after_hybrid_time` on
-   `AcquireObjectLockRequestPB` (`src/yb/tserver/tserver.proto`), enforced in
-   `TSLocalLockManager::CheckRequestForDeadline`
-   (`src/yb/tserver/ts_local_lock_manager.cc`). There is no equivalent field on
-   `PgPerformOptionsPB` / `PgPerformRequestPB` (`src/yb/tserver/pg_client.proto`)
-   or `PgsqlWriteRequestPB` (`src/yb/common/pgsql_protocol.proto`).
+1. **The fence is available on the write path, and amp does not ask for it.**
+   The server side landed for the thin client: `ignore_after_hybrid_time` is a
+   per-row field on `ybthin_upsert_row`, and per the shim's ABI header the leader
+   rejects the write with `YBTHIN_FENCED` when that hybrid time has already passed
+   by the time the op is assigned its own — judged per tablet, so a batch
+   straddling the boundary can be partly applied. What is missing is on our side:
+   `TsClient::upsert` hardcodes `0`, so no write carries a fence and the token
+   stays cooperative — it stops a *well-behaved* writer that notices its lease
+   lapsed, not a wedged one that resumes mid-write after a long stall. Closing it
+   means threading the lease token through the page and WAL writers and encoding
+   it as above. The general YSQL path is still uncovered
+   ([yugabyte-db#33175](https://github.com/yugabyte/yugabyte-db/issues/33175) is
+   open): no such field on `PgPerformOptionsPB` / `PgPerformRequestPB`
+   (`src/yb/tserver/pg_client.proto`) or `PgsqlWriteRequestPB`
+   (`src/yb/common/pgsql_protocol.proto`) — but amp's only write transport is the
+   thin client, so that does not block us.
 
    Two things that look like they could stand in for it, and cannot:
 

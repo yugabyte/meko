@@ -325,9 +325,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      # Pinned to the 2026.1.0 official release; bump deliberately, not via
-      # `latest`, so CI can't drift to an untested YB.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+      # Pinned to the 2026.1.2 official release, the first that carries
+      # yb.tserver.ThinClientService — the RPC the pinned yb_thin_client shim
+      # (compute/libs/yb_thin_client/shim/VERSION) speaks; bump the two together,
+      # deliberately, not via `latest`, so CI can't drift to an untested YB. Keep
+      # in sync with on-demand-checks.yml, the migrations job below and
+      # scripts/yb-local.sh.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
     defaults:
       run:
         working-directory: amp
@@ -449,6 +453,17 @@ jobs:
           INTEGRATION_PORT_BASE: "18000"
         run: test/integration/compute/pg_regress.sh --no-build --contrib postgres_fdw
 
+      - name: Collect YugabyteDB logs
+        if: failure()
+        # yugabyted writes master/tserver/postgres logs under <base_dir>/logs
+        # inside the container; pull them next to the run logs so the artifact
+        # carries the server side of a failure (a hang in the thin-client path
+        # shows only there).
+        run: |
+          dir=$(docker exec yb sh -c 'ls -d "$HOME"/var/logs /home/yugabyte/var/logs /root/var/logs 2>/dev/null' | head -1)
+          mkdir -p .integration-tests
+          if [ -n "$dir" ]; then docker cp "yb:$dir" .integration-tests/yb-logs; else echo "no yugabyted log dir found" >&2; fi
+
       - name: Upload run logs
         if: failure()
         uses: actions/upload-artifact@v7
@@ -464,6 +479,7 @@ jobs:
             amp/.integration-tests/**/*.log
             amp/.integration-tests/pg_regress_*_out/regression.diffs
             amp/.integration-tests/pg_regress_*_out/regression.out
+            amp/.integration-tests/yb-logs/**
           # `.integration-tests` is a dot-dir; upload-artifact skips hidden paths
           # by default, so without this the artifact is empty.
           include-hidden-files: true
@@ -641,7 +657,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+      # Keep in sync with the integration job above.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
     steps:
       - uses: actions/checkout@v7
 

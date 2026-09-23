@@ -1,6 +1,6 @@
 # yb_thin_client
 
-A thin, safe Rust client to a **yb-tserver's `PgClientService.Perform`**, used
+A thin, safe Rust client to a **yb-tserver's `ThinClientService.Perform`**, used
 on the storage hot paths (pageserver page reads/writes, safekeeper WAL
 reads/writes). The tserver does the tablet routing — exactly as it does for
 pggate — so there is **no metacache, batcher, or tablet invoker** on this side.
@@ -23,10 +23,10 @@ with YB's own code.
    └────┬───────────────────────────────┘
         │  shim/yb_thin_client.h  (the C ABI)
    ┌────▼───────────────────────────────┐
-   │ libyb_thin_client.so  (YB C++)      │  PgClientServiceProxy, PartitionSchema,
+   │ libyb_thin_client.so  (YB C++)      │  ThinClientServiceProxy, PartitionSchema,
    │                                     │  pg_doc_data decode — YB's own code
    └────┬───────────────────────────────┘
-        │  PgClientService.Perform (RPC, port 9100)
+        │  ThinClientService.Perform (RPC, port 9100)
      yb-tserver  ── routes each op to the right tablet
 ```
 
@@ -56,13 +56,15 @@ read is just a one-op batch; writes are the same shape.
   a `Value` enum (`Null|Bool|I16|I32|I64|Text|Bytes`) and `Row = Vec<Value>`.
   `Value::as_i64()/as_bytes()/…` return `Result`.
 - Errors: `YbError` mirrors the shim's status codes (`Invalid`, `Network`,
-  `TryAgain`, `ReadRestart`, `Schema`, `Other`); `ReadRestart` means restart the
-  whole batch on a fresh read point.
+  `TryAgain`, `ReadRestart`, `Schema`, `Fenced`, `Other`); `ReadRestart` means
+  restart the whole batch on a fresh read point, and `Fenced` means the row's
+  `ignore_after_hybrid_time` had passed — the write did not take effect, so it
+  is never retried.
 
 ## Session / connection pool
 
 `TsClientConfig` carries `read_sessions` / `write_sessions` /
-`sessions_per_conn`. A single PgClientService session serialises its Performs
+`sessions_per_conn`. A single ThinClientService session serialises its Performs
 server-side, so concurrency comes from many sessions; the shim packs
 `sessions_per_conn` sessions onto each connection and opens
 `ceil((read+write)/per_conn)` connections. It is the *connections* that spread
@@ -77,7 +79,7 @@ surface: `ybthin_client_create`/`_destroy`, `ybthin_table_open`/`_close`/
 `ybthin_columns_free`, `ybthin_read_async` (batch read → `ybthin_read_result`
 of per-op decoded `ybthin_cell[]`), `ybthin_upsert_batch_async`,
 `ybthin_read_result_free`, `ybthin_string_free`. Status codes:
-`OK/INVALID/NETWORK/TRY_AGAIN/READ_RESTART/SCHEMA/OTHER`. Callbacks may fire on
+`OK/INVALID/NETWORK/TRY_AGAIN/READ_RESTART/SCHEMA/OTHER/FENCED`. Callbacks may fire on
 a YB reactor thread, so the Rust side only signals a `oneshot` and returns.
 
 ## Build / packaging
@@ -141,7 +143,15 @@ deploy image's. `DT_RUNPATH` is searched *after*, so an explicitly set
 `/opt/yb_thin_client/lib`), CI, and `run.sh` keep control.
 
 To move to a newer shim: rebuild + publish the tarball, bump `shim/COMMIT`
-(and `shim/VERSION` if it changed), and re-vendor `shim/yb_thin_client.h`.
+(and `shim/VERSION` if it changed), and re-vendor `shim/yb_thin_client.h`
+(diff it against the old one — the ABI is not stable across shim releases, and
+`src/ffi.rs` mirrors it field for field).
+
+The CI YugabyteDB pin moves with it. The shim talks
+`yb.tserver.ThinClientService` to the tserver, so the image every YB-backed job
+starts has to carry that service at a compatible version; a shim bump that
+leaves the image behind fails at `ybthin_client_create` or on the first
+`Perform`, not at build time.
 
 ## Hot-path integration
 

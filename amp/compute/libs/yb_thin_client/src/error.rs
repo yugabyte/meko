@@ -25,6 +25,10 @@ pub enum YbError {
     /// Anything else — fatal.
     #[error("yb_thin_client error: {0}")]
     Other(String),
+    /// The row's `ignore_after_hybrid_time` fence had passed: the write did
+    /// NOT take effect. Never retry — the lease it was fenced on is gone.
+    #[error("yb_thin_client fenced: {0}")]
+    Fenced(String),
 }
 
 impl YbError {
@@ -66,5 +70,6 @@ pub(crate) unsafe fn check(status: ffi::YbStatus) -> Result<(), YbError> {
         ReadRestart => Err(YbError::ReadRestart(message)),
         Schema => Err(YbError::Schema(message)),
         Other => Err(YbError::Other(message)),
+        Fenced => Err(YbError::Fenced(message)),
     }
 }

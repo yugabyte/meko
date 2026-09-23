@@ -303,7 +303,7 @@ default/fallback.
 ### The hot path needs direct tserver RPC access
 
 The safekeeper (WAL write/read on `amp_storage.wals`) and the pageserver
-(page read/write on `pages`/`slru_pages`/`meta`) speak YB's native pggate RPC
+(page read/write on `pages`/`slru_pages`/`meta`) speak YB's native ThinClientService RPC
 **straight to the yb-tserver RPC port** (9100), not through the YSQL frontend
 (5433).
 

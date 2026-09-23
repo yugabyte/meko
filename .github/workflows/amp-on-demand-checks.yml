@@ -125,7 +125,7 @@ jobs:
       cancel-in-progress: true
     env:
       # Keep in sync with pr-build.yml's integration job and scripts/yb-local.sh.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
     defaults:
       run:
         working-directory: amp
@@ -202,12 +202,25 @@ jobs:
       - name: Integration tests (slow suite)
         run: test/integration/compute/run.sh slow
 
+      - name: Collect YugabyteDB logs
+        if: failure()
+        # yugabyted writes master/tserver/postgres logs under <base_dir>/logs
+        # inside the container; pull them next to the run logs so the artifact
+        # carries the server side of a failure (a hang in the thin-client path
+        # shows only there).
+        run: |
+          dir=$(docker exec yb sh -c 'ls -d "$HOME"/var/logs /home/yugabyte/var/logs /root/var/logs 2>/dev/null' | head -1)
+          mkdir -p .integration-tests
+          if [ -n "$dir" ]; then docker cp "yb:$dir" .integration-tests/yb-logs; else echo "no yugabyted log dir found" >&2; fi
+
       - name: Upload run logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: on-demand-integration-logs-${{ github.run_id }}
-          path: amp/.integration-tests/**/*.log
+          path: |
+            amp/.integration-tests/**/*.log
+            amp/.integration-tests/yb-logs/**
           include-hidden-files: true
           if-no-files-found: ignore
 
@@ -263,7 +276,7 @@ jobs:
       cancel-in-progress: true
     env:
       # Keep in sync with the integration job above and scripts/yb-local.sh.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
       # From secrets so the base-image buildx layer cache
       # (quay.io/.../amp-pg18-build:buildcache, shared with the GKE extensions job)
       # can be reused. Empty on forks (which get no secrets) → the Quay login below
@@ -408,12 +421,26 @@ jobs:
         env:
           INTEGRATION_PORT_BASE: "21000"
         run: test/integration/compute/extensions.sh --ext age --regress ${{ steps.quay.outputs.cache }}
+
+      - name: Collect YugabyteDB logs
+        if: failure()
+        # yugabyted writes master/tserver/postgres logs under <base_dir>/logs
+        # inside the container; pull them next to the run logs so the artifact
+        # carries the server side of a failure (a hang in the thin-client path
+        # shows only there).
+        run: |
+          dir=$(docker exec yb sh -c 'ls -d "$HOME"/var/logs /home/yugabyte/var/logs /root/var/logs 2>/dev/null' | head -1)
+          mkdir -p .integration-tests
+          if [ -n "$dir" ]; then docker cp "yb:$dir" .integration-tests/yb-logs; else echo "no yugabyted log dir found" >&2; fi
+
       - name: Upload run logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: on-demand-extensions-local-logs-${{ github.run_id }}
-          path: amp/.integration-tests/**/*.log
+          path: |
+            amp/.integration-tests/**/*.log
+            amp/.integration-tests/yb-logs/**
           include-hidden-files: true
           if-no-files-found: ignore
 

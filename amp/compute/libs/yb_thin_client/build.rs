@@ -2,7 +2,7 @@
 //!
 //! The shim (`shim/yb_thin_client.h` → `yb_thin_client.cc` in the YB tree)
 //! is a *YugabyteDB build target*: it uses YB internals
-//! (`PgClientServiceProxy`, `PartitionSchema`, `pg_doc_data`) + generated
+//! (`ThinClientServiceProxy`, `PartitionSchema`, `pg_doc_data`) + generated
 //! protos and must be built with YB's Clang-21/libc++ toolchain, so it is
 //! NOT compiled here — we link the prebuilt `libyb_thin_client.so` from the
 //! per-arch release tarball published to S3 (see `README.md` → Packaging).

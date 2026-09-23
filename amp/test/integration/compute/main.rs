@@ -333,7 +333,7 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 ///    one SQL statement, so only a real cluster can confirm it holds).
 /// 2. The `yb_thin_client` live integration suite (`tests/live.rs`, all
 ///    `#[ignore]` "requires a live YugabyteDB") — the hot-path client
-///    (PgClientService on port 9100), which creates its own tables; its
+///    (ThinClientService on port 9100), which creates its own tables; its
 ///    `repro_pages_multipage_scan` guards the paged `read_scan` loop that a
 ///    branch's cold reads (and any many-version page) depend on.
 async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {

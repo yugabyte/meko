@@ -1272,8 +1272,8 @@ func (g mapGetter) GetBool(_ string, def bool) bool                       { retu
 func (g mapGetter) GetDuration(_ string, def time.Duration) time.Duration { return def }
 
 // TestResolveYBImagePrecedence: a fully-qualified yb_image wins; else the
-// registry+version derivation ({registry}:{versions.yb||versions.yugabytedb});
-// else the DefaultYBImage fallback when neither an image nor a version exists.
+// registry+version derivation ({registry}:{versions.yb||DefaultYBVersion});
+// else the DefaultYBImage fallback when the registry is empty.
 func TestResolveYBImagePrecedence(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1286,18 +1286,20 @@ func TestResolveYBImagePrecedence(t *testing.T) {
 			"quay.io/x/yb:custom",
 		},
 		{
-			"derive from default registry + versions.yugabytedb",
+			// versions.yugabytedb is the awsvm provisioners' LTS pin and must NOT
+			// reach amp's yugabyted: it predates ThinClientService.
+			"versions.yugabytedb is ignored; the amp default is used",
 			mapGetter{"env.ampstack.yb_image_registry": "yugabytedb/yugabyte", "versions.yugabytedb": "2025.2.1.0-b141"},
-			"yugabytedb/yugabyte:2025.2.1.0-b141",
+			"yugabytedb/yugabyte:" + DefaultYBVersion,
 		},
 		{
-			"versions.yb override beats versions.yugabytedb (preview registry)",
+			"versions.yb override beats the amp default (preview registry)",
 			mapGetter{"env.ampstack.yb_image_registry": "quay.io/yugabyte/yugabyte-itest", "versions.yb": "2.25.1.0-b99", "versions.yugabytedb": "2025.2.1.0-b141"},
 			"quay.io/yugabyte/yugabyte-itest:2.25.1.0-b99",
 		},
 		{
-			"no image and no version → DefaultYBImage",
-			mapGetter{"env.ampstack.yb_image_registry": "yugabytedb/yugabyte"},
+			"no registry → DefaultYBImage",
+			mapGetter{"env.ampstack.yb_image_registry": ""},
 			DefaultYBImage,
 		},
 	}

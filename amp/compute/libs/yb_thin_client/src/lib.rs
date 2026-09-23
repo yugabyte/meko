@@ -1,4 +1,4 @@
-//! Thin, safe client to a yb-tserver's `PgClientService.Perform`.
+//! Thin, safe client to a yb-tserver's `ThinClientService.Perform`.
 //!
 //! A minimal wrapper over the `libyb_thin_client` C ABI (`shim/yb_thin_client.h`):
 //! the shim sends `Perform` to a tserver and the tserver does the tablet

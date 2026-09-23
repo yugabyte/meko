@@ -420,7 +420,7 @@ impl Default for TsClientConfig {
 fn to_bind(b: &BindValue) -> ffi::YbBind {
     let mut out = ffi::YbBind {
         tag: ffi::YbBindTag::Null,
-        i: 0,
+        int_value: 0,
         bytes: std::ptr::null(),
         bytes_len: 0,
     };
@@ -428,19 +428,19 @@ fn to_bind(b: &BindValue) -> ffi::YbBind {
         BindValue::Null => {}
         BindValue::Bool(v) => {
             out.tag = ffi::YbBindTag::Bool;
-            out.i = *v as i64;
+            out.int_value = *v as i64;
         }
         BindValue::I16(v) => {
             out.tag = ffi::YbBindTag::I16;
-            out.i = *v as i64;
+            out.int_value = *v as i64;
         }
         BindValue::I32(v) => {
             out.tag = ffi::YbBindTag::I32;
-            out.i = *v as i64;
+            out.int_value = *v as i64;
         }
         BindValue::I64(v) => {
             out.tag = ffi::YbBindTag::I64;
-            out.i = *v;
+            out.int_value = *v;
         }
         BindValue::Text(s) => {
             out.tag = ffi::YbBindTag::Text;
@@ -908,6 +908,7 @@ impl TsClient {
                 value_ids: r.value_ids.as_ptr(),
                 values: vals[i].as_ptr(),
                 n_values: vals[i].len(),
+                ignore_after_hybrid_time: 0,
             })
             .collect();
 
@@ -1006,10 +1007,10 @@ fn cell_to_value(c: &ffi::YbCell) -> Value {
     };
     match c.tag {
         ffi::YbBindTag::Null => Value::Null,
-        ffi::YbBindTag::Bool => Value::Bool(c.i != 0),
-        ffi::YbBindTag::I16 => Value::I16(c.i as i16),
-        ffi::YbBindTag::I32 => Value::I32(c.i as i32),
-        ffi::YbBindTag::I64 => Value::I64(c.i),
+        ffi::YbBindTag::Bool => Value::Bool(c.int_value != 0),
+        ffi::YbBindTag::I16 => Value::I16(c.int_value as i16),
+        ffi::YbBindTag::I32 => Value::I32(c.int_value as i32),
+        ffi::YbBindTag::I64 => Value::I64(c.int_value),
         ffi::YbBindTag::Text => Value::Text(bytes()),
         ffi::YbBindTag::Bytea => Value::Bytes(bytes()),
     }

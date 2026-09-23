@@ -84,8 +84,9 @@ There are two ways yb-amp code reaches YB:
   primitive is a **batch of ops = one `Perform`** (one RPC, one snapshot),
   so multi-op reads collapse to a single round trip; writes are the same
   shape. It is **the** hot-path client — there is no YSQL alternative for
-  the page and WAL hot paths. It speaks the pggate RPC protocol
-  (`yb.tserver.PgClientService`) directly to a tserver's RPC port (9100),
+  the page and WAL hot paths. It speaks the tserver's thin-client RPC
+  (`yb.tserver.ThinClientService`, a Perform-only sibling of the pggate
+  service that first shipped in 2026.1.2) directly to its RPC port (9100),
   skipping the PG backend entirely (wire framing, parse/plan, pggate), and
   implements exactly what the hot tables need — hash-eq + range-bound
   clustered scans with paging and snapshot pinning, and batched

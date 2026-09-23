@@ -30,6 +30,9 @@ pub enum YbStatusCode {
     ReadRestart = 4,
     Schema = 5,
     Other = 6,
+    /// `ignore_after_hybrid_time` had passed when the leader assigned the
+    /// write its own; the write did NOT take effect.
+    Fenced = 7,
 }
 
 /// Owned `message` (free with `ybthin_string_free`), null when `code == Ok`.
@@ -103,7 +106,7 @@ pub enum YbBindTag {
 #[repr(C)]
 pub struct YbBind {
     pub tag: YbBindTag,
-    pub i: i64,
+    pub int_value: i64,
     pub bytes: *const u8,
     pub bytes_len: usize,
 }
@@ -143,13 +146,13 @@ pub struct YbReadSpec {
 }
 
 /// A decoded read cell (mirrors [`YbBind`], the write side). `Null` is a
-/// tag; `Bool`/`I16`/`I32`/`I64` read `i`; `Text`/`Bytea` read
+/// tag; `Bool`/`I16`/`I32`/`I64` read `int_value`; `Text`/`Bytea` read
 /// `(bytes, bytes_len)`. `bytes` point into result-owned storage, valid
 /// until `ybthin_read_result_free`.
 #[repr(C)]
 pub struct YbCell {
     pub tag: YbBindTag,
-    pub i: i64,
+    pub int_value: i64,
     pub bytes: *const u8,
     pub bytes_len: usize,
 }
@@ -193,6 +196,11 @@ pub struct YbUpsertRow {
     pub value_ids: *const i32,
     pub values: *const YbBind,
     pub n_values: usize,
+    /// Fence against a lease the caller holds: the leader rejects the row
+    /// with `Fenced` if this hybrid time has already passed by the time the
+    /// op is assigned its own. 0 means no fence. Judged per tablet, so a
+    /// batch straddling the boundary can be partly applied.
+    pub ignore_after_hybrid_time: u64,
 }
 
 pub type YbReadCb =
