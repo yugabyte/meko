@@ -218,8 +218,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: on-demand-integration-logs-${{ github.run_id }}
+          # *.walredo alongside the logs for the same reason as the fast suite:
+          # `record_and_log`'s log line names a dump that otherwise dies with
+          # the runner. The poison scenario runs here, not in fast.
           path: |
             amp/.integration-tests/**/*.log
+            amp/.integration-tests/**/*.walredo
             amp/.integration-tests/yb-logs/**
           include-hidden-files: true
           if-no-files-found: ignore
@@ -440,6 +444,7 @@ jobs:
           name: on-demand-extensions-local-logs-${{ github.run_id }}
           path: |
             amp/.integration-tests/**/*.log
+            amp/.integration-tests/**/*.walredo
             amp/.integration-tests/yb-logs/**
           include-hidden-files: true
           if-no-files-found: ignore

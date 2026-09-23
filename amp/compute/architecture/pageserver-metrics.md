@@ -157,6 +157,7 @@ GC metrics live with the GC docs — see
 | `pageserver_wal_redo_process_started_total` | IntCounter | — | WAL redo processes started. |
 | `pageserver_wal_redo_process_stopped_total` | IntCounterVec | `cause` | WAL redo processes stopped, by kill cause. |
 | `pageserver_walredo_stderr_logger_tasks_started_total` / `pageserver_walredo_stderr_logger_tasks_finished_total` | IntCounter | — | walredo stderr-logger tasks started / finished. |
+| `pageserver_wal_redo_poison_total` | IntCounterVec | `outcome` | Pool-poison events a caller absorbed, by `outcome` (`retried`, `exhausted`, `materializer_skipped`). A dropped caller leaves its pooled child unusable; the next caller to draw it fails through no fault of its own. Not a corruption signal — `pageserver_yb_correctness_errors_total` carries those. `materializer_skipped` always follows an `exhausted` for the same event, so the outcomes are not a partition: `retried` and `exhausted` count draws, `materializer_skipped` counts a job disposition. Sum **by** outcome, never **across** outcomes: `sum by (outcome) (rate(...))` is safe over instances, branches and time, while collapsing the label into one number double-counts the terminal draw. |
 
 ## basebackup / compute commands
 

@@ -2605,6 +2605,59 @@ pub(crate) static WAL_REDO_RECORD_COUNTER: Lazy<IntCounter> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Outcomes for [`WAL_REDO_POISON`]. An enum, not a `&str`, for the same reason
+/// as [`GcEmitPath`]: it keeps the label domain closed, so the seeding in
+/// `preinitialize_metrics` cannot fall behind a new outcome.
+#[derive(Debug, Clone, Copy, VariantNames, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum WalRedoPoisonOutcome {
+    /// A poisoned draw the caller absorbed by drawing another child.
+    Retried,
+    /// The caller spent its whole poison budget. Terminal.
+    Exhausted,
+    /// A materialise job abandoned after its redo came back poisoned. Always
+    /// follows an `Exhausted` for the same event.
+    MaterializerSkipped,
+}
+
+impl WalRedoPoisonOutcome {
+    pub(crate) fn inc(self) {
+        WAL_REDO_POISON
+            .with_label_values(&[<&'static str>::from(self)])
+            .inc();
+    }
+}
+
+/// Walredo pool-poison events a caller had to absorb. Dropping a caller
+/// mid-request leaves its pooled child unusable, so the next caller to draw
+/// that slot fails through no fault of its own. The usual cause is a compute
+/// backend disconnecting mid-getpage.
+///
+/// - `retried` — the normal, self-healing case: the caller drew another child.
+/// - `exhausted` — poison arrived faster than children could be retired and
+///   the caller spent its whole poison budget. The read path fails the read.
+/// - `materializer_skipped` — a job the materialiser gave up on. A rel key is
+///   re-dispatched by the first read that walks its still-long chain; an SLRU
+///   key has no read-side backstop (`read_slru_chain` and `scan_slru_range`
+///   do not dispatch) and waits for the write trigger.
+///
+/// The labels are not a partition of one population — `retried` and
+/// `exhausted` count draws, `materializer_skipped` counts a job disposition —
+/// so querying it has a rule, which `pageserver-metrics.md` states for the
+/// operator reading a dashboard.
+///
+/// None of these are correctness signals; `CORRECTNESS_ERRORS` carries those.
+/// Folding routine client disconnects into the corruption counter is what
+/// makes the corruption signal untrustworthy.
+pub(crate) static WAL_REDO_POISON: Lazy<metrics::IntCounterVec> = Lazy::new(|| {
+    metrics::register_int_counter_vec!(
+        "pageserver_wal_redo_poison_total",
+        "Walredo pool poison events observed by a caller, by outcome",
+        &["outcome"],
+    )
+    .expect("failed to define a metric")
+});
+
 #[rustfmt::skip]
 pub(crate) static WAL_REDO_PROCESS_LAUNCH_DURATION_HISTOGRAM: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
@@ -3761,6 +3814,9 @@ pub fn preinitialize_metrics(
     // Driven off the enum's variants, so a new path cannot be left unseeded.
     for path in GcEmitPath::VARIANTS {
         GC_CANDIDATES_EMITTED.with_label_values(&[path]).inc_by(0);
+    }
+    for outcome in WalRedoPoisonOutcome::VARIANTS {
+        WAL_REDO_POISON.with_label_values(&[outcome]).inc_by(0);
     }
 
     // gauges

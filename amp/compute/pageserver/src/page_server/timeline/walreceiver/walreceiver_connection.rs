@@ -62,6 +62,10 @@ pub(super) struct WalConnectionStatus {
 pub(super) enum WalReceiverError {
     /// An error of a type that does not indicate an issue, e.g. a connection closing
     ExpectedSafekeeperError(tokio_postgres::Error),
+    /// Ingest drew a walredo child an earlier caller poisoned, and the poison
+    /// allowance ran out. Another caller's disconnect, not this record's
+    /// fault: the reconnect replays from `consistent_lsn` and redoes it.
+    WalRedoPoisoned(anyhow::Error),
     /// An "error" message that carries a SUCCESSFUL_COMPLETION status code.  Carries
     /// the message part of the original postgres error
     SuccessfulCompletion(String),
@@ -199,6 +203,10 @@ pub(super) async fn handle_walreceiver_connection(
                             }
                             WalReceiverError::ClosedGate => {
                                 // doesn't happen at runtime
+                            }
+                            WalReceiverError::WalRedoPoisoned(_) => {
+                                // ingest-side only; `From<tokio_postgres::Error>`
+                                // never builds it
                             }
                             WalReceiverError::Other(err) => {
                                 warn!("Connection aborted: {err:#}")
@@ -494,9 +502,19 @@ pub(super) async fn handle_walreceiver_connection(
                         WAL_INGEST.records_observed.inc();
                     }
 
-                    walingest
+                    let ingested = walingest
                         .ingest_record(interpreted, &mut modification, &ctx)
-                        .await
+                        .await;
+                    // Checked on the typed error, before `with_context` flattens
+                    // it into anyhow. `modification` is an uncommitted buffer, so
+                    // ending the connection discards the half-applied record and
+                    // the replay redoes it from a clean state.
+                    if ingested.as_ref().is_err_and(|e| e.is_walredo_poison()) {
+                        return Err(WalReceiverError::WalRedoPoisoned(anyhow::anyhow!(
+                            "walredo pool poisoned ingesting record at {local_next_record_lsn}"
+                        )));
+                    }
+                    ingested
                         .with_context(|| {
                             format!("could not ingest record at {local_next_record_lsn}")
                         })

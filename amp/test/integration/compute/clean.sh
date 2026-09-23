@@ -69,13 +69,17 @@ PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
 
 # On a failed run the harness sets INTEGRATION_KEEP_LOGS=1: the cluster is stopped
 # and the db dropped above, but this run's *.log files (harness +
-# compute/pageserver/safekeeper/controller) are
+# compute/pageserver/safekeeper/controller) and any *.walredo dumps are
 # preserved for postmortem and CI artifact upload — everything else (pgdata,
 # sockets, config, ...) is dropped. Otherwise remove the whole run dir so the
 # next init starts fresh.
 if [ "${INTEGRATION_KEEP_LOGS:-}" = 1 ]; then
-    step "Keep *.log under $YB_AMP_REPO_DIR; remove the rest"
-    find "$YB_AMP_REPO_DIR" -type f ! -name '*.log' -delete 2>/dev/null || true
+    step "Keep *.log and *.walredo under $YB_AMP_REPO_DIR; remove the rest"
+    # `.walredo` dumps are `record_and_log`'s copy of an input walredo could not
+    # apply — the one artifact that says *what* it choked on. Poisoned draws no
+    # longer write them, so whatever survives a failed run is a genuine failure
+    # worth keeping alongside the logs.
+    find "$YB_AMP_REPO_DIR" -type f ! -name '*.log' ! -name '*.walredo' -delete 2>/dev/null || true
     find "$YB_AMP_REPO_DIR" -depth -type d -empty -delete 2>/dev/null || true
 else
     step "Remove $YB_AMP_REPO_DIR"

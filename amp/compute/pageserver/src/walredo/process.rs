@@ -239,10 +239,15 @@ impl WalRedoProcess {
             anyhow::bail!("WAL redo timed out");
         };
 
-        if res.is_err() {
-            // not all of these can be caused by this particular input, however these are so rare
-            // in tests so capture all.
-            self.record_and_log(&writebuf);
+        if let Err(e) = res.as_ref() {
+            // Not all of these can be caused by this particular input, however these are so rare
+            // in tests so capture all. Poison is the exception: it is never about the input, an
+            // earlier caller was dropped mid-request and left this child unusable. Dumping for it
+            // writes one file plus one `error!` per poisoned draw, and the poison budget allows
+            // `2 * walredo_pool_size` of them per call, all for an input that was never at fault.
+            if !super::is_poison(e) {
+                self.record_and_log(&writebuf);
+            }
         }
 
         res
@@ -304,6 +309,15 @@ impl WalRedoProcess {
 
         let mut lock_guard = self.stdout.lock().await;
         let mut poison_guard = lock_guard.check_and_arm()?;
+        // Stall a redo here with the guard armed, so dropping the caller
+        // poisons this child the way a compute disconnect does. Driven by
+        // `ps_walredo_poison_isolated`.
+        //
+        // The sleep failpoint, because `pausable_failpoint!` logs and awaits a
+        // `spawn_blocking` round trip on every call under `feature = "testing"`
+        // whether or not it is armed, and this is the per-redo path holding a
+        // mutex. Unarmed, this is one registry lookup.
+        utils::failpoint_support::sleep_millis_async!("ps::walredo-stdout-armed");
         let output = poison_guard.data_mut();
         let n_processed_responses = output.n_processed_responses;
         while n_processed_responses + output.pending_responses.len() <= request_no {

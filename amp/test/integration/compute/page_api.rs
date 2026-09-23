@@ -242,6 +242,17 @@ pub fn restart_with_pipeline_depth(
     original: &str,
     depth: usize,
 ) -> anyhow::Result<()> {
+    restart_with_pipeline_depth_and_keys(c, original, depth, STRESS_PAGE_WRITER_KEYS)
+}
+
+/// [`restart_with_pipeline_depth`] with the caller's `[yb_page_writer]` keys
+/// in place of the stress set.
+pub fn restart_with_pipeline_depth_and_keys(
+    c: &Cluster,
+    original: &str,
+    depth: usize,
+    page_writer_keys: &str,
+) -> anyhow::Result<()> {
     let toml = c
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");
@@ -260,11 +271,7 @@ pub fn restart_with_pipeline_depth(
     let with_pipeline = format!("{pipelining}{stripped}");
     std::fs::write(
         &toml,
-        crate::cluster::merge_toml_section(
-            &with_pipeline,
-            "yb_page_writer",
-            STRESS_PAGE_WRITER_KEYS,
-        ),
+        crate::cluster::merge_toml_section(&with_pipeline, "yb_page_writer", page_writer_keys),
     )
     .context("write pipeline_depth pageserver.toml")?;
     // Immediate stop + start rather than a graceful `restart`: this is setup

@@ -475,8 +475,12 @@ jobs:
           # non-log leftovers can't break artifact zip creation.
           # pg_regress's regression.diffs is the postmortem for that suite —
           # which tests diverged and how — and is not a *.log.
+          # *.walredo is `record_and_log`'s copy of an input walredo could not
+          # apply; without it a walredo failure's log line names a dump that
+          # died with the runner.
           path: |
             amp/.integration-tests/**/*.log
+            amp/.integration-tests/**/*.walredo
             amp/.integration-tests/pg_regress_*_out/regression.diffs
             amp/.integration-tests/pg_regress_*_out/regression.out
             amp/.integration-tests/yb-logs/**

@@ -358,6 +358,13 @@ impl ConnectionManagerState {
                                 info!("walreceiver connection handling ended: {e}");
                                 Ok(())
                             }
+                            WalReceiverError::WalRedoPoisoned(e) => {
+                                // Same argument as not latching `corruption_detected`:
+                                // transient, another caller's fault, and the
+                                // reconnect below replays from `consistent_lsn`.
+                                info!("walreceiver connection handling ended: {e:#}");
+                                Ok(())
+                            }
                             WalReceiverError::ClosedGate => {
                                 info!(
                                     "walreceiver connection handling ended because of closed gate"

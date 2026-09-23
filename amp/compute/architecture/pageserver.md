@@ -772,7 +772,10 @@ two-phase pipeline:
    Skips: empty chain, or head already an image at ≥ `target_lsn`.
    A chain read error logs and skips (best-effort); a **walredo error
    fatally aborts the process** — the chain does not legally produce a
-   page, and continuing risks persisting a bad image. A merged durable
+   page, and continuing risks persisting a bad image. The one exception
+   is `walredo::Error::Poisoned`, which says nothing about the chain
+   (see "Walredo pool poisoning" below): those jobs are skipped, never
+   aborted. A merged durable
    chain with no `will_init` anchor is refused with
    `correctness_errors{materialize_unanchored_chain}` (SLRU:
    `…_unanchored_slru_chain`) rather than letting walredo fold deltas onto
@@ -862,12 +865,13 @@ reproduces the lost-update deterministically under tiny cache/chain
 limits.
 
 **Failure / restart.** Failed jobs are logged and dropped; the next
-delta past the (reset) counter re-enqueues. On process restart the
-per-key counters start at zero, so restart-survivor keys with long
-chains read via the slow path until the threshold re-fires — the
-read-side dispatch (a read that walredoes a chain longer than
-`image_chain_limit`, or one that crossed a lineage segment) self-heals
-them after one slow read.
+delta past the (reset) counter re-enqueues — another full threshold's
+worth of deltas, since the counter resets at dispatch, not at
+completion. On process restart the per-key counters start at zero, so
+restart-survivor keys with long chains read via the slow path until the
+threshold re-fires — the read-side dispatch (a read that walredoes a
+chain longer than `image_chain_limit`, or one that crossed a lineage
+segment) self-heals them after one slow read.
 
 ## Replay correctness rules
 
@@ -1092,7 +1096,85 @@ applied in Rust by `walredo/apply_neon.rs` without the subprocess.
 `RedoAttemptType` labels the caller (`ReadPage` for the read path,
 `LegacyCompaction` for the materialiser) in metrics and error handling:
 read-path walredo failures surface as `PageReconstructError::WalRedo`
-on that one read, materialiser walredo failures abort the process.
+on that one read, materialiser walredo failures abort the process —
+except for pool poisoning, which is neither caller's fault and is
+handled separately (see "Walredo pool poisoning").
+
+### Walredo pool poisoning
+
+The response protocol is unframed — a reply is a bare 8 KiB blob and
+request N's answer is the Nth blob out of the pipe — so a caller dropped
+mid-`read_exact` has consumed an unknown 0..8191 bytes and every later
+read would be shifted. `utils::poison::Poison` therefore arms a guard
+around the pipe I/O and permanently poisons the process if the future is
+dropped in between. That is the correct trade: the alternative is
+silently splicing fragments of other pages into reads.
+
+The routine trigger is a compute backend disconnecting mid-getpage —
+`page_service` drops the in-flight getpage futures on client EOF or
+reset, and redo is awaited inline in those futures. Poison is therefore
+**never the caller's input's fault, and never a corruption signal**. The
+poisoned child is not retired at poison time; eviction is lazy, driven
+by the next caller that draws that slot and errors.
+
+`apply_batch_postgres` gives poison its own budget of `2 ×
+walredo_pool_size`, separate from `max_retry_attempts`, so it does not
+spend the retries reserved for genuine redo failures. Each failed draw
+retires that child, so the loop reaches a clean one in at most pool-size
+passes when nothing re-poisons concurrently; the 2× leaves room for
+`pick_slot` being a counter shared with the materialiser.
+
+The last error wins, as it did before poison had its own budget: an
+earlier hard error is deliberately **not** carried past a later poison.
+A hard error worth acting on is reproducible — the only `Error::Other`
+that indicts the data is walredo PANICking on the records, and those
+rows are already durable in YB, so the next re-dispatch, or the next
+read of that key, replays them and fails the same way. Preferring the
+stale error would buy earlier detection of something that re-announces
+itself, not detection of something otherwise missed. The rest of the
+hard errors — timeout, OOM-kill, SIGKILL, spawn failure — belong to a
+child that no longer exists, and carrying those forward is how a one-off
+timeout gets reported as corruption. The diagnostic never rode on the
+return value either: every failed attempt is logged as it happens, with
+key, LSN range, byte count and both attempt counters — at warn for
+poison and for `GcCompaction`, at error for the rest.
+`GcCompaction` would be the one caller with no second chance
+(`max_attempts = 0`, no re-dispatch), but it has no production
+constructor today — only the `fire_critical_error` match arm and tests
+name it — and it fires no critical errors anyway.
+
+On exhaustion the callers differ: the read path fails the read but
+does **not** fire `critical_timeline!` (that panics debug builds and
+permanently latches `corruption_detected`, exported as
+`safekeeper_ps_corruption_detected`), and the materialiser logs and
+skips. Skipping costs latency, not correctness; how fast the key
+recovers depends on whether it is a rel or an SLRU key, which
+`WAL_REDO_POISON`'s doc comment sets out.
+
+WAL ingest is the third caller and reaches `reconstruct_value` by the
+same route: `CREATE DATABASE` copies the template DB block by block
+through `get_rel_page_at_lsn`, under `RedoAttemptType::ReadPage`. Its
+`.inspect_err` in `handle_walreceiver_connection` latches
+`corruption_detected` for any ingest failure, so the walreceiver checks
+the typed error for poison first and returns
+`WalReceiverError::WalRedoPoisoned`, which skips the latch and is
+reported at info level rather than as a connection failure. The error
+still ends the connection; the connection manager reconnects with
+backoff and replays from `consistent_lsn`, which is safe because
+`modification` is an uncommitted buffer — the half-applied record is
+discarded and redone from a clean state.
+
+`pageserver_wal_redo_poison_total{outcome}` counts all of it,
+deliberately apart from `correctness_errors`. Its labels are not a
+partition of one population, so querying it has a rule; see the row in
+`pageserver-metrics.md`.
+
+End to end, the `ps::walredo-stdout-armed` failpoint stalls a redo inside
+the armed window so a test can drop the caller there and poison a live
+child, which is what `slow/ps_walredo_poison_isolated` does. It is the
+sleep failpoint rather than `pausable_failpoint!` because this is the
+per-redo hot path: that macro logs and awaits a `spawn_blocking` round
+trip on every call once `feature = "testing"` is on, armed or not.
 
 ## Background tasks
 

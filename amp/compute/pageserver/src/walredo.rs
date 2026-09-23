@@ -44,7 +44,7 @@ use wal_decoder::models::record::NeonWalRecord;
 use crate::config::PageServerConf;
 use crate::metrics::{
     WAL_REDO_BYTES_HISTOGRAM, WAL_REDO_PROCESS_LAUNCH_DURATION_HISTOGRAM,
-    WAL_REDO_RECORDS_HISTOGRAM, WAL_REDO_TIME,
+    WAL_REDO_RECORDS_HISTOGRAM, WAL_REDO_TIME, WalRedoPoisonOutcome,
 };
 
 /// The real implementation that uses a Postgres process to
@@ -111,8 +111,42 @@ impl std::ops::Deref for Process {
 pub enum Error {
     #[error("cancelled")]
     Cancelled,
+    /// An *earlier* caller was dropped mid-request and left this pooled child
+    /// unusable. Never caused by this caller's input, so consumers must not
+    /// treat it as a corruption signal.
+    #[error(transparent)]
+    Poisoned(anyhow::Error),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// Sort a walredo failure into [`Error::Poisoned`] or [`Error::Other`].
+///
+/// `check_and_arm()` is the only producer of a [`utils::poison::Error`], so
+/// finding one means an earlier caller was dropped mid-request. Classify here,
+/// because whether a caller can still see the poison depends on what its
+/// `.context(..)` makes the anyhow *root*:
+///
+/// - context over an `anyhow::Error` stacks, leaving the poison as the root
+///   where `downcast_ref::<utils::poison::Error>()` finds it. The read and
+///   ingest paths rely on that.
+/// - context over a typed [`Error`] makes that the root, putting the poison in
+///   a struct field where downcast cannot reach it. The materialiser is in
+///   this position and matches on the variant instead.
+fn classify(e: anyhow::Error) -> Error {
+    if is_poison(&e) {
+        Error::Poisoned(e)
+    } else {
+        Error::Other(e)
+    }
+}
+
+/// Did the pool's poison guard produce this, rather than the records? The one
+/// definition, so [`classify`], the dump suppression in
+/// [`process::WalRedoProcess::apply_wal_records`] and
+/// `PageReconstructError::is_walredo_poison` cannot drift apart.
+pub(crate) fn is_poison(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<utils::poison::Error>().is_some()
 }
 
 macro_rules! bail {
@@ -137,6 +171,72 @@ impl std::fmt::Display for RedoAttemptType {
             RedoAttemptType::ReadPage => write!(f, "read page"),
             RedoAttemptType::LegacyCompaction => write!(f, "legacy compaction"),
             RedoAttemptType::GcCompaction => write!(f, "gc compaction"),
+        }
+    }
+}
+
+/// Retry allowance for one redo, split by cause: retrying a failure the
+/// records may have caused is a guess, retrying a poisoned draw is not.
+#[derive(Debug, Clone, Copy)]
+struct RetryBudget {
+    /// For a failure the records may have caused.
+    max_attempts: u32,
+    /// For drawing a child an earlier caller poisoned. Pool size suffices
+    /// when nothing re-poisons concurrently (each failed draw retires that
+    /// child); 2x covers `pick_slot` being shared with the materialiser.
+    /// Every attempt type gets this. `GcCompaction` has no production
+    /// constructor today, so the live callers are `ReadPage` and
+    /// `LegacyCompaction`.
+    max_poison_attempts: u32,
+}
+
+impl RetryBudget {
+    fn new(redo_attempt_type: RedoAttemptType, pool_size: usize) -> Self {
+        Self {
+            max_attempts: match redo_attempt_type {
+                RedoAttemptType::ReadPage => 2,
+                RedoAttemptType::LegacyCompaction => 1,
+                RedoAttemptType::GcCompaction => 0,
+            },
+            max_poison_attempts: 2 * pool_size as u32,
+        }
+    }
+}
+
+/// What one redo has spent so far, one counter per allowance in
+/// [`RetryBudget`].
+#[derive(Debug, Default, Clone, Copy)]
+struct Attempts {
+    /// Failures the records may have caused.
+    hard: u32,
+    /// Draws of a child an earlier caller poisoned.
+    poison: u32,
+}
+
+/// Charge one failed attempt to the allowance it belongs to. `Ok` means retry,
+/// `Err` is terminal and is what the caller returns.
+fn spend(e: Error, n: &mut Attempts, budget: RetryBudget) -> Result<(), Error> {
+    match e {
+        // The failed draw already evicted that child, so the retry draws
+        // another one.
+        Error::Poisoned(e) => {
+            n.poison += 1;
+            if n.poison > budget.max_poison_attempts {
+                WalRedoPoisonOutcome::Exhausted.inc();
+                return Err(Error::Poisoned(e));
+            }
+            WalRedoPoisonOutcome::Retried.inc();
+            Ok(())
+        }
+        // Last error wins. An earlier hard error is not carried forward: its
+        // child is already retired, and if the records are the problem they
+        // fail again on the next attempt.
+        e => {
+            n.hard += 1;
+            if n.hard > budget.max_attempts {
+                return Err(e);
+            }
+            Ok(())
         }
     }
 }
@@ -167,11 +267,7 @@ impl PostgresRedoManager {
             bail!("invalid WAL redo request with no records");
         }
 
-        let max_retry_attempts = match redo_attempt_type {
-            RedoAttemptType::ReadPage => 2,
-            RedoAttemptType::LegacyCompaction => 1,
-            RedoAttemptType::GcCompaction => 0,
-        };
+        let budget = RetryBudget::new(redo_attempt_type, self.redo_pool.len());
 
         let base_img_lsn = base_img.as_ref().map(|p| p.0).unwrap_or(Lsn::INVALID);
         let mut img = base_img.map(|p| p.1);
@@ -192,7 +288,7 @@ impl PostgresRedoManager {
                         &records[batch_start..i],
                         self.conf.wal_redo_timeout,
                         pg_version,
-                        max_retry_attempts,
+                        budget,
                         redo_attempt_type,
                     )
                     .await
@@ -215,7 +311,7 @@ impl PostgresRedoManager {
                 &records[batch_start..],
                 self.conf.wal_redo_timeout,
                 pg_version,
-                max_retry_attempts,
+                budget,
                 redo_attempt_type,
             )
             .await
@@ -231,9 +327,7 @@ impl PostgresRedoManager {
     /// This method is cancellation-safe.
     pub async fn ping(&self, pg_version: PgMajorVersion) -> Result<(), Error> {
         self.do_with_walredo_process(pg_version, |proc| async move {
-            proc.ping(Duration::from_secs(1))
-                .await
-                .map_err(Error::Other)
+            proc.ping(Duration::from_secs(1)).await.map_err(classify)
         })
         .await
     }
@@ -447,13 +541,13 @@ impl PostgresRedoManager {
         records: &[(Lsn, NeonWalRecord)],
         wal_redo_timeout: Duration,
         pg_version: PgMajorVersion,
-        max_retry_attempts: u32,
+        budget: RetryBudget,
         redo_attempt_type: RedoAttemptType,
     ) -> Result<Bytes, Error> {
         *(self.last_redo_at.lock().unwrap()) = Some(Instant::now());
 
         let (rel, blknum) = key.to_rel_block().context("invalid record")?;
-        let mut n_attempts = 0u32;
+        let mut attempts = Attempts::default();
         loop {
             let base_img = &base_img;
             let closure = |proc: Arc<Process>| async move {
@@ -488,11 +582,12 @@ impl PostgresRedoManager {
                     lsn
                 );
 
+                let result = result.map_err(classify);
                 if let Err(e) = result.as_ref() {
                     macro_rules! message {
-                        ($level:tt) => {
+                        ($level:tt, $err:expr) => {
                             $level!(
-                                "error applying {} WAL records {}..{} ({} bytes) to key {} during {}, from base image with LSN {} to reconstruct page image at LSN {} n_attempts={}: {:?}",
+                                "error applying {} WAL records {}..{} ({} bytes) to key {} during {}, from base image with LSN {} to reconstruct page image at LSN {} n_attempts={} n_poison_attempts={}: {:?}",
                                 records.len(),
                                 records.first().map(|p| p.0).unwrap_or(Lsn(0)),
                                 records.last().map(|p| p.0).unwrap_or(Lsn(0)),
@@ -501,28 +596,44 @@ impl PostgresRedoManager {
                                 redo_attempt_type,
                                 base_img_lsn,
                                 lsn,
-                                n_attempts,
-                                e,
+                                attempts.hard,
+                                attempts.poison,
+                                $err,
                             )
                         }
                     }
-                    match redo_attempt_type {
-                        RedoAttemptType::ReadPage => message!(error),
-                        RedoAttemptType::LegacyCompaction => message!(error),
-                        RedoAttemptType::GcCompaction => message!(warn),
+                    match e {
+                        // Expected and self-healing: the retry draws another child.
+                        Error::Poisoned(e) => message!(warn, e),
+                        Error::Other(e) => match redo_attempt_type {
+                            RedoAttemptType::ReadPage => message!(error, e),
+                            RedoAttemptType::LegacyCompaction => message!(error, e),
+                            RedoAttemptType::GcCompaction => message!(warn, e),
+                        },
+                        // `classify` yields only the two above.
+                        Error::Cancelled => {}
                     }
                 }
 
-                result.map_err(Error::Other)
+                result
             };
+
+            // Bound first: the closure borrows `attempts`, and that borrow must
+            // end before `spend` takes it mutably.
             let result = self.do_with_walredo_process(pg_version, closure).await;
 
-            if result.is_ok() && n_attempts != 0 {
-                info!(n_attempts, "retried walredo succeeded");
-            }
-            n_attempts += 1;
-            if n_attempts > max_retry_attempts || result.is_ok() {
-                return result;
+            match result {
+                Ok(img) => {
+                    if attempts.hard != 0 || attempts.poison != 0 {
+                        info!(
+                            n_attempts = attempts.hard,
+                            n_poison_attempts = attempts.poison,
+                            "retried walredo succeeded"
+                        );
+                    }
+                    return Ok(img);
+                }
+                Err(e) => spend(e, &mut attempts, budget)?,
             }
         }
     }
@@ -578,5 +689,133 @@ impl PostgresRedoManager {
         apply_neon::apply_in_neon(record, record_lsn, key, page)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Context;
+
+    use super::{Error, classify};
+    use crate::metrics::WAL_REDO_POISON;
+
+    /// The shape `check_and_arm()` produces, once a caller's `.context(..)` has
+    /// stacked on top of it.
+    fn poisoned() -> Error {
+        classify(
+            anyhow::Error::from(utils::poison::Error::Poisoned {
+                what: "stdout",
+                at: chrono::Utc::now(),
+            })
+            .context("apply_wal_records"),
+        )
+    }
+
+    /// The safety-critical direction: a failure the records caused must never
+    /// be classified as poison, or the materializer would skip a job that
+    /// signalled corruption.
+    #[test]
+    fn classify_sorts_poison_from_everything_else() {
+        let poisoned = anyhow::Error::from(utils::poison::Error::Poisoned {
+            what: "stdout",
+            at: chrono::Utc::now(),
+        })
+        .context("apply_wal_records");
+        assert!(matches!(classify(poisoned), Error::Poisoned(_)));
+
+        // What a PANIC'd, OOM-killed or externally SIGKILLed child looks like.
+        let eof = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+            .context("read walredo stdout")
+            .context("apply_wal_records");
+        assert!(matches!(classify(eof), Error::Other(_)));
+
+        let timeout = anyhow::anyhow!("WAL redo timed out").context("apply_wal_records");
+        assert!(matches!(classify(timeout), Error::Other(_)));
+    }
+
+    /// Poison gets its own allowance so a disconnect storm cannot spend the
+    /// budget meant for failures the records may have caused.
+    #[test]
+    fn poison_gets_its_own_budget_for_every_caller() {
+        use super::{RedoAttemptType, RetryBudget};
+
+        for (attempt, expected) in [
+            (RedoAttemptType::ReadPage, 2),
+            (RedoAttemptType::LegacyCompaction, 1),
+            (RedoAttemptType::GcCompaction, 0),
+        ] {
+            let b = RetryBudget::new(attempt, 4);
+            assert_eq!(b.max_attempts, expected, "{attempt}");
+            // Including GcCompaction, which retries no records but is still
+            // not at fault for another caller's poison.
+            assert_eq!(b.max_poison_attempts, 8, "{attempt}");
+        }
+    }
+
+    /// The branch a disconnect storm reaches: the budget runs out and the
+    /// caller is still told it was the *pool* that failed. `Error::Other` here
+    /// is what latches `corruption_detected` for a client disconnect.
+    #[test]
+    fn an_exhausted_poison_budget_still_returns_poison() {
+        use super::{Attempts, RedoAttemptType, RetryBudget, spend};
+
+        // Pool of 1, so the allowance is 2 and the third draw exhausts it.
+        let budget = RetryBudget::new(RedoAttemptType::ReadPage, 1);
+        let mut n = Attempts::default();
+        let exhausted = || WAL_REDO_POISON.with_label_values(&["exhausted"]).get();
+        let before = exhausted();
+
+        assert!(spend(poisoned(), &mut n, budget).is_ok());
+        assert!(spend(poisoned(), &mut n, budget).is_ok());
+        let terminal = spend(poisoned(), &mut n, budget)
+            .expect_err("three poisoned draws must outlast an allowance of two");
+
+        assert!(
+            matches!(terminal, Error::Poisoned(_)),
+            "an exhausted allowance must not masquerade as a corruption signal: {terminal:#}"
+        );
+        assert_eq!(exhausted() - before, 1);
+        assert_eq!(
+            n.hard, 0,
+            "poison must not spend the retries reserved for the records"
+        );
+    }
+
+    /// The other direction: a failure the records may have caused spends the
+    /// ordinary allowance and leaves the poison one untouched.
+    #[test]
+    fn a_hard_failure_spends_its_own_budget() {
+        use super::{Attempts, RedoAttemptType, RetryBudget, spend};
+
+        let budget = RetryBudget::new(RedoAttemptType::ReadPage, 1);
+        let mut n = Attempts::default();
+        let hard = || Error::Other(anyhow::anyhow!("WAL redo timed out"));
+
+        assert!(spend(hard(), &mut n, budget).is_ok());
+        assert!(spend(hard(), &mut n, budget).is_ok());
+        assert!(
+            spend(hard(), &mut n, budget).is_err(),
+            "three failures must outlast max_attempts=2"
+        );
+        assert_eq!(n.poison, 0);
+    }
+
+    /// What the materializer sees after `redo_one`'s `.with_context(..)`: the
+    /// `poison::Error` is out of reach, so it must match on the variant.
+    #[test]
+    fn the_variant_survives_a_callers_context() {
+        let e = classify(
+            anyhow::Error::from(utils::poison::Error::Poisoned {
+                what: "stdout",
+                at: chrono::Utc::now(),
+            })
+            .context("apply_wal_records"),
+        );
+        let wrapped = Err::<(), _>(e).context("request_redo").unwrap_err();
+        assert!(wrapped.downcast_ref::<utils::poison::Error>().is_none());
+        assert!(matches!(
+            wrapped.downcast_ref::<Error>(),
+            Some(Error::Poisoned(_))
+        ));
     }
 }

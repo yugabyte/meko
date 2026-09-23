@@ -410,6 +410,23 @@ impl ImageMaterializer {
                     images.push(std::sync::Arc::new(image_row));
                 }
                 Ok(None) => {} // nothing-to-do (no chain / already anchored)
+                Err(e) if is_walredo_poison(&e) => {
+                    // Someone else's cancelled getpage left every child this
+                    // job drew unusable, and `request_redo` spent its whole
+                    // poison budget walking the pool. The chain was never
+                    // applied, so skip like the nothing-to-do case.
+                    // `commit_phase` releases the per-key `in_flight` guard
+                    // for the whole batch, so the key can be re-dispatched;
+                    // `WAL_REDO_POISON` documents how, and how fast.
+                    crate::metrics::WalRedoPoisonOutcome::MaterializerSkipped.inc();
+                    tracing::warn!(
+                        "materializer skipping branch={} target_lsn={} key={:?}: \
+                         walredo pool poisoned: {e:#}",
+                        self.branch_id,
+                        job.target_lsn,
+                        job.key,
+                    );
+                }
                 Err(e) => {
                     // A walredo failure means the chain we assembled
                     // does not legally produce a page (PG's walredo
@@ -769,6 +786,19 @@ impl ImageMaterializer {
     }
 }
 
+/// Did this job fail because an earlier caller poisoned the walredo pool,
+/// rather than because of the chain we assembled? Guards the `fatal_abort`
+/// below: poison is not a corruption signal.
+///
+/// `redo_one`'s `.with_context(..)` moves the `utils::poison::Error` out of
+/// anyhow's context chain, so only the `walredo::Error` root is downcastable.
+fn is_walredo_poison(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<crate::walredo::Error>(),
+        Some(crate::walredo::Error::Poisoned(_))
+    )
+}
+
 /// Whether the chain head is already a base at the target. `will_init`, not
 /// `is_image`: folding an init record writes an image at its own primary key.
 fn head_is_anchor_at(head: &PageRow, target_lsn: Lsn) -> bool {
@@ -840,6 +870,51 @@ fn parse_chain(chain: &[std::sync::Arc<PageRow>]) -> Result<RedoChain> {
     // does the same reverse before its own walredo call).
     records.reverse();
     Ok((base_img, records))
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Context;
+
+    use super::is_walredo_poison;
+
+    /// Wrap an error the way `redo_one` wraps `request_redo`'s.
+    fn as_redo_one_sees_it(e: crate::walredo::Error) -> anyhow::Error {
+        Err::<(), _>(e)
+            .with_context(|| "request_redo actual_lsn=0/20 chain_len=4".to_string())
+            .unwrap_err()
+    }
+
+    /// Poison must route to the skip arm. If this regresses, one disconnected
+    /// compute takes the pageserver down.
+    #[test]
+    fn poison_does_not_reach_the_abort_arm() {
+        let e = as_redo_one_sees_it(crate::walredo::Error::Poisoned(
+            anyhow::Error::from(utils::poison::Error::Poisoned {
+                what: "stdout",
+                at: chrono::Utc::now(),
+            })
+            .context("apply_wal_records"),
+        ));
+        assert!(is_walredo_poison(&e));
+    }
+
+    /// The other direction, and the reason the predicate matches on the
+    /// variant rather than sniffing the message: a walredo PANIC must still
+    /// abort.
+    #[test]
+    fn a_walredo_failure_still_reaches_the_abort_arm() {
+        let e = as_redo_one_sees_it(crate::walredo::Error::Other(
+            anyhow::anyhow!("WAL redo process closed its stdout unexpectedly")
+                .context("apply_wal_records"),
+        ));
+        assert!(!is_walredo_poison(&e));
+
+        // Chain-assembly failures come through as bare anyhow errors.
+        assert!(!is_walredo_poison(&anyhow::anyhow!(
+            "decode NeonWalRecord at lsn=0/20"
+        )));
+    }
 }
 
 #[cfg(test)]

@@ -527,6 +527,20 @@ pub(crate) enum PageReconstructError {
 }
 
 impl PageReconstructError {
+    /// True when this failure was another caller's poisoned walredo child
+    /// rather than anything about the data. WAL ingest reaches
+    /// `reconstruct_value` too and latches `corruption_detected` for any
+    /// failure, so it checks this first. See [`walredo::Error::Poisoned`].
+    ///
+    /// Only the poison arm of `reconstruct_value` builds a [`Self::WalRedo`]
+    /// this reports: it stacks context on the *inner* anyhow, leaving
+    /// `utils::poison::Error` at the root where the downcast reaches it.
+    /// Boxing the typed [`walredo::Error`] instead would make that the root
+    /// and hide the poison in a struct field.
+    pub(crate) fn is_walredo_poison(&self) -> bool {
+        matches!(self, PageReconstructError::WalRedo(e) if walredo::is_poison(e))
+    }
+
     #[allow(dead_code)] // we use the is_cancel + into_anyhow pattern in quite a few places, this one will follow soon enough
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
@@ -3154,6 +3168,18 @@ impl Timeline {
                 let img = match res {
                     Ok(img) => img,
                     Err(walredo::Error::Cancelled) => return Err(PageReconstructError::Cancelled),
+                    // Another caller's cancellation left a pooled walredo
+                    // child unusable and the poison budget ran out. The
+                    // records were never indicted — a caller dropped on the
+                    // stdout side had already handed them over, and the child
+                    // wrote a page nobody read — so fail the read without
+                    // firing `critical_timeline!`, which panics debug builds
+                    // and permanently latches `corruption_detected`.
+                    Err(walredo::Error::Poisoned(err)) => {
+                        return Err(PageReconstructError::WalRedo(
+                            err.context("reconstruct a page image"),
+                        ));
+                    }
                     Err(walredo::Error::Other(err)) => {
                         if fire_critical_error {
                             critical_timeline!(
@@ -3355,6 +3381,32 @@ fn chain_to_value_reconstruct_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `reconstruct_value`'s poison arm has to stay recognisable after the
+    /// `.context(..)` it adds, because WAL ingest checks it to decide whether
+    /// to latch `corruption_detected`. A genuine redo failure must not match.
+    #[test]
+    fn poison_is_recognisable_through_the_reconstruct_context() {
+        // Built exactly as the poison arm builds it.
+        let poisoned = PageReconstructError::WalRedo(
+            anyhow::Error::from(utils::poison::Error::Poisoned {
+                what: "stdout",
+                at: chrono::Utc::now(),
+            })
+            .context("apply_wal_records")
+            .context("reconstruct a page image"),
+        );
+        assert!(poisoned.is_walredo_poison());
+
+        // What the sibling `Error::Other` arm builds: a walredo PANIC, which
+        // must still latch.
+        let panicked = PageReconstructError::WalRedo(
+            anyhow::anyhow!("read walredo stdout: early eof").context("reconstruct a page image"),
+        );
+        assert!(!panicked.is_walredo_poison());
+
+        assert!(!PageReconstructError::Other(anyhow::anyhow!("nope")).is_walredo_poison());
+    }
 
     /// An evicted watermark reads back as `Lsn(0)`, indistinguishable from one
     /// lost to a restart or one that never existed — which is what puts its

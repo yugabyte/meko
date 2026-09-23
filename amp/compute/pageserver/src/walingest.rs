@@ -109,6 +109,16 @@ pub struct WalIngestError {
     pub kind: WalIngestErrorKind,
 }
 
+impl WalIngestError {
+    /// True when ingest failed on another caller's poisoned walredo child
+    /// rather than on the record. `CREATE DATABASE` copies the template DB
+    /// block by block through the read path, so ingest reaches
+    /// `reconstruct_value` and can draw a poisoned child like anyone else.
+    pub(crate) fn is_walredo_poison(&self) -> bool {
+        matches!(&self.kind, WalIngestErrorKind::PageReconstructError(e) if e.is_walredo_poison())
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum WalIngestErrorKind {
     #[error(transparent)]
@@ -1571,4 +1581,45 @@ async fn get_relsize(
         .get_rel_size(rel, Version::Modified(modification), ctx)
         .await
         .map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WalIngestError, WalIngestErrorKind};
+    use crate::page_server::timeline::PageReconstructError;
+
+    fn ingest_error(kind: WalIngestErrorKind) -> WalIngestError {
+        WalIngestError {
+            backtrace: std::backtrace::Backtrace::disabled(),
+            kind,
+        }
+    }
+
+    /// The gate that decides whether ingest latches `corruption_detected`. A
+    /// silent `false` reverts the carve-out; a silent `true` hides a real
+    /// corruption signal.
+    #[test]
+    fn only_poison_is_reported_as_poison() {
+        let reconstruct = |e: anyhow::Error| {
+            ingest_error(WalIngestErrorKind::PageReconstructError(
+                PageReconstructError::WalRedo(e.context("reconstruct a page image")),
+            ))
+        };
+
+        let poisoned = reconstruct(
+            anyhow::Error::from(utils::poison::Error::Poisoned {
+                what: "stdout",
+                at: chrono::Utc::now(),
+            })
+            .context("apply_wal_records"),
+        );
+        assert!(poisoned.is_walredo_poison());
+
+        // A walredo PANIC reaching ingest by the same route must still latch.
+        let panicked = reconstruct(anyhow::anyhow!("read walredo stdout: early eof"));
+        assert!(!panicked.is_walredo_poison());
+
+        // And a failure that never went near walredo.
+        assert!(!ingest_error(WalIngestErrorKind::Cancelled).is_walredo_poison());
+    }
 }
