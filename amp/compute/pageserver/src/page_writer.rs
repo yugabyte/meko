@@ -44,7 +44,7 @@ use pageserver_api::reltag::SlruKind;
 
 use crate::gc_trim_candidates::{GcTrimCandidateEmitter, TrimBase};
 use crate::page_store::{
-    LineageSegment, MetaRow, PageRow, PageStore, PendingGcRow, SlruPageRow, dedup_page_chain_by_lsn,
+    LineageSegment, MetaRow, PageRow, PageStore, PendingGcRow, SlruPageRow, merge_page_chain,
 };
 
 /// Flush triggers (whichever fires first). Override via
@@ -1133,13 +1133,7 @@ impl PageWriter {
         // GetPage hot path: a 1-key vectored read arrives as
         // `[k..k.next())`. Dispatch to `read_chain`, which holds the
         // cache-only fast path; on a hit we skip YB entirely.
-        if range.end.field1 == range.start.field1
-            && range.end.field2 == range.start.field2
-            && range.end.field3 == range.start.field3
-            && range.end.field4 == range.start.field4
-            && range.end.field5 == range.start.field5
-            && range.end.field6 == range.start.field6.wrapping_add(1)
-        {
+        if crate::page_store::single_block_range(&range) {
             let chain = self.read_chain(range.start, target_lsn).await?;
             let mut out = std::collections::HashMap::with_capacity(1);
             if !chain.is_empty() {
@@ -1272,8 +1266,7 @@ impl PageWriter {
         Ok(out)
     }
 
-    /// Finalize each key's blended chain: sort newest-first (image wins ties),
-    /// dedup by lsn, truncate at the newest `will_init`, then fire the per-key
+    /// Finalize each key's blended chain ([`merge_page_chain`]), then fire the per-key
     /// read-side materialize trigger (a chain longer than the write-side
     /// `count_limit` means the write trigger lost a job — PS crash, queue
     /// overflow — so enqueue a fresh materialise to self-heal the next read).
@@ -1284,15 +1277,7 @@ impl PageWriter {
         target_lsn: Lsn,
     ) {
         for (key, chain) in out.iter_mut() {
-            chain.sort_by(|a, b| {
-                b.lsn
-                    .cmp(&a.lsn)
-                    .then_with(|| b.will_init.cmp(&a.will_init))
-            });
-            dedup_page_chain_by_lsn(chain);
-            if let Some(idx) = chain.iter().position(|r| r.will_init) {
-                chain.truncate(idx + 1);
-            }
+            merge_page_chain(chain);
             let crossed = self.chain_crossed_segment(chain);
             self.maybe_dispatch_read_side_materialize(*key, target_lsn, chain.len(), crossed);
         }
@@ -1376,16 +1361,14 @@ impl PageWriter {
     }
 
     /// Whether a cache-only (own-timeline) chain is self-sufficient
-    /// under lineage: its anchor must sit at or above the branch cap,
-    /// otherwise ancestor rows in (anchor_lsn, cap] may exist that the
-    /// cache cannot know about.
+    /// under lineage: its anchor must sit at or above the first ancestor's cap
+    /// (`LineageSegment::shadowed_by`), otherwise ancestor rows in
+    /// (anchor_lsn, cap] may exist that the cache cannot know about.
     fn cache_anchor_covers_lineage(&self, chain: &[Arc<PageRow>]) -> bool {
-        if self.lineage.len() <= 1 {
-            return true;
+        match self.lineage.get(1) {
+            None => true,
+            Some(first_ancestor) => first_ancestor.shadowed_by(chain),
         }
-        chain
-            .last()
-            .is_some_and(|r| r.will_init && r.lsn >= self.lineage[1].cap_lsn)
     }
 
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
@@ -1420,23 +1403,9 @@ impl PageWriter {
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
-        // Descending LSN; on ties (materialiser INSERTed an image at
-        // the same LSN as an existing delta), the base must sort first
-        // so dedup keeps it and discards the now-superseded delta.
-        // Otherwise the chain can lose its anchor. `will_init` matches
-        // the PK tail and covers a base that is an init record. Two
-        // bases at one LSN (an image over the record it folded) tie;
-        // the stable sort keeps the cached row, which replays to the
-        // same page.
-        merged.sort_by(|a, b| {
-            b.lsn
-                .cmp(&a.lsn)
-                .then_with(|| b.will_init.cmp(&a.will_init))
-        });
-        dedup_page_chain_by_lsn(&mut merged);
-        if let Some(idx) = merged.iter().position(|r| r.will_init) {
-            merged.truncate(idx + 1);
-        }
+        // Cached rows first, so a tied pair of bases keeps the cached one,
+        // which replays to the same page.
+        merge_page_chain(&mut merged);
         let crossed = self.chain_crossed_segment(&merged);
         self.maybe_dispatch_read_side_materialize(key, target_lsn, merged.len(), crossed);
         Ok(merged)
@@ -1483,23 +1452,10 @@ impl PageWriter {
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
-        // Descending LSN; on ties (materialiser INSERTed an image at
-        // the same LSN as an existing delta), the base must sort first
-        // so dedup keeps it and discards the now-superseded delta.
-        // Otherwise the chain can lose its anchor. `will_init` matches
-        // the PK tail and covers a base that is an init record. Two
-        // bases at one LSN (an image over the record it folded) tie;
-        // the stable sort keeps the cached row, which replays to the
-        // same page.
-        merged.sort_by(|a, b| {
-            b.lsn
-                .cmp(&a.lsn)
-                .then_with(|| b.will_init.cmp(&a.will_init))
-        });
-        dedup_page_chain_by_lsn(&mut merged);
-        if let Some(idx) = merged.iter().position(|r| r.will_init) {
-            merged.truncate(idx + 1);
-        } else if !merged.is_empty() {
+        // Cached rows first, so a tied pair of bases keeps the cached one,
+        // which replays to the same page.
+        merge_page_chain(&mut merged);
+        if merged.last().is_some_and(|r| !r.will_init) {
             // No `will_init` anchor in the merged cache+YB chain ≤
             // target_lsn (#57 part 2). `parse_chain` would set
             // `base_img=None` and walredo would fold these deltas onto a

@@ -537,10 +537,18 @@ branch. Every PageStore read path (`read_chain`, `scan_range`,
 `scan_meta_range`) has a `*_lineage` variant that walks the segments
 nearest-first, capping each segment's read LSN at
 `min(target_lsn, cap)`. The walk stops only at an anchor (`will_init`)
-whose LSN is **at or above the next segment's cap** (for meta: once the
-key is found — nearest segment wins). An anchor *below* the cap — e.g.
-a materialiser copy-up image — does not end the walk: ancestor deltas
-in `(anchor_lsn, cap]` still apply and must be layered on top.
+whose LSN is **at or above the next segment's cap**
+(`LineageSegment::shadowed_by`; for meta: once the key is found — nearest
+segment wins). An anchor *below* the cap — e.g. a materialiser copy-up
+image — does not end the walk: ancestor deltas in `(anchor_lsn, cap]`
+still apply and must be layered on top. The multi-block scans
+(`scan_range`, `scan_scattered_set`, `scan_slru_range`) apply the same rule
+per key, and narrow the read rather than just ending it: each ancestor is
+read only for the requested keys not yet anchored at or above its cap, and
+once none are left the walk stops. Relation blocks go out as a scattered set
+of exactly those keys; an SLRU range has no scattered form, so it narrows to
+the span of the unanchored blocks. A range that crosses forks cannot
+enumerate its key set, so it reads every ancestor in full.
 
 Iterative per-segment queries (not one UNION ALL) on purpose:
 `branch_id` is in the hash partition key, so segments live on different
@@ -562,7 +570,7 @@ silently break branch reads — keep the lineage walk and its per-segment
 binding intact. `PageWriter` carries the lineage everywhere, and its
 cache fast paths only short-circuit when the cached anchor covers the
 lineage (`cache_anchor_covers_lineage`: anchor at or above the first
-ancestor cap).
+ancestor cap, `LineageSegment::shadowed_by`).
 
 ## Write path: PageWriter buffering + flush
 

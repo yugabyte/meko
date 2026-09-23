@@ -340,11 +340,13 @@ read to YB. The branch's `LineageSegment` chain
 from self (cap `Lsn::MAX`) up the
 ancestry; the lineage-aware queries (`read_chain_lineage`,
 `scan_range_lineage`, `scan_scattered_set_lineage`) read each segment's
-rows capped at `min(target_lsn, seg.cap_lsn)` and stop at the first segment
-whose chain is complete (a `will_init` row). A child reading a key it never
-wrote gets the ancestor's pre-branch-point version rather than a missing
-key. The chain is built once at attach and is immutable for the process
-lifetime; detaching a branch from its ancestor is unsupported.
+rows capped at `min(target_lsn, seg.cap_lsn)` and stop once the chain holds
+a `will_init` row at or above the next segment's cap. The multi-block scans
+apply that per key, reading each ancestor only for the keys still short of
+one. A child reading a key it never wrote gets the ancestor's
+pre-branch-point version rather than a missing key. The chain is built once at
+attach and is immutable for the process lifetime; detaching a branch from its
+ancestor is unsupported.
 
 ---
 

@@ -1082,13 +1082,7 @@ impl Timeline {
         for range in &total_keyspace.ranges {
             if range.start.is_rel_block_key() {
                 let s = range.start;
-                let e = range.end;
-                let single_block = s.field1 == e.field1
-                    && s.field2 == e.field2
-                    && s.field3 == e.field3
-                    && s.field4 == e.field4
-                    && s.field5 == e.field5
-                    && e.field6 == s.field6.wrapping_add(1);
+                let single_block = crate::page_store::single_block_range(range);
                 if single_block {
                     scattered
                         .entry((s.field2, s.field3, s.field4, s.field5))

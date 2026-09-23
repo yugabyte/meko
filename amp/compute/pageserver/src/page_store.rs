@@ -57,14 +57,17 @@
 //! materialiser creates fresh images for hot keys to keep chains
 //! short. Reads remain correct without it, just potentially slower.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::ops::Range;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use futures::stream::{StreamExt, TryStreamExt};
-use itertools::Itertools as _;
+use itertools::{Either, Itertools as _};
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::PayloadCompression;
 use pageserver_api::reltag::SlruKind;
@@ -131,6 +134,33 @@ pub struct SlruPageRow {
     pub is_image: bool,
     pub will_init: bool,
     pub payload: Bytes,
+}
+
+/// The two fields the lineage walk reads off a chain row, so
+/// [`LineageSegment::shadowed_by`] serves rel-page and SLRU chains alike.
+/// Implemented on the two types a chain is held as: rel-page chains
+/// are `Arc<PageRow>`, SLRU chains bare [`SlruPageRow`].
+pub(crate) trait AnchorRow {
+    fn lsn(&self) -> Lsn;
+    fn will_init(&self) -> bool;
+}
+
+impl AnchorRow for Arc<PageRow> {
+    fn lsn(&self) -> Lsn {
+        self.lsn
+    }
+    fn will_init(&self) -> bool {
+        self.will_init
+    }
+}
+
+impl AnchorRow for SlruPageRow {
+    fn lsn(&self) -> Lsn {
+        self.lsn
+    }
+    fn will_init(&self) -> bool {
+        self.will_init
+    }
 }
 
 /// Dedup an LSN-descending, image-first-on-ties page chain by LSN.
@@ -240,6 +270,25 @@ pub(crate) fn dedup_page_chain_by_lsn(chain: &mut Vec<Arc<PageRow>>) {
     chain.dedup_by(|a, b| a.lsn == b.lsn);
 }
 
+/// Put a merged page chain into result form: LSN-descending, base before delta
+/// on ties, one row per LSN, nothing below the newest `will_init`.
+///
+/// Every page-chain blend (lineage segments, or `PageWriter`'s cache with the
+/// store) ends here. The base sorts first on ties so the dedup keeps it over
+/// the delta it folded; the stable sort keeps the earlier of two tied bases.
+/// [`merge_slru_chain`] is the SLRU twin.
+pub(crate) fn merge_page_chain(chain: &mut Vec<Arc<PageRow>>) {
+    chain.sort_by(|a, b| {
+        b.lsn
+            .cmp(&a.lsn)
+            .then_with(|| b.will_init.cmp(&a.will_init))
+    });
+    dedup_page_chain_by_lsn(chain);
+    if let Some(idx) = chain.iter().position(|r| r.will_init) {
+        chain.truncate(idx + 1);
+    }
+}
+
 fn slru_kind_to_i16(kind: SlruKind) -> i16 {
     match kind {
         SlruKind::Clog => 0,
@@ -276,6 +325,31 @@ impl LineageSegment {
             branch_id,
             cap_lsn: Lsn::MAX,
         }]
+    }
+
+    /// Whether `chain` holds a `will_init` row AT OR ABOVE this segment's cap,
+    /// so every row the segment can return sits below that anchor and would be
+    /// trimmed. An anchor below the cap does not suffice: a materialiser
+    /// copy-up image can land under the ancestor's head, and the ancestor
+    /// deltas in (anchor_lsn, cap] still apply. Caps are non-increasing, so a
+    /// chain that shadows one segment shadows every deeper one.
+    ///
+    /// Scanned back to front: a merged chain ends at its anchor.
+    pub(crate) fn shadowed_by<R: AnchorRow>(&self, chain: &[R]) -> bool {
+        chain
+            .iter()
+            .rev()
+            .any(|r| r.will_init() && r.lsn() >= self.cap_lsn)
+    }
+
+    /// Drop from `requested` every key whose chain in `have` already
+    /// [shadows](Self::shadowed_by) this segment.
+    fn retain_unshadowed<K, R>(&self, requested: &mut Vec<K>, have: &HashMap<K, Vec<R>>)
+    where
+        K: Eq + std::hash::Hash,
+        R: AnchorRow,
+    {
+        requested.retain(|k| !have.get(k).is_some_and(|chain| self.shadowed_by(chain)));
     }
 }
 
@@ -1336,6 +1410,108 @@ fn group_page_rows_by_key(
     Ok(by_key)
 }
 
+/// One lineage segment read, as [`record_segment_scan`] files it.
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+struct SegmentScan {
+    branch_id: BranchId,
+    /// How many keys the read covered, or `None` for the whole
+    /// target. Recorded by the scan itself, so the SLRU walker's widening of a
+    /// scattered residual to [`blknum_span`] shows up here.
+    keys: Option<usize>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Cleared by each test before the scan it asserts on. Needs a
+    /// current-thread runtime, the `#[tokio::test]` default.
+    static SEGMENT_SCANS: RefCell<Vec<SegmentScan>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Record one lineage segment read for the tests; a no-op outside them. Which
+/// segments a scan reads is invisible in its result, since the merge trims the
+/// surplus either way.
+fn record_segment_scan(_branch_id: BranchId, _keys: Option<usize>) {
+    #[cfg(test)]
+    SEGMENT_SCANS.with_borrow_mut(|scans| {
+        scans.push(SegmentScan {
+            branch_id: _branch_id,
+            keys: _keys,
+        })
+    });
+}
+
+/// The ancestor walk both multi-key lineage scans run: rel-page blocks keyed by
+/// [`Key`], SLRU blocks keyed by `u32`.
+///
+/// Reads each segment through `scan` at `min(target_lsn, seg.cap_lsn)` and
+/// folds the chains into one map. An ancestor is read only for the keys of
+/// `requested` it is not yet [shadowed](LineageSegment::shadowed_by) for, and
+/// once none are left the walk ends. `scan` gets `None` for the whole target:
+/// at the tip, until some key drops out, and throughout when `requested` is
+/// `None`. `merge` runs per key only if an ancestor returned rows.
+async fn walk_lineage_scan<K, R, I, Fut>(
+    label: &str,
+    lineage: &[LineageSegment],
+    target_lsn: Lsn,
+    requested: Option<I>,
+    scan: impl Fn(BranchId, Lsn, Option<&[K]>) -> Fut,
+    merge: impl Fn(&mut Vec<R>),
+) -> Result<HashMap<K, Vec<R>>>
+where
+    K: Eq + std::hash::Hash,
+    R: AnchorRow,
+    I: IntoIterator<Item = K>,
+    // A named future, not `AsyncFn`: the page service polls these reads from a
+    // `Send` task, and an `AsyncFn` bound cannot carry `Send` through to the
+    // future it returns.
+    Fut: Future<Output = Result<HashMap<K, Vec<R>>>>,
+{
+    let capped = |seg: &LineageSegment| std::cmp::min(target_lsn, seg.cap_lsn);
+    let Some((first, rest)) = lineage.split_first() else {
+        bail!("{label}: empty lineage");
+    };
+    let mut out = scan(first.branch_id, capped(first), None).await?;
+    if rest.is_empty() {
+        return Ok(out);
+    }
+    // Enumerated only past the tip, so an unbranched read never pays for it.
+    let mut remaining: Option<Vec<K>> = requested.map(|keys| keys.into_iter().collect());
+    let mut trimmed = false;
+    let mut ancestor_rows = false;
+    for seg in rest {
+        // `out` carries the ancestors read so far, so an anchor found in the
+        // parent drops that key before the grandparent is reached.
+        if let Some(keys) = remaining.as_mut() {
+            let before = keys.len();
+            seg.retain_unshadowed(keys, &out);
+            if keys.is_empty() {
+                break;
+            }
+            trimmed |= keys.len() != before;
+        }
+        // Until a key drops out the residual is the whole target.
+        let residual = remaining.as_deref().filter(|_| trimmed);
+        for (key, rows) in scan(seg.branch_id, capped(seg), residual).await? {
+            ancestor_rows = true;
+            out.entry(key).or_default().extend(rows);
+        }
+    }
+    if ancestor_rows {
+        out.values_mut().for_each(merge);
+    }
+    Ok(out)
+}
+
+/// The narrowest block range covering `blks`, or `None` when it is empty or
+/// ends at `u32::MAX`. What an SLRU ancestor read narrows to: `scan_slru_range`
+/// takes a range, so a scattered residual still reads the blocks between its
+/// ends, but not the anchored ones outside them. `None` falls back to the
+/// caller's full range.
+fn blknum_span(blks: &[u32]) -> Option<Range<u32>> {
+    Some(*blks.iter().min()?..blks.iter().max()?.checked_add(1)?)
+}
+
 /// What a lineage scan resolves at each ancestor segment: a contiguous key
 /// range ([`PageStore::scan_range`]) or a scattered set of same-fork keys
 /// ([`PageStore::scan_scattered_set`]). Lets [`PageStore::scan_lineage`] share
@@ -1343,6 +1519,58 @@ fn group_page_rows_by_key(
 enum LineageScanTarget<'a> {
     Range(Range<Key>),
     Set(&'a [Key]),
+}
+
+/// Whether `range` stays inside one relation fork, so it varies only in
+/// `field6` and its members are exactly the blocks between the bounds. Not
+/// `keyspace::is_contiguous_range`, which also admits a relsize-sentinel spill
+/// into the next fork; there `start.field6..end.field6` is not the key set.
+fn one_fork_range(range: &Range<Key>) -> bool {
+    range.start.field1 == range.end.field1
+        && range.start.field2 == range.end.field2
+        && range.start.field3 == range.end.field3
+        && range.start.field4 == range.end.field4
+        && range.start.field5 == range.end.field5
+}
+
+/// Whether `range` names exactly one relation block: the shape every compute
+/// getpage RPC arrives as (`KeySpace::single(k..k.next())`), which the read
+/// paths pin to a single-key query instead of a scan.
+pub(crate) fn single_block_range(range: &Range<Key>) -> bool {
+    one_fork_range(range) && spans_one_block(range)
+}
+
+/// The block half of [`single_block_range`], split out for a caller that has
+/// already established the fork. Keeps the `field6` test in one place.
+fn spans_one_block(range: &Range<Key>) -> bool {
+    range.end.field6 == range.start.field6.wrapping_add(1)
+}
+
+impl<'a> LineageScanTarget<'a> {
+    /// Every key this target asks for, or `None` for a range that crosses
+    /// forks, whose key set is not knowable without reading. A set names its
+    /// keys; a one-fork range is exactly `start.field6..end.field6` on
+    /// `start`'s relation and fork. Lazy: an unbranched read never enumerates,
+    /// and a branched one pays a `Vec` of at most `max_get_vectored_keys`
+    /// keys when [`walk_lineage_scan`] collects it.
+    fn requested_keys(&self) -> Option<impl Iterator<Item = Key> + 'a> {
+        match self {
+            LineageScanTarget::Set(keys) => Some(Either::Left(keys.iter().copied())),
+            LineageScanTarget::Range(r) => {
+                if !one_fork_range(r) {
+                    return None;
+                }
+                let proto = r.start;
+                Some(Either::Right((r.start.field6..r.end.field6).map(
+                    move |blk| {
+                        let mut k = proto;
+                        k.field6 = blk;
+                        k
+                    },
+                )))
+            }
+        }
+    }
 }
 
 impl PageStore {
@@ -1719,16 +1947,18 @@ impl PageStore {
             );
         }
 
-        let one_fork = range.start.field2 == range.end.field2
-            && range.start.field3 == range.end.field3
-            && range.start.field4 == range.end.field4
-            && range.start.field5 == range.end.field5;
+        // `field1` counts: the bail above pins it only for `range.start`, so an
+        // end at `field1 == 1` reaches here, and `start.field6..end.field6` is
+        // then not the key set. Classing it cross-fork keeps `requested_keys`
+        // from naming the wrong keys; the cross-fork SQL ignores `field1` too,
+        // so that shape is not read correctly either way.
+        let one_fork = one_fork_range(&range);
 
         // Single-key fast path: every compute getpage RPC arrives as a
         // 1-key vectored read (`KeySpace::single(k..k.next())`). Detect
         // and dispatch to read_chain, which skips the multi-block
         // GROUP BY / LEFT JOIN entirely.
-        if one_fork && range.end.field6 == range.start.field6.wrapping_add(1) {
+        if one_fork && spans_one_block(&range) {
             let mut key_bytes = vec![0u8; KEY_SIZE];
             range.start.write_to_byte_slice(&mut key_bytes);
             let chain = self.read_chain(branch_id, &key_bytes, target_lsn).await?;
@@ -2314,7 +2544,8 @@ impl PageStore {
     // branch_id. Each method below walks the lineage segments
     // nearest-first, capping the per-segment read LSN at
     // `min(target_lsn, seg.cap_lsn)`, and stops as soon as the chain
-    // is anchored (page/SLRU) or the key is found (meta).
+    // is anchored (page/SLRU; see `LineageSegment::shadowed_by`) or the
+    // key is found (meta). The multi-block scans apply that per key.
     //
     // Iterative per-segment queries (not one UNION ALL) on purpose:
     // `branch_id` is in the hash partition key, so segments live on
@@ -2336,15 +2567,7 @@ impl PageStore {
     ) -> Result<Vec<Arc<PageRow>>> {
         let mut chain: Vec<Arc<PageRow>> = Vec::new();
         for seg in lineage {
-            // Skip this (and every deeper) segment only when the chain
-            // is already anchored AT OR ABOVE the segment's cap: the
-            // segment's rows are all ≤ cap, so none can sit above the
-            // anchor. An anchor BELOW the cap does NOT suffice — a
-            // materialiser copy-up image lands in the descendant at
-            // its chain-head LSN, which can be below the ancestor's
-            // head at the cap, and the ancestor deltas in
-            // (anchor_lsn, cap] must still be layered on top.
-            if chain.iter().any(|r| r.will_init && r.lsn >= seg.cap_lsn) {
+            if seg.shadowed_by(&chain) {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
@@ -2352,28 +2575,17 @@ impl PageStore {
             chain.extend(rows);
         }
         if lineage.len() > 1 {
-            // Cross-segment rows can interleave (an ancestor delta
-            // above a descendant copy-up image) and tie at the branch
-            // boundary. Re-sort (base first on ties), dedup by LSN,
-            // and trim at the first anchor — same blend rules as
-            // PageWriter's in-RAM merge.
-            chain.sort_by(|a, b| {
-                b.lsn
-                    .cmp(&a.lsn)
-                    .then_with(|| b.will_init.cmp(&a.will_init))
-            });
-            dedup_page_chain_by_lsn(&mut chain);
-            if let Some(idx) = chain.iter().position(|r| r.will_init) {
-                chain.truncate(idx + 1);
-            }
+            merge_page_chain(&mut chain);
         }
         Ok(chain)
     }
 
-    /// Lineage-aware [`Self::scan_range`]. Ancestor segments are
-    /// always scanned (when present): keys written only before the
-    /// branch point are undiscoverable from the descendant's segment
-    /// alone. Per-key chains are merged nearest-first, then
+    /// Lineage-aware [`Self::scan_range`]. An ancestor segment is read only
+    /// while some requested block is not yet anchored at or above its cap (see
+    /// [`walk_lineage_scan`]); a range that crosses forks cannot enumerate its
+    /// keys, so its ancestors are always read, since keys written only before
+    /// the branch point are otherwise undiscoverable from the descendant's
+    /// segment. Per-key chains are merged nearest-first, then
     /// sorted/deduped/trimmed at the anchor.
     pub async fn scan_range_lineage(
         &self,
@@ -2408,29 +2620,34 @@ impl PageStore {
         .await
     }
 
-    /// Resolve one lineage segment's chains — a contiguous range or a scattered
-    /// key set, per `target`. The per-segment step of [`Self::scan_lineage`].
+    /// Resolve one lineage segment's chains: `residual` keys if the walk has
+    /// narrowed to some, else the whole `target`, a contiguous range or a
+    /// scattered key set. The per-segment step of [`Self::scan_lineage`].
+    ///
+    /// `residual` is owned rather than borrowed because this is the one future
+    /// type [`walk_lineage_scan`]'s `scan` returns, so it cannot hold a slice
+    /// borrowed from the walk.
     async fn scan_lineage_segment(
         &self,
         target: &LineageScanTarget<'_>,
         branch_id: BranchId,
         lsn: Lsn,
+        residual: Option<Vec<Key>>,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+        if let Some(keys) = residual.as_deref() {
+            return self.scan_scattered_set(branch_id, keys, lsn).await;
+        }
         match target {
             LineageScanTarget::Range(range) => self.scan_range(branch_id, range.clone(), lsn).await,
             LineageScanTarget::Set(keys) => self.scan_scattered_set(branch_id, keys, lsn).await,
         }
     }
 
-    /// Shared skeleton of [`Self::scan_range_lineage`] and
-    /// [`Self::scan_scattered_set_lineage`]. Walk `lineage` newest-branch-first,
-    /// scanning each segment via [`Self::scan_lineage_segment`] (capped at that
-    /// segment's `cap_lsn`), fold every segment's chains into one map, then
-    /// merge (sort/dedup/truncate) per key. Only the per-segment scan differs
-    /// between the two callers — a contiguous range vs a scattered key set —
-    /// carried by `target`. `label` names the caller for the empty-lineage
-    /// error. The single-segment case returns the segment's output directly (it
-    /// is already ordered); the merge only runs when ancestors contribute rows.
+    /// Shared body of [`Self::scan_range_lineage`] and
+    /// [`Self::scan_scattered_set_lineage`]: [`walk_lineage_scan`] over
+    /// `target`'s keys. A narrowed ancestor is read as a scattered set of the
+    /// unanchored blocks, all on `target`'s one fork, since a cross-fork range
+    /// never enumerates.
     async fn scan_lineage(
         &self,
         label: &str,
@@ -2438,43 +2655,19 @@ impl PageStore {
         target_lsn: Lsn,
         target: LineageScanTarget<'_>,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
-        let Some((first, rest)) = lineage.split_first() else {
-            bail!("{label}: empty lineage");
-        };
-        let mut out = self
-            .scan_lineage_segment(
-                &target,
-                first.branch_id,
-                std::cmp::min(target_lsn, first.cap_lsn),
-            )
-            .await?;
-        if rest.is_empty() {
-            return Ok(out);
-        }
-        for seg in rest {
-            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            let anc = self
-                .scan_lineage_segment(&target, seg.branch_id, eff)
-                .await?;
-            for (key, rows) in anc {
-                out.entry(key).or_default().extend(rows);
-            }
-        }
-        // Concatenating chains across ancestor segments breaks per-key LSN
-        // order, so re-merge each: sort newest-first, dedup by lsn, truncate at
-        // the newest will_init.
-        for chain in out.values_mut() {
-            chain.sort_by(|a, b| {
-                b.lsn
-                    .cmp(&a.lsn)
-                    .then_with(|| b.will_init.cmp(&a.will_init))
-            });
-            dedup_page_chain_by_lsn(chain);
-            if let Some(idx) = chain.iter().position(|r| r.will_init) {
-                chain.truncate(idx + 1);
-            }
-        }
-        Ok(out)
+        let target = &target;
+        walk_lineage_scan(
+            label,
+            lineage,
+            target_lsn,
+            target.requested_keys(),
+            move |branch_id, lsn, residual: Option<&[Key]>| {
+                record_segment_scan(branch_id, residual.map(<[Key]>::len));
+                self.scan_lineage_segment(target, branch_id, lsn, residual.map(<[Key]>::to_vec))
+            },
+            merge_page_chain,
+        )
+        .await
     }
 
     /// Lineage-aware [`Self::read_slru_chain`]. Required for branches:
@@ -2490,9 +2683,7 @@ impl PageStore {
     ) -> Result<Vec<SlruPageRow>> {
         let mut chain: Vec<SlruPageRow> = Vec::new();
         for seg in lineage {
-            // See read_chain_lineage: an anchor below this segment's
-            // cap doesn't cover the segment's rows above it.
-            if chain.iter().any(|r| r.will_init && r.lsn >= seg.cap_lsn) {
+            if seg.shadowed_by(&chain) {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
@@ -2509,7 +2700,10 @@ impl PageStore {
 
     /// Lineage-aware [`Self::scan_slru_range`]. Ancestor rows all lie below
     /// the branch point, so after the merge the tip's rows lead and a
-    /// [`SlruScan::NewestUpTo`] cut keeps the newest overall.
+    /// [`SlruScan::NewestUpTo`] cut keeps the newest overall. An ancestor is
+    /// read only for the blocks it is not yet shadowed for: `merge_slru_chain`
+    /// trims at the anchor before the newest-`n` cut, so a shadowed ancestor's
+    /// rows would be dropped in either mode.
     pub async fn scan_slru_range_lineage(
         &self,
         lineage: &[LineageSegment],
@@ -2519,36 +2713,27 @@ impl PageStore {
         target_lsn: Lsn,
         mode: SlruScan,
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
-        let Some((first, rest)) = lineage.split_first() else {
-            bail!("scan_slru_range_lineage: empty lineage");
-        };
-        // A segment is read at most up to its cap: the LSN at which the next
-        // segment branched off it.
-        let scan = async |branch_id, capped_lsn| {
-            self.scan_slru_range(
-                branch_id,
-                kind,
-                segno,
-                blknum_range.clone(),
-                capped_lsn,
-                mode,
-            )
-            .await
-        };
-        let mut out = scan(first.branch_id, std::cmp::min(target_lsn, first.cap_lsn)).await?;
-        if rest.is_empty() {
-            return Ok(out);
-        }
-        for seg in rest {
-            let anc = scan(seg.branch_id, std::cmp::min(target_lsn, seg.cap_lsn)).await?;
-            for (blk, rows) in anc {
-                out.entry(blk).or_default().extend(rows);
-            }
-        }
-        for chain in out.values_mut() {
-            merge_slru_chain(chain, mode);
-        }
-        Ok(out)
+        // An SLRU range is always its own key set, so there is no
+        // read-everything case here.
+        walk_lineage_scan(
+            "scan_slru_range_lineage",
+            lineage,
+            target_lsn,
+            Some(blknum_range.clone()),
+            move |branch_id, lsn, residual: Option<&[u32]>| {
+                // No scattered SLRU read, so an ancestor is narrowed to the
+                // span of the blocks still unanchored rather than to the set.
+                let range = residual
+                    .and_then(blknum_span)
+                    .unwrap_or_else(|| blknum_range.clone());
+                // The span, not the residual: a gap between two unanchored
+                // blocks is read too, and the tests hold that to account.
+                record_segment_scan(branch_id, residual.map(|_| range.len()));
+                self.scan_slru_range(branch_id, kind, segno, range, lsn, mode)
+            },
+            |chain| merge_slru_chain(chain, mode),
+        )
+        .await
     }
 
     /// Lineage-aware [`Self::scan_meta_range`]. Nearest-segment-wins
@@ -4440,6 +4625,69 @@ mod tests {
         ]
     }
 
+    /// Three-segment lineage: `child` (MAX) off `parent` at `cap_parent`, which
+    /// is itself off `grand` at `cap_grand` (caps are non-increasing).
+    fn lineage3(
+        child: BranchId,
+        parent: BranchId,
+        grand: BranchId,
+        cap_parent: u64,
+        cap_grand: u64,
+    ) -> Vec<LineageSegment> {
+        assert!(cap_grand <= cap_parent);
+        let mut segs = lineage2(child, parent, cap_parent);
+        segs.push(LineageSegment {
+            branch_id: grand,
+            cap_lsn: Lsn(cap_grand),
+        });
+        segs
+    }
+
+    /// The one relation and fork these tests key off.
+    fn blk_key(blknum: u32) -> Key {
+        Key::from_slice(&page_key(1663, 5, 16384, 0, blknum))
+    }
+
+    fn blk_range(lo: u32, hi: u32) -> Range<Key> {
+        blk_key(lo)..blk_key(hi)
+    }
+
+    /// One relation-page row on the fork [`blk_key`] builds keys in.
+    fn blk_row(blknum: u32, lsn: u64, is_image: bool, will_init: bool, p: &[u8]) -> Arc<PageRow> {
+        page_row(
+            page_key(1663, 5, 16384, 0, blknum),
+            lsn,
+            is_image,
+            will_init,
+            p,
+        )
+    }
+
+    /// One `pg_xact` row in segment 1, the SLRU these tests use throughout.
+    fn clog_row(
+        blknum: u32,
+        lsn: u64,
+        is_image: bool,
+        will_init: bool,
+        payload: &[u8],
+    ) -> SlruPageRow {
+        SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 1,
+            blknum,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::copy_from_slice(payload),
+        }
+    }
+
+    /// LSNs of a chain, newest first. Generic over [`AnchorRow`], so it serves
+    /// rel-page and SLRU chains alike.
+    fn lsns<R: AnchorRow>(chain: &[R]) -> Vec<u64> {
+        chain.iter().map(|r| r.lsn().0).collect()
+    }
+
     /// A branch chain anchors in the ancestor: pre-branch rows live
     /// under the ancestor's branch_id and the lineage walk stitches
     /// them below the descendant's deltas.
@@ -4476,10 +4724,7 @@ mod tests {
             .read_chain_lineage(&lineage, &k, Lsn(100))
             .await
             .unwrap();
-        assert_eq!(
-            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
-            vec![40, 30, 20, 10]
-        );
+        assert_eq!(lsns(&chain), vec![40, 30, 20, 10]);
         assert!(chain[3].is_image, "anchor is the ancestor's image");
         drop_schema(&store, &schema).await;
     }
@@ -4515,7 +4760,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            lsns(&chain),
             vec![40, 20, 10],
             "ancestor row at lsn 30 (> branch point 25) must be excluded"
         );
@@ -4566,7 +4811,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            lsns(&chain),
             vec![38, 30, 25],
             "ancestor deltas above the sub-cap copy-up anchor must be layered on top"
         );
@@ -4586,7 +4831,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            lsns(&chain),
             vec![45],
             "post-cap own anchor shadows the whole ancestor history"
         );
@@ -4637,48 +4882,33 @@ mod tests {
         let (store, schema) = make_store("lin_scan").await;
         let anc = rand_branch();
         let child = rand_branch();
-        let k_anc_only = page_key(1663, 5, 16384, 0, 1);
-        let k_shared = page_key(1663, 5, 16384, 0, 2);
-
         store
             .put_pages(
                 anc,
                 &[
-                    page_row(k_anc_only.clone(), 10, true, true, b"a-img"),
-                    page_row(k_shared.clone(), 10, true, true, b"s-img"),
+                    blk_row(1, 10, true, true, b"a-img"),
+                    blk_row(2, 10, true, true, b"s-img"),
                 ],
             )
             .await
             .unwrap();
         store
-            .put_pages(
-                child,
-                &[page_row(k_shared.clone(), 30, false, false, b"s-child")],
-            )
+            .put_pages(child, &[blk_row(2, 30, false, false, b"s-child")])
             .await
             .unwrap();
 
-        let lineage = lineage2(child, anc, 25);
-        let start = Key::from_slice(&page_key(1663, 5, 16384, 0, 0));
-        let end = Key::from_slice(&page_key(1663, 5, 16384, 0, 10));
         let out = store
-            .scan_range_lineage(&lineage, start..end, Lsn(100))
+            .scan_range_lineage(&lineage2(child, anc, 25), blk_range(0, 10), Lsn(100))
             .await
             .unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(
-            out[&Key::from_slice(&k_anc_only)]
-                .iter()
-                .map(|r| r.lsn.0)
-                .collect::<Vec<_>>(),
+            lsns(&out[&blk_key(1)]),
             vec![10],
             "ancestor-only key must be discovered"
         );
         assert_eq!(
-            out[&Key::from_slice(&k_shared)]
-                .iter()
-                .map(|r| r.lsn.0)
-                .collect::<Vec<_>>(),
+            lsns(&out[&blk_key(2)]),
             vec![30, 10],
             "shared key blends child delta over ancestor image"
         );
@@ -4715,7 +4945,7 @@ mod tests {
             .await
             .unwrap();
 
-        let k_absent = Key::from_slice(&page_key(1663, 5, 16384, 0, 999));
+        let k_absent = blk_key(999);
         let keys: Vec<Key> = [&k1, &k4, &k9]
             .iter()
             .map(|b| Key::from_slice(b))
@@ -4764,10 +4994,7 @@ mod tests {
         );
 
         // Keys spanning forks are rejected (caller must bucket by fork).
-        let cross_fork = vec![
-            Key::from_slice(&page_key(1663, 5, 16384, 0, 1)),
-            Key::from_slice(&page_key(1663, 5, 16384, 1, 1)),
-        ];
+        let cross_fork = vec![blk_key(1), Key::from_slice(&page_key(1663, 5, 16384, 1, 1))];
         assert!(
             store
                 .scan_scattered_set(br, &cross_fork, target)
@@ -4822,9 +5049,9 @@ mod tests {
             )
             .await
             .expect("raw cross-fork scan");
-        let lsns: Vec<i64> = raw.iter().map(|r| r.get::<_, i64>(5)).collect();
+        let raw_lsns: Vec<i64> = raw.iter().map(|r| r.get::<_, i64>(5)).collect();
         assert_eq!(
-            lsns,
+            raw_lsns,
             vec![60, 50, 40],
             "the LATERAL must start at the newest base, the init record at 40, \
              not the image at 10 below it"
@@ -4838,10 +5065,7 @@ mod tests {
             .scan_range(br, key..fork_end, Lsn(target as u64))
             .await
             .unwrap();
-        assert_eq!(
-            chain[&key].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
-            vec![60, 50, 40],
-        );
+        assert_eq!(lsns(&chain[&key]), vec![60, 50, 40],);
         drop_schema(&store, &schema).await;
     }
 
@@ -4854,48 +5078,38 @@ mod tests {
         let (store, schema) = make_store("scattered_lin").await;
         let anc = rand_branch();
         let child = rand_branch();
-        // Non-contiguous keys so the set is genuinely scattered.
-        let k_anc_only = page_key(1663, 5, 16384, 0, 1);
-        let k_shared = page_key(1663, 5, 16384, 0, 8);
-
+        // Non-adjacent blocks, so the set is scattered rather than a run.
         store
             .put_pages(
                 anc,
                 &[
-                    page_row(k_anc_only.clone(), 10, true, true, b"a-img"),
-                    page_row(k_shared.clone(), 10, true, true, b"s-img"),
+                    blk_row(1, 10, true, true, b"a-img"),
+                    blk_row(8, 10, true, true, b"s-img"),
                 ],
             )
             .await
             .unwrap();
         store
-            .put_pages(
-                child,
-                &[page_row(k_shared.clone(), 30, false, false, b"s-child")],
-            )
+            .put_pages(child, &[blk_row(8, 30, false, false, b"s-child")])
             .await
             .unwrap();
 
-        let lineage = lineage2(child, anc, 25);
-        let keys = vec![Key::from_slice(&k_anc_only), Key::from_slice(&k_shared)];
         let out = store
-            .scan_scattered_set_lineage(&lineage, &keys, Lsn(100))
+            .scan_scattered_set_lineage(
+                &lineage2(child, anc, 25),
+                &[blk_key(1), blk_key(8)],
+                Lsn(100),
+            )
             .await
             .unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(
-            out[&Key::from_slice(&k_anc_only)]
-                .iter()
-                .map(|r| r.lsn.0)
-                .collect::<Vec<_>>(),
+            lsns(&out[&blk_key(1)]),
             vec![10],
             "ancestor-only scattered key must be discovered"
         );
         assert_eq!(
-            out[&Key::from_slice(&k_shared)]
-                .iter()
-                .map(|r| r.lsn.0)
-                .collect::<Vec<_>>(),
+            lsns(&out[&blk_key(8)]),
             vec![30, 10],
             "shared key blends child delta over ancestor image"
         );
@@ -4909,22 +5123,12 @@ mod tests {
         let (store, schema) = make_store("lin_slru").await;
         let anc = rand_branch();
         let child = rand_branch();
-        let slru_row = |lsn: u64, is_image: bool, will_init: bool, payload: &[u8]| SlruPageRow {
-            kind: SlruKind::Clog,
-            segno: 1,
-            blknum: 0,
-            lsn: Lsn(lsn),
-            is_image,
-            will_init,
-            payload: Bytes::copy_from_slice(payload),
-        };
-
         store
-            .put_slru_pages(anc, &[slru_row(10, true, true, b"anc-img")])
+            .put_slru_pages(anc, &[clog_row(0, 10, true, true, b"anc-img")])
             .await
             .unwrap();
         store
-            .put_slru_pages(child, &[slru_row(30, false, false, b"child-delta")])
+            .put_slru_pages(child, &[clog_row(0, 30, false, false, b"child-delta")])
             .await
             .unwrap();
 
@@ -4933,10 +5137,7 @@ mod tests {
             .read_slru_chain_lineage(&lineage, SlruKind::Clog, 1, 0, Lsn(100))
             .await
             .unwrap();
-        assert_eq!(
-            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
-            vec![30, 10]
-        );
+        assert_eq!(lsns(&chain), vec![30, 10]);
 
         // And the range-scan variant sees the ancestor-only block.
         let scanned = store
@@ -4950,10 +5151,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            scanned[&0].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
-            vec![30, 10]
-        );
+        assert_eq!(lsns(&scanned[&0]), vec![30, 10]);
         drop_schema(&store, &schema).await;
     }
 
@@ -4963,36 +5161,25 @@ mod tests {
     async fn scan_slru_newest_caps_each_block() {
         let (store, schema) = make_store("slru_newest").await;
         let branch = rand_branch();
-        let row = |blk: u32, lsn: u64, is_image: bool, will_init: bool, pl: &[u8]| SlruPageRow {
-            kind: SlruKind::Clog,
-            segno: 1,
-            blknum: blk,
-            lsn: Lsn(lsn),
-            is_image,
-            will_init,
-            payload: Bytes::copy_from_slice(pl),
-        };
         // blk 0: an image at 10 under six deltas; blk 1: the image is the
         // newest row; blk 2: nothing.
         store
             .put_slru_pages(
                 branch,
                 &[
-                    row(0, 10, true, true, b"b0-img"),
-                    row(0, 20, false, false, b"b0-d20"),
-                    row(0, 30, false, false, b"b0-d30"),
-                    row(0, 40, false, false, b"b0-d40"),
-                    row(0, 50, false, false, b"b0-d50"),
-                    row(0, 60, false, false, b"b0-d60"),
-                    row(0, 70, false, false, b"b0-d70"),
-                    row(1, 40, false, false, b"b1-d40"),
-                    row(1, 50, true, true, b"b1-img"),
+                    clog_row(0, 10, true, true, b"b0-img"),
+                    clog_row(0, 20, false, false, b"b0-d20"),
+                    clog_row(0, 30, false, false, b"b0-d30"),
+                    clog_row(0, 40, false, false, b"b0-d40"),
+                    clog_row(0, 50, false, false, b"b0-d50"),
+                    clog_row(0, 60, false, false, b"b0-d60"),
+                    clog_row(0, 70, false, false, b"b0-d70"),
+                    clog_row(1, 40, false, false, b"b1-d40"),
+                    clog_row(1, 50, true, true, b"b1-img"),
                 ],
             )
             .await
             .unwrap();
-        let lsns = |chain: &Vec<SlruPageRow>| chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>();
-
         let newest = store
             .scan_slru_range(
                 branch,
@@ -5044,21 +5231,12 @@ mod tests {
         let (store, schema) = make_store("slru_newest_lin").await;
         let anc = rand_branch();
         let child = rand_branch();
-        let row = |lsn: u64, is_image: bool, will_init: bool, pl: &[u8]| SlruPageRow {
-            kind: SlruKind::Clog,
-            segno: 1,
-            blknum: 0,
-            lsn: Lsn(lsn),
-            is_image,
-            will_init,
-            payload: Bytes::copy_from_slice(pl),
-        };
         store
             .put_slru_pages(
                 anc,
                 &[
-                    row(10, true, true, b"anc-img"),
-                    row(20, false, false, b"anc-d20"),
+                    clog_row(0, 10, true, true, b"anc-img"),
+                    clog_row(0, 20, false, false, b"anc-d20"),
                 ],
             )
             .await
@@ -5067,15 +5245,13 @@ mod tests {
             .put_slru_pages(
                 child,
                 &[
-                    row(30, false, false, b"child-d30"),
-                    row(40, false, false, b"child-d40"),
+                    clog_row(0, 30, false, false, b"child-d30"),
+                    clog_row(0, 40, false, false, b"child-d40"),
                 ],
             )
             .await
             .unwrap();
         let lineage = lineage2(child, anc, 25);
-        let lsns = |chain: &Vec<SlruPageRow>| chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>();
-
         for (n, want) in [
             (3u64, vec![40, 30, 20]),
             (1, vec![40]),
@@ -5094,6 +5270,991 @@ mod tests {
                 .unwrap();
             assert_eq!(lsns(&got[&0]), want, "NewestUpTo({n})");
         }
+        drop_schema(&store, &schema).await;
+    }
+
+    // ------------------- #1077 anchor-stop contract ------------------------
+    //
+    // Which ancestor segments a lineage scan reads is invisible in what it
+    // returns, so these tests assert on what the walkers record under
+    // `#[cfg(test)]` (see `record_segment_scan` / `take_segment_scans`).
+
+    /// The segments scanned on this thread since the last call, in read order.
+    fn take_segment_scans() -> Vec<SegmentScan> {
+        SEGMENT_SCANS.with_borrow_mut(std::mem::take)
+    }
+
+    /// [`take_segment_scans`] reduced to the branches, for the tests that only
+    /// care which segments were read.
+    fn take_scanned_branches() -> Vec<BranchId> {
+        take_segment_scans()
+            .into_iter()
+            .map(|s| s.branch_id)
+            .collect()
+    }
+
+    /// Every requested block is anchored in the child at or above the
+    /// ancestor's cap, so nothing the ancestor could return survives the merge.
+    /// The walk must stop before reading it, exactly as `read_chain_lineage`
+    /// already does for a single block.
+    #[tokio::test]
+    async fn scan_range_lineage_stops_at_the_anchor() {
+        let (store, schema) = make_store("lin_stop_range").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                anc,
+                &[
+                    blk_row(1, 10, true, true, b"a1"),
+                    blk_row(2, 10, true, true, b"a2"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[
+                    blk_row(1, 30, true, true, b"c1"),
+                    blk_row(2, 30, true, true, b"c2"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(&lineage2(child, anc, 25), blk_range(1, 3), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&blk_key(1)]), vec![30]);
+        assert_eq!(lsns(&out[&blk_key(2)]), vec![30]);
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child],
+            "the child anchors every block at or above the cap; the ancestor is surplus"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Scattered-set twin of `scan_range_lineage_stops_at_the_anchor`.
+    #[tokio::test]
+    async fn scan_scattered_set_lineage_stops_at_the_anchor() {
+        let (store, schema) = make_store("lin_stop_set").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                anc,
+                &[
+                    blk_row(1, 10, true, true, b"a1"),
+                    blk_row(8, 10, true, true, b"a8"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[
+                    blk_row(1, 30, true, true, b"c1"),
+                    blk_row(8, 30, true, true, b"c8"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let keys = [blk_key(1), blk_key(8)];
+        take_segment_scans();
+        let out = store
+            .scan_scattered_set_lineage(&lineage2(child, anc, 25), &keys, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&blk_key(1)]), vec![30]);
+        assert_eq!(lsns(&out[&blk_key(8)]), vec![30]);
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child],
+            "the child anchors every key at or above the cap; the ancestor is surplus"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// SLRU twin of `scan_range_lineage_stops_at_the_anchor`.
+    #[tokio::test]
+    async fn scan_slru_range_lineage_stops_at_the_anchor() {
+        let (store, schema) = make_store("lin_stop_slru").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_slru_pages(
+                anc,
+                &[
+                    clog_row(0, 10, true, true, b"a0"),
+                    clog_row(1, 10, true, true, b"a1"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(0, 30, true, true, b"c0"),
+                    clog_row(1, 30, true, true, b"c1"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_slru_range_lineage(
+                &lineage2(child, anc, 25),
+                SlruKind::Clog,
+                1,
+                0..2,
+                Lsn(100),
+                SlruScan::ToAnchor,
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&0]), vec![30]);
+        assert_eq!(lsns(&out[&1]), vec![30]);
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child],
+            "the child anchors every block at or above the cap; the ancestor is surplus"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The same stop under [`SlruScan::NewestUpTo`], whose tip chain is a
+    /// top-of-chain cut rather than anchor-complete (`clog_trailers` is the
+    /// production caller). The cut cannot hide an anchor the skip needs: the
+    /// merge trims at the newest `will_init` before taking the newest `n`, so
+    /// a shadowed ancestor's rows are dropped whichever mode asked for them.
+    #[tokio::test]
+    async fn scan_slru_newest_lineage_stops_at_the_anchor() {
+        let (store, schema) = make_store("lin_stop_slru_newest").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_slru_pages(
+                anc,
+                &[
+                    clog_row(0, 10, true, true, b"a0-img"),
+                    clog_row(0, 20, false, false, b"a0-d20"),
+                    clog_row(1, 10, true, true, b"a1-img"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(0, 30, true, true, b"c0-img"),
+                    clog_row(0, 40, false, false, b"c0-d40"),
+                    clog_row(1, 30, true, true, b"c1-img"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_slru_range_lineage(
+                &lineage2(child, anc, 25),
+                SlruKind::Clog,
+                1,
+                0..2,
+                Lsn(100),
+                SlruScan::NewestUpTo(3),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&0]), vec![40, 30]);
+        assert_eq!(lsns(&out[&1]), vec![30]);
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child],
+            "every block's image sits at or above the cap, so the ancestor's \
+             pre-branch rows are below an anchor the merge trims at"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Depth 3: an anchor at or above the PARENT's cap shadows the parent, and
+    /// because caps are non-increasing it shadows the grandparent too. One
+    /// scan, not three.
+    #[tokio::test]
+    async fn scan_range_lineage_stops_before_a_shadowed_grandparent() {
+        let (store, schema) = make_store("lin_stop_depth3").await;
+        let grand = rand_branch();
+        let parent = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(grand, &[blk_row(1, 10, true, true, b"g1")])
+            .await
+            .unwrap();
+        store
+            .put_pages(parent, &[blk_row(1, 40, false, false, b"p1")])
+            .await
+            .unwrap();
+        store
+            .put_pages(child, &[blk_row(1, 60, true, true, b"c1")])
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(
+                &lineage3(child, parent, grand, 50, 20),
+                blk_range(1, 2),
+                Lsn(100),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&blk_key(1)]), vec![60]);
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child],
+            "an anchor above the parent's cap shadows every deeper segment too"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Depth 3 with the anchor one level down: the child carries only a delta, so
+    /// the parent must be read, and the parent's own image then shadows the
+    /// grandparent. The walk folds each ancestor into `out` before judging the
+    /// next, so two segments are read, not three. Planning every ancestor from the
+    /// child's rows alone would miss this and read the grandparent as well.
+    #[tokio::test]
+    async fn scan_range_lineage_stops_when_the_parent_shadows_the_grandparent() {
+        let (store, schema) = make_store("lin_parent_shadows").await;
+        let grand = rand_branch();
+        let parent = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(grand, &[blk_row(1, 10, true, true, b"g1")])
+            .await
+            .unwrap();
+        // At or above the grandparent's cap (20), below the parent's own (50).
+        store
+            .put_pages(parent, &[blk_row(1, 30, true, true, b"p1")])
+            .await
+            .unwrap();
+        // A delta anchors nothing, so the child cannot end the walk by itself.
+        store
+            .put_pages(child, &[blk_row(1, 60, false, false, b"c1")])
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(
+                &lineage3(child, parent, grand, 50, 20),
+                blk_range(1, 2),
+                Lsn(100),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            lsns(&out[&blk_key(1)]),
+            vec![60, 30],
+            "the child delta layers on the parent's image, and the walk trims there"
+        );
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child, parent],
+            "the parent's image anchors block 1 at or above the grandparent's cap"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// An anchor BELOW the segment's cap does not shadow it: a materialiser
+    /// copy-up image lands in the child under the ancestor's head, and the
+    /// ancestor deltas in (anchor_lsn, cap] still have to be layered on top.
+    /// The ancestor must still be read, and its delta must survive.
+    #[tokio::test]
+    async fn scan_range_lineage_reads_an_ancestor_under_a_sub_cap_anchor() {
+        let (store, schema) = make_store("lin_subcap").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(anc, &[blk_row(1, 25, false, false, b"a-delta")])
+            .await
+            .unwrap();
+        store
+            .put_pages(child, &[blk_row(1, 24, true, true, b"c-image")])
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(&lineage2(child, anc, 25), blk_range(1, 2), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            lsns(&out[&blk_key(1)]),
+            vec![25, 24],
+            "the ancestor delta in (24, 25] layers on the sub-cap copy-up image"
+        );
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child, anc],
+            "an anchor below the cap leaves the ancestor's rows above it uncovered"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A mixed range: one block anchored in the child, one carrying only a
+    /// child delta, one that exists only in the ancestor. The ancestor is still
+    /// needed, but only for the two unanchored blocks, and the ancestor-only
+    /// block must still be discovered.
+    #[tokio::test]
+    async fn scan_range_lineage_reads_an_ancestor_for_unanchored_blocks() {
+        let (store, schema) = make_store("lin_mixed").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                anc,
+                &[
+                    blk_row(1, 10, true, true, b"a1"),
+                    blk_row(2, 10, true, true, b"a2"),
+                    blk_row(3, 10, true, true, b"a3"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[
+                    blk_row(1, 30, true, true, b"c1"),
+                    blk_row(2, 30, false, false, b"c2"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(&lineage2(child, anc, 25), blk_range(1, 4), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&blk_key(1)]), vec![30], "anchored in the child");
+        assert_eq!(
+            lsns(&out[&blk_key(2)]),
+            vec![30, 10],
+            "a child delta over the ancestor image"
+        );
+        assert_eq!(
+            lsns(&out[&blk_key(3)]),
+            vec![10],
+            "a block written only before the branch point is still discovered"
+        );
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: anc,
+                    keys: Some(2)
+                },
+            ],
+            "block 1 is anchored in the child, so the ancestor is read for the other two"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// SLRU twin of `scan_range_lineage_reads_an_ancestor_for_unanchored_blocks`:
+    /// the residual reaches the scan, which narrows the ancestor read to its
+    /// span (`blknum_span`) rather than re-reading the anchored head blocks.
+    #[tokio::test]
+    async fn scan_slru_range_lineage_reads_an_ancestor_for_unanchored_blocks() {
+        let (store, schema) = make_store("lin_slru_mixed").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_slru_pages(
+                anc,
+                &[
+                    clog_row(0, 10, true, true, b"a0"),
+                    clog_row(1, 10, true, true, b"a1"),
+                    clog_row(2, 10, true, true, b"a2"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(0, 30, true, true, b"c0"),
+                    clog_row(1, 30, false, false, b"c1"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_slru_range_lineage(
+                &lineage2(child, anc, 25),
+                SlruKind::Clog,
+                1,
+                0..3,
+                Lsn(100),
+                SlruScan::ToAnchor,
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&0]), vec![30], "anchored in the child");
+        assert_eq!(
+            lsns(&out[&1]),
+            vec![30, 10],
+            "a child delta over the ancestor image"
+        );
+        assert_eq!(
+            lsns(&out[&2]),
+            vec![10],
+            "a block written only before the branch point is still discovered"
+        );
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: anc,
+                    keys: Some(2)
+                },
+            ],
+            "block 0 is anchored in the child, so the ancestor is read for blocks 1..3"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A residual with a hole in it. The child anchors blocks 0, 2 and 4, so
+    /// only 1 and 3 still need the ancestor, which the rel path asks for
+    /// exactly, since a scattered set need not be contiguous.
+    #[tokio::test]
+    async fn scan_range_lineage_reads_an_ancestor_for_a_scattered_residual() {
+        let (store, schema) = make_store("lin_gap_rel").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                anc,
+                &(0..5)
+                    .map(|b| blk_row(b, 10, true, true, b"a"))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[
+                    blk_row(0, 30, true, true, b"c0"),
+                    blk_row(2, 30, true, true, b"c2"),
+                    blk_row(4, 30, true, true, b"c4"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(&lineage2(child, anc, 25), blk_range(0, 5), Lsn(100))
+            .await
+            .unwrap();
+        for blk in [0, 2, 4] {
+            assert_eq!(lsns(&out[&blk_key(blk)]), vec![30], "anchored in the child");
+        }
+        for blk in [1, 3] {
+            assert_eq!(lsns(&out[&blk_key(blk)]), vec![10], "ancestor-only block");
+        }
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: anc,
+                    keys: Some(2)
+                },
+            ],
+            "the gap costs nothing on the rel path: blocks 1 and 3 and no others"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// SLRU twin of the scattered residual, pinning the cost the rel path does
+    /// not pay: with no scattered SLRU read the ancestor is narrowed to the
+    /// residual's SPAN, so the anchored block between 1 and 3 is read again and
+    /// discarded by the merge. Three blocks read for two that were needed.
+    #[tokio::test]
+    async fn scan_slru_range_lineage_widens_a_scattered_residual_to_its_span() {
+        let (store, schema) = make_store("lin_gap_slru").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_slru_pages(
+                anc,
+                &(0..5)
+                    .map(|b| clog_row(b, 10, true, true, b"a"))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(0, 30, true, true, b"c0"),
+                    clog_row(2, 30, true, true, b"c2"),
+                    clog_row(4, 30, true, true, b"c4"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_slru_range_lineage(
+                &lineage2(child, anc, 25),
+                SlruKind::Clog,
+                1,
+                0..5,
+                Lsn(100),
+                SlruScan::ToAnchor,
+            )
+            .await
+            .unwrap();
+        for blk in [0, 2, 4] {
+            assert_eq!(lsns(&out[&blk]), vec![30], "anchored in the child");
+        }
+        for blk in [1, 3] {
+            assert_eq!(lsns(&out[&blk]), vec![10], "ancestor-only block");
+        }
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: anc,
+                    keys: Some(3)
+                },
+            ],
+            "blocks 1 and 3 are needed, so the span 1..4 is read, not 0..5, \
+             and not the two blocks a scattered read would have taken"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A range crossing a fork boundary cannot enumerate its keys, so the walk
+    /// cannot prove any block is anchored and must keep reading every ancestor.
+    #[tokio::test]
+    async fn scan_range_lineage_reads_every_ancestor_for_a_cross_fork_range() {
+        let (store, schema) = make_store("lin_crossfork").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                anc,
+                &[page_row(
+                    page_key(1663, 5, 16384, 1, 0),
+                    10,
+                    true,
+                    true,
+                    b"afsm",
+                )],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(child, &[blk_row(0, 30, true, true, b"c0")])
+            .await
+            .unwrap();
+
+        let range = blk_key(0)..Key::from_slice(&page_key(1663, 5, 16384, 1, 1));
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(&lineage2(child, anc, 25), range, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            lsns(&out[&Key::from_slice(&page_key(1663, 5, 16384, 1, 0))]),
+            vec![10],
+            "the ancestor-only key in the other fork is still found"
+        );
+        assert_eq!(
+            take_scanned_branches(),
+            vec![child, anc],
+            "an unenumerable range keeps the read-everything walk"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Scattered-set twin of `scan_range_lineage_reads_an_ancestor_for_unanchored_blocks`.
+    #[tokio::test]
+    async fn scan_scattered_set_lineage_reads_an_ancestor_for_unanchored_keys() {
+        let (store, schema) = make_store("lin_set_mixed").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                anc,
+                &[
+                    blk_row(1, 10, true, true, b"a1"),
+                    blk_row(8, 10, true, true, b"a8"),
+                    blk_row(40, 10, true, true, b"a40"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[
+                    blk_row(1, 30, true, true, b"c1"),
+                    blk_row(8, 30, false, false, b"c8"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let keys = [blk_key(1), blk_key(8), blk_key(40)];
+        take_segment_scans();
+        let out = store
+            .scan_scattered_set_lineage(&lineage2(child, anc, 25), &keys, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&blk_key(1)]), vec![30], "anchored in the child");
+        assert_eq!(lsns(&out[&blk_key(8)]), vec![30, 10]);
+        assert_eq!(lsns(&out[&blk_key(40)]), vec![10], "ancestor-only key");
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: anc,
+                    keys: Some(2)
+                },
+            ],
+            "key 1 is anchored in the child, so the ancestor is read for 8 and 40"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Nothing anchors in the child, so the parent is read in full; the parent's
+    /// image then shadows the grandparent for block 1 only, so narrowing starts
+    /// one segment down.
+    #[tokio::test]
+    async fn scan_range_lineage_narrows_first_at_the_grandparent() {
+        let (store, schema) = make_store("lin_narrow_grand").await;
+        let grand = rand_branch();
+        let parent = rand_branch();
+        let child = rand_branch();
+        store
+            .put_pages(
+                grand,
+                &[
+                    blk_row(1, 10, true, true, b"g1"),
+                    blk_row(2, 10, true, true, b"g2"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                parent,
+                &[
+                    blk_row(1, 30, true, true, b"p1"),
+                    blk_row(2, 40, false, false, b"p2"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[
+                    blk_row(1, 60, false, false, b"c1"),
+                    blk_row(2, 60, false, false, b"c2"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_range_lineage(
+                &lineage3(child, parent, grand, 50, 20),
+                blk_range(1, 3),
+                Lsn(100),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&blk_key(1)]), vec![60, 30]);
+        assert_eq!(lsns(&out[&blk_key(2)]), vec![60, 40, 10]);
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: parent,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: grand,
+                    keys: Some(1)
+                },
+            ],
+            "only block 2 still needs the grandparent"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Partial narrowing under [`SlruScan::NewestUpTo`]: block 0 is anchored in
+    /// the child at or above the cap, block 1 is not.
+    #[tokio::test]
+    async fn scan_slru_newest_lineage_reads_an_ancestor_for_unanchored_blocks() {
+        let (store, schema) = make_store("lin_slru_newest_mixed").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        store
+            .put_slru_pages(
+                anc,
+                &[
+                    clog_row(0, 10, true, true, b"a0-img"),
+                    clog_row(1, 10, true, true, b"a1-img"),
+                    clog_row(1, 20, false, false, b"a1-d20"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(0, 30, true, true, b"c0-img"),
+                    clog_row(0, 40, false, false, b"c0-d40"),
+                    clog_row(1, 30, false, false, b"c1-d30"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        take_segment_scans();
+        let out = store
+            .scan_slru_range_lineage(
+                &lineage2(child, anc, 25),
+                SlruKind::Clog,
+                1,
+                0..2,
+                Lsn(100),
+                SlruScan::NewestUpTo(3),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lsns(&out[&0]), vec![40, 30]);
+        assert_eq!(lsns(&out[&1]), vec![30, 20, 10]);
+        assert_eq!(
+            take_segment_scans(),
+            vec![
+                SegmentScan {
+                    branch_id: child,
+                    keys: None
+                },
+                SegmentScan {
+                    branch_id: anc,
+                    keys: Some(1)
+                },
+            ],
+            "block 0 is anchored in the child, so the ancestor is read for block 1"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    // ------------------- #1077 anchor predicate (no YB) --------------------
+
+    #[test]
+    fn shadowed_by_needs_a_will_init_at_or_above_the_cap() {
+        let seg = LineageSegment {
+            branch_id: rand_branch(),
+            cap_lsn: Lsn(25),
+        };
+        let k = page_key(1663, 5, 16384, 0, 1);
+        assert!(seg.shadowed_by(&[page_row(k.clone(), 25, true, true, b"")]));
+        assert!(seg.shadowed_by(&[
+            page_row(k.clone(), 40, false, false, b""),
+            page_row(k.clone(), 30, true, true, b""),
+        ]));
+        assert!(
+            !seg.shadowed_by(&[page_row(k.clone(), 24, true, true, b"")]),
+            "a sub-cap copy-up leaves the ancestor deltas in (24, 25] uncovered"
+        );
+        assert!(
+            !seg.shadowed_by(&[page_row(k.clone(), 30, false, false, b"")]),
+            "a delta is not an anchor"
+        );
+        assert!(!seg.shadowed_by::<Arc<PageRow>>(&[]));
+    }
+
+    #[test]
+    fn retain_unshadowed_keeps_the_keys_the_segment_is_still_needed_for() {
+        let parent = LineageSegment {
+            branch_id: rand_branch(),
+            cap_lsn: Lsn(50),
+        };
+        let grand = LineageSegment {
+            branch_id: rand_branch(),
+            cap_lsn: Lsn(20),
+        };
+        let row =
+            |blk: u32, lsn: u64, will_init: bool| blk_row(blk, lsn, will_init, will_init, b"");
+        let have: HashMap<Key, Vec<Arc<PageRow>>> = HashMap::from([
+            (blk_key(1), vec![row(1, 60, true)]),  // anchors both segments
+            (blk_key(2), vec![row(2, 30, true)]),  // anchors the grandparent only
+            (blk_key(3), vec![row(3, 70, false)]), // a delta anchors nothing
+        ]);
+        let left = |seg: &LineageSegment, keys: &[Key]| {
+            let mut keys = keys.to_vec();
+            seg.retain_unshadowed(&mut keys, &have);
+            keys
+        };
+        assert_eq!(left(&parent, &[blk_key(1)]), vec![]);
+        assert_eq!(left(&parent, &[blk_key(2)]), vec![blk_key(2)]);
+        assert_eq!(
+            left(&grand, &[blk_key(2)]),
+            vec![],
+            "the deeper cap is lower, so the same anchor covers it"
+        );
+        assert_eq!(
+            left(&parent, &[blk_key(3)]),
+            vec![blk_key(3)],
+            "a delta-only chain anchors nothing"
+        );
+        assert_eq!(
+            left(&parent, &[blk_key(4)]),
+            vec![blk_key(4)],
+            "a key with no chain at all could live only in an ancestor"
+        );
+        assert_eq!(
+            left(&parent, &[blk_key(1), blk_key(3)]),
+            vec![blk_key(3)],
+            "the anchored key drops out; the segment is read for the rest"
+        );
+    }
+
+    #[test]
+    fn blknum_span_covers_the_residual_and_nothing_outside_it() {
+        assert_eq!(blknum_span(&[4]), Some(4..5));
+        assert_eq!(blknum_span(&[7, 2, 5]), Some(2..8), "order does not matter");
+        assert_eq!(blknum_span(&[]), None);
+        assert_eq!(blknum_span(&[u32::MAX]), None, "no range can end past MAX");
+    }
+
+    #[test]
+    fn requested_keys_enumerates_one_fork_ranges_only() {
+        let enumerate = |t: &LineageScanTarget| t.requested_keys().map(Iterator::collect::<Vec<_>>);
+
+        let range = LineageScanTarget::Range(blk_range(3, 7));
+        assert_eq!(
+            enumerate(&range),
+            Some(vec![blk_key(3), blk_key(4), blk_key(5), blk_key(6)])
+        );
+        let keys = [blk_key(1), blk_key(8), blk_key(40)];
+        assert_eq!(
+            enumerate(&LineageScanTarget::Set(&keys)),
+            Some(keys.to_vec())
+        );
+        let cross_fork =
+            LineageScanTarget::Range(blk_key(0)..Key::from_slice(&page_key(1663, 5, 16384, 1, 0)));
+        assert_eq!(
+            enumerate(&cross_fork),
+            None,
+            "a range crossing forks cannot enumerate its keys"
+        );
+    }
+
+    // ------------------- #1077 perf harness (ignored) ----------------------
+
+    /// Wall-clock cost of one vectored read on a branched timeline whose own
+    /// rows anchor every requested block at or above the ancestor's cap, so
+    /// every ancestor scan the walk issues is provably surplus. Ignored by
+    /// default: needs a live YB and runs for seconds. Run it with
+    ///
+    ///     cargo test -p pageserver --lib bench_lineage_scan -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "perf harness: needs a live YB and runs for seconds"]
+    async fn bench_lineage_scan_shadowed_ancestor() {
+        const BLOCKS: u32 = 128;
+        const ITERS: usize = 100;
+        let (store, schema) = make_store("bench_lineage").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+
+        let anc_rows: Vec<_> = (0..BLOCKS)
+            .map(|b| blk_row(b, 10, true, true, b"anc"))
+            .collect();
+        let child_rows: Vec<_> = (0..BLOCKS)
+            .map(|b| blk_row(b, 30, true, true, b"child"))
+            .collect();
+        store.put_pages(anc, &anc_rows).await.unwrap();
+        store.put_pages(child, &child_rows).await.unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let range = blk_range(0, BLOCKS);
+
+        // Warm the pool, the tablet caches and the prepared statements.
+        for _ in 0..10 {
+            store
+                .scan_range_lineage(&lineage, range.clone(), Lsn(100))
+                .await
+                .unwrap();
+        }
+
+        let mut samples = Vec::with_capacity(ITERS);
+        for _ in 0..ITERS {
+            let t = std::time::Instant::now();
+            let out = store
+                .scan_range_lineage(&lineage, range.clone(), Lsn(100))
+                .await
+                .unwrap();
+            samples.push(t.elapsed());
+            assert_eq!(out.len(), BLOCKS as usize);
+        }
+        samples.sort();
+        let median = samples[ITERS / 2];
+        let p90 = samples[ITERS * 9 / 10];
+        let mean = samples.iter().sum::<std::time::Duration>() / ITERS as u32;
+        println!(
+            "BENCH #1077 scan_range_lineage blocks={BLOCKS} iters={ITERS} \
+             median={median:?} mean={mean:?} p90={p90:?}"
+        );
         drop_schema(&store, &schema).await;
     }
 
@@ -5348,24 +6509,14 @@ mod tests {
         assert_eq!(scattered.len(), 2);
 
         // SLRU: put through the lane, then chain + range scan.
-        let slru_row =
-            |blk: u32, lsn: u64, is_image: bool, will_init: bool, pl: &[u8]| SlruPageRow {
-                kind: SlruKind::Clog,
-                segno: 1,
-                blknum: blk,
-                lsn: Lsn(lsn),
-                is_image,
-                will_init,
-                payload: Bytes::copy_from_slice(pl),
-            };
         store
             .put_slru_pages(
                 branch,
                 &[
-                    slru_row(0, 10, true, true, b"s0-img"),
-                    slru_row(0, 20, false, false, b"s0-d20"),
-                    slru_row(1, 30, false, true, b"s1-init"),
-                    slru_row(1, 40, false, false, b"s1-d40"),
+                    clog_row(0, 10, true, true, b"s0-img"),
+                    clog_row(0, 20, false, false, b"s0-d20"),
+                    clog_row(1, 30, false, true, b"s1-init"),
+                    clog_row(1, 40, false, false, b"s1-d40"),
                 ],
             )
             .await
