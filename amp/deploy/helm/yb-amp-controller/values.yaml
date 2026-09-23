@@ -307,6 +307,22 @@ agent:
     # -- Key within the Secret holding the API key.
     key: "api-key"
 
+  # -- Extra environment variables for the agent container, as a list of
+  # {name, value}. Rendered BEFORE the chart's own vars, so a name the chart
+  # sets wins and cannot be overridden from here.
+  #
+  # The case this exists for is a YCP only reachable through a proxy. Setting
+  # HTTPS_PROXY/HTTP_PROXY here also proxies the agent's OTHER targets, which
+  # are cluster-local http:// names: the controller (AMP_CONTROLLER_URL) and the
+  # collector metrics endpoint. Both go through the same default transport, so
+  # NO_PROXY must cover them or the agent never binds its controller and the
+  # telemetry watch reports nothing:
+  #
+  #   extraEnv:
+  #     - {name: HTTPS_PROXY, value: "http://proxy.ns.svc.cluster.local:1055"}
+  #     - {name: NO_PROXY, value: ".svc,.svc.cluster.local,.cluster.local,localhost,127.0.0.1"}
+  extraEnv: []
+
   # -- Compute resources for the agent container.
   resources: {}
 

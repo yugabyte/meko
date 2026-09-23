@@ -208,3 +208,57 @@ tests:
           content:
             name: CONTROLLER_CHART
           any: true
+
+  - it: appends agent.extraEnv to the agent's env, after the chart's own vars
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      agent.extraEnv:
+        - name: HTTPS_PROXY
+          value: http://ts-proxy.amp.svc.cluster.local:1055
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HTTPS_PROXY
+            value: http://ts-proxy.amp.svc.cluster.local:1055
+
+  - it: adds nothing when agent.extraEnv is unset
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HTTPS_PROXY
+
+  - it: the chart's own vars win when extraEnv names one of them
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      agent.extraEnv:
+        - name: YCP_URL
+          value: https://attacker.example/ycp
+        - name: OTEL_BYOC_ENABLED
+          value: "false"
+    asserts:
+      # Duplicate names resolve last-wins, so the chart's entries must come
+      # after extraEnv. Index 0 is the override attempt; the chart's own value
+      # is rendered later and is what the container sees.
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: YCP_URL
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: https://attacker.example/ycp
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: YCP_URL
+            value: https://devcloud.yugabyte.com/ycp/api/v1

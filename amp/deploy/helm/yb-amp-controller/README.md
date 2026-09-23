@@ -203,6 +203,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `agent.reconcileInterval` | _(empty)_ | `RECONCILE_INTERVAL`; empty ⇒ the binary's default (10s) |
 | `agent.controllerChart` | _(empty)_ | `CONTROLLER_CHART`, the chart the agent helm-upgrades this release to when YCP declares a controller version. Empty ⇒ the agent's default OCI ref, which is not published yet — so driving the controller version from YCP requires naming a chart the agent can pull (an https `.tgz` URL, or a path) |
 | `agent.apiKeySecret.name` / `.key` | `amp-agent-api-key` / `api-key` | Secret the agent reads the YBM API key from. Create it before install — the chart holds no credentials |
+| `agent.extraEnv` | `[]` | extra `{name, value}` env for the agent container, rendered **before** the chart's own vars so a name the chart sets wins. For a YCP reachable only through a proxy: set `HTTPS_PROXY` here, and `NO_PROXY` covering `.svc.cluster.local`, or the agent cannot reach its own controller or the collector |
 | `otel.environmentId` | _(empty)_ | stamped as an `environment_id` label on every series both metrics collectors scrape. The YCP environment id (same value as `agent.envName`); the install hint sets it |
 | `otel.accountId` | _(empty)_ | stamped as an `account_id` label alongside it. The install hint omits it for a standalone YCP, which has no account |
 

@@ -35,6 +35,18 @@ spec:
           image: {{ include "yb-amp-controller.agentImage" . }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           env:
+            {{- /*
+            FIRST, deliberately. Duplicate env names resolve last-wins in the
+            container, so anything rendered after this overrides it, which is
+            what keeps the chart's own vars authoritative. In particular the
+            OTEL_* attestation vars below must not be settable from values: the
+            agent reports them to YCP as evidence the collectors are running
+            (#1337), and an operator who could overwrite them could report
+            SHIPPING while shipping nothing.
+            */}}
+            {{- with .Values.agent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- with .Values.agent.controllerChart }}
             - name: CONTROLLER_CHART
               value: {{ . | quote }}
