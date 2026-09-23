@@ -324,7 +324,7 @@ function NewDatapackPlaceholderCard({ onClick }: { onClick: () => void }) {
       <div className="space-y-1 text-center">
         <p className="text-base font-semibold text-foreground">New datapack</p>
         <p className="max-w-[14rem] text-xs leading-relaxed text-muted-foreground">
-          Connect an existing project or start from scratch
+          Connect an existing collection or start from scratch
         </p>
       </div>
     </Card>

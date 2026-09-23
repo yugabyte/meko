@@ -241,8 +241,8 @@ export type CurrentUser = {
 };
 
 export type LangfuseProjectKeys = {
-  project_id?: string;
-  project_name?: string;
+  collection_id?: string;
+  collection_name?: string;
   public_key: string;
   secret_key: string;
 };
@@ -1138,7 +1138,7 @@ export type ListDatapackConversationsResponse = {
   /** Langfuse project_id resolved from meko_system.langfuse_project_mapping
    *  for this datapack. Empty when no Langfuse mapping exists yet. The UI
    *  uses it to build per-conversation deep links into the embedded
-   *  Observe iframe (/observe/project/<pid>/sessions/<sid>). */
+   *  Observe iframe (/observe/collection/<pid>/sessions/<sid>). */
   langfuse_project_id?: string;
   limit: number;
   offset: number;
@@ -1342,7 +1342,7 @@ export async function getDatapackMessageTrace(
 /** Slim per-message decision-trace payload — the exact subset of fields
  *  the `DecisionTrace` card reads (reasoning / plan / retrieval hits /
  *  processing steps + per-turn telemetry). Mirrors the BE
- *  `MessageDecisionTrace` struct; the server projects it out of one
+ *  `MessageDecisionTrace` struct; the server collections it out of one
  *  message's window in the Langfuse thread, so no whole-thread payload
  *  is transferred. */
 export type DatapackMessageDecisionTrace = {

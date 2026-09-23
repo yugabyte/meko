@@ -125,6 +125,12 @@ func run() error {
 		envBoolOrDefault("MEKO_ENABLE_CONVERSATION_SEARCH", false),
 		"enable the conversation-search / conversation-embedding feature (Index-conversation backfill)")
 
+	// Collections & folders. The SAME env var gates the UI's Collections nav via
+	// runtime-config, so one switch turns the feature on/off end to end.
+	enableCollections := flag.Bool("enable-collections",
+		envBoolOrDefault("MEKO_ENABLE_COLLECTIONS", false),
+		"enable the collection tree (collections, folders, datapack placements)")
+
 	// YCP control-plane mode (BYOC). Gates the fleet registry + agent API.
 	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable YCP fleet registry + agent API (control plane)")
 
@@ -522,6 +528,7 @@ func run() error {
 		MaxArtifactSizeBytes:               *maxArtifactSizeBytes,
 		ShowPGAMP:                          *showPGAMP,
 		EnableConversationSearch:           *enableConversationSearch,
+		EnableCollections:                  *enableCollections,
 		ControlPlaneMode:                   *controlPlaneMode,
 		BasePath:                           *basePath,
 		AWSMarketplaceProductCode:          *awsMarketplaceProductCode,

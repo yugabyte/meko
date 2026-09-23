@@ -619,6 +619,38 @@ func (r *KnowledgeBaseRepo) DeleteDocument(
 
 // GetSourceIDs returns all rag_source_id values for a datapack, ordered
 // by created_at descending.
+// SourceOwners maps each rag_source_id back to the datapack that owns it,
+// for a whole set of datapacks. The activity log's file-upload side filters
+// dist_rag by source_id, so this is what lets a row be attributed to its
+// datapack afterwards.
+//
+// ONE query whatever the number of datapacks: datapack_id is the hash half
+// of the primary key on meko_system.knowledge_bases.
+func (r *KnowledgeBaseRepo) SourceOwners(datapackIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(datapackIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.systemDB.Query(
+		`SELECT rag_source_id::text, datapack_id::text
+		 FROM   meko_system.knowledge_bases
+		 WHERE  datapack_id = ANY($1)`,
+		pq.Array(datapackIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("source owners: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sourceID, datapackID string
+		if sErr := rows.Scan(&sourceID, &datapackID); sErr != nil {
+			return nil, fmt.Errorf("source owners: scan: %w", sErr)
+		}
+		out[sourceID] = datapackID
+	}
+	return out, rows.Err()
+}
+
 func (r *KnowledgeBaseRepo) GetSourceIDs(
 	datapackID string,
 ) ([]string, error) {
@@ -1084,6 +1116,13 @@ type ActivityLogItem struct {
 	Type      string `json:"type"` // "file_upload" | "memory_promotion"
 	Timestamp string `json:"timestamp"`
 
+	// DatapackID is which datapack the row came from. Redundant on the
+	// single-datapack feed, essential on the collection-wide one where ten
+	// datapacks interleave. DatapackName is filled by the caller, which is
+	// the layer that already knows the names.
+	DatapackID   string `json:"datapack_id,omitempty"`
+	DatapackName string `json:"datapack_name,omitempty"`
+
 	// file_upload fields (nil on memory_promotion rows)
 	DocumentName    *string `json:"document_name,omitempty"`
 	DocumentType    *string `json:"document_type,omitempty"`
@@ -1195,9 +1234,15 @@ type activityRow struct {
 // `schema` and `indexName` are the service-layer constants
 // ("datapacks" / "knowledge_bases").
 func (r *KnowledgeBaseRepo) ListActivityLog(
-	datapackID, schema, indexName string,
+	datapackIDs []string, schema, indexName string,
 	limit int, cursor ActivityLogCursor,
 ) (items []ActivityLogItem, nextCursor ActivityLogCursor, err error) {
+	if len(datapackIDs) == 0 {
+		// Empty, not nil: `items` is a required array on the wire. A collection
+		// with no datapacks yet is the ordinary state right after creating
+		// one, so this path is hit before any other.
+		return []ActivityLogItem{}, ActivityLogCursor{}, nil
+	}
 	if limit <= 0 {
 		limit = 10
 	}
@@ -1208,11 +1253,11 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 	perSideCap := limit + 1
 
 	files, fileErr := r.listActivityFileUploads(
-		datapackID, schema, indexName,
+		datapackIDs, schema, indexName,
 		cursor.FileTs, cursor.FileID, perSideCap,
 	)
 	promos, promoErr := r.listActivityPromotions(
-		datapackID, cursor.PromoTs, cursor.PromoID, perSideCap,
+		datapackIDs, cursor.PromoTs, cursor.PromoID, perSideCap,
 	)
 
 	// If BOTH sides failed, the feed has nothing to show — propagate.
@@ -1225,12 +1270,12 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 	// Partial failure: log + degrade. The good side serves alone.
 	if fileErr != nil {
 		slog.Warn("activity log: file uploads side failed; serving promotions only",
-			"datapack_id", datapackID, "error", fileErr)
+			"datapack_ids", datapackIDs, "error", fileErr)
 		files = nil
 	}
 	if promoErr != nil {
 		slog.Warn("activity log: promotions side failed; serving file uploads only",
-			"datapack_id", datapackID, "error", promoErr)
+			"datapack_ids", datapackIDs, "error", promoErr)
 		promos = nil
 	}
 
@@ -1337,17 +1382,22 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 // (When the two physical DBs are colocated, this is one extra trivial
 // round-trip; when they're truly split, this is the only correct shape.)
 func (r *KnowledgeBaseRepo) listActivityFileUploads(
-	datapackID, schema, indexName string,
+	datapackIDs []string, schema, indexName string,
 	cursorTs, cursorID string,
 	cap int,
 ) ([]activityRow, error) {
-	// Step 1: source IDs for this datapack (systemDB).
-	sourceIDs, err := r.GetSourceIDs(datapackID)
+	// Step 1: source IDs for these datapacks, and which datapack each
+	// belongs to (systemDB). One query however many datapacks.
+	owners, err := r.SourceOwners(datapackIDs)
 	if err != nil {
 		return nil, fmt.Errorf("activity log file uploads: source ids: %w", err)
 	}
-	if len(sourceIDs) == 0 {
+	if len(owners) == 0 {
 		return nil, nil
+	}
+	sourceIDs := make([]string, 0, len(owners))
+	for sourceID := range owners {
+		sourceIDs = append(sourceIDs, sourceID)
 	}
 
 	// Step 2: pipeline rows (dataDB). Two parameter layouts so we don't
@@ -1355,8 +1405,8 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 	// is identical, only the keyset WHERE differs.
 	const baseQ = `WITH latest_per_document AS (
 		   SELECT DISTINCT ON (document_id)
-		          document_id, document_name, document_type, document_details,
-		          chunks_processed,
+		          document_id, source_id, document_name, document_type,
+		          document_details, chunks_processed,
 		          COALESCE(
 		            NULLIF(document_details->'meko'->>'uploaded_at', '')::timestamptz,
 		            pipeline_completed_at,
@@ -1380,7 +1430,8 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 		 )
 		 SELECT l.display_ts,
 		        l.sort_ts,
-		        l.document_id::text,
+		        l.document_id::text AS doc_id,
+		        l.source_id::text   AS src_id,
 		        l.document_name,
 		        l.document_type,
 		        l.chunks_processed,
@@ -1420,16 +1471,20 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 			displayTs      sql.NullTime
 			sortTs         time.Time // never NULL — backed by COALESCE(..., 'epoch')
 			docID          sql.NullString
+			srcID          sql.NullString
 			docName        sql.NullString
 			docType        sql.NullString
 			chunks         sql.NullInt64
 			sizeBytes      sql.NullInt64
 			uploaderUserID sql.NullString
 		)
-		if err := rows.Scan(&displayTs, &sortTs, &docID, &docName, &docType, &chunks, &sizeBytes, &uploaderUserID); err != nil {
+		if err := rows.Scan(&displayTs, &sortTs, &docID, &srcID, &docName, &docType, &chunks, &sizeBytes, &uploaderUserID); err != nil {
 			return nil, fmt.Errorf("scan file upload row: %w", err)
 		}
 		it := ActivityLogItem{Type: "file_upload"}
+		if srcID.Valid {
+			it.DatapackID = owners[srcID.String]
+		}
 		// Display timestamp stays nullable — UI renders "—" when this is
 		// empty (matches the existing convention for rows whose pipeline
 		// never produced a timestamp).
@@ -1473,7 +1528,7 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 	displays, err := LookupUserDisplays(context.Background(), r.systemDB, uploaderIDs)
 	if err != nil {
 		slog.Warn("activity log file uploads: user display lookup failed",
-			"datapack_id", datapackID, "error", err)
+			"datapack_ids", datapackIDs, "error", err)
 		displays = nil
 	}
 	// Step 4: merge emails onto rows.
@@ -1496,17 +1551,24 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 // other side. Keyset cursor mirrors the file-uploads side: tuple
 // comparison on (meko_promoted_to_kb_at, id).
 func (r *KnowledgeBaseRepo) listActivityPromotions(
-	datapackID string,
+	datapackIDs []string,
 	cursorTs, cursorID string,
 	cap int,
 ) ([]activityRow, error) {
+	// `id::text AS memory_id`, not a bare `id::text`: without the alias the
+	// cast's output column is also named "id", and PostgreSQL resolves
+	// `ORDER BY id` to that output column, sorting UUIDs as TEXT while the
+	// keyset WHERE below compares them as uuid. The two agree for canonical
+	// lowercase UUIDs so nothing is visibly wrong today, but they are
+	// different comparators and a paginated feed should not rely on that.
 	const baseQ = `SELECT meko_promoted_to_kb_at,
-		        id::text,
+		        id::text AS memory_id,
+		        meko_datapack_id::text AS owning_datapack,
 		        COALESCE(payload->>'data', '') AS content,
 		        meko_agent_id,
 		        meko_conversation_id::text
 		 FROM   datapacks.promoted_collection
-		 WHERE  meko_datapack_id = $1::uuid
+		 WHERE  meko_datapack_id = ANY($1)
 		   AND  meko_promoted_to_kb_at IS NOT NULL `
 
 	var (
@@ -1518,7 +1580,7 @@ func (r *KnowledgeBaseRepo) listActivityPromotions(
 			baseQ+
 				` ORDER BY meko_promoted_to_kb_at DESC NULLS LAST, id DESC
 				  LIMIT $2`,
-			datapackID, cap,
+			pq.Array(datapackIDs), cap,
 		)
 	} else {
 		rows, err = r.dataDB.Query(
@@ -1526,7 +1588,7 @@ func (r *KnowledgeBaseRepo) listActivityPromotions(
 				`   AND  (meko_promoted_to_kb_at, id) < ($2::timestamptz, $3::uuid)
 				 ORDER BY meko_promoted_to_kb_at DESC NULLS LAST, id DESC
 				 LIMIT $4`,
-			datapackID, cursorTs, cursorID, cap,
+			pq.Array(datapackIDs), cursorTs, cursorID, cap,
 		)
 	}
 	if err != nil {
@@ -1539,14 +1601,18 @@ func (r *KnowledgeBaseRepo) listActivityPromotions(
 		var (
 			ts      sql.NullTime
 			memID   sql.NullString
+			owner   sql.NullString
 			content sql.NullString
 			agentID sql.NullString
 			convID  sql.NullString
 		)
-		if err := rows.Scan(&ts, &memID, &content, &agentID, &convID); err != nil {
+		if err := rows.Scan(&ts, &memID, &owner, &content, &agentID, &convID); err != nil {
 			return nil, fmt.Errorf("scan promotion row: %w", err)
 		}
 		it := ActivityLogItem{Type: "memory_promotion"}
+		if owner.Valid {
+			it.DatapackID = owner.String
+		}
 		if ts.Valid {
 			it.Timestamp = ts.Time.UTC().Format(time.RFC3339Nano)
 		}

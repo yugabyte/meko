@@ -211,6 +211,13 @@ type ServerConfig struct {
 	// and feeds the UI runtime-config key of the same name.
 	EnableConversationSearch bool
 
+	// EnableCollections gates the collection tree (collections, folders, datapack
+	// placements) and its REST surface. Off by default; mirrors
+	// MEKO_ENABLE_COLLECTIONS, the same env var the UI reads from runtime-config
+	// to show the Collections nav. Off end to end means the endpoints do not
+	// exist, rather than existing and returning empty.
+	EnableCollections bool
+
 	// ControlPlaneMode gates the YCP fleet registry + agent API (BYOC control
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.

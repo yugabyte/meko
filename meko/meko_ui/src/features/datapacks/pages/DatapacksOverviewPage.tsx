@@ -398,9 +398,9 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                 <div className="flex-1">
                   <p className="text-muted-foreground text-base mb-3 leading-relaxed max-w-2xl">
                     A datapack is everything your agent knows in one place, usually organized by a
-                    project topic. Conversations you have with your agents, the memories they form,
+                    collection topic. Conversations you have with your agents, the memories they form,
                     the docs you upload, and a traceable record of what each agent did. Create one
-                    per topic or project. Any AI tool you connect over MCP can read and write to it,
+                    per topic or collection. Any AI tool you connect over MCP can read and write to it,
                     so your context follows you when you switch tools.
                   </p>
                   <p className="mb-6 max-w-2xl text-xs italic text-muted-foreground/70">

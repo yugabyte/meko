@@ -184,6 +184,23 @@ definitions:
       email:
         type: string
     type: object
+  service.CreateCollectionRequest:
+    properties:
+      collection_name:
+        type: string
+      description:
+        type: string
+      folders:
+        description: |-
+          Folders replaces the theme's own folder list. The Blank theme exists for
+          exactly this: it ships no meaningful layout, so the caller names the
+          first folder instead. Omitted, the theme's folders are used.
+        items:
+          type: string
+        type: array
+      theme_key:
+        type: string
+    type: object
   service.CreateRequest:
     properties:
       agent_id:
@@ -1223,6 +1240,287 @@ paths:
       summary: Stripe webhook receiver (no JWT, Stripe-Signature verified)
       tags:
       - billing
+  /collections:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List collections with folder and datapack counts
+      tags:
+      - collections
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Create request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.CreateCollectionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a collection from a theme
+      tags:
+      - collections
+  /collections/{collection_id}:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a collection
+      tags:
+      - collections
+    get:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get a collection, its folders, and the datapacks in them with counts
+      tags:
+      - collections
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Rename a collection
+      tags:
+      - collections
+  /collections/{collection_id}/activity-log:
+    get:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      - description: Page size (default 10, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Opaque cursor from the previous page
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Uploads and memory promotions across a collection, newest first
+      tags:
+      - collections
+  /collections/{collection_id}/folders:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Add a folder to a collection
+      tags:
+      - collections
+  /collections/{collection_id}/folders/{folder_id}:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      - description: Folder ID
+        in: path
+        name: folder_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a folder and its subfolders
+      tags:
+      - collections
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      - description: Folder ID
+        in: path
+        name: folder_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Rename a folder
+      tags:
+      - collections
+  /collections/placements:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Map every filed datapack to its path
+      tags:
+      - collections
+  /collections/themes:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List collection themes
+      tags:
+      - collections
   /datapacks:
     get:
       produces:
@@ -2399,6 +2697,37 @@ paths:
       summary: List datapack members
       tags:
       - sharing
+  /datapacks/{datapack_id}/metrics:
+    get:
+      description: Returns token savings, score bands, agent/human access counts,
+        daily activity (last 30 days), conversation count, memory extraction rate,
+        chunk counts per content type, and storage byte sizes for the given datapack.
+      parameters:
+      - description: Datapack UUID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get all analytics metrics for a datapack
+      tags:
+      - datapacks
   /datapacks/{datapack_id}/outgoing-shares:
     get:
       parameters:
@@ -2431,6 +2760,51 @@ paths:
       summary: List pending outgoing invites for a datapack
       tags:
       - sharing
+  /datapacks/{datapack_id}/placement:
+    delete:
+      parameters:
+      - description: Datapack ID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Remove a datapack from the caller's tree
+      tags:
+      - collections
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack ID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: File or move a datapack into a folder
+      tags:
+      - collections
   /datapacks/{datapack_id}/share:
     post:
       consumes:

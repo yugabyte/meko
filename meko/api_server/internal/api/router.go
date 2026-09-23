@@ -59,6 +59,10 @@ type serviceRegistry struct {
 	tokenSavingsRepo    *repository.TokenSavingsRepo
 	tokenSavingsSvc     *service.TokenSavingsService
 	datapackMetricsRepo *repository.DatapackMetricsRepo
+	// collectionSvc owns the collection tree (collections, folders, datapack
+	// placements). Always constructed; the routes are registered only when
+	// cfg.EnableCollections is set.
+	collectionSvc *service.CollectionService
 	// ampSvc is nil unless the AMP feature is enabled (--show-pg-amp); the AMP
 	// datapack-database routes are registered only when it is non-nil. The AMP
 	// controller endpoint is resolved at request time from the registration row,
@@ -296,6 +300,21 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Error("deployments: init failed", "error", dErr)
 	}
 
+	collectionRepo := repository.NewCollectionRepo(cfg.SystemDB)
+	collectionSvc := service.NewCollectionService(
+		collectionRepo,
+		repository.NewPlacementRepo(cfg.SystemDB),
+		dpRepo,
+		repository.NewDatapackRollupRepo(cfg.DB),
+		kbSvc,
+		dpSvc,
+	)
+	if cfg.EnableCollections {
+		// Accepting a share then also recreates the owner's folder path in the
+		// recipient's tree. Left unset when the feature is off, so sharing
+		// behaves exactly as it did before Collections existed.
+	}
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:           accountRepo,
@@ -329,6 +348,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		tokenSavingsRepo:      tokenSavingsRepo,
 		tokenSavingsSvc:       tokenSavingsSvc,
 		datapackMetricsRepo:   datapackMetricsRepo,
+		collectionSvc:         collectionSvc,
 		ampSvc:                ampSvc,
 		ampRegistrationRepo:   ampRegistrationRepo,
 		envSvc:                envSvc,
@@ -539,7 +559,13 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 
 	root.GET("/success", handlers.SuccessHandler(successCfg))
 
-	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes, cfg.EnableConversationSearch)
+	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes, cfg.EnableConversationSearch, cfg.EnableCollections)
+	if cfg.EnableCollections {
+		registerCollectionRoutes(datapackGroup, reg)
+		slog.Info("collection routes enabled (collections, folders, datapack placements)")
+	} else {
+		slog.Warn("collection routes disabled (set --enable-collections to enable)")
+	}
 	registerBillingRoutes(v1, datapackGroup, reg)
 	registerMarketplaceRoutes(v1, datapackGroup, reg)
 	registerDeploymentRoutes(datapackGroup, reg)
@@ -845,7 +871,7 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 // also has the per-PAT rate limiter attached. Each PAT-bearing
 // route is additionally guarded by auth.RequireScope so a token
 // minted with scopes={"read"} can't issue mutations.
-func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxArtifactSizeBytes int64, enableConversationSearch bool) {
+func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxArtifactSizeBytes int64, enableConversationSearch, enableCollections bool) {
 	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc, reg.memoriesSvc, reg.kbSvc)
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc, enableConversationSearch)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
@@ -1184,4 +1210,45 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	)
 
 	slog.Info("datapack routes registered")
+}
+
+// registerCollectionRoutes wires the collection tree — collections, their folders, and
+// where datapacks sit inside them.
+//
+// JWT-only (g), not dpDirect: a tree belongs to a signed-in user and nothing
+// reaches these over a PAT yet. When datapack_create grows a path argument,
+// the placement write is the one route that moves to dpDirect.
+//
+// There is no ownership middleware here because every collection query is
+// user-scoped in its own WHERE clause — a collection id from another user's tree
+// resolves to no row rather than to a forbidden.
+func registerCollectionRoutes(g *echo.Group, reg *serviceRegistry) {
+	h := handlers.NewCollectionHandler(reg.collectionSvc)
+
+	// Static segments first. Echo prefers a static match over a param, and
+	// neither name is a UUID, so a real collection_id can never collide.
+	g.GET("/collections/themes", h.Themes)
+	g.GET("/collections/placements", h.DatapackPaths)
+
+	g.GET("/collections", h.List)
+	g.POST("/collections", h.Create)
+	g.GET("/collections/:collection_id", h.Detail)
+	g.GET("/collections/:collection_id/activity-log", h.ActivityLog)
+	g.PATCH("/collections/:collection_id", h.Update)
+	g.DELETE("/collections/:collection_id", h.Delete)
+
+	g.POST("/collections/:collection_id/folders", h.CreateFolder)
+	g.PATCH("/collections/:collection_id/folders/:folder_id", h.UpdateFolder)
+	g.DELETE("/collections/:collection_id/folders/:folder_id", h.DeleteFolder)
+
+	// Filing needs datapack ACCESS, not ownership: placing a datapack someone
+	// shared with you into your OWN tree is the point of per-user placement.
+	dpAccess := auth.RequireDatapackAccess(reg.dpRepo)
+	// POST, not PUT: filing is an upsert, and every other mutation in this
+	// router is POST/PATCH/DELETE — a lone PUT would also be the only verb the
+	// UI's shared request() helper does not speak.
+	g.POST("/datapacks/:datapack_id/placement", h.PlaceDatapack, dpAccess)
+	g.DELETE("/datapacks/:datapack_id/placement", h.UnplaceDatapack, dpAccess)
+
+	slog.Info("collection routes registered")
 }

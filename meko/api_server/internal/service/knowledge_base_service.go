@@ -420,9 +420,31 @@ func (s *KnowledgeBaseService) ListActivityLog(
 	if dp == nil {
 		return ActivityLogResponse{}, fmt.Errorf("datapack is required")
 	}
+	return s.ListActivityLogForDatapacks([]string{dp.ID}, limit, cursor)
+}
+
+// ListActivityLogForDatapacks is the same feed over a SET of datapacks, for
+// the collection-wide Activity tab.
+//
+// The caller decides the set, and that is the access boundary: this method
+// checks nothing, so it must only ever be handed datapacks the caller can
+// already see.
+//
+// Cost note. Both sides read every row in scope and sort, per page: the
+// promotions side because promoted_collection is keyed
+// (meko_datapack_id HASH, id) with nothing on the promotion timestamp, and
+// the uploads side because dist_rag.vector_index_pipeline_details is a VIEW
+// over a four-way join that the DISTINCT ON materialises before the keyset
+// filter applies. So a collection's feed costs O(collection contents) per page,
+// not O(page). Fine at the sizes a collection reaches; the fix is an event
+// table, not a better query.
+func (s *KnowledgeBaseService) ListActivityLogForDatapacks(
+	datapackIDs []string,
+	limit int, cursor string,
+) (ActivityLogResponse, error) {
 	c := repository.DecodeActivityLogCursor(cursor)
 	items, nextCursor, err := s.repo.ListActivityLog(
-		dp.ID, DatapackIndexSchema, DatapackIndexName, limit, c,
+		datapackIDs, DatapackIndexSchema, DatapackIndexName, limit, c,
 	)
 	if err != nil {
 		return ActivityLogResponse{}, err
