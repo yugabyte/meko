@@ -10,7 +10,6 @@ import WorkbenchLMPage from "@/features/workbench-lm/pages/WorkbenchLMPage";
 import SettingsPage from "@/features/settings/pages/SettingsPage";
 import UsagePage from "@/features/settings/pages/UsagePage";
 import BillingPage from "@/features/billing/pages/BillingPage";
-import AdminPage from "@/features/admin/pages/AdminPage";
 import MarketplaceCompletePage from "@/features/billing/pages/MarketplaceCompletePage";
 import LabsSection from "@/features/labs/pages/LabsSection";
 import LabRunnerPage from "@/features/labs/pages/LabRunnerPage";
@@ -27,9 +26,9 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
 
   // MEKO_ENABLE_LABS off: bounce every /labs route, before the runner's
   // early return below can take over the viewport. A redirect rather than a
-  // silent fallthrough, for the reason the admin comment below gives -- a
-  // bookmark or a shared link should land somewhere real, not render
-  // Datapacks under a /labs URL. Sidebar hides the entry on the same flag.
+  // silent fallthrough: a bookmark or a shared link should land somewhere
+  // real, not render Datapacks under a /labs URL. Sidebar hides the entry on
+  // the same flag.
   if (isLabsPath(pathname) && !isLabsEnabled()) {
     return <Navigate to={ROUTES.datapacks} replace />;
   }
@@ -75,16 +74,9 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
   const isLabsRoute = isLabsPath(pathname);
   const isLabsListOrDetail = isLabsRoute && !isLabRunner;
-  // Admin console (flag-gated). Conditionally mounted like WorkbenchLM so its
-  // /admin/* data fetches never tick while the user is elsewhere.
-  // Mount AdminPage for ANY /admin route (not gated by the flag here): AdminPage
-  // self-guards and redirects to Datapacks when the view is disabled, so a
-  // direct URL to /admin with the flag/opt-in off actually bounces — rather than
-  // rendering Datapacks content under a stale /admin URL.
-  const onAdminRoute = pathname === ROUTES.admin || pathname.startsWith(`${ROUTES.admin}/`);
   const isMarketplaceComplete = pathname === ROUTES.marketplaceComplete;
 
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, admin, labs. */
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, labs. */
   const isDatapacks =
     !isObserve &&
     !isConnect &&
@@ -93,7 +85,6 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
     !isUsage &&
     !isBilling &&
     !isMarketplaceComplete &&
-    !onAdminRoute &&
     !isLabsRoute;
 
   // See onboarding-shell comment above re: h-dvh for iOS keyboard.
@@ -130,9 +121,6 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
             to the bottom).
           */}
           {isWorkbenchLM ? <WorkbenchLMPage isRouteActive={true} /> : null}
-          {/* Admin console — conditionally mounted (not display-toggled) so it
-              only fetches /admin/* data while actually being viewed. */}
-          {onAdminRoute ? <AdminPage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isSettings ? "contents" : "none" }}
@@ -142,7 +130,7 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           {/* Usage — conditionally mounted (not display-toggled) so the
               tracker's refetchOnMount:"always" refetches on every /usage visit,
               and nothing is fetched until the page is opened. UsagePage owns its
-              own flex-1 height chain, so no wrapper is needed (like Admin). */}
+              own flex-1 height chain, so no wrapper is needed. */}
           {isUsage ? <UsagePage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"

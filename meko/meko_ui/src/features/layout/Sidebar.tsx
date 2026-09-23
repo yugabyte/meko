@@ -18,7 +18,6 @@ import {
   Settings as SettingsIcon,
   CreditCard,
   Gauge,
-  Shield,
   FlaskConical,
 } from "lucide-react";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
@@ -44,7 +43,6 @@ import { resetTelemetry, trackEvent } from "@/lib/telemetry/rudderstack";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
-import { isAdminViewEnabled } from "@/lib/admin";
 import { isLabsEnabled } from "@/lib/labs";
 
 /**
@@ -87,15 +85,10 @@ export default function Sidebar() {
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
   const showBillingNav = useBillingNavFlag();
-  // Admin console tab — gated by the SHOW_ADMIN_VIEW runtime flag (off by
-  // default). Interim gate until a per-user admin role lands; see `@/lib/admin`.
-  const showAdminNav = isAdminViewEnabled();
   // Discovery Labs tab — gated by MEKO_ENABLE_LABS (off by default). Hiding the
   // entry is only half of it: ProtectedRoutes bounces /labs as well, so the
   // surface is unreachable rather than merely unlinked.
   const showLabsNav = isLabsEnabled();
-  const onAdminRoute =
-    location.pathname === ROUTES.admin || location.pathname.startsWith(`${ROUTES.admin}/`);
   const [signOutOpen, setSignOutOpen] = useState(false);
   // Shared react-query cache — every other surface (HomePage, ObservePage,
   // WorkbenchLM, DatapacksOverviewPage) subscribes to the same key, so
@@ -554,26 +547,6 @@ export default function Sidebar() {
             isCollapsed ? "items-center" : "",
           )}
         >
-          {/* Admin console — sits BEFORE Settings. Hidden unless SHOW_ADMIN_VIEW
-              is on; the route also bounces to Datapacks when the flag is off. */}
-          {showAdminNav ? (
-            <NavLink
-              to={ROUTES.admin}
-              onClick={expandSidebar}
-              className={cn(
-                "flex items-center rounded-md text-sm font-medium transition-colors",
-                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-                onAdminRoute
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              )}
-              title={isCollapsed ? "Admin" : undefined}
-            >
-              <Shield className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-              {!isCollapsed && <span className="animate-in fade-in truncate">Admin</span>}
-            </NavLink>
-          ) : null}
-
           {/* Usage — live consumed-vs-cap tracker, promoted out of Settings
               so quota visibility is one click away. Sits above Settings. */}
           <NavLink

@@ -309,7 +309,7 @@ const docTemplate = `{
         },
         "/admin/token-savings": {
             "get": {
-                "description": "Legacy combined executive rollup (users, datapacks, conversations, token savings, top savers) for the meko_ui in-app admin console. New consumers use the /admin/executive/* panels.",
+                "description": "Legacy combined executive rollup (users, datapacks, conversations, token savings, top savers). Superseded by the /admin/executive/* panels; retained only for compatibility.",
                 "produces": [
                     "application/json"
                 ],
@@ -5650,18 +5650,7 @@ const docTemplate = `{
             }
         },
         "service.AddRequest": {
-            "type": "object",
-            "properties": {
-                "details": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "url": {
-                    "type": "string"
-                }
-            }
+            "type": "object"
         },
         "service.ChangePasswordRequest": {
             "type": "object",
@@ -5750,18 +5739,7 @@ const docTemplate = `{
             }
         },
         "service.CreateUserAgentRequest": {
-            "type": "object",
-            "properties": {
-                "agent_details": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "agent_id": {
-                    "type": "string"
-                }
-            }
+            "type": "object"
         },
         "service.ForgotPasswordConfirmRequest": {
             "type": "object",

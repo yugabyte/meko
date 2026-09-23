@@ -441,8 +441,8 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminGroup.GET("/executive/engagement", adminH.ExecEngagement)
 	adminGroup.GET("/executive/knowledge", adminH.ExecKnowledge)
 	adminGroup.GET("/executive/savings", adminH.ExecSavings)
-	// Legacy combined rollup, kept for the meko_ui in-app admin console until it
-	// migrates to the panels above (follow-up).
+	// Legacy combined rollup. Its only consumer was the meko_ui in-app admin
+	// console, removed in MEKO-655; meko_admin uses the panels above.
 	adminGroup.GET("/token-savings", adminH.Executive)
 	adminGroup.GET("/dataplane", adminH.DataPlane)
 	adminGroup.PATCH("/users/:id/tier", adminH.UpdateUserTier)

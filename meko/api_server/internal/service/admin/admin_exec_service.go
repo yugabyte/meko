@@ -82,10 +82,10 @@ type ExecSavings struct {
 	TopUsers         []ExecUserSavings `json:"top_users"`
 }
 
-// ExecutiveSummary is the legacy combined payload for GET /admin/token-savings,
-// kept for the meko_ui in-app admin console until it migrates to the four
-// /admin/executive/* panels (tracked as a follow-up). meko_admin uses the split
-// panels; this shim assembles the subset meko_ui renders from the same methods.
+// ExecutiveSummary is the legacy combined payload for GET /admin/token-savings.
+// It was shaped for the meko_ui in-app admin console, removed in MEKO-655, and
+// has no consumer now — meko_admin uses the four /admin/executive/* panels. The
+// shim assembles its subset from the same methods those panels use.
 type ExecutiveSummary struct {
 	TotalUsers         int64             `json:"total_users"`
 	TotalDatapacks     int64             `json:"total_datapacks"`
@@ -222,8 +222,8 @@ func (s *AdminMetricsService) tokenSavings(start, endExclusive *time.Time) (requ
 	return s.repo.TotalTokenSavingsInRange(start, endExclusive)
 }
 
-// Executive is the legacy combined rollup behind GET /admin/token-savings, kept
-// for the meko_ui in-app admin console (see ExecutiveSummary). It fetches ONLY
+// Executive is the legacy combined rollup behind GET /admin/token-savings (see
+// ExecutiveSummary for why it still exists). It fetches ONLY
 // the fields ExecutiveSummary exposes — the user + datapack totals directly (not
 // the full Growth panel, which also runs the week-over-week CountDatapacksByWeek
 // aggregate ExecutiveSummary has no field for), the Savings panel, and the

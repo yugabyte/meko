@@ -38,6 +38,10 @@ don't reach for the local pg pool.
 
 ## Auth & data
 
+- Admin tokens are verified server-side against `ADMIN_COGNITO_POOL_ID`'s JWKS
+  (`server/adminAuth.ts`), never with Cognito's `GetUser` — that API accepts a
+  token from ANY pool in the region, so it authenticates but cannot authorize.
+  The BFF rejects every request when that pool or its client id is unset.
 - Cognito admin auth in `authContext.tsx`. **`queryClient.clear()` on both login
   and logout** — query keys aren't per-user, so skipping this leaks the previous
   admin's cached data to the next.

@@ -22,34 +22,10 @@ export const ROUTES = {
   usage: "/usage",
   /** Workspace plans & billing (current plan, usage, plan picker). */
   billing: "/billing",
-  /**
-   * Admin console (Data Plane / Metrics / Executive / Users / AMP), integrated
-   * from meko_admin. Gated by the SHOW_ADMIN_VIEW runtime flag (off by default);
-   * see `@/lib/admin`. Sub-sections live under `/admin/...` (see ADMIN_SECTION).
-   */
-  admin: "/admin",
   /** AWS Marketplace fulfillment completion landing page. Reads ?t=<token>
    *  from the URL and calls the BE to resolve the entitlement. */
   marketplaceComplete: "/marketplace/complete",
 } as const;
-
-/**
- * Admin sub-section path suffixes under `/admin`. The bare `/admin` route shows
- * Data Plane; the rest are `/admin/<segment>`. Single source of truth shared by
- * the AdminPage sub-nav and its section switch.
- */
-export const ADMIN_SECTION = {
-  dataPlane: "", // bare /admin
-  users: "users",
-  metrics: "metrics",
-  executive: "executive",
-  amp: "amp",
-} as const;
-
-/** Build an admin section URL (`/admin` for Data Plane, `/admin/<segment>` else). */
-export function adminSectionPath(segment: string): string {
-  return segment ? `${ROUTES.admin}/${segment}` : ROUTES.admin;
-}
 
 /**
  * Sub-route segments under `/datapacks/:datapack_id/...`. Single source of truth
@@ -251,7 +227,6 @@ export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.observeHub,
   ROUTES.settings,
   ROUTES.usage,
-  ROUTES.admin,
   ROUTES.labs,
 ] as const;
 

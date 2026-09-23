@@ -83,7 +83,7 @@ func TestSavings_TotalsAndLeaderboard(t *testing.T) {
 	}
 }
 
-// Executive is the legacy /admin/token-savings shim for meko_ui — the one place
+// Executive is the legacy /admin/token-savings shim — the one place
 // users_created/datapacks_created are re-derived under the old
 // total_users/total_datapacks JSON names, and it must fetch ONLY the control
 // plane + one Langfuse count (no data-plane promoted/by-agent queries). With no

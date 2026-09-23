@@ -227,11 +227,11 @@ func (h *AdminHandler) ExecSavings(c echo.Context) error {
 }
 
 // Executive handles GET /api/v1/admin/token-savings — the legacy combined
-// executive rollup kept for the meko_ui in-app admin console until it migrates
-// to the /admin/executive/* panels. New consumers use those panels.
+// executive rollup. Its only consumer was the meko_ui in-app admin console,
+// removed in MEKO-655; use the /admin/executive/* panels.
 //
 //	@Summary	Executive dashboard summary (admin, legacy combined)
-//	@Description	Legacy combined executive rollup (users, datapacks, conversations, token savings, top savers) for the meko_ui in-app admin console. New consumers use the /admin/executive/* panels.
+//	@Description	Legacy combined executive rollup (users, datapacks, conversations, token savings, top savers). Superseded by the /admin/executive/* panels; retained only for compatibility.
 //	@Tags		admin
 //	@Produce	json
 //	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"

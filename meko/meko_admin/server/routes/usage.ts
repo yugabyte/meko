@@ -92,6 +92,15 @@ router.patch("/users/:id/tier", async (req, res, next) => {
   try {
     const { tier } = req.body as { tier?: string };
     const actor = (req as unknown as AuthenticatedRequest).adminUser;
+    // api_server writes the actor into a permanent audit row, so a tier change
+    // it cannot attribute must not happen at all -- the email is empty only when
+    // Cognito was unreachable during verification.
+    if (!actor.email) {
+      res
+        .status(503)
+        .json({ error: "Cannot attribute this change right now. Retry in a moment." });
+      return;
+    }
     const data = await apiServerSend<{ id: string; tier: string }>(
       "PATCH",
       `/users/${req.params.id}/tier`,

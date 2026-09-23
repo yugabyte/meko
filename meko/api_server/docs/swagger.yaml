@@ -145,13 +145,6 @@ definitions:
         type: string
     type: object
   service.AddRequest:
-    properties:
-      details:
-        items:
-          type: integer
-        type: array
-      url:
-        type: string
     type: object
   service.ChangePasswordRequest:
     properties:
@@ -213,13 +206,6 @@ definitions:
         type: string
     type: object
   service.CreateUserAgentRequest:
-    properties:
-      agent_details:
-        items:
-          type: integer
-        type: array
-      agent_id:
-        type: string
     type: object
   service.ForgotPasswordConfirmRequest:
     properties:
@@ -525,8 +511,8 @@ paths:
   /admin/token-savings:
     get:
       description: Legacy combined executive rollup (users, datapacks, conversations,
-        token savings, top savers) for the meko_ui in-app admin console. New consumers
-        use the /admin/executive/* panels.
+        token savings, top savers). Superseded by the /admin/executive/* panels; retained
+        only for compatibility.
       parameters:
       - description: Range start (inclusive), YYYY-MM-DD
         in: query

@@ -7,7 +7,8 @@
     "dev": "NODE_ENV=development tsx --env-file=.env server/index.ts",
     "build": "vite build && esbuild server/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs --external:vite --external:./vite --external:@vitejs/plugin-react --external:@tailwindcss/vite --external:@replit/vite-plugin-runtime-error-modal",
     "start": "NODE_ENV=production node dist/index.cjs",
-    "check": "tsc"
+    "check": "tsc",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "3.1055.0",
@@ -40,7 +41,8 @@
     "@radix-ui/react-toggle-group": "1.1.11",
     "@radix-ui/react-tooltip": "1.2.8",
     "@tanstack/react-query": "5.100.14",
-    "axios": "1.16.1",
+    "aws-jwt-verify": "5.2.1",
+    "axios": "1.20.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
@@ -57,7 +59,7 @@
     "react-dom": "19.2.6",
     "react-hook-form": "7.76.1",
     "react-resizable-panels": "2.1.9",
-    "react-router-dom": "7.15.1",
+    "react-router-dom": "7.18.4",
     "recharts": "2.15.4",
     "sonner": "2.0.7",
     "tailwind-merge": "3.6.0",
@@ -81,7 +83,8 @@
     "tailwindcss": "4.3.0",
     "tsx": "4.22.3",
     "typescript": "5.6.3",
-    "vite": "7.3.5"
+    "vite": "7.3.5",
+    "vitest": "4.1.10"
   },
   "engines": {
     "node": ">=22"
