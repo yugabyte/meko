@@ -48,8 +48,12 @@ func (d *Deployer) applyCRs(ctx context.Context) error {
 		if res.ExitCode != 0 {
 			return fmt.Errorf("apply %s: %s", m.Kind, strings.TrimSpace(res.Stderr))
 		}
-		if m.Kind == ybuniverse.KindProvider {
-			if err := d.waitProvider(ctx); err != nil {
+		// Both of these are referenced BY NAME from the universe below, and YBA
+		// resolves the reference when it reconciles — asynchronously, with the
+		// rejection arriving as a failed action tens of minutes later, or for
+		// telemetry as nothing at all. Ordering alone is not enough; the wait is.
+		if m.Kind == ybuniverse.KindProvider || m.Kind == ybuniverse.KindTelemetryProvider {
+			if err := d.waitRegistered(ctx, m.Kind, m.ObjectName); err != nil {
 				return err
 			}
 		}
@@ -64,14 +68,29 @@ func (d *Deployer) applyCRs(ctx context.Context) error {
 // rejection arrives asynchronously as a failed action on the universe, which is
 // a much worse place to read "the provider was not ready yet".
 func (d *Deployer) waitProvider(ctx context.Context) error {
-	name := d.spec.ProviderName()
+	return d.waitRegistered(ctx, ybuniverse.KindProvider, d.spec.ProviderName())
+}
+
+// waitRegistered blocks until YBA has created the object behind a CR and given
+// it a UUID.
+//
+// One function for YBProvider and TelemetryProvider because their statuses are
+// the same three fields and their failure is the same shape: the universe names
+// them, YBA resolves that name when it reconciles, and a name that is not ready
+// yet is rejected asynchronously. For a provider that surfaces as a failed
+// action on the universe tens of minutes in; for telemetry it surfaces as
+// nothing whatsoever — the universe is healthy and simply never exports. Which
+// is why this waits rather than trusting document order.
+func (d *Deployer) waitRegistered(ctx context.Context, kind, name string) error {
+	// kubectl takes the lowercased kind; both are singular resources.
+	resource := strings.ToLower(kind)
 	deadline := time.Now().Add(d.universeTimeout)
 	ticker := time.NewTicker(d.pollInterval)
 	defer ticker.Stop()
 
 	var last string
 	for {
-		res, err := d.kubectl(ctx, nil, "get", "ybprovider", name, "-o", "json")
+		res, err := d.kubectl(ctx, nil, "get", resource, name, "-o", "json")
 		if err != nil {
 			return err
 		}
@@ -80,31 +99,31 @@ func (d *Deployer) waitProvider(ctx context.Context) error {
 				Status ybuniverse.ProviderStatus `json:"status"`
 			}
 			if err := json.Unmarshal([]byte(res.Stdout), &doc); err != nil {
-				return fmt.Errorf("parse ybprovider %s: %w", name, err)
+				return fmt.Errorf("parse %s %s: %w", resource, name, err)
 			}
 			st := doc.Status
 			switch {
 			case strings.EqualFold(st.State, "Ready"):
-				d.log("provider %s is registered (%s)", name, st.ResourceUUID)
+				d.log("%s %s is registered (%s)", kind, name, st.ResourceUUID)
 				return nil
 			case strings.EqualFold(st.State, "Error"), strings.EqualFold(st.State, "Failed"):
 				msg := st.Message
 				if msg == "" {
 					msg = "no message"
 				}
-				return fmt.Errorf("provider %s failed to register: %s", name, msg)
+				return fmt.Errorf("%s %s failed to register: %s", kind, name, msg)
 			}
 			if reason := st.State + " " + st.Message; reason != last {
-				d.log("waiting for provider %s: %s", name, strings.TrimSpace(reason))
+				d.log("waiting for %s %s: %s", kind, name, strings.TrimSpace(reason))
 				last = reason
 			}
 		} else if last != "absent" {
-			d.log("waiting for provider %s to appear", name)
+			d.log("waiting for %s %s to appear", kind, name)
 			last = "absent"
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("provider %s did not register within %s (last: %s)",
-				name, d.universeTimeout, strings.TrimSpace(last))
+			return fmt.Errorf("%s %s did not register within %s (last: %s)",
+				kind, name, d.universeTimeout, strings.TrimSpace(last))
 		}
 		select {
 		case <-ctx.Done():

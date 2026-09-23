@@ -1171,6 +1171,7 @@ func TestDBReleaseCheckRunsBeforeTheUniverseApply(t *testing.T) {
 	spec := loadExample(t, "resources.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get telemetryprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"t1"}}`}},
 		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
 		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.2-b9\n"}},
 	}}
@@ -1281,6 +1282,7 @@ func TestApplyAppliesEveryDeclaredKindInOrder(t *testing.T) {
 	spec := loadExample(t, "resources.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get telemetryprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"t1"}}`}},
 	}}
 	d := New(spec, rec.Runner()).
 		WithTimeouts(time.Second, time.Second, time.Millisecond).
@@ -1310,6 +1312,7 @@ func TestApplyAppliesEveryDeclaredKindInOrder(t *testing.T) {
 		"StorageConfig/backups",
 		"StorageConfig/archive",
 		"KMSConfig/foundation-kms",
+		"TelemetryProvider/byoc-metrics",
 		"YBUniverse/foundation",
 	}
 	if !reflect.DeepEqual(applied, want) {
@@ -1334,6 +1337,7 @@ func TestDownIsTheSpecReadBackwards(t *testing.T) {
 	}
 	want := []string{
 		"YBUniverse/foundation",
+		"TelemetryProvider/byoc-metrics",
 		"KMSConfig/foundation-kms",
 		"StorageConfig/archive",
 		"StorageConfig/backups",
@@ -1651,5 +1655,83 @@ func TestIncompleteErrorWithNothingSkipped(t *testing.T) {
 	err.Skipped = []string{"verify the tserver Service", "create the databases"}
 	if msg := err.Error(); !strings.Contains(msg, "did not run: verify the tserver Service, create the databases") {
 		t.Errorf("message does not list the skipped steps:\n%s", msg)
+	}
+}
+
+// TestTelemetryProviderIsWaitedForBeforeTheUniverse: document order is not
+// enough, and the failure it leaves is the quietest one this deployer has.
+//
+// The universe names a TelemetryProvider, and YBA resolves that name when it
+// reconciles. Submitted in the very next iteration after the provider's apply,
+// the reference can be to something YBA has not created yet — and unlike a
+// YBProvider, which surfaces as a failed action on the universe, telemetry
+// surfaces as nothing whatsoever: the universe is Ready, healthy, and simply
+// never exports. So the apply blocks on Ready, the same as for a YBProvider.
+func TestTelemetryProviderIsWaitedForBeforeTheUniverse(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get telemetryprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"t1"}}`}},
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.2-b9\n"}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+	if err := d.applyCRs(context.Background()); err != nil {
+		t.Fatalf("applyCRs: %v", err)
+	}
+
+	wait, universeApply := -1, -1
+	for i, c := range rec.Calls {
+		joined := strings.Join(c.Argv, " ")
+		if strings.Contains(joined, "get telemetryprovider") && wait < 0 {
+			wait = i
+		}
+		if strings.Contains(joined, "apply --server-side") &&
+			strings.Contains(c.Stdin, `"kind": "YBUniverse"`) {
+			universeApply = i
+		}
+	}
+	if wait < 0 {
+		t.Fatal("the telemetry provider's status was never read; the universe was applied without waiting for it")
+	}
+	if universeApply < 0 {
+		t.Fatal("the universe was never applied")
+	}
+	if wait > universeApply {
+		t.Errorf("waited for the telemetry provider at call %d, after applying the universe at %d", wait, universeApply)
+	}
+}
+
+// A provider YBA refuses must stop the converge rather than leave the universe
+// referencing it. Error is terminal here: the spec is wrong (a bad endpoint, a
+// Secret whose key does not exist), and retrying for the full universe timeout
+// only delays the message.
+func TestApplyStopsOnATelemetryProviderYBARefused(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get telemetryprovider", Result: Result{
+			Stdout: `{"status":{"state":"Error","message":"secret byoc-metrics-auth has no key password"}}`}},
+	}}
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+
+	err := d.applyCRs(context.Background())
+	if err == nil {
+		t.Fatal("applyCRs passed with a TelemetryProvider YBA refused")
+	}
+	if !strings.Contains(err.Error(), "byoc-metrics") {
+		t.Errorf("error %q does not name the provider", err)
+	}
+	if !strings.Contains(err.Error(), "has no key password") {
+		t.Errorf("error %q drops YBA's own message, which is the only place the reason appears", err)
+	}
+	for _, c := range rec.Calls {
+		if strings.Contains(c.Stdin, `"kind": "YBUniverse"`) {
+			t.Error("the universe was applied anyway, referencing a provider YBA refused")
+		}
 	}
 }

@@ -292,3 +292,85 @@ func TestInstallHint_HonorsForwardedHeaders(t *testing.T) {
 		t.Errorf("hint leaked the internal address:\n%s", hint)
 	}
 }
+
+// The database under an amp environment is exported by YBA, not by the chart's
+// collectors, so the hint has to hand the operator the CR blocks that turn it on
+// (meko#1405). What matters is the three fields that fail quietly if wrong:
+// MINIMAL is the smallest level that takes effect, the target list omits YCQL,
+// and the exporter names the provider that carries the credential.
+// TABLE_OFF must never appear: the export path drops its parameters silently.
+func TestInstallHint_AmpTurnsOnYugabyteDBMetrics(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA,
+		AccountID: "3f2b1c00-0000-0000-0000-000000000009",
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	for _, want := range []string{
+		// The gate defaults off and is read at yugaware startup, so an operator
+		// who pastes only the two CR blocks gets no collector and no error —
+		// the exact failure the hint exists to prevent.
+		"yb.universe.otel_collector_enabled",
+		// The CRs apply only where YBA runs, and the hint says whose they are.
+		"OPERATOR-MANAGED FOUNDATION",
+		"TelemetryProvider:",
+		"provider: OTLP",
+		"passwordSecret: {name: byoc-metrics-auth, key: password}",
+		"collectionLevel: MINIMAL",
+		"scrapeConfigTargets: [MASTER_EXPORT, TSERVER_EXPORT, YSQL_EXPORT]",
+		"telemetryProvider: byoc-metrics",
+		// The door 415s an uncompressed payload, and every send failing is
+		// visible only in the collector's own counters.
+		"compression: gzip",
+		"environment_id: amp-acme-prod",
+		"account_id: 3f2b1c00-0000-0000-0000-000000000009",
+	} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint does not carry %q:\n%s", want, hint)
+		}
+	}
+	// A password in the block would be a credential printed into a file the
+	// operator then commits. It reaches YBA by Secret reference or not at all.
+	if strings.Contains(hint, "password: ") {
+		t.Errorf("hint puts a literal password in the TelemetryProvider:\n%s", hint)
+	}
+}
+
+// Ordering is the point of putting this in the hint at all: the exporter names a
+// Secret that step 2 creates, and the identity tags exist nowhere earlier. Printed
+// before the Secret it would not work; printed after the install the universe
+// would have spent that window collecting nothing.
+func TestInstallHint_AmpTurnsOnMetricsAfterTheSecretAndBeforeTheInstall(t *testing.T) {
+	hint := hintForEnv(t, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA,
+	}, "/api/v1/environments", "ycp.example.com", "", nil)
+
+	secret := strings.Index(hint, "create secret generic byoc-metrics-auth")
+	telemetry := strings.Index(hint, "collectionLevel: MINIMAL")
+	install := strings.Index(hint, "helm upgrade --install yb-amp-controller")
+	if secret < 0 || telemetry < 0 || install < 0 {
+		t.Fatalf("hint is missing one of the three steps:\n%s", hint)
+	}
+	if !(secret < telemetry && telemetry < install) {
+		t.Errorf("steps out of order (secret %d, telemetry %d, install %d):\n%s",
+			secret, telemetry, install, hint)
+	}
+}
+
+// A control plane with no door has nowhere to send the database's metrics, so the
+// step is absent — and the sequence must still read 1, 2, 3 rather than skipping
+// a number, which reads as a step the operator missed.
+func TestInstallHint_AmpNumbersTheInstallWhenThereIsNoDoor(t *testing.T) {
+	req := httptest.NewRequest("POST", "/api/v1/environments", nil)
+	req.Host = "ycp.example.com"
+	c := echo.New().NewContext(req, httptest.NewRecorder())
+	hint := installHint(c, &models.Environment{
+		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA,
+	}, "")
+
+	if strings.Contains(hint, "TelemetryProvider:") {
+		t.Errorf("hint declares a telemetry provider with no door to point it at:\n%s", hint)
+	}
+	if !strings.Contains(hint, "# 3 — install the amp controller") {
+		t.Errorf("install step is not numbered 3 with the telemetry step absent:\n%s", hint)
+	}
+}

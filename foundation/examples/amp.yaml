@@ -124,6 +124,25 @@ yba:
         name: prom/prometheus
         tag: v3.13.2
 
+    # Arbitrary YBA runtime config, written into application.docker.conf.
+    #
+    # yb.universe.otel_collector_enabled gates the OTel collector sidecar YBA
+    # injects into the DB pods, and it defaults OFF — with it off, a universe
+    # declaring telemetry gets no collector and no error. It has to be set here
+    # rather than later because YBA reads its runtime config at startup, and
+    # nothing on this path can call YBA's API to change one afterwards (the
+    # operator reconciles CRs under its own ServiceAccount; no API token
+    # exists here).
+    #
+    # This only ENABLES the mechanism. Nothing is scraped or exported until a
+    # universe declares spec.telemetry.metrics with an exporter — see the
+    # comment on YBUniverse below. The two companion flags,
+    # yb.universe.metrics_export_enabled and yb.telemetry.allow_otlp, both
+    # default true and are not set here.
+    additionalAppConf:
+      nonStringConf:
+        "yb.universe.otel_collector_enabled": true
+
     # Perf Advisor is new in 2026.1.2: a subchart, enabled by default, whose
     # image pulls under its OWN imagePullSecretName (yugabyte-k8s-pull-secret)
     # that nothing here creates. `helm --wait` waits for every workload in the
@@ -204,6 +223,37 @@ YBProvider:
               # storageClass on the universe's volumes loses to this.
               kubernetesStorageClass: yb-standard
 
+# No telemetry here, deliberately — metrics export is turned on AFTER this
+# universe is up, not with it (meko#1405).
+#
+# The exporter references a TelemetryProvider, whose credential is a Secret
+# (byoc-metrics-auth) that does not exist yet: it is created by the install hint,
+# from a password only the operator has. Declaring the provider here would apply
+# it against a missing Secret and leave it in Error. And the identity the series
+# must carry — environment_id, account_id — is not known until that same step.
+#
+# So the install hint prints both blocks, with the ids filled in, to be added to
+# this file and applied. What arrives looks like:
+#
+#   TelemetryProvider:          # above YBUniverse — keys apply top to bottom
+#     name: byoc-metrics
+#     spec:
+#       provider: OTLP
+#       otlp: {...}             # the BYOC door, password by secretKeyRef
+#
+#   YBUniverse:
+#     spec:
+#       telemetry:
+#         metrics:
+#           collectionLevel: MINIMAL          # the smallest set that takes effect
+#           scrapeConfigTargets: [MASTER_EXPORT, TSERVER_EXPORT, YSQL_EXPORT]
+#           exporters:
+#             - telemetryProvider: byoc-metrics
+#               additionalTags: {source: amp, environment_id: ..., account_id: ...}
+#
+# examples/resources.yaml carries the full worked version. Nothing collects until
+# the exporters list is non-empty: an empty one is not "scrape but do not ship",
+# it is no collector at all.
 YBUniverse:
   name: foundation
   spec:

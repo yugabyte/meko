@@ -44,6 +44,26 @@
     },
     "providerName": "foundation",
     "replicationFactor": 3,
+    "telemetry": {
+      "metrics": {
+        "collectionLevel": "MINIMAL",
+        "exporters": [
+          {
+            "additionalTags": {
+              "account_id": "3f2b1c00-0000-0000-0000-000000000009",
+              "environment_id": "acme-prod",
+              "source": "amp"
+            },
+            "telemetryProvider": "byoc-metrics"
+          }
+        ],
+        "scrapeConfigTargets": [
+          "MASTER_EXPORT",
+          "TSERVER_EXPORT",
+          "YSQL_EXPORT"
+        ]
+      }
+    },
     "tserverVolume": {
       "volumeSize": 100
     },

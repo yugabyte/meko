@@ -29,6 +29,11 @@ const (
 	APIVersion   = "operator.yugabyte.io/v1alpha1"
 	KindUniverse = "YBUniverse"
 	KindProvider = "YBProvider"
+	// KindTelemetryProvider is named here only because Spec reads its bodies
+	// for the Secrets they reference (Spec.TelemetryProviderSecrets). Nothing
+	// renders or validates it specially — like every other kind the bundle
+	// ships, it passes through verbatim.
+	KindTelemetryProvider = "TelemetryProvider"
 )
 
 // Universe states. The CRD's description lists these four as examples ("e.g.")

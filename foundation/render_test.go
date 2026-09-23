@@ -571,3 +571,94 @@ func TestCrdSourceHonoursTheOverride(t *testing.T) {
 		t.Errorf("the deployer and the CLI disagree: %q vs %q", got, spec.CRDPath)
 	}
 }
+
+// TestMetricsExportIsDeclaredNotAssembled pins the shape of YugabyteDB metrics
+// export (meko#1405), which is entirely CR fields: YBA renders the collector
+// config from these, and nothing in this repo writes a scrape job or a relabel
+// rule.
+//
+// Three of these fields are the whole reason the feature is safe to turn on, and
+// each fails silently rather than loudly if it drifts:
+//
+//   - collectionLevel MINIMAL is the smallest set that actually takes effect.
+//     NOT TABLE_OFF, whose name says what we want: YBA's OTel export sends only
+//     priority_regex, metrics and show_help, and TABLE_OFF's params file defines
+//     neither of the first two, so it degrades to no filter at all and emits
+//     every per-table series. The CRD accepts it either way, so the guard has to
+//     live here.
+//   - the target list omits CQL_EXPORT, which amp's computes never speak.
+//   - an EMPTY exporters list is not "scrape but ship nowhere": YBA gates the
+//     sidecar on there being an exporter, so it means no collector at all. Since
+//     the identity tags hang off the exporter entry, that is also what makes it
+//     impossible to ship a series with no identity on it.
+func TestMetricsExportIsDeclaredNotAssembled(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	crSpec := renderedSpec(t, spec, "YBUniverse")
+
+	metrics, ok := crSpec["telemetry"].(map[string]any)["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("telemetry.metrics = %v, want a map", crSpec["telemetry"])
+	}
+	if got := metrics["collectionLevel"]; got != "MINIMAL" {
+		t.Errorf("collectionLevel = %v, want MINIMAL. TABLE_OFF in particular is a trap: "+
+			"the export path never sends its parameters, so it collects MORE than this, not less", got)
+	}
+	targets := metrics["scrapeConfigTargets"].([]any)
+	want := []any{"MASTER_EXPORT", "TSERVER_EXPORT", "YSQL_EXPORT"}
+	if !reflect.DeepEqual(targets, want) {
+		t.Errorf("scrapeConfigTargets = %v, want %v", targets, want)
+	}
+
+	exporters, _ := metrics["exporters"].([]any)
+	if len(exporters) != 1 {
+		t.Fatalf("exporters = %v, want exactly one — an empty list is no collector at all", exporters)
+	}
+	exp := exporters[0].(map[string]any)
+	if got := exp["telemetryProvider"]; got != "byoc-metrics" {
+		t.Errorf("telemetryProvider = %v, want the TelemetryProvider entry's name", got)
+	}
+	for tag, want := range map[string]string{"source": "amp", "environment_id": "acme-prod"} {
+		if got := exp["additionalTags"].(map[string]any)[tag]; got != want {
+			t.Errorf("additionalTags[%q] = %v, want %q", tag, got, want)
+		}
+	}
+	if _, set := exp["additionalTags"].(map[string]any)["account_id"]; !set {
+		t.Error("additionalTags has no account_id; the fleet identity is both ids, not one")
+	}
+}
+
+// TestTelemetryProviderCarriesNoCredential: the BYOC password reaches YBA as a
+// Secret reference, never as a value in the CR.
+//
+// A TelemetryProvider spec is immutable in every field, so a password written
+// here could not even be rotated without deleting the resource — which YBA
+// refuses while a universe references it. The Secret itself is created
+// out-of-band; Preflight is what checks it exists.
+func TestTelemetryProviderCarriesNoCredential(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	crSpec := renderedSpec(t, spec, "TelemetryProvider")
+
+	if got := crSpec["provider"]; got != "OTLP" {
+		t.Errorf("provider = %v, want OTLP", got)
+	}
+	otlp := crSpec["otlp"].(map[string]any)
+	if got := otlp["authType"]; got != "BasicAuth" {
+		t.Fatalf("authType = %v, want BasicAuth", got)
+	}
+	auth := otlp["basicAuth"].(map[string]any)
+	if _, leaked := auth["password"]; leaked {
+		t.Error("basicAuth carries a literal password; it must be a passwordSecret reference")
+	}
+	ref, ok := auth["passwordSecret"].(map[string]any)
+	if !ok {
+		t.Fatalf("passwordSecret = %v, want a {name,key} reference", auth["passwordSecret"])
+	}
+	if ref["name"] != "byoc-metrics-auth" || ref["key"] != "password" {
+		t.Errorf("passwordSecret = %v, want the byoc-metrics-auth/password the install hint creates", ref)
+	}
+	// The tags that vary per environment belong on the universe's exporter,
+	// which is editable; this spec is frozen the moment it is created.
+	if _, set := crSpec["tags"]; set {
+		t.Error("the provider declares tags, which are immutable — per-environment identity belongs in the universe's additionalTags")
+	}
+}

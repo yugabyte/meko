@@ -214,9 +214,93 @@ the console prints fills both in. Unset, nothing is stamped. The hint omits
 `account_id` for a standalone YCP, whose all-zeros sentinel account would label
 every series identically.
 
-Two sources this does **not** reach: the backing foundation YugabyteDB, which no
-collector job scrapes (the QA framework samples it into the report portal, a
-different pipeline), and the reconcile-agent, which exposes no `/metrics` at all.
+One source this does **not** reach: the reconcile-agent, which exposes no
+`/metrics` at all. The backing YugabyteDB is reached by a different pipeline
+entirely, and **only on the operator-managed foundation** — see below. (The QA
+framework also samples the DB into the report portal, which is a third one.)
+
+## YugabyteDB: exported by YBA, not scraped by us
+
+**Only where YBA runs.** These are CRs the YugabyteDB Kubernetes operator reads,
+so this covers the operator-managed foundation and nothing else: `up-gke.sh`
+gates the step on `FOUNDATION=operator`, and `FOUNDATION` defaults to
+`yugabyted`. Every other bring-up — `deploy/up.sh`, the default `up-gke.sh`, the
+ycp agent's BYOC data plane — runs a hand-rolled `yugabyted` StatefulSet with no
+YBA to accept these, and its database still reports nothing. That gap is real and
+open; do not read this section as covering it.
+
+The universe under an operator-managed deployment is not in the pipeline above.
+Its metrics are YugabyteDB Anywhere's to export, configured declaratively on the
+CRs the foundation renders (meko#1405):
+
+```
+foundation spec
+  TelemetryProvider          ─┐
+  YBUniverse.spec.telemetry  ─┤
+                              ▼
+   operator ─▶ YBA ─▶ collector config ─▶ otelCollector.* on the DB chart
+                                             │
+                                             ▼
+                          sidecar in the yb-master and yb-tserver pods,
+                          scraping pod-locally ─▶ the BYOC OTLP door
+```
+
+Nothing in this repo writes a scrape job or a relabel rule for it, and the amp
+collectors never see it — it reaches the same door by its own route.
+
+**Why not just scrape it with a collector of ours.** Two different obstacles,
+depending on the shape:
+
+- A **deployment-mode** collector, like the three above, discovers pods with
+  `role: pod` SD restricted to the release namespace, backed by a namespaced
+  `Role`. The universe lands in the provider zones' `kubeNamespace`, which need
+  not be that namespace — so it would need either a grant in a namespace the
+  chart does not own or cluster-scoped discovery, which #753 exists to prevent.
+- A **sidecar** of ours avoids discovery entirely, but injection happens at pod
+  *admission*: `foundation up` creates the universe long before the amp chart
+  creates the collector CR, so the webhook has nothing to resolve and never
+  retries. Verified on a live universe — pods annotated, CR present, no
+  `otc-container`.
+
+And writing `otelCollector.config` by hand through `kubernetesOverrides` fights
+YBA for the same field, which it sets itself from the universe's telemetry
+config.
+
+**It is turned on after the universe, not with it.** The exporter references the
+`byoc-metrics-auth` Secret, which the environment's install hint creates, and the
+identity tags come from that same step — so a foundation comes up with no
+telemetry and the hint prints the blocks that enable it. An empty `exporters`
+list is not "collect but ship nowhere": YBA gates the sidecar on there being an
+exporter, so nothing is collected until it is applied, and no series can reach
+the door without an identity on it.
+
+**`collectionLevel: MINIMAL`, and deliberately not `TABLE_OFF`.** This is the one
+piece of the configuration that is a trap. YBA has two collection-level
+implementations: the swamper iterates every parameter in the level's file, so
+`TABLE_OFF`'s `table_allowlist=NONE` reaches the database; the **metrics export
+path sends only `priority_regex`, `metrics` and `show_help`**, and `TABLE_OFF`
+defines neither of the first two. Declaring it on an exporting universe therefore
+sends no filter at all — the v1 endpoint's default `priority_regex=.*` — and
+collects *every* per-table series, the opposite of its name and worse than the
+`NORMAL` default. The CRD accepts it and documents it as dropping per-table
+metrics, so nothing says otherwise until the bill does. `MINIMAL` defines both
+parameters, so both are sent and it takes effect. No level yields zero per-table
+series here; that needs the export generator to pass every parameter the way the
+swamper already does.
+
+`deploy/yb-metrics-smoke.sh` checks the links rather than the intent, because
+each of them fails quietly: the provider reaching `Ready` with a UUID, the sidecar
+actually being in both pods, the *generated* config carrying the level's
+parameters and the identity tags, and the collector accepting datapoints. Reading
+the generated config is the only place an under- or over-collecting level becomes
+visible before the storage bill. It runs in the foundation nightly, the only path
+with a real operator-managed universe.
+
+**Known limitation.** `additionalTags` is fixed per exporter, so one environment
+per universe is assumed; two sharing a foundation would tag the same series with
+one identity. And a `TelemetryProvider` spec is immutable in every field, so
+rotating the BYOC password means deleting and recreating it, which YBA refuses
+while a universe references it.
 
 ## Step 3 — compute Postgres metrics (implemented)
 

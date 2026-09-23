@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseVersion(t *testing.T) {
@@ -253,5 +254,52 @@ func TestPreflightNamesAMissingChartOrCrdPath(t *testing.T) {
 				t.Fatalf("err = %v, want it to name %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestPreflightFailsOnAMissingTelemetrySecret: a TelemetryProvider's credential
+// is a Secret reference, and a missing one fails in the worst possible way — the
+// operator parks the provider in Error with the reason only in YBA's own log,
+// the universe's telemetry section never reconciles, and the universe itself
+// looks entirely healthy while exporting nothing. Preflight is where that
+// becomes a sentence instead of a silence.
+func TestPreflightFailsOnAMissingTelemetrySecret(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "helm version", Result: Result{Stdout: "v3.20.0"}},
+		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
+		{Match: "get storageclass", Result: Result{Stdout: "WaitForFirstConsumer"}},
+		// The pull secret resolves; only the telemetry one is absent.
+		{Match: "get secret quay-pull-secret", Result: Result{Stdout: "secret/quay-pull-secret"}},
+		{Match: "get secret", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
+	}}
+	spec := loadExample(t, "resources.yaml")
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(string, ...any) {})
+
+	err := d.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("Preflight passed with a TelemetryProvider secret that does not exist")
+	}
+	if !strings.Contains(err.Error(), "byoc-metrics-auth") {
+		t.Errorf("error %q does not name the secret", err)
+	}
+	if !strings.Contains(err.Error(), "TelemetryProvider") {
+		t.Errorf("error %q does not say what references it", err)
+	}
+}
+
+// TestTelemetryProviderSecretsReadsReferencesNotValues: the accessor walks CR
+// bodies for {name, key} references, so it works for any provider the bundle
+// ships without a table of them here — and it must never pick up a literal.
+func TestTelemetryProviderSecretsReadsReferencesNotValues(t *testing.T) {
+	spec := loadExample(t, "resources.yaml")
+	if got := spec.TelemetryProviderSecrets(); len(got) != 1 || got[0] != "byoc-metrics-auth" {
+		t.Fatalf("TelemetryProviderSecrets() = %v, want [byoc-metrics-auth]", got)
+	}
+	// A spec with no telemetry declares no requirement — which is the state a
+	// foundation comes up in, before the install hint adds the export.
+	if got := loadExample(t, "amp.yaml").TelemetryProviderSecrets(); len(got) != 0 {
+		t.Errorf("amp.yaml requires %v; it declares no TelemetryProvider and should require none", got)
 	}
 }

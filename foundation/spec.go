@@ -889,6 +889,62 @@ func (s *Spec) PullSecrets() []string {
 	return out
 }
 
+// TelemetryProviderSecrets is every Secret a declared TelemetryProvider names,
+// which must already exist for the provider to reconcile.
+//
+// Credentials reach YBA by reference on this kind — a Datadog apiKeySecret, an
+// OTLP basicAuth passwordSecret, a bearer tokenSecret — so the CR is safe to
+// keep in a spec file, and the Secret is somebody else's job. The install hint
+// creates the BYOC one (byoc-metrics-auth) from a password only the operator
+// has, which is also why telemetry is added to a spec AFTER the universe is up
+// rather than with it.
+//
+// Nothing here creates one. Missing, the operator leaves the provider in Error
+// with the reason only in YBA's own log, and the universe's telemetry section
+// silently never reconciles — so Preflight checks instead.
+//
+// The walk is over spec bodies passed through verbatim, so it reads whatever
+// shape a `*Secret` key happens to have rather than modelling each provider:
+// a kind shipped in a future chart works the day its CRD does, which is the
+// same reason Resources is untyped.
+func (s *Spec) TelemetryProviderSecrets() []string {
+	seen := map[string]bool{}
+	for i := range s.Resources {
+		if s.Resources[i].Kind != ybuniverse.KindTelemetryProvider {
+			continue
+		}
+		collectSecretRefs(s.Resources[i].Spec, seen)
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// collectSecretRefs walks a CR body for {name, key} references under any key
+// ending in "Secret" — the shape every telemetry provider's credential uses.
+func collectSecretRefs(node any, seen map[string]bool) {
+	switch v := node.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if strings.HasSuffix(key, "Secret") {
+				if ref, ok := child.(map[string]any); ok {
+					if name, ok := ref["name"].(string); ok && name != "" {
+						seen[name] = true
+					}
+				}
+			}
+			collectSecretRefs(child, seen)
+		}
+	case []any:
+		for _, child := range v {
+			collectSecretRefs(child, seen)
+		}
+	}
+}
+
 // UniverseNamespace is where the DB pods, and so the Service consumers dial,
 // actually land.
 //

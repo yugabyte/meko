@@ -197,6 +197,24 @@ func (d *Deployer) Preflight(ctx context.Context) error {
 				name, d.spec.Namespace)
 		}
 	}
+
+	// Same contract for the Secrets a TelemetryProvider references. Missing, the
+	// operator leaves the provider in Error with the reason only in YBA's log,
+	// and the universe's telemetry section then never reconciles — a universe
+	// that looks entirely healthy while exporting nothing.
+	for _, name := range d.spec.TelemetryProviderSecrets() {
+		res, err := d.kubectl(ctx, nil, "get", "secret", name, "-o", "name")
+		if err != nil {
+			return err
+		}
+		if res.ExitCode != 0 {
+			return fmt.Errorf("secret %q, referenced by a TelemetryProvider, does not exist in "+
+				"namespace %s: create it before deploying (the environment's install hint prints "+
+				"the `kubectl create secret` line), or drop the telemetry from the spec — the "+
+				"provider would otherwise sit in Error and nothing would be exported",
+				name, d.spec.Namespace)
+		}
+	}
 	return nil
 }
 

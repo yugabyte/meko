@@ -423,6 +423,17 @@ jobs:
             exit 1
           }
 
+      # Metrics export is declared on the CRs and everything after that belongs to
+      # somebody else — the operator turns them into YBA config, YBA renders a
+      # collector config, the DB chart injects it — and every one of those links
+      # fails quietly. This is the only place a real universe exists to check
+      # them against (meko#1405).
+      #
+      # DB_NS because the universe lands in the provider zones' kubeNamespace,
+      # which on this path is whatever that resolved to.
+      - name: Check YugabyteDB metrics export is on
+        run: NS="$NS" DB_NS="$UNIVERSE_NS" amp/deploy/yb-metrics-smoke.sh
+
       # An explicit down, then proof it reclaimed the cluster-scoped RBAC. The
       # chart names a ClusterRole and ClusterRoleBinding after the helm release,
       # and a namespace delete never reclaims a cluster-scoped object — so

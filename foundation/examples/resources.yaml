@@ -118,6 +118,42 @@ KMSConfig:
     name: foundation-kms
     provider: AWS
 
+# Where metrics go. YBA renders the whole collector config from this plus the
+# universe's telemetry block below, and the DB chart injects it as a sidecar into
+# the master and tserver pods — nothing here writes a scrape job or a relabel rule
+# (meko#1405).
+#
+# Above YBUniverse because the universe references it by name, and the universe's
+# telemetry section is not reconciled until this reports Ready with a
+# status.resourceUUID.
+#
+# The password is a Secret REFERENCE, so no credential lives in this file. That
+# Secret must already exist in the namespace: nothing here creates it, and a
+# missing one leaves the provider in Error with the reason only in YBA's log,
+# which is what Preflight checks for.
+#
+# The whole spec is IMMUTABLE — YBA exposes no edit API for a telemetry provider,
+# so changing the endpoint or rotating the password means deleting this resource
+# and creating a new one, which YBA allows only while no universe references it.
+# Hence nothing environment-specific here: identity goes on the universe, which
+# is editable.
+TelemetryProvider:
+  name: byoc-metrics
+  spec:
+    provider: OTLP
+    otlp:
+      endpoint: https://byoc.devcloud.yugabyte.com/api/v1/otlp
+      protocol: HTTP
+      metricsEndpoint: https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics
+      # Explicit, though gzip is the CRD's default: the BYOC door's nginx returns
+      # 415 to an uncompressed payload, so a change of default would make every
+      # send fail with nothing but the exporter's own counters to say so.
+      compression: gzip
+      authType: BasicAuth
+      basicAuth:
+        username: byoc
+        passwordSecret: {name: byoc-metrics-auth, key: password}
+
 YBUniverse:
   name: foundation
   spec:
@@ -133,6 +169,48 @@ YBUniverse:
             - code: us-west1-b
               numNodes: 3
     tserverVolume: {volumeSize: 100}
+    # What to collect and where to send it. Unlike audit and query logs this does
+    # not restart the DB processes, but applying it is still a rolling helm
+    # upgrade of the master and tserver pods.
+    telemetry:
+      metrics:
+        # MINIMAL, and NOT TABLE_OFF, though TABLE_OFF is the one whose name
+        # says what we want. The CRD accepts it and describes it as dropping
+        # per-table metrics, but its parameters never reach the database on
+        # this path: YBA's OTel metrics export sends only priority_regex,
+        # metrics and show_help, and TABLE_OFF's params file defines neither
+        # of the first two. So it degrades to NO filter at all — the v1
+        # endpoint's default priority_regex=.* — which emits every per-table
+        # series, the opposite of the intent and worse than the default.
+        # (YBA's own swamper path iterates every param in the file and does
+        # honour it; only the export path is hardcoded to three.)
+        #
+        # MINIMAL defines both params, so both are sent and it demonstrably
+        # takes effect: a small server-level `metrics` allowlist plus a
+        # seven-family table-level regex — follower lag, the memory-pressure
+        # rejections, sst file size, WAL size, async replication lag — which
+        # are the families only meaningful per table anyway.
+        #
+        # There is no level here that yields zero per-table series. Getting
+        # one needs an upstream fix to the export generator.
+        collectionLevel: MINIMAL
+        # Pod-local targets only. CQL_EXPORT is left out because amp's computes
+        # speak YSQL; the VM-only NODE_EXPORT and NODE_AGENT_EXPORT are not in
+        # this enum at all, since a sidecar cannot reach them from inside the pod.
+        scrapeConfigTargets: [MASTER_EXPORT, TSERVER_EXPORT, YSQL_EXPORT]
+        # An EMPTY list here is not "scrape but ship nowhere" — it is no collector
+        # at all, because YBA gates the sidecar on there being an exporter. So the
+        # tags below cannot be added separately from turning collection on, which
+        # is why no series ever reaches a store untagged.
+        exporters:
+          - telemetryProvider: byoc-metrics
+            # Attached to every exported record. environment_id and account_id are
+            # per-environment and come from the install hint; this block is
+            # editable in place, unlike the provider above.
+            additionalTags:
+              source: amp
+              environment_id: acme-prod
+              account_id: 3f2b1c00-0000-0000-0000-000000000009
 
 databases:
   - yb_storage

@@ -1,0 +1,28 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "TelemetryProvider",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
+    "name": "byoc-metrics",
+    "namespace": "amp"
+  },
+  "spec": {
+    "otlp": {
+      "authType": "BasicAuth",
+      "basicAuth": {
+        "passwordSecret": {
+          "key": "password",
+          "name": "byoc-metrics-auth"
+        },
+        "username": "byoc"
+      },
+      "compression": "gzip",
+      "endpoint": "https://byoc.devcloud.yugabyte.com/api/v1/otlp",
+      "metricsEndpoint": "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics",
+      "protocol": "HTTP"
+    },
+    "provider": "OTLP"
+  }
+}

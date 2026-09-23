@@ -257,9 +257,9 @@ failure stopped.
 
 1. **Preflight** — binaries on PATH, cluster reachable, helm ≥ 3.11, k8s ≥ 1.27,
    every storage class the spec names exists (and warns unless it binds
-   `WaitForFirstConsumer`), every pull secret the spec names exists,
-   `yba.values.yugaware.defaultUser.password` is set, and any local `yba.chart`
-   or `crdPath` is actually there.
+   `WaitForFirstConsumer`), every pull secret the spec names exists, every Secret
+   a `TelemetryProvider` references exists, `yba.values.yugaware.defaultUser.password`
+   is set, and any local `yba.chart` or `crdPath` is actually there.
 2. **CRDs** — `kubectl apply --server-side -f <bundle for chartVersion>`, with a
    local-path override for a cluster with no egress.
 
@@ -292,6 +292,14 @@ failure stopped.
    `quay.io/yugabyte/hardened-*`, which the itest robot cannot pull — the
    yugaware pod sits in `Init:ImagePullBackOff` and the install burns the full
    `ybaTimeout` before saying so. `examples/amp.yaml` overrides both back.
+
+   **`yb.universe.otel_collector_enabled` is off by default and read at
+   startup.** It gates the collector sidecar YBA injects into the DB pods, so
+   without it a universe declaring telemetry gets no collector and no error —
+   and YBA reads its runtime config when yugaware starts, so it cannot be turned
+   on afterwards from this path (nothing here holds a YBA API token).
+   `examples/amp.yaml` sets it through `yba.values.additionalAppConf`, which the
+   chart writes into `application.docker.conf`.
 
    2026.1.2 also added **Perf Advisor**, a subchart enabled by default that
    pulls under its own `imagePullSecretName` (`yugabyte-k8s-pull-secret`,

@@ -35,6 +35,14 @@ const apiKeyPlaceholder = "<YCP_AGENT_API_KEY>" //nolint:gosec // a placeholder,
 const (
 	byocMetricsSecretName = "byoc-metrics-auth" //nolint:gosec // a Secret NAME, not a credential
 	datadogSecretName     = "datadog-api"       //nolint:gosec // a Secret NAME, not a credential
+	// byocMetricsUsername is the BasicAuth user the door's nginx checks against
+	// its htpasswd, and the chart's otel.byoc.username default. Repeated here
+	// because the YugabyteDB telemetry block below is not the chart's and cannot
+	// inherit it.
+	byocMetricsUsername = "byoc"
+	// ybTelemetryProviderName is the TelemetryProvider CR the universe's exporter
+	// references. Only a name — the credential is the Secret above.
+	ybTelemetryProviderName = "byoc-metrics"
 )
 
 // installHint renders the commands that attach an agent to an environment. It is the
@@ -262,7 +270,16 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "  --from-literal=api-key=\"${DD_API_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
 
-	fmt.Fprintf(&b, "# 3 — install the amp controller and its reconcile-agent, from a meko checkout.\n")
+	// Numbered, not fixed: with no door configured there is nowhere for the
+	// database's metrics to go, so that step is absent and the install is 3.
+	// A printed sequence that skips a number reads as a missing step.
+	installStep := 3
+	if byocMetricsURL != "" {
+		ybMetricsExportHint(&b, envID, accountID, byocMetricsURL)
+		installStep = 4
+	}
+
+	fmt.Fprintf(&b, "# %d — install the amp controller and its reconcile-agent, from a meko checkout.\n", installStep)
 	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
 	fmt.Fprintf(&b, "helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller -n \"${NS}\" \\\n")
 	// Above the preflight hook's own budget. helm waits on a post-install hook for
@@ -385,4 +402,81 @@ func basePathOf(r *http.Request) string {
 		return p[:i]
 	}
 	return ""
+}
+
+// ybMetricsExportHint prints the step that turns YugabyteDB metrics on.
+//
+// The amp chart's collectors cover amp's own components; the database underneath
+// them is YBA's to export, declared on the CRs the foundation renders (meko#1405).
+// So this step is YAML to add to a spec, not a command to run: the spec's path,
+// kube context and chart source belong to the operator, and naming an invocation
+// here would couple this control plane to a CLI surface it does not own.
+//
+// It is printed AFTER the Secret step and BEFORE the install, and that order is
+// the whole reason this lives in the hint at all. The exporter references a
+// Secret that only exists once step 2 has run, and the identity tags are not
+// known anywhere earlier — so a foundation comes up with no telemetry, and this
+// is the first moment it can be turned on correctly. An empty exporter list is
+// not "collect but ship nowhere": YBA gates the collector sidecar on there being
+// an exporter, so nothing is collected until this is applied, and no series can
+// reach the door without the identity on it.
+func ybMetricsExportHint(b *strings.Builder, envID, accountID, byocMetricsURL string) {
+	fmt.Fprintf(b, "# 3 — turn on YugabyteDB metrics, so the database under this environment\n")
+	fmt.Fprintf(b, "#      reports too. FOR AN OPERATOR-MANAGED FOUNDATION: these are CRs that\n")
+	fmt.Fprintf(b, "#      YugabyteDB Anywhere reads, so they apply only where a foundation\n")
+	fmt.Fprintf(b, "#      runs one. Add BOTH blocks to its spec — the provider above the\n")
+	fmt.Fprintf(b, "#      YBUniverse entry, the telemetry block inside its spec:.\n")
+	fmt.Fprintf(b, "#      Until then the universe collects nothing.\n")
+	fmt.Fprintf(b, "#\n")
+	// The gate defaults OFF and YBA reads its runtime config at startup, so a
+	// spec that adds it later gets no collector and no error at all. Printed
+	// first because it is the one thing here that cannot be fixed afterwards
+	// without reinstalling yugaware.
+	fmt.Fprintf(b, "#      It also needs YBA's collector gate on, which defaults off and is\n")
+	fmt.Fprintf(b, "#      read at yugaware STARTUP — it must be in the spec that installs\n")
+	fmt.Fprintf(b, "#      YBA, or nothing below produces a collector and nothing reports why:\n")
+	fmt.Fprintf(b, "#\n")
+	fmt.Fprintf(b, "#      yba:\n")
+	fmt.Fprintf(b, "#        values:\n")
+	fmt.Fprintf(b, "#          additionalAppConf:\n")
+	fmt.Fprintf(b, "#            nonStringConf: {\"yb.universe.otel_collector_enabled\": true}\n")
+	fmt.Fprintf(b, "#\n")
+	fmt.Fprintf(b, "#      TelemetryProvider:\n")
+	fmt.Fprintf(b, "#        name: %s\n", ybTelemetryProviderName)
+	fmt.Fprintf(b, "#        spec:\n")
+	fmt.Fprintf(b, "#          provider: OTLP\n")
+	fmt.Fprintf(b, "#          otlp:\n")
+	fmt.Fprintf(b, "#            endpoint: %s\n", strings.TrimSuffix(byocMetricsURL, "/metrics"))
+	fmt.Fprintf(b, "#            protocol: HTTP\n")
+	fmt.Fprintf(b, "#            metricsEndpoint: %s\n", byocMetricsURL)
+	// Explicit, though gzip is the CRD's default: the door returns 415 to an
+	// uncompressed payload, so a changed default would fail every send with
+	// nothing but the collector's own counters to say so.
+	fmt.Fprintf(b, "#            compression: gzip\n")
+	fmt.Fprintf(b, "#            authType: BasicAuth\n")
+	fmt.Fprintf(b, "#            basicAuth:\n")
+	fmt.Fprintf(b, "#              username: %s\n", byocMetricsUsername)
+	fmt.Fprintf(b, "#              passwordSecret: {name: %s, key: password}\n", byocMetricsSecretName)
+	fmt.Fprintf(b, "#\n")
+	fmt.Fprintf(b, "#      (under the YBUniverse entry's spec:)\n")
+	fmt.Fprintf(b, "#      telemetry:\n")
+	fmt.Fprintf(b, "#        metrics:\n")
+	// MINIMAL, and deliberately not TABLE_OFF, whose name is the one that says
+	// what is wanted: YBA's metrics export sends only priority_regex, metrics and
+	// show_help, and TABLE_OFF's params file defines neither of the first two, so
+	// it reaches the database as no filter at all and emits every per-table
+	// series. MINIMAL defines both and takes effect.
+	fmt.Fprintf(b, "#          collectionLevel: MINIMAL\n")
+	fmt.Fprintf(b, "#          scrapeConfigTargets: [MASTER_EXPORT, TSERVER_EXPORT, YSQL_EXPORT]\n")
+	fmt.Fprintf(b, "#          exporters:\n")
+	fmt.Fprintf(b, "#            - telemetryProvider: %s\n", ybTelemetryProviderName)
+	fmt.Fprintf(b, "#              additionalTags:\n")
+	fmt.Fprintf(b, "#                source: amp\n")
+	fmt.Fprintf(b, "#                environment_id: %s\n", envID)
+	// Same rule as the chart's identity args: the standard YCP account is a
+	// sentinel that would label every series identically, so it is omitted.
+	if account := service.MetricsAccountID(accountID); account != "" {
+		fmt.Fprintf(b, "#                account_id: %s\n", account)
+	}
+	fmt.Fprintf(b, "\n")
 }

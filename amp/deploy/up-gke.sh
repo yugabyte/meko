@@ -524,6 +524,36 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   kubectl -n "${NS}" create secret generic datadog-api \
     --from-literal=api-key="${YCP_DATADOG_API_KEY}" \
     --dry-run=client -o yaml | kubectl apply -f -
+
+  # YugabyteDB's own metrics, which the amp collectors do not reach: YBA exports
+  # them, declared on the CRs the foundation renders (meko#1405). This is what
+  # the environment's install hint prints for an operator to do by hand.
+  #
+  # HERE rather than in the spec the bring-up used, mirroring the order a real
+  # BYOC install has no choice about: the exporter's password arrives with
+  # registration, so the universe is already running by the time it exists. This
+  # script could declare it at create — both inputs are env vars — but then CI
+  # would never exercise the path the install hint actually prints.
+  #
+  # An empty exporter list is not "collect but ship nowhere", it is no collector
+  # at all, so nothing reaches the door untagged.
+  if [ "${FOUNDATION}" = "operator" ]; then
+    say "enabling YugabyteDB metrics export on the foundation"
+    FOUNDATION_TELEMETRY_SPEC="$(mktemp -t foundation-telemetry.XXXXXX.yaml)"
+    YCP_ENV_ID="${YCP_ENV_ID}" YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL}" \
+      python3 "${REPO_ROOT}/deploy/foundation-telemetry.py" \
+        "${FOUNDATION_SPEC}" "${FOUNDATION_TELEMETRY_SPEC}" \
+      || die "could not write a telemetry-enabled foundation spec"
+    TELEMETRY_ARGS=(-c "${FOUNDATION_TELEMETRY_SPEC}" --namespace "${NS}")
+    [ -n "${CLUSTER}" ] && TELEMETRY_ARGS+=(--kube-context "${CLUSTER}")
+    ( cd "${REPO_ROOT}/../foundation" \
+      && go run ./cmd/foundation validate -c "${FOUNDATION_TELEMETRY_SPEC}" ) \
+      || die "the telemetry-enabled spec does not validate; not applying it"
+    ( cd "${REPO_ROOT}/../foundation" \
+      && go run ./cmd/foundation apply "${TELEMETRY_ARGS[@]}" ) \
+      || die "foundation apply failed enabling metrics export"
+
+  fi
   # The chart the agent helm-upgrades this release to when YCP declares a
   # controller version. Empty leaves the agent's own default, an OCI ref that is
   # not published — so a deploy that wants the controller driven from YCP must
