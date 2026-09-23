@@ -1711,6 +1711,11 @@ export async function listPendingUploads(
 export type KBActivityLogItem = {
   type: "file_upload" | "memory_promotion";
   timestamp: string;
+  /** Which datapack the row came from. Absent on the single-datapack feed,
+   *  where it would only repeat the page you are already on; present on the
+   *  collection feed, where several datapacks interleave. */
+  datapack_id?: string | null;
+  datapack_name?: string | null;
   // file_upload
   document_name?: string | null;
   document_type?: string | null;

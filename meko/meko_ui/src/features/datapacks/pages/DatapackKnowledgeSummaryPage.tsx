@@ -9,7 +9,7 @@
 // from the most recent activity-log item when available, falling
 // back to the summary's last_file_uploaded_at while the log loads.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileText, Search, Sparkles } from "lucide-react";
@@ -251,6 +251,12 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
   }, [refreshKey, datapackId, qc]);
 
   const resolvedDatapackId = datapack?.datapack_id ?? datapackId;
+  // Stable, so the feed does not refetch on every parent render.
+  const fetchDatapackActivityPage = useCallback(
+    ({ limit, cursor }: { limit: number; cursor: string }) =>
+      getKnowledgeBaseActivityLog(resolvedDatapackId, { limit, cursor }, {}),
+    [resolvedDatapackId],
+  );
   const displayDatapackName = datapack?.datapack_name ?? "";
   const promotedCount = summary?.promoted_memories_count ?? 0;
   // Use summary.total_files for the tab badge — KnowledgeFilesTab owns
@@ -390,7 +396,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
 
         {resolvedDatapackId ? (
           <KnowledgeActivityLog
-            datapackId={resolvedDatapackId}
+            fetchPage={fetchDatapackActivityPage}
             refreshKey={refreshKey}
             pageSize={10}
           />

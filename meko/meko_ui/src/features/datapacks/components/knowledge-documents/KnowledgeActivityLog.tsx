@@ -1,4 +1,10 @@
-// "Activity log" panel at the bottom of the SharedKnowledge page.
+// "Activity log" panel: the SharedKnowledge page's, and the collection
+// Activity tab's.
+//
+// Takes a fetcher rather than a datapack id, because the two surfaces differ
+// only in which endpoint they page through: one datapack's feed, or every
+// datapack in a collection. Everything else here (pagination, row rendering,
+// the 429 tolerance) is identical and worth having once.
 //
 // Merged file-upload + memory-promotion feed, server-side paginated.
 // The "Show more" button asks the BE for the next page (offset += 10)
@@ -18,14 +24,16 @@ import { cn } from "@/lib/utils";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import {
   getApiErrorMessage,
-  getKnowledgeBaseActivityLog,
   type KBActivityLogItem,
+  type KBActivityLogResponse,
 } from "@/lib/api/mekoApi";
 
 const DEFAULT_PAGE_SIZE = 10;
 
 type Props = {
-  datapackId: string;
+  /** Fetches one page. Bound to a datapack or to a collection by the caller.
+   *  Must be stable across renders (useCallback) or the feed refetches. */
+  fetchPage: (args: { limit: number; cursor: string }) => Promise<KBActivityLogResponse>;
   /** Increment to reset and re-fetch from the first page (e.g. after a new KB is created). */
   refreshKey?: number;
   /**
@@ -34,9 +42,16 @@ type Props = {
    * the pagination flow without needing many log entries.
    */
   pageSize?: number;
+  /** Says what the feed covers, when it covers more than one datapack. */
+  description?: string;
 };
 
-export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAULT_PAGE_SIZE }: Props) {
+export function KnowledgeActivityLog({
+  fetchPage,
+  refreshKey,
+  pageSize = DEFAULT_PAGE_SIZE,
+  description,
+}: Props) {
   const [items, setItems] = useState<KBActivityLogItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -50,15 +65,10 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
 
   const loadPage = useCallback(
     async (cursor: string, append: boolean) => {
-      if (!datapackId) return;
       setLoading(true);
       setError(null);
       try {
-        const resp = await getKnowledgeBaseActivityLog(
-          datapackId,
-          { limit: pageSize, cursor },
-          {},
-        );
+        const resp = await fetchPage({ limit: pageSize, cursor });
         setItems((prev) => (append ? [...prev, ...resp.items] : resp.items));
         setHasMore(resp.has_more);
         setNextCursor(resp.next_cursor);
@@ -72,7 +82,7 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
         setLoading(false);
       }
     },
-    [datapackId, pageSize],
+    [fetchPage, pageSize],
   );
 
   useEffect(() => {
@@ -81,7 +91,7 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
     setNextCursor("");
     setInitialized(false);
     void loadPage("", false);
-  }, [loadPage, refreshKey, datapackId]);
+  }, [loadPage, refreshKey]);
 
   return (
     <section className="rounded-xl border border-border bg-card p-6">
@@ -89,6 +99,10 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
         <History className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h2 className="text-base font-semibold text-foreground">Activity log</h2>
       </header>
+
+      {description ? (
+        <p className="-mt-2 mb-4 text-sm text-muted-foreground">{description}</p>
+      ) : null}
 
       {error ? (
         <div
@@ -147,7 +161,10 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
     const displayName = basename.replace(/^\d+_/, "") || "—";
     const relTime = formatRelativeTime(item.timestamp, now);
 
+    // Datapack first: on the collection feed it is the thing that tells two
+    // otherwise identical rows apart. Absent on a single-datapack feed.
     const meta: string[] = [];
+    if (item.datapack_name) meta.push(item.datapack_name);
     if (item.chunks_processed != null) meta.push(`${item.chunks_processed} chunks generated`);
 
     return (
@@ -189,9 +206,15 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
         <p className="line-clamp-2 text-sm text-foreground" title={content || undefined}>
           Promoted memory <span className="font-medium">{snippet}</span>
         </p>
-        {item.agent_id ? (
+        {item.agent_id || item.datapack_name ? (
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            agent <code className="text-foreground/70">{item.agent_id}</code>
+            {item.datapack_name}
+            {item.datapack_name && item.agent_id ? " · " : null}
+            {item.agent_id ? (
+              <>
+                agent <code className="text-foreground/70">{item.agent_id}</code>
+              </>
+            ) : null}
           </p>
         ) : null}
       </div>

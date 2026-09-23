@@ -1,5 +1,11 @@
 /**
  * “Collective learning” ribbon: Conversations → Memories → Learnings → (promote) → Collective Memory + Shared Knowledge.
+ *
+ * Shared by a datapack's detail page and a collection's, which is why the
+ * heading, the Conversations stage and the footer actions are optional. A
+ * project has no conversation count to show (they live in Langfuse, one
+ * query per datapack) and none of the footer actions have a target at
+ * collection scope.
  */
 import { useEffect, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
@@ -307,6 +313,11 @@ type Props = {
   collectiveMemoryCount?: number;
   knowledgeChunks?: number;
   datapackId?: string | null;
+  /** Heading and its sentence. Defaults to the datapack wording. */
+  title?: string;
+  description?: ReactNode;
+  /** Omit the Conversations stage and the arrow after it. */
+  showConversations?: boolean;
   onSelectSection?: (tab: DatapackDetailTab) => void;
   onUploadKnowledgeFiles?: () => void;
   /** When provided (AMP enabled), renders a "Create cluster" action. */
@@ -324,6 +335,9 @@ export function CollectiveLearningPipeline({
   knowledgeFileAndPromotedCount = 0,
   knowledgeChunks: _knowledgeChunks = 0,
   datapackId = null,
+  title = "Collective learning",
+  description,
+  showConversations = true,
   onSelectSection,
   onUploadKnowledgeFiles,
   onCreateCluster,
@@ -400,41 +414,49 @@ export function CollectiveLearningPipeline({
         <div className="border-b border-border/60 bg-card/40 px-5 py-4 sm:px-6">
           <div className="min-w-0 space-y-1">
             <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-              Collective learning
+              {title}
             </h2>
             <p className="text-sm leading-normal text-muted-foreground text-pretty">
-              How memory from individual agents flows into shared knowledge everyone can read. Each
-              promotion populates <span className="font-semibold text-brand">both</span>{" "}
-              destinations; Shared Knowledge can also receive files directly.
+              {description ?? (
+                <>
+                  How memory from individual agents flows into shared knowledge everyone can read.
+                  Each promotion populates <span className="font-semibold text-brand">both</span>{" "}
+                  destinations; Shared Knowledge can also receive files directly.
+                </>
+              )}
             </p>
           </div>
         </div>
 
         <div className="px-4 py-6 sm:px-6 sm:py-8">
           <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:gap-0">
-            <StageShell
-              tone={DATAPACK_DETAIL_TAB.conversations}
-              eyebrow=""
-              title="Conversations"
-              value={conversationsCount}
-              delta=""
-              subtitle=""
-              titleIcon={
-                <MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />
-              }
-              // No `titleClassName` override — inherits `text-foreground`
-              // so the Conversations title carries the same visual weight
-              // as the four accent-coloured ones beside it.
-              loading={statusLoading}
-              loadingLabel="Loading conversations count"
-              onSelect={
-                onSelectSection
-                  ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations)
-                  : undefined
-              }
-            />
+            {showConversations ? (
+              <>
+              <StageShell
+                tone={DATAPACK_DETAIL_TAB.conversations}
+                eyebrow=""
+                title="Conversations"
+                value={conversationsCount}
+                delta=""
+                subtitle=""
+                titleIcon={
+                  <MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />
+                }
+                // No `titleClassName` override — inherits `text-foreground`
+                // so the Conversations title carries the same visual weight
+                // as the four accent-coloured ones beside it.
+                loading={statusLoading}
+                loadingLabel="Loading conversations count"
+                onSelect={
+                  onSelectSection
+                    ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations)
+                    : undefined
+                }
+              />
 
-            <FlowArrow label="extract" />
+              <FlowArrow label="extract" />
+              </>
+            ) : null}
 
             <StageShell
               tone={DATAPACK_DETAIL_TAB.memories}
@@ -468,6 +490,10 @@ export function CollectiveLearningPipeline({
                 onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined
               }
             >
+              {/* Only where there is somewhere to go. The collection view has no
+                  promotions-review surface, and a permanently disabled CTA
+                  reads as broken rather than as absent. */}
+              {onSelectSection ? (
               <Button
                 type="button"
                 size="sm"
@@ -483,7 +509,7 @@ export function CollectiveLearningPipeline({
                 // to `whitespace-nowrap` + fixed height, which is what
                 // pushed the text out the sides at narrow widths).
                 className="w-full min-w-0 whitespace-normal h-auto py-2 leading-tight border-0 bg-context-learning-soft text-xs font-semibold text-context-learning shadow-md transition hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110 disabled:opacity-60"
-                disabled={learningsCountLoading || !onSelectSection}
+                disabled={learningsCountLoading}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectSection?.(DATAPACK_DETAIL_TAB.learnings);
@@ -498,6 +524,7 @@ export function CollectiveLearningPipeline({
                   reviewLabel
                 )}
               </Button>
+              ) : null}
             </StageShell>
 
             <div className="hidden lg:contents">
@@ -567,7 +594,10 @@ export function CollectiveLearningPipeline({
           </div>
         </div>
 
-        <div className="border-t border-border/55 bg-input/25 px-4 py-3 sm:px-6">
+        {/* No actions at collection scope: uploading and cluster creation both
+            need one datapack to target. */}
+        {onUploadKnowledgeFiles || onCreateCluster ? (
+          <div className="border-t border-border/55 bg-input/25 px-4 py-3 sm:px-6">
           <div className="flex flex-wrap items-center justify-end gap-2">
             {onCreateCluster ? (
               <Button
@@ -612,7 +642,8 @@ export function CollectiveLearningPipeline({
               </TooltipContent>
             </Tooltip>
           </div>
-        </div>
+          </div>
+        ) : null}
       </section>
     </TooltipProvider>
   );

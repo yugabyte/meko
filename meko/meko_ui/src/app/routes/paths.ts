@@ -13,6 +13,9 @@ export const ROUTES = {
   // and links; the product is renamed to "WorkbenchLM" elsewhere in the UI.
   workbenchLm: "/workbench-lm",
   datapacks: "/datapacks",
+  /** Collections & folders — the tree that organises datapacks. Gated by the
+   *  MEKO_ENABLE_COLLECTIONS runtime flag; see `@/lib/collectionsFeature`. */
+  collections: "/collections",
   observeHub: "/observe-hub",
   /** Guided product labs (e.g. the ADLC Review Agent Lab). */
   labs: "/labs",
@@ -224,11 +227,24 @@ export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.connect,
   ROUTES.workbenchLm,
   ROUTES.datapacks,
+  ROUTES.collections,
   ROUTES.observeHub,
   ROUTES.settings,
   ROUTES.usage,
   ROUTES.labs,
 ] as const;
+
+/** `/collections/:collectionId` — one collection and its folder tree. */
+export function collectionDetailPath(collectionId: string): string {
+  return `${ROUTES.collections}/${encodeURIComponent(collectionId)}`;
+}
+
+/** True for every Collections URL, list and detail. Kept separate from the
+ *  feature flag so the routing decision is testable without a rendered tree —
+ *  same split as `isLabsPath`. */
+export function isCollectionsPath(pathname: string): boolean {
+  return pathname === ROUTES.collections || pathname.startsWith(`${ROUTES.collections}/`);
+}
 
 /** `/labs/:labId` — the lab detail page. */
 export function labDetailPath(labId: string): string {

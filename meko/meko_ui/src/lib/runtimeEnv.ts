@@ -20,3 +20,18 @@ export function readRuntimeEnv(name: string): string | undefined {
   if (runtime && name in runtime) return runtime[name];
   return (import.meta.env as Record<string, string | undefined>)[name];
 }
+
+/** Spellings the BE and MCP server also accept for a boolean env var, so one
+ *  value means the same thing in every service's ConfigMap. */
+const TRUTHY_RUNTIME_VALUES = ["1", "true", "yes"];
+
+/**
+ * Reads a runtime env var as an on/off gate. Absent or unrecognised reads as
+ * OFF, so a deployment that has not set the var never inherits the feature.
+ *
+ * Use this for any new deployment-level flag instead of re-deriving the
+ * parse — `lib/labs.ts` predates it and spells the same check by hand.
+ */
+export function readRuntimeFlag(name: string): boolean {
+  return TRUTHY_RUNTIME_VALUES.includes((readRuntimeEnv(name) ?? "").trim().toLowerCase());
+}

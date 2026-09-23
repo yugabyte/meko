@@ -13,6 +13,17 @@ export const FEATURE_FLAGS = {
     storageKey: "meko:show_billing_nav",
     queryParam: "showPaymentOptions",
   },
+  /**
+   * Collections & folders: the `/collections` tree and the collection/path additions to
+   * the Datapacks page. Unlike the flag above this one has no default of its
+   * own — unset, it follows the `MEKO_ENABLE_COLLECTIONS` deployment flag, and
+   * `?collections=true|false` overrides that for one browser. See
+   * `lib/collectionsFeature.ts`.
+   */
+  collections: {
+    storageKey: "meko:show_collections",
+    queryParam: "collections",
+  },
 } as const;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

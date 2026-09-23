@@ -1,0 +1,49 @@
+// The depth-1 folder names of a collection, as monospace chips. Shows the shape
+// of the tree at a glance, which is the thing that distinguishes one collection
+// from another on a list of otherwise identical cards.
+//
+// Shared: the collection card and the unfiled/empty states both render these.
+
+import { cn } from "@/lib/utils";
+
+/** Beyond this the chips wrap onto a third line and stop being scannable; the
+ *  remainder collapses into a "+N" chip. */
+const MAX_VISIBLE_FOLDERS = 4;
+
+export function CollectionFolderChips({
+  folders,
+  className,
+}: {
+  folders: string[];
+  className?: string;
+}) {
+  if (folders.length === 0) {
+    return (
+      <p className={cn("text-xs italic text-muted-foreground/70", className)}>No folders yet</p>
+    );
+  }
+
+  const visible = folders.slice(0, MAX_VISIBLE_FOLDERS);
+  const hidden = folders.length - visible.length;
+
+  return (
+    <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
+      {visible.map((folder) => (
+        <span
+          key={folder}
+          className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
+        >
+          {folder}
+        </span>
+      ))}
+      {hidden > 0 ? (
+        <span
+          className="text-xs text-muted-foreground/70"
+          title={folders.slice(MAX_VISIBLE_FOLDERS).join(", ")}
+        >
+          +{hidden}
+        </span>
+      ) : null}
+    </div>
+  );
+}

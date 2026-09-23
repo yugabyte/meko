@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from "react-router-dom";
-import { ROUTES } from "./paths";
+import { ROUTES, isCollectionsPath } from "./paths";
 import Sidebar from "@/features/layout/Sidebar";
 import { KbImportStatusBanner } from "@/features/layout/KbImportStatusBanner";
 import DatapacksPage from "@/features/datapacks/pages/DatapacksPage";
@@ -15,6 +15,8 @@ import LabsSection from "@/features/labs/pages/LabsSection";
 import LabRunnerPage from "@/features/labs/pages/LabRunnerPage";
 import { parseLabRoute } from "@/features/labs/lib/parseLabRoute";
 import { isLabsEnabled, isLabsPath } from "@/lib/labs";
+import CollectionsSection from "@/features/collections/pages/CollectionsSection";
+import { useCollectionsEnabled } from "@/lib/collectionsFeature";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -23,6 +25,17 @@ type Props = {
 export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const { pathname } = useLocation();
   const isLabRunner = parseLabRoute(pathname)?.isRunner ?? false;
+  // Collections gate. A hook rather than a bare function like isLabsEnabled,
+  // because the per-browser `?collections=true|false` override is latched in
+  // localStorage and has to re-render this tree when it flips.
+  const collectionsEnabled = useCollectionsEnabled();
+
+  // MEKO_ENABLE_COLLECTIONS off (and no per-browser override): bounce every
+  // /collections route, for the same reason Labs does below — a bookmark should
+  // land somewhere real rather than render Datapacks under a /collections URL.
+  if (isCollectionsPath(pathname) && !collectionsEnabled) {
+    return <Navigate to={ROUTES.datapacks} replace />;
+  }
 
   // MEKO_ENABLE_LABS off: bounce every /labs route, before the runner's
   // early return below can take over the viewport. A redirect rather than a
@@ -74,9 +87,10 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
   const isLabsRoute = isLabsPath(pathname);
   const isLabsListOrDetail = isLabsRoute && !isLabRunner;
+  const isCollections = isCollectionsPath(pathname);
   const isMarketplaceComplete = pathname === ROUTES.marketplaceComplete;
 
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, labs. */
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, labs, collections. */
   const isDatapacks =
     !isObserve &&
     !isConnect &&
@@ -85,7 +99,8 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
     !isUsage &&
     !isBilling &&
     !isMarketplaceComplete &&
-    !isLabsRoute;
+    !isLabsRoute &&
+    !isCollections;
 
   // See onboarding-shell comment above re: h-dvh for iOS keyboard.
   return (
@@ -145,6 +160,10 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           >
             <LabsSection />
           </div>
+          {/* Collections — conditionally mounted rather than display-toggled, so
+              a workspace with the flag off never issues /collections requests and
+              the tree queries stop the moment the user navigates away. */}
+          {isCollections ? <CollectionsSection /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isDatapacks ? "contents" : "none" }}

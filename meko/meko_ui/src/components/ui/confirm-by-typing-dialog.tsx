@@ -23,6 +23,10 @@ export type ConfirmByTypingDialogProps = {
   confirmLabel?: string;
   pending?: boolean;
   onConfirm: () => void | Promise<void>;
+  /** Rendered above the confirm input, for flows that must choose WHICH
+   *  resource to destroy before naming it. Leave it out and the dialog is
+   *  exactly what it was. */
+  children?: ReactNode;
 };
 
 export function ConfirmByTypingDialog({
@@ -34,12 +38,15 @@ export function ConfirmByTypingDialog({
   confirmLabel = "Delete",
   pending = false,
   onConfirm,
+  children,
 }: ConfirmByTypingDialogProps) {
   const [value, setValue] = useState("");
   useEffect(() => {
     if (open) setValue("");
   }, [open]);
-  const matches = value.trim() === confirmPhrase;
+  // An empty phrase can never be confirmed: the caller has not chosen a
+  // target yet, so there is nothing to name.
+  const matches = confirmPhrase !== "" && value.trim() === confirmPhrase;
 
   return (
     <Dialog
@@ -55,6 +62,7 @@ export function ConfirmByTypingDialog({
             <DialogDescription className="text-muted-foreground">{description}</DialogDescription>
           ) : null}
         </DialogHeader>
+        {children ? <div className="mt-2 space-y-2">{children}</div> : null}
         <div className="my-2">
           <Input
             autoFocus

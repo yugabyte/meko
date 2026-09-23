@@ -19,6 +19,7 @@ import {
   CreditCard,
   Gauge,
   FlaskConical,
+  FolderTree,
 } from "lucide-react";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
+import { useCollectionsEnabled } from "@/lib/collectionsFeature";
 
 /**
  * Cap the nested "Datapacks" list at this many rows before it starts to
@@ -89,6 +91,10 @@ export default function Sidebar() {
   // entry is only half of it: ProtectedRoutes bounces /labs as well, so the
   // surface is unreachable rather than merely unlinked.
   const showLabsNav = isLabsEnabled();
+  // Collections tab — MEKO_ENABLE_COLLECTIONS, overridable per browser with
+  // ?collections=true|false. ProtectedRoutes bounces /collections on the same gate,
+  // so the surface is unreachable rather than merely unlinked.
+  const showCollectionsNav = useCollectionsEnabled();
   const [signOutOpen, setSignOutOpen] = useState(false);
   // Shared react-query cache — every other surface (HomePage, ObservePage,
   // WorkbenchLM, DatapacksOverviewPage) subscribes to the same key, so
@@ -414,6 +420,24 @@ export default function Sidebar() {
           >
             <FlaskConical className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
             {!isCollapsed && <span className="animate-in fade-in truncate">Labs</span>}
+          </NavLink>
+        ) : null}
+
+        {showCollectionsNav ? (
+          <NavLink
+            to={ROUTES.collections}
+            className={cn(
+              "flex items-center rounded-md text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              location.pathname === ROUTES.collections ||
+                location.pathname.startsWith(`${ROUTES.collections}/`)
+                ? "bg-foreground/10 text-foreground"
+                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            )}
+            title={isCollapsed ? "Collections" : undefined}
+          >
+            <FolderTree className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">Collections</span>}
           </NavLink>
         ) : null}
 

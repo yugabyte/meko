@@ -183,6 +183,11 @@ app.use((req, res, next) => {
     // flag so it can be turned on per environment without a rebuild. Off by
     // default, so a deployment that has not set it gets no Labs.
     "MEKO_ENABLE_LABS",
+    // Gates Collections & folders: the left-nav entry, every /collections route, and
+    // the collection/path additions to the Datapacks page. Runtime flag so it can
+    // be turned on per environment without a rebuild; `?collections=true|false`
+    // overrides it per browser (see lib/collectionsFeature.ts). Off by default.
+    "MEKO_ENABLE_COLLECTIONS",
     // AWS Marketplace Standard tier UI: show/hide the tile on the pricing
     // section, and the URL the "Upgrade" button deep-links to. Runtime flags
     // so they can be flipped per-deployment (limited vs public listing, or
