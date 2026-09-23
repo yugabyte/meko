@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/lib/pq"
 
@@ -72,7 +73,8 @@ const envColumns = `e.uuid, e.id, e.account_id, e.placement, e.region, e.state, 
 	e.mcp_base_url, e.cert_fingerprint, COALESCE(e.components::text, '[]'), e.live,
 	(SELECT api_key_id FROM meko_system.environment_api_keys
 	   WHERE env_uuid = e.uuid AND status = 'active'),
-	e.created_at, COALESCE(e.kind, 'meko'), COALESCE(e.resources::text, '[]'), e.agent_base_url`
+	e.created_at, COALESCE(e.kind, 'meko'), COALESCE(e.resources::text, '[]'), e.agent_base_url,
+	COALESCE(e.type, 'BYOC')`
 
 func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, error) {
 	var e models.Environment
@@ -83,7 +85,7 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 	if err := row.Scan(&e.UUID, &e.ID, &e.AccountID, &e.Placement, &region, &e.State, &k8sVersion,
 		&e.NodeCount, &provider, &e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat,
 		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &apiKeyID,
-		&e.CreatedAt, &e.Kind, &resourcesText, &agentBaseURL); err != nil {
+		&e.CreatedAt, &e.Kind, &resourcesText, &agentBaseURL, &e.Type); err != nil {
 		return nil, err
 	}
 	e.AccountID = accountFromStore(e.AccountID)
@@ -201,7 +203,7 @@ func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) 
 const envColumnsInsert = `id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
 	components, live, created_at,
-	kind, resources, agent_base_url`
+	kind, resources, agent_base_url, type`
 
 // ErrAPIKeyBound is returned when a key binding would attach an api key that
 // another environment already holds, which environment_api_keys' primary key
@@ -232,6 +234,10 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 	if kind == "" {
 		kind = "meko"
 	}
+	typ := e.Type
+	if typ == "" {
+		typ = "BYOC"
+	}
 	account := accountForStore(e.AccountID)
 
 	tx, err := r.db.Begin()
@@ -242,13 +248,13 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 
 	err = tx.QueryRow(`
 		INSERT INTO meko_system.environments (`+envColumnsInsert+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		RETURNING uuid`,
 		e.ID, account, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
 		e.CreatedAt, kind,
-		[]byte(resources), nullStr(e.AgentBaseURL)).Scan(&e.UUID)
+		[]byte(resources), nullStr(e.AgentBaseURL), typ).Scan(&e.UUID)
 	if err != nil {
 		// A 23505 from THIS statement can only be environments_account_id_uniq: the
 		// table's other unique key is its primary key, whose uuid the INSERT never
@@ -306,17 +312,21 @@ func (r *EnvironmentRepo) Update(e *models.Environment) error {
 	if kind == "" {
 		kind = "meko"
 	}
+	typ := e.Type
+	if typ == "" {
+		typ = "BYOC"
+	}
 	_, err := r.db.Exec(`
 		UPDATE meko_system.environments SET
 			placement=$2, region=$3, state=$4, k8s_version=$5, node_count=$6,
 			provider=$7, datapacks=$8, max_datapacks=$9, agent_version=$10, last_heartbeat_at=$11,
 			mcp_base_url=$12, cert_fingerprint=$13, components=$14, live=$15,
-			kind=$16, resources=$17
+			kind=$16, resources=$17, type=$18
 		WHERE uuid = $1`,
 		e.UUID, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
-		kind, []byte(resources))
+		kind, []byte(resources), typ)
 	if err != nil {
 		slog.Error("update environment", "uuid", e.UUID, "err", err)
 		return fmt.Errorf("update environment: %w", err)
@@ -398,6 +408,97 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 	}
 	return tx.Commit()
 }
+
+// applyDesiredPatchesTx applies a batch of targeted desired-state changes on an
+// EXISTING transaction, so a caller can span several environments in one atomic call
+// (the storage-pool region PATCH does). It neither begins nor commits: the caller
+// owns the transaction boundary and its rollback. Items are applied in slice order,
+// so two items naming the same (kind, name) compose as a shallow-merge sequence (the
+// second reads back what the first wrote).
+//
+// Each item is either a partial-spec upsert (Delete false) or a cascade subtree
+// delete (Delete true). Unlike ReplaceDesired this does not prune: only the rows the
+// batch names are read or written, so no unrelated resource is touched. The per-item
+// upsert reuses ReplaceDesired's spec-defaulting ({}) and generation rule — a
+// generation bumps only when the merged spec is semantically different.
+func applyDesiredPatchesTx(tx *sql.Tx, envUUID string, patches []models.ResourcePatch) error {
+	for _, p := range patches {
+		if p.Delete {
+			// Removes the resource AND every descendant (endpoints under a branch,
+			// branches+endpoints under a cluster), mirroring the amp controller's own
+			// delete cascade. starts_with rather than LIKE so a _/% in a name is not a
+			// wildcard. Deleting an absent resource is a no-op, not an error.
+			const del = `DELETE FROM meko_system.environment_desired_resources
+				 WHERE env_uuid=$1 AND (name=$2 OR starts_with(name, $2 || '/'))`
+			if _, err := tx.Exec(del, envUUID, p.Name); err != nil {
+				return fmt.Errorf("delete desired subtree %s: %w", p.Name, err)
+			}
+			continue
+		}
+		merged, err := mergeDesiredSpec(tx, envUUID, p.Kind, p.Name, p.Spec)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
+			 VALUES ($1,$2,$3,$4,0)
+			 ON CONFLICT (env_uuid, kind, name) DO UPDATE
+			   SET spec = EXCLUDED.spec,
+			       generation = CASE
+			         WHEN meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec
+			         THEN meko_system.environment_desired_resources.generation + 1
+			         ELSE meko_system.environment_desired_resources.generation
+			       END`,
+			envUUID, p.Kind, p.Name, []byte(merged)); err != nil {
+			return fmt.Errorf("upsert desired %s/%s: %w", p.Kind, p.Name, err)
+		}
+	}
+	return nil
+}
+
+// mergeDesiredSpec reads the resource's current spec (locked FOR UPDATE) and shallow-
+// merges the patch onto it: top-level keys present in the patch replace those in the
+// stored spec, unmentioned keys are preserved, and a nested object (e.g. pg_settings)
+// is replaced wholesale — matching the backend's "a declared settings surface owns
+// the whole map". An absent row (or an empty stored/patch spec) merges onto {}, so a
+// first patch becomes the whole spec.
+func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMessage) (json.RawMessage, error) {
+	var existingText string
+	err := tx.QueryRow(
+		`SELECT COALESCE(spec::text, '{}') FROM meko_system.environment_desired_resources
+		 WHERE env_uuid=$1 AND kind=$2 AND name=$3 FOR UPDATE`,
+		envUUID, kind, name).Scan(&existingText)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("read desired %s/%s: %w", kind, name, err)
+	}
+
+	merged := map[string]json.RawMessage{}
+	if err == nil && strings.TrimSpace(existingText) != "" {
+		if uerr := json.Unmarshal([]byte(existingText), &merged); uerr != nil {
+			// A stored spec that is not a JSON object cannot be shallow-merged onto;
+			// treat it as opaque and let the patch replace it wholesale.
+			merged = map[string]json.RawMessage{}
+		}
+	}
+	if len(bytes.TrimSpace(patch)) > 0 {
+		var incoming map[string]json.RawMessage
+		if uerr := json.Unmarshal(patch, &incoming); uerr != nil {
+			return nil, fmt.Errorf("%w: spec for %s/%s is not a JSON object", ErrSpecNotObject, kind, name)
+		}
+		for k, v := range incoming {
+			merged[k] = v
+		}
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("marshal merged spec for %s/%s: %w", kind, name, err)
+	}
+	return out, nil
+}
+
+// ErrSpecNotObject is returned when a patch spec is present but is not a JSON object,
+// so it cannot be shallow-merged. Mapped to 400 by the service.
+var ErrSpecNotObject = errors.New("spec must be a JSON object")
 
 // ListDesired returns the desired resources for an environment.
 func (r *EnvironmentRepo) ListDesired(envUUID string) ([]models.DesiredResource, error) {

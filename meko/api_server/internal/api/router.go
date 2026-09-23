@@ -486,6 +486,26 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.DELETE("/environments/:id", envH.Deregister)
 		fleet.GET("/environments/:id/desired", envH.GetDesired)
 		fleet.POST("/environments/:id/desired", envH.SetDesired)
+		// Region-addressed desired-state surface for MANAGED storage pools: no
+		// environment id in the path. GET reads a pool's desired + observed resources
+		// across the environments it is mapped to; PATCH applies a batch of targeted
+		// merges/deletes per region, resolving each region to one MANAGED environment
+		// via the sticky (storage_pool, region) mapping.
+		//
+		// Deliberately NOT on the fleet group: these routes are not account-scoped.
+		// The per-environment routes above resolve against the caller's account, but a
+		// MANAGED amp environment is Yugabyte-operated fleet infrastructure shared
+		// across accounts -- it carries no per-customer account_id (pickManagedEnvTx
+		// chooses any READY MANAGED amp env in the region), so there is no account to
+		// scope by. The tenant key here is the storage-pool UUID in the request, a
+		// separate id space from X-Meko-Account-ID. An account header would therefore
+		// be validated and then ignored, and under --require-account-header the fleet
+		// group would even 400 a caller that has no account to send. So they hang off
+		// the admin secret alone -- the same shared secret that already gates the
+		// fleet, held by the trusted proxy that manages storage pools.
+		poolRoutes := v1.Group("", auth.RequireAdminSecret(cfg.AdminAPIKey))
+		poolRoutes.GET("/environments/resources", envH.ListResourcesByName)
+		poolRoutes.PATCH("/environments/resources", envH.SetResourcesByRegion)
 		fleet.GET("/environments/:id/metrics",
 			handlers.NewEnvironmentMetricsHandler(reg.envSvc, reg.metricsSvc).Get)
 		tasksH := handlers.NewEnvironmentTasksHandler(reg.envSvc)

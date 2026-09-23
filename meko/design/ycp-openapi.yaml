@@ -192,6 +192,82 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
+  /api/v1/environments/resources:
+    get:
+      tags: [environments]
+      summary: List a MANAGED storage pool's resources (desired + observed)
+      operationId: listStoragePoolResources
+      description: |
+        Region-addressed and environment-agnostic: no environment id in the path. Returns a
+        storage pool's resources across every MANAGED environment it is mapped to, each as a
+        declared `desired` set and an agent-reported `observed` inventory. The storage pool is
+        the first path segment of `name`, so the endpoint stays generic across kinds.
+
+        A pool nothing is mapped to returns an empty `environments` list, not a 404 — a LIST
+        never assigns.
+
+        Desired and observed spell a resource's path differently: a desired row's `name` is the
+        full path (`pool-a/main-db`), while an observed row's `name` is the leaf (`main-db`) and
+        the full path is in its `id` (`cluster/pool-a/main-db`). The filters below match on the
+        full path in both.
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string }, description: A resource's full hierarchical path; its first segment is the storage pool. Exact match by default. }
+        - { name: kind, in: query, schema: { type: string, enum: [storage-pool, cluster, branch, endpoint] }, description: Keep only this resource kind. }
+        - { name: subtree, in: query, schema: { type: boolean, default: false }, description: With `name`, also return the resource's descendants. }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  environments: { type: array, items: { $ref: '#/components/schemas/EnvironmentResources' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    patch:
+      tags: [environments]
+      summary: Apply targeted desired-state changes to a MANAGED storage pool, by region
+      operationId: patchStoragePoolResources
+      description: |
+        Region-addressed: the body names the storage pool once and a batch of changes per region.
+        Each region resolves to ONE MANAGED amp environment via the sticky `(storage_pool, region)`
+        mapping — the first call for a pair pins a READY environment, later calls reuse it — so a
+        pool's resources never scatter across environments.
+
+        Every resource across every region is applied in one ATOMIC transaction. Each item names
+        one resource (`kind`+`name`, the name confined to the `<storage_pool>` subtree) and is
+        either a partial-spec merge (only the top-level keys present are changed; an absent
+        resource is created with the patch as its whole spec) or, with `delete: true`, a cascade
+        removal of that resource and every descendant. The storage-pool row itself is auto-created
+        on first touch, with an owner derived from the pool name.
+
+        The whole call is validated first: a `storage_pool` that is not a UUID, or any invalid
+        item — a kind the environment does not serve, a `delete` carrying a `spec`, a missing
+        `kind`/`name`, a non-object `spec`, a name outside the pool subtree — fails with 400 and
+        writes nothing. A region with no READY MANAGED amp environment is a 404. The batch is
+        capped at 100 items across all regions.
+
+        The response mirrors the LIST: the pool's desired and observed resources per environment
+        touched.
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/StoragePoolRegionPatch' } }
+      responses:
+        '200':
+          description: OK; the whole batch applied. The agent converges on its next tick.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  environments: { type: array, items: { $ref: '#/components/schemas/EnvironmentResources' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
   # ------------------------------------------------------------------ datapacks
   /api/v1/datapacks:
     get:
@@ -427,6 +503,11 @@ components:
       properties:
         id: { type: string, examples: [acme-prod] }
         account_id: { type: string }
+        type:
+          type: string
+          enum: [BYOC, MANAGED]
+          default: BYOC
+          description: BYOC (customer-run data plane) or MANAGED. Fixed at registration.
         placement: { type: string, enum: [cloud, onprem] }
         region: { type: string, examples: [us-east-1] }
         state: { $ref: '#/components/schemas/EnvState' }
@@ -456,6 +537,11 @@ components:
       properties:
         name: { type: string, examples: [acme-prod] }
         account_id: { type: string }
+        type:
+          type: string
+          enum: [BYOC, MANAGED]
+          default: BYOC
+          description: BYOC (customer-run data plane) or MANAGED; empty defaults to BYOC. Fixed at registration.
         api_key_id:
           type: string
           format: uuid
@@ -563,6 +649,76 @@ components:
         # carrying generation has to validate. ReplaceDesired derives the value in SQL
         # and ignores whatever was sent.
         generation: { type: integer, format: int64 }
+
+    ResourceStatus:
+      type: object
+      description: |
+        One item of an environment's observed inventory, as the agent last reported it.
+        Kind-agnostic and flat: `parent` links a resource to its owner by id, so new kinds
+        need no schema change. `name` is the LEAF; the full hierarchical path is in `id` as
+        `<kind>/<path>`.
+      properties:
+        kind: { type: string, examples: [cluster] }
+        id: { type: string, examples: [cluster/pool-a/main-db] }
+        name: { type: string, examples: [main-db] }
+        parent: { type: string, examples: [storage-pool/pool-a] }
+        state: { type: string, examples: [ready] }
+        error: { type: string, description: Why the resource is not converged, when the agent can say. }
+        attrs: { type: object, additionalProperties: { type: string } }
+
+    StoragePoolRegionPatch:
+      type: object
+      additionalProperties: false
+      required: [storage_pool, regions]
+      description: |
+        A region-addressed batch: one storage pool, and its targeted changes grouped by region.
+        Applied atomically across every region in one transaction; capped at 100 patches total.
+      properties:
+        storage_pool: { type: string, format: uuid, examples: ['3f0b5a2c-1d4e-4a9b-8c7d-2e6f9a0b1c2d'], description: The storage pool (an aeon account id, a UUID), equal to its `storage-pool` resource name. Every resource name below must be it or under it. }
+        regions:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RegionResources' }
+
+    RegionResources:
+      type: object
+      additionalProperties: false
+      required: [region, resources]
+      properties:
+        region: { type: string, examples: [us-east-1], description: The region whose MANAGED environment these patches target. }
+        resources:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ResourcePatch' }
+
+    EnvironmentResources:
+      type: object
+      description: One environment's slice of a region-addressed response — desired and observed resources for the storage pool.
+      properties:
+        environment_id: { type: string, examples: [acme-prod], description: The operator-facing id of the environment that answered. }
+        region: { type: string, examples: [us-east-1] }
+        desired: { type: array, items: { $ref: '#/components/schemas/DesiredResource' } }
+        observed: { type: array, items: { $ref: '#/components/schemas/ResourceStatus' } }
+
+    ResourcePatch:
+      type: object
+      # additionalProperties: false mirrors the server, which rejects an unknown key at
+      # every level. Keys inside spec are free — it is opaque to the control plane.
+      additionalProperties: false
+      required: [kind, name]
+      properties:
+        kind: { type: string, enum: [agent, datapack, storage-pool, cluster, branch, endpoint], description: Resource type; constrained by the environment's kind. }
+        name: { type: string, examples: [pool-a/main-db], description: The resource's full hierarchical path. }
+        # A PARTIAL, shallow-merge patch: only the top-level keys present are changed, the rest
+        # are preserved, and a nested object is replaced wholesale. An absent resource is created
+        # with this as its whole spec. References secret NAMES only — never secret values.
+        spec: { type: object, additionalProperties: true, examples: [{ pg_version: 17 }] }
+        delete:
+          type: boolean
+          default: false
+          description: |
+            When true, cascade-removes the named resource and every descendant from desired
+            state. Mutually exclusive with `spec` — a delete must not carry one.
 
     StatusReport:
       type: object

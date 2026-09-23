@@ -27,7 +27,12 @@ type Environment struct {
 	// thing that says what an environment serves: the id is a bare slug(name) and
 	// encodes nothing. Ids minted before that carry an "amp-" prefix and still
 	// resolve. Legacy rows registered before this field read as "meko".
-	Kind            string          `json:"kind"`
+	Kind string `json:"kind"`
+	// Type distinguishes a BYOC environment (the customer runs the data plane in
+	// their own cloud) from a MANAGED one. Fixed at registration, like Kind, and
+	// stored without behaviour attached yet. Legacy rows read as "BYOC" — YCP is
+	// the BYOC control plane, so every environment predating this is one.
+	Type            string          `json:"type"`
 	Placement       string          `json:"placement"`
 	Region          string          `json:"region"`
 	State           string          `json:"state"`
@@ -79,6 +84,45 @@ type DesiredResource struct {
 	// (re-apply). Starts at 0 (see ReplaceDesired: the amp backend's cache-cold
 	// NoOp depends on it); maintained by ReplaceDesired.
 	Generation int64 `json:"generation,omitempty"`
+}
+
+// ResourcePatch is one targeted change to an environment's desired state, the unit
+// of a batch PATCH. It names one resource by Kind+Name and is either a partial Spec
+// merge (only the top-level keys present are changed; an absent resource is created
+// with the patch as its whole spec) or, when Delete is true, a cascade removal of
+// that resource and every descendant. Delete and a non-empty Spec are mutually
+// exclusive — a delete that also names a spec is ambiguous, and the handler rejects
+// it. Lives here beside DesiredResource so handler, service and repository can all
+// name it without a layering cycle.
+type ResourcePatch struct {
+	Kind   string          `json:"kind"`
+	Name   string          `json:"name"`
+	Spec   json.RawMessage `json:"spec,omitempty"`
+	Delete bool            `json:"delete,omitempty"`
+}
+
+// RegionResources is one region's slice of a storage-pool region PATCH: the region
+// whose MANAGED environment the patches target, and the batch of desired-state
+// changes to apply there. A single PATCH carries one per region and applies them all
+// in one atomic transaction, so a bad item in any region rolls the whole call back.
+type RegionResources struct {
+	Region    string          `json:"region"`
+	Resources []ResourcePatch `json:"resources"`
+}
+
+// AeonAccountMapping is one sticky assignment pinning a storage pool, in one region,
+// to the MANAGED environment that serves it. It is what makes the region-addressed
+// resource APIs deterministic: the first PATCH for a (storage_pool, region) picks a
+// READY MANAGED environment and records it here, and every later call for that pair
+// reuses the same environment instead of re-choosing. Unique on
+// (storage_pool_name, region); environment_id references environments(uuid).
+type AeonAccountMapping struct {
+	ID              string    `json:"id"`
+	EnvironmentUUID string    `json:"environment_id"`
+	Region          string    `json:"region"`
+	StoragePoolName string    `json:"storage_pool_name"`
+	CreatedOn       time.Time `json:"created_on"`
+	UpdatedOn       time.Time `json:"updated_on"`
 }
 
 // EnvironmentTask is one amp controller task as the control plane stores it: the

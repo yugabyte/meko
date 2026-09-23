@@ -173,6 +173,33 @@ this call and `POST /environments`. Only the **kind** is checked here — name s
 the backend's rule, so `"<agent>/<datapack>"` is enforced a tick later as permanent
 drift rather than at declare time.
 
+To change a **MANAGED** environment's storage-pool resources without resending the
+whole set, use the region-addressed, atomic batch — there is no environment id in the
+path. `PATCH /environments/resources` takes
+`{"storage_pool": "<pool>", "regions": [{"region": "...", "resources": [...]}]}`
+(capped at 100 patches across all regions). Each region resolves to one MANAGED amp
+environment through the sticky `(storage_pool, region)` mapping — the first call pins a
+READY one, later calls reuse it — and every patch across every region applies in one
+transaction: each item shallow-merges its partial `spec` into one resource by
+`kind`+`name` (an absent one is created; names must fall under the pool), or with
+`delete: true` cascade-removes it and its descendants. The `storage-pool` row is
+auto-created on first touch, with an owner derived from the pool name. There is no
+prune, and any invalid item fails the whole call with 400 and writes nothing; a region
+with no READY MANAGED amp environment is a 404. `GET /environments/resources?name=<path>`
+reads back both the declared (`desired`) and agent-reported (`observed`) sets per
+mapped environment, filterable by `kind` and `subtree`; the PATCH response mirrors it.
+
+```bash
+curl -X PATCH "$YCP/api/v1/environments/resources" \
+  -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+  -d '{"storage_pool":"acct-123","regions":[
+        {"region":"us-east-1","resources":[
+          {"kind":"cluster","name":"acct-123/main-db","spec":{"pg_version":17}},
+          {"kind":"branch","name":"acct-123/main-db/feature-x","delete":true}
+        ]}
+      ]}'
+```
+
 ### What a meko environment declares
 
 | Kind | Name | Spec | Notes |

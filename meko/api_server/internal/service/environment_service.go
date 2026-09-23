@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -74,6 +75,27 @@ func normalizeKind(kind string) (string, error) {
 		return KindAmp, nil
 	default:
 		return "", fmt.Errorf("%w: unknown environment kind %q (want %q or %q)", ErrValidation, kind, KindMeko, KindAmp)
+	}
+}
+
+// Environment types. BYOC is a customer-run data plane in their own cloud (what YCP
+// exists for); MANAGED is one Yugabyte runs. Fixed at registration, like the kind.
+const (
+	TypeBYOC    = "BYOC"
+	TypeManaged = "MANAGED"
+)
+
+// normalizeType uppercases and validates a declared type, defaulting empty to BYOC
+// so a legacy row and a pre-type caller read as BYOC. Returns ErrValidation for
+// anything else. Mirrors normalizeKind.
+func normalizeType(t string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(t)) {
+	case "", TypeBYOC:
+		return TypeBYOC, nil
+	case TypeManaged:
+		return TypeManaged, nil
+	default:
+		return "", fmt.Errorf("%w: unknown environment type %q (want %q or %q)", ErrValidation, t, TypeBYOC, TypeManaged)
 	}
 }
 
@@ -197,7 +219,10 @@ type RegisterEnvironmentRequest struct {
 	// Kind is "amp" (the amp controller) or "meko" (the datapack/stack agent);
 	// empty defaults to "meko". It fixes what the environment runs. The returned id
 	// derives from the name alone, so a name is unique per account across kinds.
-	Kind        string       `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// Type is "BYOC" (customer-run data plane) or "MANAGED"; empty defaults to
+	// "BYOC". Fixed at registration, like Kind.
+	Type        string       `json:"type,omitempty"`
 	AccountID   string       `json:"account_id"`
 	Placement   string       `json:"placement"`
 	Region      string       `json:"region"`
@@ -355,6 +380,10 @@ func (s *EnvironmentService) Register(
 	if err != nil {
 		return nil, err
 	}
+	typ, err := normalizeType(req.Type)
+	if err != nil {
+		return nil, err
+	}
 	// Checked before the insert, not after: a declaration this environment's agent
 	// cannot converge should fail the registration outright rather than leave a
 	// registered environment whose desired state was quietly dropped.
@@ -387,7 +416,7 @@ func (s *EnvironmentService) Register(
 	// qualified into a different id than the caller asked for.
 	id := slug(name)
 	e = &models.Environment{
-		ID: id, Kind: kind, AccountID: accountID, Placement: placement, Region: req.Region,
+		ID: id, Kind: kind, Type: typ, AccountID: accountID, Placement: placement, Region: req.Region,
 		State: state, MaxDatapacks: 400, CreatedAt: time.Now().UTC(),
 		Components: json.RawMessage("[]"), Resources: json.RawMessage("[]"),
 		APIKeyID: apiKey.String(), AgentBaseURL: strings.TrimSpace(req.AgentBaseURL),
@@ -766,6 +795,242 @@ func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []
 // already resolved the environment, whether by scope or by api key id.
 func (s *EnvironmentService) Desired(envUUID string) ([]models.DesiredResource, error) {
 	return s.repo.ListDesired(envUUID)
+}
+
+// listResourcesForEnv filters an already-resolved environment's resources into two
+// lists: the declared desired set (what an operator asked for) and the agent-reported
+// observed inventory (what the data plane last reported). A caller diffs the two to
+// see what has yet to converge.
+//
+// Both lists are filtered by the same rule: keep an entry when its kind matches (or
+// kind is unset) AND its full hierarchical path equals name (or name is unset), or —
+// with subtree — the path is name or a descendant of it. The two lists spell the
+// path differently, which resourcePath reconciles: a desired row's Name is already
+// the full path, while an observed row's Name is only the leaf and the path lives in
+// its ID as "<kind>/<path>".
+func (s *EnvironmentService) listResourcesForEnv(
+	e *models.Environment, kind, name string, subtree bool,
+) (desired []models.DesiredResource, observed []ResourceStatus, err error) {
+	all, err := s.repo.ListDesired(e.UUID)
+	if err != nil {
+		return nil, nil, err
+	}
+	desired = []models.DesiredResource{}
+	for _, d := range all {
+		if matchResource(kind, name, subtree, d.Kind, d.Name) {
+			desired = append(desired, d)
+		}
+	}
+
+	observed = []ResourceStatus{}
+	if len(bytes.TrimSpace(e.Resources)) > 0 {
+		var obs []ResourceStatus
+		if uerr := json.Unmarshal(e.Resources, &obs); uerr != nil {
+			return desired, nil, fmt.Errorf("decode observed resources: %w", uerr)
+		}
+		for _, o := range obs {
+			if matchResource(kind, name, subtree, o.Kind, resourcePath(o.Kind, o.ID)) {
+				observed = append(observed, o)
+			}
+		}
+	}
+	return desired, observed, nil
+}
+
+// resourcePath returns a resource's full hierarchical path. A desired row's Name is
+// already the path; an observed ResourceStatus carries the leaf in Name and the path
+// in ID as "<kind>/<path>".
+func resourcePath(kind, id string) string {
+	return strings.TrimPrefix(id, kind+"/")
+}
+
+// matchResource applies the kind/name/subtree filter to one resource identified by
+// its kind and full path.
+func matchResource(filterKind, filterName string, subtree bool, kind, path string) bool {
+	if filterKind != "" && kind != filterKind {
+		return false
+	}
+	if filterName == "" {
+		return true
+	}
+	if path == filterName {
+		return true
+	}
+	return subtree && strings.HasPrefix(path, filterName+"/")
+}
+
+// validateResourcePatches checks a batch before any write: every spec that is not a
+// delete must be a JSON object (the shallow-merge target), and no kind may be one the
+// environment's agent does not serve. It returns ErrValidation on the first problem,
+// so a caller runs it before opening the transaction and the batch stays
+// all-or-nothing.
+func validateResourcePatches(envKind string, patches []models.ResourcePatch) error {
+	check := make([]models.DesiredResource, len(patches))
+	for i, p := range patches {
+		check[i] = models.DesiredResource{Kind: p.Kind, Name: p.Name}
+		if !p.Delete && len(bytes.TrimSpace(p.Spec)) > 0 {
+			var probe map[string]json.RawMessage
+			if json.Unmarshal(p.Spec, &probe) != nil {
+				return fmt.Errorf("%w: patches[%d] spec must be a JSON object", ErrValidation, i)
+			}
+		}
+	}
+	return checkKinds(envKind, check)
+}
+
+// ErrNoManagedEnv re-exports the repository's, so handlers map it to a 404 without
+// importing the storage layer. Raised when a region names no READY MANAGED
+// environment for a storage pool to pin to.
+var ErrNoManagedEnv = repository.ErrNoEligibleEnvironment
+
+// ErrConcurrentPoolUpdate re-exports the repository's retryable-deadlock sentinel, so
+// handlers map a lost concurrent-write race to a retryable status without importing the
+// storage layer.
+var ErrConcurrentPoolUpdate = repository.ErrConcurrentPoolUpdate
+
+// EnvironmentResources is one environment's slice of a region-addressed response:
+// which environment answered (its operator-facing id and region) and the storage
+// pool's desired and observed resources there. Both SetResourcesByStoragePool and
+// ListResourcesByName return a slice of these, so a PATCH reads back like a LIST.
+type EnvironmentResources struct {
+	EnvironmentID string                   `json:"environment_id"`
+	Region        string                   `json:"region"`
+	Desired       []models.DesiredResource `json:"desired"`
+	Observed      []ResourceStatus         `json:"observed"`
+}
+
+// SetResourcesByStoragePool applies desired-state changes to a storage pool addressed
+// by region, never by environment id. Each region resolves to one MANAGED environment
+// through the sticky mapping (first call pins a READY one, later calls reuse it), and
+// every patch across every region is applied in ONE transaction — all-or-nothing.
+//
+// The whole call is validated before the transaction opens: the storage pool must be a
+// UUID (an aeon account id), kinds against the amp set (region APIs serve MANAGED amp
+// resources), and every name confined to the <storage_pool> subtree. The storage-pool
+// row itself is auto-created on first touch with an owner derived from the pool name,
+// so a first child patch has a parent. The response mirrors the LIST: the pool's
+// resources per environment touched.
+func (s *EnvironmentService) SetResourcesByStoragePool(
+	storagePool string, regions []models.RegionResources,
+) ([]EnvironmentResources, error) {
+	storagePool = strings.TrimSpace(storagePool)
+	if storagePool == "" {
+		return nil, fmt.Errorf("%w: storage_pool is required", ErrValidation)
+	}
+	// A MANAGED storage pool is addressed by an aeon account id, which is a UUID; the
+	// synthesized pool's owner is derived from it (deriveOwner). Reject a non-UUID here
+	// rather than mint a UUIDv5 owner from an arbitrary string. PATCH-only: the LIST
+	// side stays lenient so an operator can probe any name.
+	if _, err := uuid.Parse(storagePool); err != nil {
+		return nil, fmt.Errorf("%w: storage_pool %q must be a UUID", ErrValidation, storagePool)
+	}
+	if len(regions) == 0 {
+		return nil, fmt.Errorf("%w: at least one region is required", ErrValidation)
+	}
+	for ri, rr := range regions {
+		if strings.TrimSpace(rr.Region) == "" {
+			return nil, fmt.Errorf("%w: regions[%d].region is required", ErrValidation, ri)
+		}
+		if len(rr.Resources) == 0 {
+			return nil, fmt.Errorf("%w: regions[%d] has no resources", ErrValidation, ri)
+		}
+		if err := validateResourcePatches(KindAmp, rr.Resources); err != nil {
+			return nil, fmt.Errorf("regions[%d]: %w", ri, err)
+		}
+		for pi, p := range rr.Resources {
+			if !underStoragePool(storagePool, p.Name) {
+				return nil, fmt.Errorf("%w: regions[%d].resources[%d] name %q is not under storage pool %q",
+					ErrValidation, ri, pi, p.Name, storagePool)
+			}
+		}
+	}
+	poolSpec, err := deriveStoragePoolSpec(storagePool)
+	if err != nil {
+		return nil, err
+	}
+	assignments, err := s.repo.ApplyStoragePoolPatches(storagePool, regions, poolSpec)
+	if err != nil {
+		return nil, err
+	}
+	// Read back the whole pool subtree per environment so a PATCH answers like a LIST.
+	return s.resourcesForAssignments(assignments, "", storagePool, true)
+}
+
+// ListResourcesByName returns a storage pool's resources across every MANAGED
+// environment it is mapped to. The storage pool is the first path segment of name, so
+// the endpoint stays generic across kinds. It never assigns: a pool nothing is mapped
+// to returns an empty slice.
+func (s *EnvironmentService) ListResourcesByName(
+	name, kind string, subtree bool,
+) ([]EnvironmentResources, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("%w: name is required", ErrValidation)
+	}
+	assignments, err := s.repo.ListStoragePoolEnvs(storagePoolFromName(name))
+	if err != nil {
+		return nil, err
+	}
+	return s.resourcesForAssignments(assignments, kind, name, subtree)
+}
+
+// resourcesForAssignments reads each resolved environment back and builds its
+// desired+observed lists, filtered by the same kind/name/subtree rule the by-env list
+// used. Reads run after the PATCH's transaction has committed, so the response is a
+// fresh snapshot rather than the in-transaction state.
+func (s *EnvironmentService) resourcesForAssignments(
+	assignments []repository.StoragePoolAssignment, kind, name string, subtree bool,
+) ([]EnvironmentResources, error) {
+	out := []EnvironmentResources{}
+	for _, a := range assignments {
+		e, err := s.repo.GetByUUID(a.EnvUUID)
+		if err != nil {
+			return nil, err
+		}
+		if e == nil {
+			continue // raced with a delete; skip rather than fail the whole response
+		}
+		desired, observed, err := s.listResourcesForEnv(e, kind, name, subtree)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, EnvironmentResources{
+			EnvironmentID: e.ID,
+			Region:        a.Region,
+			Desired:       desired,
+			Observed:      observed,
+		})
+	}
+	return out, nil
+}
+
+// storagePoolFromName is the first path segment of a resource name — the storage pool
+// a full path (pool/cluster/branch) belongs to.
+func storagePoolFromName(name string) string {
+	return strings.SplitN(strings.TrimSpace(name), "/", 2)[0]
+}
+
+// underStoragePool reports whether a resource name is the storage pool itself or a
+// descendant of it, the scope every region PATCH name must satisfy.
+func underStoragePool(pool, name string) bool {
+	name = strings.TrimSpace(name)
+	return name == pool || strings.HasPrefix(name, pool+"/")
+}
+
+// deriveStoragePoolSpec is the auto-created storage-pool spec: a pool needs an owner,
+// but users are not YCP desired state, so the owner is derived from the pool name.
+func deriveStoragePoolSpec(pool string) ([]byte, error) {
+	return json.Marshal(map[string]string{"owner_user_id": deriveOwner(pool).String()})
+}
+
+// deriveOwner turns a storage pool name into a stable owner user id: the name parsed
+// as a UUID when it already is one, otherwise a deterministic UUIDv5 of the name.
+// Deterministic either way, so re-touching the same pool derives the same owner.
+func deriveOwner(pool string) uuid.UUID {
+	if id, err := uuid.Parse(pool); err == nil {
+		return id
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(pool))
 }
 
 // Action applies a lifecycle action (suspend|resume|drain|deregister) and returns
