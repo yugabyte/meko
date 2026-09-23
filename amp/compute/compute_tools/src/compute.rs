@@ -2945,12 +2945,20 @@ mod tests {
         use super::*;
 
         /// A process that will sit in `dir` until something signals it.
+        #[allow(unsafe_code)]
         fn process_in(dir: &Path) -> std::process::Child {
-            Command::new("sleep")
-                .arg("60")
-                .current_dir(dir)
-                .spawn()
-                .expect("spawning the stand-in postmaster")
+            let mut cmd = Command::new("sleep");
+            cmd.arg("60").current_dir(dir);
+            // An inherited SIG_IGN would outlive the reclaim's SIGQUIT; a postmaster resets it.
+            // SAFETY: `signal` is async-signal-safe and allocates nothing.
+            unsafe {
+                cmd.pre_exec(|| {
+                    nix::sys::signal::signal(Signal::SIGQUIT, nix::sys::signal::SigHandler::SigDfl)
+                        .map(drop)
+                        .map_err(std::io::Error::from)
+                });
+            }
+            cmd.spawn().expect("spawning the stand-in postmaster")
         }
 
         /// The pidfile postgres would have left; only its first line is read.

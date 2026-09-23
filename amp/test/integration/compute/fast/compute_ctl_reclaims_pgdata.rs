@@ -70,7 +70,10 @@ const RECOVER_TIMEOUT: Duration = Duration::from_secs(90);
 /// and specific binds of one port collide either way round.
 fn spawn_stand_in(pgdata: &Path, port: u16) -> anyhow::Result<Child> {
     let grab = "\
-import socket, sys, time
+import signal, socket, sys, time
+
+# An inherited SIG_IGN would outlive the reclaim's SIGQUIT; a postmaster resets it.
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 port, deadline = int(sys.argv[1]), time.time() + int(sys.argv[2])
 while True:
     s = socket.socket()
