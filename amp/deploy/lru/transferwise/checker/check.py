@@ -253,22 +253,6 @@ def check_all():
     if v is not None:
         rules["pageserver_gc_drain_lag_bytes"] = (v, band(v, 1e9, 10e9))
 
-    # --- how long until the data outgrows the endpoint -----------------------
-    # Not "is it big" but "when does it stop fitting". small_temporal reached 99%
-    # of its file cache with every rule green and no warning anywhere; the answer
-    # wanted to be a number of days, not a number of bytes.
-    size = q(f"max(pageserver_current_logical_size{{{ep}}})")
-    cache = q(f"max(pg_settings_yb_amp_max_file_cache_size_bytes{{{ep}}})")
-    if size and cache and cache > 0:
-        rules["logical_size_vs_file_cache"] = (size / cache, advisory(band(size / cache, 0.8, 1.0)))
-        growth = q(f"deriv(max(pageserver_current_logical_size{{{ep}}})[6h:5m])")
-        if growth and growth > 0:
-            days = max(0.0, cache - size) / (growth * 86400)
-            rules["days_until_file_cache_full"] = (
-                days,
-                advisory(band(days, 7, 2, higher_is_bad=False)),
-            )
-
     # A checkpointer that never rests is the mechanism behind a write-side slide:
     # requested checkpoints mean max_wal_size is the trigger, not the timeout.
     v = q(

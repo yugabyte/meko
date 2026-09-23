@@ -88,8 +88,6 @@ So every LRU also carries:
   `last_over_time((expr)[10m:1m] offset 24h)`. Note the subquery: `offset` binds
   to a selector, not to a parenthesised expression, so `(sum(...)) offset 24h`
   is a parse error rather than a comparison.
-- `logical_size_vs_file_cache` and `days_until_file_cache_full`, because
-  capacity wants an answer in days rather than in bytes.
 - `latency_vs_7d_baseline`, latency against `quantile_over_time(0.1, ...[7d:1h])`.
   A 24h comparison cannot see a decay slower than a day, and unlike an offset a
   baseline needs no history at a particular age.

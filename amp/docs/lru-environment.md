@@ -211,7 +211,7 @@ first three things to run when picking this up cold:
 ... --data-urlencode 'query=count_over_time((lru_check_status < 1)[24h:1m])'
 
 # the drift numbers: >1 means slower or bigger than the reference
-... --data-urlencode 'query=lru_check_value{check=~"throughput_vs_24h_ago|latency_vs_7d_baseline|logical_size_vs_file_cache"}'
+... --data-urlencode 'query=lru_check_value{check=~"throughput_vs_24h_ago|latency_vs_7d_baseline"}'
 ```
 
 A standing WARN is normal and is not the same as a new one. `count_over_time` at 1440
