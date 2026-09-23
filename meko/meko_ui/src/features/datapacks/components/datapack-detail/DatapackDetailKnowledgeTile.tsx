@@ -6,6 +6,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { KnowledgeBaseDocument } from "@/lib/api/mekoApi";
 import { datapackKnowledgePath } from "@/app/routes/paths";
 import { FilesTable } from "@/features/datapacks/components/knowledge-documents/KnowledgeFilesTable";
+import { HoverInfoBadge } from "@/components/ui/hover-info-badge";
+import { KNOWLEDGE_TILE_HINT } from "@/features/datapacks/components/datapack-detail/datapackTileHints";
 import { useAccountUsage } from "@/hooks/useAccountUsage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
@@ -93,6 +95,9 @@ export function DatapackDetailKnowledgeTile({
         <div className="flex min-w-0 items-center gap-2">
           <FileText className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
           <span className="truncate text-sm font-semibold text-foreground">Knowledge</span>
+          <HoverInfoBadge variant="icon" label="What is knowledge?">
+            {KNOWLEDGE_TILE_HINT}
+          </HoverInfoBadge>
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
             {countLabel}
           </span>

@@ -21,6 +21,8 @@ import {
   listDatapackArtifacts,
   type Artifact,
 } from "@/lib/api/mekoApi";
+import { HoverInfoBadge } from "@/components/ui/hover-info-badge";
+import { ARTIFACTS_TILE_HINT } from "@/features/datapacks/components/datapack-detail/datapackTileHints";
 
 /** Preview cap — mirrors the KnowledgeTile preview limit so the two
  *  read the same. Anything past this is reached via the "View all"
@@ -75,6 +77,9 @@ export function DatapackDetailArtifactsTile({ datapackId, className }: Props) {
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
         <Package className="h-4 w-4 shrink-0 text-brand" aria-hidden />
         <span className="truncate text-sm font-semibold text-foreground">Artifacts</span>
+        <HoverInfoBadge variant="icon" label="What are artifacts?">
+          {ARTIFACTS_TILE_HINT}
+        </HoverInfoBadge>
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
           {countLabel}
         </span>
