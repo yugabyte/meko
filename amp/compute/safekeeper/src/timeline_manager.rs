@@ -20,8 +20,6 @@ use utils::lsn::Lsn;
 
 use crate::SafeKeeperConf;
 use crate::metrics::{MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS};
-use crate::remove_wal::calc_horizon_lsn;
-use crate::send_wal::WalSenders;
 use crate::timeline::{ManagerTimeline, ReadGuardSharedState, StateSK, WalResidentTimeline};
 use crate::timeline_guard::{AccessService, GuardId, ResidenceGuard};
 use crate::yb_wal_storage::YbWalConn;
@@ -147,7 +145,6 @@ pub(crate) struct Manager {
     pub(crate) tli: ManagerTimeline,
     pub(crate) conf: SafeKeeperConf,
     pub(crate) wal_seg_size: usize,
-    pub(crate) walsenders: Arc<WalSenders>,
     #[allow(dead_code)]
     pub(crate) yb_wal: Option<Arc<YbWalConn>>,
 
@@ -255,7 +252,6 @@ impl Manager {
     ) -> Manager {
         Manager {
             wal_seg_size: tli.get_wal_seg_size().await,
-            walsenders: tli.get_walsenders().clone(),
             yb_wal,
             state_version_rx: tli.get_state_version_rx(),
             num_computes_rx: tli.get_walreceivers().get_num_rx(),
@@ -350,14 +346,12 @@ impl Manager {
             return;
         }
 
-        // Clamp the removal horizon to the slowest active walsender. WAL
-        // lives in YB rows here (no local-disk WAL, no S3 fallback for
-        // the pageserver to refetch from), so deleting bytes that an
-        // active walsender still needs is a one-way data loss.
-        let replication_horizon_lsn = self.walsenders.laggard_lsn();
-
-        let removal_horizon_lsn = calc_horizon_lsn(state, replication_horizon_lsn);
-        let removal_horizon_segno = removal_horizon_lsn
+        // WAL below `consistent_lsn` is safe to delete: the pageserver commits
+        // that position durably before reporting it, so it never resumes below
+        // it, and it only reports WAL this safekeeper served, so it never
+        // passes `flush_lsn`.
+        let removal_horizon_segno = state
+            .consistent_lsn
             .segment_number(self.wal_seg_size)
             .saturating_sub(1);
 

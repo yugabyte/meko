@@ -21,7 +21,6 @@ pub mod http;
 pub mod metrics;
 pub mod patch_control_file;
 pub mod receive_wal;
-pub mod remove_wal;
 pub mod safekeeper;
 pub mod send_interpreted_wal;
 pub mod send_wal;

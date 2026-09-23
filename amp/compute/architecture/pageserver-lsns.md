@@ -228,8 +228,8 @@ fenced the same way (see [`compute-fencing.md`](compute-fencing.md)).
 **Safekeeper behavior:** `send_wal.rs` feeds
 `ps_feedback.consistent_lsn` into `update_consistent_lsn`
 (the WAL-retention bound, which the safekeeper also seeds at startup
-straight from this daemon's `branch_state.consistent_lsn`); `last_received_lsn` from feedback is used for
-metrics and walsender-laggard clamping, not truncation. The value on the wire is
+straight from this daemon's `branch_state.consistent_lsn`); `last_received_lsn` from feedback is relayed to
+the compute for backpressure and reported as a metric, not used for truncation. The value on the wire is
 the durable watermark, so the truncation bound is correct by construction.
 
 ---
@@ -427,7 +427,7 @@ makes the format extensible.
 
 | Wire key | Struct field | Source | Safekeeper use |
 |----------|--------------|--------|----------------|
-| `ps_writelsn` | `last_received_lsn` | end of last ingested record | Backpressure relay to compute; walsender laggard clamp for WAL removal; `safekeeper_ps_last_received_lsn` metric |
+| `ps_writelsn` | `last_received_lsn` | end of last ingested record | Backpressure relay to compute; `safekeeper_ps_last_received_lsn` metric |
 | `ps_flushlsn` | `consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics; **WAL truncation bound** — `update_consistent_lsn` |
 | `ps_replytime` | `replytime` | send time | staleness checks |
 | `current_timeline_size` | `current_timeline_size` | logical size calc | relayed to compute for size limiting |

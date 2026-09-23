@@ -148,21 +148,6 @@ impl WalSenders {
             .collect()
     }
 
-    /// Get LSN of the most lagging pageserver receiver. Return None if there are no
-    /// active walsenders.
-    pub fn laggard_lsn(self: &Arc<WalSenders>) -> Option<Lsn> {
-        self.mutex
-            .lock()
-            .slots
-            .iter()
-            .flatten()
-            .filter_map(|s| match s.get_feedback() {
-                ReplicationFeedback::Pageserver(feedback) => Some(feedback.last_received_lsn),
-                ReplicationFeedback::Standby(_) => None,
-            })
-            .min()
-    }
-
     /// Returns total counter of pageserver feedbacks received and last feedback.
     pub fn info_for_metrics(self: &Arc<WalSenders>) -> WalSendersTimelineMetricValues {
         let shared = self.mutex.lock();

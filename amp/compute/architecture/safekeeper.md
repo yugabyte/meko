@@ -370,10 +370,10 @@ Key properties:
   deadline and cost the endpoint (#874).
   It does not wait on the watermark — by construction it only targets
   segments far below the writer's position. The matching `WalCache` ranges
-  are dropped first. The GC horizon is
-  `min(consistent_lsn, flush_lsn, slowest active walsender)`
-  (`compute/safekeeper/src/remove_wal.rs` + the manager's laggard clamp) —
-  WAL lives only in these rows, so trimming past a reader would be
+  are dropped first. The GC horizon is `consistent_lsn`
+  (the manager's `update_wal_removal`; its assumptions are in
+  [`safekeeper-lsns.md`](safekeeper-lsns.md#wal-removal-horizon)) —
+  WAL lives only in these rows, so trimming past the pageserver would be
   unrecoverable data loss for it.
 - **Failure handling.** On a batch write error the consumer retries the
   batch with capped backoff until it lands — the chunks are not durable, so

@@ -34,7 +34,7 @@ flowchart LR
     WS -->|InterpretedWalRecords| PS
     PS -->|PageserverFeedback ps_flushlsn| SK_FB[update_consistent_lsn]
     SK_FB -->|inmem only| RCS[consistent_lsn]
-    RCS -->|calc_horizon_lsn| GC[remove_up_to WAL GC]
+    RCS -->|removal horizon| GC[remove_up_to WAL GC]
 ```
 
 ---
@@ -297,7 +297,7 @@ walsender slot, and applies exactly one field to retention:
 | Field (wire key) | Safekeeper use |
 |------------------|----------------|
 | `consistent_lsn` (`ps_flushlsn`) | **`update_consistent_lsn`** — the WAL retention bound. Also relayed to the compute (slot apply position, backpressure); metrics. |
-| `last_received_lsn` (`ps_writelsn`) | `laggard_lsn()` clamp for WAL removal (min across pageserver walsenders); `safekeeper_ps_last_received_lsn` metric. |
+| `last_received_lsn` (`ps_writelsn`) | Relayed to the compute (backpressure `writeLsn`); `safekeeper_ps_last_received_lsn` metric. |
 | `current_timeline_size`, `replytime`, `corruption_detected` | Relayed to the compute via `AppendResponse.pageserver_feedback`. |
 
 The pageserver populates `consistent_lsn` from its single durable
@@ -324,18 +324,9 @@ Not persisted. Not inputs to WAL truncation.
 
 ## WAL removal horizon
 
-`remove_wal::calc_horizon_lsn`:
-
-```rust
-horizon_lsn = min(
-    state.consistent_lsn,        // pageserver durable-ingest frontier
-    state.flush_lsn,                    // never trim past durable end-of-WAL
-    extra_horizon_lsn,                  // slowest active walsender (laggard)
-)
-```
-
+The horizon is `consistent_lsn`, the pageserver's durable-ingest frontier.
 The manager (`update_wal_removal`) computes
-`removal_horizon_segno = horizon.segment_number() - 1` (saturating) and,
+`removal_horizon_segno = consistent_lsn.segment_number() - 1` (saturating) and,
 when it exceeds `last_removed_segno`, spawns
 `YbWalStorage::remove_up_to(segno)` — dropping cached chunks first, then
 DELETEing all `amp_storage.wals` rows with `segno < segno_up_to`, bounded below
@@ -344,17 +335,14 @@ resolves that bound from `min(segno)` on the branch — slow by nature, see
 [`safekeeper.md`](safekeeper.md) → `remove_up_to` — and every removal after it
 uses the previous one's upper edge.
 
-**Why each term is in the min:**
-- `consistent_lsn`: the pageserver's durable-ingest frontier. Safe to
-  trim on directly even though the safekeeper holds it only in memory —
-  every value came from a `consistent_lsn` the pageserver had already
-  committed, so a crash restores a floor at or above whatever was trimmed.
-- `flush_lsn`: a stale or corrupt `consistent_lsn` past end-of-WAL
-  must not trim beyond durability.
-- Laggard clamp (`WalSenders::laggard_lsn`, min of pageserver walsenders'
-  `last_received_lsn`): WAL lives only in `amp_storage.wals` rows — there is
-  no secondary copy for an active pageserver connection to re-fetch from,
-  so deleting bytes a walsender still needs is one-way data loss.
+It is safe to trim on directly even though the safekeeper holds it only in
+memory — every value came from a `consistent_lsn` the pageserver had already
+committed, so a crash restores a floor at or above whatever was trimmed.
+
+No `flush_lsn` clamp is needed, provided nothing outside the safekeeper mutates
+the branch's `wals` rows: the pageserver only ingests WAL this safekeeper
+served, and `flush_lsn` never drops below what it served (trimming keeps the
+horizon's segment, and `handle_elected` refuses to truncate below it).
 
 **Timeline activity** (`update_is_active`): the timeline counts as active
 while computes are attached or
@@ -393,8 +381,8 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
   a durable LSN can land mid-record. `Storage::flush_lsn` carries the full
   argument for why it takes the lower of the two.
 - *`consistent_lsn ≤ flush_lsn`*: feedback describes ingested WAL,
-  which the safekeeper streamed, which is ≤ its durable end. The horizon
-  min() enforces it even against a misbehaving peer.
+  which the safekeeper streamed, which is ≤ its durable end. Nothing clamps
+  the horizon to it; see [WAL removal horizon](#wal-removal-horizon).
 - *Truncation floor*: `start_streaming_at < flush_lsn` would delete WAL
   already acked to the compute (and possibly already streamed to the
   pageserver); the assert makes the disagreement loud instead of silent.
@@ -413,8 +401,8 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
    its durable slot waits for flushes.
 5. After each successful `advance_consistent_lsn`, the
    pageserver's next `PageserverFeedback.consistent_lsn` advances.
-6. Safekeeper bumps `consistent_lsn` immediately and
-   `calc_horizon_lsn` allows WAL removal up to it.
+6. Safekeeper bumps `consistent_lsn` immediately and the manager
+   allows WAL removal up to it.
 
 The lag in this loop degrades toward *extra retention*, not loss: a lagging
 pageserver column means WAL gets re-streamed into idempotent UPSERTs.
@@ -457,11 +445,10 @@ pageserver column means WAL gets re-streamed into idempotent UPSERTs.
   (commit watch), `update_consistent_lsn`,
   `should_walsender_stop`, hs-feedback injection.
 - `compute/safekeeper/src/send_wal.rs` — `NEON_STATUS_UPDATE_TAG_BYTE`,
-  feedback intake, `laggard_lsn`, standby aggregation, `EndWatch`.
+  feedback intake, standby aggregation, `EndWatch`.
 - `compute/safekeeper/src/send_interpreted_wal.rs` /
   `wal_reader_stream.rs` — `wal_end_lsn` / `available_wal_end_lsn` batch
   bounds.
-- `compute/safekeeper/src/remove_wal.rs` — `calc_horizon_lsn`.
 - `compute/safekeeper/src/timeline_manager.rs` — `update_wal_removal`,
   `update_is_active`.
 - `compute/pgxn/yb_amp/walproposer.c` / `walproposer_pg.c` — greeting →

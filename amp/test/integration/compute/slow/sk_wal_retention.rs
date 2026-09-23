@@ -1,6 +1,6 @@
 //! WAL-retention contract for the safekeeper.
 //!
-//! `calc_horizon_lsn` decides which `amp_storage.wals` rows get deleted.
+//! The removal horizon decides which `amp_storage.wals` rows get deleted.
 //! A horizon that is too low only wastes space; one that is too high
 //! deletes WAL the pageserver still needs, and there is no S3 fallback
 //! to refetch it from — the loss is one-way. Nothing in the suite
@@ -117,8 +117,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     // ---- 3. the floor survives a restart taken with no pageserver -------
     //
-    // With the pageserver down there is no feedback to relearn from, and
-    // `laggard_lsn()` returns None so nothing else clamps the horizon:
+    // With the pageserver down there is no feedback to relearn from:
     // whatever the safekeeper reports here came purely from what it had
     // persisted. Zero would mean trimming stalls until the pageserver
     // returns.
