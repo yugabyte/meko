@@ -147,6 +147,10 @@ export type CreateDatapackPayload = {
   user_id: string;
   description?: string | null;
   agent_id?: string | null;
+  /** Files the new datapack into a collection folder. Required by the API once
+   *  Collections is enabled AND the caller already has a collection — see
+   *  `@/lib/collectionsFeature`. Omitted, the datapack is created unfiled. */
+  folder_id?: string | null;
 };
 
 /**
@@ -441,6 +445,11 @@ export async function createDatapack(payload: CreateDatapackPayload) {
   }
   body.user_id = payload.user_id;
   body.agent_id = payload.agent_id ?? null;
+  // Only sent when the caller picked a folder: an explicit null would read as
+  // "unfiled" to a server that is enforcing the folder rule.
+  if (payload.folder_id != null && payload.folder_id.trim() !== "") {
+    body.folder_id = payload.folder_id.trim();
+  }
   return request<CreatedDatapack>("/datapacks", "POST", body);
 }
 

@@ -873,6 +873,12 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 // minted with scopes={"read"} can't issue mutations.
 func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxArtifactSizeBytes int64, enableConversationSearch, enableCollections bool) {
 	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc, reg.memoriesSvc, reg.kbSvc)
+	if enableCollections {
+		// Turns on the "a new datapack lives in a folder" rule. Gated here, so
+		// clearing the flag restores the previous create contract for every
+		// caller — including agents whose datapack_create sends no folder.
+		dpH.SetCollections(reg.collectionSvc)
+	}
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc, enableConversationSearch)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
 

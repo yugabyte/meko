@@ -152,6 +152,11 @@ type CreateRequest struct {
 	// / "pro" / "enterprise"). Populated by the handler from the auth
 	// context; paid tiers skip the free-tier datapack count cap.
 	UserType string `json:"-"`
+	// FolderID files the new datapack into a collection folder. Required once the
+	// Collections feature is on and the caller has at least one collection — see
+	// CollectionService.ValidateNewDatapackFolder. Ignored when the feature is
+	// off, so the field is additive for existing clients.
+	FolderID string `json:"folder_id,omitempty"`
 }
 
 // MCPServerInfo holds the MCP server connection details returned after

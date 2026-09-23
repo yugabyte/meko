@@ -3,6 +3,7 @@
  */
 import { Loader2, Pencil } from "lucide-react";
 import { DatapackNameDescriptionFields } from "@/features/datapacks/components/DatapackNameDescriptionFields";
+import { CollectionFolderSelect } from "@/features/collections/components/CollectionFolderSelect";
 
 type Props = {
   isCreateFlow: boolean;
@@ -13,6 +14,11 @@ type Props = {
   loading: boolean;
   submitting: boolean;
   error: string | null;
+  /** Create flow only, and only with Collections enabled: a new datapack is
+   *  created inside a folder. */
+  showFolderPicker?: boolean;
+  folderId?: string;
+  onFolderChange?: (folderId: string) => void;
 };
 
 export function ConfigureWizardConfigureStep({
@@ -24,6 +30,9 @@ export function ConfigureWizardConfigureStep({
   loading,
   submitting,
   error,
+  showFolderPicker = false,
+  folderId = "",
+  onFolderChange,
 }: Props) {
   const busy = loading || submitting;
 
@@ -42,7 +51,7 @@ export function ConfigureWizardConfigureStep({
 
       <div className="space-y-2">
         <div className="flex items-center gap-3">
-          <Pencil className="h-7 w-7 shrink-0 text-blue-400" aria-hidden />
+          <Pencil className="h-7 w-7 shrink-0 text-brand" aria-hidden />
           <h2 className="text-xl font-semibold tracking-tight">
             {isCreateFlow ? "Name your datapack" : "Datapack details"}
           </h2>
@@ -63,6 +72,22 @@ export function ConfigureWizardConfigureStep({
         nameInputId="wizard-configure-datapack-name"
         descriptionInputId="wizard-configure-datapack-description"
       />
+
+      {showFolderPicker && onFolderChange ? (
+        <div className="space-y-4 rounded-xl border border-border bg-card/40 p-6 shadow-sm">
+          <p className="text-sm text-muted-foreground">
+            Optionally file this datapack into a collection folder. Leave it unset and the datapack
+            is created unfiled, which works exactly as it always has; you can file or move it at
+            any time afterwards.
+          </p>
+          <CollectionFolderSelect
+            folderId={folderId}
+            onFolderChange={onFolderChange}
+            enabled={!busy}
+            idPrefix="wizard-configure"
+          />
+        </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">{error}</div>

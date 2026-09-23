@@ -5730,6 +5730,10 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "folder_id": {
+                    "description": "FolderID files the new datapack into a collection folder. Required once the\nCollections feature is on and the caller has at least one collection — see\nCollectionService.ValidateNewDatapackFolder. Ignored when the feature is\noff, so the field is additive for existing clients.",
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },

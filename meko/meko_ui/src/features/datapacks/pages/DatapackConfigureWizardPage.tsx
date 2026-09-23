@@ -26,6 +26,7 @@ import {
   wizardStepIndex,
 } from "@/features/datapacks/components/configure-wizard/wizardSteps";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
+import { useCollectionsEnabled } from "@/lib/collectionsFeature";
 import {
   confirmUpload,
   createDatapack,
@@ -88,6 +89,10 @@ export default function DatapackConfigureWizardPage({
     isCreateFlow ? null : routeDatapackId ?? null,
   );
 
+  // Create flow only: the folder the new datapack is filed into. Empty until
+  // the user picks one, and ignored entirely when Collections is off.
+  const collectionsEnabled = useCollectionsEnabled();
+  const [createFolderId, setCreateFolderId] = useState("");
   const [configureDraftName, setConfigureDraftName] = useState("");
   const [configureDraftDescription, setConfigureDraftDescription] = useState(() => descriptionFromState ?? "");
   const [configureInitialName, setConfigureInitialName] = useState("");
@@ -443,6 +448,10 @@ export default function DatapackConfigureWizardPage({
           name: trimmed,
           user_id: currentUser.account_id,
           ...(descTrim ? { description: configureDraftDescription } : {}),
+          // Only when the user picked one. Omitted, the API decides: it allows
+          // unfiled while the user has no collections and rejects the create once
+          // they do.
+          ...(collectionsEnabled && createFolderId ? { folder_id: createFolderId } : {}),
         });
         if (created?.name) {
           notifyDatapacksListChanged(`create:${created.name}`);
@@ -628,6 +637,9 @@ export default function DatapackConfigureWizardPage({
               loading={configureLoading}
               submitting={configureSubmitting}
               error={configureError}
+              showFolderPicker={isCreateFlow && collectionsEnabled}
+              folderId={createFolderId}
+              onFolderChange={setCreateFolderId}
             />
           ) : null}
           {stepId === WIZARD_STEP_ID.install ? (
