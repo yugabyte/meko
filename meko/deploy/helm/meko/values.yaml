@@ -730,12 +730,22 @@ langfuse:
   # put them in langfuse-config; Jenkins must add them to langfuse-secrets.env
   # instead (they arrive as env via the existing secretRef). Prod also had a
   # placeholder (<change-me>) password gap that this closes.
+  # MEKO-650: LANGFUSE_INIT_USER_EMAIL/PASSWORD create the Langfuse org
+  # owner account (see meko-langfuse's web/src/initialize.ts) and are just
+  # as sensitive as DATABASE_URL below -- their plaintext defaults
+  # (owner@local.langfuse / password123) were left in this chart's
+  # identical dev/prod config and, via the equivalent kustomize deploy
+  # path, used for an RCE (HackerOne 4037821). Keep them out of `config:`
+  # and require them from the deploy-time secrets file instead, like every
+  # other credential here.
   secretKeys:
     - DATABASE_URL
     - TRACING_DATABASE_URL
     - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
     - LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
     - LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID
+    - LANGFUSE_INIT_USER_EMAIL
+    - LANGFUSE_INIT_USER_PASSWORD
   # Non-sensitive config (identical dev/prod). Rendered into langfuse-config.
   config:
     REDIS_HOST: "valkey"
@@ -763,9 +773,7 @@ langfuse:
     LANGFUSE_INIT_PROJECT_ID: "22222222-2222-4222-8222-222222222222"
     LANGFUSE_INIT_PROJECT_NAME: "Tracing Project"
     LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "pk-lf-local-tracing-project"
-    LANGFUSE_INIT_USER_EMAIL: "owner@local.langfuse"
     LANGFUSE_INIT_USER_NAME: "Tracing Owner"
-    LANGFUSE_INIT_USER_PASSWORD: "password123"
     LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: "false"
     LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED: "false"
     LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED: "false"

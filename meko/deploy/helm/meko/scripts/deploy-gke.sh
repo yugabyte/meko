@@ -29,6 +29,11 @@
 #   BRING_UP_YB=true          deploy a throwaway YB; false = use EXTERNAL_YB_HOST
 #   EXTERNAL_YB_HOST=...       required when BRING_UP_YB=false
 #   COGNITO_CLIENT_SECRET=...  real value enables login; placeholder otherwise
+#   LANGFUSE_INIT_USER_EMAIL=...     Langfuse demo owner login; see below
+#   LANGFUSE_INIT_USER_PASSWORD=...  freshly random per run unless set (MEKO-650:
+#                                    never default this to a fixed value — a
+#                                    HackerOne report used exactly that to get
+#                                    RCE on a real deployment's Langfuse worker)
 #   UI_PORT=8600              local port-forward for the UI
 # =============================================================================
 set -euo pipefail
@@ -42,6 +47,8 @@ ECR_REGION="${ECR_REGION:-us-east-2}"
 API_TAG="${API_TAG:-1.0.26-20260710}"
 BRING_UP_YB="${BRING_UP_YB:-true}"
 COGNITO_CLIENT_SECRET="${COGNITO_CLIENT_SECRET:-PLACEHOLDER}"
+LANGFUSE_INIT_USER_EMAIL="${LANGFUSE_INIT_USER_EMAIL:-demo@local.langfuse}"
+LANGFUSE_INIT_USER_PASSWORD="${LANGFUSE_INIT_USER_PASSWORD:-$(openssl rand -hex 16)}"
 UI_PORT="${UI_PORT:-8600}"
 CHART_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 K="kubectl --context=$CONTEXT"
@@ -120,7 +127,9 @@ mk meko-langfuse langfuse-secrets \
   --from-literal=SALT=saltsaltsalt --from-literal=NEXTAUTH_SECRET=nextauthsecret \
   --from-literal=ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000 \
   --from-literal=DATABASE_URL="postgresql://yugabyte:yugabyte@${YB_HOST}:5433/langfuse" \
-  --from-literal=TRACING_DATABASE_URL="postgresql://yugabyte:yugabyte@${YB_HOST}:5433/langfuse"
+  --from-literal=TRACING_DATABASE_URL="postgresql://yugabyte:yugabyte@${YB_HOST}:5433/langfuse" \
+  --from-literal=LANGFUSE_INIT_USER_EMAIL="$LANGFUSE_INIT_USER_EMAIL" \
+  --from-literal=LANGFUSE_INIT_USER_PASSWORD="$LANGFUSE_INIT_USER_PASSWORD"
 
 # Deploy-time overrides: point DBs at the in-cluster YB, no LBs, rag on default pool.
 OVR="$(mktemp)"; trap 'rm -f "$OVR"' EXIT; cat > "$OVR" <<EOF
@@ -182,6 +191,10 @@ To enable Cognito login:
   2. register the UI URL (http://${LB_IP:-<lb-ip>}) as an allowed callback on
      the dev Cognito app client. NOTE: Cognito often rejects a bare-IP/HTTP
      callback — put a DNS name + TLS in front of the LB if so.
+
+Langfuse demo owner login (generated fresh this run unless overridden):
+  email:    $LANGFUSE_INIT_USER_EMAIL
+  password: $LANGFUSE_INIT_USER_PASSWORD
 
 Teardown:
   helm uninstall $RELEASE yb --kube-context $CONTEXT -n $NS
