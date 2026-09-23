@@ -58,6 +58,10 @@ apiServer:
   # would replace the live data plane. controlPlaneDb defaults to this namespace
   # too, so setting it here covers both.
   namespace: ycp-system
+  # A control plane runs inside the Meko/Aeon VPC, not a customer cluster, so it
+  # opts OUT of the chart's BYOC default — its accounts stay ordinary metered
+  # users. (meko-ui does not render in ycp mode, so only this side needs saying.)
+  enableByoc: false
   # A control plane authenticates operators with the admin shared secret, not an
   # IdP. Leaving Cognito on would demand a meko-api-server-cognito Secret it never
   # uses. Set true and supply that Secret if you do want a pool wired.

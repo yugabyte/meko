@@ -45,6 +45,7 @@ import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
+import { isByocEnabled } from "@/lib/byoc";
 import { useCollectionsEnabled } from "@/lib/collectionsFeature";
 
 /**
@@ -87,10 +88,23 @@ export default function Sidebar() {
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
   const showBillingNav = useBillingNavFlag();
-  // Discovery Labs tab — gated by MEKO_ENABLE_LABS (off by default). Hiding the
-  // entry is only half of it: ProtectedRoutes bounces /labs as well, so the
-  // surface is unreachable rather than merely unlinked.
-  const showLabsNav = isLabsEnabled();
+  // BYOC data plane: the customer runs this in their own account, so Feedback
+  // goes through their support contract rather than an in-app form.
+  //
+  // Sign out is hidden on the same flag, which is the weaker of the two: BYOC
+  // does not imply Cognito is off (they are independent chart values), so a
+  // BYOC install that keeps an IdP loses its only sign-out affordance. Gating
+  // on a session signal from /auth/me is the right shape -- tracked, not done.
+  const byoc = isByocEnabled();
+  // Discovery Labs tab. Two terms, and they are NOT equivalent:
+  //   MEKO_ENABLE_LABS off — ProtectedRoutes bounces /labs too, so the surface
+  //     is unreachable rather than merely unlinked.
+  //   BYOC on — hides the entry only. ProtectedRoutes gates on isLabsEnabled
+  //     alone, so a BYOC deployment that also enables Labs keeps /labs
+  //     reachable by URL. Labs is Yugabyte-hosted teaching content, so not
+  //     offering it to a customer's own deployment is the intent; closing the
+  //     route as well would mean teaching ProtectedRoutes about BYOC.
+  const showLabsNav = isLabsEnabled() && !byoc;
   // Collections tab — MEKO_ENABLE_COLLECTIONS, overridable per browser with
   // ?collections=true|false. ProtectedRoutes bounces /collections on the same gate,
   // so the surface is unreachable rather than merely unlinked.
@@ -662,6 +676,7 @@ export default function Sidebar() {
           )}
         </a>
 
+        {byoc ? null : (
         <button
           type="button"
           className={cn(
@@ -675,6 +690,7 @@ export default function Sidebar() {
           <MessageSquare className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
           {!isCollapsed && <span className="animate-in fade-in truncate">Feedback</span>}
         </button>
+        )}
 
         <a
           href="https://discord.com/invite/GWcSST7GqZ"
@@ -705,6 +721,7 @@ export default function Sidebar() {
           {!isCollapsed && <span className="animate-in fade-in truncate">Join us on Discord</span>}
         </a>
 
+        {byoc ? null : (
         <button
           type="button"
           className={cn(
@@ -717,6 +734,7 @@ export default function Sidebar() {
           <LogOut className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
           {!isCollapsed && <span className="animate-in fade-in truncate">Sign out</span>}
         </button>
+        )}
       </div>
 
       <SignOutConfirmDialog

@@ -40,6 +40,14 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		"--set reconcileAgent.enabled=true",
 		"--set reconcileAgent.ycpUrl=http://ycp.example.com/api/v1",
 		"--set reconcileAgent.envName=acme-prod",
+		// values-byoc.yaml enables the inference gateway, so the hint has to carry
+		// its tag (else the env preset's ECR tag resolves under quay.io and the pull
+		// fails) and its Bedrock credentials (mounted with envFrom and no
+		// optional=true, so absent is CreateContainerConfigError, not a missing
+		// feature).
+		"--set-string inferenceGateway.image.tag=",
+		"--set dataPlaneSecrets.awsAccessKeyId=",
+		"--set dataPlaneSecrets.awsSecretAccessKey=",
 		// The footnote for the configuration that does need a token.
 		"Cognito ON",
 	} {
@@ -57,6 +65,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		}
 		if strings.HasPrefix(line, "TAG=") || strings.HasPrefix(line, "AGENT_TAG=") ||
 			strings.HasPrefix(line, "QUAY_USER=") || strings.HasPrefix(line, "QUAY_TOKEN=") ||
+			strings.HasPrefix(line, "BEDROCK_KEY=") || strings.HasPrefix(line, "BEDROCK_SECRET=") ||
 			strings.Contains(line, "--from-literal=") {
 			continue
 		}

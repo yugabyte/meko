@@ -43,6 +43,13 @@ byte-identically to the pre-mode chart.
        point without anyone having to know the env fallback exists. */}}
 - "--base-path=$(MEKO_YCP_BASE_PATH)"
 {{- end }}
+{{- if $c.enableByoc }}
+{{- /* Rendered only when true, like --require-account-header below: the flag
+       defaults false, and an api-server image predating it exits on an unknown
+       flag rather than ignoring it. Pairs with mekoUi.env.enableByoc — both
+       sides read MEKO_ENABLE_BYOC, so they must be set together. */}}
+- "--enable-byoc"
+{{- end }}
 {{- if eq $mode "ycp" }}
 - "--mcp-internal-secret=$(MCP_INTERNAL_SECRET)"
 - "--control-plane-mode"

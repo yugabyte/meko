@@ -5,14 +5,28 @@ kind: ServiceAccount
 metadata:
   name: meko-api-server
   namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  {{- /* componentLabels alone, as every other object in this chart does: it
+         already carries managed-by and part-of, so including meko.labels beside
+         it emitted both keys twice and the document did not parse under a strict
+         YAML reader. */}}
   labels:
     {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
-    {{- include "meko.labels" . | nindent 4 }}
 {{- /* Not rendered in ycp mode: a control plane provisions no tenant CRs, and
        emitting these forces the tenants namespace to pre-exist for a release that
        never touches it — an install-time failure for no benefit. A template
-       comment, not a YAML one, so the data-plane render stays byte-identical. */}}
-{{- if ne (include "meko.mode" .) "ycp" }}
+       comment, not a YAML one, so the data-plane render stays byte-identical.
+
+       Skipped in singleNamespace (BYOC) mode too, but keyed on the PROVISIONER,
+       not on singleNamespace alone: the mekouseraccounts CRD is rendered only by
+       templates/provisioner/crd.yaml, so with the provisioner on there IS a
+       resource type to grant against and the Role has to be rendered even in one
+       namespace. provisioner.enabled defaults true and only values-byoc turns it
+       off, so `--set global.singleNamespace=true` on chart defaults would
+       otherwise drop the Role while the CRD exists.
+       Why it is worth skipping at all: creating a Role needs
+       container.roles.create, which an operator installing into their own
+       namespace has no reason to hold, and the whole install fails on it. */}}
+{{- if and (ne (include "meko.mode" .) "ycp") (or (not .Values.global.singleNamespace) (eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true")) }}
 ---
 # Role + binding live in the tenants namespace so the api-server SA can create
 # MekouserAccount CRs there. apiGroup is standardized on saas.mekodata.ai (§6.6).

@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
+import { isByocEnabled } from "@/lib/byoc";
 import { queryClient } from "@/lib/queryClient";
 import { ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -48,6 +49,16 @@ export default function SettingsPage() {
   // Shared, session-cached identity — usually already warmed by the
   // header, so deep-linking into /settings reads from cache.
   const { data: user = null, isLoading: loading, error } = useCurrentUser();
+  // A BYOC data plane runs in the customer's own account: billing is contractual
+  // (no plans or prices), and the account is theirs to remove at the
+  // infrastructure level rather than by asking Yugabyte support. Read once — it
+  // gates three sections below.
+  //
+  // The password tile is the weak one: it is gated on BYOC, but whether an
+  // in-app password exists is what has_email_password_login already answers.
+  // A BYOC user with one loses the only UpdatePasswordDialog in the app.
+  // Gating it on that field instead is tracked, not done.
+  const byoc = isByocEnabled();
   const errorMessage = error ? getApiErrorMessage(error, "Failed to load your account.") : null;
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
@@ -175,6 +186,7 @@ export default function SettingsPage() {
                     uses the brand colour (not red) — this is a request
                     handed off to support, not a one-click destructive
                     action, so red would over-signal danger. */}
+                {byoc ? null : (
                 <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/40 pt-4">
                   <div className="flex min-w-0 items-start gap-2.5">
                     <Trash2
@@ -203,6 +215,7 @@ export default function SettingsPage() {
                     Request deletion
                   </Button>
                 </div>
+                )}
               </section>
 
               {/* Security section — password + API keys. The tokens
@@ -212,7 +225,7 @@ export default function SettingsPage() {
                   The password subsection is gated on has_email_password_login
                   from GET /auth/me (false for Google_ / LinkedIn_ / GitHub_
                   usernames). Optional on older BE deploys → show the form. */}
-              {user.has_email_password_login !== false ? (
+              {!byoc && user.has_email_password_login !== false ? (
                 <section className="rounded-xl border border-border bg-card p-5">
                   <header className="mb-4 flex items-start justify-between gap-3">
                     <div>
@@ -237,7 +250,11 @@ export default function SettingsPage() {
 
               <SecurityTokensSection />
 
-              <PricingSection />
+              {/* Hidden on a BYOC data plane: the customer runs this
+                  deployment in their own account under a contract agreed off
+                  the product, so in-app plans and prices are not what they
+                  owe. */}
+              {byoc ? null : <PricingSection />}
             </>
           ) : null}
         </div>

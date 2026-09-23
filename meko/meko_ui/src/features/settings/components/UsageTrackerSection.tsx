@@ -32,6 +32,7 @@ import {
   type TierLimits,
   type TierName,
 } from "@/lib/freeTier";
+import { isByocEnabled } from "@/lib/byoc";
 import type { AccountUsage } from "@/lib/api/mekoApi";
 
 // Threshold for the "you're getting close" amber tint. 80% is early
@@ -164,9 +165,17 @@ export function UsageTrackerSection() {
       <header className="mb-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-foreground">Usage</h2>
-          <span className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-brand">
-            {tierDisplayName(tier)} tier
-          </span>
+          {/* No tier chip on a BYOC data plane: naming a tier points at a plan
+              the customer never bought. In practice this section rarely renders
+              there at all -- BYOC accounts are created 'pro', for which
+              limitsForTier returns null and the whole card is skipped. It still
+              shows for an account that predates the flag, which is the case
+              this gate is for. */}
+          {isByocEnabled() ? null : (
+            <span className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-brand">
+              {tierDisplayName(tier)} tier
+            </span>
+          )}
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           Live consumption against your current-tier caps.

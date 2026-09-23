@@ -194,6 +194,12 @@ app.use((req, res, next) => {
     // hide the tile entirely) without a rebuild.
     "MEKO_ENABLE_STANDARD_TIER",
     "MEKO_AWS_MARKETPLACE_URL",
+    // Marks this as a BYOC data plane, where the customer runs the deployment
+    // in their own account under a contract negotiated off the product. Hides
+    // the pricing section in Settings, since the plans and prices quoted there
+    // are not what a BYOC customer owes. Default off, so hosted deployments are
+    // unaffected.
+    "MEKO_ENABLE_BYOC",
     // The account a Labs datapack gets shared with in the "share with
     // AgentK" lesson (ShareWithAgentStage.tsx). Same var name as
     // api_server's own MEKO_LABS_AGENTK_ADMIN_EMAIL by convention, but a

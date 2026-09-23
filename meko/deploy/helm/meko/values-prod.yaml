@@ -13,6 +13,10 @@ ingress:
 
 apiServer:
   replicas: 3
+  # Hosted deployment: opt OUT of the chart's BYOC default. Leaving it on would
+  # create every new signup 'pro' (no tier caps) and hide this env's own billing
+  # UI. See apiServer.enableByoc in values.yaml.
+  enableByoc: false
   deployEnv: prod
   image: { tag: "1.0.13-20260529" }
   ingress:
@@ -54,6 +58,9 @@ mekoUi:
   replicas: 1
   # §6.5: prod overlay historically never set a tag; now explicit every env.
   image: { tag: "1.0.0-20260504" }
+  env:
+    # Hosted: keep pricing, tier names, Labs, Feedback and sign-out visible.
+    enableByoc: "false"
   ingress:
     host: cloud.mekodata.ai
     # prod UI has its own ACM cert, distinct from api-server's.
@@ -76,6 +83,8 @@ mekoMcpServer:
     MEM0_DB_NAME: mekodata
     CONVERSATION_SEARCH_ENABLED: "true"
     MEKO_FREE_TIER_QUOTA_ENABLED: "true"
+    # Hosted: keep tier quotas and the free-tier feature gates enforced.
+    MEKO_ENABLE_BYOC: "false"
     ENABLE_ASYNC_MEMORY_EXTRACTION: "true"
 
 inferenceGateway:

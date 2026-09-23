@@ -31,11 +31,20 @@ type CreateAccountParams struct {
 // Backing table: meko_system.users.
 type AccountRepo struct {
 	db *sql.DB
+	// byocMode makes Create insert 'pro' instead of letting the column's
+	// 'free' default stand. See NewAccountRepo.
+	byocMode bool
 }
 
 // NewAccountRepo creates a new AccountRepo.
-func NewAccountRepo(db *sql.DB) *AccountRepo {
-	return &AccountRepo{db: db}
+//
+// byocMode marks a BYOC data plane — one the customer runs in their own
+// account. There is no plan to meter them against there, so Create inserts
+// 'pro', which service.IsGatedUserType reports as un-gated and so skips cap
+// enforcement altogether rather than raising a number. False is the hosted
+// behaviour: the column is omitted and the schema's 'free' default stands.
+func NewAccountRepo(db *sql.DB, byocMode bool) *AccountRepo {
+	return &AccountRepo{db: db, byocMode: byocMode}
 }
 
 // Create inserts a new user row and the user's default agent in a
@@ -65,17 +74,30 @@ func (r *AccountRepo) Create(
 		}
 	}()
 
+	// BYOC names the tier explicitly; a hosted deployment omits the column
+	// entirely so the schema's DEFAULT 'free' stays the single source of
+	// truth rather than being restated here. Both fragments are compile-time
+	// constants — nothing from `params` reaches the statement text.
+	userTypeCol, userTypeVal := "", ""
+	if r.byocMode {
+		userTypeCol = ", user_type"
+		userTypeVal = ", 'pro'::meko_system.account_type"
+	}
+
 	var acct models.Account
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO meko_system.users
+		fmt.Sprintf(
+			`INSERT INTO meko_system.users
 			(user_first_name, user_last_name,
-			 user_email, cognito_sub, email_verified_at)
+			 user_email, cognito_sub, email_verified_at%s)
 		 VALUES ($1, $2, $3, $4,
-			 CASE WHEN $5::boolean THEN NOW() ELSE NULL END)
+			 CASE WHEN $5::boolean THEN NOW() ELSE NULL END%s)
 		 RETURNING user_id, user_first_name, user_last_name,
 			user_email, user_type, user_org, cognito_sub,
 			email_verified_at, has_completed_onboarding,
 			created_at, updated_at`,
+			userTypeCol, userTypeVal,
+		),
 		params.FirstName, params.LastName,
 		params.Email, params.CognitoSub, params.EmailVerified,
 	).Scan(

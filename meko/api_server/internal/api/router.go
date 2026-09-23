@@ -101,7 +101,7 @@ type serviceRegistry struct {
 func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	slog.Info("initializing service registry")
 
-	accountRepo := repository.NewAccountRepo(cfg.SystemDB)
+	accountRepo := repository.NewAccountRepo(cfg.SystemDB, cfg.BYOCMode)
 	ybaRepo := repository.NewYBARepo(cfg.SystemDB)
 	dpRepo := repository.NewDatapackRepo(cfg.SystemDB, cfg.MCPServerURL, cfg.DeployEnv)
 

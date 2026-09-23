@@ -5,6 +5,7 @@ import { ArrowRight } from "lucide-react";
 import type { NavigateFunction } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
+import { isByocEnabled } from "@/lib/byoc";
 import {
   datapackDetailUrlOpenConnect,
   datapackKnowledgePath,
@@ -75,8 +76,18 @@ export function DatapackOnboardingStepper({
         path={connectPath}
         navigate={navigate}
       />
-      <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">or</span>
-      <StepChip label="Try Meko Labs" accent="learning" path={ROUTES.labs} navigate={navigate} />
+      {/* Labs is Yugabyte-hosted teaching content, and its nav entry is hidden on
+          a BYOC data plane, so a chip pointing at it is an entry point to a
+          surface that deployment does not offer. (The route itself stays
+          reachable by URL — ProtectedRoutes gates only on MEKO_ENABLE_LABS.)
+          The "or" separator goes with it — it only reads as a choice when there
+          is a third option after it. */}
+      {isByocEnabled() ? null : (
+        <>
+          <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">or</span>
+          <StepChip label="Try Meko Labs" accent="learning" path={ROUTES.labs} navigate={navigate} />
+        </>
+      )}
     </div>
   );
 }

@@ -36,12 +36,43 @@ Storage class: {{ .Values.global.storageClassName | default "(cluster default)" 
 Secrets: rendered from dataPlaneSecrets — this release created
 {{ .Values.apiServer.secrets.existing.db }}, {{ .Values.apiServer.secrets.existing.systemDb }} and {{ .Values.mekoMcpServer.secrets.existing.yugabytedb }}
 from one dbPassword, so the database and the services that connect to it cannot
-disagree. Everything else is read with optional=true: an absent credential costs
-its own feature, not the pod.
+disagree. Anything flagged ! below is read with optional=true and costs only its
+own feature; anything flagged !! stops a pod from starting at all.
 {{- if not .Values.dataPlaneSecrets.openaiApiKey }}
 
-  ! No OpenAI key. Meko runs, and stores nothing: memory extraction and RAG fail
-    at the point of use. Set dataPlaneSecrets.openaiApiKey to fix that.
+  ! No OpenAI key, and both LLM_PROVIDER and EMBEDDER_PROVIDER default to openai:
+    memory extraction and knowledge-base embedding raise at the point of use.
+{{- end }}
+{{- if and (has .Values.apiServer.staticArgs.s3AuthMode (list "iam-user" "minio")) (not (and .Values.dataPlaneSecrets.s3AccessKey .Values.dataPlaneSecrets.s3SecretKey)) }}
+
+  ! No S3 credentials: knowledge-base file upload fails at the presigned URL, in
+    the browser, with the api-server healthy. (Embedding is the OpenAI key above.)
+{{- end }}
+{{- if not .Values.dataPlaneSecrets.mcpInternalSecret }}
+
+  !! No MCP internal secret. The api-server reads it with no optional=true, so
+     its pod stops at CreateContainerConfigError whatever else is deployed.
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") (eq .Values.mekoMcpServer.staticEnv.authProvider "meko_tkn") }}
+     meko-mcp-server is on meko_tkn, so it aborts at startup (sys.exit) too.
+{{- end }}
+{{- end }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (eq .Values.inferenceGateway.config.INFERENCE_LLM_PROVIDER "bedrock") (not (and .Values.dataPlaneSecrets.awsAccessKeyId .Values.dataPlaneSecrets.awsSecretAccessKey)) }}
+
+  !! No Bedrock credentials, and the inference gateway is enabled on bedrock: its
+     Secret is mounted with envFrom, so the pod never starts. Set them, or disable it.
+{{- end }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (not .Values.inferenceGateway.config.INFERENCE_MCP_ENDPOINT) }}
+
+  ! The inference gateway has no MCP endpoint. It starts and answers /healthz,
+    then every chat turn fails to reach the MCP server. Set
+    inferenceGateway.config.INFERENCE_MCP_ENDPOINT.
+{{- end }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (not .Values.inferenceGateway.config.INFERENCE_CORS_ORIGINS) }}
+
+  ! The inference gateway has no CORS origins. Empty does NOT mean "none" — the
+    gateway falls back to its compiled defaults, which trust the HOSTED origins
+    (app.mekodev.com, cloud.mekodata.ai) inside your cluster. Set
+    inferenceGateway.config.INFERENCE_CORS_ORIGINS to this deployment's UI origin.
 {{- end }}
 {{- else -}}
 Secrets: this release holds NO secret material — it only references pre-created

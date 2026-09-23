@@ -19,10 +19,28 @@ data:
   {{- if $.Values.yugabyte.enabled }}
   {{- $ybHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
   {{- end }}
+  {{- /* MEKO_BASE_URL is the api-server this MCP server validates Meko PATs
+         against — mcp_auth/pat_verifier.py POSTs /internal/meko-tokens/validate
+         to it. Same failure as the DB hosts above and worse: left at the env
+         preset's value a BYOC install authenticates its tokens against the
+         SHARED hosted api-server, so a PAT minted here is rejected and one
+         minted there is accepted. Fill it with this release's own api-server
+         when the values leave it empty. basePath is honoured because the
+         api-server mounts every route under it when set. */}}
+  {{- $apiBase := "" }}
+  {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "apiServer")) "true" }}
+  {{- $apiNs := include "meko.ns" (dict "root" $ "ns" $.Values.apiServer.namespace) }}
+  {{- /* Absolute (trailing dot) for the same ndots:5 reason as DB_HOST above.
+         basePath is trimmed of a trailing slash so it cannot yield //api/v1. */}}
+  {{- $apiBase = printf "http://meko-api-server-service.%s.svc.cluster.local.:%v%s/api/v1" $apiNs $.Values.apiServer.service.port (trimSuffix "/" $.Values.apiServer.basePath) }}
+  {{- end }}
   {{- range $k, $v := $c.config }}
   {{- $val := $v }}
   {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST")) (not $v) }}
   {{- $val = $ybHost }}
+  {{- end }}
+  {{- if and $apiBase (eq $k "MEKO_BASE_URL") (not $v) }}
+  {{- $val = $apiBase }}
   {{- end }}
   {{ $k }}: {{ $val | quote }}
   {{- end }}

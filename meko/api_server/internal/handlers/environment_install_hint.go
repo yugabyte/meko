@@ -105,7 +105,18 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "API_TAG=%s\n", tagOf(rel.APIServer))
 	fmt.Fprintf(&b, "MCP_TAG=%s\n", tagOf(rel.MCPServer))
 	fmt.Fprintf(&b, "UI_TAG=%s\n", tagOf(rel.UI))
+	// values-byoc.yaml enables the inference gateway, so its tag is no longer
+	// optional here: unset, it falls through to the env preset's ECR tag under
+	// quay.io/yugabyte and the pod never pulls.
+	fmt.Fprintf(&b, "GW_TAG=%s\n", tagOf(rel.InferenceGateway))
 	fmt.Fprintf(&b, "AGENT_TAG=<agent image tag>     # quay.io/yugabyte/ycp-reconciler-agent\n")
+	// The gateway's Secret is mounted with envFrom and no optional=true, so an
+	// install that omits these gets CreateContainerConfigError, not a missing
+	// feature. In the header rather than inline for the reason above: the control
+	// plane cannot know them, and a command carrying a placeholder looks pasteable
+	// and is not.
+	fmt.Fprintf(&b, "BEDROCK_KEY=<aws access key id>        # inference gateway, bedrock provider\n")
+	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>\n")
 	fmt.Fprintf(&b, "QUAY_USER=<robot name>         # e.g. yugabyte+something\n")
 	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n\n")
 
@@ -130,6 +141,9 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "  --set-string apiServer.image.tag=\"${API_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoMcpServer.image.tag=\"${MCP_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoUi.image.tag=\"${UI_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string inferenceGateway.image.tag=\"${GW_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
 	fmt.Fprintf(&b, "  --set reconcileAgent.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set reconcileAgent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "  --set reconcileAgent.envName=%s \\\n", envID)

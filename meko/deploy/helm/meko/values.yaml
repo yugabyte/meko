@@ -191,6 +191,17 @@ apiServer:
     annotations: {}
   # --deploy-env value
   deployEnv: dev
+  # BYOC data plane: new users are created 'pro' rather than taking the
+  # meko_system.users 'free' default, which skips tier caps entirely — metering
+  # a customer against plan limits on hardware they pay for themselves is wrong.
+  # Paired with mekoUi.env.enableByoc (same env name, one switch per side).
+  #
+  # DEFAULT TRUE: an unqualified install of this chart is a BYOC data plane.
+  # The hosted deployments are the exception and opt OUT explicitly —
+  # values-dev, values-prod and values-ycp each set this false. A new hosted
+  # preset MUST do the same, or its signups land uncapped and its billing UI
+  # disappears.
+  enableByoc: true
   ses:
     fromAddress: ""
     region: us-east-2
@@ -452,9 +463,10 @@ controlPlaneSecrets:
 #   - mcpInternalSecret — needed by api_server and meko-mcp-server, and deliberately
 #     NOT optional at the ref: an absent internal secret is a data plane whose two
 #     halves silently reject each other, which is worse than a pod that won't start.
-#   - the four this block does not cover — cognito-client-secret, meko-api-server-s3,
-#     meko-ui-secret and openai-credentials are read with optional=true, so a missing
-#     one costs its feature (auth, uploads, analytics) and nothing else.
+#   - the three this block does not cover — cognito-client-secret, meko-ui-secret
+#     and openai-credentials are read with optional=true, so a missing one costs
+#     its feature (auth, analytics) and nothing else. meko-api-server-s3 used to
+#     be a fourth; s3AccessKey/s3SecretKey below now render it.
 #
 # Same no-generation rule as controlPlaneSecrets, for the same reason: `lookup` is
 # empty under `helm template`, so a chart-generated password rotates itself out of
@@ -480,6 +492,27 @@ dataPlaneSecrets:
   openaiApiKey: ""
   # Shared between api_server and meko-mcp-server. Both must see the same value.
   mcpInternalSecret: ""
+  # Bedrock credentials for inferenceGateway.secrets.existing.aws (keys
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). Rendered only when BOTH are set
+  # and the gateway is enabled. Needed only for INFERENCE_LLM_PROVIDER=bedrock;
+  # the openai provider reads OPENAI_API_KEY instead, which the gateway's
+  # Deployment does not wire today.
+  awsAccessKeyId: ""
+  awsSecretAccessKey: ""
+  # Object storage for knowledge-base uploads → apiServer.secrets.existing.s3
+  # (keys s3-access-key / s3-secret-key). The api-server reads the pair into
+  # BOTH S3_ACCESS_KEY/S3_SECRET_KEY and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY,
+  # so these two values configure all four env vars.
+  #
+  # Only for apiServer.staticArgs.s3AuthMode = iam-user or minio. Under
+  # iam-role leave them empty: the SDK resolves IRSA / the instance profile,
+  # and static keys would shadow it.
+  #
+  # Distinct from awsAccessKeyId above — that is Bedrock for the inference
+  # gateway, this is S3 for the api-server. Same cloud, different grants, and
+  # nothing requires them to be the same principal.
+  s3AccessKey: ""
+  s3SecretKey: ""
 
 # ---------------------------------------------------------------------------
 # meko-ui
@@ -527,6 +560,12 @@ mekoUi:
   env:
     rudderstackDataPlaneUrl: "https://yugabyteklhgka.dataplane.rudderstack.com"
     freeTierQuotaEnabled: "true"
+    # Hides the surfaces that only make sense on the hosted product: pricing,
+    # tier names, delete-account, the password tile, Labs, Feedback, sign-out.
+    # Paired with apiServer.enableByoc — the api-server reads the SAME env name
+    # to create users pro instead of free, so the two must agree.
+    # Default true, opted out by values-dev / values-prod; see apiServer.enableByoc.
+    enableByoc: "true"
   # nginx proxy upstream server addresses (host:port), injected into default.conf.
   upstreams:
     ui: 127.0.0.1:5000
@@ -566,6 +605,11 @@ mekoMcpServer:
     MEM0_DB_NAME: ""
     CONVERSATION_SEARCH_ENABLED: "true"
     MEKO_FREE_TIER_QUOTA_ENABLED: "true"
+    # BYOC data plane: skip every tier check in the MCP tools — the per-metric
+    # quota and the free-tier feature gates on the DB and vector-index tools.
+    # Same env name api_server and meko_ui read. Default true here and opted
+    # out by values-dev / values-prod; see apiServer.enableByoc.
+    MEKO_ENABLE_BYOC: "true"
     ENABLE_ASYNC_MEMORY_EXTRACTION: "true"
   # Tunable static env (rest are literal in the template, matching source).
   staticEnv:
@@ -661,6 +705,17 @@ inferenceGateway:
     INFERENCE_MCP_ENDPOINT: ""
     INFERENCE_CORS_ORIGINS: ""
     INFERENCE_CONV_SUMMARY_MODEL: mistral.ministral-3-3b-instruct
+    # Route retrieval through one unified `context_search` call (conversation
+    # cache + memory + knowledgebase) instead of separate knowledgebase_search +
+    # memory_search calls. This is the GATEWAY's own flag and nothing else reads
+    # it: the MCP server's matching flag was retired when that tool became
+    # always-registered (inference_gateway/chain.py), and this chart plumbs the
+    # key only into inference-gateway-config.
+    MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH: "false"
+    # Agentic chat (MEKO-407): bind a curated set of read-only Meko MCP tools onto
+    # the main LLM call, so tool-shaped intents ("list all my memories") are
+    # answered by calling the tool rather than by a semantic search.
+    MEKO_AGENTIC_CHAT: "false"
   secrets:
     existing:
       aws: inference-gateway-aws

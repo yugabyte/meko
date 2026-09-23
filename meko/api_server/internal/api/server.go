@@ -211,6 +211,15 @@ type ServerConfig struct {
 	// and feeds the UI runtime-config key of the same name.
 	EnableConversationSearch bool
 
+	// BYOCMode marks this api-server as a BYOC data plane — one the customer
+	// runs in their own account. New users are created 'pro' rather than the
+	// column's 'free' default, which skips tier cap enforcement entirely
+	// (service.IsGatedUserType is false for pro): metering a customer against
+	// plan limits on infrastructure they are paying for themselves is wrong.
+	// Off by default, so a hosted deployment is unaffected. Mirrors
+	// MEKO_ENABLE_BYOC, the same env var that hides the hosted-only surfaces
+	// in the UI via its runtime-config key of the same name.
+	BYOCMode bool
 	// EnableCollections gates the collection tree (collections, folders, datapack
 	// placements) and its REST surface. Off by default; mirrors
 	// MEKO_ENABLE_COLLECTIONS, the same env var the UI reads from runtime-config

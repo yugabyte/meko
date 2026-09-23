@@ -42,11 +42,12 @@ type DataPlaneRelease struct {
 // migrations reference the dist_rag schema, so a data plane on a stock image fails its
 // first migration.
 //
-// Only APIServer, MCPServer and UI are rendered: the meko install hint prints one tag
-// each, and a BYOC release runs nothing else — values-byoc.yaml disables the inference
-// gateway, the RAG worker, langfuse and the provisioner. RAGWorker and InferenceGateway
-// are carried at the same release for when it does not, and Database is read by nothing
-// at all, the chart owning that image. Wiring those up or deleting them is
+// APIServer, MCPServer, UI and InferenceGateway are rendered: the meko install hint
+// prints one tag each. values-byoc.yaml now enables the inference gateway, so its tag
+// has to be passed or the gateway falls through to the env preset's ECR tag under
+// quay.io/yugabyte. RAGWorker is still carried unprinted — values-byoc disables the
+// RAG worker, langfuse and the provisioner — and Database is read by nothing at all,
+// the chart owning that image. Wiring those up or deleting them is
 // https://github.com/yugabyte/meko/issues/1319.
 var pinnedDataPlaneRelease = DataPlaneRelease{
 	// Mirrored to Quay by meko/jenkins/scripts/mirror-database-image.sh rather than

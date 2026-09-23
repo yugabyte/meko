@@ -39,6 +39,8 @@ spec:
                   optional: true
             - name: MEKO_FREE_TIER_QUOTA_ENABLED
               value: {{ $c.env.freeTierQuotaEnabled | quote }}
+            - name: MEKO_ENABLE_BYOC
+              value: {{ $c.env.enableByoc | quote }}
           ports:
             - containerPort: 5000
               protocol: TCP

@@ -8,6 +8,7 @@ import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { isPlaceholderEmail } from "@/lib/api/mekoApi";
+import { isByocEnabled } from "@/lib/byoc";
 import { IncomingShareNotificationsBell } from "@/features/layout/IncomingShareNotificationsBell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 
@@ -150,6 +151,10 @@ function truncateIdentity(value: string): string {
  * Source of truth: `currentUser.user_type` from `/auth/me`.
  */
 function TierBadge({ userType }: { userType?: string | null }) {
+  // A BYOC data plane has no tiers: the customer runs it in their own account
+  // under a contract, so FREE / STANDARD / PRO describes nothing they bought
+  // and naming one here is misleading.
+  if (isByocEnabled()) return null;
   const userTier = (userType ?? "").trim().toLowerCase();
   if (
     userTier !== "free" &&

@@ -119,6 +119,13 @@ apiServer:
   image:
     registry: quay.io/yugabyte
     repository: meko-api-server
+  # New users are created 'pro', skipping tier caps outright — there is no plan
+  # to meter a customer against on hardware they pay for themselves.
+  #
+  # This matches the chart default and is stated anyway: this preset IS the
+  # BYOC install, so a later change to that default must not be able to turn it
+  # off here silently. Must stay in step with mekoUi.env.enableByoc below.
+  enableByoc: true
   migrate:
     # The database's own image, for a ysqlsh matching the server — from Quay for the
     # same reason as everything else here.
@@ -156,6 +163,12 @@ mekoMcpServer:
     registry: quay.io/yugabyte
     repository: meko-mcp-server
   config:
+    # Skip every tier check in the MCP tools: the per-metric quota and the
+    # free-tier feature gates on the DB and vector-index tools. Stated here for
+    # the same reason as apiServer.enableByoc — this preset is composed LAST,
+    # over an env preset that sets it "false", so leaving it to the chart
+    # default would let values-dev win and quietly re-enable gating.
+    MEKO_ENABLE_BYOC: "true"
     # Emptied for the same reason as the api-server's: the env preset points these
     # at the SHARED dev YugabyteDB, and the chart refills them with this release's
     # own database. Left as the preset had them, the api-server reads the database
@@ -163,6 +176,12 @@ mekoMcpServer:
     # green, one of them serving someone else's data.
     DB_HOST: ""
     SYSTEM_DB_HOST: ""
+    # Emptied for the same reason, and filled the same way: this is the api-server
+    # whose /internal/meko-tokens/validate decides whether a Meko PAT is valid.
+    # The env preset points it at the HOSTED api-server, so a BYOC install would
+    # reject every token minted by the api-server running beside it — and accept
+    # ones minted somewhere else entirely.
+    MEKO_BASE_URL: ""
     # One colocated database, matching apiServer.config above: a fresh YugabyteDB has
     # no separate meko_system database to point the system connection at.
     DB_NAME: yugabyte
@@ -179,6 +198,10 @@ mekoUi:
   image:
     registry: quay.io/yugabyte
     repository: meko-ui
+  env:
+    # Hides the hosted-only surfaces: pricing, tier names, delete-account, the
+    # password tile, Labs, Feedback, sign-out. Pairs with apiServer.enableByoc.
+    enableByoc: "true"
   ingress:
     # This was already set here and was silently ignored: the template gated only on
     # the component being enabled, so a BYOC release created an Ingress claiming
@@ -190,9 +213,30 @@ mekoUi:
 # Off until each has a BYOC story of its own:
 #   langfuse — v3 needs ClickHouse, Redis and object storage beside it;
 #   ragAgent — wants GPU nodes and an S3 bucket;
-#   inferenceGateway — needs an LLM provider configured;
 #   provisioner — manages per-tenant namespaces, which is the opposite of one namespace.
-inferenceGateway: { enabled: false }
+#
+# inferenceGateway is ON. What it still needs from the installer: an image tag,
+# the two endpoints blanked below, and — for the default bedrock provider —
+# dataPlaneSecrets.awsAccessKeyId / .awsSecretAccessKey, which render the
+# inference-gateway-aws Secret its Deployment mounts with envFrom.
+inferenceGateway:
+  enabled: true
+  image:
+    registry: quay.io/yugabyte
+    repository: meko-inference-gateway
+  config:
+    # Both on for BYOC, matching the dev overlay in meko-devops
+    # (kustomize/inference-gateway/overlays/dev).
+    MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH: "true"
+    MEKO_AGENTIC_CHAT: "true"
+    # Blanked deliberately, NOT inherited. The env preset points both at hosted
+    # dev (mcp.mekodev.com / app.mekodev.com), which a customer's cluster can
+    # neither reach nor should be told to trust. They depend on where this
+    # release actually runs, so the installer supplies them:
+    #   --set inferenceGateway.config.INFERENCE_MCP_ENDPOINT=http://meko-mcp-server.<ns>.svc.cluster.local/mcp
+    #   --set inferenceGateway.config.INFERENCE_CORS_ORIGINS=<the UI's origin>
+    INFERENCE_MCP_ENDPOINT: ""
+    INFERENCE_CORS_ORIGINS: ""
 ragAgent: { enabled: false }
 langfuse: { enabled: false }
 provisioner: { enabled: false }

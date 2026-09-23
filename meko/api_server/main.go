@@ -125,6 +125,14 @@ func run() error {
 		envBoolOrDefault("MEKO_ENABLE_CONVERSATION_SEARCH", false),
 		"enable the conversation-search / conversation-embedding feature (Index-conversation backfill)")
 
+	// BYOC data plane — the customer runs this stack in their own account.
+	// Creates new users 'pro' (no tier caps) instead of the 'free' default;
+	// see api.ServerConfig.BYOCMode. The SAME env var hides the hosted-only surfaces
+	// in the UI (pricing, tier names, Labs, Feedback, sign-out), so one switch
+	// covers both sides.
+	enableBYOC := flag.Bool("enable-byoc",
+		envBoolOrDefault("MEKO_ENABLE_BYOC", false),
+		"run as a BYOC data plane: new users are created pro (no tier caps)")
 	// Collections & folders. The SAME env var gates the UI's Collections nav via
 	// runtime-config, so one switch turns the feature on/off end to end.
 	enableCollections := flag.Bool("enable-collections",
@@ -528,6 +536,7 @@ func run() error {
 		MaxArtifactSizeBytes:               *maxArtifactSizeBytes,
 		ShowPGAMP:                          *showPGAMP,
 		EnableConversationSearch:           *enableConversationSearch,
+		BYOCMode:                           *enableBYOC,
 		EnableCollections:                  *enableCollections,
 		ControlPlaneMode:                   *controlPlaneMode,
 		BasePath:                           *basePath,

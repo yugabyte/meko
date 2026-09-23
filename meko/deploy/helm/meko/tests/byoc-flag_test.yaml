@@ -1,0 +1,91 @@
+# MEKO_ENABLE_BYOC is one switch read by three services, and each half of it has
+# a way to go quietly wrong:
+#
+#   1. The api-server takes it as a BARE flag, rendered only when true — an image
+#      predating the flag exits on an unknown one, so --enable-byoc=false is not
+#      a safe spelling.
+#   2. The UI and the MCP server take it as an env var that must be present in
+#      BOTH states: absent is not the same as "false" to a runtime-config reader.
+#   3. The hosted presets must NOT inherit it. values.yaml defaults it true, so a
+#      preset that forgets creates uncapped 'pro' users and hides its billing UI.
+#   4. values-byoc.yaml composes LAST over an env preset that sets false, so it
+#      has to restate true rather than rely on the chart default.
+#
+#   helm unittest charts/meko
+suite: byoc flag
+templates:
+  # The two configmaps are loaded because their Deployments include them for a
+  # config checksum; only the listed templates are asserted against.
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+  - templates/meko-ui/deployment.yaml
+  - templates/meko-ui/nginx-configmap.yaml
+  - templates/meko-mcp-server/configmap.yaml
+tests:
+  - it: renders the bare flag and true env under the byoc compose
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      mekoUi.image.tag: t
+      mekoMcpServer.image.tag: t
+      inferenceGateway.image.tag: t
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-byoc"
+      - template: templates/meko-ui/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_ENABLE_BYOC
+            value: "true"
+      - template: templates/meko-mcp-server/configmap.yaml
+        equal:
+          path: data.MEKO_ENABLE_BYOC
+          value: "true"
+
+  - it: is off for hosted dev, and the flag is absent rather than false
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      mekoUi.image.tag: t
+      mekoMcpServer.image.tag: t
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-byoc"
+      - template: templates/meko-ui/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_ENABLE_BYOC
+            value: "false"
+      - template: templates/meko-mcp-server/configmap.yaml
+        equal:
+          path: data.MEKO_ENABLE_BYOC
+          value: "false"
+
+  - it: is off for hosted prod
+    values:
+      - ../values-aws.yaml
+      - ../values-prod.yaml
+    set:
+      apiServer.image.tag: t
+      mekoUi.image.tag: t
+      mekoMcpServer.image.tag: t
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-byoc"
+      - template: templates/meko-mcp-server/configmap.yaml
+        equal:
+          path: data.MEKO_ENABLE_BYOC
+          value: "false"
