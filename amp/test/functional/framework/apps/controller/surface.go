@@ -187,3 +187,75 @@ func (c *Client) ProvisionMigrationTarget(ctx context.Context, id string, req Pr
 func (c *Client) StartMigration(ctx context.Context, id string) (Task, string, error) {
 	return c.async(ctx, http.MethodPost, c.apiURL+"/migrations/"+id+"/migrate", struct{}{})
 }
+
+func (c *Client) CancelTask(ctx context.Context, taskID string) (Task, error) {
+	var out Task
+	_, _, err := c.doJSON(ctx, http.MethodPost, c.apiURL+"/tasks/"+url.PathEscape(taskID)+"/cancel", nil, &out)
+	return out, err
+}
+
+type ExtensionLayout struct {
+	SharePath   string            `json:"share_path,omitempty"`
+	LibPath     string            `json:"lib_path,omitempty"`
+	LibraryPath []string          `json:"library_path,omitempty"`
+	EnvPaths    map[string]string `json:"env_paths,omitempty"`
+}
+
+type Extension struct {
+	Name           string           `json:"name"`
+	Image          string           `json:"image"`
+	Version        string           `json:"version,omitempty"`
+	Description    string           `json:"description,omitempty"`
+	Library        string           `json:"library,omitempty"`
+	Preload        bool             `json:"preload"`
+	Builtin        bool             `json:"builtin"`
+	Layout         *ExtensionLayout `json:"layout,omitempty"`
+	ABIExtraExempt []string         `json:"abi_extra_exempt,omitempty"`
+}
+
+type RegisterExtensionRequest struct {
+	Image          string           `json:"image"`
+	Version        string           `json:"version,omitempty"`
+	Description    string           `json:"description,omitempty"`
+	Library        string           `json:"library,omitempty"`
+	Preload        bool             `json:"preload,omitempty"`
+	Layout         *ExtensionLayout `json:"layout,omitempty"`
+	ABIExtraExempt []string         `json:"abi_extra_exempt,omitempty"`
+}
+
+type ExtensionList struct {
+	Extensions []Extension `json:"extensions"`
+	Total      int         `json:"total"`
+	Count      int         `json:"count"`
+}
+
+func (c *Client) ListExtensions(ctx context.Context) (ExtensionList, error) {
+	var out ExtensionList
+	_, err := c.GetRaw(ctx, "/extensions", nil, &out)
+	return out, err
+}
+
+func (c *Client) GetExtension(ctx context.Context, name string) (Extension, error) {
+	var out Extension
+	_, err := c.GetRaw(ctx, "/extensions/"+url.PathEscape(name), nil, &out)
+	return out, err
+}
+
+func (c *Client) RegisterExtension(ctx context.Context, name, userID string, req RegisterExtensionRequest) (Extension, error) {
+	var out Extension
+	_, _, err := c.doJSON(ctx, http.MethodPut, c.extensionURL(name, userID), req, &out)
+	return out, err
+}
+
+func (c *Client) DeregisterExtension(ctx context.Context, name, userID string) error {
+	_, _, err := c.doJSON(ctx, http.MethodDelete, c.extensionURL(name, userID), nil, nil)
+	return err
+}
+
+func (c *Client) extensionURL(name, userID string) string {
+	u := c.apiURL + "/extensions/" + url.PathEscape(name)
+	if userID != "" {
+		u += "?" + url.Values{"user_id": {userID}}.Encode()
+	}
+	return u
+}

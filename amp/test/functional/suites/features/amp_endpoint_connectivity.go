@@ -48,7 +48,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for. An nlb_external endpoint with allowed_cidrs gets an internet-facing Service whose loadBalancerSourceRanges is exactly that list, no internal annotation, only the Postgres port, and the Service is gone once the endpoint is deleted.",
+		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip or on a shared-ingress mode, an ingress_* mode on a controller with no shared ingress, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for. An nlb_external endpoint with allowed_cidrs gets an internet-facing Service whose loadBalancerSourceRanges is exactly that list, no internal annotation, only the Postgres port, and the Service is gone once the endpoint is deleted.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		// Two load balancers, each waited out to a cloud-assigned ingress.
 		Timeout: 45 * time.Minute,
@@ -108,7 +108,7 @@ func (a *ampFeatureRun) connectivityValidation(ctx context.Context) error {
 	return connectivityValidationSteps(ctx, cl, a.proj, "conn-"+a.f.suffix(), a.f.cfg.PgVersion)
 }
 
-// connectivityValidationSteps sends the four malformed requests and demands a
+// connectivityValidationSteps sends the six malformed requests and demands a
 // 400 for each. Nothing here waits on a task: an accepted request is the failure.
 func connectivityValidationSteps(ctx context.Context, cl connectivityCtl, proj ampCluster, clusterName string, pgVersion int) error {
 	epCases := []struct {
@@ -118,6 +118,9 @@ func connectivityValidationSteps(ctx context.Context, cl connectivityCtl, proj a
 		{"an unknown mode", controller.EndpointConnectivity{Mode: "nlb_sideways"}},
 		{"a bare IP in allowed_cidrs", controller.EndpointConnectivity{Mode: controller.ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.1"}}},
 		{"allowed_cidrs on cluster_ip", controller.EndpointConnectivity{Mode: controller.ConnectivityClusterIP, AllowedCIDRs: []string{"10.0.0.0/8"}}},
+		{"allowed_cidrs on a shared-ingress mode", controller.EndpointConnectivity{Mode: controller.ConnectivityIngressExternal, AllowedCIDRs: []string{"10.0.0.0/8"}}},
+		// ampstack never sets controller.deploy.ingress.enabled; falling back to a dedicated LB would bill one nobody asked for.
+		{"ingress_internal on a controller with no shared ingress", controller.EndpointConnectivity{Mode: controller.ConnectivityIngressInternal}},
 	}
 	for _, tc := range epCases {
 		conn := tc.conn

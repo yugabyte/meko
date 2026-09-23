@@ -16,8 +16,10 @@ package stress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,7 +58,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
 		Tags:        []string{"stress"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Churn the branch lifecycle (fork, endpoint, write, retire, delete) in parallel lanes against one cluster and assert every cycle converged, nothing was orphaned, and no task failed.",
+		Description: "Churn the branch lifecycle (fork, endpoint, write, retire, delete) in parallel lanes against one cluster, cancelling a branch create or an endpoint create in two cycles of every three, and assert every cancelled task either lost the race or ended failed as cancelled, every cycle converged, nothing was orphaned, and no task failed other than the cancelled and the retried ones.",
 		Params:      []string{"env.sharedk8s", "stress.consistency"},
 		Run:         runBranchChurn,
 	})
@@ -83,7 +85,15 @@ type churnRun struct {
 	// endpoint the default branch is allowed to have at the end.
 	seedEndpoint string
 	seedEP       controller.Endpoint
+	cancelled    atomic.Int64
+	lostRace     atomic.Int64
 }
+
+const (
+	churnCancelNone = iota
+	churnCancelBranch
+	churnCancelEndpoint
+)
 
 // runBranchChurn creates one cluster, runs churnLanes × churnCycles branch
 // lifecycles across it, and then asserts the control plane is exactly where it
@@ -188,7 +198,10 @@ func runBranchChurn(t *core.T) (err error) {
 			}
 		}
 		s.Set("transients_retried", run.retried.Load())
+		s.Set("cancels_honoured", run.cancelled.Load())
+		s.Set("cancels_lost_race", run.lostRace.Load())
 		t.Metric("churn_cycles", float64(churnLanes*churnCycles), "count")
+		t.Metric("churn_cancels_honoured", float64(run.cancelled.Load()), "count")
 		return nil
 	}); err != nil {
 		return err
@@ -224,20 +237,29 @@ func runBranchChurn(t *core.T) (err error) {
 			return fmt.Errorf("the default branch lists %v after the churn, want only seed_parent's writer %s — the churn only ever created endpoints on its own branches",
 				ids, run.seedEndpoint)
 		}
-		failed, err := cl.ListTasks(t.Context, controller.ListTasksOptions{ClusterID: proj.ID, Status: controller.TaskFailed, Limit: 50})
+		failed, err := churnFailedTasks(t.Context, cl, proj.ID)
 		if err != nil {
 			return fmt.Errorf("list failed tasks after the churn: %w", err)
 		}
 		// Each transient the lanes retried past left its own failed task, so the
 		// bar is "no failure the churn did not already observe and recover from".
 		retried := int(run.retried.Load())
-		s.Set("failed_tasks", failed.Total)
-		if failed.Total > retried {
-			kinds := make([]string, 0, len(failed.Tasks))
-			for _, tk := range failed.Tasks {
-				kinds = append(kinds, tk.Kind)
+		var broken []string
+		cancelled := 0
+		for _, tk := range failed {
+			if churnCancelled(tk) {
+				cancelled++
+				continue
 			}
-			return fmt.Errorf("the cluster has %d failed task(s) after the churn (%v) but the lanes only retried past %d transient error(s), so at least one lifecycle failed unobserved", failed.Total, kinds, retried)
+			broken = append(broken, tk.Kind)
+		}
+		s.Set("failed_tasks", len(failed))
+		s.Set("cancelled_tasks", cancelled)
+		if cancelled != int(run.cancelled.Load()) {
+			return fmt.Errorf("the cluster has %d failed task(s) carrying cancel_requested_at but the lanes saw %d cancels honoured", cancelled, run.cancelled.Load())
+		}
+		if len(broken) > retried {
+			return fmt.Errorf("the cluster has %d failed task(s) that were not cancelled (%v) but the lanes only retried past %d transient error(s), so at least one lifecycle failed unobserved", len(broken), broken, retried)
 		}
 		if err := cl.Readyz(t.Context); err != nil {
 			return fmt.Errorf("the controller is not ready after the churn: %w", err)
@@ -262,7 +284,7 @@ func runBranchChurn(t *core.T) (err error) {
 func runChurnLane(ctx context.Context, t *core.T, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Cluster, lane int, logf func(string, ...any)) error {
 	for cycle := 0; cycle < churnCycles; cycle++ {
 		name := fmt.Sprintf("churn-l%d-c%d-%s", lane, cycle, suffix(t))
-		if err := churnCycle(ctx, run, env, cl, poolID, proj, name); err != nil {
+		if err := churnCycle(ctx, run, env, cl, poolID, proj, name, (lane+cycle)%3); err != nil {
 			return fmt.Errorf("cycle %d (branch %s): %w", cycle, name, err)
 		}
 		if err := cl.Readyz(ctx); err != nil {
@@ -275,8 +297,33 @@ func runChurnLane(ctx context.Context, t *core.T, run *churnRun, env ampControlP
 
 // churnCycle is one full lifecycle. Every create and delete is waited on, so a
 // step that never converges fails here rather than surfacing as an orphan later.
-func churnCycle(ctx context.Context, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Cluster, name string) error {
+func churnCycle(ctx context.Context, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Cluster, name string, cancel int) error {
+	branchReady := false
+	if cancel == churnCancelBranch {
+		var ref string
+		if err := withChurnRetry(ctx, run, func() error {
+			task, loc, err := cl.CreateBranch(ctx, poolID, proj.ID, controller.CreateBranchRequest{Name: name, ParentBranchID: proj.DefaultBranch.BranchID})
+			ref = controller.TaskRef(task, loc)
+			return err
+		}); err != nil {
+			return fmt.Errorf("plan the branch create to cancel: %w", err)
+		}
+		done, err := churnCancel(ctx, run, cl, ref, "branch create")
+		if err != nil {
+			return err
+		}
+		if branchReady = done.Status == controller.TaskSucceeded; !branchReady {
+			if br, err := findBranch(ctx, cl, poolID, proj.ID, name); err == nil {
+				if _, err := cl.DeleteBranchAndWait(ctx, poolID, proj.ID, br.BranchID); err != nil {
+					return fmt.Errorf("delete the branch a cancelled create left behind: %w", err)
+				}
+			}
+		}
+	}
 	if err := withChurnRetry(ctx, run, func() error {
+		if branchReady {
+			return nil
+		}
 		_, err := cl.CreateBranchAndWait(ctx, poolID, proj.ID, controller.CreateBranchRequest{
 			Name:           name,
 			ParentBranchID: proj.DefaultBranch.BranchID,
@@ -291,7 +338,38 @@ func churnCycle(ctx context.Context, run *churnRun, env ampControlPlaneEnv, cl *
 	}
 
 	var ep controller.Endpoint
+	if cancel == churnCancelEndpoint {
+		var ref string
+		if err := withChurnRetry(ctx, run, func() error {
+			task, loc, err := cl.CreateEndpoint(ctx, poolID, proj.ID, br.BranchID, controller.CreateEndpointRequest{Role: "read_write"})
+			ref = controller.TaskRef(task, loc)
+			return err
+		}); err != nil {
+			return fmt.Errorf("plan the endpoint create to cancel: %w", err)
+		}
+		done, err := churnCancel(ctx, run, cl, ref, "endpoint create")
+		if err != nil {
+			return err
+		}
+		eps, err := cl.ListAllEndpoints(ctx, poolID, proj.ID, br.BranchID)
+		if err != nil {
+			return err
+		}
+		for _, e := range eps {
+			if done.Status == controller.TaskSucceeded {
+				ep = e
+				continue
+			}
+			// A cancelled create can leave its row until the sweeper takes it (meko#486).
+			if _, err := cl.DeleteEndpointAndWait(ctx, poolID, proj.ID, br.BranchID, e.ID); err != nil {
+				return fmt.Errorf("delete endpoint %s a cancelled create left: %w", e.ID, err)
+			}
+		}
+	}
 	if err := withChurnRetry(ctx, run, func() error {
+		if ep.ID != "" {
+			return nil
+		}
 		if _, err := cl.CreateEndpointAndWait(ctx, poolID, proj.ID, br.BranchID, controller.CreateEndpointRequest{Role: "read_write"}); err != nil {
 			return err
 		}
@@ -319,6 +397,56 @@ func churnCycle(ctx context.Context, run *churnRun, env ampControlPlaneEnv, cl *
 		return fmt.Errorf("delete branch %s: %w", name, err)
 	}
 	return nil
+}
+
+// churnCancel requires a just-cancelled task to end succeeded (lost the race) or failed as cancelled.
+func churnCancel(ctx context.Context, run *churnRun, cl *controller.Client, ref, what string) (controller.Task, error) {
+	if _, err := cl.CancelTask(ctx, ref); err != nil {
+		var apiErr *controller.APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
+			return controller.Task{}, fmt.Errorf("cancel the %s %s: %w", what, ref, err)
+		}
+	}
+	done, err := cl.WaitTask(ctx, ref)
+	switch done.Status {
+	case controller.TaskSucceeded:
+		run.lostRace.Add(1)
+		return done, nil
+	case controller.TaskFailed:
+		msg := ""
+		if done.Error != nil {
+			msg = *done.Error
+		}
+		if !churnCancelled(done) {
+			if transientChurnErr(errors.New(msg)) {
+				run.retried.Add(1)
+				return done, nil
+			}
+			return done, fmt.Errorf("the cancelled %s %s failed with %q and cancel_requested_at %v, not as cancelled", what, ref, msg, done.CancelRequestedAt)
+		}
+		run.cancelled.Add(1)
+		return done, nil
+	}
+	return done, fmt.Errorf("the cancelled %s %s never reached a terminal status: %w", what, ref, err)
+}
+
+func churnCancelled(t controller.Task) bool {
+	return t.CancelRequestedAt != nil && t.Error != nil && strings.Contains(strings.ToLower(*t.Error), "cancel")
+}
+
+func churnFailedTasks(ctx context.Context, cl *controller.Client, clusterID string) ([]controller.Task, error) {
+	const page = 100
+	var out []controller.Task
+	for offset := 0; ; offset += page {
+		list, err := cl.ListTasks(ctx, controller.ListTasksOptions{ClusterID: clusterID, Status: controller.TaskFailed, Limit: page, Offset: offset})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, list.Tasks...)
+		if len(list.Tasks) < page || len(out) >= list.Total {
+			return out, nil
+		}
+	}
 }
 
 // churnWrite writes and verifies the cycle's dataset through the endpoint — the

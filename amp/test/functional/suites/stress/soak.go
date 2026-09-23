@@ -369,7 +369,7 @@ func (r *soakRun) churn(ctx context.Context) {
 	for cycle := 0; ctx.Err() == nil; cycle++ {
 		name := fmt.Sprintf("soak-churn-%d-%s", cycle, r.t.ResourceSuffix())
 		began := time.Now()
-		if err := churnCycle(ctx, run, r.env, r.cl, r.poolID, cluster, name); err != nil {
+		if err := churnCycle(ctx, run, r.env, r.cl, r.poolID, cluster, name, churnCancelNone); err != nil {
 			if ctx.Err() != nil {
 				return
 			}

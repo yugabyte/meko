@@ -74,9 +74,7 @@ var endpointAuthPoll = 5 * time.Second
 
 func WaitEndpointAuth(ctx context.Context, kube *k8s.Kubectl, endpointID string, a EndpointAuth, timeout time.Duration, logf func(string, ...any)) error {
 	deadline := time.Now().Add(timeout)
-	probe := fmt.Sprintf("PGPASSWORD=%s timeout %d psql -h %s -p %d -U %s -d %s -tAc 'select 1'",
-		shellQuote(a.Password), int(endpointAuthProbeTimeout.Seconds()),
-		a.Host, a.Port, a.User, a.Database)
+	probe := psqlProbe(a, "select 1")
 	var last error
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -111,6 +109,28 @@ func WaitEndpointAuth(ctx context.Context, kube *k8s.Kubectl, endpointID string,
 		case <-time.After(endpointAuthPoll):
 		}
 	}
+}
+
+func psqlProbe(a EndpointAuth, sql string) string {
+	return fmt.Sprintf("PGPASSWORD=%s PGCONNECT_TIMEOUT=10 timeout %d psql -h %s -p %d -U %s -d %s -v ON_ERROR_STOP=1 -tAc %s",
+		shellQuote(a.Password), int(endpointAuthProbeTimeout.Seconds()),
+		a.Host, a.Port, a.User, a.Database, shellQuote(sql))
+}
+
+// EndpointPsql runs psql from fromEndpointID's pod: off loopback, so pg_hba asks for the password.
+func EndpointPsql(ctx context.Context, kube *k8s.Kubectl, fromEndpointID string, a EndpointAuth, sql string) (string, error) {
+	pod, err := EndpointPodName(ctx, kube, fromEndpointID)
+	if err != nil {
+		return "", fmt.Errorf("resolve a compute pod of endpoint %s: %w", fromEndpointID, err)
+	}
+	res, err := kube.ForPod(pod, endpointContainer).Run(ctx, psqlProbe(a, sql))
+	if err != nil {
+		return "", fmt.Errorf("exec psql in %s: %w", pod, err)
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("psql in %s as %s to %s:%d exited %d: %s", pod, a.User, a.Host, a.Port, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return strings.TrimSpace(res.Stdout), nil
 }
 
 func shellQuote(v string) string {

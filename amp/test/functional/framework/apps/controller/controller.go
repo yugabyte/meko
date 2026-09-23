@@ -230,6 +230,9 @@ const (
 	ConnectivityClusterIP   = "cluster_ip"   // in-cluster only (the default)
 	ConnectivityNLBInternal = "nlb_internal" // a Postgres-only Service behind the cloud's internal L4 load balancer
 	ConnectivityNLBExternal = "nlb_external" // the same, internet-facing
+	// A port on a shared ingress shard (meko#462); refused unless the controller enables shared ingress.
+	ConnectivityIngressInternal = "ingress_internal"
+	ConnectivityIngressExternal = "ingress_external"
 )
 
 // EndpointConnectivity is an endpoint's client reachability. AllowedCIDRs is the
@@ -394,6 +397,8 @@ type Task struct {
 	// Result is the final step's opaque outcome JSON, absent until a step records
 	// one. For a resize_endpoint task it carries in_place_resize + in_place_message.
 	Result json.RawMessage `json:"result"`
+	// Nil unless someone asked POST /tasks/{id}/cancel for this task.
+	CancelRequestedAt *time.Time `json:"cancel_requested_at"`
 }
 
 // InPlaceResize decodes the in-place outcome a resize_endpoint task recorded.

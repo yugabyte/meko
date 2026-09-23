@@ -65,7 +65,7 @@ func init() {
 		Tags:       []string{"perf"},
 		OwningTeam: core.TeamControlPlane,
 		Description: "Time every control-plane operation on fresh objects, perf.ops_latency.repeats times each: cluster create and delete, branch create off a near-empty parent and fork off a seeded one, branch delete, " +
-			"endpoint create cold and warm, ready-to-first-SQL, resize, settings update and endpoint delete. Each operation gates the median of its repeats as an ops.<op> ms datapoint, with its coefficient of " +
+			"endpoint create cold and warm, ready-to-first-SQL, resize, settings update, endpoint delete, and cancelling a just-planned endpoint create (request to terminal). Each operation gates the median of its repeats as an ops.<op> ms datapoint, with its coefficient of " +
 			"variation and the controller's own task window emitted beside it. The seeded fork's first SQL is its own ops.endpoint_first_sql_seeded series rather than mixed into the empty branch's, and both carry the " +
 			"harness cost of standing up the port-forward they connect through, so they move with the harness revision as well as with the product.",
 		Params:  []string{"perf.ops_latency", "perf.gate"},
@@ -181,6 +181,7 @@ func (r *opsRun) run() error {
 		r.resizeForkEndpoint,
 		r.updateForkSettings,
 		r.deleteForkEndpoint,
+		r.cancelEndpointCreate,
 		r.deleteCluster,
 	} {
 		if err := fn(); err != nil {
@@ -440,6 +441,44 @@ func (r *opsRun) updateForkSettings() error {
 func (r *opsRun) deleteForkEndpoint() error {
 	return r.async("endpoint_delete", func() (controller.Task, string, error) {
 		return r.cl.DeleteEndpoint(r.t.Context, r.poolID, r.clusterID, r.seededFork, r.forkEP.ID)
+	})
+}
+
+// A cancel that loses the race records no sample: it timed a create, not a cancel.
+func (r *opsRun) cancelEndpointCreate() error {
+	ctx := r.t.Context
+	return r.step("task_cancel", func(s *core.StepHandle) error {
+		task, loc, err := r.cl.CreateEndpoint(ctx, r.poolID, r.clusterID, r.seededFork, controller.CreateEndpointRequest{
+			Role:      "read_write",
+			Resources: &controller.EndpointResources{CPU: r.params.EndpointCPU, Memory: r.params.EndpointMem},
+		})
+		if err != nil {
+			return err
+		}
+		ref := controller.TaskRef(task, loc)
+		start := time.Now()
+		_, cerr := r.cl.CancelTask(ctx, ref)
+		done, werr := r.cl.WaitTask(ctx, ref)
+		ms := msSince(start)
+		s.Set("task", ref)
+		switch {
+		case done.Status == controller.TaskFailed && done.CancelRequestedAt != nil:
+			r.record("task_cancel", ms)
+		case done.Status == controller.TaskSucceeded:
+			r.logf("ops_latency: [i%d] the cancel of create %s lost the race (%v)", r.iter, ref, cerr)
+		default:
+			return fmt.Errorf("cancelled create %s ended %q: cancel %v, wait %v", ref, done.Status, cerr, werr)
+		}
+		eps, err := r.cl.ListAllEndpoints(ctx, r.poolID, r.clusterID, r.seededFork)
+		if err != nil {
+			return err
+		}
+		for _, ep := range eps {
+			if _, err := r.cl.DeleteEndpointAndWait(ctx, r.poolID, r.clusterID, r.seededFork, ep.ID); err != nil {
+				return fmt.Errorf("delete endpoint %s the cancel left: %w", ep.ID, err)
+			}
+		}
+		return nil
 	})
 }
 

@@ -34,14 +34,14 @@ func (r *rejectingCtl) CreateEndpoint(_ context.Context, _, _, _ string, req con
 	return controller.Task{}, "", r.reply()
 }
 
-func TestConnectivityValidationDemandsFour400s(t *testing.T) {
+func TestConnectivityValidationDemandsSix400s(t *testing.T) {
 	proj := ampCluster{poolID: "p", projID: "c", branchID: "b"}
 	ctl := &rejectingCtl{status: http.StatusBadRequest}
 	if err := connectivityValidationSteps(context.Background(), ctl, proj, "conn-x", 16); err != nil {
 		t.Fatalf("all-400 controller: %v", err)
 	}
-	if len(ctl.endpoints) != 3 || len(ctl.clusters) != 1 {
-		t.Fatalf("sent %d endpoint and %d cluster creates, want 3 and 1", len(ctl.endpoints), len(ctl.clusters))
+	if len(ctl.endpoints) != 5 || len(ctl.clusters) != 1 {
+		t.Fatalf("sent %d endpoint and %d cluster creates, want 5 and 1", len(ctl.endpoints), len(ctl.clusters))
 	}
 	if ctl.clusters[0].WithWriter || ctl.clusters[0].Connectivity == nil {
 		t.Errorf("the cluster case must carry connectivity WITHOUT with_writer: %+v", ctl.clusters[0])
