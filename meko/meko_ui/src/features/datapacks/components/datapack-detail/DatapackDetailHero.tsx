@@ -3,14 +3,17 @@
  * description, and ID / created / access on one muted line. Renders an `actions` slot on the right.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, Copy, Database, Sparkles } from "lucide-react";
-import { ROUTES } from "@/app/routes/paths";
+import { Link } from "react-router-dom";
+import { Check, Copy, Database, FolderTree, Sparkles } from "lucide-react";
+import { collectionDetailPath, ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { copyToClipboard } from "@/lib/clipboard";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
 import { DatapackShareGrant } from "@/lib/api/mekoApi";
+import type { DatapackPath } from "@/lib/api/collectionsApi";
+import { UNFILED_LABEL } from "@/features/collections/collectionsCopy";
 
 /**
  * When true, shows the green “active” status pill next to the title.
@@ -28,9 +31,37 @@ type Props = {
   /** Shown when `created_at` is within the last 24 hours. */
   isNewDatapack?: boolean;
   statusLoading: boolean;
+  /** Who owns a datapack shared WITH you. Omitted on your own, where an owner
+   *  line would only ever read as your own name. */
+  ownerName?: string | null;
+  /** Off with the collections feature disabled, which is what keeps the whole
+   *  Collection entry out rather than showing it permanently unfiled. */
+  showCollection?: boolean;
+  /** Where this datapack is filed. Undefined means unfiled. */
+  collectionPath?: DatapackPath;
   /** Hero actions (e.g. Connect, Share, settings menu). */
   actions: React.ReactNode;
 };
+
+/** The separator between metadata entries. Its own component because the line
+ *  now carries up to five of them and an inline copy each time is noise. */
+function MetaDot() {
+  return (
+    <span className="text-muted-foreground/45 select-none" aria-hidden>
+      ·
+    </span>
+  );
+}
+
+/** One `Label value` pair on the metadata line. */
+function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1">
+      <span className="font-semibold text-foreground/90">{label}</span>
+      {children}
+    </span>
+  );
+}
 
 function ActiveStatusPill() {
   return (
@@ -58,6 +89,9 @@ export function DatapackDetailHero({
   createdLabel,
   isNewDatapack = false,
   statusLoading,
+  ownerName,
+  showCollection = false,
+  collectionPath,
   actions,
 }: Props) {
   const [descExpanded, setDescExpanded] = useState(false);
@@ -172,20 +206,52 @@ export function DatapackDetailHero({
                   </button>
                 ) : null}
               </span>
-              <span className="text-muted-foreground/45 select-none" aria-hidden>
-                ·
-              </span>
-              <span className="inline-flex flex-wrap items-baseline gap-x-1">
-                <span className="font-semibold text-foreground/90">Created</span>
+              <MetaDot />
+              <MetaItem label="Created">
                 <span className="text-muted-foreground">{statusLoading ? "…" : createdLabel}</span>
-              </span>
-              <span className="text-muted-foreground/45 select-none" aria-hidden>
-                ·
-              </span>
-              <span className="inline-flex flex-wrap items-baseline gap-x-1">
-                <span className="font-semibold text-foreground/90">Access</span>
+              </MetaItem>
+              <MetaDot />
+              <MetaItem label="Access">
                 <span className="text-muted-foreground">{accessLabel}</span>
-              </span>
+              </MetaItem>
+
+              {/* Directly after Access, because on a shared datapack the two
+                  answer one question together: what may I do here, and whose
+                  is it. */}
+              {ownerName ? (
+                <>
+                  <MetaDot />
+                  <MetaItem label="Owner">
+                    <span className="text-muted-foreground">{ownerName}</span>
+                  </MetaItem>
+                </>
+              ) : null}
+
+              {showCollection ? (
+                <>
+                  <MetaDot />
+                  <MetaItem label="Collection">
+                    {collectionPath ? (
+                      // Links to the collection rather than just naming it:
+                      // having found where a datapack lives, the next thing
+                      // wanted is usually the rest of what lives there.
+                      <Link
+                        to={collectionDetailPath(collectionPath.collection_id)}
+                        title={collectionPath.path}
+                        className={cn(
+                          "inline-flex max-w-[16rem] items-baseline gap-1 text-muted-foreground",
+                          "underline-offset-2 transition-colors hover:text-foreground hover:underline",
+                        )}
+                      >
+                        <FolderTree className="h-3 w-3 shrink-0 self-center" aria-hidden />
+                        <span className="truncate font-mono">{collectionPath.path}</span>
+                      </Link>
+                    ) : (
+                      <span className="italic text-muted-foreground/70">{UNFILED_LABEL}</span>
+                    )}
+                  </MetaItem>
+                </>
+              ) : null}
             </p>
           </div>
         </div>

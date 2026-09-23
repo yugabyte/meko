@@ -55,7 +55,7 @@ import {
 import { kbFilesKeys, kbSummaryKey } from "@/features/datapacks/lib/knowledgeQueryKeys";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { toast } from "@/hooks/use-toast";
-import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
+import { formatDatapackCreatedDayUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackMetricsSection, DatapackMetricsTilesRow } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
@@ -81,6 +81,8 @@ import {
 } from "@/features/datapacks/components/datapack-detail/dialogs";
 // Breadcrumbs, title, badges, description, metadata row, and hero action slot.
 import { DatapackDetailHero } from "@/features/datapacks/components/datapack-detail/DatapackDetailHero";
+import { useCollectionsEnabled } from "@/lib/collectionsFeature";
+import { useDatapackPaths } from "@/features/collections/hooks/useCollections";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
@@ -185,6 +187,16 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
 
   // Only the owner should provision project keys; null = not yet loaded.
   const isOwner = datapack !== null ? (datapackGrant === null || datapackGrant === "owner") : null;
+
+  // Where this datapack is filed. One cached request shared with the Datapacks
+  // page and the sidebar, and not issued at all with the feature off.
+  const collectionsEnabled = useCollectionsEnabled();
+  const { data: datapackPaths = {} } = useDatapackPaths({ enabled: collectionsEnabled });
+  const collectionPath = datapackPaths[routeDatapackId];
+  // Only on a datapack shared WITH you: on your own, naming the owner tells
+  // you your own name.
+  const sharedOwnerName =
+    isOwner === false ? (datapack?.datapack_owner_name || null) : null;
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(displayDatapackName, routeDatapackId, isOwner);
 
   useEffect(() => {
@@ -368,7 +380,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   }, [isConnectOpen, datapack?.datapack_id, routeDatapackId]);
 
   const displayId = datapack?.datapack_id ?? "—";
-  const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
+  const createdLabel = formatDatapackCreatedDayUtc(datapack?.created_at);
   const isNewDatapack = isDatapackCreatedWithinLast24Hours(datapack?.created_at);
   const isDefaultDatapack = displayDatapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
@@ -415,6 +427,9 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           datapackGrant={datapackGrant}
           isNewDatapack={isNewDatapack}
           statusLoading={statusLoading}
+          ownerName={sharedOwnerName}
+          showCollection={collectionsEnabled}
+          collectionPath={collectionPath}
           actions={
             <>
               {isDatapackGrantEligibleToShare({ grant: datapackGrant }) && (

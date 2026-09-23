@@ -38,6 +38,14 @@ import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTile
 import { DatapackConnectDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
+import { useCollectionsEnabled } from "@/lib/collectionsFeature";
+import {
+  DATAPACK_PATHS_QUERY_KEY,
+  useDatapackPaths,
+  useCollections,
+} from "@/features/collections/hooks/useCollections";
+import { FileIntoCollectionDialog } from "@/features/collections/components/FileIntoCollectionDialog";
+import { DATAPACK_MOVED_TOAST } from "@/features/collections/collectionsCopy";
 
 // Local key for tracking whether the user has seen the "What is a Datapack?"
 // explainer at least once. Used to expand the panel by default on the very
@@ -66,6 +74,25 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     () => getFreeTierStatus(usage, currentUser?.user_type),
     [usage, currentUser?.user_type],
   );
+  // Collections: both queries are gated on the flag, so a workspace without the
+  // feature issues no /collections requests at all.
+  const collectionsEnabled = useCollectionsEnabled();
+  const { data: collectionLists } = useCollections({ enabled: collectionsEnabled });
+  // The filter spans both lists (you may want to narrow to a shared collection),
+  // but only an OWNED collection can be filed into.
+  const ownedCollections = useMemo(() => collectionLists?.owned ?? [], [collectionLists]);
+  const filterableCollections = useMemo(
+    () => [...ownedCollections, ...(collectionLists?.shared ?? [])],
+    [ownedCollections, collectionLists],
+  );
+  const canFileIntoACollection = ownedCollections.length > 0;
+  const { data: datapackPaths = {} } = useDatapackPaths({ enabled: collectionsEnabled });
+  // Non-null while the file/move dialog is open, and the datapack
+  // it was opened for.
+  const [datapackToFile, setDatapackToFile] = useState<Datapack | null>(null);
+  // Where that datapack sits today, if anywhere. Undefined means unfiled,
+  // which is what turns the dialog from a move into a file.
+  const filingTarget = datapackToFile ? datapackPaths[datapackToFile.datapack_id] : undefined;
   const [isProvisioningDefaultDatapack, setIsProvisioningDefaultDatapack] = useState(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const error =
@@ -117,6 +144,10 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     const refresh = () => {
       setPollError(null);
       void queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] });
+      // Accepting a share is one of the events that fires this, and it changes
+      // which datapacks the caller can see, so their resolved paths are stale
+      // too, not just the list.
+      void queryClient.invalidateQueries({ queryKey: [DATAPACK_PATHS_QUERY_KEY] });
     };
     addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
     return () => removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
@@ -485,7 +516,30 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           }
           onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_id))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
+          showCollections={collectionsEnabled}
+          collections={filterableCollections}
+          canFile={canFileIntoACollection}
+          datapackPaths={datapackPaths}
+          onFileDatapack={setDatapackToFile}
         />
+
+        {/* Mounted only with the feature on, so a workspace without Collections
+            never builds the dialog's queries. */}
+        {collectionsEnabled ? (
+          <FileIntoCollectionDialog
+            open={datapackToFile !== null}
+            onOpenChange={(open) => {
+              if (!open) setDatapackToFile(null);
+            }}
+            datapack={datapackToFile}
+            // Already filed: this is a move, and it starts from where the
+            // datapack currently lives rather than from a blank picker.
+            title={filingTarget ? "Move datapack" : undefined}
+            confirmLabel={filingTarget ? "Move here" : undefined}
+            successTitle={filingTarget ? DATAPACK_MOVED_TOAST : undefined}
+            defaultCollectionId={filingTarget?.collection_id}
+          />
+        ) : null}
 
         {/* Workspace-level Connect dialog. `showDatapackName={false}` hides
             the "Datapack: <name>" row because the user clicked a Meko-wide

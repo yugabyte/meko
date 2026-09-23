@@ -16,6 +16,29 @@ export function formatDatapackCreatedAtUtc(iso: string | undefined): string {
   return `${formatted} UTC`;
 }
 
+/**
+ * Calendar date with weekday (UTC), e.g. `Mon, Jul 6, 2026`.
+ *
+ * `formatDatapackCreatedAtUtc` without the time of day, for the datapack
+ * header, where the minute a datapack was created is not something anyone
+ * reads. Carries no "UTC" suffix, like the shorthand below: the date is the
+ * UTC one, so a datapack created late in the day can read as tomorrow to a
+ * viewer east of it. Accepted, because a timezone suffix on a bare date buys
+ * less than it costs in noise.
+ */
+export function formatDatapackCreatedDayUtc(iso: string | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /** Calendar date only (UTC), e.g. `May 3, 2025` — for compact tiles and summaries. */
 export function formatDatapackCreatedDateShorthand(iso: string | undefined): string {
   if (!iso) return "—";
