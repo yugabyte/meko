@@ -43,9 +43,12 @@ read is just a one-op batch; writes are the same shape.
   `num_hash_columns()` / `num_key_columns()` resolve columns by name.
 - **`client.read(&[ReadOp], read_time_ht) -> ReadBatch`** — the read primitive:
   N read ops as the ops of one `Perform`; `batch.ops[i]` corresponds to
-  `ops[i]`, `batch.used_read_time_ht` is the one snapshot. `read_page` and
+  `ops[i]` — the pairing is positional and enforced here, so callers may index
+  their own per-op state by result position — and `batch.used_read_time_ht` is
+  the one snapshot. `read_page` and
   `read_scan` are RPC-free sugar over it (the latter pages a whole scan pinned
-  to the first page's snapshot).
+  to the first page's snapshot, and fails it once a continuation has returned
+  more than `THIN_SCAN_BARREN_ROUNDS` empty pages without advancing).
 - **`client.upsert(&[UpsertRow])`** — a batch of upserts as one write `Perform`;
   rows may span tables.
 - Builders: `RangeRead::new(table, hash_values).cond(...).targets(...).limit(...)`

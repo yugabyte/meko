@@ -2407,7 +2407,7 @@ impl AsyncRead for YbSegmentReader {
                 Poll::Ready(Ok(Err(e))) => {
                     me.fetch = None;
                     return Poll::Ready(Err(std::io::Error::other(format!(
-                        "YB WAL fetch failed for segno {} offset {}: {e}",
+                        "YB WAL fetch failed for segno {} offset {}: {e:#}",
                         me.segno, me.pos
                     ))));
                 }
@@ -2432,28 +2432,6 @@ impl AsyncRead for YbSegmentReader {
 /// hit cache every time after the first miss in a run.
 const FETCH_FORWARD_CHUNKS: usize = 64;
 const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
-
-/// How many rounds in a row a paging op may return NOTHING, while still
-/// handing back a continuation, before the fetch gives up on it. Matches
-/// `THIN_SCAN_BARREN_ROUNDS` in the page store.
-const MAX_BARREN_ROUNDS: usize = 64;
-
-/// Fold one paging round into an op's barren counter, reporting whether the op
-/// has now gone unproductive for too long to be believed.
-///
-/// `got` is the row count that round returned. Any row resets the counter: a
-/// round that returns rows is progress however slow the scan is, so the number
-/// of PRODUCTIVE rounds is deliberately unbounded. Only an unbroken run of
-/// empty rounds under a live continuation is evidence a token is not advancing.
-///
-/// Capping total rounds instead would kill healthy fetches, because paging to
-/// exhaustion is the ordinary case on both arms of `fetch_chunks_thin`: the
-/// forward arm wants `FETCH_FORWARD_CHUNKS` rows inside a window that normally
-/// holds far fewer, and most covering arms hold nothing for a given segno.
-fn barren_round_exceeded(barren: &mut usize, got: usize) -> bool {
-    *barren = if got == 0 { *barren + 1 } else { 0 };
-    *barren > MAX_BARREN_ROUNDS
-}
 
 /// Fetch the chunk covering `(segno, byte_offset)` plus a forward
 /// prefetch window from `amp_storage.wals`.
@@ -2661,7 +2639,7 @@ async fn fetch_chunks_thin(
     //
     // `wals` is range-sharded, so an op's scan is bounded to a contiguous key
     // span but NOT pinned to one tablet, and this loop genuinely runs several
-    // rounds — see `THIN_SCAN_BARREN_ROUNDS`-style reasoning below. It also
+    // rounds — see the barren-round reasoning in `yb_thin_client::barren`. It also
     // picks up forward rows that a size-capped page used to drop. Reads are
     // rare relative to writes, so the extra round trips are cheap insurance —
     // and nothing here touches the write path.
@@ -2686,7 +2664,7 @@ async fn fetch_chunks_thin(
         let mut rows: Vec<Vec<yb_thin_client::Row>> = vec![Vec::new(); reads.len()];
         let mut paging: Vec<Option<bytes::Bytes>> = vec![None; reads.len()];
         let mut active: Vec<usize> = (0..reads.len()).collect();
-        // Per-op consecutive-empty-round counters; see `barren_round_exceeded`.
+        // Per-op consecutive-empty-round counters; see `check_barren_round`.
         let mut barren: Vec<usize> = vec![0; reads.len()];
         let mut read_time_ht = 0u64;
         let mut round = 0usize;
@@ -2716,24 +2694,27 @@ async fn fetch_chunks_thin(
             // Pin every continuation to the snapshot round 1 ran at, so the
             // whole fan-out still resolves at ONE read point (#139).
             read_time_ht = batch.used_read_time_ht;
+            // `active[slot]` below is safe because `ops` is 1:1 with `active`
+            // and `TsClient::read` guarantees one result per op sent.
+            debug_assert_eq!(ops.len(), active.len());
             let mut next: Vec<usize> = Vec::new();
             for (slot, res) in batch.ops.into_iter().enumerate() {
-                let Some(&i) = active.get(slot) else { continue };
+                let i = active[slot];
                 let got = res.rows.len();
                 rows[i].extend(res.rows);
                 if rows[i].len() < wanted(i) && res.paging_state.is_some() {
-                    anyhow::ensure!(
-                        !barren_round_exceeded(&mut barren[i], got),
-                        "WAL chunk fetch for segno {segno} offset {byte_offset} returned \
-                         {MAX_BARREN_ROUNDS} empty pages in a row on the {} arm of bucket {} \
-                         while still continuing — the continuation token is not advancing",
-                        if i < WALS_BUCKETS as usize {
+                    yb_thin_client::check_barren_round(&mut barren[i], got).with_context(|| {
+                        let arm = if i < WALS_BUCKETS as usize {
                             "covering"
                         } else {
                             "forward"
-                        },
-                        i % WALS_BUCKETS as usize
-                    );
+                        };
+                        format!(
+                            "WAL chunk fetch for segno {segno} offset {byte_offset} \
+                             on the {arm} arm of bucket {}",
+                            i % WALS_BUCKETS as usize
+                        )
+                    })?;
                     paging[i] = res.paging_state;
                     next.push(i);
                 }
@@ -2890,59 +2871,6 @@ mod tests {
         // segment-relative).
         let chunks = [pc(7, 100, 400), pc(8, 0, 100), pc(8, 100, 32)];
         assert_eq!(coalesce_runs(&chunks), vec![0..1, 1..3]);
-    }
-
-    /// A productive round must never count against the paging cap, no matter
-    /// how many rounds the scan takes. Regression: the cap used to be on TOTAL
-    /// rounds, so a fetch that returned rows on every round still died once it
-    /// crossed the limit — which is what paging to exhaustion under load looks
-    /// like, and it wedged replay behind a retry loop that could not heal
-    /// because every reconnect reissued the identical fetch.
-    #[test]
-    fn productive_paging_rounds_are_unbounded() {
-        let mut barren = 0usize;
-        for round in 1..=(20 * MAX_BARREN_ROUNDS) {
-            assert!(
-                !barren_round_exceeded(&mut barren, 1),
-                "round {round} returned a row and must count as progress"
-            );
-        }
-        assert_eq!(barren, 0, "a productive round leaves nothing to charge");
-    }
-
-    /// Any row resets the run, so empty rounds only accumulate while they are
-    /// UNBROKEN. A scan crossing empty tablets between hits pages arbitrarily
-    /// long without tripping the cap.
-    #[test]
-    fn a_single_row_resets_the_barren_run() {
-        let mut barren = 0usize;
-        for _ in 0..(4 * MAX_BARREN_ROUNDS) {
-            // Walk right up to the cap, then land one row.
-            for _ in 0..MAX_BARREN_ROUNDS {
-                assert!(!barren_round_exceeded(&mut barren, 0));
-            }
-            assert_eq!(barren, MAX_BARREN_ROUNDS);
-            assert!(!barren_round_exceeded(&mut barren, 1));
-            assert_eq!(barren, 0);
-        }
-    }
-
-    /// The cap still fires on a genuinely stuck token: an unbroken run of empty
-    /// rounds under a live continuation, which is the only shape that means the
-    /// continuation is not advancing.
-    #[test]
-    fn an_unbroken_barren_run_trips_the_cap() {
-        let mut barren = 0usize;
-        for round in 1..=MAX_BARREN_ROUNDS {
-            assert!(
-                !barren_round_exceeded(&mut barren, 0),
-                "empty round {round} is still within the budget"
-            );
-        }
-        assert!(
-            barren_round_exceeded(&mut barren, 0),
-            "one empty round past the budget must fail the fetch"
-        );
     }
 
     fn pgcfg() -> tokio_postgres::Config {

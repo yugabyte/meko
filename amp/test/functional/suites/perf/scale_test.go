@@ -147,18 +147,21 @@ func TestScaleDepthLadderReachesTheKnownWedgeScale(t *testing.T) {
 
 // The wedge markers are the product's own words. If they drift, the detector
 // silently stops detecting, so they are pinned here.
-func TestWedgeMarkersCoverTheReportedSignature(t *testing.T) {
-	reported := "YB WAL fetch failed for segno 4410 offset 7337520: WAL chunk fetch for segno 4410 " +
-		"offset 7337520 returned 64 empty pages in a row on the covering arm of bucket 5 " +
+//
+// EVERY marker must match, not just one: two come from `poll_read`'s outer
+// format! and two from the barren-round bail, so an any-match test lets either
+// half drift while the other keeps it green.
+//
+// `emitted` is the line the code composes today, not a transcript: meko#739
+// logged the older flat message with a different count.
+func TestWedgeMarkersCoverTheEmittedSignature(t *testing.T) {
+	emitted := "YB WAL fetch failed for segno 4410 offset 7337520: WAL chunk fetch for segno 4410 " +
+		"offset 7337520 on the covering arm of bucket 5: returned 65 empty pages in a row " +
 		"while still continuing — the continuation token is not advancing"
-	hit := false
 	for _, m := range wedgeMarkers {
-		if strings.Contains(reported, m) {
-			hit = true
+		if !strings.Contains(emitted, m) {
+			t.Errorf("marker %q matches nothing the product emits: %q", m, emitted)
 		}
-	}
-	if !hit {
-		t.Errorf("no marker in %v matches the signature meko#739 reported", wedgeMarkers)
 	}
 	healthy := "INFO WAL acceptor: start receiving WAL since 0/1516AA0"
 	for _, m := range wedgeMarkers {

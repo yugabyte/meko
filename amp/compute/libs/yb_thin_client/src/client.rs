@@ -285,8 +285,9 @@ pub struct ReadResult {
     pub paging_state: Option<Bytes>,
 }
 
-/// The result of one read batch: `ops[i]` corresponds to the i-th input op;
-/// `used_read_time_ht` is the single snapshot the whole batch ran at.
+/// The result of one read batch: `ops[i]` corresponds to the i-th input op
+/// (`TsClient::read` enforces the lengths agree, so callers may index by
+/// position); `used_read_time_ht` is the single snapshot the whole batch ran at.
 #[derive(Clone, Debug)]
 pub struct ReadBatch {
     pub ops: Vec<ReadResult>,
@@ -696,9 +697,23 @@ impl TsClient {
         // `!Send`, and doing it in a sync fn keeps them out of this future's
         // suspended state across the await below, so the future stays `Send`
         // for the tokio task pool.
-        self.fire_read(ops, read_time_ht)
+        let batch = self
+            .fire_read(ops, read_time_ht)
             .await
-            .unwrap_or_else(|_| Err(YbError::Other("shim dropped the read callback".into())))
+            .unwrap_or_else(|_| Err(YbError::Other("shim dropped the read callback".into())))?;
+        // Position is the only thing pairing results to ops: no id travels on
+        // either side to re-key by. A wrong-length batch would pair rows with
+        // the wrong op, or for a paging driver drop the missing ops and end
+        // their scans early, looking exactly like exhaustion.
+        if batch.ops.len() != ops.len() {
+            return Err(YbError::Other(format!(
+                "read returned {} results for {} ops — results are positional, \
+                 so a mismatch would pair them with the wrong op",
+                batch.ops.len(),
+                ops.len()
+            )));
+        }
+        Ok(batch)
     }
 
     fn fire_read(
@@ -823,6 +838,8 @@ impl TsClient {
             let mut paging_state: Option<Bytes> = None;
             let mut read_time_ht: u64 = 0;
             let mut restart = false;
+            // Consecutive empty-but-continuing pages; see `check_barren_round`.
+            let mut barren = 0usize;
             loop {
                 let mut batch = match self
                     .read(
@@ -855,9 +872,16 @@ impl TsClient {
                 // `on_page` returns `true` to STOP early (e.g. a chain reached
                 // its `will_init` anchor, or a `limit(1)` point read found its
                 // row).
+                let got = op.rows.len();
                 let requested_stop = on_page(&mut acc, op.rows)?;
                 match next_scan_page(requested_stop, op.paging_state) {
-                    Some(ps) => paging_state = Some(ps),
+                    Some(ps) => {
+                        // Nothing else bounds this loop: every RPC succeeds, so
+                        // neither `with_retries` nor the RPC timeout ever fires.
+                        crate::barren::check_barren_round(&mut barren, got)
+                            .map_err(YbError::from)?;
+                        paging_state = Some(ps);
+                    }
                     None => break,
                 }
             }

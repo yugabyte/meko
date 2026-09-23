@@ -8,12 +8,14 @@
 //! maps status codes onto [`YbError`]. See `README.md` for the design and
 //! the C++ shim spec.
 
+mod barren;
 mod client;
 mod error;
 mod ffi;
 mod recycle;
 mod tls_watch;
 
+pub use barren::{StuckContinuation, THIN_SCAN_BARREN_ROUNDS, check_barren_round};
 pub use client::{
     BindValue, ColKind, Column, CondOp, RangeRead, ReadBatch, ReadOp, ReadPage, ReadResult, Row,
     TableHandle, TlsOpts, TsClient, TsClientConfig, UpsertRow, Value, ValueType,

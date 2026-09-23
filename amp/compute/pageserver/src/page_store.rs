@@ -598,9 +598,7 @@ async fn run_batched_block_scan(
             .map(|&(blk, _)| ChainCollector::new(blk))
             .collect();
         let mut paging: Vec<Option<bytes::Bytes>> = vec![None; block_reads.len()];
-        // Consecutive rounds an op returned nothing while still handing back a
-        // continuation. Crossing empty tablets legitimately does this a few
-        // times; forever means the token is not advancing.
+        // Per-op consecutive-empty-round counters; see `check_barren_round`.
         let mut barren: Vec<usize> = vec![0; block_reads.len()];
         let mut active: Vec<usize> = (0..block_reads.len()).collect();
         let mut read_time_ht = 0u64;
@@ -630,15 +628,9 @@ async fn run_batched_block_scan(
                 Err(e) => return Err(e.into()),
             };
             read_time_ht = batch.used_read_time_ht;
-            // `active[slot]` below relies on this pairing.
-            anyhow::ensure!(
-                batch.ops.len() == active.len(),
-                "thin-lane {what} got {} results for {} ops — results are \
-                 positional, so a mismatch would truncate chains",
-                batch.ops.len(),
-                active.len()
-            );
-
+            // `active[slot]` below is safe because `ops` is 1:1 with `active`
+            // and `TsClient::read` guarantees one result per op sent.
+            debug_assert_eq!(ops.len(), active.len());
             let mut next: Vec<usize> = Vec::new();
             for (slot, res) in batch.ops.into_iter().enumerate() {
                 let i = active[slot];
@@ -649,14 +641,8 @@ async fn run_batched_block_scan(
                     continue;
                 }
                 if let Some(ps) = res.paging_state {
-                    barren[i] = if got == 0 { barren[i] + 1 } else { 0 };
-                    anyhow::ensure!(
-                        barren[i] <= THIN_SCAN_BARREN_ROUNDS,
-                        "thin-lane {what} for {} returned {} empty pages in a row while \
-                         still continuing — the continuation token is not advancing",
-                        op_label(i),
-                        barren[i]
-                    );
+                    yb_thin_client::check_barren_round(&mut barren[i], got)
+                        .with_context(|| format!("thin-lane {what} for {}", op_label(i)))?;
                     paging[i] = Some(ps);
                     next.push(i);
                 }
@@ -773,15 +759,6 @@ pub(crate) fn merge_slru_chain(chain: &mut Vec<SlruPageRow>, mode: SlruScan) {
 /// `TsClient::read`, so the scan driver retries the whole fan-out on a fresh
 /// read point. Mirrors the client's own `MAX_SCAN_RESTARTS`.
 const THIN_SCAN_RESTARTS: usize = 5;
-
-/// Consecutive empty-but-continuing pages tolerated per op before the scan
-/// fails loudly. Deliberately NOT a cap on total rounds: a legitimate large
-/// scan needs unboundedly many, so a round cap would false-fail it. An op
-/// crossing tablets that hold no matching row returns empty pages with a
-/// continuation, which is normal for a handful of rounds; only a token that
-/// never advances does it indefinitely (an earlier shim did exactly that and
-/// spun at ~35% CPU forever).
-const THIN_SCAN_BARREN_ROUNDS: usize = 64;
 
 /// Read-side cell access for the hot-path client's row type
 /// (`yb_thin_client::Row`), keeping the chain/scan decode helpers below
@@ -1830,9 +1807,13 @@ impl PageStore {
             .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
             .limit(DIRECT_CHAIN_PAGE_ROWS);
-        let raw = fetch_chain_rows_thin(&p.client, pages, read, 0, 2).await?;
-
         let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
+        let raw = fetch_chain_rows_thin(&p.client, pages, read, 0, 2)
+            .await
+            .with_context(|| {
+                format!("thin-lane chain read for branch={branch_id} key={key} lsn<={target}")
+            })?;
+
         assemble_page_chain(key, raw, 0, "read_chain_thin")
     }
 
@@ -2154,7 +2135,14 @@ impl PageStore {
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
             .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
-        let raw = fetch_chain_rows_thin(&p.client, slru, read, 0, 2).await?;
+        let raw = fetch_chain_rows_thin(&p.client, slru, read, 0, 2)
+            .await
+            .with_context(|| {
+                format!(
+                    "thin-lane slru chain read for branch={branch_id} kind={kind:?} \
+                     segno={segno_i} blk={blk_i} lsn<={target}"
+                )
+            })?;
 
         assemble_slru_chain(
             kind,
@@ -2479,7 +2467,13 @@ impl PageStore {
                     Ok(false)
                 },
             )
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "thin-lane meta read for branch={branch_id} key={} lsn<={target_lsn}",
+                    hex::encode(key)
+                )
+            })?;
         row.map(|r| decode_meta_row(key, &r)).transpose()
     }
 
