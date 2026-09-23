@@ -33,9 +33,10 @@ import (
 
 // Defaults.
 const (
-	DefaultNamespacePrefix   = "ampqa"
-	DefaultPullSecretName    = "pull-secret"
-	DefaultYBImage           = "yugabytedb/yugabyte:latest"
+	DefaultNamespacePrefix = "ampqa"
+	DefaultPullSecretName  = "pull-secret"
+	// The same pinned build as the ampstack env; see ampstack.DefaultYBVersion.
+	DefaultYBImage           = ampstack.DefaultYBImage
 	DefaultYBStorage         = "20Gi"
 	DefaultControllerService = "amp-controller"
 	DefaultControllerPort    = 8080
@@ -78,6 +79,15 @@ type Config struct {
 	QuayToken string
 }
 
+// ybImage is env.exclusivek8s.yb_image, or DefaultYBImage when it is empty.
+// default.yaml leaves it empty so the pin is compiled in once, in ampstack.
+func ybImage(c *core.Config) string {
+	if img := c.GetString("env.exclusivek8s.yb_image", ""); img != "" {
+		return img
+	}
+	return DefaultYBImage
+}
+
 // FromConfig reads env.exclusivek8s.* from a framework Config.
 func FromConfig(c *core.Config) Config {
 	return Config{
@@ -85,7 +95,7 @@ func FromConfig(c *core.Config) Config {
 		NamespacePrefix:   c.GetString("env.exclusivek8s.namespace_prefix", DefaultNamespacePrefix),
 		PullSecretB64:     c.GetString("env.exclusivek8s.pull_secret_b64", ""),
 		PullSecretName:    c.GetString("env.exclusivek8s.pull_secret_name", DefaultPullSecretName),
-		YBImage:           c.GetString("env.exclusivek8s.yb_image", DefaultYBImage),
+		YBImage:           ybImage(c),
 		YBStorage:         c.GetString("env.exclusivek8s.yb_storage", DefaultYBStorage),
 		HelmChart:         c.GetString("env.exclusivek8s.helm_chart", ""),
 		HelmRelease:       c.GetString("env.exclusivek8s.helm_release", DefaultHelmRelease),

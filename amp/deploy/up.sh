@@ -56,8 +56,13 @@ ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp/endpoint}"
 CONTROLLER_TAG="${CONTROLLER_TAG:-}"
 ENDPOINT_TAG="${ENDPOINT_TAG:-}"
 
-# Single-node YugabyteDB (yugabyted).
-YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:latest}"
+# shellcheck source=../scripts/versions.sh
+. "${SCRIPT_DIR}/../scripts/versions.sh"
+
+# Single-node YugabyteDB (yugabyted). Pinned, not `latest`: the pod pulls
+# IfNotPresent, so a node already holding an older `latest` would keep running it,
+# and the endpoint's shim needs a tserver at or past the floor in versions.txt.
+YB_IMAGE="${YB_IMAGE:-$(amp_version YB_IMAGE)}"
 YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 # Stable in-cluster address of the yugabyted pod (StatefulSet headless Service DNS).
 YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
@@ -72,7 +77,7 @@ TLS_PERMISSIVE="${TLS_PERMISSIVE:-1}"
 TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
 TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-}"
 TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
-YB_CHART_VERSION="${YB_CHART_VERSION:-2026.1.0}"
+YB_CHART_VERSION="${YB_CHART_VERSION:-$(amp_version YB_CHART_VERSION)}"
 YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG:-}"
 # Empty by default: the chart then takes the cluster's default StorageClass,
 # the same choice the plaintext path here makes by omitting storageClass from

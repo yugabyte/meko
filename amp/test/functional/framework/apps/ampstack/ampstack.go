@@ -63,21 +63,29 @@ import (
 // Defaults.
 const (
 	DefaultPullSecretName = "pull-secret"
-	DefaultYBImage        = "yugabytedb/yugabyte:latest"
+	// DefaultYBVersion is the build amp's yugabyted runs when a run names no
+	// version: the tag of YB_IMAGE in amp/versions.txt. It is the one compiled-in
+	// copy of that pin — this binary embeds its config and runs without a
+	// checkout, so it cannot read the file — and amp-pr-build.yml fails any PR
+	// on which the two disagree. Keep it a single string literal on one line;
+	// that check reads it.
+	//
+	// It is deliberately NOT versions.yugabytedb: that is the 2025.2 LTS the
+	// awsvm cluster provisioners deploy, and amp's endpoint links the
+	// yb_thin_client shim, whose page and WAL hot paths speak
+	// yb.tserver.ThinClientService — first shipped in 2026.1.2. Against a 2025.2
+	// tserver the stack comes up and every hot-path op fails.
+	DefaultYBVersion = "2026.1.2.0-b137"
+	// DefaultYBImage is the pinned build from Docker Hub, used where no
+	// registry is configured to derive one from. Never `latest`: the pods pull
+	// IfNotPresent, so a node already holding an older `latest` keeps it.
+	DefaultYBImage = "yugabytedb/yugabyte:" + DefaultYBVersion
 	// DefaultYBImageRegistry is the registry+repo the built-in yugabyted image
 	// is derived from (as "<registry>:<version>") when env.ampstack.yb_image is
 	// unset. quay itest is the only registry with unreleased builds (Docker Hub
 	// carries released ones only); it is private, so pulling needs its credential.
 	DefaultYBImageRegistry = "quay.io/yugabyte/yugabyte-itest"
-	// DefaultYBVersion is the build the derived image uses when a run names no
-	// version. It is amp's own pin, deliberately NOT versions.yugabytedb: that
-	// is the 2025.2 LTS the awsvm cluster provisioners deploy, and amp's endpoint
-	// links the yb_thin_client shim, whose page and WAL hot paths speak
-	// yb.tserver.ThinClientService — first shipped in 2026.1.2. Derived against a
-	// 2025.2 tserver the stack comes up and every hot-path op fails. Move it with
-	// compute/libs/yb_thin_client/shim/VERSION and the CI image pin.
-	DefaultYBVersion = "2026.1.2.0-b137"
-	DefaultYBStorage = "20Gi"
+	DefaultYBStorage       = "20Gi"
 	// DefaultYBStorageClass must bind WaitForFirstConsumer: an Immediate class
 	// (GKE's default `standard`) provisions the disk first and zone-pins the pod.
 	DefaultYBStorageClass = "standard-rwo"

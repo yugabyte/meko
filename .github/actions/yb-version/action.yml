@@ -1,0 +1,30 @@
+name: amp versions
+description: >
+  Export the pins in amp/versions.txt into the job environment, so a workflow
+  never spells a version out itself. Run it after actions/checkout and before
+  any step that reads one.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      # Only NAME=value lines are exported. `read` has already split on
+      # newlines, so a value cannot inject a second variable; what the NAME
+      # check stops is $GITHUB_ENV's heredoc form, where a `NAME<<DELIM` line
+      # would take the following lines as its value. Whitespace is refused
+      # because every value is a single pin, so a space means a typo.
+      run: |
+        set -euo pipefail
+        file="${{ github.workspace }}/amp/versions.txt"
+        [ -f "$file" ] || { echo "::error::$file not found"; exit 1; }
+        n=0
+        while IFS= read -r line; do
+          case "$line" in ''|'#'*) continue ;; esac
+          if [[ ! "$line" =~ ^[A-Z][A-Z0-9_]*=[^[:space:]]+$ ]]; then
+            echo "::error::amp/versions.txt: malformed line: $line"; exit 1
+          fi
+          echo "$line" >> "$GITHUB_ENV"
+          echo "amp/versions.txt: ${line%%=*}=${line#*=}"
+          n=$((n + 1))
+        done < "$file"
+        [ "$n" -gt 0 ] || { echo "::error::amp/versions.txt defined nothing"; exit 1; }

@@ -195,9 +195,10 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if acfg.EndpointImage != ampstack.DefaultQuayEndpointImage {
 		t.Errorf("ampstack EndpointImage = %q, want %q", acfg.EndpointImage, ampstack.DefaultQuayEndpointImage)
 	}
-	// yb_image is documented-empty → derived version-aware as
-	// "<yb_image_registry>:<versions.yugabytedb>" (a pinned build, not :latest).
-	if want := ampstack.DefaultYBImageRegistry + ":" + cfg.GetString("versions.yugabytedb", ""); acfg.YBImage != want {
+	// yb_image is documented-empty → derived as "<yb_image_registry>:<version>"
+	// from amp's own pin, never versions.yugabytedb (the awsvm LTS, which predates
+	// the ThinClientService the endpoint's shim needs).
+	if want := ampstack.DefaultYBImageRegistry + ":" + ampstack.DefaultYBVersion; acfg.YBImage != want {
 		t.Errorf("ampstack YBImage = %q, want derived %q", acfg.YBImage, want)
 	}
 	if got := cfg.GetString("env.ampstack.yb_image", "__MISSING__"); got != "" {

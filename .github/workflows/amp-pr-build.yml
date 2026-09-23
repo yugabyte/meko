@@ -88,6 +88,27 @@ jobs:
       # push events it diffs locally and needs the repo checked out. On a
       # push to main it detects changes against the commit before the push.
       - uses: actions/checkout@v7
+
+      # amp/versions.txt is the YugabyteDB pin, but the functional framework
+      # compiles its own copy in (it embeds its config and runs without a
+      # checkout, so it cannot read the file). This keeps the two in step. It
+      # runs on every PR, here, because nothing in CI runs that framework's
+      # tests, and a copy that only drifts silently is the bug it prevents.
+      - name: YugabyteDB pins agree
+        run: |
+          pin=$(sed -n 's/^YB_IMAGE=//p' amp/versions.txt)
+          go_src=amp/test/functional/framework/apps/ampstack/ampstack.go
+          ver=$(sed -nE 's/^[[:space:]]*DefaultYBVersion[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$go_src")
+          if [ -z "$pin" ] || [ -z "$ver" ]; then
+            echo "::error::could not read YB_IMAGE from amp/versions.txt or DefaultYBVersion from $go_src"
+            exit 1
+          fi
+          if [ "$pin" != "yugabytedb/yugabyte:$ver" ]; then
+            echo "::error file=$go_src::DefaultYBVersion is $ver but amp/versions.txt pins $pin; move them together"
+            exit 1
+          fi
+          echo "YugabyteDB pin agrees: $pin"
+
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -118,6 +139,10 @@ jobs:
               - 'amp/postgres.mk'
               - 'amp/build.sh'
               - 'amp/scripts/build.py'
+              # The YugabyteDB pin these jobs start. Without it a bump that edits
+              # only versions.txt would skip the jobs that test it.
+              - 'amp/versions.txt'
+              - '.github/actions/yb-version/**'
               - '.github/workflows/amp-pr-build.yml'
             controller:
               - 'amp/controller/**'
@@ -154,6 +179,10 @@ jobs:
               # YugabyteDB: the atomic acquire, the skew grace, and takeover after
               # a holder dies are all SQL-level behaviour no fake reproduces.
               - 'amp/controller/pkg/**'
+              # The YugabyteDB pin these jobs start. Without it a bump that edits
+              # only versions.txt would skip the jobs that test it.
+              - 'amp/versions.txt'
+              - '.github/actions/yb-version/**'
               - '.github/workflows/amp-pr-build.yml'
 
       # A change counts as "code" if at least one changed file is not a markdown
@@ -324,14 +353,6 @@ jobs:
     if: needs.amp_changes.outputs.compute == 'true' && needs.amp_changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      # Pinned to the 2026.1.2 official release, the first that carries
-      # yb.tserver.ThinClientService — the RPC the pinned yb_thin_client shim
-      # (compute/libs/yb_thin_client/shim/VERSION) speaks; bump the two together,
-      # deliberately, not via `latest`, so CI can't drift to an untested YB. Keep
-      # in sync with on-demand-checks.yml, the migrations job below and
-      # scripts/yb-local.sh.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
     defaults:
       run:
         working-directory: amp
@@ -351,6 +372,9 @@ jobs:
         uses: ./.github/actions/fetch-pg-submodule
         with:
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      - name: Versions (amp/versions.txt)
+        uses: ./.github/actions/yb-version
 
       # Start YB first so it initializes while the toolchain installs.
       # Use host networking + advertise 127.0.0.1 so YB advertises an address
@@ -463,6 +487,11 @@ jobs:
           dir=$(docker exec yb sh -c 'ls -d "$HOME"/var/logs /home/yugabyte/var/logs /root/var/logs 2>/dev/null' | head -1)
           mkdir -p .integration-tests
           if [ -n "$dir" ]; then docker cp "yb:$dir" .integration-tests/yb-logs; else echo "no yugabyted log dir found" >&2; fi
+          # glog's yb-master.INFO-style pointers are symlinks, and upload-artifact
+          # follows symlinks: one that does not resolve after the copy fails the
+          # whole upload, taking the run logs with it. The files they point at
+          # are copied anyway.
+          [ -d .integration-tests/yb-logs ] && find .integration-tests/yb-logs -type l -delete || true
 
       - name: Upload run logs
         if: failure()
@@ -660,11 +689,11 @@ jobs:
     if: needs.amp_changes.outputs.migrations == 'true' && needs.amp_changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      # Keep in sync with the integration job above.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
     steps:
       - uses: actions/checkout@v7
+
+      - name: Versions (amp/versions.txt)
+        uses: ./.github/actions/yb-version
 
       - uses: actions/setup-go@v7
         with:

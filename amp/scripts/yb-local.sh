@@ -4,8 +4,8 @@
 #
 # amp's integration harness (test/integration/compute/run.sh) and the default dev cluster expect
 # a YugabyteDB reachable at 127.0.0.1:5433 / db `yb_storage`. This runs the same
-# pinned image CI uses (see .github/workflows/pr-build.yml), so local and CI
-# exercise the identical YB build — one command, no manual tarball install.
+# pinned image CI uses (YB_IMAGE in amp/versions.txt), so local and CI exercise the
+# identical YB build — one command, no manual tarball install.
 #
 # Usage:
 #   scripts/yb-local.sh start     # run (first time pulls ~1GB) + wait until ready
@@ -14,7 +14,7 @@
 #   scripts/yb-local.sh logs      # follow container logs
 #
 # Env overrides:
-#   YB_IMAGE      container image (default: the CI-pinned release below)
+#   YB_IMAGE      container image (default: YB_IMAGE in amp/versions.txt)
 #   YB_PORT       host port to publish YSQL on (default: 5433)
 #   YB_CONTAINER  container name (default: amp-yb)
 #   YB_TLS        1 = TLS on both YSQL (5433) and tserver RPC (9100), with
@@ -34,13 +34,14 @@
 #
 set -euo pipefail
 
-# Keep this default in sync with .github/workflows/amp-pr-build.yml (env: YB_IMAGE),
-# so a local dev box and CI run byte-identical YugabyteDB builds.
-YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:2026.1.2.0-b137}"
+AMP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=versions.sh
+. "$AMP_DIR/scripts/versions.sh"
+YB_IMAGE="${YB_IMAGE:-$(amp_version YB_IMAGE)}"
 YB_PORT="${YB_PORT:-5433}"
 YB_CONTAINER="${YB_CONTAINER:-amp-yb}"
 YB_TLS="${YB_TLS:-0}"
-YB_TLS_DIR="${YB_TLS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.yb-local-tls}"
+YB_TLS_DIR="${YB_TLS_DIR:-$AMP_DIR/.yb-local-tls}"
 YB_TLS_PORT_OFFSET="${YB_TLS_PORT_OFFSET:-0}"
 if [ "$YB_TLS" = 1 ]; then
     YB_PORT=$((5433 + YB_TLS_PORT_OFFSET))

@@ -20,7 +20,9 @@ this is what an operator runs and checks.
 Enable it on a fresh bring-up with `TLS=1 deploy/up-gke.sh` (or `up.sh`). Knobs:
 `TLS_PERMISSIVE` (default `1`: plaintext still accepted, see below),
 `TLS_ISSUER_KIND` / `TLS_ISSUER_NAME` / `TLS_ISSUER_GROUP` (bring-your-own issuer),
-`YB_CHART_VERSION`, `YB_STORAGE_CLASS`, `YB_STORAGE_ROLE`. The controller's DSN
+`YB_CHART_VERSION` (default from `amp/versions.txt`; the chart's appVersion is the
+image it runs, so it must be one that carries `ThinClientService` — 2026.1.2 or
+later), `YB_STORAGE_CLASS`, `YB_STORAGE_ROLE`. The controller's DSN
 then carries `sslmode=verify-full` and the three file paths, and endpoints get the
 same four values through their chart (`yugabyte.sslmode` … `yugabyte.sslkey`).
 

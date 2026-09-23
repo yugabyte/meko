@@ -123,9 +123,6 @@ jobs:
       # cancelled before it starts.
       group: on-demand-slow-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
-    env:
-      # Keep in sync with pr-build.yml's integration job and scripts/yb-local.sh.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
     defaults:
       run:
         working-directory: amp
@@ -145,6 +142,9 @@ jobs:
         uses: ./.github/actions/fetch-pg-submodule
         with:
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      - name: Versions (amp/versions.txt)
+        uses: ./.github/actions/yb-version
 
       - name: Start YugabyteDB
         run: |
@@ -212,6 +212,11 @@ jobs:
           dir=$(docker exec yb sh -c 'ls -d "$HOME"/var/logs /home/yugabyte/var/logs /root/var/logs 2>/dev/null' | head -1)
           mkdir -p .integration-tests
           if [ -n "$dir" ]; then docker cp "yb:$dir" .integration-tests/yb-logs; else echo "no yugabyted log dir found" >&2; fi
+          # glog's yb-master.INFO-style pointers are symlinks, and upload-artifact
+          # follows symlinks: one that does not resolve after the copy fails the
+          # whole upload, taking the run logs with it. The files they point at
+          # are copied anyway.
+          [ -d .integration-tests/yb-logs ] && find .integration-tests/yb-logs -type l -delete || true
 
       - name: Upload run logs
         if: failure()
@@ -279,8 +284,6 @@ jobs:
       group: on-demand-ext-local-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     env:
-      # Keep in sync with the integration job above and scripts/yb-local.sh.
-      YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
       # From secrets so the base-image buildx layer cache
       # (quay.io/.../amp-pg18-build:buildcache, shared with the GKE extensions job)
       # can be reused. Empty on forks (which get no secrets) → the Quay login below
@@ -308,6 +311,9 @@ jobs:
         uses: ./.github/actions/fetch-pg-submodule
         with:
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      - name: Versions (amp/versions.txt)
+        uses: ./.github/actions/yb-version
 
       # docker-container builder so build.sh --cache can export the base layer
       # cache to the registry (install:false, so plain `docker build` for the
@@ -436,6 +442,11 @@ jobs:
           dir=$(docker exec yb sh -c 'ls -d "$HOME"/var/logs /home/yugabyte/var/logs /root/var/logs 2>/dev/null' | head -1)
           mkdir -p .integration-tests
           if [ -n "$dir" ]; then docker cp "yb:$dir" .integration-tests/yb-logs; else echo "no yugabyted log dir found" >&2; fi
+          # glog's yb-master.INFO-style pointers are symlinks, and upload-artifact
+          # follows symlinks: one that does not resolve after the copy fails the
+          # whole upload, taking the run logs with it. The files they point at
+          # are copied anyway.
+          [ -d .integration-tests/yb-logs ] && find .integration-tests/yb-logs -type l -delete || true
 
       - name: Upload run logs
         if: failure()

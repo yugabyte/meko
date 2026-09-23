@@ -169,7 +169,8 @@ compute pointed at it. You can point at any YB deployment
 below assumes a local single-node cluster.
 
 Start a local YugabyteDB first — `./scripts/yb-local.sh` runs the same
-pinned image CI uses, reachable at `127.0.0.1:5433` / db `yb_storage`:
+pinned image CI uses (both read `versions.txt`), reachable at
+`127.0.0.1:5433` / db `yb_storage`:
 
 ```sh
 ./scripts/yb-local.sh start         # run (first pull ~1GB) + wait until ready

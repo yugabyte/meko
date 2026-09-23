@@ -1,0 +1,33 @@
+# Versions the amp stack is built and tested against. One pin per line, plain
+# `NAME=value`, no quoting or expansion: shell reads it through
+# scripts/versions.sh and CI through .github/actions/yb-version.
+#
+# Bump here. A literal version copied into a workflow or a script is a bug,
+# because the next bump will miss it. The one copy that has to exist is
+# ampstack.DefaultYBVersion in the functional framework, which compiles its
+# config in and so cannot read this file; amp-pr-build.yml's `YugabyteDB pins
+# agree` step fails the PR until it matches the YB_IMAGE tag below.
+#
+# A bump runs the PR-build integration and migrations jobs on its own (both path
+# filters list this file); also request
+# `/ci amp_integration_slow amp_extensions_local amp_deploy_gke`, which are opt-in
+# and do not.
+#
+# The endpoint's yb_thin_client shim speaks yb.tserver.ThinClientService, which
+# first shipped in 2026.1.2 — a hard floor for every pin below. Bump them together
+# with compute/libs/yb_thin_client/shim/VERSION, and check the tserver carries the
+# service (`strings yb-tserver | grep ThinClientService`) first.
+#
+# Not covered: the operator-managed foundation (`/ci amp_deploy_gke_foundation`)
+# pins its universe build in foundation/examples/amp.yaml, coupled to the
+# yugaware chart it installs. The same floor applies; move it too.
+
+# The YugabyteDB container CI starts for the integration, migration, extension and
+# GKE-deploy suites; also the default for scripts/yb-local.sh and the yugabyted that
+# deploy/up.sh and up-gke.sh stand up, so a dev box and CI run the identical build.
+YB_IMAGE=yugabytedb/yugabyte:2026.1.2.0-b137
+
+# The upstream `yugabyte` Helm chart the TLS=1 deploy path installs
+# (deploy/tls/yugabyte-tls.sh). Its appVersion is the image it runs, so it must
+# carry ThinClientService too: chart 2026.1.2 ships 2026.1.2.0-b137.
+YB_CHART_VERSION=2026.1.2

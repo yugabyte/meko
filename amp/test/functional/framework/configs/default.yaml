@@ -320,7 +320,9 @@ env:
   exclusivek8s:
     namespace_prefix: "ampqa"
     pull_secret_name: "pull-secret"
-    yb_image: "yugabytedb/yugabyte:latest"
+    # Empty → exclusivek8s.DefaultYBImage, the pinned build (never `latest`: the
+    # pod pulls IfNotPresent). Set a fully-qualified ref to override.
+    yb_image: ""
     yb_storage: "20Gi"
     helm_release: "amp-controller"
     controller_service: "amp-controller"

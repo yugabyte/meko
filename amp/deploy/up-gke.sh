@@ -92,8 +92,14 @@ PULL_SECRET_DOCKERCONFIGJSON="${PULL_SECRET_DOCKERCONFIGJSON:-}"  # raw docker c
 FOUNDATION="${FOUNDATION:-yugabyted}"
 FOUNDATION_SPEC="${FOUNDATION_SPEC:-${REPO_ROOT}/../foundation/examples/amp.yaml}"
 
-# yugabyted settings (FOUNDATION=yugabyted only).
-YB_IMAGE="${YB_IMAGE:-yugabytedb/yugabyte:latest}"
+# shellcheck source=../scripts/versions.sh
+. "${SCRIPT_DIR}/../scripts/versions.sh"
+
+# yugabyted settings (FOUNDATION=yugabyted only). Pinned, not `latest`: the pod
+# pulls IfNotPresent, so a node already holding an older `latest` would keep
+# running it, and the endpoint's shim needs a tserver at or past the floor in
+# versions.txt.
+YB_IMAGE="${YB_IMAGE:-$(amp_version YB_IMAGE)}"
 YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 # Stable in-cluster address of the yugabyted pod (StatefulSet headless Service DNS).
 YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
@@ -123,7 +129,7 @@ TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
 TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-}"
 TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
 # The chart-deployed YugabyteDB (TLS=1 only).
-YB_CHART_VERSION="${YB_CHART_VERSION:-2026.1.0}"
+YB_CHART_VERSION="${YB_CHART_VERSION:-$(amp_version YB_CHART_VERSION)}"
 YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG:-}"              # empty => the chart's appVersion
 # standard-rwo is a GKE PD class; this is the GKE script, so it names one.
 YB_STORAGE_CLASS="${YB_STORAGE_CLASS:-standard-rwo}"

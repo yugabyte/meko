@@ -99,9 +99,6 @@ permissions:
 
 env:
   QUAY_NS: quay.io/yugabyte    # repos: amp-{controller,endpoint,controller-ui,mcp}
-  # The yugabyted up-gke.sh stands up. Same pin as amp-pr-build.yml: the endpoint's
-  # shim needs a tserver carrying yb.tserver.ThinClientService, i.e. 2026.1.2 or newer.
-  YB_IMAGE: yugabytedb/yugabyte:2026.1.2.0-b137
 
 jobs:
   decide:

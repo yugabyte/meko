@@ -9,7 +9,7 @@
 #
 # Env:
 #   NS                 namespace (required)
-#   YB_CHART_VERSION   `yugabyte` chart version (2026.1.0)
+#   YB_CHART_VERSION   `yugabyte` chart version (default: YB_CHART_VERSION in amp/versions.txt)
 #   YB_CHART_IMAGE_TAG image tag override (default: the chart's appVersion)
 #   YB_STORAGE_SIZE    per-pod volume size (20Gi)
 #   YB_STORAGE_CLASS   storage class; empty (default) takes the cluster's own
@@ -31,7 +31,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${NS:?NS is required}"
-YB_CHART_VERSION="${YB_CHART_VERSION:-2026.1.0}"
+# shellcheck source=../../scripts/versions.sh
+. "${SCRIPT_DIR}/../../scripts/versions.sh"
+YB_CHART_VERSION="${YB_CHART_VERSION:-$(amp_version YB_CHART_VERSION)}"
 YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG:-}"
 YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 YB_STORAGE_CLASS="${YB_STORAGE_CLASS:-}"
