@@ -14,3 +14,16 @@ func apiServerUnreachable(out string) bool {
 	return strings.Contains(low, "unable to connect to the server") ||
 		(strings.Contains(low, "the connection to the server") && strings.Contains(low, "was refused"))
 }
+
+// kubectl prints "Unable to connect to the server" for any transport error,
+// including an EOF after the exec upgrade may already have started the command.
+// Only these prove the request never left the host.
+func apiServerNeverDialed(out string) bool {
+	low := strings.ToLower(out)
+	for _, m := range []string{"dial tcp", "connection refused", "no such host", "tls handshake timeout"} {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
+}

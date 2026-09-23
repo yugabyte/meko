@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -180,5 +181,84 @@ func TestExecTransportGivesUpAfterTransientBudget(t *testing.T) {
 	}
 	if attempts != transientAttempts {
 		t.Fatalf("attempts = %d, want %d", attempts, transientAttempts)
+	}
+}
+
+const apiServerTimeout = "Unable to connect to the server: dial tcp 10.150.8.6:443: i/o timeout"
+
+func TestExecTransportRetriesAPIServerUnreachableOnPOST(t *testing.T) {
+	old := transientRetryPause
+	transientRetryPause = time.Millisecond
+	defer func() { transientRetryPause = old }()
+
+	attempts := 0
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(ctx context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
+			attempts++
+			if attempts == 1 {
+				return execpkg.Result{ExitCode: 1, Stderr: apiServerTimeout}, nil
+			}
+			return execpkg.Result{Stdout: "HTTP/1.1 202 Accepted\r\n\r\n{}"}, nil
+		})
+	tr := &HTTPExecTransport{Kube: kube, BaseURL: "http://amp-controller:8080", Logf: func(string, ...any) {}}
+	req, _ := http.NewRequest(http.MethodPost, "http://placeholder/api/v1/endpoint-upgrades", strings.NewReader("{}"))
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("want the retry to succeed, got %v", err)
+	}
+	resp.Body.Close()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestExecTransportTypesAPIServerUnreachableOnceTheBudgetIsSpent(t *testing.T) {
+	old := transientRetryPause
+	transientRetryPause = time.Millisecond
+	defer func() { transientRetryPause = old }()
+
+	attempts := 0
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(ctx context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
+			attempts++
+			return execpkg.Result{ExitCode: 1, Stderr: apiServerTimeout}, nil
+		})
+	ensured := false
+	tr := &HTTPExecTransport{
+		Kube: kube, BaseURL: "http://amp-controller:8080",
+		EnsurePod: func(context.Context) error { ensured = true; return nil },
+	}
+	req, _ := http.NewRequest(http.MethodPost, "http://placeholder/api/v1/endpoint-upgrades", strings.NewReader("{}"))
+	_, err := tr.RoundTrip(req)
+	var unreachable *APIServerUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("err = %v, want an APIServerUnreachableError so the result lands env_failed", err)
+	}
+	if attempts != transientAttempts {
+		t.Fatalf("attempts = %d, want %d", attempts, transientAttempts)
+	}
+	if ensured {
+		t.Fatal("recreated the relay pod although the API server, not the pod, was unreachable")
+	}
+}
+
+// kubectl says "Unable to connect" for a mid-stream EOF too, after the exec
+// upgrade may already have started curl; replaying the POST could double-create.
+func TestExecTransportDoesNotReplayPOSTOnAnAPIServerEOF(t *testing.T) {
+	attempts := 0
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(ctx context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
+			attempts++
+			return execpkg.Result{ExitCode: 1, Stderr: "Unable to connect to the server: unexpected EOF"}, nil
+		})
+	tr := &HTTPExecTransport{Kube: kube, BaseURL: "http://amp-controller:8080"}
+	req, _ := http.NewRequest(http.MethodPost, "http://placeholder/api/v1/clusters", strings.NewReader("{}"))
+	_, err := tr.RoundTrip(req)
+	var unreachable *APIServerUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("err = %v, want an APIServerUnreachableError", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }

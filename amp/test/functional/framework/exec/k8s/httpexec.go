@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,8 @@ type HTTPExecTransport struct {
 	// EnsurePod, when set, is invoked once per request after an exec-level
 	// failure (relay pod evicted, node scaled away) to recreate the pod before
 	// the single retry. The pod is stateless, so recreation is always safe.
+	// Skipped when kubectl never reached the API server: recreating the pod
+	// needs that same API server.
 	EnsurePod func(ctx context.Context) error
 	// Timeout bounds one curl attempt. Zero means defaultHTTPExecTimeout.
 	Timeout time.Duration
@@ -58,7 +61,8 @@ func (t *HTTPExecTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if err == nil {
 		return parseWireResponse(res.Stdout, req)
 	}
-	if t.EnsurePod == nil {
+	var unreachable *APIServerUnreachableError
+	if t.EnsurePod == nil || errors.As(err, &unreachable) {
 		return nil, err
 	}
 	if t.Logf != nil {
@@ -76,14 +80,13 @@ func (t *HTTPExecTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 // execTransient retries curl exits where the connection never carried a
 // response. Idempotent methods only: a timed-out POST may already have applied.
+// A kubectl that failed to even dial the API server never started curl, so
+// that one is retried for every method.
 func (t *HTTPExecTransport) execTransient(req *http.Request, body []byte) (execpkg.Result, error) {
 	res, err := t.exec(req, body)
-	if err == nil || !idempotentMethod(req.Method) {
-		return res, err
-	}
-	for attempt := 2; attempt <= transientAttempts && transientCurlExit(res.ExitCode); attempt++ {
+	for attempt := 2; attempt <= transientAttempts && t.retryable(req, res, err); attempt++ {
 		if t.Logf != nil {
-			t.Logf("k8s: curl exited %d on %s %s; retrying (attempt %d/%d)", res.ExitCode, req.Method, req.URL.Path, attempt, transientAttempts)
+			t.Logf("k8s: %v; retrying %s %s (attempt %d/%d)", err, req.Method, req.URL.Path, attempt, transientAttempts)
 		}
 		select {
 		case <-req.Context().Done():
@@ -96,6 +99,17 @@ func (t *HTTPExecTransport) execTransient(req *http.Request, body []byte) (execp
 		}
 	}
 	return res, err
+}
+
+func (t *HTTPExecTransport) retryable(req *http.Request, res execpkg.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	var unreachable *APIServerUnreachableError
+	if errors.As(err, &unreachable) {
+		return idempotentMethod(req.Method) || apiServerNeverDialed(res.Stderr)
+	}
+	return idempotentMethod(req.Method) && transientCurlExit(res.ExitCode)
 }
 
 func transientCurlExit(code int) bool {
@@ -122,6 +136,9 @@ func (t *HTTPExecTransport) exec(req *http.Request, body []byte) (execpkg.Result
 		stdin = bytes.NewReader(body)
 	}
 	res, err := t.Kube.RunStdin(req.Context(), stdin, cmd)
+	if (err != nil || res.ExitCode != 0) && apiServerUnreachable(res.Stderr) {
+		return res, &APIServerUnreachableError{Err: fmt.Errorf("kubectl exec for %s %s never reached the API server: %s", req.Method, req.URL.Path, strings.TrimSpace(res.Stderr))}
+	}
 	if err != nil {
 		return res, err
 	}
