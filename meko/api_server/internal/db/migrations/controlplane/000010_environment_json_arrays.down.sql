@@ -1,0 +1,2 @@
+-- Not reversible: the values this replaced were NULL or `null`, which no reader
+-- accepted. Left as a no-op so the set keeps a down file per version.

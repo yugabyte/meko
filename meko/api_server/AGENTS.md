@@ -85,9 +85,20 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
   **data plane** (`datapacks.*`, `dist_rag.*`, `DB`). Put a table on the right
   side and use the matching pool. Admin metrics span both (+ Langfuse) via the
   `admin` repo.
-- Migrations live in `internal/db/migrations/{system,data}` and run on startup.
-  Enums can't drop values in place — swap to a fresh type (see
+- Migrations live in `internal/db/migrations/{system,data,controlplane}` and run
+  on startup. Enums can't drop values in place — swap to a fresh type (see
   `000008_standard_tier`: create `_v2`, rebind columns, drop old, rename).
+- **A migration that writes rows is the only statement in its file**, and DDL never
+  shares a file with DML: golang-migrate `Exec`s a migration whole, so the simple
+  query protocol runs it as one implicit transaction, and YSQL cannot retry a
+  statement inside such a batch (yugabyte-db#21833). A conflict with a live writer
+  aborts it and leaves the version dirty, failing every later boot until someone
+  resets that set's version row by hand — each set has its own table, and only the
+  control-plane one lives in `meko_system` (`getPostgresConfig`). Alone in its file
+  the same statement is retried transparently. `TestBackfillMigrationsAreSingleStatement`
+  enforces it — nothing else would, because such a batch applies cleanly on a quiet
+  database and on the plain Postgres the `controlplane` set meets in CI
+  (CLOUDGA-36984).
 - A new migration's version must extend main's current highest by exactly +1
   in its directory, and ship both an `up.sql` and a `down.sql` — CI's
   `meko_migration_versions` job blocks a PR that doesn't. Check locally before

@@ -15,6 +15,16 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
+// One statement per file for anything that writes rows, and never DDL beside DML:
+// golang-migrate Execs a migration whole, which the simple query protocol runs as a
+// single implicit transaction, and YugabyteDB cannot retry a statement inside one
+// (yugabyte-db#21833). A conflict with a live writer then aborts the migration and
+// leaves the version dirty instead of being retried away -- CLOUDGA-36984's backfill
+// of a table agents heartbeat into every 10s, while the api-server replicas it is
+// replacing still serve them. The two 000001s and the two other multi-statement
+// backfills predate the rule and are grandfathered by
+// TestBackfillMigrationsAreSingleStatement.
+//
 //go:embed migrations/system/*.sql
 var systemMigrationsFS embed.FS
 

@@ -5,7 +5,7 @@
  * Modelled on the kind column (000001): TEXT NOT NULL with a DEFAULT, no CHECK, and
  * validated in Go (service.normalizeType). No CHECK because the value is entirely
  * control-plane-minted, so the Go gate is the single source of truth -- and it avoids
- * the idempotent-ADD-CONSTRAINT dance 000007 needed.
+ * the idempotent-ADD-CONSTRAINT dance 000011 needed.
  *
  * Default 'BYOC' so every existing row is correct with no backfill: YCP is the BYOC
  * control plane, so an environment predating this is a BYOC one.

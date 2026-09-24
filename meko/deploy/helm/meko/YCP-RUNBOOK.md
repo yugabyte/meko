@@ -343,6 +343,40 @@ returns the `api_key_id` so the key can be revoked in YBM.
 api-server image predates the flag. Same for `-only-controlplane-migrate` on the
 migrate container. Check the image as in Prerequisites.
 
+**`migrate` init container fails with `current transaction is expired or aborted …
+multi-statement queries issued via the simple query protocol`** — only on a control
+plane pointed at an external YugabyteDB; the bundled `controlPlaneDb` is Postgres and
+never hits this. golang-migrate sends a migration file as one simple-query batch, so
+the server runs it as a single implicit transaction, and YSQL cannot retry a statement
+inside one (yugabyte-db#21833) — a backfill touching rows an agent is heartbeating
+loses the race. The pod sits in `Init:CrashLoopBackOff`; `kubectl -n $NS logs
+deploy/meko-api-server -c migrate` has the statement.
+
+The failed attempt is recorded **dirty**, so once the migration itself is fixed every
+later boot still fails, now with `Dirty database version N`. Nothing clears that on
+its own. Read the version, reset it to the one below, restart:
+
+```bash
+psql "$SYSTEM_DB_URL" -c \
+  'SELECT version, dirty FROM meko_system.schema_migrations_controlplane'
+psql "$SYSTEM_DB_URL" <<'SQL'
+DELETE FROM meko_system.schema_migrations_controlplane;
+INSERT INTO meko_system.schema_migrations_controlplane (version, dirty) VALUES (<N-1>, false);
+SQL
+kubectl -n $NS rollout restart deploy/meko-api-server
+```
+
+The table holds a **single row** — golang-migrate truncates and re-inserts it at
+every step, so it is a current-state pointer and the `DELETE` loses no history.
+Re-applying from there is safe: every statement in the set is guarded (`IF NOT
+EXISTS`, and the state CHECK is added only when absent), so the versions that did
+land are no-ops the second time.
+
+A data plane wedges the same way, but do not copy the statement above verbatim: only
+the control-plane set tracks inside `meko_system`. The system set uses
+`schema_migrations_system` and the data set plain `schema_migrations`, both wherever
+the search path puts them (`getPostgresConfig` in `internal/db/connect.go`).
+
 **`ycp-postgres-0` stuck `Pending`** — the storage class does not exist. The install
 now refuses up front when the class is missing and lists the ones the cluster has, so
 this should only appear on a release created before that check: `kubectl get sc` and
