@@ -605,10 +605,9 @@ impl Timeline {
     }
 
     /// Run `f` over each of `items` with bounded concurrency
-    /// (`GC_ACTION_PARALLELISM` × tenant `scale_factor`) and sum the
-    /// per-call deleted counts. Each item gets a fresh `store` clone handed
-    /// to `f`, so the future it returns owns its captures (required to be
-    /// `Send` across `buffer_unordered`).
+    /// (`gc_action_parallelism`) and sum the per-call deleted counts. Each item
+    /// gets a fresh `store` clone handed to `f`, so the future it returns owns
+    /// its captures (required to be `Send` across `buffer_unordered`).
     async fn run_parallel_actions<T, Fut>(
         &self,
         store: &Arc<crate::page_store::PageStore>,
@@ -619,12 +618,8 @@ impl Timeline {
         Fut: std::future::Future<Output = Result<u64, GcError>>,
     {
         use futures::StreamExt as _;
-        // Fan-out width: GC_ACTION_PARALLELISM scaled by the tenant
-        // scale_factor (cheap; recomputed per fan-out).
-        let parallelism = pageserver_api::config::scale_count(
-            crate::page_store::GC_ACTION_PARALLELISM,
-            self.conf.scale_factor,
-        );
+        // Same value that sized the `pageserver:gc` pool these run on.
+        let parallelism = self.conf.gc_action_parallelism;
         // `collect`, not `try_collect`: dropping a sibling mid-statement loses
         // the rows it committed from `GC_ROWS_DELETED`, which each act charges
         // only once its statement returns (#1142). Completion order, so which

@@ -98,6 +98,11 @@ pub struct PageServerConf {
     /// them so a single tenant can replay multiple records in parallel.
     pub walredo_pool_size: NonZeroUsize,
 
+    /// `tenant_config.gc_action_parallelism` verbatim, else
+    /// `GC_ACTION_PARALLELISM` scaled by `scale_factor`. Resolved here so the
+    /// `pageserver:gc` pool and the drain's object fan-out cannot disagree.
+    pub gc_action_parallelism: usize,
+
     pub superuser: String,
     pub locale: String,
 
@@ -384,6 +389,17 @@ impl PageServerConf {
         let walredo_pool_size =
             NonZeroUsize::new(pageserver_api::config::scale_count(1, scale_factor))
                 .expect("scale_count clamps to >= 1");
+        // Floored at 1: `buffer_unordered(0)` never polls its source, parking
+        // the drain forever. `scale_count` clamps, so only an explicit 0 hits it.
+        let gc_action_parallelism = tenant_config
+            .gc_action_parallelism
+            .unwrap_or_else(|| {
+                pageserver_api::config::scale_count(
+                    pageserver_api::config::GC_ACTION_PARALLELISM,
+                    scale_factor,
+                )
+            })
+            .max(1);
 
         let mut conf = PageServerConf {
             // ------------------------------------------------------------
@@ -400,6 +416,7 @@ impl PageServerConf {
             wait_lsn_timeout,
             wal_redo_timeout,
             walredo_pool_size,
+            gc_action_parallelism,
             superuser,
             locale,
             http_auth_type,
@@ -609,6 +626,36 @@ mod tests {
         let conf2 = PageServerConf::parse_and_validate(reparsed, &workdir)
             .expect("parse_and_validate round trip");
         assert_eq!(conf2.timeline_identity, conf.timeline_identity);
+    }
+
+    /// The default scales with `scale_factor`; an explicit value does not, and
+    /// is floored at 1.
+    #[rstest]
+    #[case("", 1.0, 1)]
+    #[case("", 4.0, 4)]
+    #[case("gc_action_parallelism = 8", 1.0, 8)]
+    #[case("gc_action_parallelism = 8", 4.0, 8)]
+    #[case("gc_action_parallelism = 0", 1.0, 1)]
+    fn test_gc_action_parallelism_override_is_verbatim(
+        #[case] knob: &str,
+        #[case] scale_factor: f64,
+        #[case] expected: usize,
+    ) {
+        let input = format!(
+            r#"
+            control_plane_api = "http://localhost:6666"
+            scale_factor = {scale_factor}
+
+            [tenant_config]
+            {knob}
+        "#
+        );
+        let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(&input)
+            .expect("config has valid fields");
+        let workdir = Utf8PathBuf::from("/nonexistent");
+        let conf =
+            PageServerConf::parse_and_validate(config_toml, &workdir).expect("parse_and_validate");
+        assert_eq!(conf.gc_action_parallelism, expected);
     }
 
     #[test]

@@ -680,6 +680,8 @@ impl BranchConfig {
             gc_trim_watermark_cache_capacity: self
                 .gc_trim_watermark_cache_capacity
                 .unwrap_or(global_conf.gc_trim_watermark_cache_capacity),
+            // No per-branch override: it sizes a pool built at process start.
+            gc_action_parallelism: global_conf.gc_action_parallelism,
             gc_rows_per_statement: self
                 .gc_rows_per_statement
                 .unwrap_or(global_conf.gc_rows_per_statement),

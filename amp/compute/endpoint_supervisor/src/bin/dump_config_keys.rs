@@ -58,6 +58,13 @@ const EXTRA_KEYS: &[(Daemon, &str, &str, &str)] = &[
         "boolean",
         "true",
     ),
+    // GC's action width / `pageserver:gc` pool; `None` scales the base default.
+    (
+        Daemon::Pageserver,
+        "tenant_config.gc_action_parallelism",
+        "integer",
+        "4",
+    ),
 ];
 
 fn main() -> Result<()> {

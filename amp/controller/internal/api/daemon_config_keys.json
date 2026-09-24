@@ -58,6 +58,7 @@
     "synthetic_size_calculation_interval": "string",
     "tenant_config.basebackup_cache_enabled": "boolean",
     "tenant_config.enable_gc": "boolean",
+    "tenant_config.gc_action_parallelism": "integer",
     "tenant_config.gc_candidate_every_n_bases": "integer",
     "tenant_config.gc_drain_limit": "integer",
     "tenant_config.gc_horizon": "integer",

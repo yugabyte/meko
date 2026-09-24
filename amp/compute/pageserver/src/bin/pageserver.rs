@@ -790,16 +790,13 @@ async fn create_hot_path_page_store(
 }
 
 /// Dedicated GC-drain pool (select + parallel trim DELETEs + dequeue), sized to
-/// `GC_ACTION_PARALLELISM` — the tick's *object* fan-out, not its statement
+/// `gc_action_parallelism` — the tick's *object* fan-out, not its statement
 /// count (#1182) — and isolated from the hot-path pool. No
 /// `yb_enable_upsert_mode`: the drain never INSERTs.
 async fn create_gc_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
-    let pool_size = pageserver_api::config::scale_count(
-        pageserver::page_store::GC_ACTION_PARALLELISM,
-        conf.scale_factor,
-    );
+    let pool_size = conf.gc_action_parallelism;
     let store = create_page_store_with_app_name(conf, "pageserver:gc", pool_size, false).await?;
     info!(pool_size, "GC PageStore connected");
     Ok(store)

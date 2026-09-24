@@ -91,9 +91,8 @@ mod test_support;
 // GC's storage layer is a submodule for size only; its public surface stays
 // `page_store::…` so the drain and the emitter keep their imports.
 pub use gc::{
-    GC_ACTION_PARALLELISM, GC_BUCKETS, GC_SWEEP_MAX_ROWS_PER_DELETE, GcDbIdent, GcForkIdent,
-    GcKind, GcSelectedCandidates, GcSlruSeg, GcSweepProgress, GcSweepScope, PendingGcRow,
-    TrimOutcome, gc_bucket_id,
+    GC_BUCKETS, GC_SWEEP_MAX_ROWS_PER_DELETE, GcDbIdent, GcForkIdent, GcKind, GcSelectedCandidates,
+    GcSlruSeg, GcSweepProgress, GcSweepScope, PendingGcRow, TrimOutcome, gc_bucket_id,
 };
 pub(crate) use gc::{
     GcCandidateId, GcSweepCandidate, materialise_object_key, rel_fork_of, slru_seg_of,

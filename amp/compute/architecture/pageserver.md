@@ -114,8 +114,8 @@ queue behind internal writes:
   production INSERT reaches these connections any more — only those UPDATEs
   do. The flag outlives its reason; the pool was renamed off it.
 - **`gc_page_store`** (`application_name = "pageserver:gc"`, pool of
-  `GC_ACTION_PARALLELISM` × `scale_factor`) — the GC drain
-  ([`pageserver-gc.md`](pageserver-gc.md)).
+  `gc_action_parallelism`, which defaults to `GC_ACTION_PARALLELISM` ×
+  `scale_factor`) — the GC drain ([`pageserver-gc.md`](pageserver-gc.md)).
 
 `PageStore` also opens direct-RPC table handles over `libs/yb_thin_client`
 (`PageStore::thinclient`, the batch-first client over the

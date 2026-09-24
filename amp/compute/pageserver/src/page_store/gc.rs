@@ -20,12 +20,6 @@ use crate::page_store::tokio_postgres::types::FromSql;
 /// the drain's per-bucket fan-out.
 pub const GC_BUCKETS: i32 = 3;
 
-/// Objects a drain tick acts on at once (scaled); the dedicated
-/// `pageserver:gc` pool is sized to this. Not the statement count: a `pages` act
-/// fans out again over `PAGE_BUCKETS` (#1182), and the pool bounds how many
-/// backends serve those, not how many are issued.
-pub const GC_ACTION_PARALLELISM: usize = 1;
-
 pub use pageserver_api::config::GC_SWEEP_MAX_ROWS_PER_DELETE;
 
 /// How a trim ended. Cancellation is an outcome, not an error: the rows it
@@ -1135,7 +1129,8 @@ impl PageStore {
         // sub-2MB fork is one bucket and this runs a single future; and
         // `YsqlClient` releases its pool slot before awaiting, so the pool gates
         // no statement, it picks the backend — making the realised concurrency
-        // `min(pool size, PAGE_BUCKETS)`, i.e. 1 at `scale_factor = 1.0`.
+        // `min(pool size, PAGE_BUCKETS)` — 1 with `gc_action_parallelism` unset
+        // at `scale_factor = 1.0`.
         let bucket_loops = bounds_by_bucket
             .into_iter()
             .enumerate()

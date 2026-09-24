@@ -188,7 +188,10 @@ sudo ss -tnp dst $YB_HOST 2>/dev/null | awk 'NR>1' \
 ```
 Cross-reference each pid against `ps -o pid,comm,args -p <pid>`. The pageserver pid's count is
 the YB pool size, and it scales with `scale_factor` — roughly `5 × scale_factor` (compute-reads and
-hot-path at 2 each, plus the GC pool at 1, all × `scale_factor`).
+hot-path at 2 each, plus the GC pool at 1, all × `scale_factor`). The arithmetic only holds at the
+defaults: `tenant_config.gc_action_parallelism` and `tsclient_read_sessions` /
+`tsclient_write_sessions` are used verbatim when set, so check `pageserver.toml` before treating a
+mismatch as a leak.
 
 **Which default applies depends on where the pageserver runs:**
 

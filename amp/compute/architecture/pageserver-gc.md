@@ -384,7 +384,7 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
      SLRU blocks (`gc_act_trim_slru`, single-tablet — the branch hash key
      plus a `(kind, segno)` range prefix); `meta` has no `will_init`/chain,
      so `gc_act_trim_meta` just keeps the newest version `<= cutoff` per
-     key. Trims across objects run in parallel (`GC_ACTION_PARALLELISM`,
+     key. Trims across objects run in parallel (`gc_action_parallelism`,
      default 1, scaled) — distinct objects are distinct keys / tablets,
      no ordering constraint. The rel trim fans out again within one fork,
      over its buckets; `slru_pages` and `meta` have none to fan out over.
@@ -539,7 +539,8 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    concurrently, so a pathologically deep key no longer makes its fork's other
    five buckets queue behind it — but `gc_act_trim_blocks` collects, so the deep
    key still holds the trim phase for its whole duration, and at
-   `GC_ACTION_PARALLELISM` = 1 no other fork proceeds alongside it.
+   `gc_action_parallelism` = 1 — its default at `scale_factor = 1.0` — no other
+   fork proceeds alongside it.
    Cancellation is checked between statements, but the bound is now looser on a
    pool narrower than six: those loops share a backend that runs their
    statements one at a time, so the last bucket's check is reached only after up
@@ -588,8 +589,7 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    pool wider than one: `YsqlClient` releases its slot before awaiting, so the
    pool picks the backend rather than gating the statement, making the
    realised width `min(GC pool, GC_BUCKETS)` — and the pool is
-   `scale_count(GC_ACTION_PARALLELISM, scale_factor)`, a single connection at
-   `scale_factor = 1.0`.
+   `gc_action_parallelism`, a single connection unless it is raised.
 
    A drop or shrink acts per-candidate at `<= due_lsn`, so only the acted
    candidate may clear; an un-acted sibling (e.g. a capped-out later re-drop)
@@ -697,11 +697,12 @@ candidate for them again.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`pageserver:gc` connection pool** sized to the *object* fan-out
-(`GC_ACTION_PARALLELISM`, scaled), so a backlogged drain never contends with the
+(`gc_action_parallelism`), so a backlogged drain never contends with the
 ingest/materialiser lanes or compute reads. It is not the statement count: each
 `pages` act fans out again over its buckets, so the pool bounds how many
-backends serve those statements rather than how many are issued (#1182). Candidate *inserts* ride the direct-RPC lane alongside the
-page writes they trail, as PGSQL_UPSERT batches
+backends serve those statements rather than how many are issued (#1182).
+Candidate *inserts* ride the direct-RPC lane alongside the page writes they
+trail, as PGSQL_UPSERT batches
 (`gc_enqueue_candidates_thin`); their volume is a rounding error next to
 the page writes. The drain itself has no thin lane — select, actions and
 dequeue are YSQL only.
@@ -757,9 +758,11 @@ the lever until the cadence itself tracks how long a tick took.
 
 ## Config
 
-All GC knobs are **per-branch** (tenant config, patchable via
-`BranchConfigPatch`). Under the 1 pageserver : 1 branch topology,
-per-branch is also per-instance today.
+All GC knobs live in the pageserver's `[tenant_config]`, patchable on a live
+endpoint through `pageserver_settings` (`tenant_config.gc_period`, …). The
+per-branch `BranchConfig` override the getters check first is always empty
+here — `page_server/mgr.rs` opens the timeline with `BranchConfig::default()`
+and nothing patches it — so `[tenant_config]` is the effective value.
 
 | Knob | Default | Effect |
 | --- | --- | --- |
@@ -769,6 +772,7 @@ per-branch is also per-instance today.
 | `gc_rows_per_statement` | `100 000` | Rows one GC delete statement names before committing and re-issuing. Every trim statement carries it, on all three keyspaces, and the prefix sweeps cap their derived batch with `GC_SWEEP_MAX_ROWS_PER_DELETE` — so the name is not trim-specific. Floored at 1 on read — a statement selecting nothing would never let its loop terminate — and not capped above, so an oversized value is the operator's to avoid. Measured on RF-3 over 1 M versions of a single block, the per-statement overhead is fully amortised by ~20 000 and flat above it (15.7 µs/row at 20 000, 16.2 at 100 000, against 26.6 at 5 000). Read fresh each tick. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects and dequeues (it acts on the subset whose watermark does not already cover them); bounds per-tick memory and delete burst. Since the dequeue no longer collapses a hot key's duplicates, this is also the queue's drain **rate** — `gc_drain_limit` rows per tick, at the cadence below. It bounds the **keys** a trim visits, not its statement count: a key deeper than `gc_rows_per_statement` takes as many statements as its depth needs (#1209). Read fresh each tick. |
 | `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
+| `gc_action_parallelism` | `scale_count(1, scale_factor)` | *Objects* a tick acts on at once, and the size of the `pageserver:gc` pool — one value, resolved at startup, so the two cannot drift. Not the statement count: a rel trim fans out again over its fork's buckets, and because `YsqlClient` frees its pool slot before awaiting, the pool picks the backend rather than gating the statement — realised bucket concurrency is `min(pool, PAGE_BUCKETS)`, so an unscaled default of 1 serialises that inner fan-out (#1182) entirely, and even amp2's 4 caps it below `PAGE_BUCKETS` (6). This is the knob that widens it without moving the other lanes. **Set verbatim: `scale_factor` does not apply to an explicit value** (8 means 8 on any `scale_factor`); only the default is scaled, and an explicit value is floored at 1 (a width of 0 parks the drain). |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
 
@@ -814,12 +818,12 @@ already uses. In tick order:
 | `gc publish cutoff` | — | 1 |
 | `gc await readers` | the RCU write guard as well as the wait | — |
 | `gc select` | — | 1 (one `UNION ALL` over `GC_BUCKETS`) |
-| `gc drop slru` | — | `GC_ACTION_PARALLELISM` |
+| `gc drop slru` | — | `gc_action_parallelism` |
 | `gc drop meta` | one batched `key = ANY` delete per distinct `due_lsn` | 1 |
 | `gc drop sweeps` | `DropRel` and `DropDb` alike, `pages` then `meta`, under one shared row budget | 1 |
-| `gc shrink pages` | — | `GC_ACTION_PARALLELISM` x `PAGE_BUCKETS` |
-| `gc trim pages` | a fork's anchor as well as its delete | `GC_ACTION_PARALLELISM` x `PAGE_BUCKETS` |
-| `gc trim slru` | — | `GC_ACTION_PARALLELISM` |
+| `gc shrink pages` | — | `gc_action_parallelism` x `PAGE_BUCKETS` |
+| `gc trim pages` | a fork's anchor as well as its delete | `gc_action_parallelism` x `PAGE_BUCKETS` |
+| `gc trim slru` | — | `gc_action_parallelism` |
 | `gc trim meta` | — | 1 |
 | `gc dequeue` | both dequeue statements, the busy-drop bookkeeping | `GC_BUCKETS`, for the trim sweep only |
 
@@ -843,7 +847,7 @@ that errors part-way still records every phase it entered.
 A phase's `pg_stat_statements` time over its wall time here is the concurrency it
 actually realised, which statement time alone cannot give — it sums across
 concurrent calls and each phase fans out at a different width. Read it against
-the width above, not as a reading of `GC_ACTION_PARALLELISM`: the two block
+the width above, not as a reading of `gc_action_parallelism`: the two block
 paths nest a `PAGE_BUCKETS` fan-out inside `run_parallel_actions`' one, so their
 ratio is the product of both and moving either knob moves it.
 

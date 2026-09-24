@@ -1043,6 +1043,15 @@ pub struct BranchConfigToml {
     /// an act it did not need. `pageserver_yb_gc_trim_watermark_{hits,misses}`
     /// is the hit rate to size this from.
     pub gc_trim_watermark_cache_capacity: usize,
+    /// Objects a GC tick acts on at once, and the size of the `pageserver:gc`
+    /// pool — one value, so the two cannot drift. Raising it also widens the
+    /// bucket fan-out inside a rel trim, whose realised concurrency is
+    /// `min(pool, PAGE_BUCKETS)` (#1182). **Used verbatim: `scale_factor`
+    /// applies only to the unset default,
+    /// `scale_count(GC_ACTION_PARALLELISM, scale_factor)`.** Floored at 1. No
+    /// `BranchConfig` override; resolved at startup, so a change needs a
+    /// pageserver restart.
+    pub gc_action_parallelism: Option<usize>,
 }
 
 /// Ceiling on the rows one prefix-sweep GC DELETE names, so a `DROP DATABASE`
@@ -1050,6 +1059,10 @@ pub struct BranchConfigToml {
 /// The batch is otherwise derived from `gc_sweep_rows_per_tick` (see
 /// `PageStore::gc_act_sweep`); this only caps it.
 pub const GC_SWEEP_MAX_ROWS_PER_DELETE: usize = 5_000;
+
+/// Base default behind an unset [`BranchConfigToml::gc_action_parallelism`],
+/// scaled by `scale_factor`.
+pub const GC_ACTION_PARALLELISM: usize = 1;
 
 pub mod tenant_conf_defaults {
     pub const DEFAULT_GC_HORIZON: u64 = 64 * 1024 * 1024;
@@ -1116,6 +1129,7 @@ impl Default for BranchConfigToml {
             enable_gc: true,
             gc_candidate_every_n_bases: DEFAULT_GC_CANDIDATE_EVERY_N_BASES,
             gc_trim_watermark_cache_capacity: DEFAULT_GC_TRIM_WATERMARK_CACHE_CAPACITY,
+            gc_action_parallelism: None,
             gc_rows_per_statement: DEFAULT_GC_ROWS_PER_STATEMENT,
         }
     }
