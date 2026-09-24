@@ -53,10 +53,14 @@ read is just a one-op batch; writes are the same shape.
   rows may span tables.
 - Builders: `RangeRead::new(table, hash_values).cond(...).targets(...).limit(...)`
   and `UpsertRow::new(table, key_values, &[(col, val)])` resolve column names to
-  ids against the `TableHandle` (RPC-free). `BindValue` is the input value type.
+  ids against the `TableHandle` (RPC-free). `BindValue` is the input value type,
+  and each variant must match its column's type exactly (`I16` SMALLINT, `I32`
+  INTEGER, `I64` BIGINT, `U32` OID): the builders and `.cond()` return `Invalid`
+  otherwise. The tserver does not check, so an `I64` on an `INTEGER` key column
+  would build a key no YSQL-written row has.
 - Reads come back **decoded**: the shim decodes each page (YB's `pg_doc_data`
   codec + the table's column types) into typed cells; this crate maps them onto
-  a `Value` enum (`Null|Bool|I16|I32|I64|Text|Bytes`) and `Row = Vec<Value>`.
+  a `Value` enum (`Null|Bool|I16|I32|I64|U32|Text|Bytes`; `U32` is an `oid` column) and `Row = Vec<Value>`.
   `Value::as_i64()/as_bytes()/…` return `Result`.
 - Errors: `YbError` mirrors the shim's status codes (`Invalid`, `Network`,
   `TryAgain`, `ReadRestart`, `Schema`, `Fenced`, `Other`); `ReadRestart` means

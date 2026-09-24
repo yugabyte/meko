@@ -27,20 +27,20 @@ struct Args {
     #[arg(long)]
     branch: BranchId,
     #[arg(long)]
-    spc: i64,
+    spc: u32,
     #[arg(long)]
-    db: i64,
+    db: u32,
     #[arg(long)]
-    rel: i64,
+    rel: u32,
     #[arg(long)]
     fork: i16,
     /// Single block. Required for --decode (a chain is per-block).
     #[arg(long)]
-    blknum: Option<i64>,
+    blknum: Option<u32>,
     #[arg(long)]
-    blknum_from: Option<i64>,
+    blknum_from: Option<u32>,
     #[arg(long)]
-    blknum_to: Option<i64>,
+    blknum_to: Option<u32>,
     #[arg(long, value_name = "X/Y")]
     lsn_from: Option<Lsn>,
     #[arg(long, value_name = "X/Y")]
@@ -89,12 +89,12 @@ fn key_where(a: &Args) -> String {
 /// - an open-ended or absent blknum filter ⇒ no predicate. The blknums are
 ///   genuinely unknown, so narrowing would risk hiding rows; correctness beats
 ///   pruning in a diagnostic.
-fn bucket_where(rel: i64, blknum: Option<i64>, from: Option<i64>, to: Option<i64>) -> String {
+fn bucket_where(rel: u32, blknum: Option<u32>, from: Option<u32>, to: Option<u32>) -> String {
     let buckets: Vec<i16> = match (blknum, from, to) {
         (Some(b), _, _) => vec![page_bucket_id(rel, b)],
-        // `--blknum-to` is inclusive, hence the +1 to the half-open helper.
-        // Saturating because both bounds come straight from the command line.
-        (None, Some(lo), Some(hi)) => page_buckets_for_range(rel, lo, hi.saturating_add(1)),
+        // `--blknum-to` is inclusive, hence the +1 to the half-open helper,
+        // taken in `i64` so `u32::MAX` cannot overflow.
+        (None, Some(lo), Some(hi)) => page_buckets_for_range(rel, i64::from(lo), i64::from(hi) + 1),
         _ => return String::new(),
     };
     match buckets.len() {
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn bucket_where_pins_only_when_blknum_is_known() {
         // rel 16400: (16400/7 + 16400/13) % 6 == 3 for stretch 0.
-        const REL: i64 = 16400;
+        const REL: u32 = 16400;
 
         // A single block ⇒ equality on one bucket (one tablet).
         assert_eq!(
@@ -533,9 +533,9 @@ mod tests {
             format!(" AND bucket_id = {}", page_bucket_id(REL, 300))
         );
 
-        // i64::MAX must not overflow the inclusive->half-open +1.
+        // u32::MAX must not overflow the inclusive->half-open +1.
         assert_eq!(
-            bucket_where(REL, None, Some(0), Some(i64::MAX)),
+            bucket_where(REL, None, Some(0), Some(u32::MAX)),
             " AND bucket_id IN (0,1,2,3,4,5)"
         );
 

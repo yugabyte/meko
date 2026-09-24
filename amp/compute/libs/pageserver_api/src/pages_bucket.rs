@@ -39,13 +39,14 @@ pub const PAGE_BUCKET_STRIDE: i64 = 256;
 /// all the data, so including it would only shuffle FSM/VM.
 ///
 /// Integer division throughout, matching PostgreSQL's truncated `/` and `%`
-/// exactly. Inputs come from a `Key`'s u32 fields so they are never negative;
-/// a negative input would make the result negative and the row unreachable.
-pub fn page_bucket_id(relnode: i64, blknum: i64) -> i16 {
-    debug_assert!(
-        relnode >= 0 && blknum >= 0,
-        "bucket inputs are non-negative"
-    );
+/// exactly. The inputs are a `Key`'s u32 fields, and the arithmetic runs in
+/// `i64` — as the CHECK's `::bigint` casts do — so neither overflows nor goes
+/// negative.
+pub fn page_bucket_id(relnode: u32, blknum: u32) -> i16 {
+    bucket_of(i64::from(relnode), i64::from(blknum))
+}
+
+fn bucket_of(relnode: i64, blknum: i64) -> i16 {
     ((relnode / 7 + relnode / 13 + blknum / PAGE_BUCKET_STRIDE) % PAGE_BUCKETS) as i16
 }
 
@@ -58,7 +59,7 @@ pub fn page_bucket_id(relnode: i64, blknum: i64) -> i16 {
 /// Empty when the range is empty. Saturates at every bucket once the range
 /// spans [`PAGE_BUCKETS`] stretches, which is the common case for a large
 /// relation.
-pub fn page_buckets_for_range(relnode: i64, blk_lo: i64, blk_hi: i64) -> Vec<i16> {
+pub fn page_buckets_for_range(relnode: u32, blk_lo: i64, blk_hi: i64) -> Vec<i16> {
     if blk_lo >= blk_hi {
         return Vec::new();
     }
@@ -68,7 +69,7 @@ pub fn page_buckets_for_range(relnode: i64, blk_lo: i64, blk_hi: i64) -> Vec<i16
         return (0..PAGE_BUCKETS as i16).collect();
     }
     let mut buckets: Vec<i16> = (first..=last)
-        .map(|stretch| page_bucket_id(relnode, stretch * PAGE_BUCKET_STRIDE))
+        .map(|stretch| bucket_of(i64::from(relnode), stretch * PAGE_BUCKET_STRIDE))
         .collect();
     buckets.sort_unstable();
     buckets.dedup();
@@ -98,14 +99,15 @@ mod tests {
         // A whole 2MB stretch shares one bucket; the next stretch is the next
         // bucket; six stretches wrap. This is the sequential-scan locality
         // property — without it a scan sprays across every tablet.
-        for blk in 0..PAGE_BUCKET_STRIDE {
+        let stride = PAGE_BUCKET_STRIDE as u32;
+        for blk in 0..stride {
             assert_eq!(page_bucket_id(16400, blk), 3, "stretch 0 is one bucket");
         }
-        assert_eq!(page_bucket_id(16400, PAGE_BUCKET_STRIDE), 4);
-        assert_eq!(page_bucket_id(16400, PAGE_BUCKET_STRIDE * PAGE_BUCKETS), 3);
+        assert_eq!(page_bucket_id(16400, stride), 4);
+        assert_eq!(page_bucket_id(16400, stride * PAGE_BUCKETS as u32), 3);
 
         // Deterministic + in range over a spread of blocks.
-        for g in 0..10_000i64 {
+        for g in 0..10_000u32 {
             let (rel, blk) = (16400 + (g % 50), g);
             let b = page_bucket_id(rel, blk);
             assert_eq!(b, page_bucket_id(rel, blk), "stable");
@@ -118,9 +120,9 @@ mod tests {
         // stride 42; this must stay near-even for every plausible stride.
         // Bound is 1.5x the ideal share, against a measured worst of 1.39x
         // for strides <= 30.
-        for stride in 1..=30i64 {
+        for stride in 1..=30u32 {
             let mut counts = [0usize; PAGE_BUCKETS as usize];
-            for g in 0..600i64 {
+            for g in 0..600u32 {
                 counts[page_bucket_id(16384 + stride * g, 0) as usize] += 1;
             }
             let worst = *counts.iter().max().unwrap();
@@ -161,7 +163,7 @@ mod tests {
         for (lo, hi) in [(0i64, 1i64), (0, 700), (250, 260), (1000, 4000), (7, 9)] {
             let buckets = page_buckets_for_range(16400, lo, hi);
             for blk in lo..hi {
-                let b = page_bucket_id(16400, blk);
+                let b = page_bucket_id(16400, blk as u32);
                 assert!(
                     buckets.contains(&b),
                     "range [{lo},{hi}) dropped bucket {b} for blknum {blk}"

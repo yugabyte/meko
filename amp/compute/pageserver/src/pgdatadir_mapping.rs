@@ -2098,7 +2098,7 @@ impl DatadirModification<'_> {
         &mut self,
         key: pageserver_api::key::Key,
         gc_kind: crate::page_store::GcKind,
-        relsize: Option<i64>,
+        relsize: Option<u32>,
     ) {
         if !self.gc_enabled() {
             return;
@@ -2285,7 +2285,7 @@ impl DatadirModification<'_> {
             self.record_gc_drop_shrink_event(
                 rel_size_to_key(rel),
                 crate::page_store::GcKind::ShrinkPages,
-                Some(nblocks as i64),
+                Some(nblocks),
             );
         }
         Ok(())

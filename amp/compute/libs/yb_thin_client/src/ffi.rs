@@ -75,6 +75,8 @@ pub enum YbValueType {
     I64 = 3,
     Text = 4,
     Bytea = 5,
+    /// DocDB UINT32: what YSQL stores an `oid` column as.
+    U32 = 6,
 }
 
 #[repr(C)]
@@ -101,6 +103,8 @@ pub enum YbBindTag {
     I64 = 4,
     Text = 5,
     Bytea = 6,
+    /// `int_value` holds the unsigned value, 0..2^32-1.
+    U32 = 7,
 }
 
 #[repr(C)]
@@ -146,7 +150,7 @@ pub struct YbReadSpec {
 }
 
 /// A decoded read cell (mirrors [`YbBind`], the write side). `Null` is a
-/// tag; `Bool`/`I16`/`I32`/`I64` read `int_value`; `Text`/`Bytea` read
+/// tag; `Bool`/`I16`/`I32`/`I64`/`U32` read `int_value`; `Text`/`Bytea` read
 /// `(bytes, bytes_len)`. `bytes` point into result-owned storage, valid
 /// until `ybthin_read_result_free`.
 #[repr(C)]

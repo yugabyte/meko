@@ -37,6 +37,8 @@ pub enum ValueType {
     I64,
     Text,
     Bytea,
+    /// DocDB UINT32, the storage type of an `oid` column.
+    U32,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +59,42 @@ pub enum BindValue {
     I64(i64),
     Text(String),
     Bytes(Bytes),
+    /// An `oid` column's value.
+    U32(u32),
+}
+
+impl BindValue {
+    /// Refuse a bind whose type is not `col`'s.
+    ///
+    /// DocDB encodes a key entry from the bound value's wire type and the
+    /// tserver does not check it against the column, so an `I64` bound to an
+    /// `INTEGER` key column builds a key no YSQL-written row has: reads miss
+    /// silently, and an upsert lands a row that every later scan of the table
+    /// trips over. Every builder that resolves a column runs this, so
+    /// a column-width change fails the first request that binds the old width
+    /// instead of corrupting the table. `Null` fits any value column, and no
+    /// key column.
+    fn check_fits(&self, col: &Column) -> Result<(), YbError> {
+        let fits = match (self, col.value_type) {
+            (BindValue::Null, _) => col.kind == ColKind::Value,
+            (BindValue::Bool(_), ValueType::Bool)
+            | (BindValue::I16(_), ValueType::I16)
+            | (BindValue::I32(_), ValueType::I32)
+            | (BindValue::I64(_), ValueType::I64)
+            | (BindValue::U32(_), ValueType::U32)
+            | (BindValue::Text(_), ValueType::Text)
+            | (BindValue::Bytes(_), ValueType::Bytea) => true,
+            _ => false,
+        };
+        if fits {
+            Ok(())
+        } else {
+            Err(YbError::Invalid(format!(
+                "column {:?} is {:?} ({:?}), cannot bind {self:?}",
+                col.name, col.value_type, col.kind
+            )))
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,6 +121,8 @@ pub enum Value {
     I64(i64),
     Text(Bytes),
     Bytes(Bytes),
+    /// An `oid` column's value.
+    U32(u32),
 }
 
 impl Value {
@@ -97,6 +137,7 @@ impl Value {
             Value::I16(v) => Ok(*v as i64),
             Value::I32(v) => Ok(*v as i64),
             Value::I64(v) => Ok(*v),
+            Value::U32(v) => Ok(i64::from(*v)),
             _ => Err(type_err("integer", self)),
         }
     }
@@ -139,6 +180,7 @@ fn type_err(want: &str, got: &Value) -> YbError {
         Value::I16(_) => "i16",
         Value::I32(_) => "i32",
         Value::I64(_) => "i64",
+        Value::U32(_) => "u32",
         Value::Text(_) => "text",
         Value::Bytes(_) => "bytea",
     };
@@ -182,6 +224,7 @@ impl RangeRead {
                 hash_values.len()
             )));
         }
+        check_prefix(table.key_columns(), &hash_values)?;
         Ok(RangeRead {
             hash_values,
             range_values: Vec::new(),
@@ -218,6 +261,7 @@ impl RangeRead {
                 range_values.len()
             )));
         }
+        check_prefix(table.key_columns(), &range_values)?;
         Ok(RangeRead {
             hash_values: Vec::new(),
             range_values,
@@ -242,6 +286,7 @@ impl RangeRead {
                 "column {column:?} is not a range key column"
             )));
         }
+        value.check_fits(col)?;
         self.conds.push((col.id, op, value));
         Ok(self)
     }
@@ -328,6 +373,7 @@ impl UpsertRow {
                 key_values.len()
             )));
         }
+        check_prefix(table.key_columns(), &key_values)?;
         let mut value_ids = Vec::with_capacity(values.len());
         let mut owned = Vec::with_capacity(values.len());
         for (name, value) in values {
@@ -337,6 +383,7 @@ impl UpsertRow {
                     "column {name:?} is a key column, pass it in key_values"
                 )));
             }
+            value.check_fits(col)?;
             value_ids.push(col.id);
             owned.push(value.clone());
         }
@@ -442,6 +489,10 @@ fn to_bind(b: &BindValue) -> ffi::YbBind {
         BindValue::I64(v) => {
             out.tag = ffi::YbBindTag::I64;
             out.int_value = *v;
+        }
+        BindValue::U32(v) => {
+            out.tag = ffi::YbBindTag::U32;
+            out.int_value = i64::from(*v);
         }
         BindValue::Text(s) => {
             out.tag = ffi::YbBindTag::Text;
@@ -589,11 +640,27 @@ impl TableHandle {
     }
 
     pub fn num_key_columns(&self) -> usize {
+        self.key_columns().count()
+    }
+
+    /// The key columns in schema order: hash, then range.
+    fn key_columns(&self) -> impl Iterator<Item = &Column> {
         self.columns
             .iter()
             .filter(|c| matches!(c.kind, ColKind::Hash | ColKind::Range))
-            .count()
     }
+}
+
+/// [`BindValue::check_fits`] over `values` against the leading `columns`. The
+/// callers check the counts first, so `zip` stopping at the shorter side
+/// drops nothing.
+fn check_prefix<'a>(
+    columns: impl Iterator<Item = &'a Column>,
+    values: &[BindValue],
+) -> Result<(), YbError> {
+    columns
+        .zip(values)
+        .try_for_each(|(col, value)| value.check_fits(col))
 }
 
 impl TsClient {
@@ -1035,6 +1102,7 @@ fn cell_to_value(c: &ffi::YbCell) -> Value {
         ffi::YbBindTag::I16 => Value::I16(c.int_value as i16),
         ffi::YbBindTag::I32 => Value::I32(c.int_value as i32),
         ffi::YbBindTag::I64 => Value::I64(c.int_value),
+        ffi::YbBindTag::U32 => Value::U32(c.int_value as u32),
         ffi::YbBindTag::Text => Value::Text(bytes()),
         ffi::YbBindTag::Bytea => Value::Bytes(bytes()),
     }
@@ -1067,6 +1135,7 @@ unsafe fn columns_from(info: &ffi::YbTableInfo) -> Vec<Column> {
                 ffi::YbValueType::I16 => ValueType::I16,
                 ffi::YbValueType::I32 => ValueType::I32,
                 ffi::YbValueType::I64 => ValueType::I64,
+                ffi::YbValueType::U32 => ValueType::U32,
                 ffi::YbValueType::Text => ValueType::Text,
                 ffi::YbValueType::Bytea => ValueType::Bytea,
             },
@@ -1158,6 +1227,52 @@ mod tests {
         .await;
         assert!(out.is_err());
         assert_eq!(calls.get(), MAX_ATTEMPTS);
+    }
+
+    /// A bind must carry its column's own type: the tserver builds the key
+    /// entry from the bind, so a wider or narrower integer is a different key.
+    #[test]
+    fn a_bind_must_match_its_column_type() {
+        use super::{BindValue, ColKind, Column, ValueType, check_prefix};
+        let col = |kind, value_type| Column {
+            name: "c".into(),
+            id: 1,
+            kind,
+            value_type,
+        };
+        let key = |value_type| col(ColKind::Range, value_type);
+        for (value_type, fits) in [
+            (ValueType::I16, BindValue::I16(7)),
+            (ValueType::I32, BindValue::I32(7)),
+            (ValueType::I64, BindValue::I64(7)),
+            (ValueType::U32, BindValue::U32(u32::MAX)),
+            (ValueType::Bool, BindValue::Bool(true)),
+            (ValueType::Text, BindValue::Text("t".into())),
+            (ValueType::Bytea, BindValue::Bytes(Bytes::from_static(b"b"))),
+        ] {
+            assert!(fits.check_fits(&key(value_type)).is_ok(), "{fits:?}");
+        }
+        assert!(BindValue::I64(7).check_fits(&key(ValueType::I32)).is_err());
+        assert!(BindValue::I32(7).check_fits(&key(ValueType::I64)).is_err());
+        assert!(BindValue::I64(7).check_fits(&key(ValueType::U32)).is_err());
+        assert!(BindValue::I32(7).check_fits(&key(ValueType::I16)).is_err());
+        assert!(
+            BindValue::Text("t".into())
+                .check_fits(&key(ValueType::Bytea))
+                .is_err()
+        );
+        // NULL is a value-column state; no key column can hold it.
+        assert!(BindValue::Null.check_fits(&key(ValueType::I64)).is_err());
+        assert!(
+            BindValue::Null
+                .check_fits(&col(ColKind::Value, ValueType::I64))
+                .is_ok()
+        );
+
+        let columns = [key(ValueType::I16), key(ValueType::U32)];
+        assert!(check_prefix(columns.iter(), &[BindValue::I16(1), BindValue::U32(2)]).is_ok());
+        assert!(check_prefix(columns.iter(), &[BindValue::I16(1)]).is_ok());
+        assert!(check_prefix(columns.iter(), &[BindValue::I16(1), BindValue::I64(2)]).is_err());
     }
 
     /// The `read_scan` pagination truth table. The regression: a scan must keep

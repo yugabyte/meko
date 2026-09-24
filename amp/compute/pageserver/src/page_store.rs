@@ -13,11 +13,11 @@
 //! CREATE TABLE amp_storage.pages (
 //!     bucket_id   SMALLINT NOT NULL,
 //!     branch_id   uuid     NOT NULL,
-//!     spcnode     BIGINT   NOT NULL,
-//!     dbnode      BIGINT   NOT NULL,
-//!     relnode     BIGINT   NOT NULL,
+//!     spcnode     OID      NOT NULL,
+//!     dbnode      OID      NOT NULL,
+//!     relnode     OID      NOT NULL,
 //!     forknum     SMALLINT NOT NULL,
-//!     blknum      BIGINT   NOT NULL,
+//!     blknum      OID      NOT NULL,
 //!     is_image    BOOLEAN  NOT NULL,
 //!     lsn         BIGINT   NOT NULL,
 //!     will_init   BOOLEAN  NOT NULL,
@@ -586,7 +586,7 @@ impl<T> ChainCollector<T> {
 async fn run_batched_block_scan(
     client: &yb_thin_client::TsClient,
     table: &yb_thin_client::TableHandle,
-    block_reads: &[(i64, yb_thin_client::RangeRead)],
+    block_reads: &[(u32, yb_thin_client::RangeRead)],
     stop: ScanStop,
     what: &str,
     op_label: impl Fn(usize) -> String,
@@ -594,7 +594,7 @@ async fn run_batched_block_scan(
     for attempt in 1..=THIN_SCAN_RESTARTS {
         let mut collectors: Vec<ChainCollector<yb_thin_client::Row>> = block_reads
             .iter()
-            .map(|&(blk, _)| ChainCollector::new(blk))
+            .map(|&(blk, _)| ChainCollector::new(i64::from(blk)))
             .collect();
         let mut paging: Vec<Option<bytes::Bytes>> = vec![None; block_reads.len()];
         // Per-op consecutive-empty-round counters; see `check_barren_round`.
@@ -781,15 +781,6 @@ impl RowCells for yb_thin_client::Row {
     }
 }
 
-/// [`int_bind_pg`] for the `yb_thin_client` lane.
-fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindValue {
-    match col.value_type {
-        yb_thin_client::ValueType::I16 => yb_thin_client::BindValue::I16(v as i16),
-        yb_thin_client::ValueType::I32 => yb_thin_client::BindValue::I32(v as i32),
-        _ => yb_thin_client::BindValue::I64(v),
-    }
-}
-
 /// The bound key prefix selecting ONE page's chain in `pages`: all seven
 /// leading key columns, so the rows it spans are exactly that page's versions
 /// and the read is a single clustered seek on one tablet. Callers append the
@@ -801,23 +792,23 @@ fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindVa
 fn page_chain_read(
     pages: &yb_thin_client::TableHandle,
     branch: &bytes::Bytes,
-    sp: i64,
-    db: i64,
-    rel: i64,
+    sp: u32,
+    db: u32,
+    rel: u32,
     fork: i16,
-    blk: i64,
+    blk: u32,
 ) -> Result<yb_thin_client::RangeRead> {
     use yb_thin_client::{BindValue, RangeRead};
     Ok(RangeRead::new_range(
         pages,
         vec![
-            int_bind_thin(pages.col("bucket_id")?, page_bucket_id(rel, blk) as i64),
+            BindValue::I16(page_bucket_id(rel, blk)),
             BindValue::Bytes(branch.clone()),
-            int_bind_thin(pages.col("spcnode")?, sp),
-            int_bind_thin(pages.col("dbnode")?, db),
-            int_bind_thin(pages.col("relnode")?, rel),
-            int_bind_thin(pages.col("forknum")?, fork as i64),
-            BindValue::I64(blk),
+            BindValue::U32(sp),
+            BindValue::U32(db),
+            BindValue::U32(rel),
+            BindValue::I16(fork),
+            BindValue::U32(blk),
         ],
     )?)
 }
@@ -829,24 +820,22 @@ fn slru_segment_read(
     slru: &yb_thin_client::TableHandle,
     branch: &bytes::Bytes,
     kind_i: i16,
-    segno_i: i64,
+    segno: u32,
 ) -> Result<yb_thin_client::RangeRead> {
     use yb_thin_client::{BindValue, CondOp, RangeRead};
     Ok(
         RangeRead::new(slru, vec![BindValue::Bytes(branch.clone())])?
-            .cond(
-                slru,
-                "kind",
-                CondOp::Eq,
-                int_bind_thin(slru.col("kind")?, kind_i as i64),
-            )?
-            .cond(
-                slru,
-                "segno",
-                CondOp::Eq,
-                int_bind_thin(slru.col("segno")?, segno_i),
-            )?,
+            .cond(slru, "kind", CondOp::Eq, BindValue::I16(kind_i))?
+            .cond(slru, "segno", CondOp::Eq, BindValue::U32(segno))?,
     )
+}
+
+/// An SLRU block's `slru_pages.blknum`. The column is SMALLINT because the
+/// block is a page's index within its segment, `0..SLRU_PAGES_PER_SEGMENT`,
+/// and the importer refuses a segment file holding more pages than that.
+/// An error rather than a panic, since the value arrives in a `Key`.
+pub(crate) fn slru_blknum(blk: u32) -> Result<i16> {
+    i16::try_from(blk).with_context(|| format!("SLRU blknum {blk} is not a page within a segment"))
 }
 
 /// Normalize a chain fetched in DocDB storage order into SQL result
@@ -1247,7 +1236,7 @@ impl ThinClientTables {
 /// Decompose an 18-byte relation-page Key into the typed columns.
 /// Returns `Err` if the bytes don't parse as `field1 = 0` (the
 /// relation-page namespace).
-fn key_columns(key: &Key) -> Result<(i64, i64, i64, i16, i64)> {
+fn key_columns(key: &Key) -> Result<(u32, u32, u32, i16, u32)> {
     if !key.is_rel_block_key() {
         bail!(
             "PageStore: key {key} is not a relation block (field1=0x{:02x}, field4={}, field6=0x{:x}); \
@@ -1258,24 +1247,24 @@ fn key_columns(key: &Key) -> Result<(i64, i64, i64, i16, i64)> {
         );
     }
     Ok((
-        key.field2 as i64,
-        key.field3 as i64,
-        key.field4 as i64,
+        key.field2,
+        key.field3,
+        key.field4,
         key.field5 as i16,
-        key.field6 as i64,
+        key.field6,
     ))
 }
 
 /// Inverse: rebuild the 18-byte BYTEA Key from typed columns.
-fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Bytes {
+fn columns_to_key_bytes(sp: u32, db: u32, rel: u32, fork: i16, blk: u32) -> Bytes {
     let mut buf = [0u8; KEY_SIZE];
     // field1 = 0 (relation-page namespace)
     buf[0] = 0;
-    buf[1..5].copy_from_slice(&(sp as u32).to_be_bytes());
-    buf[5..9].copy_from_slice(&(db as u32).to_be_bytes());
-    buf[9..13].copy_from_slice(&(rel as u32).to_be_bytes());
+    buf[1..5].copy_from_slice(&sp.to_be_bytes());
+    buf[5..9].copy_from_slice(&db.to_be_bytes());
+    buf[9..13].copy_from_slice(&rel.to_be_bytes());
     buf[13] = fork as u8;
-    buf[14..18].copy_from_slice(&(blk as u32).to_be_bytes());
+    buf[14..18].copy_from_slice(&blk.to_be_bytes());
     Bytes::copy_from_slice(&buf)
 }
 
@@ -1677,13 +1666,6 @@ impl PageStore {
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pages = &p.pages;
-        // Column metadata is constant for the whole flush — resolve once
-        // instead of per row (ROWS_PER_INSERT * chunks lookups otherwise).
-        let col_bucket = pages.col("bucket_id")?;
-        let col_spc = pages.col("spcnode")?;
-        let col_db = pages.col("dbnode")?;
-        let col_rel = pages.col("relnode")?;
-        let col_fork = pages.col("forknum")?;
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let branch_b = branch_id.to_bytes();
 
@@ -1707,13 +1689,13 @@ impl PageStore {
                 batch.push(UpsertRow::new(
                     pages,
                     vec![
-                        int_bind_thin(col_bucket, page_bucket_id(rel, blk) as i64),
+                        BindValue::I16(page_bucket_id(rel, blk)),
                         BindValue::Bytes(branch_b.clone()),
-                        int_bind_thin(col_spc, sp),
-                        int_bind_thin(col_db, db),
-                        int_bind_thin(col_rel, rel),
-                        int_bind_thin(col_fork, fork as i64),
-                        BindValue::I64(blk),
+                        BindValue::U32(sp),
+                        BindValue::U32(db),
+                        BindValue::U32(rel),
+                        BindValue::I16(fork),
+                        BindValue::U32(blk),
                         BindValue::I64(row.lsn.0 as i64),
                         BindValue::Bool(row.will_init),
                     ],
@@ -1793,11 +1775,11 @@ impl PageStore {
         &self,
         p: &ThinClientTables,
         branch_id: BranchId,
-        sp: i64,
-        db: i64,
-        rel: i64,
+        sp: u32,
+        db: u32,
+        rel: u32,
         fork: i16,
-        blk: i64,
+        blk: u32,
         target: i64,
     ) -> Result<Vec<Arc<PageRow>>> {
         use yb_thin_client::{BindValue, CondOp};
@@ -1829,11 +1811,11 @@ impl PageStore {
         &self,
         p: &ThinClientTables,
         branch_id: BranchId,
-        sp: i64,
-        db: i64,
-        rel: i64,
+        sp: u32,
+        db: u32,
+        rel: u32,
         fork: i16,
-        blks: &[i64],
+        blks: &[u32],
         target: i64,
         read: OneForkRead,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
@@ -1847,7 +1829,7 @@ impl PageStore {
         let branch_b = branch_id.to_bytes();
         let block_reads = blks
             .iter()
-            .map(|&blk| -> Result<(i64, RangeRead)> {
+            .map(|&blk| -> Result<(u32, RangeRead)> {
                 Ok((
                     blk,
                     page_chain_read(pages, &branch_b, sp, db, rel, fork, blk)?
@@ -1959,11 +1941,11 @@ impl PageStore {
         // plus `group_page_rows_by_key`. A block with no base below the
         // target yields its full chain.
         if one_fork {
-            let sp = range.start.field2 as i64;
-            let db = range.start.field3 as i64;
-            let rel = range.start.field4 as i64;
+            let sp = range.start.field2;
+            let db = range.start.field3;
+            let rel = range.start.field4;
             let fork = range.start.field5 as i16;
-            let blks: Vec<i64> = (range.start.field6 as i64..range.end.field6 as i64).collect();
+            let blks: Vec<u32> = (range.start.field6..range.end.field6).collect();
             let p = self.thinclient.current().await;
             return self
                 .scan_one_fork_thin(
@@ -1984,16 +1966,17 @@ impl PageStore {
         // predicates. Joining the CTE on the full (spcnode, dbnode,
         // relnode, forknum, blknum) tuple keeps anchors paired with
         // the right block when a range crosses forks.
-        let sp_lo = range.start.field2 as i64;
-        let db_lo = range.start.field3 as i64;
-        let rel_lo = range.start.field4 as i64;
+        // The oid columns are `OID`; tokio-postgres binds only `u32` to that type.
+        let sp_lo = range.start.field2;
+        let db_lo = range.start.field3;
+        let rel_lo = range.start.field4;
         let fork_lo = range.start.field5 as i16;
-        let blk_lo = range.start.field6 as i64;
-        let sp_hi = range.end.field2 as i64;
-        let db_hi = range.end.field3 as i64;
-        let rel_hi = range.end.field4 as i64;
+        let blk_lo = range.start.field6;
+        let sp_hi = range.end.field2;
+        let db_hi = range.end.field3;
+        let rel_hi = range.end.field4;
         let fork_hi = range.end.field5 as i16;
-        let blk_hi = range.end.field6 as i64;
+        let blk_hi = range.end.field6;
         // Cross-fork variant of the DISTINCT-driven LATERAL (memoized,
         // ids baked — see `build_scan_cross_fork_sql`), keyed on the
         // full (spcnode, dbnode, relnode, forknum, blknum) tuple so
@@ -2038,7 +2021,7 @@ impl PageStore {
             return Ok(HashMap::new());
         }
         let (sp, db, rel, fork, _) = key_columns(&keys[0])?;
-        let mut blknums: Vec<i64> = Vec::with_capacity(keys.len());
+        let mut blknums: Vec<u32> = Vec::with_capacity(keys.len());
         for k in keys {
             let (sp2, db2, rel2, fork2, blk) = key_columns(k)?;
             if sp2 != sp || db2 != db || rel2 != rel || fork2 != fork {
@@ -2101,14 +2084,12 @@ impl PageStore {
         target_lsn: Lsn,
     ) -> Result<Vec<SlruPageRow>> {
         let kind_i = slru_kind_to_i16(kind);
-        let segno_i = segno as i64;
-        let blk_i = blknum as i64;
         let target = target_lsn.0 as i64;
 
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
         let chain = self
-            .read_slru_chain_thin(&p, branch_id, kind, kind_i, segno_i, blk_i, target)
+            .read_slru_chain_thin(&p, branch_id, kind, kind_i, segno, blknum, target)
             .await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["read_slru_chain", "yb_thin_client"])
@@ -2123,14 +2104,19 @@ impl PageStore {
         branch_id: BranchId,
         kind: SlruKind,
         kind_i: i16,
-        segno_i: i64,
-        blk_i: i64,
+        segno: u32,
+        blknum: u32,
         target: i64,
     ) -> Result<Vec<SlruPageRow>> {
         use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = slru_segment_read(slru, &branch_id.to_bytes(), kind_i, segno_i)?
-            .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk_i))?
+        let read = slru_segment_read(slru, &branch_id.to_bytes(), kind_i, segno)?
+            .cond(
+                slru,
+                "blknum",
+                CondOp::Eq,
+                BindValue::I16(slru_blknum(blknum)?),
+            )?
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
             .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
@@ -2139,18 +2125,11 @@ impl PageStore {
             .with_context(|| {
                 format!(
                     "thin-lane slru chain read for branch={branch_id} kind={kind:?} \
-                     segno={segno_i} blk={blk_i} lsn<={target}"
+                     segno={segno} blk={blknum} lsn<={target}"
                 )
             })?;
 
-        assemble_slru_chain(
-            kind,
-            segno_i as u32,
-            blk_i as u32,
-            raw,
-            0,
-            "read_slru_chain_thin",
-        )
+        assemble_slru_chain(kind, segno, blknum, raw, 0, "read_slru_chain_thin")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2160,9 +2139,8 @@ impl PageStore {
         branch_id: BranchId,
         kind: SlruKind,
         kind_i: i16,
-        segno_i: i64,
-        blk_lo: i64,
-        blk_hi: i64,
+        segno: u32,
+        blknums: Range<u32>,
         target: i64,
         mode: SlruScan,
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
@@ -2174,12 +2152,17 @@ impl PageStore {
         // cannot stop without abandoning later blocks (#1042). They still ride
         // one `Perform`, so the fan-out resolves at one read point.
         let branch = branch_id.to_bytes();
-        let block_reads = (blk_lo..blk_hi)
-            .map(|blk| -> Result<(i64, yb_thin_client::RangeRead)> {
+        let block_reads = blknums
+            .map(|blk| -> Result<(u32, yb_thin_client::RangeRead)> {
                 Ok((
                     blk,
-                    slru_segment_read(slru, &branch, kind_i, segno_i)?
-                        .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk))?
+                    slru_segment_read(slru, &branch, kind_i, segno)?
+                        .cond(
+                            slru,
+                            "blknum",
+                            CondOp::Eq,
+                            BindValue::I16(slru_blknum(blk)?),
+                        )?
                         .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
                         .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
                         .limit(mode.page_rows()),
@@ -2193,22 +2176,15 @@ impl PageStore {
             &block_reads,
             mode.stop(),
             "slru scan",
-            |i| format!("kind={kind:?} segno={segno_i} blk={}", block_reads[i].0),
+            |i| format!("kind={kind:?} segno={segno} blk={}", block_reads[i].0),
         )
         .await?;
 
         let mut by_block = HashMap::with_capacity(chains.len());
         for (&(blk, _), raw) in block_reads.iter().zip(chains) {
-            let chain = assemble_slru_chain(
-                kind,
-                segno_i as u32,
-                blk as u32,
-                raw,
-                1,
-                "scan_slru_range_thin",
-            )?;
+            let chain = assemble_slru_chain(kind, segno, blk, raw, 1, "scan_slru_range_thin")?;
             if !chain.is_empty() {
-                by_block.insert(blk as u32, chain);
+                by_block.insert(blk, chain);
             }
         }
         Ok(by_block)
@@ -2242,16 +2218,20 @@ impl PageStore {
         }
 
         let kind_i = slru_kind_to_i16(kind);
-        let segno_i = segno as i64;
-        let blk_lo = blknum_range.start as i64;
-        let blk_hi = blknum_range.end as i64;
         let target = target_lsn.0 as i64;
 
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
         let by_block = self
             .scan_slru_range_thin(
-                &p, branch_id, kind, kind_i, segno_i, blk_lo, blk_hi, target, mode,
+                &p,
+                branch_id,
+                kind,
+                kind_i,
+                segno,
+                blknum_range,
+                target,
+                mode,
             )
             .await?;
         crate::metrics::YB_STORE_OP_SECONDS
@@ -2269,9 +2249,6 @@ impl PageStore {
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let slru = &p.slru_pages;
-        // Column metadata is constant for the whole flush — resolve once.
-        let col_kind = slru.col("kind")?;
-        let col_segno = slru.col("segno")?;
         let parallelism = pageserver_api::config::scale_count(1, self.scale_factor);
         let branch_b = branch_id.to_bytes();
 
@@ -2289,9 +2266,9 @@ impl PageStore {
                     slru,
                     vec![
                         BindValue::Bytes(branch_b.clone()),
-                        int_bind_thin(col_kind, slru_kind_to_i16(row.kind) as i64),
-                        int_bind_thin(col_segno, row.segno as i64),
-                        BindValue::I64(row.blknum as i64),
+                        BindValue::I16(slru_kind_to_i16(row.kind)),
+                        BindValue::U32(row.segno),
+                        BindValue::I16(slru_blknum(row.blknum)?),
                         BindValue::I64(row.lsn.0 as i64),
                         BindValue::Bool(row.will_init),
                     ],
@@ -3615,11 +3592,12 @@ mod payload_envelope_tests {
 }
 
 fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
-    let sp: i64 = r.try_get(0)?;
-    let db: i64 = r.try_get(1)?;
-    let rel: i64 = r.try_get(2)?;
+    // `OID` columns decode only as `u32`.
+    let sp: u32 = r.try_get(0)?;
+    let db: u32 = r.try_get(1)?;
+    let rel: u32 = r.try_get(2)?;
     let fork: i16 = r.try_get(3)?;
-    let blk: i64 = r.try_get(4)?;
+    let blk: u32 = r.try_get(4)?;
     let lsn: i64 = r.try_get(5)?;
     let is_image: bool = r.try_get(6)?;
     let will_init: bool = r.try_get(7)?;
@@ -4046,8 +4024,8 @@ mod tests {
         let lo = 250u32;
         let hi = 262u32;
         assert_ne!(
-            page_bucket_id(rel as i64, lo as i64),
-            page_bucket_id(rel as i64, hi as i64 - 1),
+            page_bucket_id(rel, lo),
+            page_bucket_id(rel, hi - 1),
             "range must straddle a stretch boundary for this test to mean anything"
         );
 

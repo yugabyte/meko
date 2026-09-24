@@ -16,7 +16,7 @@ struct PartitionedCandidates {
     /// these rows and only these, so each has to survive to it.
     trims: Vec<crate::page_store::PendingGcRow>,
     drops: Vec<crate::page_store::PendingGcRow>,
-    shrinks: Vec<(crate::page_store::PendingGcRow, i64)>,
+    shrinks: Vec<(crate::page_store::PendingGcRow, u32)>,
 }
 
 /// One timer per tick phase, on the `StorageTimeMetrics` family
@@ -138,11 +138,10 @@ impl PendingMaterialise {
         use crate::page_store::GcSweepScope;
         match scope {
             Some(GcSweepScope::Relation((spcnode, dbnode), relnode)) => {
-                self.rels
-                    .contains(&(spcnode as u32, dbnode as u32, relnode as u32))
+                self.rels.contains(&(spcnode, dbnode, relnode))
             }
             Some(GcSweepScope::Database((spcnode, dbnode))) => {
-                self.dbs.contains(&(spcnode as u32, dbnode as u32))
+                self.dbs.contains(&(spcnode, dbnode))
             }
             None => self.objects.contains(&row.key),
         }
@@ -155,7 +154,7 @@ impl PendingMaterialise {
 pub(crate) enum CandidatePartition {
     Trim,
     Drop,
-    Shrink { relsize: i64 },
+    Shrink { relsize: u32 },
 }
 
 /// Why the drain won't act on a due candidate. None of these dequeues the
@@ -809,7 +808,7 @@ impl Timeline {
     async fn act_shrinks(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        shrink_rows: &[(crate::page_store::PendingGcRow, i64)],
+        shrink_rows: &[(crate::page_store::PendingGcRow, u32)],
     ) -> Result<u64, GcError> {
         let phases = &self.gc_drain.phases;
         let _timer = phases.shrink_pages.start_timer().record_on_drop();
@@ -834,8 +833,8 @@ impl Timeline {
     /// `gc_act_shrink_fork`). A total decode: the `relsize` is the one
     /// `classify_candidate` validated and the key is already known rel-size.
     fn shrink_targets(
-        shrink_rows: &[(crate::page_store::PendingGcRow, i64)],
-    ) -> Vec<(crate::page_store::GcForkIdent, i64, Lsn)> {
+        shrink_rows: &[(crate::page_store::PendingGcRow, u32)],
+    ) -> Vec<(crate::page_store::GcForkIdent, u32, Lsn)> {
         shrink_rows
             .iter()
             .map(|(r, relsize)| (crate::page_store::rel_fork_of(&r.key), *relsize, r.due_lsn))
@@ -982,13 +981,10 @@ impl Timeline {
     /// The watermarks for one object's blocks, paired with their blknums —
     /// what the two block trims bind. The map is keyed by `Key`; the store
     /// binds blknums, which are those keys' `field6`.
-    fn block_trim_watermarks(&self, keys: &[Key]) -> Vec<(i64, Lsn)> {
+    fn block_trim_watermarks(&self, keys: &[Key]) -> Vec<(u32, Lsn)> {
         let mut progress = self.gc_drain.progress.lock().unwrap();
         let watermarks = progress.trim_watermarks_of(keys);
-        keys.iter()
-            .map(|k| k.field6 as i64)
-            .zip(watermarks)
-            .collect()
+        keys.iter().map(|k| k.field6).zip(watermarks).collect()
     }
 
     /// Store the anchors a block trim committed to, rebuilding each `Key` from
@@ -999,7 +995,7 @@ impl Timeline {
     ///
     /// Called on the error path too: only committed anchors reach `trimmed_to`,
     /// and a failed statement's predecessors still made progress.
-    fn store_block_trim_watermarks(&self, template: &Key, trimmed_to: &[(i64, Lsn)]) {
+    fn store_block_trim_watermarks(&self, template: &Key, trimmed_to: &[(u32, Lsn)]) {
         self.gc_drain
             .progress
             .lock()
@@ -1007,7 +1003,7 @@ impl Timeline {
             .store_trim_watermarks(trimmed_to.iter().map(|&(blknum, anchor)| {
                 (
                     Key {
-                        field6: blknum as u32,
+                        field6: blknum,
                         ..*template
                     },
                     anchor,
@@ -1035,12 +1031,11 @@ impl Timeline {
     /// sentinel's own `field6`, so the largest real target is one below it.
     fn validated_relsize(
         row: &crate::page_store::PendingGcRow,
-    ) -> Result<i64, CandidateRejectionReason> {
+    ) -> Result<u32, CandidateRejectionReason> {
         let relsize = row
             .relsize
             .ok_or(CandidateRejectionReason::ShrinkMissingRelsize)?;
-        (0..u32::MAX as i64)
-            .contains(&relsize)
+        (relsize != u32::MAX)
             .then_some(relsize)
             .ok_or(CandidateRejectionReason::ShrinkRelsizeOutOfRange)
     }
@@ -1333,7 +1328,7 @@ mod tests {
     /// A validated shrink bucket entry, as `partition_by_kind` would build it —
     /// the row and its relsize derived from one argument so the pair can't
     /// drift.
-    fn shrink_entry(relsize: i64, due: u64) -> (PendingGcRow, i64) {
+    fn shrink_entry(relsize: u32, due: u64) -> (PendingGcRow, u32) {
         (
             PendingGcRow {
                 relsize: Some(relsize),
@@ -1450,11 +1445,11 @@ mod tests {
 
     /// A shrink's `relsize` is the truncation target `gc_act_shrink_fork`
     /// deletes from (`blknum >= relsize`), so it must be present AND a real
-    /// block number. A **negative** relsize is the dangerous one: it would
-    /// match every block and delete the whole fork.
+    /// block number. `u32` rules out the negative relsize that would match
+    /// every block; `u32::MAX` is the rel-size sentinel's `field6`, not a size.
     #[test]
     fn classify_rejects_a_shrink_relsize_it_cannot_trust() {
-        let with_relsize = |relsize: Option<i64>| PendingGcRow {
+        let with_relsize = |relsize: Option<u32>| PendingGcRow {
             relsize,
             ..row_of(GcKind::ShrinkPages)
         };
@@ -1462,15 +1457,12 @@ mod tests {
             Timeline::classify_candidate(&with_relsize(None)),
             Err(CandidateRejectionReason::ShrinkMissingRelsize),
         );
-        for bad in [-1, i64::MIN, u32::MAX as i64, i64::MAX] {
-            assert_eq!(
-                Timeline::classify_candidate(&with_relsize(Some(bad))),
-                Err(CandidateRejectionReason::ShrinkRelsizeOutOfRange),
-                "relsize {bad} is not a block number",
-            );
-        }
+        assert_eq!(
+            Timeline::classify_candidate(&with_relsize(Some(u32::MAX))),
+            Err(CandidateRejectionReason::ShrinkRelsizeOutOfRange),
+        );
         // Truncate-to-empty and the largest real fork are both valid.
-        for ok in [0, u32::MAX as i64 - 1] {
+        for ok in [0, u32::MAX - 1] {
             assert!(Timeline::classify_candidate(&with_relsize(Some(ok))).is_ok());
         }
     }

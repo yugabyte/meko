@@ -117,11 +117,18 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
 CREATE TABLE IF NOT EXISTS amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,
     branch_id    uuid     NOT NULL,
-    spcnode      BIGINT   NOT NULL,
-    dbnode       BIGINT   NOT NULL,
-    relnode      BIGINT   NOT NULL,
+    -- OID, not BIGINT: these are PostgreSQL oids, unsigned 32-bit, and the
+    -- three of them sit in every version row's DocDB key. OID has no
+    -- arithmetic operators, hence the `::bigint` casts in the CHECK below.
+    -- INTEGER would be the wrong stand-in: an oid >= 2^31 cast into it wraps
+    -- negative, which reorders the key and mis-buckets the row.
+    spcnode      OID      NOT NULL,
+    dbnode       OID      NOT NULL,
+    relnode      OID      NOT NULL,
     forknum      SMALLINT NOT NULL,
-    blknum       BIGINT   NOT NULL,
+    -- OID: a PostgreSQL BlockNumber is unsigned 32-bit. The relation-size
+    -- sentinel 0xffffffff never lands here — `Key::is_rel_block_key` excludes it.
+    blknum       OID      NOT NULL,
     is_image     BOOLEAN  NOT NULL,
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
@@ -129,10 +136,11 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
     -- Subsumes a plain 0..5 range check: the expression cannot leave
     -- that interval for non-negative relnode/blknum. Integer division
     -- throughout — `/` and `%` are truncated in both PostgreSQL and
-    -- Rust, so this is character-for-character the Rust function. A
-    -- float (`/ 256.0`, `floor(...)`) would let the two sides diverge.
+    -- Rust, so this is the Rust function modulo the casts, which only
+    -- give the oid an integer type to divide in. A float (`/ 256.0`,
+    -- `floor(...)`) would let the two sides diverge.
     CONSTRAINT pages_bucket_id_matches_formula CHECK (
-        bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+        bucket_id = ((relnode::bigint / 7) + (relnode::bigint / 13) + (blknum::bigint / 256)) % 6
     ),
     -- An image initialises the page, so every image is a base.
     -- `build_page_row` holds this by construction. YSQL lane only, so
@@ -155,8 +163,13 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
 CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     branch_id    uuid     NOT NULL,
     kind         SMALLINT NOT NULL,
-    segno        BIGINT   NOT NULL,
-    blknum       BIGINT   NOT NULL,
+    -- OID: an SLRU segment number is unsigned 32-bit, like every other key field.
+    -- `blknum` is SMALLINT because it is the page's index WITHIN its
+    -- segment — `pageno % SLRU_PAGES_PER_SEGMENT`, so 0..31 — and the importer
+    -- refuses a segment file holding more pages than that. The segment-size
+    -- sentinel 0xffffffff is not a block key (`Key::is_slru_block_key`).
+    segno        OID      NOT NULL,
+    blknum       SMALLINT NOT NULL,
     is_image     BOOLEAN  NOT NULL,
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
@@ -284,8 +297,10 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_rel 5=drop_slru 6=drop_meta 7=drop_db
     -- Rel size (blocks) as of a shrink. Set on shrink candidates only
-    -- (NULL for trim/drop; shrink is rel-only).
-    relsize    BIGINT,
+    -- (NULL for trim/drop; shrink is rel-only). OID because a block count is
+    -- unsigned 32-bit; it is only ever compared against `pages.blknum`,
+    -- never used in arithmetic, and oid has the comparison operators.
+    relsize    OID,
     PRIMARY KEY ((branch_id, bucket_id) HASH, due_lsn, key, gc_kind)
 ) SPLIT INTO 6 TABLETS;
 
@@ -316,7 +331,11 @@ CREATE TABLE IF NOT EXISTS amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,
     branch_id        uuid     NOT NULL,
     segno            BIGINT   NOT NULL,
-    chunk_offset     BIGINT   NOT NULL,
+    -- INTEGER, not BIGINT: a segment-relative byte offset, and PostgreSQL
+    -- caps a WAL segment at 1 GiB, below 2^31. In the key of every chunk
+    -- row. Both lanes must bind it 32-bit: on the thin-client lane
+    -- a 64-bit bind builds a key no YSQL-written row matches, silently.
+    chunk_offset     INTEGER  NOT NULL,
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,

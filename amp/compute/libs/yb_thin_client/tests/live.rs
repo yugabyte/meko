@@ -957,7 +957,7 @@ async fn repro_wals_covering_read() {
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
-                 chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
+                 chunk_offset INTEGER NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset))"
         ),
     )
@@ -981,7 +981,7 @@ async fn repro_wals_covering_read() {
         .unwrap()
         .cond(&table, "segno", CondOp::Eq, BindValue::I64(1))
         .unwrap()
-        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I64(250))
+        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I32(250))
         .unwrap()
         .targets(&table, &["chunk_offset", "chunk_size"])
         .unwrap()
@@ -992,7 +992,7 @@ async fn repro_wals_covering_read() {
         .unwrap()
         .cond(&table, "segno", CondOp::Eq, BindValue::I64(1))
         .unwrap()
-        .cond(&table, "chunk_offset", CondOp::Ge, BindValue::I64(250))
+        .cond(&table, "chunk_offset", CondOp::Ge, BindValue::I32(250))
         .unwrap()
         .targets(&table, &["chunk_offset", "chunk_size"])
         .unwrap()
@@ -1068,7 +1068,7 @@ async fn repro_wals_covering_read() {
             BindValue::Text("wbig".into()),
             BindValue::I16(1),
             BindValue::I64(7),
-            BindValue::I64(0),
+            BindValue::I32(0),
         ],
         &[
             ("chunk_size", BindValue::I32(big.len() as i32)),
@@ -1138,8 +1138,8 @@ async fn repro_pages_multipage_scan() {
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  bucket_id SMALLINT NOT NULL,
-                 branch_id TEXT NOT NULL, spcnode BIGINT NOT NULL, dbnode BIGINT NOT NULL,
-                 relnode BIGINT NOT NULL, forknum SMALLINT NOT NULL, blknum BIGINT NOT NULL,
+                 branch_id TEXT NOT NULL, spcnode OID NOT NULL, dbnode OID NOT NULL,
+                 relnode OID NOT NULL, forknum SMALLINT NOT NULL, blknum OID NOT NULL,
                  is_image BOOLEAN NOT NULL, lsn BIGINT NOT NULL, will_init BOOLEAN NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
@@ -1195,16 +1195,16 @@ async fn repro_pages_multipage_scan() {
             vec![
                 BindValue::I16(*bucket),
                 BindValue::Text("b".into()),
-                BindValue::I64(1),
-                BindValue::I64(2),
-                BindValue::I64(REL),
+                BindValue::U32(1),
+                BindValue::U32(2),
+                BindValue::U32(REL as u32),
                 BindValue::I16(0),
             ],
         )
         .unwrap()
-        .cond(&table, "blknum", CondOp::Ge, BindValue::I64(0))
+        .cond(&table, "blknum", CondOp::Ge, BindValue::U32(0))
         .unwrap()
-        .cond(&table, "blknum", CondOp::Lt, BindValue::I64(N))
+        .cond(&table, "blknum", CondOp::Lt, BindValue::U32(N as u32))
         .unwrap()
         .cond(&table, "lsn", CondOp::Le, BindValue::I64(100))
         .unwrap()
@@ -1269,13 +1269,13 @@ async fn repro_pages_multipage_scan() {
         vec![
             BindValue::I16(w_bucket),
             BindValue::Text("w".into()),
-            BindValue::I64(1),
-            BindValue::I64(2),
-            BindValue::I64(REL),
+            BindValue::U32(1),
+            BindValue::U32(2),
+            BindValue::U32(REL as u32),
             BindValue::I16(0),
-            BindValue::I64(w_blk), // blknum
-            BindValue::I64(777),   // lsn
-            BindValue::Bool(true), // will_init
+            BindValue::U32(w_blk as u32), // blknum
+            BindValue::I64(777),          // lsn
+            BindValue::Bool(true),        // will_init
         ],
         &[
             ("is_image", BindValue::Bool(false)),
@@ -1296,11 +1296,11 @@ async fn repro_pages_multipage_scan() {
         vec![
             BindValue::I16(w_bucket),
             BindValue::Text("w".into()),
-            BindValue::I64(1),
-            BindValue::I64(2),
-            BindValue::I64(REL),
+            BindValue::U32(1),
+            BindValue::U32(2),
+            BindValue::U32(REL as u32),
             BindValue::I16(0),
-            BindValue::I64(w_blk),
+            BindValue::U32(w_blk as u32),
         ],
     )
     .unwrap()
@@ -1521,7 +1521,7 @@ async fn repro_wals_range_sharded() {
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
-                 chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
+                 chunk_offset INTEGER NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
                  PRIMARY KEY (branch_id ASC, bucket_id ASC, segno ASC, chunk_offset ASC))
              SPLIT AT VALUES (('b', 0, 2), ('b', 0, 4))"
         ),
@@ -1647,7 +1647,7 @@ async fn repro_wals_range_sharded() {
     let covering = branch_b()
         .cond(&table, "segno", CondOp::Eq, BindValue::I64(3))
         .unwrap()
-        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I64(250))
+        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I32(250))
         .unwrap()
         .targets(&table, &["segno", "chunk_offset"])
         .unwrap()
@@ -1749,7 +1749,7 @@ async fn repro_wals_range_sharded() {
                     BindValue::Text("b".into()),
                     BindValue::I16(0),
                     BindValue::I64(segno),
-                    BindValue::I64(400),
+                    BindValue::I32(400),
                 ],
                 &[
                     ("chunk_size", BindValue::I32(64)),
@@ -1841,7 +1841,7 @@ async fn repro_range_scan_walks_past_its_key_range() {
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  bucket_id SMALLINT NOT NULL, branch_id TEXT NOT NULL, segno BIGINT NOT NULL,
-                 chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
+                 chunk_offset INTEGER NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
                  PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC))
              SPLIT AT VALUES ((1), (2), (3), (4), (5))"
         ),
@@ -1901,7 +1901,12 @@ async fn repro_range_scan_walks_past_its_key_range() {
             ],
         )
         .unwrap()
-        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I64(POS))
+        .cond(
+            &table,
+            "chunk_offset",
+            CondOp::Lt,
+            BindValue::I32(POS as i32),
+        )
         .unwrap()
         .targets(&table, &["chunk_offset", "chunk_size", "data"])
         .unwrap()
@@ -1932,7 +1937,7 @@ async fn repro_range_scan_walks_past_its_key_range() {
                 BindValue::I16(bucket),
                 BindValue::Text("b".into()),
                 BindValue::I64(SEGNO),
-                BindValue::I64(CHUNK_OFFSET),
+                BindValue::I32(CHUNK_OFFSET as i32),
             ],
         )
         .unwrap()

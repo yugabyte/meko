@@ -99,13 +99,7 @@ pub(super) fn rand_branch() -> BranchId {
 /// `field1=0, spcnode, dbnode, relnode=16384+ord, forknum=0, blknum`.
 /// `field4 != 0` is required by `is_rel_block_key`.
 pub(super) fn page_key(spcnode: u32, dbnode: u32, relnode: u32, fork: u8, blknum: u32) -> Bytes {
-    columns_to_key_bytes(
-        spcnode as i64,
-        dbnode as i64,
-        relnode as i64,
-        fork as i16,
-        blknum as i64,
-    )
+    columns_to_key_bytes(spcnode, dbnode, relnode, fork as i16, blknum)
 }
 
 pub(super) fn page_row(

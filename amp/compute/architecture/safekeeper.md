@@ -132,7 +132,7 @@ CREATE TABLE amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,
     branch_id        uuid     NOT NULL,
     segno            BIGINT   NOT NULL,
-    chunk_offset     BIGINT   NOT NULL,   -- byte offset of `data` within the segment
+    chunk_offset     INTEGER  NOT NULL,   -- byte offset of `data` within the segment
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,

@@ -276,9 +276,8 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
    key (`TrimMeta`), the relmap key (`DropDb` — the act takes only
    `(spcnode, dbnode)` from the key and sweeps that whole database, so a
    rel-size key would name a *live* database and delete every row of it). A
-   shrink additionally needs a `relsize` in `BlockNumber`
-   range — `gc_act_shrink_fork` deletes `blknum >= relsize`, so a negative one
-   would match every block and delete the whole fork.
+   shrink additionally needs a `relsize`, and not `u32::MAX`, which is the
+   rel-size sentinel's `field6` rather than a block count.
 
    `DropMeta` is the one kind with an **allowlist** rather than a keyspace
    test, because trim keeps one version and drop keeps none: `gc_act_trim_meta`
@@ -870,7 +869,7 @@ a stream of new ones — the `error!` line carries the row.
 | --- | --- |
 | `gc_candidate_key_shape_mismatch` | The row's `key` shape doesn't match the keyspace its `gc_kind` acts on (e.g. `DropRel` carrying a rel *block* key, not the relation's rel-size key). The act paths decode the object identity from the key blind, so acting could delete a live object. |
 | `gc_shrink_missing_relsize` | A `ShrinkPages` candidate with no stored `relsize` — nothing to truncate at. |
-| `gc_shrink_relsize_out_of_range` | A `ShrinkPages` `relsize` that isn't a block number (negative, or `>= u32::MAX`). A negative one would match every block (`blknum >= relsize`) and delete the whole fork. |
+| `gc_shrink_relsize_out_of_range` | A `ShrinkPages` `relsize` of `u32::MAX`, the rel-size sentinel's `field6` rather than a block count. |
 | `gc_unknown_candidate_kind` | A `gc_kind` this binary doesn't know, most likely written by a newer one — it reclaims the row on roll-forward. |
 | `gc_malformed_key` | The `key` bytea isn't the fixed 18-byte `Key` length. Refused at decode in the select rather than panicking; there's no valid key to dequeue it by either. |
 

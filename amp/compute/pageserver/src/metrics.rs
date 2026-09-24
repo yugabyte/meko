@@ -562,8 +562,7 @@ pub(crate) static YB_PAYLOAD_ROWS: Lazy<IntCounterVec> = Lazy::new(|| {
 /// - `gc_shrink_missing_relsize` — a shrink candidate with no stored
 ///   `relsize`.
 /// - `gc_shrink_relsize_out_of_range` — a shrink candidate whose `relsize`
-///   isn't a block number (negative, or `>= u32::MAX`). A negative one
-///   would delete the whole fork (`blknum >= relsize` matches everything).
+///   is `u32::MAX`, the rel-size sentinel's `field6` rather than a block count.
 /// - `gc_unknown_candidate_kind` — an unknown `gc_kind`, most likely
 ///   written by a newer binary; it drains itself on roll-forward.
 /// - `gc_malformed_key` — the `key` bytea isn't the fixed 18-byte `Key`

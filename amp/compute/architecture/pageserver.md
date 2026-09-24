@@ -153,17 +153,17 @@ WAL record) and stays a value column (#1171).
 CREATE TABLE amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
     branch_id    uuid     NOT NULL,
-    spcnode      BIGINT   NOT NULL,
-    dbnode       BIGINT   NOT NULL,
-    relnode      BIGINT   NOT NULL,
+    spcnode      OID      NOT NULL,    -- oids are unsigned 32-bit
+    dbnode       OID      NOT NULL,
+    relnode      OID      NOT NULL,
     forknum      SMALLINT NOT NULL,
-    blknum       BIGINT   NOT NULL,
+    blknum       OID      NOT NULL,    -- BlockNumber is unsigned 32-bit
     is_image     BOOLEAN  NOT NULL,
     lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs are << 2^63)
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     CONSTRAINT pages_bucket_id_matches_formula CHECK (
-        bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+        bucket_id = ((relnode::bigint / 7) + (relnode::bigint / 13) + (blknum::bigint / 256)) % 6
     ),
     CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,

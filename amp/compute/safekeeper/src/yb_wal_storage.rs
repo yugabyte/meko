@@ -375,7 +375,8 @@ struct PendingChunk {
     /// one tablet. Placement only, not identity: a retried flush replays the
     /// same stamped chunks, so a chunk keeps its bucket across retries.
     bucket_id: i16,
-    chunk_offset: i64,
+    /// `wals.chunk_offset`'s own INTEGER width.
+    chunk_offset: i32,
     chunk_size: i32,
     data: Arc<Vec<u8>>,
     /// LSN immediately after this chunk's last byte. The consumer uses
@@ -780,7 +781,7 @@ impl YbWalStorage {
         for bucket in 0..WALS_BUCKETS {
             let sql = bake_branch_id(
                 &format!(
-                    "SELECT segno, chunk_offset + chunk_size AS end_off FROM {} \
+                    "SELECT segno, chunk_offset::bigint + chunk_size AS end_off FROM {} \
                      WHERE branch_id = $1 AND bucket_id = {bucket} \
                      ORDER BY segno DESC, chunk_offset DESC \
                      LIMIT 1",
@@ -872,7 +873,9 @@ impl YbWalStorage {
             let pc = PendingChunk {
                 segno,
                 bucket_id: 0, // placeholder; consumer stamps the batch bucket
-                chunk_offset: offset as i64,
+                // PostgreSQL caps a WAL segment at 1 GiB, below 2^31.
+                chunk_offset: i32::try_from(offset)
+                    .with_context(|| format!("WAL segment offset {offset} exceeds INTEGER"))?,
                 chunk_size: take as i32,
                 data,
                 end_lsn,
@@ -1310,7 +1313,8 @@ impl YbWalSource<'_> {
     /// One scan row, decoded, its offset resolved against `segno`. Borrows the
     /// row buffer: a batch can be thousands of rows.
     fn decode_row(&self, row: &yb_tokio_postgres::Row, segno: i64) -> Result<(Lsn, Vec<u8>)> {
-        let chunk_offset = row.get::<_, i64>(0) as u64;
+        // `chunk_offset` is INTEGER: tokio-postgres reads it only as `i32`.
+        let chunk_offset = row.get::<_, i32>(0) as u64;
         let stored: &[u8] = row.get(1);
         let data = decode_chunk_data(stored, "end-of-WAL scan")
             .with_context(|| format!("chunk segno={segno} offset={chunk_offset}"))?;
@@ -1326,7 +1330,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
         self.find_anchor_queries.fetch_add(1, Ordering::Relaxed);
         let segno = (lsn.0 / self.seg) as i64;
-        let off = (lsn.0 % self.seg) as i64;
+        let off = (lsn.0 % self.seg) as i32;
         // The bucket of a chunk can't be derived, so probe all buckets (an
         // IN-list on the leading key column = batched index probes) and take
         // the highest covering offset across them.
@@ -1399,7 +1403,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     async fn contiguous_chunks_from(&self, lsn: Lsn) -> anyhow::Result<Vec<(Lsn, Vec<u8>)>> {
         self.find_end_of_wal_queries.fetch_add(1, Ordering::Relaxed);
         let segno = (lsn.0 / self.seg) as i64;
-        let off = (lsn.0 % self.seg) as i64;
+        let off = (lsn.0 % self.seg) as i32;
         let table = quote_relation(self.table);
         let buckets = bucket_in_list();
         let sql = format!(
@@ -1487,8 +1491,7 @@ fn coalesce_runs(chunks: &[PendingChunk]) -> Vec<std::ops::Range<usize>> {
     for i in 1..chunks.len() {
         let prev = &chunks[i - 1];
         let cur = &chunks[i];
-        if cur.segno != prev.segno || prev.chunk_offset + prev.chunk_size as i64 != cur.chunk_offset
-        {
+        if cur.segno != prev.segno || prev.chunk_offset + prev.chunk_size != cur.chunk_offset {
             runs.push(start..i);
             start = i;
         }
@@ -1603,7 +1606,7 @@ async fn truncate_wals_above(
     // Both statements address `end_pos` as `(end_segno, end_off)` rather than
     // as a single LSN — see `truncate_stmts` for why.
     let end_segno = end / seg;
-    let end_off = end % seg;
+    let end_off = (end % seg) as i32;
     let params: [&(dyn ToSql + Sync); 3] = [&branch_id, &end_segno, &end_off];
     let (del, sel) = truncate_stmts(&table);
 
@@ -1620,11 +1623,11 @@ async fn truncate_wals_above(
     for row in straddling {
         let bucket_id: i16 = row.get(0);
         let segno: i64 = row.get(1);
-        let chunk_offset: i64 = row.get(2);
+        let chunk_offset: i32 = row.get(2);
         let stored: Vec<u8> = row.get(3);
         let stored = bytes::Bytes::from(stored);
 
-        let keep = end - (segno * seg + chunk_offset);
+        let keep = end - (segno * seg + i64::from(chunk_offset));
         // The predicate guarantees 0 < keep < chunk_size; a violation means
         // the row disagrees with the arithmetic that selected it.
         anyhow::ensure!(
@@ -2061,6 +2064,7 @@ async fn flush_batch_thin(
         ))
     });
     use yb_thin_client::{BindValue, UpsertRow};
+    let wals = &yb_thinclient.wals;
     let n = runs.len();
     let now_us: i64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2076,18 +2080,19 @@ async fn flush_batch_thin(
             // `chunk_size` stays the run's UNCOMPRESSED length — the read
             // path and `truncate_wals_above` do LSN arithmetic with
             // `chunk_offset + chunk_size`.
-            let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
+            // A run never leaves its segment, so it fits INTEGER as its offset does.
+            let total: i32 = chunks.iter().map(|p| p.chunk_size).sum();
             UpsertRow::new(
-                &yb_thinclient.wals,
+                wals,
                 // PRIMARY KEY order: `bucket_id` leads the all-range key.
                 vec![
                     BindValue::I16(first.bucket_id),
                     BindValue::Bytes(branch_b.clone()),
                     BindValue::I64(first.segno as i64),
-                    BindValue::I64(first.chunk_offset),
+                    BindValue::I32(first.chunk_offset),
                 ],
                 &[
-                    ("chunk_size", BindValue::I32(total as i32)),
+                    ("chunk_size", BindValue::I32(total)),
                     ("data", BindValue::Bytes(data.clone())),
                     ("last_modified_us", BindValue::I64(now_us)),
                 ],
@@ -2548,6 +2553,13 @@ async fn fetch_chunks_thin(
     let wals = &yb_thinclient.wals;
     let targets = ["chunk_offset", "chunk_size", "data"];
     let segno_i = segno as i64;
+    // `chunk_offset` is INTEGER. `byte_offset` is inside the segment,
+    // which PostgreSQL caps at 1 GiB; the forward bound can run past the
+    // segment's end, and clamping it loses nothing — no offset exceeds INTEGER.
+    let offset_lo = i32::try_from(byte_offset)
+        .with_context(|| format!("WAL segment offset {byte_offset} exceeds INTEGER"))?;
+    let offset_hi =
+        i32::try_from(byte_offset.saturating_add(FETCH_FORWARD_BYTES)).unwrap_or(i32::MAX);
 
     // Both arms scan one `(bucket_id, branch_id, segno)`'s chunk range and
     // differ only in their `chunk_offset` bound, so they share a base read.
@@ -2578,12 +2590,7 @@ async fn fetch_chunks_thin(
     // byte_offset; the cross-bucket max resolves in the merge.
     let covering_read = |bucket: i16| -> anyhow::Result<RangeRead> {
         Ok(base_read(bucket)?
-            .cond(
-                wals,
-                "chunk_offset",
-                CondOp::Lt,
-                BindValue::I64(byte_offset as i64),
-            )?
+            .cond(wals, "chunk_offset", CondOp::Lt, BindValue::I32(offset_lo))?
             .targets(wals, &targets)?
             .descending()
             .limit(1))
@@ -2592,18 +2599,8 @@ async fn fetch_chunks_thin(
     // [byte_offset, byte_offset + FETCH_FORWARD_BYTES).
     let forward_read = |bucket: i16| -> anyhow::Result<RangeRead> {
         Ok(base_read(bucket)?
-            .cond(
-                wals,
-                "chunk_offset",
-                CondOp::Ge,
-                BindValue::I64(byte_offset as i64),
-            )?
-            .cond(
-                wals,
-                "chunk_offset",
-                CondOp::Lt,
-                BindValue::I64(byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64),
-            )?
+            .cond(wals, "chunk_offset", CondOp::Ge, BindValue::I32(offset_lo))?
+            .cond(wals, "chunk_offset", CondOp::Lt, BindValue::I32(offset_hi))?
             .targets(wals, &targets)?
             .limit(FETCH_FORWARD_CHUNKS as u64))
     };
@@ -2827,7 +2824,7 @@ mod tests {
     /// nowhere else.
     /// A `PendingChunk` with only the fields `coalesce_runs` reads set;
     /// data/end_lsn/bucket are placeholders.
-    fn pc(segno: u64, chunk_offset: i64, chunk_size: i32) -> PendingChunk {
+    fn pc(segno: u64, chunk_offset: i32, chunk_size: i32) -> PendingChunk {
         PendingChunk {
             segno,
             bucket_id: 0,
@@ -3028,7 +3025,7 @@ mod tests {
                bucket_id        SMALLINT NOT NULL,\
                branch_id        uuid     NOT NULL,\
                segno            BIGINT   NOT NULL,\
-               chunk_offset     BIGINT   NOT NULL,\
+               chunk_offset     INTEGER  NOT NULL,\
                chunk_size       INT      NOT NULL,\
                data             BYTEA    NOT NULL,\
                last_modified_us BIGINT   NOT NULL,\
@@ -3058,7 +3055,7 @@ mod tests {
                 &[
                     &branch_id,
                     &segno,
-                    &chunk_offset,
+                    &(chunk_offset as i32),
                     &(data.len() as i32),
                     &enc(data),
                 ],
@@ -3536,7 +3533,7 @@ mod tests {
                 &ins,
                 &[
                     &branch_id,
-                    &0i64,
+                    &0i32,
                     &(readable as i32),
                     &enc(&buf[..readable]),
                 ],
@@ -3553,7 +3550,7 @@ mod tests {
                 &ins,
                 &[
                     &branch_id,
-                    &(readable as i64),
+                    &(readable as i32),
                     &((buf.len() - readable) as i32),
                     &undecodable,
                 ],
@@ -3839,7 +3836,7 @@ mod tests {
         // (this test is about cross-lane visibility; the per-bucket
         // max-end probe must take the max across both). End-offset is
         // 1024 + 256 = 1280.
-        let rows: &[(i64, i64, i32)] = &[(0, 0, 1024), (0, 1024, 256)];
+        let rows: &[(i64, i32, i32)] = &[(0, 0, 1024), (0, 1024, 256)];
         let now_us: i64 = 0;
         let blob_small = vec![0xabu8; 1024];
         let blob_tail = vec![0xcdu8; 256];
@@ -3971,7 +3968,7 @@ mod tests {
 
         // Three chunks in segno 0 spanning [0, 20480): two full pages + a
         // partial. Cut at 10000 — mid the second chunk [8192, 16384).
-        let chunks: &[(i64, i64, i32)] = &[(0, 0, 8192), (0, 8192, 8192), (0, 16384, 4096)];
+        let chunks: &[(i64, i32, i32)] = &[(0, 0, 8192), (0, 8192, 8192), (0, 16384, 4096)];
         for (i, (segno, offset, size)) in chunks.iter().enumerate() {
             let bucket = (i % 10) as i16;
             let blob = vec![0x5au8; *size as usize];
@@ -4096,7 +4093,7 @@ mod tests {
                     &branch_id,
                     &bucket_of_straddler,
                     &0i64,
-                    &8192i64,
+                    &8192i32,
                     &replay_data.as_slice(),
                     &replay_size,
                     &pre_image.as_slice(),
@@ -4123,7 +4120,7 @@ mod tests {
                     &branch_id,
                     &bucket_of_straddler,
                     &0i64,
-                    &8192i64,
+                    &8192i32,
                     &replay_data.as_slice(),
                     &replay_size,
                     &pre_image.as_slice(),
@@ -4164,7 +4161,7 @@ mod tests {
         //   segno 5 offset 8192   trimmed   (straddles the cut)
         //   segno 6 offset 0      deleted   (above the cut, offset < end_off)
         let cut = Lsn((5 * seg + 12288) as u64);
-        let chunks: &[(i64, i64)] = &[
+        let chunks: &[(i64, i32)] = &[
             (4, 0),
             (4, 8192),
             (4, 16384),
@@ -4213,7 +4210,7 @@ mod tests {
             .await
             .expect("surviving rows")
             .iter()
-            .map(|r| (r.get(0), r.get(1)))
+            .map(|r| (r.get(0), i64::from(r.get::<_, i32>(1))))
             .collect();
         assert_eq!(
             surviving,
@@ -4269,7 +4266,7 @@ mod tests {
             .await
             .expect("surviving rows after boundary cut")
             .iter()
-            .map(|r| (r.get(0), r.get(1)))
+            .map(|r| (r.get(0), i64::from(r.get::<_, i32>(1))))
             .collect();
         assert_eq!(
             surviving,
@@ -4337,7 +4334,7 @@ mod tests {
         // Cut inside the last segment, the worst case for the old shape: the
         // rows it must touch are at the very end of the branch's key range.
         let end_segno = ROWS / PER_SEG - 1;
-        let end_off = 50 * 8192i64;
+        let end_off = 50 * 8192i32;
         let (del, sel) = truncate_stmts(&quote_relation(&table));
         for (what, stmt) in [("delete", del), ("select", sel)] {
             let plan: String = system
@@ -4405,8 +4402,8 @@ mod tests {
         let now_us: i64 = 0;
         let segno_i: i64 = 0;
         for (i, (offset_i, size_i, data)) in [
-            (0i64, 1024i32, chunk_a.as_slice()),
-            (1024i64, 2048i32, chunk_b.as_slice()),
+            (0i32, 1024i32, chunk_a.as_slice()),
+            (1024i32, 2048i32, chunk_b.as_slice()),
         ]
         .into_iter()
         .enumerate()
@@ -4545,7 +4542,7 @@ mod tests {
         );
 
         // 1. Stage the committed chunk and the (still-uncommitted) tail.
-        for (i, (off, bytes)) in [(0i64, &committed), (1024i64, &tail_old)]
+        for (i, (off, bytes)) in [(0i32, &committed), (1024i32, &tail_old)]
             .into_iter()
             .enumerate()
         {
@@ -4599,7 +4596,7 @@ mod tests {
         // 3. A new term rewrites the once-uncommitted tail; flush then advances
         //    to cover it. (No cache invalidation is modeled — the point is that
         //    the tail was never cached, so there is nothing stale to shadow.)
-        fpu.execute(&delete_sql, &[&branch_id, &seg, &1024i64])
+        fpu.execute(&delete_sql, &[&branch_id, &seg, &1024i32])
             .await
             .expect("DELETE old tail");
         let tail_new_slice = tail_new.as_slice();
@@ -4610,7 +4607,7 @@ mod tests {
                 &branch_id,
                 &1i16,
                 &seg,
-                &1024i64,
+                &1024i32,
                 &tail_size,
                 &enc(tail_new_slice),
             ],
@@ -4668,7 +4665,7 @@ mod tests {
         let head_size = head_bytes.len() as i32;
         fpu.execute(
             &insert_sql,
-            &[&branch_id, &0i16, &seg, &0i64, &head_size, &enc(head_slice)],
+            &[&branch_id, &0i16, &seg, &0i32, &head_size, &enc(head_slice)],
         )
         .await
         .expect("INSERT head chunk");
@@ -4747,7 +4744,7 @@ mod tests {
         let branch_id = BranchId::generate();
 
         let seg: i64 = 0;
-        let off: i64 = 0;
+        let off: i32 = 0;
         let size: i32 = 4096;
         // Committed prefix [0,1024) is identical across terms (committed WAL is
         // immutable); only the once-uncommitted tail [1024,4096) is rewritten.
@@ -4852,7 +4849,7 @@ mod tests {
         // Segment 1: absolute LSN = SEG_SIZE + offset.
         let seg: i64 = 1;
         let seg_base: u64 = SEG_SIZE; // 1 * SEG_SIZE
-        let off: i64 = 0;
+        let off: i32 = 0;
         let size: i32 = 4096;
         let old: Vec<u8> = vec![0xAB; 4096];
         let mut new: Vec<u8> = vec![0u8; 4096];
@@ -5003,7 +5000,7 @@ mod tests {
         let mut got: Vec<u8> = Vec::with_capacity(stream.len());
         for row in &rows {
             let segno: i64 = row.get("segno");
-            let off: i64 = row.get("chunk_offset");
+            let off: i32 = row.get("chunk_offset");
             let size: i32 = row.get("chunk_size");
             let stored: Vec<u8> = row.get("data");
             // `chunk_size` is LOGICAL length: it must match the payload
@@ -5084,7 +5081,7 @@ mod tests {
                     (
                         r.get::<_, i16>("bucket_id"),
                         r.get::<_, i64>("segno"),
-                        r.get::<_, i64>("chunk_offset"),
+                        i64::from(r.get::<_, i32>("chunk_offset")),
                     )
                 })
                 .filter(|(_, s, o)| !seen.contains(&(*s, *o)))
@@ -5161,7 +5158,7 @@ mod tests {
         // overlap within a segno, per the writer invariant. Buckets must be
         // < WALS_BUCKETS or the reader's `bucket_id IN (…)` list cannot see
         // them and the max silently comes back low.
-        let rows: &[(i16, i64, i64, i32)] = &[
+        let rows: &[(i16, i64, i32, i32)] = &[
             (4, 5, 8192, 128),  // TRUE global max end: 5*SEG + 8320
             (4, 3, 0, 64),      // low decoy in the SAME bucket as the max
             (2, 5, 0, 8192),    // second-highest end, same top segno, other bucket
@@ -5310,7 +5307,7 @@ mod tests {
 
     #[test]
     fn encoded_runs_round_trip_and_keep_chunk_size_logical() {
-        fn pc(segno: u64, off: i64, fill: u8, len: usize) -> PendingChunk {
+        fn pc(segno: u64, off: i32, fill: u8, len: usize) -> PendingChunk {
             PendingChunk {
                 segno,
                 bucket_id: 0, // placeholder, stamped below like consumer_main does
@@ -5424,7 +5421,7 @@ mod tests {
                bucket_id        SMALLINT NOT NULL,\
                branch_id        uuid     NOT NULL,\
                segno            BIGINT   NOT NULL,\
-               chunk_offset     BIGINT   NOT NULL,\
+               chunk_offset     INTEGER  NOT NULL,\
                chunk_size       INT      NOT NULL,\
                data             BYTEA    NOT NULL,\
                last_modified_us BIGINT   NOT NULL,\
@@ -5435,7 +5432,7 @@ mod tests {
 
         // Chunks at 0, 1000, 2000, 3000 — each 1000 bytes, so the one at 1000
         // spans the fetch position 1500 and is the true covering chunk.
-        for offset in [0i64, 1000, 2000, 3000] {
+        for offset in [0i32, 1000, 2000, 3000] {
             let payload = vec![(offset / 1000) as u8 + 1; 1000];
             let stored = encode_run(
                 &[PendingChunk {

@@ -244,7 +244,7 @@ impl WalSource for WalReader<'_> {
 
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
         let segno = (lsn.0 / self.seg) as i64;
-        let off = (lsn.0 % self.seg) as i64;
+        let off = (lsn.0 % self.seg) as i32;
         // A chunk's placement bucket is a rotating per-batch counter, so it
         // can't be derived from the row — probe every bucket by naming them all
         // (0..WALS_BUCKETS in safekeeper/src/yb_wal_storage.rs, currently 6).
@@ -267,7 +267,7 @@ impl WalSource for WalReader<'_> {
         else {
             return Ok(None);
         };
-        let chunk_offset = row.get::<_, i64>(0) as u64;
+        let chunk_offset = row.get::<_, i32>(0) as u64;
         let data: Vec<u8> = row.get::<_, Vec<u8>>(1);
         let chunk_start = segno as u64 * self.seg + chunk_offset;
         if lsn.0 >= chunk_start + data.len() as u64 {

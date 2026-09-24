@@ -14,6 +14,13 @@
 //! mismatch fails the build: re-vendor the header and bump the version file
 //! before building against a newer shim.
 //!
+//! The version alone cannot tell two builds of one release apart, and an ABI
+//! addition such as a new enum value exports no symbol, so linking the older
+//! build succeeds. Where the shim's own `include/yb_thin_client.h` sits beside
+//! its `lib/` — every extracted release tarball — the build also requires it
+//! to equal the vendored header byte for byte. The deploy images stage only
+//! the `.so`, fetched from the same pin in the same build, so they skip it.
+//!
 //! # Resolution
 //!
 //! 1. `YB_THIN_CLIENT_LIB_DIR`, when set — an explicit directory holding
@@ -46,6 +53,8 @@ const PINNED_SHIM_VERSION: &str = include_str!("shim/VERSION");
 /// The shim build the vendored ABI came from; with the version, it names the
 /// published tarball (and so the cache entry).
 const PINNED_SHIM_COMMIT: &str = include_str!("shim/COMMIT");
+/// The ABI `src/ffi.rs` mirrors.
+const VENDORED_HEADER: &str = include_str!("shim/yb_thin_client.h");
 
 /// Repo root, derived from this crate's manifest dir
 /// (`<repo>/compute/libs/yb_thin_client`).
@@ -146,6 +155,13 @@ fn shim_version(lib_dir: &Path) -> Option<String> {
     None
 }
 
+/// The header the shim shipped with, or `None` when only the `.so` (and
+/// `version.txt`) were staged.
+fn shipped_header(lib_dir: &Path) -> Option<(PathBuf, String)> {
+    let p = lib_dir.join("../include/yb_thin_client.h");
+    std::fs::read_to_string(&p).ok().map(|s| (p, s))
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=shim/yb_thin_client.h");
     println!("cargo:rerun-if-changed=shim/VERSION");
@@ -216,6 +232,18 @@ fn main() {
              .shim-cache entry and rebuild to re-fetch.",
             dir.display(),
         ),
+    }
+
+    if let Some((path, shipped)) = shipped_header(&dir) {
+        assert!(
+            shipped == VENDORED_HEADER,
+            "yb_thin_client: the linked shim's header {} differs from the vendored \
+             shim/yb_thin_client.h, though both claim version {pinned}. They are different \
+             builds, and src/ffi.rs mirrors the vendored one. Pin shim/COMMIT to the build \
+             the header was vendored from, or re-vendor the header (and src/ffi.rs) from \
+             this one.",
+            path.display()
+        );
     }
 
     let d = dir.display();

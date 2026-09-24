@@ -1465,14 +1465,14 @@ impl Cluster {
         for r in rows.iter().take(5) {
             let branch: String = r.get("branch_id");
             let segno: i64 = r.get("segno");
-            let prev_off: i64 = r.get("prev_off");
+            let prev_off: i32 = r.get("prev_off");
             let prev_size: i32 = r.get("prev_size");
-            let off: i64 = r.get("chunk_offset");
+            let off: i32 = r.get("chunk_offset");
             let size: i32 = r.get("chunk_size");
             eprintln!(
                 "  branch {branch} segno {segno}: [{prev_off}, {}) overlaps [{off}, {})",
-                prev_off + prev_size as i64,
-                off + size as i64,
+                i64::from(prev_off) + i64::from(prev_size),
+                i64::from(off) + i64::from(size),
             );
         }
         bail!("overlapping amp_storage.wals chunk ranges introduced by {label}");

@@ -390,17 +390,17 @@ read anchor and the GC anchor seek; `is_image` is a value column (#1171).
 CREATE TABLE amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
     branch_id    uuid     NOT NULL,
-    spcnode      BIGINT   NOT NULL,
-    dbnode       BIGINT   NOT NULL,
-    relnode      BIGINT   NOT NULL,
+    spcnode      OID      NOT NULL,    -- oids are unsigned 32-bit
+    dbnode       OID      NOT NULL,
+    relnode      OID      NOT NULL,
     forknum      SMALLINT NOT NULL,
-    blknum       BIGINT   NOT NULL,
+    blknum       OID      NOT NULL,    -- BlockNumber is unsigned 32-bit
     is_image     BOOLEAN  NOT NULL,
     lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs << 2^63)
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     CONSTRAINT pages_bucket_id_matches_formula CHECK (
-        bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+        bucket_id = ((relnode::bigint / 7) + (relnode::bigint / 13) + (blknum::bigint / 256)) % 6
     ),
     CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
@@ -482,8 +482,8 @@ ordered inside it.
 CREATE TABLE amp_storage.slru_pages (
     branch_id    uuid     NOT NULL,
     kind         SMALLINT NOT NULL,
-    segno        BIGINT   NOT NULL,
-    blknum       BIGINT   NOT NULL,
+    segno        OID      NOT NULL,    -- unsigned 32-bit, like every key field
+    blknum       SMALLINT NOT NULL,    -- page index WITHIN its segment: 0..31
     is_image     BOOLEAN  NOT NULL,
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
@@ -687,7 +687,7 @@ CREATE TABLE amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..5
     branch_id        uuid     NOT NULL,
     segno            BIGINT   NOT NULL,
-    chunk_offset     BIGINT   NOT NULL,
+    chunk_offset     INTEGER  NOT NULL,  -- segment-relative, < 1 GiB
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,
@@ -771,7 +771,7 @@ CREATE TABLE amp_storage.pending_gc (
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,  -- encoded 18-byte Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,  -- page_store::GcKind (0..=7; trim/shrink/drop × table, plus drop_db/drop_rel)
-    relsize    BIGINT,             -- shrink's truncation target; NULL for trim/drop
+    relsize    OID,                -- shrink's truncation target; NULL for trim/drop
     PRIMARY KEY ((branch_id, bucket_id) HASH,
                  due_lsn, key, gc_kind)
 ) SPLIT INTO 6 TABLETS;

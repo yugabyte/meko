@@ -77,7 +77,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // the 1000-delta trigger and no new deltas accrue while we wait, so the
     // chain cannot grow into a fold.
     let hot_blknum = format!(
-        "SELECT COALESCE((SELECT blknum FROM amp_storage.slru_pages \
+        // `blknum::bigint`: the column is SMALLINT, and COALESCE with an
+        // integer literal would otherwise hand back an int4.
+        "SELECT COALESCE((SELECT blknum::bigint FROM amp_storage.slru_pages \
            WHERE branch_id = '{b}' AND kind = 0 \
            GROUP BY blknum ORDER BY count(*) DESC LIMIT 1), -1)"
     );

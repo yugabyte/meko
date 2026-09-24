@@ -226,16 +226,20 @@ impl GcKind {
 /// Fork identity: (spcnode, dbnode, relnode, forknum). The grouping key
 /// for per-fork rel trims and the rel drop/shrink acts, passed as a unit
 /// to the rel `gc_act_*` functions (which bind the columns).
-pub type GcForkIdent = (i64, i64, i64, i16);
+///
+/// The oids are `u32`, the `Key` fields they come from and the type
+/// tokio-postgres binds to an `OID` column, so they reach the wire unconverted
+/// on both lanes.
+pub type GcForkIdent = (u32, u32, u32, i16);
 
 /// SLRU segment identity: (kind, segno). The grouping key for per-segment
 /// SLRU trims and the SLRU drop act, passed as a unit to the SLRU
 /// `gc_act_*` functions.
-pub type GcSlruSeg = (i16, i64);
+pub type GcSlruSeg = (i16, u32);
 
 /// Database identity: (spcnode, dbnode) — what a [`GcKind::DropDb`]
 /// candidate names, and the `pages` key prefix its sweep binds.
-pub type GcDbIdent = (i64, i64);
+pub type GcDbIdent = (u32, u32);
 
 /// One candidate's full identity: `key`, `gc_kind` and `due_lsn`, which
 /// within a branch is `pending_gc`'s whole primary key — and, whatever the
@@ -253,7 +257,7 @@ pub struct PendingGcRow {
     pub key: Key,
     pub gc_kind: GcKind,
     pub due_lsn: Lsn,
-    pub relsize: Option<i64>,
+    pub relsize: Option<u32>,
 }
 
 impl PendingGcRow {
@@ -270,7 +274,7 @@ impl PendingGcRow {
 #[derive(Debug, Clone, Copy)]
 pub enum GcSweepScope {
     Database(GcDbIdent),
-    Relation(GcDbIdent, i64),
+    Relation(GcDbIdent, u32),
 }
 
 impl GcSweepScope {
@@ -282,7 +286,7 @@ impl GcSweepScope {
         let db = db_of_rel_key(key);
         match gc_kind {
             GcKind::DropDb => Some(GcSweepScope::Database(db)),
-            GcKind::DropRel => Some(GcSweepScope::Relation(db, key.field4 as i64)),
+            GcKind::DropRel => Some(GcSweepScope::Relation(db, key.field4)),
             _ => None,
         }
     }
@@ -295,7 +299,7 @@ impl GcSweepScope {
     }
 
     /// The extra `pages` column a relation sweep binds.
-    fn relnode(self) -> Option<i64> {
+    fn relnode(self) -> Option<u32> {
         match self {
             GcSweepScope::Database(_) => None,
             GcSweepScope::Relation(_, relnode) => Some(relnode),
@@ -309,13 +313,11 @@ impl GcSweepScope {
         let (spcnode, dbnode) = self.db();
         match self {
             GcSweepScope::Database(_) => {
-                pageserver_api::key::db_rel_keyspace_range(spcnode as u32, dbnode as u32)
+                pageserver_api::key::db_rel_keyspace_range(spcnode, dbnode)
             }
-            GcSweepScope::Relation(_, relnode) => pageserver_api::key::rel_all_forks_key_range(
-                spcnode as u32,
-                dbnode as u32,
-                relnode as u32,
-            ),
+            GcSweepScope::Relation(_, relnode) => {
+                pageserver_api::key::rel_all_forks_key_range(spcnode, dbnode, relnode)
+            }
         }
     }
 
@@ -331,7 +333,7 @@ impl GcSweepScope {
         let (spcnode, dbnode) = self.db();
         match self {
             GcSweepScope::Database(_) => {
-                pageserver_api::key::db_meta_key_ranges(spcnode as u32, dbnode as u32).to_vec()
+                pageserver_api::key::db_meta_key_ranges(spcnode, dbnode).to_vec()
             }
             GcSweepScope::Relation(..) => vec![self.rel_keyspace_range()],
         }
@@ -420,9 +422,9 @@ enum GcSweepBucket {
 /// `(bucket_id, branch_id, spcnode, dbnode)` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GcSweepPageCursor {
-    relnode: i64,
+    relnode: u32,
     forknum: i16,
-    blknum: i64,
+    blknum: u32,
 }
 
 impl GcSweepProgress {
@@ -499,29 +501,21 @@ pub struct GcSelectedCandidates {
 /// from its Key fields (field2..field5). Only meaningful for rel-keyspace
 /// keys (`field1 == 0`).
 pub(crate) fn rel_fork_of(key: &Key) -> GcForkIdent {
-    (
-        key.field2 as i64,
-        key.field3 as i64,
-        key.field4 as i64,
-        key.field5 as i16,
-    )
+    (key.field2, key.field3, key.field4, key.field5 as i16)
 }
 
-/// A rel key's database, as the `i64`s the `pages` columns bind. Only
-/// meaningful for rel-keyspace keys (`field1 == 0`), whose field2/field3 are
-/// spcnode/dbnode — an SLRU key's are its kind and a constant.
-///
-/// The cast is the point, and why this isn't a `Key` method: a caller building
-/// another `Key` wants the raw `Oid`s instead (see `drop_target_is_busy`).
+/// A rel key's database `(spcnode, dbnode)`. Only meaningful for rel-keyspace
+/// keys (`field1 == 0`), whose field2/field3 are spcnode/dbnode — an SLRU
+/// key's are its kind and a constant.
 pub(crate) fn db_of_rel_key(key: &Key) -> GcDbIdent {
-    (key.field2 as i64, key.field3 as i64)
+    (key.field2, key.field3)
 }
 
 /// Decode an SLRU key's segment identity `(kind, segno)` from its fields
 /// (kind = field2, segno = field4). Only meaningful for SLRU-keyspace keys
 /// (`field1 == 1`) — a block or its seg-size sentinel.
 pub(crate) fn slru_seg_of(key: &Key) -> GcSlruSeg {
-    (key.field2 as i16, key.field4 as i64)
+    (key.field2 as i16, key.field4)
 }
 
 /// The busy-defer key of a materialisable *block* key: the object's
@@ -590,9 +584,6 @@ impl PageStore {
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pending_gc = &p.pending_gc;
-        // Column metadata is constant for the batch — resolve once.
-        let col_bucket = pending_gc.col("bucket_id")?;
-        let col_kind = pending_gc.col("gc_kind")?;
         // Sequential: candidate volume is a rounding error next to the page
         // writes it trails.
         let parallelism = 1;
@@ -606,15 +597,15 @@ impl PageStore {
                     pending_gc,
                     vec![
                         BindValue::Bytes(branch_b.clone()),
-                        int_bind_thin(col_bucket, gc_bucket_id(&row.key) as i64),
+                        BindValue::I16(gc_bucket_id(&row.key)),
                         BindValue::I64(row.due_lsn.0 as i64),
                         BindValue::Bytes(Bytes::from(key_to_bytes(&row.key))),
-                        int_bind_thin(col_kind, row.gc_kind.to_i16() as i64),
+                        BindValue::I16(row.gc_kind.to_i16()),
                     ],
                     &[(
                         "relsize",
                         match row.relsize {
-                            Some(n) => BindValue::I64(n),
+                            Some(n) => BindValue::U32(n),
                             None => BindValue::Null,
                         },
                     )],
@@ -841,7 +832,7 @@ impl PageStore {
     fn gc_trim_blocks_anchors_sql(&self) -> String {
         format!(
             r#"SELECT b.blknum, b.watermark, x.lsn AS anchor
-            FROM unnest($6::bigint[], $8::smallint[], $9::bigint[])
+            FROM unnest($6::oid[], $8::smallint[], $9::bigint[])
                  AS b(blknum, bucket, watermark)
             CROSS JOIN LATERAL (
                 SELECT lsn
@@ -884,7 +875,7 @@ impl PageStore {
             r#"{hint}
             WITH ids AS MATERIALIZED (
                 SELECT x.blknum AS blknum, x.lsn AS lsn, x.tid AS tid
-                FROM unnest($6::bigint[], $7::bigint[], $8::bigint[])
+                FROM unnest($6::oid[], $7::bigint[], $8::bigint[])
                      AS bound(blknum, watermark, anchor)
                 CROSS JOIN LATERAL (
                     SELECT scan.ybctid AS tid, scan.blknum AS blknum, scan.lsn AS lsn
@@ -1054,11 +1045,11 @@ impl PageStore {
         &self,
         branch_id: BranchId,
         (spcnode, dbnode, relnode, forknum): GcForkIdent,
-        block_watermarks: &[(i64, Lsn)],
+        block_watermarks: &[(u32, Lsn)],
         cutoff: Lsn,
         rows_per_statement: usize,
         cancel: &CancellationToken,
-        trimmed_to: &mut Vec<(i64, Lsn)>,
+        trimmed_to: &mut Vec<(u32, Lsn)>,
     ) -> Result<TrimOutcome> {
         if block_watermarks.is_empty() {
             return Ok(TrimOutcome::Complete(0));
@@ -1078,7 +1069,9 @@ impl PageStore {
         // strand the rows between them.
         // One pass, three parallel binds. Their order is the contract with
         // `gc_trim_blocks_anchors_sql`'s unnest, so they are built together.
-        let (all_blknums, all_buckets, all_watermarks): (Vec<i64>, Vec<i16>, Vec<i64>) =
+        // `blknum` is OID and `unnest` is typed `oid[]`, so the array binds as
+        // `u32`.
+        let (all_blknums, all_buckets, all_watermarks): (Vec<u32>, Vec<i16>, Vec<i64>) =
             block_watermarks
                 .iter()
                 .map(|&(blk, watermark)| (blk, page_bucket_id(relnode, blk), watermark.0 as i64))
@@ -1113,9 +1106,9 @@ impl PageStore {
         // The DELETE stays per bucket: `bucket_id` leads that table's key, so it
         // has to be a bound value for the scan to prune to that bucket's
         // tablets.
-        let mut bounds_by_bucket: Vec<TrimBounds<i64>> = vec![Vec::new(); PAGE_BUCKETS as usize];
+        let mut bounds_by_bucket: Vec<TrimBounds<u32>> = vec![Vec::new(); PAGE_BUCKETS as usize];
         for r in &bound_rows {
-            let blknum: i64 = r.get("blknum");
+            let blknum: u32 = r.get("blknum");
             bounds_by_bucket[page_bucket_id(relnode, blknum) as usize].push(TrimBound {
                 key: blknum,
                 watermark: r.get("watermark"),
@@ -1527,7 +1520,7 @@ impl PageStore {
         &self,
         branch_id: BranchId,
         (spcnode, dbnode, relnode, forknum): GcForkIdent,
-        relsize: i64,
+        relsize: u32,
         due_lsn: Lsn,
     ) -> Result<u64> {
         self.write_gate("GC shrink of an amp_storage.pages fork");
@@ -1588,7 +1581,7 @@ impl PageStore {
     fn gc_trim_slru_anchors_sql(&self) -> String {
         format!(
             r#"SELECT b.blknum, b.watermark, x.lsn AS anchor
-            FROM unnest($4::bigint[], $6::bigint[]) AS b(blknum, watermark)
+            FROM unnest($4::smallint[], $6::bigint[]) AS b(blknum, watermark)
             CROSS JOIN LATERAL (
                 SELECT lsn
                 FROM "{schema}".slru_pages
@@ -1613,7 +1606,7 @@ impl PageStore {
             r#"{hint}
             WITH ids AS MATERIALIZED (
                 SELECT x.blknum AS blknum, x.lsn AS lsn, x.tid AS tid
-                FROM unnest($4::bigint[], $5::bigint[], $6::bigint[])
+                FROM unnest($4::smallint[], $5::bigint[], $6::bigint[])
                      AS bound(blknum, watermark, anchor)
                 CROSS JOIN LATERAL (
                     SELECT scan.ybctid AS tid, scan.blknum AS blknum, scan.lsn AS lsn
@@ -1651,19 +1644,21 @@ impl PageStore {
         &self,
         branch_id: BranchId,
         (kind, segno): GcSlruSeg,
-        block_watermarks: &[(i64, Lsn)],
+        block_watermarks: &[(u32, Lsn)],
         cutoff: Lsn,
         rows_per_statement: usize,
         cancel: &CancellationToken,
-        trimmed_to: &mut Vec<(i64, Lsn)>,
+        trimmed_to: &mut Vec<(u32, Lsn)>,
     ) -> Result<TrimOutcome> {
         if block_watermarks.is_empty() {
             return Ok(TrimOutcome::Complete(0));
         }
         let cutoff_i = cutoff.0 as i64;
-        let (all_blknums, all_watermarks): (Vec<i64>, Vec<i64>) = block_watermarks
+        let (all_blknums, all_watermarks): (Vec<i16>, Vec<i64>) = block_watermarks
             .iter()
-            .map(|&(blk, watermark)| (blk, watermark.0 as i64))
+            .map(|&(blk, watermark)| Ok((slru_blknum(blk)?, watermark.0 as i64)))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
             .unzip();
 
         // Read before the DELETE, never after: a base can appear below the
@@ -1691,10 +1686,10 @@ impl PageStore {
             })?;
         // Blocks with no base <= cutoff are absent, which is what leaves them
         // untouched.
-        let bounds: TrimBounds<i64> = bound_rows
+        let bounds: TrimBounds<i16> = bound_rows
             .iter()
             .map(|r| TrimBound {
-                key: r.get::<_, i64>("blknum"),
+                key: r.get::<_, i16>("blknum"),
                 watermark: r.get::<_, i64>("watermark"),
                 anchor: r.get::<_, i64>("anchor"),
             })
@@ -1712,7 +1707,8 @@ impl PageStore {
             TrimTarget {
                 gate_label: "GC trim of amp_storage.slru_pages",
                 key_col: "blknum",
-                to_watermark_key: |blk| *blk,
+                // Only the blknums bound above come back, and those were `u32`s.
+                to_watermark_key: |blk| *blk as u32,
                 err_context: format!(
                     "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno}"
                 ),
@@ -2003,7 +1999,7 @@ mod tests {
         // buckets — a single-bucket batch would pass even if the lane
         // hard-coded one.
         let mut batch: Vec<PendingGcRow> = (0..24i64)
-            .map(|i| gc_cand(16401 + i, 0, i, 100 + i as u64))
+            .map(|i| gc_cand(16401 + i as u32, 0, i, 100 + i as u64))
             .collect();
         // One shrink candidate, the only kind carrying a relsize.
         batch.push(PendingGcRow {
@@ -2037,8 +2033,8 @@ mod tests {
         );
     }
 
-    const GC_SPC: i64 = 1663;
-    const GC_DB: i64 = 5;
+    const GC_SPC: u32 = 1663;
+    const GC_DB: u32 = 5;
     /// The watermark each key ends a call with. `trimmed_to` carries a key's
     /// progress once per committed statement — that is the point, so a failure
     /// mid-loop keeps what went — and the caller's map keeps the last write per
@@ -2074,11 +2070,11 @@ mod tests {
         async fn test_raw_block_versions(
             &self,
             branch_id: BranchId,
-            spcnode: i64,
-            dbnode: i64,
-            relnode: i64,
+            spcnode: u32,
+            dbnode: u32,
+            relnode: u32,
             forknum: i16,
-            blknum: i64,
+            blknum: u32,
         ) -> Result<Vec<(u64, bool, bool)>> {
             let sql = format!(
                 "SELECT lsn, is_image, will_init FROM \"{}\".pages \
@@ -2107,8 +2103,8 @@ mod tests {
         async fn test_db_row_counts(
             &self,
             branch_id: BranchId,
-            spcnode: i64,
-            dbnode: i64,
+            spcnode: u32,
+            dbnode: u32,
         ) -> Result<(i64, i64)> {
             let pages_sql = format!(
                 "SELECT count(*) FROM \"{}\".pages \
@@ -2128,8 +2124,7 @@ mod tests {
             );
             // The keyspace definition is shared with the sweep; its batching
             // and stepping — what this test exercises — is not.
-            let [rel, sparse] =
-                pageserver_api::key::db_meta_key_ranges(spcnode as u32, dbnode as u32);
+            let [rel, sparse] = pageserver_api::key::db_meta_key_ranges(spcnode, dbnode);
             let meta: i64 = self
                 .ysql_client
                 .query(
@@ -2154,8 +2149,8 @@ mod tests {
         async fn test_db_pages_per_bucket(
             &self,
             branch_id: BranchId,
-            spcnode: i64,
-            dbnode: i64,
+            spcnode: u32,
+            dbnode: u32,
         ) -> Result<Vec<i64>> {
             let sql = format!(
                 "SELECT bucket_id, count(*) FROM \"{}\".pages \
@@ -2204,8 +2199,8 @@ mod tests {
             &self,
             branch_id: BranchId,
             kind: i16,
-            segno: i64,
-            blknum: i64,
+            segno: u32,
+            blknum: u32,
         ) -> Result<Vec<(u64, bool, bool)>> {
             let sql = format!(
                 "SELECT lsn, is_image, will_init FROM \"{}\".slru_pages \
@@ -2215,7 +2210,10 @@ mod tests {
             );
             let rows = self
                 .ysql_client
-                .query(&sql, &[&branch_id, &kind, &segno, &blknum])
+                .query(
+                    &sql,
+                    &[&branch_id, &kind, &segno, &slru_blknum(blknum).unwrap()],
+                )
                 .await
                 .context("test_raw_slru_versions")?;
             Ok(rows
@@ -2225,11 +2223,11 @@ mod tests {
         }
     }
 
-    fn gc_rel(relnode: i64, forknum: i16) -> RelTag {
+    fn gc_rel(relnode: u32, forknum: i16) -> RelTag {
         RelTag {
-            spcnode: GC_SPC as u32,
-            dbnode: GC_DB as u32,
-            relnode: relnode as u32,
+            spcnode: GC_SPC,
+            dbnode: GC_DB,
+            relnode,
             forknum: forknum as u8,
         }
     }
@@ -2238,7 +2236,7 @@ mod tests {
     /// convention for these tests: `sel >= 0` → a trim candidate for that
     /// block; `sel == -2` → a drop; `sel == -1` → a shrink (both keyed by
     /// the fork's rel-size object key).
-    fn gc_cand(relnode: i64, forknum: i16, sel: i64, due: u64) -> PendingGcRow {
+    fn gc_cand(relnode: u32, forknum: i16, sel: i64, due: u64) -> PendingGcRow {
         let (key, gc_kind) = if sel >= 0 {
             (
                 rel_block_to_key(gc_rel(relnode, forknum), sel as u32),
@@ -2295,6 +2293,17 @@ mod tests {
         assert_eq!(GcKind::from_i16(8), GcKind::Unknown(8));
         assert_eq!(GcKind::TrimPages.to_i16(), 0);
         assert_eq!(GcKind::DropRel.to_i16(), 4);
+    }
+
+    /// `slru_pages.blknum` is SMALLINT: a page's index within its segment, so
+    /// `0..SLRU_PAGES_PER_SEGMENT`, which is what makes 16 bits safe.
+    /// A value past that is refused, not folded into another block's key.
+    #[test]
+    fn an_slru_blknum_is_a_page_within_its_segment() {
+        let last_in_segment = postgres_ffi::pg_constants::SLRU_PAGES_PER_SEGMENT - 1;
+        assert_eq!(slru_blknum(0).unwrap(), 0);
+        assert_eq!(slru_blknum(last_in_segment).unwrap(), 31);
+        assert!(slru_blknum(i16::MAX as u32 + 1).is_err());
     }
 
     /// golden values, not just property checks. No DB needed (pure fn).
@@ -2738,56 +2747,56 @@ mod tests {
         let rows = vec![
             // block A: the full scenario
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 10,
                 false,
                 true,
                 b"d10i",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 15,
                 false,
                 false,
                 b"d15",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 40,
                 true,
                 true,
                 b"i40",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 55,
                 false,
                 false,
                 b"d55",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 70,
                 true,
                 true,
                 b"i70",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 70,
                 false,
                 false,
                 b"d70",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 90,
                 false,
                 false,
                 b"d90",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_a),
                 120,
                 false,
                 false,
@@ -2795,14 +2804,14 @@ mod tests {
             ),
             // block B: no base at all — must be untouched
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_b),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_b),
                 20,
                 false,
                 false,
                 b"d20",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_b),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_b),
                 30,
                 false,
                 false,
@@ -2810,14 +2819,14 @@ mod tests {
             ),
             // block C: has garbage but is NOT in the visit list
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_c),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_c),
                 10,
                 true,
                 true,
                 b"i10",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_c),
+                page_key(GC_SPC, GC_DB, rel, 0, blk_c),
                 50,
                 true,
                 true,
@@ -2829,8 +2838,8 @@ mod tests {
         let _ = store
             .gc_act_trim_blocks(
                 branch,
-                (GC_SPC, GC_DB, rel as i64, 0),
-                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(0))],
+                (GC_SPC, GC_DB, rel, 0),
+                &[(blk_a, Lsn(0)), (blk_b, Lsn(0))],
                 Lsn(100),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -2840,7 +2849,7 @@ mod tests {
             .unwrap();
 
         let a = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_a)
             .await
             .unwrap();
         assert_eq!(
@@ -2854,12 +2863,12 @@ mod tests {
             "block A must keep anchor + its same-LSN delta + everything above"
         );
         let b = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_b as i64)
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_b)
             .await
             .unwrap();
         assert_eq!(b.len(), 2, "no-anchor block must be untouched");
         let c = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_c as i64)
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_c)
             .await
             .unwrap();
         assert_eq!(c.len(), 2, "unlisted block must be untouched");
@@ -2878,10 +2887,8 @@ mod tests {
         let blks: Vec<u32> = (0..PAGE_BUCKETS as u32)
             .map(|stretch| stretch * PAGE_BUCKET_STRIDE as u32 + 3)
             .collect();
-        let buckets: std::collections::BTreeSet<i16> = blks
-            .iter()
-            .map(|b| page_bucket_id(rel as i64, *b as i64))
-            .collect();
+        let buckets: std::collections::BTreeSet<i16> =
+            blks.iter().map(|b| page_bucket_id(rel, *b)).collect();
         assert_eq!(
             buckets.len(),
             PAGE_BUCKETS as usize,
@@ -2890,19 +2897,19 @@ mod tests {
 
         let mut rows = Vec::new();
         for blk in &blks {
-            let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, *blk);
+            let key = page_key(GC_SPC, GC_DB, rel, 0, *blk);
             rows.push(page_row(key.clone(), 10, false, false, b"d10"));
             rows.push(page_row(key.clone(), 30, true, true, b"i30"));
             rows.push(page_row(key, 50, false, false, b"d50"));
         }
         store.put_pages(branch, &rows).await.unwrap();
 
-        let watermarks: Vec<(i64, Lsn)> = blks.iter().map(|b| (*b as i64, Lsn(0))).collect();
+        let watermarks: Vec<(u32, Lsn)> = blks.iter().map(|b| (*b, Lsn(0))).collect();
         let mut trimmed_to = Vec::new();
         let deleted = store
             .gc_act_trim_blocks(
                 branch,
-                (GC_SPC, GC_DB, rel as i64, 0),
+                (GC_SPC, GC_DB, rel, 0),
                 &watermarks,
                 Lsn(100),
                 TRIM_UNBATCHED,
@@ -2920,15 +2927,13 @@ mod tests {
         let final_marks = final_watermarks(&trimmed_to);
         assert_eq!(
             final_marks,
-            blks.iter()
-                .map(|b| (*b as i64, Lsn(30)))
-                .collect::<Vec<_>>(),
+            blks.iter().map(|b| (*b, Lsn(30))).collect::<Vec<_>>(),
             "each block's watermark must come back at its anchor"
         );
 
         for blk in &blks {
             let versions = store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, *blk as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, *blk)
                 .await
                 .unwrap();
             assert_eq!(
@@ -2951,22 +2956,16 @@ mod tests {
         let blk = 7u32;
 
         let rows = vec![
+            page_row(page_key(GC_SPC, GC_DB, rel, 0, blk), 30, true, true, b"i30"),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
-                30,
-                true,
-                true,
-                b"i30",
-            ),
-            page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                page_key(GC_SPC, GC_DB, rel, 0, blk),
                 40,
                 false,
                 false,
                 b"d40",
             ),
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                page_key(GC_SPC, GC_DB, rel, 0, blk),
                 55,
                 false,
                 false,
@@ -2974,7 +2973,7 @@ mod tests {
             ),
             // newest base ≤ cutoff is an init DELTA, not an image
             page_row(
-                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                page_key(GC_SPC, GC_DB, rel, 0, blk),
                 70,
                 false,
                 true,
@@ -2988,8 +2987,8 @@ mod tests {
         let _ = store
             .gc_act_trim_blocks(
                 branch,
-                (GC_SPC, GC_DB, rel as i64, 0),
-                &[(blk as i64, Lsn(0))],
+                (GC_SPC, GC_DB, rel, 0),
+                &[(blk, Lsn(0))],
                 Lsn(100),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -2999,7 +2998,7 @@ mod tests {
             .unwrap();
 
         let left = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk)
             .await
             .unwrap();
         assert_eq!(left, vec![(70, false, true)], "init delta is the anchor");
@@ -3015,7 +3014,7 @@ mod tests {
         let branch = rand_branch();
         let rel = 16430u32;
         let blk = 4u32;
-        let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        let key = page_key(GC_SPC, GC_DB, rel, 0, blk);
 
         store
             .put_pages(
@@ -3032,9 +3031,8 @@ mod tests {
             .await
             .unwrap();
 
-        let fork = (GC_SPC, GC_DB, rel as i64, 0);
-        let versions =
-            || store.test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64);
+        let fork = (GC_SPC, GC_DB, rel, 0);
+        let versions = || store.test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk);
 
         // Tick 1, no watermark: the whole range below the anchor at 30.
         let mut wm = Vec::new();
@@ -3042,7 +3040,7 @@ mod tests {
             .gc_act_trim_blocks(
                 branch,
                 fork,
-                &[(blk as i64, Lsn(0))],
+                &[(blk, Lsn(0))],
                 Lsn(35),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3052,7 +3050,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_watermarks(&wm),
-            vec![(blk as i64, Lsn(30))],
+            vec![(blk, Lsn(30))],
             "the anchor is the watermark"
         );
         assert_eq!(
@@ -3072,7 +3070,7 @@ mod tests {
             .gc_act_trim_blocks(
                 branch,
                 fork,
-                &[(blk as i64, Lsn(30))],
+                &[(blk, Lsn(30))],
                 Lsn(55),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3080,7 +3078,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(final_watermarks(&wm2), vec![(blk as i64, Lsn(50))]);
+        assert_eq!(final_watermarks(&wm2), vec![(blk, Lsn(50))]);
         assert_eq!(
             versions().await.unwrap(),
             vec![(50, true, true), (60, false, false)],
@@ -3101,7 +3099,7 @@ mod tests {
         let branch = rand_branch();
         let rel = 16450u32;
         let (blk_a, blk_b) = (1u32, 2u32);
-        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        let key = |blk: u32| page_key(GC_SPC, GC_DB, rel, 0, blk);
 
         store
             .put_pages(
@@ -3128,8 +3126,8 @@ mod tests {
         let _ = store
             .gc_act_trim_blocks(
                 branch,
-                (GC_SPC, GC_DB, rel as i64, 0),
-                &[(blk_a as i64, Lsn(20)), (blk_b as i64, Lsn(60))],
+                (GC_SPC, GC_DB, rel, 0),
+                &[(blk_a, Lsn(20)), (blk_b, Lsn(60))],
                 Lsn(100),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3139,11 +3137,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_watermarks(&wm),
-            vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]
+            vec![(blk_a, Lsn(30)), (blk_b, Lsn(60))]
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_a)
                 .await
                 .unwrap(),
             vec![(10, true, true), (30, true, true), (40, false, false)],
@@ -3151,7 +3149,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_b as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_b)
                 .await
                 .unwrap(),
             vec![
@@ -3175,7 +3173,7 @@ mod tests {
         let branch = rand_branch();
         let rel = 16460u32;
         let (blk_a, blk_b) = (1u32, 2u32);
-        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        let key = |blk: u32| page_key(GC_SPC, GC_DB, rel, 0, blk);
 
         store
             .put_pages(
@@ -3204,8 +3202,8 @@ mod tests {
         let _ = store
             .gc_act_trim_blocks(
                 branch,
-                (GC_SPC, GC_DB, rel as i64, 0),
-                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(50))],
+                (GC_SPC, GC_DB, rel, 0),
+                &[(blk_a, Lsn(0)), (blk_b, Lsn(50))],
                 Lsn(100),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3215,11 +3213,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_watermarks(&wm),
-            vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]
+            vec![(blk_a, Lsn(30)), (blk_b, Lsn(60))]
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_a)
                 .await
                 .unwrap(),
             vec![(30, true, true), (40, false, false)],
@@ -3227,7 +3225,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_b as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk_b)
                 .await
                 .unwrap(),
             vec![
@@ -3257,8 +3255,8 @@ mod tests {
         let branch = rand_branch();
         let rel = 16480u32;
         let blk = 3u32;
-        let fork = (GC_SPC, GC_DB, rel as i64, 0);
-        let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        let fork = (GC_SPC, GC_DB, rel, 0);
+        let key = page_key(GC_SPC, GC_DB, rel, 0, blk);
 
         // 10, 20 (delta + the image the materialiser stamped over it), 30, 40,
         // 50, 60, 70, 80 below the anchor; 90 is the anchor; 100 above it.
@@ -3276,7 +3274,7 @@ mod tests {
             .gc_act_trim_blocks(
                 branch,
                 fork,
-                &[(blk as i64, Lsn(0))],
+                &[(blk, Lsn(0))],
                 Lsn(95),
                 2,
                 &never_cancelled(),
@@ -3287,12 +3285,12 @@ mod tests {
 
         assert_eq!(
             final_watermarks(&wm),
-            vec![(blk as i64, Lsn(90))],
+            vec![(blk, Lsn(90))],
             "the watermark is the anchor, however many statements it took"
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk)
                 .await
                 .unwrap(),
             vec![(90, true, true), (100, false, false)],
@@ -3309,8 +3307,8 @@ mod tests {
         let branch = rand_branch();
         let rel = 16490u32;
         let blk = 4u32;
-        let fork = (GC_SPC, GC_DB, rel as i64, 0);
-        let key = page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        let fork = (GC_SPC, GC_DB, rel, 0);
+        let key = page_key(GC_SPC, GC_DB, rel, 0, blk);
 
         let mut rows = vec![page_row(key.clone(), 10, true, true, b"i10")];
         for lsn in [20u64, 30, 40] {
@@ -3323,15 +3321,7 @@ mod tests {
         cancel.cancel();
         let mut wm = Vec::new();
         let outcome = store
-            .gc_act_trim_blocks(
-                branch,
-                fork,
-                &[(blk as i64, Lsn(0))],
-                Lsn(55),
-                1,
-                &cancel,
-                &mut wm,
-            )
+            .gc_act_trim_blocks(branch, fork, &[(blk, Lsn(0))], Lsn(55), 1, &cancel, &mut wm)
             .await
             .expect("cancellation is an outcome, not an error");
         assert_eq!(
@@ -3345,7 +3335,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk)
                 .await
                 .unwrap(),
             vec![
@@ -3363,7 +3353,7 @@ mod tests {
     fn rel_size_row(relnode: u32, forknum: u8, lsn: u64, nblocks: u32) -> MetaRow {
         MetaRow {
             key: Bytes::from(key_to_bytes(&rel_size_to_key(gc_rel(
-                relnode as i64,
+                relnode,
                 forknum as i16,
             )))),
             lsn: Lsn(lsn),
@@ -3557,8 +3547,8 @@ mod tests {
         let _ = store
             .gc_act_trim_slru(
                 branch,
-                (kind, seg as i64),
-                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(0))],
+                (kind, seg),
+                &[(blk_a, Lsn(0)), (blk_b, Lsn(0))],
                 Lsn(50),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3568,7 +3558,7 @@ mod tests {
             .unwrap();
 
         let a = store
-            .test_raw_slru_versions(branch, kind, seg as i64, blk_a as i64)
+            .test_raw_slru_versions(branch, kind, seg, blk_a)
             .await
             .unwrap();
         assert_eq!(
@@ -3577,7 +3567,7 @@ mod tests {
             "block A must keep its anchor + its same-LSN delta + everything above"
         );
         let b = store
-            .test_raw_slru_versions(branch, kind, seg as i64, blk_b as i64)
+            .test_raw_slru_versions(branch, kind, seg, blk_b)
             .await
             .unwrap();
         assert_eq!(b.len(), 2, "no-anchor block must be untouched");
@@ -3625,8 +3615,7 @@ mod tests {
             .await
             .unwrap();
 
-        let versions =
-            |blk: u32| store.test_raw_slru_versions(branch, kind, seg as i64, blk as i64);
+        let versions = |blk: u32| store.test_raw_slru_versions(branch, kind, seg, blk);
 
         // Tick 1, block A only, no watermark: the whole range below its anchor
         // at 30.
@@ -3634,8 +3623,8 @@ mod tests {
         let _ = store
             .gc_act_trim_slru(
                 branch,
-                (kind, seg as i64),
-                &[(blk_a as i64, Lsn(0))],
+                (kind, seg),
+                &[(blk_a, Lsn(0))],
                 Lsn(35),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3645,7 +3634,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_watermarks(&wm),
-            vec![(blk_a as i64, Lsn(30))],
+            vec![(blk_a, Lsn(30))],
             "the anchor is the watermark"
         );
         assert_eq!(
@@ -3663,8 +3652,8 @@ mod tests {
         let _ = store
             .gc_act_trim_slru(
                 branch,
-                (kind, seg as i64),
-                &[(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(50))],
+                (kind, seg),
+                &[(blk_a, Lsn(30)), (blk_b, Lsn(50))],
                 Lsn(75),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3674,7 +3663,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_watermarks(&wm2),
-            vec![(blk_a as i64, Lsn(50)), (blk_b as i64, Lsn(70))]
+            vec![(blk_a, Lsn(50)), (blk_b, Lsn(70))]
         );
         assert_eq!(
             versions(blk_a).await.unwrap(),
@@ -3731,8 +3720,8 @@ mod tests {
         let _ = store
             .gc_act_trim_slru(
                 branch,
-                (kind, seg as i64),
-                &[(blk_a as i64, Lsn(0)), (blk_b as i64, Lsn(50))],
+                (kind, seg),
+                &[(blk_a, Lsn(0)), (blk_b, Lsn(50))],
                 Lsn(100),
                 TRIM_UNBATCHED,
                 &never_cancelled(),
@@ -3742,11 +3731,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_watermarks(&wm),
-            vec![(blk_a as i64, Lsn(30)), (blk_b as i64, Lsn(60))]
+            vec![(blk_a, Lsn(30)), (blk_b, Lsn(60))]
         );
         assert_eq!(
             store
-                .test_raw_slru_versions(branch, kind, seg as i64, blk_a as i64)
+                .test_raw_slru_versions(branch, kind, seg, blk_a)
                 .await
                 .unwrap(),
             vec![(30, true, true), (40, false, false)],
@@ -3754,7 +3743,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .test_raw_slru_versions(branch, kind, seg as i64, blk_b as i64)
+                .test_raw_slru_versions(branch, kind, seg, blk_b)
                 .await
                 .unwrap(),
             vec![
@@ -4013,7 +4002,8 @@ mod tests {
     async fn gc_trims_keep_every_per_key_bound_in_the_index_cond() {
         let (store, _schema) = make_store("gc_trim_plan").await;
         let branch = BranchId::generate();
-        let oid: i64 = 1;
+        // `spcnode`/`dbnode`/`relnode` and `slru_pages.segno` are all OID.
+        let oid: u32 = 1;
         let fork: i16 = 0;
         let bucket: i16 = 0;
         // A realistic batch width. At one or two bounds the planner picks a
@@ -4021,7 +4011,10 @@ mod tests {
         // (#1209); production batches are a bucket's worth of a fork's
         // candidates, in the hundreds.
         const BOUNDS: usize = 200;
-        let blknums: Vec<i64> = (0..BOUNDS as i64).collect();
+        // `pages.blknum` binds as `oid[]`, `slru_pages.blknum` as `smallint[]`,
+        // so the two statements below need separately typed arrays.
+        let blknums: Vec<u32> = (0..BOUNDS as u32).collect();
+        let slru_blknums: Vec<i16> = (0..BOUNDS as i16).collect();
         let keys: Vec<Vec<u8>> = (0..BOUNDS).map(|i| vec![i as u8; KEY_SIZE]).collect();
         let watermarks: Vec<i64> = vec![0; BOUNDS];
         let anchors: Vec<i64> = vec![1; BOUNDS];
@@ -4059,7 +4052,7 @@ mod tests {
                     &branch,
                     &fork,
                     &oid,
-                    &blknums,
+                    &slru_blknums,
                     &watermarks,
                     &anchors,
                     &limit,
@@ -4167,7 +4160,7 @@ mod tests {
         // which would make the assertions vacuous.
         let key_count = 2_000;
         let idents: Vec<Vec<u8>> = (0..key_count)
-            .map(|i| key_to_bytes(&rel_size_to_key(gc_rel(16401 + i as i64, 0))))
+            .map(|i| key_to_bytes(&rel_size_to_key(gc_rel(16401 + i as u32, 0))))
             .collect();
         let kinds: Vec<i16> = vec![GcKind::DropRel.to_i16(); key_count];
         let due: Vec<i64> = (0..key_count as i64).map(|i| 100 + i).collect();
@@ -4221,7 +4214,7 @@ mod tests {
         let branch = rand_branch();
         // One base in 400 versions, clog's density.
         const VERSIONS: i64 = 400;
-        let (rel, fork, blk) = (16_384i64, 0i16, 0i64);
+        let (rel, fork, blk) = (16_384u32, 0i16, 0u32);
         let bucket = page_bucket_id(rel, blk);
         // YSQL lane, so both CHECKs fire and the seed is one statement.
         store
@@ -4237,7 +4230,7 @@ mod tests {
             ))
             .await
             .expect("seed one pages block");
-        let (kind, segno) = (0i16, 640i64);
+        let (kind, segno) = (0i16, 640u32);
         store
             .test_only_execute(&format!(
                 "INSERT INTO \"{schema}\".slru_pages \
@@ -4253,7 +4246,10 @@ mod tests {
 
         // Cut above every version: the base is at the far end of the range.
         let cutoff = VERSIONS;
+        // The two statements type their key array differently: `pages.blknum` is
+        // OID, `slru_pages.blknum` SMALLINT.
         let blknums = vec![blk];
+        let slru_blknums = vec![slru_blknum(blk).unwrap()];
         let buckets = vec![bucket];
         let watermarks = vec![0i64];
         let pages_plan = explain_analyze_indexed(
@@ -4273,7 +4269,7 @@ mod tests {
         .await;
         let slru_plan = explain_analyze_indexed(
             &store.gc_trim_slru_anchors_sql(),
-            &[&branch, &kind, &segno, &blknums, &cutoff, &watermarks],
+            &[&branch, &kind, &segno, &slru_blknums, &cutoff, &watermarks],
         )
         .await;
 
@@ -4349,7 +4345,7 @@ mod tests {
                         let blk = stride * PAGE_BUCKET_STRIDE as u32 + j;
                         for lsn in [10u64, 20] {
                             pages.push(page_row(
-                                page_key(GC_SPC as u32, db as u32, rel, fork, blk),
+                                page_key(GC_SPC, db, rel, fork, blk),
                                 lsn,
                                 true,
                                 true,
@@ -4361,38 +4357,29 @@ mod tests {
                 meta.push(rel_size_row(rel, fork, 10, 42));
                 // A live marker for the even rels, a DROP TABLE tombstone for
                 // the odd ones — a range sweep clears both without listing.
-                meta.push(meta_row(
-                    rel_tag_sparse_key(GC_SPC as u32, db as u32, rel, fork),
-                    10,
-                ));
+                meta.push(meta_row(rel_tag_sparse_key(GC_SPC, db, rel, fork), 10));
             }
         }
-        meta.push(meta_row(relmap_file_key(GC_SPC as u32, db as u32), 10));
+        meta.push(meta_row(relmap_file_key(GC_SPC, db), 10));
         // Recreated on the same oids above the drop: must survive.
         pages.push(page_row(
-            page_key(GC_SPC as u32, db as u32, 16400, 0, 0),
+            page_key(GC_SPC, db, 16400, 0, 0),
             200,
             true,
             true,
             b"new",
         ));
-        meta.push(meta_row(relmap_file_key(GC_SPC as u32, db as u32), 200));
+        meta.push(meta_row(relmap_file_key(GC_SPC, db), 200));
         // A different database: must survive untouched.
         pages.push(page_row(
-            page_key(GC_SPC as u32, other_db as u32, 16400, 0, 0),
+            page_key(GC_SPC, other_db, 16400, 0, 0),
             10,
             true,
             true,
             b"other",
         ));
-        meta.push(meta_row(
-            relmap_file_key(GC_SPC as u32, other_db as u32),
-            10,
-        ));
-        meta.push(meta_row(
-            rel_tag_sparse_key(GC_SPC as u32, other_db as u32, 16400, 0),
-            10,
-        ));
+        meta.push(meta_row(relmap_file_key(GC_SPC, other_db), 10));
+        meta.push(meta_row(rel_tag_sparse_key(GC_SPC, other_db, 16400, 0), 10));
         store.put_pages(branch, &pages).await.unwrap();
         store.put_meta(branch, &meta).await.unwrap();
 
@@ -4487,7 +4474,7 @@ mod tests {
             .put_pages(
                 branch,
                 &[page_row(
-                    page_key(GC_SPC as u32, db as u32, 16400, 0, 0),
+                    page_key(GC_SPC, db, 16400, 0, 0),
                     50,
                     true,
                     true,
@@ -4550,7 +4537,7 @@ mod tests {
         for fork in 0u8..3 {
             for blk in 0u32..4 {
                 pages.push(page_row(
-                    page_key(GC_SPC as u32, GC_DB as u32, rel, fork, blk),
+                    page_key(GC_SPC, GC_DB, rel, fork, blk),
                     10,
                     true,
                     true,
@@ -4561,14 +4548,14 @@ mod tests {
         }
         // Reused relfilenode above the drop, and an unrelated relation.
         pages.push(page_row(
-            page_key(GC_SPC as u32, GC_DB as u32, rel, 0, 0),
+            page_key(GC_SPC, GC_DB, rel, 0, 0),
             200,
             true,
             true,
             b"new",
         ));
         pages.push(page_row(
-            page_key(GC_SPC as u32, GC_DB as u32, other, 0, 0),
+            page_key(GC_SPC, GC_DB, other, 0, 0),
             10,
             true,
             true,
@@ -4576,7 +4563,7 @@ mod tests {
         ));
         meta.push(rel_size_row(other, 0, 10, 1));
         // The dropped relation's tombstone, which must survive.
-        let tombstone = key_to_bytes(&rel_tag_sparse_key(GC_SPC as u32, GC_DB as u32, rel, 0));
+        let tombstone = key_to_bytes(&rel_tag_sparse_key(GC_SPC, GC_DB, rel, 0));
         meta.push(MetaRow {
             key: Bytes::from(tombstone.clone()),
             lsn: Lsn(90),
@@ -4585,7 +4572,7 @@ mod tests {
         store.put_pages(branch, &pages).await.unwrap();
         store.put_meta(branch, &meta).await.unwrap();
 
-        let scope = GcSweepScope::Relation((GC_SPC, GC_DB), rel as i64);
+        let scope = GcSweepScope::Relation((GC_SPC, GC_DB), rel);
         let mut progress = GcSweepProgress::new(scope);
         for _ in 0..40 {
             if progress.is_reclaimed() {
@@ -4599,7 +4586,7 @@ mod tests {
         assert!(progress.is_reclaimed(), "the sweep must converge");
 
         for fork in 0i16..3 {
-            for blk in 0i64..4 {
+            for blk in 0u32..4 {
                 // (0, 0) is where the reused relfilenode wrote above the drop,
                 // asserted separately below.
                 if (fork, blk) == (0, 0) {
@@ -4607,14 +4594,14 @@ mod tests {
                 }
                 assert!(
                     store
-                        .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, fork, blk)
+                        .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, fork, blk)
                         .await
                         .unwrap()
                         .is_empty(),
                     "fork {fork} block {blk} should be gone"
                 );
             }
-            let size_key = key_to_bytes(&rel_size_to_key(gc_rel(rel as i64, fork)));
+            let size_key = key_to_bytes(&rel_size_to_key(gc_rel(rel, fork)));
             assert!(
                 store
                     .read_meta(branch, &size_key, Lsn(150))
@@ -4626,7 +4613,7 @@ mod tests {
         }
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 0)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, 0)
                 .await
                 .unwrap(),
             vec![(200, true, true)],
@@ -4634,7 +4621,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, other as i64, 0, 0)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, other, 0, 0)
                 .await
                 .unwrap()
                 .len(),
@@ -4716,22 +4703,22 @@ mod tests {
             .unwrap();
 
         store
-            .gc_act_drop_slru(branch, (clog, seg as i64), seg_size_key(seg), Lsn(100))
+            .gc_act_drop_slru(branch, (clog, seg), seg_size_key(seg), Lsn(100))
             .await
             .unwrap();
 
         let b0 = store
-            .test_raw_slru_versions(branch, clog, seg as i64, 0)
+            .test_raw_slru_versions(branch, clog, seg, 0)
             .await
             .unwrap();
         assert_eq!(b0, vec![(200, true, true)], "reused segno's row survives");
         let b1 = store
-            .test_raw_slru_versions(branch, clog, seg as i64, 1)
+            .test_raw_slru_versions(branch, clog, seg, 1)
             .await
             .unwrap();
         assert!(b1.is_empty(), "dropped incarnation fully reclaimed");
         let o = store
-            .test_raw_slru_versions(branch, clog, other as i64, 0)
+            .test_raw_slru_versions(branch, clog, other, 0)
             .await
             .unwrap();
         assert_eq!(o.len(), 1, "unrelated segment untouched");
@@ -4758,7 +4745,7 @@ mod tests {
 
         // Idempotent (== 0 is retry-safe).
         let again = store
-            .gc_act_drop_slru(branch, (clog, seg as i64), seg_size_key(seg), Lsn(100))
+            .gc_act_drop_slru(branch, (clog, seg), seg_size_key(seg), Lsn(100))
             .await
             .unwrap();
         assert_eq!(again, 0);
@@ -4776,7 +4763,7 @@ mod tests {
         let branch = rand_branch();
         let rel = 16430u32;
 
-        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        let key = |blk: u32| page_key(GC_SPC, GC_DB, rel, 0, blk);
         store
             .put_pages(
                 branch,
@@ -4799,19 +4786,19 @@ mod tests {
         // the surviving-row checks below pin the outcome (exact DELETE
         // counts aren't retry-safe — see the module note).
         store
-            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, rel as i64, 0), 2, Lsn(50))
+            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, rel, 0), 2, Lsn(50))
             .await
             .unwrap();
 
         for blk in [0u32, 1] {
             let rows = store
-                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk)
                 .await
                 .unwrap();
             assert!(!rows.is_empty(), "block {blk} under the size untouched");
         }
         let b2 = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 2)
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, 2)
             .await
             .unwrap();
         assert_eq!(
@@ -4820,14 +4807,14 @@ mod tests {
             "re-extension above due_lsn survives, lsn-10 tail row gone"
         );
         let b3 = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 3)
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, 3)
             .await
             .unwrap();
         assert!(b3.is_empty(), "tail block fully reclaimed");
 
         // Idempotent, and a fork with no matching rows is a clean no-op.
         let again = store
-            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, rel as i64, 0), 2, Lsn(50))
+            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, rel, 0), 2, Lsn(50))
             .await
             .unwrap();
         assert_eq!(again, 0, "nothing left below the tail to delete");
@@ -5161,7 +5148,7 @@ mod tests {
                 }
                 for &(lsn, is_image, will_init) in &versions {
                     rows.push(page_row(
-                        page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                        page_key(GC_SPC, GC_DB, rel, 0, blk),
                         lsn,
                         is_image,
                         will_init,
@@ -5174,11 +5161,11 @@ mod tests {
 
             // ---- trim ----------------------------------------------
             let cutoff = Lsn(rng.random_range(0..=350u64));
-            let blks: Vec<(i64, Lsn)> = (0..nblocks as i64).map(|b| (b, Lsn(0))).collect();
+            let blks: Vec<(u32, Lsn)> = (0..nblocks).map(|b| (b, Lsn(0))).collect();
             let _ = store
                 .gc_act_trim_blocks(
                     branch,
-                    (GC_SPC, GC_DB, rel as i64, 0),
+                    (GC_SPC, GC_DB, rel, 0),
                     &blks,
                     cutoff,
                     // One row a statement: every block here is watermark-less,
@@ -5211,7 +5198,7 @@ mod tests {
                 // so an init-record tie cannot fail on row order alone.
                 expected.sort_by_key(|(lsn, _, wi)| (*lsn, *wi));
                 let got = store
-                    .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                    .test_raw_block_versions(branch, GC_SPC, GC_DB, rel, 0, blk as u32)
                     .await
                     .unwrap();
                 assert_eq!(
