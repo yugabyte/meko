@@ -452,10 +452,23 @@ func k8sUserIntent(s UniverseSpec) map[string]any {
 		},
 		"masterK8SNodeResourceSpec":  map[string]any{"cpuCoreCount": masterCPU, "memoryGib": masterMem},
 		"tserverK8SNodeResourceSpec": map[string]any{"cpuCoreCount": tserverCPU, "memoryGib": tserverMem},
+		"universeOverrides":          k8sUniverseOverrides,
 	}
 	applyGFlags(userIntent, s)
 	return userIntent
 }
+
+// k8sUniverseOverrides keeps the cluster autoscaler from evicting the backing's
+// pods on a node scale-down, which a test's collateral-damage guard then reports
+// as a fault it never injected. Backing only: amp's own pods stay evictable so
+// meko#1217 keeps surfacing.
+const k8sUniverseOverrides = `master:
+  podAnnotations:
+    cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+tserver:
+  podAnnotations:
+    cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+`
 
 // CreateUniverseFromSpec creates the universe via the single-call
 // POST /universes/clusters (configure+create in one — UniverseClustersController

@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func sampleUniverseSpec() UniverseSpec {
@@ -482,5 +484,29 @@ func TestBuildUniverseSpecCarriesBackingContractGFlags(t *testing.T) {
 		if s.TServerGFlags["ysql_enable_auto_analyze"] != "true" || s.TServerGFlags["ysql_pg_conf_csv"] != "yb_enable_cbo=on" {
 			t.Errorf("%s: TServerGFlags = %v", name, s.TServerGFlags)
 		}
+	}
+}
+
+func TestBuildConfigureRequestK8sPodsAreNotEvictable(t *testing.T) {
+	ui := BuildConfigureRequest(sampleK8sUniverseSpec())["clusters"].([]any)[0].(map[string]any)["userIntent"].(map[string]any)
+	raw, ok := ui["universeOverrides"].(string)
+	if !ok {
+		t.Fatalf("universeOverrides = %#v, want a YAML string", ui["universeOverrides"])
+	}
+	var v map[string]map[string]map[string]string
+	if err := yaml.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatalf("universeOverrides is not YAML the chart can read: %v", err)
+	}
+	for _, role := range []string{"master", "tserver"} {
+		if got := v[role]["podAnnotations"]["cluster-autoscaler.kubernetes.io/safe-to-evict"]; got != "false" {
+			t.Errorf("%s.podAnnotations safe-to-evict = %q, want \"false\"", role, got)
+		}
+	}
+}
+
+func TestBuildConfigureRequestVMUniversesCarryNoK8sOverrides(t *testing.T) {
+	ui := BuildConfigureRequest(sampleUniverseSpec())["clusters"].([]any)[0].(map[string]any)["userIntent"].(map[string]any)
+	if _, ok := ui["universeOverrides"]; ok {
+		t.Errorf("a VM universe carries universeOverrides: %v", ui["universeOverrides"])
 	}
 }
