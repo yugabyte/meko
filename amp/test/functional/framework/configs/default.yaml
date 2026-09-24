@@ -2171,7 +2171,7 @@ perf:
     # this much tolerance.
     floor_pct: 5.0
     # min_runs is the history floor below which a datapoint is no_signal.
-    min_runs: 3
+    min_runs: 5
   # baseline.live runs the SAME workload on a second set of stacks deployed
   # from a prior amp release, CONCURRENTLY with the run's own, and gates
   # current-vs-that under identical cluster conditions (thresholds:

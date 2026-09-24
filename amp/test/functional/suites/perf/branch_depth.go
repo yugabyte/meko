@@ -34,9 +34,10 @@
 // them, sometimes evicting the pod still under measurement; readLevel measures
 // again on the replacement rather than publish the eviction as latency.
 //
-// Every depth reports its numbers as branch.<metric>@depth<N>; the
-// perf.branch_depth.gate_depths rungs are gated against portal history and the
-// rest ride along as informational, as do the fork, endpoint and ratio figures.
+// Every depth reports its numbers as branch.<metric>@depth<N>. Only cold p50,
+// the cold scan and the update on the perf.branch_depth.gate_depths rungs are
+// gated against portal history; p99, warm reads, insert, delete, fork, endpoint
+// and ratio figures ride along as informational.
 // Cold p50 at perf.branch_depth.ratio_depth over cold p50 at the root is
 // asserted in-run against perf.branch_depth.max_ratio.
 package perf
@@ -81,10 +82,16 @@ const (
 	DefaultBranchDepthEndpointCPU  = "2"
 	DefaultBranchDepthEndpointMem  = "4Gi"
 	DefaultBranchDepthReadyTimeout = 10 * time.Minute
+
+	// Absolute floors on the gated datapoints: a history delta smaller than these
+	// is run-to-run noise at this dataset size, whatever percent it comes to.
+	branchDepthColdFloorMS  = 1.0
+	branchDepthScanFloorMS  = 1000.0
+	branchDepthWriteFloorMS = 500.0
 )
 
 // Every depth is measured and charted; these are the rungs whose numbers become
-// GATED datapoints. A 21-rung ladder gating five metrics each would put 105
+// GATED datapoints. A 21-rung ladder gating three metrics each would put 63
 // series on the portal, most of them saying the same thing as their neighbour.
 var DefaultBranchDepthGateDepths = []string{"0", "1", "5", "10", "20"}
 
@@ -755,22 +762,26 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 			bucket = &gated
 		}
 		if len(l.cold) > 0 {
-			*bucket = append(*bucket,
-				core.Datapoint{Name: branchDepthPrefix + "read_cold_p50_ms" + suffix, Value: median(l.cold), Unit: "ms", Direction: core.LowerIsBetter},
-				core.Datapoint{Name: branchDepthPrefix + "read_cold_p99_ms" + suffix, Value: percentile(l.cold, 99), Unit: "ms", Direction: core.LowerIsBetter})
+			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "read_cold_p50_ms" + suffix, Value: median(l.cold), Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthColdFloorMS})
+			// p99 of the sample set is ~3 reads, so one slow read triples it.
+			info = append(info, core.Datapoint{Name: branchDepthPrefix + "read_cold_p99_ms" + suffix, Value: percentile(l.cold, 99), Unit: "ms", Direction: core.LowerIsBetter})
 		}
 		if len(l.warm) > 0 {
-			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "read_warm_p50_ms" + suffix, Value: median(l.warm), Unit: "ms", Direction: core.LowerIsBetter})
+			// A warm read is a few microseconds, below what the timer resolves as a change.
+			info = append(info, core.Datapoint{Name: branchDepthPrefix + "read_warm_p50_ms" + suffix, Value: median(l.warm), Unit: "ms", Direction: core.LowerIsBetter})
 		}
 		if l.scanMS > 0 {
-			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "scan_cold_ms" + suffix, Value: l.scanMS, Unit: "ms", Direction: core.LowerIsBetter})
+			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "scan_cold_ms" + suffix, Value: l.scanMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthScanFloorMS})
+		}
+		if l.updateMS > 0 {
+			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "update_ms" + suffix, Value: l.updateMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthWriteFloorMS})
 		}
 		for _, w := range []struct {
 			name string
 			v    float64
-		}{{"insert_ms", l.insertMS}, {"update_ms", l.updateMS}, {"delete_ms", l.deleteMS}} {
+		}{{"insert_ms", l.insertMS}, {"delete_ms", l.deleteMS}} {
 			if w.v > 0 {
-				*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + w.name + suffix, Value: w.v, Unit: "ms", Direction: core.LowerIsBetter})
+				info = append(info, core.Datapoint{Name: branchDepthPrefix + w.name + suffix, Value: w.v, Unit: "ms", Direction: core.LowerIsBetter})
 			}
 		}
 		if l.endpointMS > 0 {

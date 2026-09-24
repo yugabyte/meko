@@ -19,7 +19,7 @@ const (
 	DefaultGateWindow   = 10
 	DefaultGateMADK     = 3.0
 	DefaultGateFloorPct = 5.0
-	DefaultGateMinRuns  = 3
+	DefaultGateMinRuns  = 5
 	portalGateTimeout   = 30 * time.Second
 	portalGateArtifact  = "perf-portal-gate.json"
 )

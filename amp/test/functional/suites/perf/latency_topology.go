@@ -43,6 +43,9 @@ const (
 	latencyTopologyHarness  = "1"
 	// latencyBaselineName is the unshaped run every topology is a ratio of.
 	latencyBaselineName = "baseline"
+	// A ratio carries the unshaped baseline's own run-to-run swing, so a change
+	// under 10% of it is not the topology's.
+	latencyRatioFloor = 0.10
 )
 
 // The perf.latency_topology.* load shape, declared like every sibling's
@@ -447,6 +450,9 @@ func (r *latencyRun) bench(ctx context.Context, s *core.StepHandle, name string,
 // The unshaped baseline's own absolutes stay informational: perf/sysbench and
 // perf/pgbench already gate that number.
 //
+// p95 is informational: multi_region's flips between ~127 and ~200 ms from one
+// run to the next on the same build.
+//
 // Each topology's per-iteration shape is also gated in-run (benchShapeGate),
 // which is what asserts something while the portal history is still short.
 func (r *latencyRun) gate(*core.StepHandle) error {
@@ -465,11 +471,19 @@ func (r *latencyRun) gate(*core.StepHandle) error {
 			info = append(info, abs...)
 			continue
 		}
-		gated = append(gated, abs...)
+		for _, dp := range abs {
+			if strings.HasSuffix(dp.Name, ".latency_p95") {
+				info = append(info, dp)
+			} else {
+				gated = append(gated, dp)
+			}
+		}
 		p := latencyTopologyPrefix + name + "."
+		tpsRatio := res.TPS.Median / base.TPS.Median
+		latRatio := res.LatencyAvg.Median / base.LatencyAvg.Median
 		gated = append(gated,
-			core.Datapoint{Name: p + "tps_of_baseline", Value: res.TPS.Median / base.TPS.Median, Unit: "x", Direction: core.HigherIsBetter},
-			core.Datapoint{Name: p + "latency_avg_of_baseline", Value: res.LatencyAvg.Median / base.LatencyAvg.Median, Unit: "x", Direction: core.LowerIsBetter},
+			core.Datapoint{Name: p + "tps_of_baseline", Value: tpsRatio, Unit: "x", Direction: core.HigherIsBetter, MinDelta: latencyRatioFloor * tpsRatio},
+			core.Datapoint{Name: p + "latency_avg_of_baseline", Value: latRatio, Unit: "x", Direction: core.LowerIsBetter, MinDelta: latencyRatioFloor * latRatio},
 		)
 	}
 	table := latencyTopologyTable(r.order, r.results)
