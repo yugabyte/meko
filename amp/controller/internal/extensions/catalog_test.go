@@ -1,6 +1,8 @@
 package extensions
 
 import (
+	"encoding/json"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -115,6 +117,43 @@ func TestBuiltinsDeclareNoLayoutOrImageRef(t *testing.T) {
 	}
 }
 
+// documentdb's .control requires pgvector and pg_cron, so resolving it alone
+// still has to mount them: without their .control files on the endpoint's
+// extension_control_path, CREATE EXTENSION documentdb fails with
+// `extension "pg_cron" is not available`. The engine bundle supplies them when
+// the caller used the engine, but extensions:["documentdb"] and
+// POST /branches/{id}/extensions do not go through an engine.
+func TestCatalogResolveClosesOverRequires(t *testing.T) {
+	c := NewCatalog("quay.io/yugabyte")
+	got := names(c.Resolve([]string{"documentdb"}))
+	want := []string{"documentdb", "pgvector", "pg_cron"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Resolve([documentdb]) = %v, want %v", got, want)
+	}
+}
+
+// Requirements already asked for are not mounted twice, and the caller's order
+// wins: the requested names come first, in the order given.
+func TestCatalogResolveRequiresDeduplicates(t *testing.T) {
+	c := NewCatalog("quay.io/yugabyte")
+	got := names(c.Resolve([]string{"pg_cron", "documentdb"}))
+	want := []string{"pg_cron", "documentdb", "pgvector"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Resolve([pg_cron documentdb]) = %v, want %v", got, want)
+	}
+}
+
+// An extension with no Requires resolves to itself — the closure must not change
+// what every other extension does.
+func TestCatalogResolveWithoutRequiresIsUnchanged(t *testing.T) {
+	c := NewCatalog("quay.io/yugabyte")
+	for _, n := range []string{"pgvector", "pg_cron", "hexabridge", "age"} {
+		if got := names(c.Resolve([]string{n})); !reflect.DeepEqual(got, []string{n}) {
+			t.Errorf("Resolve([%s]) = %v, want [%s]", n, got, n)
+		}
+	}
+}
+
 // listExtensions is what a picker renders, so a built-in without a description
 // shows a blank card — and the served catalog would then carry strictly LESS
 // than the build manifest the UI used to bundle. The manifest's generator
@@ -126,4 +165,62 @@ func TestBuiltinsAllCarryADescription(t *testing.T) {
 			t.Errorf("built-in %s has no description; listExtensions would render a blank card", n)
 		}
 	}
+}
+
+// Resolve drops names the catalog does not carry, so a Requires entry naming a
+// non-existent extension would vanish silently and only surface as a failed
+// CREATE EXTENSION on a deployed endpoint.
+func TestCatalogRequiresNamesKnownExtensions(t *testing.T) {
+	c := NewCatalog("")
+	for _, e := range builtin {
+		for _, req := range e.Requires {
+			if _, ok := c.byName[req]; !ok {
+				t.Errorf("%s requires %q, which is not in the catalog", e.Name, req)
+			}
+		}
+	}
+}
+
+// The catalog's Requires and the build manifest's `requires:` are two hand-kept
+// copies of one fact; the harness reads the manifest and the controller reads
+// this table, so they diverge silently.
+func TestCatalogRequiresMatchesManifest(t *testing.T) {
+	const generated = "../../../amp_ui/src/config/extensions.json"
+	raw, err := os.ReadFile(generated)
+	if err != nil {
+		t.Skipf("generated UI catalog not readable (%v) — amp_ui may be absent", err)
+	}
+	var cfg struct {
+		Extensions []struct {
+			Name     string   `json:"name"`
+			Requires []string `json:"requires"`
+		} `json:"extensions"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse %s: %v", generated, err)
+	}
+	want := map[string][]string{}
+	for _, e := range cfg.Extensions {
+		if len(e.Requires) > 0 {
+			want[e.Name] = e.Requires
+		}
+	}
+	got := map[string][]string{}
+	for _, e := range builtin {
+		if len(e.Requires) > 0 {
+			got[e.Name] = e.Requires
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("catalog requires = %v, manifest requires = %v", got, want)
+	}
+}
+
+// names is the resolved mount set's names, in order.
+func names(rs []Resolved) []string {
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.Name
+	}
+	return out
 }

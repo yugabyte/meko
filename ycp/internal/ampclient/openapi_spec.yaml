@@ -1966,12 +1966,13 @@ components:
             for the same reason `connectivity` is.
         engine:
           type: string
-          enum: [postgres, aidb, oracle]
+          enum: [postgres, aidb, oracle, documentdb]
           default: postgres
           description: |
             The database engine to provision as — a named bundle of externalized
             extensions. `postgres` (the default) seeds none, `aidb` seeds
-            pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+            pgvector + age + pg_cron, `oracle` seeds hexabridge, and `documentdb`
+            seeds documentdb + pgvector + pg_cron. The bundle is
             unioned with `extensions` and written onto the default branch, and the
             engine is recorded on the cluster and returned by getCluster /
             listClusters. An unknown engine is rejected (400), as is any non-default

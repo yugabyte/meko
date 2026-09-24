@@ -147,6 +147,7 @@ fi
 IFS=',' read -ra EXT_NAMES <<< "$EXT_NAME"
 if [[ -z "$EXT_NAME" ]]; then EXT_NAMES=(); fi
 [[ ${#EXT_NAMES[@]} -ge 1 || ${#REGISTERED_FILES[@]} -ge 1 ]] || { echo "no --ext or --registered given" >&2; exit 2; }
+# Guard the REQUESTED list, before the dependency closure below can grow it.
 if [[ $REGRESS == 1 && ${#EXT_NAMES[@]} -gt 1 ]]; then
     echo "--regress runs a single extension's upstream suite; got --ext $EXT_NAME" >&2
     exit 2
@@ -167,21 +168,58 @@ reg = m.get("registry", "")
 for e in m.get("extensions", []):
     if e.get("name") == name:
         control = e.get("control") or name
+        library = e.get("library") or control
         preload = "true" if e.get("preload") else "false"
-        print("%s\t%s\t%s\t%s" % (reg, e.get("version", ""), control, preload))
+        print("%s\t%s\t%s\t%s\t%s" % (reg, e.get("version", ""), control, preload, library))
         break
 else:
     sys.exit("extension %r not found in %s" % (name, sys.argv[1]))
 PY
 }
-declare -a EXT_VERSIONS EXT_CONTROLS EXT_PRELOADS EXT_IMAGES EXT_PREBUILT
+# 1a) Close over `requires`. An extension's control file can name another
+#     extension (documentdb.control requires pg_cron and vector), and CREATE
+#     EXTENSION fails with "extension X is not available" unless that one's
+#     control + library are on the endpoint's paths too. In the product an engine
+#     bundle brings them; here the manifest says so directly, so a bare
+#     `--ext documentdb` mounts what it needs. Mounting is all this does:
+#     CREATE EXTENSION still needs CASCADE to install them, which documentdb's
+#     smoke below passes. Requested
+#     names keep their order and stay first (the regress path drives
+#     EXT_NAMES[0]), with dependencies appended, deduped.
+# Skipped for a --registered-only run, which requests no built-ins.
+if (( ${#EXT_NAMES[@]} > 0 )); then
+_primary="${EXT_NAMES[0]}"
+EXT_NAMES_STR="$(python3 - "$MANIFEST" "${EXT_NAMES[@]}" <<'INNERPY'
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+rows = {e.get("name"): e for e in m.get("extensions", [])}
+out, seen, queue = [], set(), list(sys.argv[2:])
+while queue:
+    n = queue.pop(0)
+    if n in seen:
+        continue
+    if n not in rows:
+        sys.exit("extension %r not found in %s" % (n, sys.argv[1]))
+    seen.add(n)
+    out.append(n)
+    queue.extend(rows[n].get("requires") or [])
+print(",".join(out))
+INNERPY
+)" || exit 1
+IFS=',' read -ra EXT_NAMES <<< "$EXT_NAMES_STR"
+[[ "${EXT_NAMES[0]}" == "$_primary" ]] || { echo "closure reordered the primary" >&2; exit 1; }
+(( ${#EXT_NAMES[@]} > 1 )) && echo ">>> co-mounting: ${EXT_NAMES[*]}"
+fi
+
+declare -a EXT_VERSIONS EXT_CONTROLS EXT_PRELOADS EXT_IMAGES EXT_PREBUILT EXT_LIBRARIES
 declare -a EXT_SHARE EXT_LIB EXT_LIBPATH EXT_ENVPATHS
 ABI_EXEMPT=()
 for _n in "${EXT_NAMES[@]}"; do
-    IFS=$'\t' read -r _reg _ver _ctrl _pre < <(read_row "$_n")
+    IFS=$'\t' read -r _reg _ver _ctrl _pre _lib < <(read_row "$_n")
     [[ -n "$REGISTRY_OVERRIDE" ]] && _reg="$REGISTRY_OVERRIDE"
     [[ -n "$_ver" ]] || { echo "no version for '$_n' in $MANIFEST" >&2; exit 1; }
     EXT_VERSIONS+=("$_ver"); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
+    EXT_LIBRARIES+=("$_lib")
     EXT_IMAGES+=("${_reg}/amp-ext-${_n}:${_ver}"); EXT_PREBUILT+=("")
     # An amp-built image is always the layout deploy/extensions produces.
     EXT_SHARE+=("share/postgresql"); EXT_LIB+=("lib/postgresql")
@@ -226,6 +264,10 @@ for _f in "${REGISTERED_FILES[@]:-}"; do
     [[ -f "$_f" ]] || { echo "no such --registered file: $_f" >&2; exit 2; }
     IFS=$'\t' read -r _n _img _ctrl _pre _share _lib _libpath _envpaths _abi < <(read_registered "$_f")
     EXT_NAMES+=("$_n"); EXT_VERSIONS+=(""); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
+    # Parallel to EXT_CONTROLS, so the preload below indexes both lists the same
+    # way. A registration carries no separate library name: it preloads under
+    # its control name.
+    EXT_LIBRARIES+=("$_ctrl")
     EXT_IMAGES+=("$_img"); EXT_PREBUILT+=("$_img")
     EXT_SHARE+=("$_share"); EXT_LIB+=("$_lib")
     EXT_LIBPATH+=("$_libpath"); EXT_ENVPATHS+=("$_envpaths")
@@ -335,7 +377,11 @@ for _i in "${!EXT_NAMES[@]}"; do
             echo ">>> $_k=$_dir/$_v"
         done
     fi
-    [[ "${EXT_PRELOADS[$_i]}" == true ]] && PRELOAD_LIBS+=("${EXT_CONTROLS[$_i]}")
+    # The library, not the control name: documentdb's one image ships
+    # pg_documentdb_core.so + pg_documentdb.so, so preloading its CREATE EXTENSION
+    # name is a `could not access file` FATAL. Comma-separated values are passed
+    # through as-is; shared_preload_libraries takes a list.
+    [[ "${EXT_PRELOADS[$_i]}" == true ]] && PRELOAD_LIBS+=("${EXT_LIBRARIES[$_i]}")
 done
 
 # 4) The compute needs a built Postgres (+ the yb_amp extension) to run. build.sh
@@ -505,6 +551,31 @@ echo ">>> branch: $BR"
 #    With several co-mounted extensions every extracted dir is on the path.
 CTRL_PATH="$(IFS=:; echo "${CTRL_PATH_PARTS[*]}")"
 LIB_PATH="$(IFS=:; echo "${LIB_PATH_PARTS[*]}")"
+# The settings the extension's own regress suite expects from the --temp-config
+# it would normally start a private instance with. They go in the endpoint's
+# postgresql.conf rather than a per-session PGOPTIONS because some are only read
+# once, when a library loads: documentdb caches whether to emit extended-RUM
+# explain output at rum library load time (index_am/rum.c reads
+# DisableExtendedRumExplainPlans there and stores the callback), so a USERSET
+# GUC arriving per session is too late to change it. Read here, before the
+# endpoint is created; only the primary extension's are used.
+declare -a REG_PG_SETTINGS=()
+if [[ $REGRESS == 1 ]]; then
+    while IFS= read -r _kv; do
+        [[ -n "$_kv" ]] && REG_PG_SETTINGS+=(--pg-setting "$_kv")
+    done < <(python3 - "$MANIFEST" "$PRIMARY_EXT" <<'REGPY'
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+for e in m.get("extensions", []):
+    if e.get("name") == sys.argv[2]:
+        for kv in ((e.get("regress") or {}).get("pg_settings") or []):
+            print(kv)
+        break
+REGPY
+)
+    (( ${#REG_PG_SETTINGS[@]} )) && echo ">>> regress pg_settings ($PRIMARY_EXT): $((${#REG_PG_SETTINGS[@]} / 2))"
+fi
+
 PG_SETTINGS=(
     --pg-setting "extension_control_path=$CTRL_PATH"
     --pg-setting "dynamic_library_path=$LIB_PATH"
@@ -513,6 +584,7 @@ PG_SETTINGS=(
     # the stock default (off), so restore it — otherwise AGE's expr/cypher_with
     # EXPLAIN tests diverge on a value that can't be blessed. Harmless elsewhere.
     --pg-setting "compute_query_id=off"
+    "${REG_PG_SETTINGS[@]}"
 )
 # A registered image built against stock PG18 carries abi_extra "PostgreSQL"
 # where this fork carries "yb_amp Postgres", and the server refuses it outright
@@ -558,6 +630,7 @@ for e in m.get("extensions", []):
         def emit(k, v): print("%s=%s" % (k, shlex.quote(str(v if v is not None else ""))))
         emit("REG_DRIVER", r.get("driver"))
         emit("REG_SCRIPT", r.get("script"))
+        emit("REG_DIR", r.get("dir"))
         emit("EXT_URL", e.get("url"))
         emit("EXT_SHA256", e.get("sha256"))
         emit("EXT_PATCH", e.get("patch"))
@@ -610,6 +683,15 @@ PY
     fetch_source
 
     if [[ "$REG_DRIVER" == pgxs ]]; then
+        # Where the regress Makefile lives. For a single-module extension that is
+        # the tarball root, which is the default. documentdb is a multi-module
+        # tree: its REGRESS sits in pg_documentdb/src/test/regress, and its ROOT
+        # Makefile is a delegating one whose `%:` catch-all would swallow the
+        # print target below and echo nothing — which surfaced as the misleading
+        # "no REGRESS tests found in Makefile".
+        REG_SRC="$SRC_DIR${REG_DIR:+/$REG_DIR}"
+        [[ -f "$REG_SRC/Makefile" ]] || {
+            echo ">>> FAIL $EXT_NAME: no Makefile at ${REG_DIR:-<root>} (regress.dir)" >&2; exit 1; }
         # Evaluate REGRESS + REGRESS_OPTS from the extension's own Makefile (they
         # use make functions like $(wildcard ...), so read them through make
         # rather than parse). Then strip --temp-instance/--temp-config: those
@@ -618,14 +700,14 @@ PY
         PG_CONFIG="$PGINST/bin/pg_config"
         # A throwaway wrapper makefile that includes the extension's own Makefile
         # (which ends in `include $(PGXS)`) and adds a target to print any var.
-        WRAP="$SRC_DIR/.amp_regress.mk"
+        WRAP="$REG_SRC/.amp_regress.mk"
         cat > "$WRAP" <<'MK'
 include Makefile
 amp-print-%:
 	@echo '$($*)'
 MK
-        REGRESS_TESTS="$(make -s -C "$SRC_DIR" -f "$WRAP" amp-print-REGRESS PG_CONFIG="$PG_CONFIG")"
-        REGRESS_OPTS="$(make -s -C "$SRC_DIR" -f "$WRAP" amp-print-REGRESS_OPTS PG_CONFIG="$PG_CONFIG")"
+        REGRESS_TESTS="$(make -s -C "$REG_SRC" -f "$WRAP" amp-print-REGRESS PG_CONFIG="$PG_CONFIG")"
+        REGRESS_OPTS="$(make -s -C "$REG_SRC" -f "$WRAP" amp-print-REGRESS_OPTS PG_CONFIG="$PG_CONFIG")"
         rm -f "$WRAP"
         [[ -n "$REGRESS_TESTS" ]] || { echo ">>> FAIL $EXT_NAME: no REGRESS tests found in Makefile" >&2; exit 1; }
         # Reproduce the extension's "installcheck-existing" (run against a live
@@ -642,16 +724,16 @@ MK
         # latter needs the next token dropped too, or its value orphans into a
         # bogus positional test name).
         KEPT_OPTS=()
-        INPUTDIR="$SRC_DIR"
-        OUTPUTDIR="$SRC_DIR"   # pg_regress writes regression.diffs here (CWD default)
+        INPUTDIR="$REG_SRC"
+        OUTPUTDIR="$REG_SRC"   # pg_regress writes regression.diffs here (CWD default)
         drop_value=0
         for tok in $REGRESS_OPTS; do
             if (( drop_value )); then drop_value=0; continue; fi
             case "$tok" in
                 --temp-instance=*|--temp-config=*|--port=*) ;;
                 --temp-instance|--temp-config|--port) drop_value=1 ;;
-                --inputdir=*) v="${tok#--inputdir=}"; [[ $v == /* ]] && INPUTDIR="$v" || INPUTDIR="$SRC_DIR/$v"; KEPT_OPTS+=("$tok") ;;
-                --outputdir=*) v="${tok#--outputdir=}"; [[ $v == /* ]] && OUTPUTDIR="$v" || OUTPUTDIR="$SRC_DIR/$v"; KEPT_OPTS+=("$tok") ;;
+                --inputdir=*) v="${tok#--inputdir=}"; [[ $v == /* ]] && INPUTDIR="$v" || INPUTDIR="$REG_SRC/$v"; KEPT_OPTS+=("$tok") ;;
+                --outputdir=*) v="${tok#--outputdir=}"; [[ $v == /* ]] && OUTPUTDIR="$v" || OUTPUTDIR="$REG_SRC/$v"; KEPT_OPTS+=("$tok") ;;
                 *) KEPT_OPTS+=("$tok") ;;
             esac
         done
@@ -667,12 +749,67 @@ MK
         # Makefile set one, else the CWD) but that file is neither in the cluster
         # log dir nor uploaded, so print it here — it's the only way to see what
         # diverged (and thus what to bless under ext_regress_expected/) from CI.
-        if ! ( cd "$SRC_DIR" && "$PG_REGRESS" \
+        # A suite that ships a bin/ beside its Makefile puts it first on PATH,
+        # because pg_regress shells out to `diff` to compare expected against
+        # results and that is the hook suites use to normalize before comparing.
+        # documentdb's bin/diff runs normalize.sed over BOTH files (so
+        # non-deterministic values — now(), ids, LSNs — compare equal) and calls
+        # the real diff with -Z, ignoring trailing whitespace. Upstream's own
+        # Makefile does exactly this (`export PATH := $(MAKEFILE_DIR)bin:$(PATH)`);
+        # driving pg_regress directly skips it, which shows up as diffs that are
+        # only a timestamp or a column's padding.
+        # Keyed on bin/diff specifically, not on bin/ existing: that is the only
+        # program pg_regress resolves through PATH, so a suite shipping some
+        # unrelated bin/ must not have it shadow the system tools for everything
+        # else. Absent for pgvector, pg_cron, hexabridge and age, which keep the
+        # plain diff they pass with today.
+        REG_PATH="$PATH"
+        if [[ -x "$REG_SRC/bin/diff" ]]; then
+            REG_PATH="$REG_SRC/bin:$PATH"
+            echo ">>> regress diff ($EXT_NAME): using the suite's own $REG_SRC/bin/diff"
+            # amp's own log lines are not part of any extension's expected
+            # output. A test that lowers client_min_messages to see the
+            # extension's messages also sees the storage layer's — yb_amp's smgr
+            # DEBUG lines and the endpoint's LOG lines — which no upstream
+            # expected file contains. Filter them from BOTH sides rather than
+            # bless them: the smgr line carries an LSN, so a blessed file would
+            # freeze one run's value and fail on the next.
+            #
+            # bin/diff prefers normalize_modified.sed when present, its own hook
+            # for "running tests on an existing cluster", which is exactly this.
+            # Generated from the suite's normalize.sed each run so upstream's
+            # rules stay authoritative and only the amp lines are appended.
+            if [[ -f "$REG_SRC/bin/normalize.sed" ]]; then
+                {
+                    cat "$REG_SRC/bin/normalize.sed"
+                    echo '/^DEBUG:  \[YBAMP_SMGR\]/d'
+                    echo '/^LOG:  ConsoleURL not set, skipping forwarding$/d'
+                } > "$REG_SRC/bin/normalize_modified.sed"
+                echo ">>> regress normalize ($EXT_NAME): amp log lines filtered from both sides"
+            fi
+        fi
+        if ! ( cd "$REG_SRC" && export PATH="$REG_PATH" && "$PG_REGRESS" \
             --bindir="$PGINST/bin" \
             --host=127.0.0.1 --port="$COMPUTE" --user=cloud_admin \
             --dbname="amp_regress_${EXT_NAME}" \
             "${KEPT_OPTS[@]}" $REGRESS_TESTS ); then
-            for diffs in "$OUTPUTDIR/regression.diffs" "$SRC_DIR/regression.diffs" \
+            # Copy what the run produced somewhere CI can upload it. Blessing a
+            # by-design diff means committing the ACTUAL output
+            # (ext_regress_expected/<name>/<test>_N.out), and the results live in
+            # a mktemp dir teardown removes — reconstructing them from the printed
+            # diff is how a blessed file ends up subtly wrong.
+            #
+            # NOT under YB_AMP_REPO_DIR: clean.sh deletes that whole directory on
+            # exit, which is why the cluster logs are printed rather than uploaded.
+            # A sibling survives to the upload step.
+            _rd="$REPO/.integration-tests/regress-${EXT_NAME}_${RUN_ID}"
+            mkdir -p "$_rd"
+            [[ -d "$REG_SRC/results" ]] && cp -a "$REG_SRC/results" "$_rd/" 2>/dev/null || true
+            for _f in "$OUTPUTDIR/regression.diffs" "$REG_SRC/regression.diffs"; do
+                [[ -f "$_f" ]] && cp -a "$_f" "$_rd/regression.diffs" 2>/dev/null && break
+            done
+            echo ">>> regress artifacts for $EXT_NAME under $_rd ($(ls "$_rd" | tr '\n' ' '))"
+            for diffs in "$OUTPUTDIR/regression.diffs" "$REG_SRC/regression.diffs" \
                          "$INPUTDIR/regression.diffs"; do
                 [[ -f "$diffs" ]] || continue
                 echo ">>> regression.diffs ($EXT_NAME) — $diffs:"
@@ -894,6 +1031,36 @@ SQL
         echo ">>> PASS postgis: v3.6.2 + ST_Area=1 + GiST NN + ST_Transform(4326->3857) x=20037508.34"
     else
         echo ">>> FAIL postgis checks; output:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+elif [[ "$EXT_NAME" == documentdb ]]; then
+    # documentdb's control file requires documentdb_core, pg_cron,
+    # tsm_system_rows and vector, and CREATE EXTENSION installs none of them
+    # without CASCADE — the generic smoke below would fail on
+    # `required extension "documentdb_core" is not installed`. The `requires`
+    # closure above has already mounted pgvector and pg_cron for CASCADE to find.
+    #
+    # Past registration, it asserts the document path the gateway drives:
+    # insert through documentdb_api, then query with a filter, which goes
+    # through bson and the @@ operator rather than plain SQL. bsonUseEJson
+    # prints the insert result as JSON instead of BSONHEX.
+    out=$("${PSQL[@]}" <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;
+SET documentdb_core.bsonUseEJson = on;
+SELECT 'INSERT:'||documentdb_api.insert_one('amp_smoke', 'probe', '{ "_id": 1, "a": 1 }')::text;
+SELECT 'INSERT:'||documentdb_api.insert_one('amp_smoke', 'probe', '{ "_id": 2, "a": 2 }')::text;
+SELECT 'MATCH:'||object_id::text FROM documentdb_api.collection('amp_smoke', 'probe')
+  WHERE document OPERATOR(documentdb_api_catalog.@@) '{ "a": 2 }';
+SELECT 'TOTAL:'||count(*) FROM documentdb_api.collection('amp_smoke', 'probe');
+SQL
+)
+    if [[ "$(echo "$out" | grep -c '^INSERT:{ "n" : { "$numberInt" : "1" }, "ok" : { "$numberDouble" : "1.0" } }$')" == 2 ]] \
+       && echo "$out" | grep -q '^MATCH:{ "" : { "$numberInt" : "2" } }$' \
+       && echo "$out" | grep -q '^TOTAL:2$'; then
+        echo ">>> PASS documentdb: CREATE EXTENSION ... CASCADE + insert_one x2 + filtered find"
+    else
+        echo ">>> FAIL documentdb checks; output:" >&2
         echo "$out" >&2
         exit 1
     fi

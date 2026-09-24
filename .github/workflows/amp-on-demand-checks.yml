@@ -432,6 +432,20 @@ jobs:
           INTEGRATION_PORT_BASE: "21000"
         run: test/integration/compute/extensions.sh --ext age --regress ${{ steps.quay.outputs.cache }}
 
+      - name: Local extension regression suite (documentdb)
+        env:
+          INTEGRATION_PORT_BASE: "22000"
+        run: test/integration/compute/extensions.sh --ext documentdb --regress ${{ steps.quay.outputs.cache }}
+
+      # documentdb once more without --regress: the smoke path, where nothing
+      # loads the extension's requirements for it and CREATE EXTENSION has to
+      # CASCADE them in. The regress run above cannot catch that, since its
+      # REGRESS_OPTS load each one explicitly.
+      - name: Local extension smoke (documentdb)
+        env:
+          INTEGRATION_PORT_BASE: "23000"
+        run: test/integration/compute/extensions.sh --ext documentdb ${{ steps.quay.outputs.cache }}
+
       - name: Collect YugabyteDB logs
         if: failure()
         # yugabyted writes master/tserver/postgres logs under <base_dir>/logs
@@ -453,10 +467,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: on-demand-extensions-local-logs-${{ github.run_id }}
+          # regress-*/ carries the failing suite's results/ and regression.diffs,
+          # which is what a by-design diff has to be blessed FROM — the suite runs
+          # in a mktemp dir that teardown removes.
           path: |
             amp/.integration-tests/**/*.log
             amp/.integration-tests/**/*.walredo
             amp/.integration-tests/yb-logs/**
+            amp/.integration-tests/regress-*/**
           include-hidden-files: true
           if-no-files-found: ignore
 

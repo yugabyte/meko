@@ -41,6 +41,41 @@ func TestResolveBranchExtensionsResolvesThroughTheCatalog(t *testing.T) {
 	}
 }
 
+// documentdb's shared_preload_libraries entry is NOT its catalog name: its one
+// image ships pg_documentdb_core.so and pg_documentdb.so, so preloading
+// "documentdb" is a `could not access file "documentdb"` FATAL at postmaster
+// start. This assembler is the only producer of the deploy spec, so Library has
+// to survive it — and it silently did not once already: the refactor that moved
+// resolution here rebuilt deploy.Extension without the field. Nothing failed
+// first, because the endpoint deploys fine and only its postmaster refuses to
+// start, so this asserts the field at the seam where it was lost.
+func TestResolveBranchExtensionsCarriesThePreloadLibrary(t *testing.T) {
+	state := newFakeStateStore()
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranchExtensions(clusterID, branchID, "documentdb")
+
+	exts, err := resolveWithCatalog(t.Context(), state, branchID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	// The catalog closes over documentdb's Requires, so the branch's one opted-in
+	// name resolves to three mounts. Only documentdb carries a Library; the other
+	// two preload (or not) under their own names.
+	want := []deploy.Extension{
+		{
+			Name:    "documentdb",
+			Image:   "quay.io/yugabyte/amp-ext-documentdb:0.116-0",
+			Preload: true,
+			Library: "pg_documentdb_core,pg_documentdb",
+		},
+		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"},
+		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6.7", Preload: true},
+	}
+	if !reflect.DeepEqual(exts, want) {
+		t.Errorf("resolve = %+v, want %+v", exts, want)
+	}
+}
+
 // The branch id is the whole address: it is a primary key, so the set resolves
 // from it alone — no cluster id is passed, and the backends ignore the one they
 // are handed.

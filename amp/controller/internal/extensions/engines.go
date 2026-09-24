@@ -36,6 +36,9 @@ var builtinEngines = []Engine{
 	{Name: "aidb", Label: "AI Database", Extensions: []string{"pgvector", "age", "pg_cron"}},
 	// HexaCluster's Oracle-compatibility layer (DBMS_*/UTL_* packages).
 	{Name: "oracle", Label: "Oracle", Extensions: []string{"hexabridge"}},
+	// DocumentDB's MongoDB-compatible document store. pgvector and pg_cron are
+	// its own `requires`; tsm_system_rows is baked into the endpoint image.
+	{Name: "documentdb", Label: "DocumentDB", Extensions: []string{"documentdb", "pgvector", "pg_cron"}},
 }
 
 // Engines returns the built-in engines in declaration order.

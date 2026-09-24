@@ -22,15 +22,18 @@ import (
 
 // Defines values for CreateClusterRequestEngine.
 const (
-	Aidb     CreateClusterRequestEngine = "aidb"
-	Oracle   CreateClusterRequestEngine = "oracle"
-	Postgres CreateClusterRequestEngine = "postgres"
+	Aidb       CreateClusterRequestEngine = "aidb"
+	Documentdb CreateClusterRequestEngine = "documentdb"
+	Oracle     CreateClusterRequestEngine = "oracle"
+	Postgres   CreateClusterRequestEngine = "postgres"
 )
 
 // Valid indicates whether the value is a known member of the CreateClusterRequestEngine enum.
 func (e CreateClusterRequestEngine) Valid() bool {
 	switch e {
 	case Aidb:
+		return true
+	case Documentdb:
 		return true
 	case Oracle:
 		return true
@@ -498,7 +501,8 @@ type CreateClusterRequest struct {
 
 	// Engine The database engine to provision as — a named bundle of externalized
 	// extensions. `postgres` (the default) seeds none, `aidb` seeds
-	// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+	// pgvector + age + pg_cron, `oracle` seeds hexabridge, and `documentdb`
+	// seeds documentdb + pgvector + pg_cron. The bundle is
 	// unioned with `extensions` and written onto the default branch, and the
 	// engine is recorded on the cluster and returned by getCluster /
 	// listClusters. An unknown engine is rejected (400), as is any non-default
@@ -542,7 +546,8 @@ type CreateClusterRequest struct {
 
 // CreateClusterRequestEngine The database engine to provision as — a named bundle of externalized
 // extensions. `postgres` (the default) seeds none, `aidb` seeds
-// pgvector + age + pg_cron, and `oracle` seeds hexabridge. The bundle is
+// pgvector + age + pg_cron, `oracle` seeds hexabridge, and `documentdb`
+// seeds documentdb + pgvector + pg_cron. The bundle is
 // unioned with `extensions` and written onto the default branch, and the
 // engine is recorded on the cluster and returned by getCluster /
 // listClusters. An unknown engine is rejected (400), as is any non-default

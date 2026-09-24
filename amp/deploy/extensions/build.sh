@@ -101,7 +101,7 @@ def norm(v):
     return str(v)
 for e in m.get("extensions", []):
     fields = [norm(e.get(k)) for k in
-              ("name","version","url","sha256","patch","prep","trusted","dockerfile")]
+              ("name","version","url","sha256","patch","prep","trusted","dockerfile","make_targets")]
     print("EXT" + US + US.join(f.replace(US, " ") for f in fields))
 PY
 }
@@ -183,7 +183,7 @@ exists() {
 }
 
 for row in "${ext_rows[@]}"; do
-  IFS=$'\x1f' read -r name version url sha256 patch prep trusted dockerfile <<<"$row"
+  IFS=$'\x1f' read -r name version url sha256 patch prep trusted dockerfile make_targets <<<"$row"
   want "$name" || continue
 
   image="${registry}/amp-ext-${name}:${version}"
@@ -205,6 +205,7 @@ for row in "${ext_rows[@]}"; do
     --build-arg "PATCH=${patch}" \
     --build-arg "PREP=${prep}" \
     --build-arg "TRUSTED=${trusted}" \
+    --build-arg "MAKE_TARGETS=${make_targets}" \
     -f "$file" "$repo_root"
 
   if $push; then

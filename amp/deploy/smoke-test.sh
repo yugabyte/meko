@@ -619,7 +619,7 @@ SQL
     GPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="gisproj")|.id')
     GDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$GPROJ" | jq -r '.default_branch.branch_id')
 
-    IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" '{"role":"read_write"}')
+    IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
     st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(postgis) succeeded" || bad "create_endpoint(postgis) task=$st"
     GEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" | jq -r '.endpoints[0].id')
     GPOD=$(wait_ready_pod "$GEP")

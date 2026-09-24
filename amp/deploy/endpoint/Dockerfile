@@ -145,6 +145,12 @@ WORKDIR /data
 # libgdal's HDF5 wants libnuma), so they surface only in the full ldd closure,
 # never in the .so files' own DT_NEEDED list. Without them CREATE EXTENSION
 # postgis fails with "libsqlite3.so.0: cannot open shared object file".
+# libpcre2-8-0 is for documentdb: pg_documentdb_core.so links -lpcre2-8
+# dynamically (its ICU is static, so that one needs nothing here). The file is
+# already in debian-slim, but only because libselinux1 depends on it — nothing
+# declares it, so the .so loads by transitive luck today and a preload FATAL is
+# what a change to that edge would look like. Declared here instead; it is
+# already installed, so this adds no layer size.
 RUN set -e \
     && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update \
@@ -158,6 +164,7 @@ RUN set -e \
         libreadline8 \
         libseccomp2 \
         libicu72 \
+        libpcre2-8-0 \
         zlib1g \
         liblz4-1 \
         libzstd1 \

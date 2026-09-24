@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CreateClusterWizard } from "./CreateClusterWizard";
 import { ampCreateCluster } from "@/lib/api/ampApi";
 
-// The wizard's contract: PostgreSQL/AI Database/Oracle are selectable engines
-// (SQL Server + DocumentDB are "coming soon"), an Extensions step seeds the
+// The wizard's contract: PostgreSQL/AI Database/Oracle/DocumentDB are selectable
+// engines (SQL Server is "coming soon"), an Extensions step seeds the
 // main branch, and finishing fires ONE composite create with engine + extras.
 vi.mock("@/lib/api/ampApi", () => ({
   ampCreateCluster: vi.fn().mockResolvedValue({ id: "c1", name: "orders" }),
@@ -30,10 +30,10 @@ afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
 
 describe("CreateClusterWizard", () => {
-  it("greys out roadmap engines and keeps PostgreSQL / AI Database / Oracle selectable", () => {
+  it("greys out roadmap engines and keeps PostgreSQL / AI Database / Oracle / DocumentDB selectable", () => {
     renderWizard(<CreateClusterWizard open onOpenChange={() => {}} datapackId="dp" />);
     expect((screen.getByRole("button", { name: /sql server/i }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: /documentdb/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /documentdb/i }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: /postgresql/i }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: /oracle/i }) as HTMLButtonElement).disabled).toBe(false);
   });

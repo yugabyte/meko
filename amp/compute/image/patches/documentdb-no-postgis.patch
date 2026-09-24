@@ -1,0 +1,158 @@
+diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/Makefile.cflags ddb-new/Makefile.cflags
+--- a/Makefile.cflags	2026-08-21 13:29:36.000000000 -0700
++++ b/Makefile.cflags	2026-09-04 22:43:07.210588484 -0700
+@@ -1,6 +1,8 @@
+ 
+ 
+-LIBBSON := $(shell pkg-config --cflags libbson-static-1.0)
++# amp: the ABI base installs libbson under /usr/local (ENABLE_MONGOC=OFF), which
++# ships no .pc file.
++LIBBSON := -pthread -DBSON_STATIC -isystem /usr/local/include/libbson-1.0
+ 
+ DOCUMENTDB_CORE_DIR = $(OSS_SRC_DIR)/pg_documentdb_core
+ DOCUMENTDB_DIR = $(OSS_SRC_DIR)/pg_documentdb
+@@ -14,6 +16,14 @@
+ PG_CPPFLAGS = $(LIBBSON) -I$(libpq_srcdir) -Isrc -Iinclude -Ibuild/include/
+ PG_LDFLAGS = $(shell pkg-config --static --libs --cflags libbson-static-1.0) -L/usr/lib
+ PG_LDFLAGS += -Wl,-rpath=$(shell $(PG_CONFIG) --pkglibdir)
++# amp: these libraries link each other by name (-l:pg_documentdb_core.so below),
++# and the rpath above is the BUILD-time pkglibdir. amp does not install them
++# there: the image is mounted as a read-only ImageVolume under
++# /extensions/<name>/lib, so at load time the sibling is not on any search path
++# and the postmaster dies with `pg_documentdb_core.so: cannot open shared object
++# file`. $ORIGIN resolves siblings relative to the loaded library itself, so it
++# works wherever the tree is mounted.
++PG_LDFLAGS += -Wl,-rpath,'$$ORIGIN'
+ 
+ ifeq ($(USE_DOCUMENTDB_CORE),1)
+ DOCUMENTDB_CORE_LIB = $(DOCUMENTDB_CORE_DIR)/pg_documentdb_core.so
+@@ -159,4 +169,6 @@
+ EXTENSION_SQL_ONLY_DEFINES += -D__CORE_SCHEMA__=$(CORE_SCHEMA_NAME)
+ EXTENSION_SQL_ONLY_DEFINES += -D__CORE_SCHEMA_V2__=$(CORE_SCHEMA_NAME_V2)
+ 
+-SQL_DEFINES = $(EXTENSION_SQL_ONLY_DEFINES)
++# amp: gates out the postgis-dependent geospatial GIST op classes in
++# documentdb--0.24-0.sql; amp does not ship postgis.
++SQL_DEFINES = $(EXTENSION_SQL_ONLY_DEFINES) -D__AMP_NO_POSTGIS__
+diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb/documentdb.control ddb-new/pg_documentdb/documentdb.control
+--- a/pg_documentdb/documentdb.control	2026-08-21 13:29:36.000000000 -0700
++++ b/pg_documentdb/documentdb.control	2026-09-04 22:43:07.210588484 -0700
+@@ -3,4 +3,5 @@
+ module_pathname = '$libdir/pg_documentdb'
+ relocatable = false
+ superuser = true
+-requires = 'documentdb_core, pg_cron, tsm_system_rows, vector, postgis'
++# amp: postgis is not shipped — see documentdb-no-postgis.patch.
++requires = 'documentdb_core, pg_cron, tsm_system_rows, vector'
+diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb/sql/documentdb--0.24-0.sql ddb-new/pg_documentdb/sql/documentdb--0.24-0.sql
+--- a/pg_documentdb/sql/documentdb--0.24-0.sql	2026-08-21 13:29:36.000000000 -0700
++++ b/pg_documentdb/sql/documentdb--0.24-0.sql	2026-09-04 22:43:07.226588470 -0700
+@@ -46,10 +46,28 @@
+ #include "udfs/query/bson_dollar_geospatial--0.10-0.sql"
+ #include "operators/bson_geospatial_operators--0.16-0.sql"
+ #include "operators/bson_geospatial_operators--0.18-0.sql"
++/* Kept: every function here is one of documentdb's own C functions, declared
++ * over bson/internal/float8 with no postgis type in any signature, and the
++ * geospatial *query* path calls them — bson_validate_geography in particular.
++ * Gating this file out is what made 28 tests fail with
++ * "function documentdb_api_catalog.bson_validate_geography(bson, text) does not
++ * exist"; only the operator classes below actually need postgis.
++ */
+ #include "udfs/geospatial/bson_gist_extensibility_functions--0.16-0.sql"
++/* amp: the GIST operator classes, and the two files that ALTER OPERATOR FAMILY
++ * onto them. The class definition names postgis's own geometry_gist_* support
++ * functions over its geometry/box2df types, so CREATE EXTENSION fails at
++ * "function geometry_gist_union_2d(bytea, internal) does not exist" without
++ * postgis installed, and the member files cannot extend a family that was never
++ * created. amp does not ship postgis (documentdb-no-postgis.patch), so these
++ * three are gated out rather than deleted. The cost is the 2d/2dsphere GIST
++ * index types; the $geo query operators above keep working.
++ */
++#ifndef __AMP_NO_POSTGIS__
+ #include "operators/bson_gist_geospatial_op_classes--0.16-0.sql"
+ #include "operators/bson_gist_geospatial_op_classes_members--0.16-0.sql"
+ #include "operators/bson_gist_geospatial_op_classes_members--0.18-0.sql"
++#endif
+ 
+ 
+ /*
+diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb/src/test/regress/Makefile ddb-new/pg_documentdb/src/test/regress/Makefile
+--- a/pg_documentdb/src/test/regress/Makefile	2026-08-21 13:29:36.000000000 -0700
++++ b/pg_documentdb/src/test/regress/Makefile	2026-09-04 22:43:07.211588484 -0700
+@@ -1,7 +1,28 @@
+ 
+ BASEPATH:=../../../
+ 
+-REGRESS := 1
++# amp: extensions.sh --regress reads REGRESS/REGRESS_OPTS from this Makefile and
++# drives pg_regress at the LIVE compute, instead of the private --temp-instance
++# the common_test macro below starts. Upstream leaves REGRESS a placeholder and
++# selects tests through a generated schedule, so name them here.
++#
++# The loads mirror EXTENSIONLOAD minus postgis, which amp does not ship
++# (documentdb-no-postgis.patch): pg_regress CREATE EXTENSIONs each one into its
++# test database, and an unavailable postgis fails setup before any test runs.
++#
++# REGRESS is defined below, after pg_major_version — it is derived from
++# upstream's basic_schedule rather than listed here.
++#
++# --dbname is set explicitly rather than left to pgxs.mk, which appends
++# --dbname=$(CONTRIB_TESTDB) only under `ifdef REGRESS` — and REGRESS is defined
++# below, after the PGXS include, so that block does not see it. The name matters:
++# pg_cron's install script refuses to be created in any database other than
++# cron.database_name (postgres here), with one hardcoded exception for
++# `contrib_regression` so its own regression suite can run. Any other name fails
++# setup with "can only create extension in database postgres" before a test runs.
++REGRESS_OPTS = --load-extension=tsm_system_rows --load-extension=pg_cron \
++               --load-extension=vector --load-extension=documentdb_core \
++               --load-extension=documentdb --dbname=contrib_regression
+ 
+ PG_CONFIG ?= pg_config
+ 
+@@ -13,6 +34,18 @@
+ 
+ pg_major_version := $(shell $(PG_CONFIG) --version | awk -F' ' '{ print $$2 }' | awk -F'.' '{ print $$1 }' | awk -F'r' '{ print $$1 }')
+ 
++# amp: the full basic_schedule, as the test list the pgxs driver reads. Derived
++# from upstream's schedule rather than copied, so a version bump that adds or
++# renames a test carries over instead of silently narrowing what runs. The
++# schedule carries !PG18_OR_HIGHER!-style placeholders that mutate_schedule.sh
++# resolves per major, which is why this sits below pg_major_version and why the
++# schedule is copied to log/ first rather than mutated in place. Parallel groups
++# flatten to a serial list: pg_regress keeps the given order, and the schedule's
++# ordering requirements are sequential ones (documentdb_test_helpers defines the
++# helpers everything else calls, and public_api_schema checks global state).
++AMP_SCHEDULE := log/amp_basic_schedule_$(pg_major_version)
++REGRESS := $(shell mkdir -p log && cp -f basic_schedule $(AMP_SCHEDULE) && ./mutate_schedule.sh $(AMP_SCHEDULE) $(pg_major_version) >/dev/null 2>&1 && grep '^test:' $(AMP_SCHEDULE) | sed -e 's/^test:[[:space:]]*//')
++
+ EXTENSIONLOAD :=  --load-extension=tsm_system_rows --load-extension=pg_cron --load-extension=vector --load-extension=postgis --load-extension=documentdb_core --load-extension=documentdb
+ 
+ MAKEFILE_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
+diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb_core/Makefile ddb-new/pg_documentdb_core/Makefile
+--- a/pg_documentdb_core/Makefile	2026-08-21 13:29:36.000000000 -0700
++++ b/pg_documentdb_core/Makefile	2026-09-04 22:43:07.211588484 -0700
+@@ -26,12 +26,22 @@
+ # compilation configuration
+ include $(OSS_SRC_DIR)/Makefile.cflags
+ 
+-INTEL_DECIMAL_MATH_LIB = $(shell pkg-config --cflags intelmathlib)
++# amp: Intel's BID is built into the ABI base as /usr/local/lib/libbid.a with
++# headers in /usr/local/include/bid; it ships no .pc file.
++INTEL_DECIMAL_MATH_LIB = -isystem /usr/local/include/bid
+ PCRE2_LIB = $(shell pkg-config --cflags libpcre2-8)
+ 
+ PG_CPPFLAGS += $(INTEL_DECIMAL_MATH_LIB) $(PCRE2_LIB)
+ PG_CFLAGS += $(INTEL_DECIMAL_MATH_LIB) $(PCRE2_LIB)
+-PG_LDFLAGS +=  $(shell pkg-config --static --libs --cflags intelmathlib) $(shell pkg-config --static --libs --cflags libpcre2-8)
++PG_LDFLAGS += /usr/local/lib/libbid.a $(shell pkg-config --static --libs --cflags libpcre2-8)
++# amp: collation.c calls ICU, and upstream declares no ICU flags because it
++# builds against a system shared libicu the dynamic linker resolves. amp links a
++# STATIC ICU into Postgres (Makefile ICU_LIBS), so there is no shared libicu with
++# matching symbols at runtime: without this the .so loads with
++# `undefined symbol: ucnv_open_67`. Link the same static ICU the postmaster does,
++# so the symbols resolve inside this library and the runtime image's libicu
++# version is irrelevant.
++PG_LDFLAGS += -L/usr/local/icu/lib -L/usr/local/icu/lib64 -licui18n -licuuc -licudata -lstdc++
+ 
+ SOURCES = $(wildcard src/*.c) $(wildcard src/**/*.c)
+ 

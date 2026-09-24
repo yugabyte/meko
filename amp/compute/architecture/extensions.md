@@ -124,9 +124,10 @@ extension is tagged and released on its own cadence.
   the common path stays small.
 - **[`extensions.yaml`](../../deploy/extensions/extensions.yaml)** — the build
   **manifest**: one row per extension (version, URL, checksums, patch, preload,
-  prep, optional dedicated dockerfile, optional `regress:` block for the upstream
-  suite). The single source of truth for versions and checksums; keep it in
-  lockstep with the controller catalog (below).
+  prep, optional dedicated dockerfile, and a `regress:` block naming the upstream
+  suite — required, see "Adding a new extension"). The single source of
+  truth for versions and checksums; keep it in lockstep with the
+  controller catalog (below).
 - **[`build.sh`](../../deploy/extensions/build.sh)** — builds the base once, then
   each extension, and optionally `--push`es them. `--push` publishes the base too
   (for reuse); `--no-base-push` keeps the base local — nothing pulls it back, so
@@ -321,7 +322,11 @@ the feature is additive.
   (`<registry>/amp-ext-<name>:<version>` for a built-in, registry from
   `--extension-registry` / `AMP_EXTENSION_REGISTRY`; the registered reference
   verbatim otherwise), skipping unknown names so a stale entry — including one
-  since deregistered — can't wedge a deploy.   `DefaultNames()` is the always-mounted set
+  since deregistered — can't wedge a deploy. It also **closes over each entry's
+  `Requires`**: a built-in whose control file names another extension (documentdb
+  requires pgvector and pg_cron) brings that one's image with it, so the mount
+  set can be larger than the names asked for. Requested names come first,
+  requirements after, deduped. `DefaultNames()` is the always-mounted set
   (currently **empty** — All extensions are registered but off by
   default, so nothing is auto-mounted; opting in is **per branch** — the initial
   set is seeded on the default branch by `createCluster`, a fork inherits its
@@ -388,7 +393,8 @@ branch, and `addBranchExtensions`
   **that branch's** set (`AddBranchExtensions`, an idempotent absolute union)
   and then **redeploys the branch's endpoints whose recorded mount set differs from
   it** so the changed ImageVolume mounts take effect. Both are durable: an endpoint
-  create or recreate resolves **catalog defaults ∪ its branch's set**.
+  create or recreate resolves **catalog defaults ∪ its branch's set**, closed
+  over `Requires`.
 
   The step records what each endpoint mounts after that endpoint's deploy returns,
   which is what makes the comparison safe: a run that fails partway leaves the
@@ -400,7 +406,10 @@ branch, and `addBranchExtensions`
 - The opted-in set (not the catalog defaults) is **readable** on both the
   `Cluster` response (`getCluster`/`listClusters` return the default branch's set
   as the cluster's) and the `Branch` response (`getBranch`/`listBranches` return
-  that branch's own set).
+  that branch's own set). It is the set as opted into, not the mount set: a
+  branch that opted into `["documentdb"]` reports that one name, while its
+  endpoints mount documentdb, pgvector and pg_cron. Because pg_cron is preloaded,
+  opting into documentdb on a live branch is a restart for that reason too.
 
 ## Engines
 
@@ -416,6 +425,7 @@ records the engine on the cluster row (`amp_registry.clusters.engine`).
 | `postgres` (default) | nothing |
 | `aidb` | pgvector, age, pg_cron |
 | `oracle` | hexabridge |
+| `documentdb` | documentdb, pgvector, pg_cron |
 
 The recorded engine is **provenance, not a constraint**: it names what the
 cluster was created as and is never re-derived. It cannot go stale either —
@@ -430,6 +440,83 @@ of truth, `TestEngineTableMatchesManifest` asserts
 [`engines.go`](../../controller/internal/extensions/engines.go) matches it, and
 and the UI's bundled fallback catalog is generated from it (see "Adding a new
 extension" below).
+
+### documentdb and postgis
+
+`documentdb.control` lists `postgis` in its `requires`, and amp does not ship it
+— it is GPL, which is already a reason it cannot be baked in.
+[`documentdb-no-postgis.patch`](../image/patches/documentdb-no-postgis.patch)
+takes it out in two places, because the dependency is real in one of them and not
+the other:
+
+- **Link time it is not real.** `SHLIB_LINK` is `$(libpq)` alone and
+  `POSTGIS_SCHEMA_NAME` reaches the build only through
+  `EXTENSION_SQL_ONLY_DEFINES`, so the geospatial sources compile and the built
+  `.so` carries no postgis or geos symbol. Dropping `postgis` from `requires` is
+  enough to let `CREATE EXTENSION` past its dependency check.
+- **In the install SQL it is real.** Getting past that check is not sufficient:
+  `documentdb--0.24-0.sql` declares GIST support functions and operator classes
+  whose signatures use postgis's `geometry`/`box2df` types and whose op classes
+  name postgis's own `geometry_gist_*` support functions, so `CREATE EXTENSION`
+  fails at `function geometry_gist_union_2d(bytea, internal) does not exist`.
+  Upstream has no build flag for a postgis-less build (its own packaging compiles
+  postgis from source rather than skip it), but the install SQL is assembled by
+  `cpp`, so the patch gates the three operator-class `#include`s behind
+  `__AMP_NO_POSTGIS__`
+  and adds that define to `SQL_DEFINES`. The gate is exactly the operator class
+  and the two files that `ALTER OPERATOR FAMILY` onto it. It deliberately does
+  **not** cover
+  `udfs/geospatial/bson_gist_extensibility_functions--0.16-0.sql`: despite the
+  name, every function there is one of documentdb's own C functions declared
+  over `bson`/`internal`/`float8` with no postgis type in any signature, and the
+  geospatial *query* path calls them. Gating that file too is what made 28 tests
+  fail on `function documentdb_api_catalog.bson_validate_geography(bson, text)
+  does not exist`.
+
+The cost is the geospatial index types (2d/2dsphere), which need those GIST
+operator classes. The non-index `$geo` query operators are built from
+`bson_dollar_geospatial` and `bson_geospatial_operators`, which carry no postgis
+reference and are kept.
+
+Its upstream pg_regress suite runs through the `pgxs` driver like the others, but
+needed the patch's help: upstream leaves `REGRESS` a placeholder and selects tests
+through a generated schedule, and its `EXTENSIONLOAD` loads postgis
+unconditionally, which fails pg_regress setup before any test runs. The patch
+names the tests in `REGRESS` and puts the postgis-free loads in `REGRESS_OPTS`.
+It runs upstream's full `basic_schedule` — 104 tests. `REGRESS` is *derived* from
+that schedule at make time rather than listed in the patch, so a version bump that
+adds or renames a test carries over instead of silently narrowing what runs: the
+patch copies `basic_schedule` to `log/`, runs upstream's `mutate_schedule.sh` to
+resolve its `!PG18_OR_HIGHER!`-style placeholders, and flattens the `test:` lines
+into the list. Parallel groups become a serial list; pg_regress preserves the
+given order, and the schedule's real ordering constraints are sequential anyway
+(`documentdb_test_helpers` defines the helpers the rest call). By-design diffs get
+blessed under `test/integration/compute/ext_regress_expected/documentdb/`.
+
+Its three libraries also link **each other** by name, and upstream bakes the
+build-time `pkglibdir` into their rpath — but amp never installs them there: the
+image is mounted read-only under `/extensions/<name>/lib`, so at load time the
+sibling is on no search path and the postmaster dies with
+`pg_documentdb_core.so: cannot open shared object file`. The patch adds `$ORIGIN`
+to the rpath, which resolves siblings relative to the loaded library itself and
+so works wherever the tree is mounted.
+
+It also links **ICU**. Upstream declares no ICU flags because it builds against a
+system shared libicu the dynamic linker resolves; amp links a *static* ICU into
+Postgres (`Makefile` `ICU_LIBS`), so there is no shared libicu with matching
+symbols at runtime and the extension loads with `undefined symbol: ucnv_open_67`.
+The patch links the same static ICU the postmaster does, so the symbols resolve
+inside the extension and the runtime image's own libicu version is irrelevant.
+
+Two of its three native dependencies are source-built into the ABI-anchor base
+rather than apt-installed: libbson (bookworm ships 1.23, documentdb pins 1.28.0)
+and Intel's BID decimal library at 2.0u3-1 — the exact source documentdb pins,
+taken as Ubuntu's sha-pinned source package with Debian's patch series applied,
+since bookworm's `libintelrdfpmath-dev` is 2.0u2. The third, pcre2, comes from
+apt — `libpcre2-dev` in the base to build against, and `libpcre2-8-0` in the
+endpoint's runtime image to load against, since `pg_documentdb_core.so` links it
+dynamically while libbson and BID link statically. `tsm_system_rows` is a baked
+contrib module, installed by `postgres.mk`.
 
 ## Storage and fork behaviour
 
@@ -457,15 +544,25 @@ schema change:
 - `AddBranchExtensions` unions later names into a single branch row;
   `BranchExtensions` reads that branch's row.
 - At endpoint create, the step resolves the mount set as
-  **catalog defaults ∪ its branch's opted-in set**. Unknown names are dropped by
-  the catalog.
+  **catalog defaults ∪ its branch's opted-in set**, closed over each entry's
+  `Requires`. Unknown names are dropped by the catalog.
 
 The resolved set is also recorded in the endpoint's recreate `config` blob for
 audit / recreate.
 
 ## Adding a new extension
 
-1. Add a row to
+1. **Create the Quay repository first.** A new extension means a new image,
+   `quay.io/<registry>/amp-ext-<name>`, and the CI robot can push to repositories
+   that already exist but **cannot create one**. Without it the build succeeds and
+   the push fails with `unauthorized: access to the requested resource is not
+   authorized` — which reads like a broken credential rather than a missing repo,
+   and the other extensions give no hint because `build.sh` skips any whose
+   version tag is already present, so the new one is the only push attempted. Ask
+   whoever administers the Quay org to create it and grant the CI robot write
+   access. The same applies to any other new image the extension needs (the
+   documentdb gateway has its own, `amp-documentdb-gateway`).
+2. Add a row to
    [`deploy/extensions/extensions.yaml`](../../deploy/extensions/extensions.yaml)
    (version, URL, sha256, optional patch/prep/preload/dedicated dockerfile) and
    `deploy/extensions/build.sh --push <name>`. If the source is private, export
@@ -479,15 +576,15 @@ audit / recreate.
    [`Makefile`](../../Makefile) and its `-dev` package to every PG build context
    (the endpoint `pg-build` stage, the ABI base, and the on-host CI build-dep
    lists in `.github/workflows/amp-*.yml`).
-2. Add the matching entry to the controller catalog
+3. Add the matching entry to the controller catalog
    ([`catalog.go`](../../controller/internal/extensions/catalog.go)) with the
    same version, and `Default: true` only if it should be mounted on every
    endpoint (today all entries are `Default: false`). Set `Preload: true` if the
    extension registers a background worker or needs shared memory (its `_PG_init`
    requires `shared_preload_libraries`), keeping it in step with the manifest's
    `preload:`.
-3. Give the manifest row a one-line `description:` (step 1), copy it onto the
-   catalog entry in step 2, and regenerate the UI's bundled catalog:
+4. Give the manifest row a one-line `description:` (step 2), copy it onto the
+   catalog entry in step 3, and regenerate the UI's bundled catalog:
    `cd amp_ui && npm run gen:extensions`, committing the resulting
    `src/config/extensions.json`. The picker reads `GET /extensions` at runtime —
    that is how a registered image reaches it at all — and falls back to the
@@ -498,15 +595,41 @@ audit / recreate.
    [`engines.go`](../../controller/internal/extensions/engines.go) together, then
    regenerate — `TestEngineTableMatchesManifest` fails if they disagree, and the
    openapi `engine` enum has its own check (`TestEngineEnumMatchesCatalog`).
-4. For a non-default extension, opt a branch in by passing
+5. For a non-default extension, opt a branch in by passing
    `extensions: ["<name>"]` to `createCluster` (seeds the default branch), or
    `addBranchExtensions` on a branch later; every endpoint on that branch then
    mounts it.
-5. (Optional but expected) add a `regress:` block to the manifest row so
-   `extensions.sh --regress` runs the extension's upstream suite: `driver: pgxs`
-   for a Makefile with a `REGRESS` target, or `driver: script` + `script: <path>`
-   for a custom runner. Bless any by-design amp diffs under
+6. **Add a `regress:` block — this is required, not optional.** It is the only
+   thing that runs the extension against a real amp compute: `driver: pgxs` for a
+   Makefile with a `REGRESS` target, or `driver: script` + `script: <path>` for a
+   custom runner. If the extension's control file requires another extension,
+   list it under `requires:` (manifest names) so the harness co-mounts it —
+   without that, `CREATE EXTENSION` fails with "extension X is not available".
+   If upstream's suite relies on a `--temp-config` (which the driver strips,
+   since amp runs against a live compute), carry the settings it needs in
+   `pg_settings:` — a list of `key=value` that becomes `--pg-setting` on the
+   endpoint, i.e. lines in the compute's postgresql.conf. That is the faithful
+   equivalent of upstream's `--temp-config`, and it is deliberately not a
+   per-session `PGOPTIONS`: a GUC read once when a library loads (documentdb
+   decides about extended-RUM explain output at rum load time) is already fixed
+   by the time a session sets it.
+   A multi-module tree adds `dir:` — the subdirectory holding the
+   regress Makefile, since the harness reads `REGRESS` from the tarball root by
+   default. Bless any by-design amp diffs under
    `test/integration/compute/ext_regress_expected/<name>/`.
+
+   Without it nothing ever executes `CREATE EXTENSION <name>`, and a build that
+   compiles is not evidence the extension *loads*: documentdb compiled cleanly and
+   still failed at postmaster start twice — first preloading a library name that
+   did not exist, then on `undefined symbol: ucnv_open_67` because it links ICU
+   and amp's is static. Both were caught only by the regress job actually starting
+   Postgres.
+
+   **The CI step is not automatic.** The per-extension steps in
+   [`amp-on-demand-checks.yml`](../../.github/workflows/amp-on-demand-checks.yml)
+   are written out one by one, so a manifest block alone runs nothing — add a step
+   for the new extension, with its own `INTEGRATION_PORT_BASE` (reusing another
+   extension's collides).
 
 That is the path for an extension **we build**. For one we do not, there is no
 manifest row, no catalog entry and no controller release: vet the image

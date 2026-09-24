@@ -1,7 +1,12 @@
 # yb-amp externalized extensions — build manifest.
 #
 # Each entry is built into a minimal OCI image (see extension.Dockerfile) that
-# the endpoint mounts as a Kubernetes ImageVolume. build.sh reads this file,
+# the endpoint mounts as a Kubernetes ImageVolume.
+#
+# Adding one is NOT just a row here — the Quay repository has to exist first (CI
+# can push to an existing repo but cannot create one), the `regress:` block is
+# required, and its CI step has to be added by hand. See
+# compute/architecture/extensions.md, "Adding a new extension". build.sh reads this file,
 # builds the ABI-anchor base once, then each extension, and (optionally) pushes
 # them. Keep this the single source of truth for versions + checksums.
 
@@ -35,6 +40,10 @@ engines:
     label: Oracle
     description: Oracle compatibility layer
     extensions: [hexabridge]
+  - name: documentdb
+    label: DocumentDB
+    description: MongoDB-compatible document store
+    extensions: [documentdb, pgvector, pg_cron]
 
 extensions:
   - name: pgvector
@@ -152,3 +161,86 @@ extensions:
     # ImageVolume (see extensions.sh --regress).
     regress:
       driver: pgxs
+
+  - name: documentdb
+    description: MongoDB-compatible document store
+    # 0.116-0 is the current release and the first line supporting PG18, which
+    # upstream calls its paved-road default — so it builds against the forked
+    # PG18 ABI base with no back-porting.
+    version: "0.116-0"
+    url: https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
+    sha256: 09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d
+    # Drops postgis from `requires` AND gates the postgis-dependent geospatial
+    # GIST op classes out of the install SQL (the `requires` line alone is not
+    # enough — see compute/architecture/extensions.md), and points the build at
+    # the libbson/BID the ABI base installs, neither of which ships a .pc file.
+    patch: documentdb-no-postgis.patch
+    # One source tree, three extensions: documentdb_core, documentdb and
+    # documentdb_extended_rum. `CREATE EXTENSION documentdb CASCADE` installs
+    # documentdb_core and the requirements below with it; without CASCADE it
+    # fails on the first missing one. documentdb_extended_rum is not a
+    # requirement and is created separately, if at all.
+    control: documentdb
+    # documentdb.control names these in its own `requires`, so CREATE EXTENSION
+    # documentdb fails with "extension pg_cron is not available" unless they are
+    # on the endpoint's paths too. Manifest names, not control names (pgvector's
+    # control is `vector`). tsm_system_rows is also required but ships inside the
+    # compute's Postgres as a contrib module, so it is not an image to mount.
+    requires: [pgvector, pg_cron]
+    # documentdb.control ships `superuser = true`, so CREATE EXTENSION is
+    # superuser-only — not trusted.
+    trusted: false
+    # shared_preload_libraries must carry pg_documentdb_core and pg_documentdb
+    # (upstream also requires pg_cron there, which the engine bundle brings), so
+    # opting in on a live endpoint needs a postmaster restart.
+    preload: true
+    # The libraries to preload, which are NOT the CREATE EXTENSION name: this one
+    # image ships pg_documentdb_core.so and pg_documentdb.so, and preloading
+    # "documentdb" is a `could not access file "documentdb"` FATAL at startup.
+    # Comma-separated because shared_preload_libraries takes a list and this row
+    # needs two of them.
+    library: pg_documentdb_core,pg_documentdb
+    prep: ""
+    dockerfile: ""
+    # A bare `make` also descends into internal/pg_documentdb_distributed, which
+    # wants Citus. install-documentdb builds and installs just the three we ship.
+    make_targets: install-documentdb
+    # Upstream's own pg_regress suite. The patch names the tests in REGRESS and
+    # puts the extension loads in REGRESS_OPTS, so the pgxs driver can run it at
+    # the live compute. REGRESS is derived from upstream's basic_schedule (104
+    # tests) at make time, so a version bump cannot silently narrow it.
+    #
+    # dir: this is a multi-module tree, so REGRESS is not in the tarball root —
+    # and the root Makefile is a delegating one whose `%:` catch-all would
+    # swallow the harness's print target and report no tests at all.
+    regress:
+      driver: pgxs
+      dir: pg_documentdb/src/test/regress
+      # What upstream's --temp-config sets, which the pgxs driver strips because
+      # it runs against a live compute. These go in the endpoint's
+      # postgresql.conf, not a per-session PGOPTIONS: documentdb decides whether
+      # to emit extended-RUM explain output when the rum library loads, so a
+      # per-session GUC is too late and 11 tests diverge on plan detail.
+      # The PGC_POSTMASTER ones belong here too — that was the point of using
+      # postgresql.conf rather than PGOPTIONS. Upstream points both the pg_cron
+      # scheduler and documentdb's background worker at the database the suite
+      # runs in; leaving them on the default `postgres` means the worker never
+      # sees the jobs the tests queue, and
+      # commands_create_indexes_background_{cron,bgworker} sit for 73s and fail
+      # with "Waited too long for index build to complete".
+      pg_settings:
+        # Without this every bson value prints as BSONHEX<hex> and every
+        # expected file mismatches.
+        - documentdb_core.bsonUseEJson=on
+        # The three that keep EXPLAIN output stable.
+        - documentdb.disableExtendedRumExplainPlans=true
+        - documentdb.enableExplainScanIndexCosts=false
+        - documentdb.enable_default_extended_explain=false
+        - documentdb.enableLocalRetryTable=false
+        - documentdb.indexBuildsScheduledOnBgWorker=off
+        - documentdb.enableContinuationFastBitmapLookup=true
+        - documentdb.blockedRolePrefixList=documentdb,pg
+        # Both must name the database pg_regress runs the tests in, which
+        # REGRESS_OPTS pins to contrib_regression.
+        - cron.database_name=contrib_regression
+        - documentdb.bg_worker_database_name=contrib_regression

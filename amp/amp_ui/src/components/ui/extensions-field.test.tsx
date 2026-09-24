@@ -54,8 +54,11 @@ describe("ExtensionsField", () => {
 
   it("flags the extensions whose preload forces a restart", () => {
     render(<ExtensionsField value={[]} onChange={vi.fn()} />);
-    // pg_cron and hexabridge need shared_preload_libraries; pgvector and age don't.
-    expect(screen.getAllByText(/needs restart/i)).toHaveLength(2);
+    // Derived from the generated catalog rather than hardcoded, so adding a
+    // preload extension to the manifest does not falsify the count.
+    const preload = BUNDLED_EXTENSIONS.filter((e) => e.preload);
+    expect(preload.length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/needs restart/i)).toHaveLength(preload.length);
   });
 
   // Creating a cluster has no compute yet, so the restart tag would be noise.

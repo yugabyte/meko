@@ -57,6 +57,12 @@ def build() -> str:
         # preload => shared_preload_libraries => enabling it restarts the postmaster.
         if ext.get("preload"):
             entry["preload"] = True
+        # requires => other extensions whose .control must be mounted alongside
+        # this one, or CREATE EXTENSION fails. The controller catalog mirrors it
+        # (TestCatalogRequiresMatchesManifest compares the two through this file).
+        requires = list(ext.get("requires") or [])
+        if requires:
+            entry["requires"] = requires
         entries.append(entry)
     if not entries:
         sys.exit("manifest lists no extensions")

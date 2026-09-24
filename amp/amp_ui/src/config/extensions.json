@@ -24,6 +24,16 @@
       "extensions": [
         "hexabridge"
       ]
+    },
+    {
+      "name": "documentdb",
+      "label": "DocumentDB",
+      "description": "MongoDB-compatible document store",
+      "extensions": [
+        "documentdb",
+        "pgvector",
+        "pg_cron"
+      ]
     }
   ],
   "extensions": [
@@ -48,6 +58,16 @@
       "name": "age",
       "version": "1.8.0",
       "description": "Apache AGE — openCypher graph"
+    },
+    {
+      "name": "documentdb",
+      "version": "0.116-0",
+      "description": "MongoDB-compatible document store",
+      "preload": true,
+      "requires": [
+        "pgvector",
+        "pg_cron"
+      ]
     }
   ]
 }

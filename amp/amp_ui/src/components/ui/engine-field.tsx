@@ -31,7 +31,6 @@ const SUPPORTED: EngineOption[] = catalog.engines.map((e) => ({
 /** Roadmap engines — no controller support, so they stay unselectable. */
 const ROADMAP: EngineOption[] = [
   { id: "sqlserver", label: "SQL Server", comingSoon: true },
-  { id: "documentdb", label: "DocumentDB", comingSoon: true },
 ];
 
 export const DB_ENGINES: EngineOption[] = [...SUPPORTED, ...ROADMAP];

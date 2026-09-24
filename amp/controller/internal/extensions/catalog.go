@@ -35,6 +35,8 @@ type Extension struct {
 	Description string
 	// Library is the shared-library basename when it differs from Name — the
 	// shared_preload_libraries entry for a Preload extension. Empty means Name.
+	// Comma-separated when one image ships more than one (documentdb's ships
+	// pg_documentdb_core and pg_documentdb); the chart passes it through verbatim.
 	Library string
 
 	// ImageRef pins a complete image reference instead of deriving the amp-built
@@ -53,6 +55,14 @@ type Extension struct {
 	// the forked Postgres. Waiving it wrongly can crash the postmaster, which is
 	// why registering an extension is an admin-only API.
 	ABIExtraExempt []string
+	// Requires names other catalog extensions this one's .control file requires.
+	// PostgreSQL enforces that at CREATE EXTENSION time: a required extension
+	// whose .control is not on the endpoint's extension_control_path fails with
+	// `extension "X" is not available`, so mounting this one alone is not enough.
+	// Resolve closes over it. Catalog names, not SQL names (pgvector's SQL name is
+	// "vector"), and it mirrors `requires:` in deploy/extensions/extensions.yaml —
+	// TestCatalogRequiresMatchesManifest keeps the two in step.
+	Requires []string
 }
 
 // Layout is where an extension image keeps its pieces, relative to the mount
@@ -133,6 +143,23 @@ var builtin = []Extension{
 	// is AGE's PG18 release line.
 	{Name: "age", Version: "1.8.0", Default: false, Preload: false,
 		Description: "Apache AGE — openCypher graph"},
+	// documentdb: the MongoDB-compatible document store, and the bundle behind the
+	// documentdb engine. One image ships three extensions (documentdb_core,
+	// documentdb, documentdb_extended_rum). `CREATE EXTENSION documentdb CASCADE`
+	// installs documentdb_core with it, plus pg_cron, tsm_system_rows and vector;
+	// without CASCADE it fails on the first missing one. documentdb_extended_rum
+	// is not a requirement and is created separately, if at all. Preload: true — pg_documentdb_core and pg_documentdb must be in
+	// shared_preload_libraries, so opting in on a live endpoint is a restart. Its
+	// .control ships `superuser = true`, so it is not trusted. Requires pgvector
+	// and pg_cron, which its .control names; tsm_system_rows is also required but
+	// ships inside the compute's Postgres, so it is not a catalog entry. postgis
+	// is required too and amp does not ship it — dropping it needs both a
+	// `requires` edit AND gating the install SQL's GIST operator classes, which
+	// is documentdb-no-postgis.patch's job (see compute/architecture/extensions.md).
+	{Name: "documentdb", Version: "0.116-0", Default: false, Preload: true,
+		Description: "DocumentDB — MongoDB-compatible document store",
+		Library:     "pg_documentdb_core,pg_documentdb",
+		Requires:    []string{"pgvector", "pg_cron"}},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.
@@ -206,7 +233,17 @@ func (c *Catalog) DefaultNames() []string {
 func (c *Catalog) Resolve(names []string) []Resolved {
 	seen := make(map[string]struct{}, len(names))
 	var out []Resolved
-	for _, n := range names {
+	// A queue, not a range: an entry's Requires are appended as they are found, so
+	// a required extension pulls in its own requirements too. Requested names keep
+	// their order and come first; requirements follow in the order they are named.
+	// Unknown names are skipped here as they always were — a stale name must not
+	// wedge the deploy — which also means a Requires entry naming something the
+	// catalog does not carry is silently absent rather than fatal at deploy time.
+	// TestCatalogRequiresNamesKnownExtensions is what keeps that from happening.
+	queue := append([]string(nil), names...)
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
 		e, ok := c.byName[n]
 		if !ok {
 			continue
@@ -216,6 +253,7 @@ func (c *Catalog) Resolve(names []string) []Resolved {
 		}
 		seen[n] = struct{}{}
 		out = append(out, resolve(e, c.registry))
+		queue = append(queue, e.Requires...)
 	}
 	return out
 }

@@ -141,12 +141,20 @@ func TestKubernetesValuesExtensions(t *testing.T) {
 	spec := testEndpointSpec()
 	spec.Extensions = []Extension{
 		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2", Preload: false},
-		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6", Preload: true},
+		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6.7", Preload: true},
+		// Library differs from Name only for documentdb, and it is the value the
+		// chart puts in shared_preload_libraries: preloading "documentdb" instead
+		// of its two libraries is a `could not access file` FATAL at postmaster
+		// start, so it has to survive the hop into chart values.
+		{Name: "documentdb", Image: "quay.io/yugabyte/amp-ext-documentdb:0.116-0", Preload: true,
+			Library: "pg_documentdb_core,pg_documentdb"},
 	}
 	v := k.values(spec, "yb-ep-rel")
 	want := []extensionValues{
 		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2", Preload: false},
-		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6", Preload: true},
+		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6.7", Preload: true},
+		{Name: "documentdb", Image: "quay.io/yugabyte/amp-ext-documentdb:0.116-0", Preload: true,
+			Library: "pg_documentdb_core,pg_documentdb"},
 	}
 	if !reflect.DeepEqual(v.Endpoint.Extensions, want) {
 		t.Fatalf("endpoint.extensions = %+v, want %+v", v.Endpoint.Extensions, want)

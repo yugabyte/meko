@@ -49,6 +49,11 @@ ARG SHA256
 ARG PATCH=""
 ARG PREP=""
 ARG TRUSTED=""
+# Extensions whose top-level `make` builds more than we ship set this to the one
+# target that builds AND installs what we want, run in place of the default
+# build-then-install pair. documentdb needs it: its bare `make` also descends
+# into internal/pg_documentdb_distributed, which wants Citus.
+ARG MAKE_TARGETS=""
 
 # stage/ and out/ live under the writable build dir: the build-tools base runs as
 # the unprivileged `nonroot` user, which can't create directories at the
@@ -78,8 +83,23 @@ RUN --mount=type=secret,id=gh_token,required=false,mode=0444 \
     cd src; \
     if [ -n "$PREP" ]; then sh -eu -c "$PREP"; fi; \
     if [ -n "$PATCH" ]; then patch --batch --fuzz=0 -p1 < "/patches/${PATCH}"; fi; \
-    make -j "$(nproc)" USE_PGXS=1 OPTFLAGS="" PG_CONFIG="$PG_CONFIG"; \
-    make install USE_PGXS=1 OPTFLAGS="" PG_CONFIG="$PG_CONFIG" DESTDIR="$stage"; \
+    if [ -n "$MAKE_TARGETS" ]; then \
+        # Serial on purpose. MAKE_TARGETS names a target that BUILDS AND
+        # INSTALLS in one invocation (documentdb's install-documentdb recurses
+        # into its three modules with `install`), so unlike the else-branch below
+        # there is no separate serial install phase to be safe in. With -j, make
+        # inside a module can run the install of a .so while its own link is
+        # still in flight: ninstall.sh copies a partially written file, and the
+        # postmaster then dies at preload with
+        #   could not load library ".../pg_documentdb_extended_rum_core.so":
+        #   file too short
+        # intermittently — green on one run, FATAL on the next. The missing
+        # dependency is upstream's; -j is what turns it into a corrupt image.
+        make $MAKE_TARGETS USE_PGXS=1 OPTFLAGS="" PG_CONFIG="$PG_CONFIG" DESTDIR="$stage"; \
+    else \
+        make -j "$(nproc)" USE_PGXS=1 OPTFLAGS="" PG_CONFIG="$PG_CONFIG"; \
+        make install USE_PGXS=1 OPTFLAGS="" PG_CONFIG="$PG_CONFIG" DESTDIR="$stage"; \
+    fi; \
     SHAREDIR="$($PG_CONFIG --sharedir)"; \
     PKGLIBDIR="$($PG_CONFIG --pkglibdir)"; \
     mkdir -p "$out/share/postgresql/extension" "$out/lib/postgresql"; \

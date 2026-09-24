@@ -17,6 +17,7 @@ export const AMP_EXTENSIONS: AmpExtension[] = [
   { name: "pg_cron", version: "1.6.7", description: "Cron-style job scheduler" },
   { name: "hexabridge", version: "0.1", description: "Oracle compatibility (DBMS_*/UTL_* packages)" },
   { name: "age", version: "1.8.0", description: "Apache AGE — openCypher graph" },
+  { name: "documentdb", version: "0.116-0", description: "MongoDB-compatible document store" },
 ];
 
 export type DbEngine = {
@@ -26,14 +27,14 @@ export type DbEngine = {
   comingSoon?: boolean;
 };
 
-// Selectable engines map to a controller engine bundle; sqlserver/documentdb are
-// roadmap tiles shown disabled so the direction is visible without implying support.
+// Selectable engines map to a controller engine bundle; sqlserver is a roadmap
+// tile shown disabled so the direction is visible without implying support.
 export const DB_ENGINES: DbEngine[] = [
   { id: "postgres", label: "PostgreSQL", sub: "18" },
   { id: "aidb", label: "AI Database" },
   { id: "oracle", label: "Oracle" },
   { id: "sqlserver", label: "SQL Server", comingSoon: true },
-  { id: "documentdb", label: "DocumentDB", comingSoon: true },
+  { id: "documentdb", label: "DocumentDB" },
 ];
 
 // Engine → the extensions its bundle seeds on the default branch. The controller
@@ -43,6 +44,7 @@ const ENGINE_EXTENSIONS: Record<string, string[]> = {
   postgres: [],
   aidb: ["pgvector", "age", "pg_cron"],
   oracle: ["hexabridge"],
+  documentdb: ["documentdb", "pgvector", "pg_cron"],
 };
 
 export function engineExtensions(engine: string): string[] {
