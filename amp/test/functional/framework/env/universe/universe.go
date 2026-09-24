@@ -85,7 +85,43 @@ const (
 	// master/tserver → WaitForMasterLeader/TServerHeartBeats → UniverseUpdate
 	// Succeeded) is ~15-25 min, so allow generous headroom.
 	provisionUniverseReadyTimeout = 45 * time.Minute
+	// adoptLockTimeout bounds waiting for an adopted universe's create task to
+	// lock it; YBA takes the lock as the task starts, seconds after the POST.
+	adoptLockTimeout = 2 * time.Minute
 )
+
+var adoptLockPoll = 3 * time.Second
+
+// awaitCreateLock polls an adopted universe until its create task has locked it
+// and returns that task's id, or "" when the lock shows only updateInProgress.
+// Before the lock the record can already read updateSucceeded, which
+// WaitUniverseReady would take for a finished build.
+func awaitCreateLock(ctx context.Context, cl ybaProvisioner, universeUUID string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	last := "never read"
+	for {
+		u, err := cl.GetUniverse(ctx, universeUUID)
+		if err != nil {
+			last = err.Error()
+		} else {
+			last = fmt.Sprintf("updateInProgress=%v updateSucceeded=%v", u.UniverseDetails.UpdateInProgress, u.UniverseDetails.UpdateSucceeded)
+			if id := u.UniverseDetails.UpdatingTaskUUID; id != "" {
+				return id, nil
+			}
+			if u.UniverseDetails.UpdateInProgress {
+				return "", nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no create task locked it within %s (last read: %s)", timeout, last)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(adoptLockPoll):
+		}
+	}
+}
 
 // Config is the env.universe.* configuration.
 type Config struct {
@@ -815,9 +851,23 @@ func (p *Provider) createUniverse(ctx context.Context, cp *ybaControlPlane, uniS
 
 	// Set universeID BEFORE waiting: the create task launches the cloud nodes
 	// DURING the wait, so a wait/task failure must still reap them.
+	adopted := false
 	ref, err := cl.CreateUniverseFromSpec(ctx, uniSpec)
 	if err != nil {
-		return failure(fmt.Errorf("provision_yba: create universe: %w", err))
+		// A create whose reply was lost (the yba port-forward died mid-POST) may
+		// still have landed, and the name is this run's alone: adopt the universe
+		// rather than fail setup with it already building.
+		u, gerr := cl.GetUniverse(ctx, universeName)
+		if gerr != nil || u.UniverseUUID == "" {
+			return failure(fmt.Errorf("provision_yba: create universe: %w", err))
+		}
+		p.log("provision_yba: create universe %q errored (%v) but YBA has it as %s; adopting it", universeName, err, u.UniverseUUID)
+		taskUUID, lerr := awaitCreateLock(ctx, cl, u.UniverseUUID, adoptLockTimeout)
+		if lerr != nil {
+			return failure(fmt.Errorf("provision_yba: create universe: %w; adopting %s: %v", err, u.UniverseUUID, lerr))
+		}
+		ref = yba.TaskRef{ResourceUUID: u.UniverseUUID, TaskUUID: taskUUID}
+		adopted = true
 	}
 	universeID = ref.ResourceUUID
 	if universeID == "" {
@@ -827,8 +877,12 @@ func (p *Provider) createUniverse(ctx context.Context, cp *ybaControlPlane, uniS
 			universeID = u.UniverseUUID
 		}
 	}
-	if _, err := cl.WaitTask(ctx, ref.TaskUUID); err != nil {
-		return failure(fmt.Errorf("provision_yba: create universe %q: %w", universeName, err))
+	// An adopted universe whose lock showed no task id was still seen locked, so
+	// WaitUniverseReady below cannot read a not-yet-started build as done.
+	if !adopted || ref.TaskUUID != "" {
+		if _, err := cl.WaitTask(ctx, ref.TaskUUID); err != nil {
+			return failure(fmt.Errorf("provision_yba: create universe %q: %w", universeName, err))
+		}
 	}
 
 	ref2 := universeID

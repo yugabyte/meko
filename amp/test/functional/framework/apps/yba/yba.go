@@ -160,6 +160,9 @@ type UniverseDetails struct {
 	Clusters         []Cluster     `json:"clusters"`
 	UpdateSucceeded  bool          `json:"updateSucceeded"`
 	UpdateInProgress bool          `json:"updateInProgress"`
+	// UpdatingTaskUUID is the task holding the universe's lock; YBA clears it
+	// when that task succeeds and keeps it on failure.
+	UpdatingTaskUUID string `json:"updatingTaskUUID"`
 	// EnableYbc/YbcInstalled: backups on current YBA run through YBC, so a
 	// universe without it cannot be backed up.
 	EnableYbc    bool `json:"enableYbc"`

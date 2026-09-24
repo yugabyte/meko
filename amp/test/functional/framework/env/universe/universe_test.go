@@ -354,6 +354,8 @@ type fakeProvisioner struct {
 	readyChecks    int
 	ybcSets        int
 	ybcEnabled     bool
+	waited         []string
+	createTaskUUID *string
 }
 
 func (f *fakeProvisioner) EnsureAWSProvider(context.Context, yba.ProviderSpec) (string, error) {
@@ -446,10 +448,18 @@ func (f *fakeProvisioner) CreateUniverseFromSpec(context.Context, yba.UniverseSp
 	if f.createErr != nil {
 		return yba.TaskRef{}, f.createErr
 	}
-	return yba.TaskRef{ResourceUUID: f.universeID, TaskUUID: "t-create"}, nil
+	task := "t-create"
+	if f.createTaskUUID != nil {
+		task = *f.createTaskUUID
+	}
+	return yba.TaskRef{ResourceUUID: f.universeID, TaskUUID: task}, nil
 }
 
-func (f *fakeProvisioner) WaitTask(context.Context, string) (yba.TaskStatus, error) {
+func (f *fakeProvisioner) WaitTask(_ context.Context, taskUUID string) (yba.TaskStatus, error) {
+	f.waited = append(f.waited, taskUUID)
+	if taskUUID == "" {
+		return yba.TaskStatus{}, fmt.Errorf("wait task: empty task uuid")
+	}
 	if f.waitErr != nil {
 		return yba.TaskStatus{}, f.waitErr
 	}
@@ -974,6 +984,71 @@ func TestProvisionYBAPartialFailureTearsYBADown(t *testing.T) {
 	}
 	if pr.deletes != 0 {
 		t.Errorf("universe deletes = %d, want 0 (no universe was created)", pr.deletes)
+	}
+}
+
+const lostReplyErr = "yba port-forward broke mid-request; POST /api/v1/customers/c1/universes/clusters may already have been applied and is not replayed: EOF"
+
+// A create whose reply the dead port-forward swallowed still built the universe;
+// setup adopts it by name and waits on the create task that locked it.
+func TestProvisionYBAAdoptsAUniverseWhoseCreateReplyWasLost(t *testing.T) {
+	ev := &ybaEvents{}
+	st := &fakeStack{ev: ev, info: ybastack.Info{URL: "http://yba", CustomerUUID: "c1", APIToken: "tok"}}
+	uni := liveUniverse()
+	uni.UniverseDetails.UpdatingTaskUUID = "t-lost-reply"
+	pr := &fakeProvisioner{ev: ev, universe: uni, universeID: "u-1", createErr: fmt.Errorf(lostReplyErr)}
+	p := provisionYBAProvider(st, pr)
+
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if len(pr.waited) != 1 || pr.waited[0] != "t-lost-reply" {
+		t.Errorf("waited on tasks %v, want the create task that locked the universe", pr.waited)
+	}
+	if err := p.Teardown(context.Background(), env); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if pr.deletes != 1 {
+		t.Errorf("universe deletes = %d, want 1: the adopted universe must still be reaped", pr.deletes)
+	}
+}
+
+// Before its create task locks it the record can read updateSucceeded, so a
+// universe never seen locked is not adopted as built.
+func TestProvisionYBADoesNotAdoptAUniverseNoTaskLocked(t *testing.T) {
+	oldPoll := adoptLockPoll
+	adoptLockPoll = time.Millisecond
+	defer func() { adoptLockPoll = oldPoll }()
+
+	ev := &ybaEvents{}
+	st := &fakeStack{ev: ev, info: ybastack.Info{URL: "http://yba", CustomerUUID: "c1", APIToken: "tok"}}
+	uni := liveUniverse()
+	uni.UniverseDetails.UpdateSucceeded = true
+	pr := &fakeProvisioner{ev: ev, universe: uni, universeID: "u-1", createErr: fmt.Errorf(lostReplyErr)}
+	p := provisionYBAProvider(st, pr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := p.Provision(ctx, core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
+		t.Fatal("a universe no create task ever locked was adopted as built")
+	}
+	if pr.readyChecks != 0 {
+		t.Errorf("WaitUniverseReady ran %d time(s) on a universe never seen locked", pr.readyChecks)
+	}
+}
+
+// Only adoption may skip the task wait: a create reply that decodes with no
+// task id is still a failure.
+func TestProvisionYBAStillFailsACreateReplyWithNoTask(t *testing.T) {
+	ev := &ybaEvents{}
+	st := &fakeStack{ev: ev, info: ybastack.Info{URL: "http://yba", CustomerUUID: "c1", APIToken: "tok"}}
+	empty := ""
+	pr := &fakeProvisioner{ev: ev, universe: liveUniverse(), universeID: "u-1", createTaskUUID: &empty}
+	p := provisionYBAProvider(st, pr)
+
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
+		t.Fatal("a create reply with no task id provisioned without waiting on any task")
 	}
 }
 
