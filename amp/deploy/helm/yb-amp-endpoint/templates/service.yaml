@@ -13,6 +13,14 @@ spec:
   selector:
     {{- include "yb-amp-endpoint.selectorLabels" . | nindent 4 }}
   ports:
+    {{- if eq (include "yb-amp-endpoint.documentdbGatewayEnabled" .) "true" }}
+    # The gateway port. Named `documentdb` so a client sees what it is; the number is the
+    # gateway's own default (10260), not MongoDB's conventional 27017.
+    - name: documentdb
+      port: {{ .Values.documentdbGateway.port }}
+      targetPort: documentdb
+      protocol: TCP
+    {{- end }}
     - name: pg-compute
       port: {{ .Values.endpoint.computePort }}
       targetPort: pg-compute

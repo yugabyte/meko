@@ -24,7 +24,10 @@ The chart renders:
   `COMPUTE_PASSWORD`. The chart renders it when either is set, so the compute
   password still gets a Secret alongside a `yugabyte.existingSecret`.
 - **Deployment** — one container running the supervisor + 5 services, plus (by
-  default) a `postgres_exporter` sidecar for Postgres metrics. PGDATA is
+  default) a `postgres_exporter` sidecar for Postgres metrics, and a
+  `documentdb-gateway` sidecar on any endpoint whose branch mounts `documentdb`
+  (`documentdbGateway.enabled` overrides that either way). The gateway also adds
+  a `documentdb` port to the Service and a Secret holding its backend URL. PGDATA is
   ephemeral and durable state lives in YugabyteDB, so `/data` is an `emptyDir`
   scratch volume by default; when `persistence.storageClass` is set it is a
   PersistentVolumeClaim instead. The Deployment always uses the `Recreate`

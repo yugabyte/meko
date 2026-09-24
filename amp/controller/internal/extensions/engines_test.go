@@ -3,6 +3,8 @@ package extensions
 import (
 	"encoding/json"
 	"os"
+	"regexp"
+	"strconv"
 	"testing"
 )
 
@@ -116,5 +118,29 @@ func TestEngineTableMatchesManifest(t *testing.T) {
 		if _, ok := want[name]; !ok {
 			t.Errorf("engines.go has engine %q, the manifest does not", name)
 		}
+	}
+}
+
+// The controller derives an endpoint's documentdb_address from this constant, but the
+// chart is what actually opens the port. If they disagree the API hands clients
+// an address nothing listens on, which is invisible until someone tries to
+// connect — so read the chart's value rather than trusting a comment.
+func TestDocumentDBGatewayPortMatchesChart(t *testing.T) {
+	const values = "../../../deploy/helm/yb-amp-endpoint/values.yaml"
+	raw, err := os.ReadFile(values)
+	if err != nil {
+		t.Skipf("chart values not readable (%v)", err)
+	}
+	m := regexp.MustCompile(`(?m)^documentdbGateway:\n(?:.*\n)*?\s+port:\s*(\d+)`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("could not find documentdbGateway.port in the chart values — " +
+			"the shape changed; update this check rather than deleting it")
+	}
+	got, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("parse chart port %q: %v", m[1], err)
+	}
+	if got != DocumentDBGatewayPort {
+		t.Errorf("chart documentdbGateway.port = %d, DocumentDBGatewayPort = %d", got, DocumentDBGatewayPort)
 	}
 }

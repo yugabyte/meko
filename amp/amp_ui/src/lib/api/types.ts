@@ -140,6 +140,11 @@ export type Endpoint = {
   /** Client reachability as stored. Absent for endpoints created before this
    *  was configurable, which behave as `cluster_ip`. */
   connectivity?: EndpointConnectivity;
+  /** MongoDB wire-protocol address (host:port) for this endpoint's documentdb
+   *  gateway. Present only when the branch has the documentdb extension — the
+   *  gateway is a sidecar deployed with the compute. The port is the gateway's
+   *  own default (10260), not MongoDB's 27017. */
+  documentdb_address?: string;
   /** This endpoint's own stored settings. `pg_settings` merge over the
    *  branch's and win on a shared key; the daemon ones are its alone. */
   pg_settings?: PgSettings;

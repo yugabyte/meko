@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,9 +97,13 @@ type KubernetesConfig struct {
 
 	EndpointImageRepo string // endpoint container image repository
 	EndpointImageTag  string // endpoint container image tag
-	PullSecret        string // imagePullSecrets name in the namespace (empty = none)
-	ComputePort       int    // compute Postgres port the endpoint Service publishes
-	ServiceType       string // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
+	// The documentdb gateway sidecar's image. An empty tag means "use
+	// EndpointImageTag": CI builds both from one commit, so they share it.
+	DocumentDBGatewayImageRepo string
+	DocumentDBGatewayImageTag  string
+	PullSecret                 string // imagePullSecrets name in the namespace (empty = none)
+	ComputePort                int    // compute Postgres port the endpoint Service publishes
+	ServiceType                string // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
 	// IngressEnabled is whether this deployment routes endpoints through shared
@@ -237,6 +242,32 @@ func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnable
 // Whether the deployment opted in is SupportsIngress; whether a slot is free is
 // the allocator's answer.
 func (k *KubernetesDeployer) PlacesIngress() bool { return true }
+
+// DocumentDBGatewayReachable reports whether a client reaches this endpoint's
+// documentdb gateway at the endpoint's own address on the gateway port. That
+// holds only where whatever fronts the endpoint ALSO publishes the gateway port on
+// the same host: the default ClusterIP Service, whose in-cluster DNS name is the
+// address and which carries a `documentdb` port whenever the gateway renders. It
+// fails everywhere else. A NodePort Service allocates a separate high port per
+// service port, so the address carries the COMPUTE port's nodePort and the
+// gateway's is a different one; the nlb_* load balancer and the ingress_* shard
+// route publish pg-compute alone. In each case that address on the gateway port
+// names something nothing listens on, so the API reports no documentdb_address rather
+// than a dead one. A connectivity mode this does not recognise is treated as
+// unreachable for the same reason.
+func (k *KubernetesDeployer) DocumentDBGatewayReachable(connectivity string) bool {
+	switch k.cfg.ServiceType {
+	case "", "ClusterIP":
+	default:
+		return false
+	}
+	switch connectivity {
+	case "", ConnectivityClusterIP:
+		return true
+	default:
+		return false
+	}
+}
 
 // CreateEndpoint installs/updates the endpoint's Helm release and waits for it
 // to be ready, then returns the stable in-cluster client address. The release
@@ -1126,6 +1157,14 @@ func (k *KubernetesDeployer) EndpointSupervisorURL(id string) string {
 // chartValues mirrors the subset of deploy/helm/yb-amp-endpoint values.yaml
 // the controller drives. JSON tags match the chart keys; helm reads the
 // marshaled document as a values file.
+// documentdbGatewayValues is the subset of the chart's documentdbGateway block
+// the controller sets. `enabled` is deliberately absent: the chart's own helper
+// already follows endpoint.extensions, so the controller does not need to
+// restate a decision the rendered extension list already carries.
+type documentdbGatewayValues struct {
+	Image imageValues `json:"image"`
+}
+
 type chartValues struct {
 	FullnameOverride string              `json:"fullnameOverride"`
 	Image            imageValues         `json:"image"`
@@ -1152,7 +1191,12 @@ type chartValues struct {
 	// liveness probe starts judging it. Derived from the deploy timeout rather
 	// than left to the chart, so raising --deploy-timeout for a slow cluster
 	// actually raises the budget the kubelet enforces (#960).
-	StartupProbe startupProbeValues `json:"startupProbe"`
+	// DocumentDBGateway carries the sidecar's image. Omitted unless the branch
+	// mounts documentdb, so a normal endpoint's values are unchanged. Present for
+	// the same reason Image is: an empty tag in the chart resolves to its
+	// appVersion, which is never the tag CI built.
+	DocumentDBGateway *documentdbGatewayValues `json:"documentdbGateway,omitempty"`
+	StartupProbe      startupProbeValues       `json:"startupProbe"`
 	// ProgressDeadlineSeconds must cover the startup budget too. The Deployment
 	// keeps Kubernetes' 600s default otherwise, and flips
 	// Progressing=False/ProgressDeadlineExceeded there — so a pod still
@@ -1408,12 +1452,29 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	if tag == "" {
 		tag = k.cfg.EndpointImageTag
 	}
+	// Only when this endpoint actually mounts documentdb — the chart's own
+	// helper decides whether to render the sidecar from the same list, so
+	// sending the image for an endpoint without it would be inert but
+	// misleading. An empty gateway tag follows the endpoint's: CI builds the two
+	// from one commit.
+	var gw *documentdbGatewayValues
+	if slices.ContainsFunc(spec.Extensions, func(e Extension) bool { return e.Name == "documentdb" }) {
+		gwTag := k.cfg.DocumentDBGatewayImageTag
+		if gwTag == "" {
+			gwTag = tag
+		}
+		gw = &documentdbGatewayValues{Image: imageValues{
+			Repository: k.cfg.DocumentDBGatewayImageRepo,
+			Tag:        gwTag,
+		}}
+	}
 	v := chartValues{
 		FullnameOverride: release,
 		Image: imageValues{
 			Repository: k.cfg.EndpointImageRepo,
 			Tag:        tag,
 		},
+		DocumentDBGateway: gw,
 		Yugabyte: yugabyteValues{
 			HostPorts: spec.YB.HostPorts,
 			User:      spec.YB.User,

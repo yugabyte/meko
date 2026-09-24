@@ -587,3 +587,74 @@ tests:
           content:
             name: COMPUTE_PASSWORD
           any: true
+
+  # The gateway sidecar. Its probes must NOT be the functional `check`: readiness
+  # is pod-wide, and `check` verifies the documentdb extension is loaded, which
+  # nothing in the product creates — gating on it kept every documentdb endpoint
+  # out of Ready and failed helm --wait on a healthy compute.
+  - it: renders the documentdb gateway sidecar when the branch has documentdb
+    template: templates/deployment.yaml
+    set:
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+          preload: true
+          library: pg_documentdb_core,pg_documentdb
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 3
+      - contains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].ports
+          content:
+            name: documentdb
+            containerPort: 10260
+            protocol: TCP
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].startupProbe.tcpSocket.port
+          value: documentdb
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].readinessProbe.tcpSocket.port
+          value: documentdb
+      - isNull:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].readinessProbe.exec
+      - isNull:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].startupProbe.exec
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].securityContext.runAsNonRoot
+          value: true
+
+  - it: renders no gateway sidecar without documentdb
+    template: templates/deployment.yaml
+    set:
+      endpoint.extensions:
+        - name: pgvector
+          image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+
+  - it: lets documentdbGateway.enabled override the extension default off
+    template: templates/deployment.yaml
+    set:
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+      documentdbGateway.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+
+  - it: lets documentdbGateway.enabled override it on
+    template: templates/deployment.yaml
+    set:
+      documentdbGateway.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 3

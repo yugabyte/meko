@@ -95,3 +95,19 @@ extension entry (with .name). Runs of invalid chars collapse to a single '-'.
 {{- define "yb-amp-endpoint.extVolumeName" -}}
 {{- printf "ext-%s" (regexReplaceAll "[^a-z0-9]+" (.name | lower) "-" | trimAll "-") -}}
 {{- end }}
+
+{{/*
+Whether the documentdb extension is mounted on this endpoint. The gateway only
+has a SQL surface to front when it is, so this is what "enabled by default"
+resolves to: on wherever documentdb is, off everywhere else.
+documentdbGateway.enabled overrides it either way when set.
+*/}}
+{{- define "yb-amp-endpoint.documentdbGatewayEnabled" -}}
+{{- if kindIs "bool" .Values.documentdbGateway.enabled -}}
+{{- .Values.documentdbGateway.enabled -}}
+{{- else -}}
+{{- $found := false -}}
+{{- range .Values.endpoint.extensions -}}{{- if eq .name "documentdb" -}}{{- $found = true -}}{{- end -}}{{- end -}}
+{{- $found -}}
+{{- end -}}
+{{- end -}}

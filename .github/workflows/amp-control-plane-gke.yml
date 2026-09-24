@@ -219,6 +219,19 @@ jobs:
             --cache-from type=registry,ref="$EP:buildcache" \
             --cache-to   type=registry,ref="$EP:buildcache",mode=max
 
+      # DocumentDB gateway sidecar. Built and tagged alongside the endpoint image
+      # and from the same commit tag, because the controller defaults the
+      # gateway's tag to the endpoint's — an endpoint that mounts documentdb
+      # renders this image, and one that cannot be pulled leaves the pod in
+      # ImagePullBackOff, which fails the create rather than degrading.
+      - name: DocumentDB gateway image
+        run: |
+          GW="$QUAY_NS/amp-documentdb-gateway"
+          docker buildx build --push -f amp/deploy/documentdb-gateway/Dockerfile amp/deploy/documentdb-gateway \
+            -t "$GW:${{ steps.tag.outputs.tag }}" \
+            --cache-from type=registry,ref="$GW:buildcache" \
+            --cache-to   type=registry,ref="$GW:buildcache",mode=max
+
       # Controller image packages the Go controller bundle (Go-only, no Rust/PG
       # headers — the deployed controller runs storage_controller too, but the
       # bundle-only image is what up-gke.sh's chart expects with SC managed).

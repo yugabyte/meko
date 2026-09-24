@@ -1022,3 +1022,80 @@ func TestIngressValuesAndAddressAgreeOnAnUnpublishedName(t *testing.T) {
 		t.Errorf("published dnsName = %q, want it carried through", got)
 	}
 }
+
+// The gateway's tag must be resolved by the controller, not left to the chart:
+// an empty tag makes the chart fall back to its own appVersion (0.1.0), which is
+// never what CI built. kubernetes.go records that trap for the endpoint image;
+// the sidecar shares it, and an unpullable sidecar fails the whole pod.
+func TestKubernetesValuesDocumentDBGatewayImage(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.EndpointImageTag = "commit-abc"
+	cfg.DocumentDBGatewayImageRepo = "quay.io/yugabyte/amp-documentdb-gateway"
+	k := NewKubernetesDeployer(cfg, nil)
+
+	spec := testEndpointSpec()
+	spec.Extensions = []Extension{{Name: "documentdb", Image: "quay.io/yugabyte/amp-ext-documentdb:0.116-0", Preload: true,
+		Library: "pg_documentdb_core,pg_documentdb"}}
+	v := k.values(spec, "yb-ep-rel")
+	if v.DocumentDBGateway == nil {
+		t.Fatal("documentdbGateway values absent for an endpoint that mounts documentdb")
+	}
+	// Empty gateway tag follows the endpoint's, so the pair always comes from one
+	// commit rather than the chart's appVersion.
+	want := imageValues{Repository: "quay.io/yugabyte/amp-documentdb-gateway", Tag: "commit-abc"}
+	if v.DocumentDBGateway.Image != want {
+		t.Errorf("gateway image = %+v, want %+v", v.DocumentDBGateway.Image, want)
+	}
+
+	// An explicit tag wins over the endpoint's.
+	cfg.DocumentDBGatewayImageTag = "gw-v9"
+	v = NewKubernetesDeployer(cfg, nil).values(spec, "yb-ep-rel")
+	if got := v.DocumentDBGateway.Image.Tag; got != "gw-v9" {
+		t.Errorf("gateway tag = %q, want gw-v9", got)
+	}
+}
+
+// An endpoint without documentdb sends no gateway block at all, so the chart's
+// own helper is the only thing deciding whether the sidecar renders.
+func TestKubernetesValuesNoDocumentDBGatewayWithoutTheExtension(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	spec := testEndpointSpec()
+	spec.Extensions = []Extension{{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"}}
+	if v := k.values(spec, "yb-ep-rel"); v.DocumentDBGateway != nil {
+		t.Errorf("documentdbGateway = %+v, want nil for an endpoint without documentdb", v.DocumentDBGateway)
+	}
+}
+
+// documentdb_address is the endpoint's own address on the gateway port, which only
+// resolves to the sidecar when Address is the pod's. Under NodePort the address
+// carries the nodePort allocated for the COMPUTE port and the gateway port gets a
+// different one; under an NLB the load balancer publishes pg-compute alone. In
+// both cases the derived address names a port nothing listens on, so the API
+// must report none.
+func TestKubernetesDocumentDBGatewayReachable(t *testing.T) {
+	for _, tc := range []struct {
+		serviceType  string
+		connectivity string
+		want         bool
+	}{
+		{"", "", true},
+		{"ClusterIP", "", true},
+		{"ClusterIP", ConnectivityClusterIP, true},
+		{"ClusterIP", ConnectivityNLBInternal, false},
+		{"ClusterIP", ConnectivityNLBExternal, false},
+		// The ingress shard routes pg-compute only, like the NLB.
+		{"ClusterIP", ConnectivityIngressInternal, false},
+		{"ClusterIP", ConnectivityIngressExternal, false},
+		{serviceTypeNodePort, "", false},
+		{serviceTypeNodePort, ConnectivityClusterIP, false},
+		{serviceTypeLoadBalancer, "", false},
+	} {
+		cfg := testKubernetesConfig()
+		cfg.ServiceType = tc.serviceType
+		got := NewKubernetesDeployer(cfg, nil).DocumentDBGatewayReachable(tc.connectivity)
+		if got != tc.want {
+			t.Errorf("DocumentDBGatewayReachable(serviceType=%q, connectivity=%q) = %v, want %v",
+				tc.serviceType, tc.connectivity, got, tc.want)
+		}
+	}
+}

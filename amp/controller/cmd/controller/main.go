@@ -153,6 +153,8 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				KubeconfigPath:                cfg.Deploy.KubeconfigPath,
 				EndpointImageRepo:             cfg.Deploy.EndpointImageRepo,
 				EndpointImageTag:              cfg.Deploy.EndpointImageTag,
+				DocumentDBGatewayImageRepo:    cfg.Deploy.DocumentDBGatewayImageRepo,
+				DocumentDBGatewayImageTag:     cfg.Deploy.DocumentDBGatewayImageTag,
 				PullSecret:                    cfg.Deploy.PullSecret,
 				ComputePort:                   cfg.Deploy.ComputePort,
 				ServiceType:                   cfg.Deploy.ServiceType,

@@ -53,6 +53,12 @@ rc=0
 # the built-in defaults and a caller-supplied resource spec.
 check "defaults" || rc=1
 check "custom" --set endpoint.resources.cpu=1500m --set endpoint.resources.memory=8Gi || rc=1
+# The documentdb gateway sidecar only renders when the extension is mounted, so
+# without this scenario the guardrail never sees it — and a sidecar missing
+# request==limit drops the WHOLE pod out of Guaranteed, since QoS is pod-wide.
+check "documentdb-gateway" \
+  --set 'endpoint.extensions[0].name=documentdb' \
+  --set 'endpoint.extensions[0].image=quay.io/yugabyte/amp-ext-documentdb:0.116-0' || rc=1
 
 if [ "$rc" -ne 0 ]; then
   echo

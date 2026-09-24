@@ -104,6 +104,13 @@ type Catalog struct {
 	order    []string // insertion order, for stable DefaultNames/Resolve output
 }
 
+// DocumentDBGatewayPort is the port the documentdb gateway listens on for the
+// MongoDB wire protocol. It is the gateway's own default, NOT MongoDB's
+// conventional 27017, so a client must be pointed at it. Must match
+// documentdbGateway.port in the yb-amp-endpoint chart, which is what actually
+// opens it — TestDocumentDBGatewayPortMatchesChart asserts they agree.
+const DocumentDBGatewayPort = 10260
+
 // builtin is the in-tree extension set. Keep versions AND descriptions in
 // lockstep with deploy/extensions/extensions.yaml (the build manifest).
 //

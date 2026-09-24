@@ -38,11 +38,19 @@ export function ComputeInstance({
   poolId: string;
   isDefaultBranch: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
+  // Which connect string was last copied, so the two buttons report
+  // independently rather than both flipping to "Copied".
+  const [copied, setCopied] = useState<"" | "psql" | "documentdb">("");
   const connStr = ep.address
     ? `postgresql://cloud_admin@${ep.address}/postgres`
     : "";
   const psql = connStr ? `psql "${connStr}"` : "";
+  // The gateway self-signs on first start, so the URI has to say the client will
+  // accept that — a bare mongodb:// fails the handshake with nothing obvious to
+  // point at.
+  const documentdbURI = ep.documentdb_address
+    ? `mongodb://${ep.documentdb_address}/?tls=true&tlsAllowInvalidCertificates=true`
+    : "";
 
   // Per-endpoint in-place resize: pre-fill with the current reservation. The
   // controller persists the new size, updates the Deployment, and resizes the
@@ -123,13 +131,14 @@ export function ComputeInstance({
     );
   }
 
-  function copy() {
-    if (!psql || !navigator.clipboard) return;
+  function copy(what: "psql" | "documentdb") {
+    const text = what === "psql" ? psql : documentdbURI;
+    if (!text || !navigator.clipboard) return;
     navigator.clipboard
-      .writeText(psql)
+      .writeText(text)
       .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        setCopied(what);
+        setTimeout(() => setCopied(""), 1500);
       })
       .catch((err) => {
         toast.error(msg.clipboardError);
@@ -152,6 +161,12 @@ export function ComputeInstance({
             <span>
               <span className="text-muted-foreground">tailnet: </span>
               {ep.tailnet_address}
+            </span>
+          )}
+          {ep.documentdb_address && (
+            <span>
+              <span className="text-muted-foreground">documentdb: </span>
+              {ep.documentdb_address}
             </span>
           )}
         </span>
@@ -245,15 +260,35 @@ export function ComputeInstance({
           <Button
             variant="outline"
             size="sm"
-            onClick={copy}
+            onClick={() => copy("psql")}
             className="h-7 shrink-0 gap-1"
           >
-            {copied ? (
+            {copied === "psql" ? (
               <Check className="h-3.5 w-3.5" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
-            {copied ? "Copied" : "Copy"}
+            {copied === "psql" ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      )}
+      {ep.documentdb_address && (
+        <div className="mt-2 flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+            {documentdbURI}
+          </code>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => copy("documentdb")}
+            className="h-7 shrink-0 gap-1"
+          >
+            {copied === "documentdb" ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            {copied === "documentdb" ? "Copied" : "Copy"}
           </Button>
         </div>
       )}

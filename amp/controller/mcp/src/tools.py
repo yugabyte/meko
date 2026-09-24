@@ -227,7 +227,10 @@ def create_endpoint(
     follows it at 8 GiB per core, so naming only `cpu` is enough; asking for less
     memory per core than that is a 400 naming the minimum. Returns a Task; poll
     `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then call
-    `get_endpoint` to read its `address` (and `tailnet_address`, if the endpoint
+    `get_endpoint` to read its `address` (and `documentdb_address` when the branch has
+    the documentdb extension — that is the MongoDB wire-protocol address of the
+    gateway sidecar, on the gateway's own port 10260 rather than MongoDB's 27017;
+    and `tailnet_address`, if the endpoint
     is exposed on the tailnet).
 
     A `read_write` endpoint comes up with `password` set on the compute's

@@ -25,6 +25,68 @@ tests:
           path: spec.ports
           count: 1
 
+  # The gateway port follows the extension: nothing to publish without a gateway
+  # to publish it for, and no endpoint should carry a port that reaches nothing.
+  - it: publishes no gateway port when the branch has no documentdb
+    set:
+      endpoint.extensions:
+        - name: pgvector
+          image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+      - notContains:
+          path: spec.ports
+          content:
+            name: documentdb
+
+  - it: publishes the gateway port when the branch has documentdb
+    set:
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+          preload: true
+          library: pg_documentdb_core,pg_documentdb
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 2
+      - contains:
+          path: spec.ports
+          content:
+            name: documentdb
+            port: 10260
+            targetPort: documentdb
+            protocol: TCP
+
+  - it: honours an explicit documentdbGateway.enabled override in both directions
+    set:
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+      documentdbGateway.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+      - notContains:
+          path: spec.ports
+          content:
+            name: documentdb
+
+  - it: publishes the gateway port when forced on without the extension
+    set:
+      documentdbGateway.enabled: true
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: documentdb
+            port: 10260
+            targetPort: documentdb
+            protocol: TCP
+
   - it: publishes internal HTTP ports when enabled
     set:
       service.exposeInternalHttp: true

@@ -805,6 +805,14 @@ type Endpoint struct {
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
 	CreatedAt    time.Time             `json:"created_at"`
 
+	// DocumentdbAddress MongoDB wire-protocol address (host:port) for this endpoint's
+	// documentdb gateway. Present only when the branch has the `documentdb`
+	// extension — the gateway runs as a sidecar beside the compute and is
+	// deployed with it. The port is the gateway's own default (10260), not
+	// MongoDB's conventional 27017, so a client has to be pointed at it.
+	// Same host as `address`; absent when the endpoint is not yet deployed.
+	DocumentdbAddress *string `json:"documentdb_address,omitempty"`
+
 	// ExtendedConfig The `extended_config` this endpoint was created with, verbatim, or
 	// `null` if it has none. Opaque — the control plane stores and forwards
 	// it without interpreting it.

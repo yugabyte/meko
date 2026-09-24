@@ -106,13 +106,20 @@ type DeployConfig struct {
 	ChartPath      string // path to the yb-amp-endpoint Helm chart
 	KubeconfigPath string // KUBECONFIG for helm; empty = default discovery (in-cluster or ~/.kube)
 
-	EndpointImageRepo  string            // endpoint container image repository
-	EndpointImageTag   string            // endpoint container image tag
-	ExtensionRegistry  string            // registry the externalized-extension images (amp-ext-*) live under; empty = bare refs
-	PullSecret         string            // imagePullSecrets name in the namespace (empty = none)
-	ComputePort        int               // compute Postgres port the endpoint Service publishes
-	ServiceType        string            // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
-	ServiceAnnotations map[string]string // annotations on the endpoint Service (e.g. GKE internal-LB)
+	EndpointImageRepo string // endpoint container image repository
+	// DocumentDBGatewayImageRepo/Tag: the wire-protocol sidecar deployed beside
+	// a compute whose branch mounts documentdb. Resolved here rather than left to
+	// the chart for the same reason as the endpoint image — an empty tag makes
+	// the chart fall back to its own appVersion. An empty tag here means "use
+	// EndpointImageTag", since CI builds the two together from one commit.
+	DocumentDBGatewayImageRepo string
+	DocumentDBGatewayImageTag  string
+	EndpointImageTag           string            // endpoint container image tag
+	ExtensionRegistry          string            // registry the externalized-extension images (amp-ext-*) live under; empty = bare refs
+	PullSecret                 string            // imagePullSecrets name in the namespace (empty = none)
+	ComputePort                int               // compute Postgres port the endpoint Service publishes
+	ServiceType                string            // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
+	ServiceAnnotations         map[string]string // annotations on the endpoint Service (e.g. GKE internal-LB)
 	// Cloud names the cloud whose load-balancer annotations the endpoint chart
 	// renders for the nlb_* connectivity modes. Empty = read it off a node's
 	// spec.providerID, which needs `nodes get, list`.
@@ -351,6 +358,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ChartPath, "deploy-chart", env("AMP_DEPLOY_CHART", "deploy/helm/yb-amp-endpoint"), "path to the yb-amp-endpoint Helm chart")
 	fs.StringVar(&d.KubeconfigPath, "kubeconfig", env("AMP_KUBECONFIG", ""), "KUBECONFIG for helm (empty = default discovery / in-cluster)")
 	fs.StringVar(&d.EndpointImageRepo, "endpoint-image-repo", env("AMP_ENDPOINT_IMAGE_REPO", ""), "endpoint container image repository")
+	fs.StringVar(&d.DocumentDBGatewayImageRepo, "documentdb-gateway-image-repo", env("AMP_DOCUMENTDB_GATEWAY_IMAGE_REPO", "quay.io/yugabyte/amp-documentdb-gateway"), "documentdb gateway sidecar image repository")
+	fs.StringVar(&d.DocumentDBGatewayImageTag, "documentdb-gateway-image-tag", env("AMP_DOCUMENTDB_GATEWAY_IMAGE_TAG", ""), "documentdb gateway sidecar image tag (empty: use the endpoint image tag)")
 	fs.StringVar(&d.EndpointImageTag, "endpoint-image-tag", env("AMP_ENDPOINT_IMAGE_TAG", "latest"), "endpoint container image tag")
 	fs.StringVar(&d.ExtensionRegistry, "extension-registry", env("AMP_EXTENSION_REGISTRY", "quay.io/yugabyte"), "k8s: registry the externalized-extension images (amp-ext-<name>:<version>) are pulled from")
 	fs.StringVar(&d.PullSecret, "deploy-pull-secret", env("AMP_DEPLOY_PULL_SECRET", ""), "imagePullSecrets name in the namespace (empty = none)")

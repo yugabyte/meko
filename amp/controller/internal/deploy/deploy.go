@@ -344,6 +344,19 @@ type Endpoint struct {
 // per-endpoint nlb_* connectivity mode. A deployer that does not implement it
 // silently ignores EndpointSpec.Connectivity, so the API rejects the nlb_* modes
 // up front rather than persisting an exposure the endpoint will never have.
+// DocumentDBGatewayRouter reports whether a client can reach an endpoint's documentdb
+// gateway at that endpoint's OWN address on the gateway port. It is not always
+// true: the gateway is a sidecar sharing the pod's network, so only a path that
+// resolves to the pod reaches it. A NodePort Service allocates a separate high
+// port per service port, so <nodeIP>:<computeNodePort> plus the gateway port
+// names a port nothing listens on; the per-endpoint load balancer publishes the
+// compute port alone, so the LB address does too. A deployer that does not
+// implement this is assumed to route (Docker and local both run the gateway on
+// the same host as the compute).
+type DocumentDBGatewayRouter interface {
+	DocumentDBGatewayReachable(connectivity string) bool
+}
+
 type ConnectivitySupporter interface {
 	SupportsConnectivity() bool
 }

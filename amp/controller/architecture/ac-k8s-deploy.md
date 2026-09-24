@@ -330,7 +330,17 @@ no local-disk path yet).
   container in the pod must set request == limit. If a future change adds a
   sidecar (e.g. the planned `postgres_exporter` metrics sidecar, #254), that
   container must also carry a request == limit block (a small fixed reservation
-  is fine) or the pod silently drops to Burstable.
+  is fine) or the pod silently drops to Burstable. Two sidecars exist today: the
+  `postgres_exporter` metrics sidecar (#254) and the `documentdb-gateway`, which
+  renders only on an endpoint whose branch mounts `documentdb` and publishes a
+  second Service port (`documentdb`, 10260). Both carry request == limit, which
+  `tests/guaranteed-qos.sh` asserts per scenario.
+
+  The gateway's probes are `tcpSocket` on its own port, deliberately not its
+  `check` subcommand: readiness is pod-wide, and `check` verifies the documentdb
+  extension is loaded — which is the user's `CREATE EXTENSION`, not something the
+  deploy does. Gating on it would keep every documentdb endpoint out of Ready and
+  fail `helm --wait` on a healthy compute.
 
   It also derives the pod's **bootstrap budget** from `--deploy-timeout`:
   `startupProbe.failureThreshold` and the Deployment's `progressDeadlineSeconds`.

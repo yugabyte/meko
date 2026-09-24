@@ -2177,6 +2177,15 @@ components:
         address:
           type: string
           description: 'Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed. Never a pod address, so a pod reschedule does not invalidate it: a load-balanced mode reports its load balancer, and a `cluster_ip` endpoint reports whatever the deployment publishes it on — the endpoint Service''s in-cluster DNS name by default, or a node address where endpoints are deployed as NodePort Services, which a node replacement does invalidate.'
+        documentdb_address:
+          type: string
+          description: |
+            MongoDB wire-protocol address (host:port) for this endpoint's
+            documentdb gateway. Present only when the branch has the `documentdb`
+            extension — the gateway runs as a sidecar beside the compute and is
+            deployed with it. The port is the gateway's own default (10260), not
+            MongoDB's conventional 27017, so a client has to be pointed at it.
+            Same host as `address`; absent when the endpoint is not yet deployed.
         tailnet_address:
           type: string
           description: 'Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.'

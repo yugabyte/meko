@@ -270,7 +270,88 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}
+        {{- if eq (include "yb-amp-endpoint.documentdbGatewayEnabled" .) "true" }}
+        # documentdb gateway sidecar: terminates the MongoDB wire protocol and
+        # translates to SQL against this pod's compute over the shared loopback,
+        # the same path postgres_exporter takes. A sidecar rather than its own
+        # deployment because it is per-endpoint state — one gateway fronts exactly
+        # one compute — and loopback keeps that traffic off the network.
+        - name: documentdb-gateway
+          image: "{{ .Values.documentdbGateway.image.repository }}:{{ .Values.documentdbGateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.documentdbGateway.image.pullPolicy }}
+          args: ["run"]
+          env:
+            - name: DOCUMENTDB_LISTEN_ADDR
+              value: ":{{ .Values.documentdbGateway.port }}"
+            # The gateway reads the backend URL from a FILE, not a variable.
+            - name: DOCUMENTDB_PG_URL_FILE
+              value: /etc/documentdb/pg-url
+            - name: DOCUMENTDB_LOG_LEVEL
+              value: {{ .Values.documentdbGateway.logLevel | quote }}
+            # Self-signed on first start into an emptyDir: MongoDB drivers expect
+            # TLS, and the cert is per-pod and disposable.
+            - name: DOCUMENTDB_TLS_AUTO_GENERATE
+              value: "true"
+            - name: DOCUMENTDB_TLS_STATE_DIR
+              value: /var/lib/documentdb/tls
+          ports:
+            - name: documentdb
+              containerPort: {{ .Values.documentdbGateway.port }}
+              protocol: TCP
+          # tcpSocket, deliberately, and NOT `documentdb-gateway check`.
+          #
+          # Readiness here is pod-wide: a failing probe on this sidecar pulls the
+          # whole pod out of the Service, taking Postgres and the controller's
+          # safekeeper round trip (verifyReady, #724) with it. `check` verifies
+          # the documentdb EXTENSION is loaded, and nothing in the product
+          # creates it — compute_ctl auto-creates only PRELOADED_EXTENSIONS
+          # ("pg_stat_statements"), and mounting the ImageVolume only makes the
+          # extension available for the user's own CREATE EXTENSION. Gating
+          # readiness on it meant no documentdb endpoint could reach Ready at
+          # all: helm --wait failed every create, on a healthy compute.
+          #
+          # So probe what this container is responsible for — its own listener —
+          # exactly as the endpoint container probes pg-compute. The budget can
+          # be small for the same reason: the gateway binds at once rather than
+          # waiting for the compute to finish bootstrap, so it no longer has to
+          # track the endpoint's startup allowance.
+          startupProbe:
+            tcpSocket:
+              port: documentdb
+            periodSeconds: {{ .Values.documentdbGateway.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.documentdbGateway.startupProbe.failureThreshold }}
+          readinessProbe:
+            tcpSocket:
+              port: documentdb
+            periodSeconds: {{ .Values.documentdbGateway.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.documentdbGateway.readinessProbe.failureThreshold }}
+          {{- with .Values.documentdbGateway.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: documentdb-gateway-conf
+              mountPath: /etc/documentdb
+              readOnly: true
+            - name: documentdb-gateway-tls
+              mountPath: /var/lib/documentdb/tls
+          {{- with .Values.documentdbGateway.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.documentdbGateway.resizePolicy }}
+          resizePolicy:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
       volumes:
+        {{- if eq (include "yb-amp-endpoint.documentdbGatewayEnabled" .) "true" }}
+        - name: documentdb-gateway-conf
+          secret:
+            secretName: {{ include "yb-amp-endpoint.fullname" . }}-documentdb-gateway
+        - name: documentdb-gateway-tls
+          emptyDir: {}
+        {{- end }}
         - name: run
         {{- if .Values.persistence.storageClass }}
           persistentVolumeClaim:

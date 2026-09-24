@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -1123,7 +1125,8 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 	case err != nil:
 		return nil, fmt.Errorf("get endpoint: %w", err)
 	}
-	return GetEndpoint200JSONResponse(endpointToAPI(ep)), nil
+	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
+	return GetEndpoint200JSONResponse(endpointToAPI(ep, c.documentDBGatewayReachable(branchExts, ep))), nil
 }
 
 func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error) {
@@ -1135,9 +1138,11 @@ func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRe
 	case err != nil:
 		return nil, fmt.Errorf("list endpoints: %w", err)
 	}
+	// One lookup for the page: every endpoint here is on the same branch.
+	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
 	out := make([]Endpoint, 0, len(endpoints))
 	for _, e := range endpoints {
-		out = append(out, endpointToAPI(e))
+		out = append(out, endpointToAPI(e, c.documentDBGatewayReachable(branchExts, e)))
 	}
 	return ListEndpoints200JSONResponse(EndpointList{Endpoints: out, Total: total, Count: len(out)}), nil
 }
@@ -1737,7 +1742,39 @@ func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string
 	return mode, cidrs, nil
 }
 
-func endpointToAPI(e core.Endpoint) Endpoint {
+// documentDBGatewayReachable answers whether documentdb_address should be reported for
+// this endpoint: the branch has to mount documentdb, and the deployer has to put
+// the pod's own address in Address. A deployer that does not implement
+// deploy.DocumentDBGatewayRouter is assumed to route — Docker and local both run the
+// gateway on the same host as the compute.
+func (c *Controllers) documentDBGatewayReachable(branchExts []string, e core.Endpoint) bool {
+	if !slices.Contains(branchExts, "documentdb") {
+		return false
+	}
+	if r, ok := c.prov.Deployer.(deploy.DocumentDBGatewayRouter); ok {
+		return r.DocumentDBGatewayReachable(e.Connectivity)
+	}
+	return true
+}
+
+// branchExtensions reads a branch's opted-in extension set. A failure here is
+// not worth failing the request over: it only decides whether documentdb_address is
+// reported, so an error degrades to "no gateway" rather than a 500.
+func (c *Controllers) branchExtensions(ctx context.Context, poolID, clusterID, branchID uuid.UUID) []string {
+	br, err := c.backend.GetBranch(ctx, poolID, clusterID, branchID)
+	if err != nil {
+		return nil
+	}
+	return br.Extensions
+}
+
+// endpointToAPI renders one endpoint for the API. gatewayReachable says whether this
+// endpoint has a documentdb gateway a client can actually reach at the
+// endpoint's own address — the branch mounts documentdb AND the deploy path puts
+// the pod's own address in Address (see documentDBGatewayReachable). The gateway
+// address is derived rather than stored: it is that address on a fixed port, so
+// a column would only add a migration and a way to disagree with the pod.
+func endpointToAPI(e core.Endpoint, gatewayReachable bool) Endpoint {
 	// Report the *effective* reservation: an endpoint created before resize
 	// existed has no cpu/memory in its config (stored as ""), but the pod still
 	// runs at the create-time defaults — so surface those rather than empty
@@ -1774,6 +1811,16 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 			conn.AllowedCidrs = &cidrs
 		}
 		out.Connectivity = &conn
+	}
+	// The gateway is a sidecar in this endpoint's pod, so it answers on the
+	// endpoint's own host — but only where that host is the pod's. Decided by
+	// the caller; here it is just "report it or not", plus the endpoint having
+	// an address at all.
+	if e.Address != "" && gatewayReachable {
+		if host, _, err := net.SplitHostPort(e.Address); err == nil {
+			addr := net.JoinHostPort(host, strconv.Itoa(extensions.DocumentDBGatewayPort))
+			out.DocumentdbAddress = &addr
+		}
 	}
 	if len(e.PgSettings) > 0 {
 		out.PgSettings = &e.PgSettings

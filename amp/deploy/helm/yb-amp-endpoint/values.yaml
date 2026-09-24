@@ -179,6 +179,74 @@ controller:
   # http://amp-controller.<ns>.svc.cluster.local:50051). Empty = controller-free.
   url: ""
 
+# DocumentDB gateway: the MongoDB wire-protocol front end for the documentdb
+# extension. It terminates the wire protocol and translates to SQL against this
+# endpoint's Postgres over the pod's shared loopback, so it runs as a sidecar
+# here rather than as its own deployment.
+documentdbGateway:
+  # -- Run the gateway. Unset (the default) follows the extension: on wherever
+  # `documentdb` is in endpoint.extensions, off otherwise — the gateway has
+  # nothing to front without it. Set true/false to override.
+  enabled: ~
+  image:
+    repository: quay.io/yugabyte/amp-documentdb-gateway
+    # -- Image tag. An empty value falls back to the chart appVersion, which is
+    # a trap for controller-driven deploys: the controller resolves the ENDPOINT
+    # image tag in Go for exactly this reason (kubernetes.go — "the chart reads
+    # an empty tag as its own appVersion"), and it now resolves this one the
+    # same way. Left empty so a bare `helm install` still gets a default.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- The gateway port, exposed on the Service. 10260 is the gateway's own
+  # default; MongoDB's conventional 27017 is not used, so a client must be
+  # pointed at this port explicitly.
+  port: 10260
+  # -- Startup probe for the gateway's own listener. Small on purpose: it is a
+  # tcpSocket check on the gateway port and the gateway binds immediately rather
+  # than waiting for the compute, so this budget need not track the endpoint
+  # container's (which derives from --deploy-timeout).
+  startupProbe:
+    periodSeconds: 5
+    failureThreshold: 12
+  # -- Readiness for the same listener. NOT a functional check: readiness is
+  # pod-wide, so failing it would pull Postgres out of the Service too.
+  readinessProbe:
+    periodSeconds: 30
+    failureThreshold: 3
+  # -- Sidecar security context, matching the postgres_exporter sidecar. The
+  # image already runs as uid 10001, which covers non-root but not privilege
+  # escalation or capability drop.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+  # -- Database the gateway connects to on the local compute.
+  dbname: postgres
+  # -- Role it connects as. cloud_admin is the compute superuser and reaches it
+  # over loopback trust auth, the same path postgres_exporter uses.
+  user: cloud_admin
+  # -- Tracing filter for the gateway (info, debug, ...).
+  logLevel: info
+  # -- Compute for the sidecar. Rendered as BOTH request and limit: QoS is
+  # pod-wide, so a sidecar without matching values would drop the whole pod out
+  # of Guaranteed (deploy/helm/yb-amp-endpoint/tests/guaranteed-qos.sh).
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+  # -- In-place resize policy, mirroring the endpoint container's so a pod-wide
+  # resize never trips over this sidecar.
+  resizePolicy:
+    - resourceName: cpu
+      restartPolicy: NotRequired
+    - resourceName: memory
+      restartPolicy: NotRequired
+
 # Internal listen ports for the co-located services. One endpoint per pod, so
 # these are fixed defaults; override only on conflict.
 ports:
