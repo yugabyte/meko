@@ -26,7 +26,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Task cancellation: cancelling an unknown task is 404, a malformed id 400, a finished task 409. A two-endpoint fleet roll cancelled as soon as it is planned ends failed with the cancellation as its error and cancel_requested_at set, a repeated cancel keeps the first timestamp, no child is left pending or running, both endpoints still serve their rows, and a fresh roll of the same endpoints is accepted and succeeds rather than being blocked by the cancelled one. A writer create and a with_writer cluster create cancelled the moment they are accepted either lose the race and serve, or end cancelled leaving no compute behind, after which a writer create on that branch and a same-named cluster create succeed.",
+		Description: "Task cancellation: cancelling an unknown task is 404, a malformed id 400, a finished task 409. A two-endpoint fleet roll cancelled as soon as it is planned ends failed with the cancellation as its error and cancel_requested_at set, a repeated cancel keeps the first timestamp, no child is left pending or running, both endpoints still serve their rows, and a fresh roll of the same endpoints is accepted and succeeds rather than being blocked by the cancelled one. A writer create and a with_writer cluster create cancelled the moment they are accepted either lose the race and serve, or end cancelled leaving no compute behind, after which a writer create on that branch succeeds, and so does a same-named cluster create once the cancelled cluster's orphan row is deleted.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     60 * time.Minute,
 		Run:         runAmpTaskCancel,
@@ -347,6 +347,12 @@ func (c *taskCancelRun) cancelClusterCreate(ctx context.Context) error {
 	if done.ClusterID != nil {
 		if err := c.clusterHasNoCompute(ctx, pool, *done.ClusterID); err != nil {
 			return err
+		}
+		// A cancel that lands after the cluster row is written leaves it as a
+		// failed-create orphan holding the name until --gc-grace (30m) passes
+		// (ac-tasks.md), so an operator deletes it before reusing the name.
+		if _, err := c.cl.DeleteClusterAndWait(ctx, pool, *done.ClusterID); err != nil && apiErrorStatus(err) != http.StatusNotFound {
+			return fmt.Errorf("delete the cluster %s the cancelled create left: %w", *done.ClusterID, err)
 		}
 	}
 	return c.r.retrySucceeds(ctx, "a same-named cluster create after a cancelled one", func(ctx context.Context) error {
