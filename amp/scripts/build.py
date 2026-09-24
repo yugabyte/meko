@@ -14,11 +14,20 @@ Modes (pick one; default is debug):
                      `cargo build` / `cargo check` / IDE can find them (the
                      postgres_ffi crate generates bindings from them).
 
-The mode selects the build type for the Rust amp stack (cargo dev vs release
-profile) and the compute extensions. PostgreSQL itself is ALWAYS built in
-release mode (for now) — a debug PG (-O0 + asserts) makes the walredo child
-needlessly slow, and the PG build type is baked into build/<v>/config.status,
-so a cached debug PG is detected and rebuilt in release regardless of mode.
+--headers and --pg-only build part of a tree rather than selecting one, so
+either may be combined with --release: `--pg-only --release` is how the
+integration suite's --release mode gets its PostgreSQL and nothing else.
+
+The mode selects one build type for everything: the Rust amp stack (cargo dev
+vs release profile), the compute extensions, and the PostgreSQL they are built
+against. A debug build gets an assertion-enabled PostgreSQL, which is what the
+integration suites run against; --release gets one without. The two live in
+separate directories (pg_install-debug/ vs pg_install-release/, see the
+Makefile), so building one never clobbers the other. Both are suffixed: the
+unsuffixed pg_install/ held a release tree before the split, and the type is
+baked into <build dir>/<v>/config.status, so naming neither type after it keeps
+a leftover from being reused. A tree configured by hand is still wiped and
+reconfigured.
 
 PostgreSQL submodule handling (every mode):
     ybAmp builds against a patched PostgreSQL tree vendored as the
@@ -57,16 +66,61 @@ def submodule_in_tree():
     ask git for the prefix rather than assuming either layout.
     """
     return (git_out("rev-parse", "--show-prefix") or "") + SUBMODULE
+
+
 PG_VERSION = "v18"
-PG_INSTALL = ROOT / "pg_install" / PG_VERSION
-BUILD_DIR = ROOT / "build"
-# Stamp test/integration/compute/run.sh touches after building the compute extensions;
-# removed here on a PG rebuild so run.sh's guard recompiles them against the new
-# headers (see --pg-only).
-EXT_STAMP = BUILD_DIR / ".yb_amp_ext.stamp"
-# PostgreSQL is always built in release mode (see module docstring). Only the
-# compute extensions and the Rust amp stack follow the selected debug/release.
-PG_BUILD_TYPE = "release"
+
+
+def make_pg_dirs(build_type):
+    """Where make puts this build type's trees: (install root, build dir).
+
+    Asking make keeps a single derivation of these paths. Re-deriving them here
+    would diverge the moment POSTGRES_INSTALL_DIR is overridden (the Makefile
+    honours it, and so do we): make would install to the override while the
+    checks below read the default, find no pg_config there, and reconfigure
+    PostgreSQL from scratch on every build. The suites read the same target — see
+    test/integration/compute/pg_tree.sh.
+    """
+    res = subprocess.run(
+        ["make", "-s", "print-pg-dirs", f"BUILD_TYPE={build_type}"],
+        cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True,
+    )
+    # Keyed, not positional: a mixed-up pair here would have wipe_pg_trees delete
+    # the wrong tree. KeyError is the right outcome if make stops printing one.
+    dirs = dict(
+        line.split("=", 1) for line in res.stdout.splitlines() if "=" in line
+    )
+    return Path(dirs["POSTGRES_INSTALL_DIR"]), Path(dirs["BUILD_DIR"])
+
+
+class PgTree:
+    """Where one PostgreSQL build type lives, as make reports it.
+
+    debug and release never share a tree. The type is baked into
+    <build dir>/<v>/config.status at configure time and never re-read, so one
+    shared tree silently serves whichever consumer configured it first — which is
+    how the integration suite lost its assertions locally (#1094).
+    """
+
+    def __init__(self, build_type):
+        assert build_type in ("debug", "release"), build_type
+        self.build_type = build_type
+        self.install_root, self.build_dir = make_pg_dirs(build_type)
+        self.install = self.install_root / PG_VERSION
+        # Stamp test/integration/compute/run.sh touches after building the compute
+        # extensions; removed here on a PG rebuild so its guard recompiles them
+        # against the new headers (see --pg-only).
+        self.ext_stamp = self.build_dir / ".yb_amp_ext.stamp"
+        # Which submodule commit this install was built from, and which makefiles
+        # shaped it. Together they are the cache key: the first notices a
+        # header/source change the gitlink cannot (an FMGR_ABI_EXTRA bump), the
+        # second notices a recipe change that bumps no commit at all.
+        self.commit_stamp = self.install / ".pg_commit"
+        self.makefiles_stamp = self.install / ".pg_makefiles"
+
+    def __str__(self):
+        return f"{self.install_root.name}/{PG_VERSION} ({self.build_type})"
+
 
 # Binaries launched by yb_amp_local (see control_plane local_env.rs).
 DAEMON_BINS = [
@@ -91,7 +145,7 @@ BUILD_CRATES = [
 ]
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).
 # See memory/bundle-runtime-libs.md. Staged top-level for the daemons and into
-# pg_install/v18/lib/ for the walredo postgres child (LD_LIBRARY_PATH is only
+# the install's v18/lib/ for the walredo postgres child (LD_LIBRARY_PATH is only
 # that dir — see #33).
 RUNTIME_LIBS = [
     "libssl.so.1.1",
@@ -120,14 +174,11 @@ def git_out(*args):
     return res.stdout.strip() if res.returncode == 0 else None
 
 
-# Stamp recording the submodule commit pg_install/v18 was built from. It is the
+# Stamp recording the submodule commit the install was built from. It is the
 # only way to notice that a header/source change (e.g. an FMGR_ABI_EXTRA bump)
 # invalidated the cached PG + every extension linked against it, since the
 # gitlink and the checked-out working tree can match while the *install* is
 # stale.
-PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
-
-
 # The other half of the cache key. The commit stamp says which PG source; these
 # say how it was built — postgres.mk's contrib set, and the PG_CFLAGS /
 # PG_CONFIGURE_OPTS the Makefile hands configure. Editing either bumps no
@@ -137,7 +188,6 @@ PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
 # File contents only: flags that reach configure from the environment or host
 # (CFLAGS, WITH_SANITIZERS, the .docker_build branch) leave these bytes
 # unchanged, so WITH_SANITIZERS=yes still reuses a non-sanitized install.
-PG_MAKEFILES_STAMP = PG_INSTALL / ".pg_makefiles"
 PG_MAKEFILES = ("Makefile", "postgres.mk")
 
 
@@ -155,49 +205,50 @@ def worktree_pg_makefiles_hash():
     return h.hexdigest()
 
 
-def built_pg_makefiles_hash():
-    """The makefiles hash pg_install/v18 was last built from, or None."""
+def built_pg_makefiles_hash(pg):
+    """The makefiles hash this install was last built from, or None."""
     return (
-        PG_MAKEFILES_STAMP.read_text().strip() if PG_MAKEFILES_STAMP.is_file() else None
+        pg.makefiles_stamp.read_text().strip()
+        if pg.makefiles_stamp.is_file() else None
     )
 
 
-def pg_makefiles_changed():
-    """True if the makefiles differ from the ones pg_install/v18 was built from."""
-    return built_pg_makefiles_hash() != worktree_pg_makefiles_hash()
+def pg_makefiles_changed(pg):
+    """True if the makefiles differ from the ones this install was built from."""
+    return built_pg_makefiles_hash(pg) != worktree_pg_makefiles_hash()
 
 
-def record_pg_makefiles():
-    """Stamp pg_install with the makefiles it was just built from."""
-    PG_MAKEFILES_STAMP.write_text(worktree_pg_makefiles_hash() + "\n")
+def record_pg_makefiles(pg):
+    """Stamp the install with the makefiles it was just built from."""
+    pg.makefiles_stamp.write_text(worktree_pg_makefiles_hash() + "\n")
 
 
-def built_pg_commit():
-    """The submodule commit pg_install/v18 was last built from, or None."""
-    return PG_COMMIT_STAMP.read_text().strip() if PG_COMMIT_STAMP.is_file() else None
+def built_pg_commit(pg):
+    """The submodule commit this install was last built from, or None."""
+    return pg.commit_stamp.read_text().strip() if pg.commit_stamp.is_file() else None
 
 
-def record_pg_commit():
-    """Stamp pg_install with the submodule commit it was just built from."""
+def record_pg_commit(pg):
+    """Stamp the install with the submodule commit it was just built from."""
     have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
     if have:
-        PG_COMMIT_STAMP.write_text(have + "\n")
+        pg.commit_stamp.write_text(have + "\n")
 
 
-def pg_install_matches_commit():
-    """True if pg_install/v18 was built from the commit now checked out.
+def pg_install_matches_commit(pg):
+    """True if this install was built from the commit now checked out.
 
     Call ensure_submodule() first, so this compares against a submodule already
     at the gitlink and a bump can only surface as .pg_commit disagreeing. An
     absent install does not match. Reads only; main() does the wiping.
     """
-    if not (PG_INSTALL / "bin" / "postgres").is_file():
-        say("pg_install/v18 missing — building PostgreSQL from source...")
+    if not (pg.install / "bin" / "postgres").is_file():
+        say(f"{pg} missing — building PostgreSQL from source...")
         return False
     have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
-    built = built_pg_commit()
+    built = built_pg_commit(pg)
     if built != have:
-        say(f"pg_install/v18 was built from {(built or 'unknown')[:12]} but the "
+        say(f"{pg} was built from {(built or 'unknown')[:12]} but the "
             f"submodule is at {(have or 'unknown')[:12]} — rebuilding PostgreSQL")
         return False
     return True
@@ -224,25 +275,30 @@ def make_env(*, cached):
     return env
 
 
-def pg_install_is_release():
-    """True if the cached pg_install is a *release* PG build.
+def installed_pg_build_type(pg):
+    """The build type the install actually has, or None if it isn't installed.
 
-    The debug configure adds `--enable-cassert` (and builds at -O0); release
-    omits it. We read the recorded configure line from the installed
-    `pg_config` — the ground truth for how the cached PG was actually built,
-    since the type is baked in at configure time (build/<v>/config.status).
-    Returns False if PG isn't installed.
+    The debug configure adds `--enable-cassert`; release omits it. We read the
+    recorded configure line from the installed `pg_config` — the ground truth for
+    how that PG was actually built, since the type is baked in at configure time
+    (<build dir>/<v>/config.status).
+
+    Kept even though each type now has its own directory, for a tree somebody
+    configured by hand or with an explicit POSTGRES_INSTALL_DIR: config.status is
+    never re-read, so the wrong type would otherwise be served indefinitely.
     """
-    pg_config = PG_INSTALL / "bin" / "pg_config"
+    pg_config = pg.install / "bin" / "pg_config"
     if not pg_config.is_file():
-        return False
+        return None
     res = subprocess.run(
         [str(pg_config), "--configure"], capture_output=True, text=True
     )
-    return res.returncode == 0 and "--enable-cassert" not in res.stdout
+    if res.returncode != 0:
+        return None
+    return "debug" if "--enable-cassert" in res.stdout else "release"
 
 
-def wipe_pg_trees(why):
+def wipe_pg_trees(pg, why):
     """Drop the PG build tree + install so the next build reconfigures cleanly.
 
     config.status is a bare file target in postgres.mk with no prerequisite on
@@ -250,13 +306,13 @@ def wipe_pg_trees(why):
     `make` picks up neither a new build type nor new PG_CONFIGURE_OPTS.
     Removing both dirs is what forces configure to run again.
     """
-    for p in (BUILD_DIR / PG_VERSION, PG_INSTALL):
+    for p in (pg.build_dir / PG_VERSION, pg.install):
         if p.exists():
             say(f"Removing {p} — {why}")
             shutil.rmtree(p)
 
 
-def stage_and_package(target_dir):
+def stage_and_package(target_dir, pg):
     """Stage the release bundle and pack it into a versioned tarball."""
     sha = git_out("rev-parse", "--short", "HEAD")
     date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -283,9 +339,11 @@ def stage_and_package(target_dir):
     # pg_install/v18/ — postgres binaries the compute spawns + the yb_amp .so
     # extensions. Without a matching tree the compute loads a wire-incompatible
     # yb_amp.so. copytree(symlinks=True) preserves the tree's symlinks.
-    say(f"Staging pg_install/v18/ ({_du(PG_INSTALL)})...")
+    # Always staged under `pg_install/`, whatever tree it was built in: that is
+    # the layout the deployment host expects.
+    say(f"Staging pg_install/v18/ from {pg} ({_du(pg.install)})...")
     (bundle / "pg_install").mkdir()
-    shutil.copytree(PG_INSTALL, bundle / "pg_install" / "v18", symlinks=True)
+    shutil.copytree(pg.install, bundle / "pg_install" / "v18", symlinks=True)
     for lib in RUNTIME_LIBS:
         shutil.copy2(f"/usr/lib64/{lib}", bundle / "pg_install" / "v18" / "lib" / lib)
 
@@ -330,19 +388,23 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    grp = ap.add_mutually_exclusive_group()
-    grp.add_argument("--release", action="store_true", help="release build")
-    grp.add_argument(
+    # Two independent axes: WHICH build type, and HOW MUCH of it to build.
+    # --pg-only --release is the integration suite asking for a release
+    # PostgreSQL tree and nothing else, so they cannot share one group.
+    typ = ap.add_mutually_exclusive_group()
+    typ.add_argument("--release", action="store_true", help="release build")
+    typ.add_argument(
         "--release-tar",
         action="store_true",
         help="release build + shippable tarball",
     )
-    grp.add_argument(
+    part = ap.add_mutually_exclusive_group()
+    part.add_argument(
         "--headers",
         action="store_true",
         help="only install PostgreSQL server headers (for cargo check / IDE)",
     )
-    grp.add_argument(
+    part.add_argument(
         "--pg-only",
         action="store_true",
         help="only (re)build PostgreSQL when the submodule commit drifted; skip "
@@ -350,19 +412,37 @@ def main():
     )
     args = ap.parse_args()
 
-    if args.release_tar:
-        mode, build_type, target_dir = "release-tar", "release", ROOT / "target/release"
-    elif args.release:
-        mode, build_type, target_dir = "release", "release", ROOT / "target/release"
-    elif args.headers:
-        mode, build_type, target_dir = "headers", "debug", None
-    elif args.pg_only:
-        mode, build_type, target_dir = "pg-only", "debug", None
-    else:
-        mode, build_type, target_dir = "debug", "debug", ROOT / "target/debug"
+    if args.release_tar and (args.headers or args.pg_only):
+        ap.error("--release-tar packages a full build; "
+                 "it cannot be combined with --headers / --pg-only")
 
-    say(f"Mode: {mode} (amp stack + extensions BUILD_TYPE={build_type}; "
-        f"PostgreSQL always {PG_BUILD_TYPE})")
+    build_type = "release" if (args.release or args.release_tar) else "debug"
+    if args.headers:
+        mode, target_dir = "headers", None
+    elif args.pg_only:
+        mode, target_dir = "pg-only", None
+    elif args.release_tar:
+        mode, target_dir = "release-tar", ROOT / f"target/{build_type}"
+    else:
+        mode, target_dir = build_type, ROOT / f"target/{build_type}"
+
+    pg = PgTree(build_type)
+    pg_make = f"BUILD_TYPE={pg.build_type}"
+    # Point every child at the tree we resolved: postgres_ffi's build script reads
+    # this to find the server headers it generates bindings from, so without it a
+    # --release build (in any mode but --pg-only) would compile the Rust workspace
+    # against the debug headers while installing the extensions into the release
+    # tree.
+    #
+    # Only when it differs from the path that build script already infers when the
+    # variable is unset. It declares cargo:rerun-if-env-changed on it, so setting
+    # it to the very path cargo would have used anyway is not a no-op — it flips
+    # set/unset against a bare `cargo build` (or rust-analyzer) and recompiles
+    # postgres_ffi and every dependent on each alternation.
+    if pg.install_root != ROOT / "pg_install-debug":
+        os.environ["POSTGRES_INSTALL_DIR"] = str(pg.install_root)
+
+    say(f"Mode: {mode} (BUILD_TYPE={build_type}; PostgreSQL {pg})")
     # Ahead of the mode dispatch: --headers builds none of PostgreSQL but still
     # configures from the submodule source.
     ensure_submodule()
@@ -372,67 +452,62 @@ def main():
     ext_target = f"yb-amp-pg-ext-{PG_VERSION}"
 
     if mode == "headers":
-        # postgres-headers-install-% installs into pg_install/v18/include so a
+        # postgres-headers-install-% installs into the tree's v18/include so a
         # bare cargo build/check can generate the postgres_ffi bindings. Headers
         # are build-type-independent, so this mode never wipes/rebuilds PG — it
         # runs while a local cluster is up, and a wipe would strip bin/postgres
         # and every contrib .so out from under it.
-        say(f"Installing PostgreSQL server headers ({PG_BUILD_TYPE})...")
-        run(
-            ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", headers_target],
-            env=make_env(cached=False),
-        )
-        say("Headers installed under pg_install/v18/include/. `cargo check` will work now.")
+        say(f"Installing PostgreSQL server headers ({pg})...")
+        run(["make", pg_make, headers_target], env=make_env(cached=False))
+        say(f"Headers installed under {pg.install}/include/. "
+            "`cargo check` will work now.")
         return
 
     # Below the --headers return, which does none of this work.
-    rebuild_pg = not pg_install_matches_commit()
+    rebuild_pg = not pg_install_matches_commit(pg)
 
     # Asked here, not inside the check above, so the wipe cannot be shadowed by
     # whichever trigger fires first: a rebuild that keeps config.status picks up
     # no new configure flags, yet record_pg_makefiles() would stamp it as if it
     # had.
-    if pg_makefiles_changed():
-        wipe_pg_trees("postgres.mk/Makefile changed since this install was built")
+    if pg_makefiles_changed(pg):
+        wipe_pg_trees(pg, "postgres.mk/Makefile changed since this install was built")
         rebuild_pg = True
 
-    # PostgreSQL must be a release build regardless of mode. If the cache is a
-    # debug build (or a partially-configured debug tree), wipe it so the build
-    # below reconfigures release — the type is baked into config.status.
-    if not pg_install_is_release():
-        if PG_INSTALL.exists() or (BUILD_DIR / PG_VERSION).exists():
-            say("Cached pg_install is not a release build — rebuilding PostgreSQL in release mode")
-            wipe_pg_trees("the cached PostgreSQL is not a release build")
+    # The tree must actually BE the type we asked for. It can only be the other
+    # one if it was configured before the per-type trees existed, or by hand —
+    # and the type is baked into config.status, so only removing both dirs
+    # re-runs configure.
+    if installed_pg_build_type(pg) != pg.build_type:
+        if pg.install.exists() or (pg.build_dir / PG_VERSION).exists():
+            wipe_pg_trees(pg, f"it is not a {pg.build_type} build")
         rebuild_pg = True
 
     if not rebuild_pg:
-        say(f"{SUBMODULE} up to date — reusing cached pg_install/v18")
+        say(f"{SUBMODULE} up to date — reusing cached {pg}")
 
     # Build (or rebuild) PostgreSQL in release *before* cargo: postgres_ffi's
     # build script generates bindings from the installed server headers
-    # (pg_install/v18/include), and postgres-install installs those headers.
+    # (<install>/v18/include), and postgres-install installs those headers.
     # Skipped when the cached PG is already release and the submodule matches.
     if rebuild_pg:
-        say(f"Building PostgreSQL {PG_VERSION} from source ({PG_BUILD_TYPE})...")
-        run(
-            ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", pg_target],
-            env=make_env(cached=False),
-        )
-        record_pg_commit()
-        record_pg_makefiles()
+        say(f"Building PostgreSQL {PG_VERSION} from source ({pg})...")
+        run(["make", pg_make, pg_target], env=make_env(cached=False))
+        record_pg_commit(pg)
+        record_pg_makefiles(pg)
         # PG headers just moved (struct layout, FMGR_ABI_EXTRA, ...). The PGXS
         # extension build has no header-dependency tracking, so an incremental
         # `make` would relink stale .o files into an ABI-mismatched .so. Wipe the
         # extension build tree so it recompiles clean against the freshly
         # installed headers.
-        ext_build = BUILD_DIR / f"pgxn-{PG_VERSION}"
+        ext_build = pg.build_dir / f"pgxn-{PG_VERSION}"
         if ext_build.exists():
             say(f"PostgreSQL rebuilt — extensions will recompile against new {PG_VERSION} headers")
             shutil.rmtree(ext_build)
         # In --pg-only we don't build the extensions (run.sh does); drop its
         # stamp so run.sh's guard notices and clean-rebuilds them.
         if mode == "pg-only":
-            EXT_STAMP.unlink(missing_ok=True)
+            pg.ext_stamp.unlink(missing_ok=True)
 
     if mode == "pg-only":
         say("--pg-only: PostgreSQL is current; skipping Rust + extension build.")
@@ -459,16 +534,16 @@ def main():
     # so PG_INSTALL_CACHED=1 keeps this step from touching it.
     say(f"Building compute extensions (compute/pgxn/yb_amp/*.so for {PG_VERSION}, {build_type})...")
     run(
-        ["make", f"BUILD_TYPE={build_type}", ext_target],
+        ["make", pg_make, ext_target],
         env=make_env(cached=True),
     )
 
     if mode != "release-tar":
-        say(f"Build complete ({mode}). Binaries in {target_dir}/, extensions in pg_install/v18/.")
+        say(f"Build complete ({mode}). Binaries in {target_dir}/, extensions in {pg.install}/.")
         say("Re-run with --release-tar to package a shippable bundle.")
         return
 
-    stage_and_package(target_dir)
+    stage_and_package(target_dir, pg)
 
 
 if __name__ == "__main__":

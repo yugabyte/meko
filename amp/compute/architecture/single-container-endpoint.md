@@ -316,7 +316,7 @@ yb-amp is currently Postgres v18 only (`POSTGRES_VERSIONS = v18`,
 [`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile) builds
 patched Postgres, the Rust daemons, and the `yb_amp` extension. The Postgres-family
 binaries and the compute's walredo child link against
-`pg_install/v18/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set
+`/usr/local/v18/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set
 image-wide (the supervisor also prepends it for everything it spawns,
 keyed off `ENDPOINT_PG_VERSION`); the `yb_amp` extension additionally
 needs `libcurl4` at runtime.

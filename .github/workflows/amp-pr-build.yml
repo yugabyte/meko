@@ -255,19 +255,28 @@ jobs:
         with:
           workspaces: amp
 
-      # scripts/build.py reuses pg_install/v18 only while both its stamps match:
+      # scripts/build.py reuses the cached install only while both its stamps match:
       # .pg_commit (the submodule commit) and .pg_makefiles (Makefile +
       # postgres.mk). Key the cache on the same two inputs, so a cache hit here
       # means what a local reuse means.
+      #
+      # Same path and key as the integration job below: BUILD_TYPE picks the
+      # PostgreSQL build as well as the cargo profile, and both jobs are debug,
+      # so they want the identical tree and whichever runs first populates it.
+      # `-debug-` in the key: entries under the old `pg-v18-` name hold a RELEASE
+      # tree from before the knobs were collapsed, and config.status is never
+      # re-read, so restoring one would serve an assertion-free PostgreSQL to a
+      # debug build. No major version in the name — the submodule rev below
+      # already changes on a bump, and a stale `v18` would only mislabel it.
       - name: Compute PostgreSQL cache key
         id: pgrev
         run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache PostgreSQL install
+      - name: Cache PostgreSQL install (debug, assertions on)
         uses: actions/cache@v6
         with:
-          path: amp/pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
+          path: amp/pg_install-debug
+          key: pg-debug-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
 
       # The storage crates link the prebuilt yb_thin_client C++ shim (a public
       # per-arch download pinned to the vendored ABI); fetch it and point
@@ -413,11 +422,16 @@ jobs:
         id: pgrev
         run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache PostgreSQL install
+      # The integration suites run against the assertion-enabled PostgreSQL,
+      # which BUILD_TYPE=debug (the default) installs to pg_install-debug/ — the same
+      # tree and cache key the build job above uses, since one knob now picks the
+      # cargo profile and the PostgreSQL together. On a miss, run.sh's
+      # `build.sh --pg-only` builds it from source (~5 min).
+      - name: Cache PostgreSQL install (debug, assertions on)
         uses: actions/cache@v6
         with:
-          path: amp/pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
+          path: amp/pg_install-debug
+          key: pg-debug-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
 
       - name: Wait for YugabyteDB
         run: |
@@ -459,12 +473,9 @@ jobs:
       # cover. ~7 min: cluster bring-up plus the suite.
       #
       # --no-build: run on the build the step above produced and touch nothing
-      # else. Building here would UNDO that step's work — build.sh insists on a
-      # release Postgres while run.sh's extension make leaves a cassert one
-      # (Makefile BUILD_TYPE defaults to debug), so each wipes and rebuilds
-      # pg_install behind the other, taking the postgres_ffi-dependent crates with
-      # it (measured: +5 min Postgres, +1m43s crates). It fails loudly if that
-      # step ever stops producing a build.
+      # else — it fails loudly if that step ever stops producing one. Both steps
+      # default to the debug profile, so both take the same assertion-enabled
+      # PostgreSQL tree (amp/Makefile BUILD_TYPE) and the same target/debug.
       #
       # Its own cluster, on a block away from the one run.sh auto-picked and below
       # the OS ephemeral floor — above it, an outbound socket can take a port

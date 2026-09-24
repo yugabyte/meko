@@ -170,6 +170,10 @@ func Init(ctx context.Context, args InitArgs) error {
 		if err != nil {
 			return fmt.Errorf("determine current directory: %w", err)
 		}
+		// Not the repo's pg_install-debug/: this default is what makes an
+		// unpacked release bundle work, where build.py stages Postgres at
+		// <bundle>/pg_install/v18 beside this binary. In a checkout the
+		// yb_amp_local wrappers set POSTGRES_DISTRIB_DIR explicitly.
 		pgDistribDir = filepath.Join(cwd, "pg_install")
 	}
 	exe, err := os.Executable()

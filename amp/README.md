@@ -338,11 +338,18 @@ It does everything the build needs, so there's no manual `git submodule
 update` or `make` to remember. Specifically it:
 
 - Checks out the vendored **PostgreSQL v18** tree (`compute/vendor/postgres-v18`)
-  on a fresh clone, and reuses the cached `pg_install/v18` only while it still
+  on a fresh clone, and reuses the cached install only while it still
   matches what produced it: the submodule commit (`.pg_commit`), the makefiles
   that shaped the build (`.pg_makefiles` — `Makefile` + `postgres.mk`, so a new
-  contrib module or a changed configure flag counts), and the release build
+  contrib module or a changed configure flag counts), and the requested build
   type. Otherwise it rebuilds PostgreSQL.
+- Builds PostgreSQL to match the requested build type — `BUILD_TYPE` picks it
+  along with the cargo profile. A debug build (the default) is assertion-enabled
+  at `-O2` and lands in `pg_install-debug/v18`, which is what the integration
+  suites run against; `--release` has assertions off and lands in
+  `pg_install-release/v18`. One install tree per type, so neither overwrites the
+  other, and both are suffixed so a pre-split `pg_install/` cannot be mistaken
+  for either.
 - Installs the **PostgreSQL server headers** before `cargo build` (the
   `postgres_ffi` crate generates Rust bindings from them, so a bare
   `cargo build` would otherwise fail with `bindgen_deps.h: 'c.h' file not
@@ -353,7 +360,8 @@ update` or `make` to remember. Specifically it:
 (The script is a thin `build.sh` shim over [`scripts/build.py`](scripts/build.py),
 which holds the logic — run `./build.sh --help` for details. It drives the
 same `make` targets directly if you prefer: `make -j$(nproc) -s` for debug,
-`BUILD_TYPE=release make -j$(nproc) -s` for release.)
+`BUILD_TYPE=release make -j$(nproc) -s` for release — each against its own
+PostgreSQL tree.)
 
 `--release-tar` packages a deploy as a single versioned tarball
 (`/tmp/yb-amp-bundle-<date>-<sha>.tar.gz`) that unpacks into a deploy dir

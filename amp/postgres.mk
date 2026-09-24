@@ -7,7 +7,7 @@
 #
 # - Compiling the targets in this file only builds the PostgreSQL sources
 #   under the compute/vendor/ subdirectory, nothing else from the repository.
-# - All outputs go to POSTGRES_INSTALL_DIR (by default 'pg_install',
+# - All outputs go to POSTGRES_INSTALL_DIR (by default 'pg_install-<type>',
 #   see parent Makefile)
 # - intermediate build artifacts go to BUILD_DIR
 #
@@ -24,6 +24,11 @@
 # - PG_CFLAGS
 # - PG_LDFLAGS
 # - EXTRA_PATH_OVERRIDES
+#
+# BUILD_TYPE (debug | release) picks all of those, and with them
+# POSTGRES_INSTALL_DIR and BUILD_DIR — one tree per type, since the type is
+# baked into $(BUILD_DIR)/<version>/config.status by the configure rule below
+# and never re-read. See the parent Makefile.
 
 ###
 ### Main targets

@@ -174,11 +174,18 @@ jobs:
         id: pgrev
         run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache PostgreSQL install
+      # run.sh runs against the assertion-enabled PostgreSQL, which BUILD_TYPE
+      # =debug (the default) installs to pg_install-debug/ (see amp/Makefile).
+      # `-debug-` in the key: entries under the old `pg-v18-` name hold a RELEASE
+      # tree from before the knobs were collapsed, and config.status is never
+      # re-read, so restoring one would serve assertions-off to this suite. No
+      # major version in the name — the submodule rev below already changes on a
+      # bump, and a stale `v18` would only mislabel it.
+      - name: Cache PostgreSQL install (debug, assertions on)
         uses: actions/cache@v6
         with:
-          path: amp/pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk', 'amp/compute/pgxn/**') }}
+          path: amp/pg_install-debug
+          key: pg-debug-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk', 'amp/compute/pgxn/**') }}
 
       - name: Wait for YugabyteDB
         run: |
@@ -367,11 +374,15 @@ jobs:
         id: pgrev
         run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache PostgreSQL install
+      # extensions.sh defaults to the RELEASE tree, and must: the extension images
+      # it loads are compiled against a release PostgreSQL (pg18-build.Dockerfile
+      # states BUILD_TYPE=release), so a cassert server would load .so files built
+      # against different headers.
+      - name: Cache PostgreSQL install (release)
         uses: actions/cache@v6
         with:
-          path: amp/pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk', 'amp/compute/pgxn/**') }}
+          path: amp/pg_install-release
+          key: pg-release-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk', 'amp/compute/pgxn/**') }}
 
       - name: Wait for YugabyteDB
         run: |

@@ -30,7 +30,6 @@
 #   test/integration/compute/extensions.sh --ext pgvector,age # co-mount + smoke both
 #   test/integration/compute/extensions.sh --ext hexabridge # needs AMP_EXT_GH_TOKEN
 #   test/integration/compute/extensions.sh --registered ext_fixtures/postgis.json
-#   test/integration/compute/extensions.sh --debug          # debug cluster build
 #   test/integration/compute/extensions.sh --registry my    # override image registry
 #   test/integration/compute/extensions.sh --cache          # layer-cache the base build
 #   test/integration/compute/extensions.sh --keep           # leave the cluster up
@@ -42,7 +41,7 @@
 # BuildKit secret to fetch the source (see deploy/extensions/build.sh).
 #
 # Requires: docker, python3 + PyYAML (the manifest parse), a YugabyteDB, and a
-# built Postgres (pg_install/v18 — this script runs ./build.sh if it is
+# built Postgres (the release tree — this script runs ./build.sh if it is
 # missing). Heavy: the first run builds the ABI-anchor PG18 base image in
 # docker (several minutes). Primarily a manual/local driver; the opt-in
 # `amp_extensions_local` CI suite (amp-on-demand-checks.yml) runs it with
@@ -82,8 +81,6 @@ Options:
   --regress           run the extension's OWN upstream regression suite against
                       the mounted ImageVolume (see the row's `regress:` block)
                       instead of the built-in smoke assertions.
-  --debug             build/run the cluster binaries in debug (default: release)
-  --release           build/run the cluster binaries in release (the default)
   --registry <reg>    override the image registry from extensions.yaml
   --cache             layer-cache the ABI-anchor PG18 base build via build.sh
                       --cache (buildx docker-container builder + a registry login
@@ -108,6 +105,8 @@ EXT_NAME=pgvector
 # positional away, so $* is empty by the time anything downstream could look.
 EXT_EXPLICIT=0
 REGISTERED_FILES=()
+# Not a flag: the extension images are built against a release PostgreSQL and
+# must be loaded by one. Kept as a variable because pg_tree.sh reads it.
 PROFILE=release
 REGISTRY_OVERRIDE=""
 CACHE=0
@@ -118,8 +117,6 @@ while [[ $# -gt 0 ]]; do
         --ext) EXT_NAME="$2"; EXT_EXPLICIT=1; shift ;;
         --registered) REGISTERED_FILES+=("$2"); shift ;;
         --regress) REGRESS=1 ;;
-        --debug) PROFILE=debug ;;
-        --release) PROFILE=release ;;
         --registry) REGISTRY_OVERRIDE="$2"; shift ;;
         --cache) CACHE=1 ;;
         --keep) KEEP=1 ;;
@@ -154,7 +151,13 @@ if [[ $REGRESS == 1 && ${#EXT_NAMES[@]} -gt 1 ]]; then
 fi
 
 MANIFEST="$REPO/deploy/extensions/extensions.yaml"
-PGINST="$REPO/pg_install/v18"
+
+# Must stay the tree the extension images were compiled against — pg18-build.
+# Dockerfile builds them BUILD_TYPE=release. A cassert server reads their structs
+# at the wrong offsets and corrupts silently instead of failing.
+# shellcheck source=test/integration/compute/pg_tree.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pg_tree.sh"
+PGINST="$PG_TREE_INSTALL_VERSION_DIR"
 
 # 1) Resolve each extension's manifest row: the image tag is the single source
 #    of truth in extensions.yaml, so read it the same way build.sh does rather
@@ -385,18 +388,18 @@ for _i in "${!EXT_NAMES[@]}"; do
 done
 
 # 4) The compute needs a built Postgres (+ the yb_amp extension) to run. build.sh
-#    is the single entry point that produces pg_install/v18 and the yb_amp .so.
+#    is the single entry point that produces the install and the yb_amp .so.
 #    This has to happen BEFORE the cargo build below: postgres_ffi's build script
-#    generates bindings against pg_install/v18's server headers (it reads
-#    pg_config / include/postgresql/server), so a missing pg_install/v18 fails the
+#    generates bindings against that tree's server headers (it reads
+#    pg_config / include/postgresql/server), so a missing install fails the
 #    cluster-binary build with "'c.h' file not found" rather than building it. The
 #    CI PG-install cache is keyed on the PG submodule rev, amp/Makefile, amp/postgres.mk
 #    and amp/compute/pgxn/** — the last so a change to the yb_amp .so (e.g. the
 #    pagestream wire command) busts the cache and rebuilds it against the fresh
 #    pageserver, rather than reusing a stale .so that speaks the old protocol.
 if [[ ! -x "$PGINST/bin/postgres" || ! -f "$PGINST/lib/postgresql/yb_amp.so" ]]; then
-    echo ">>> pg_install/v18 missing — building Postgres + yb_amp extension (./build.sh)"
-    bash "$REPO/build.sh"
+    echo ">>> $PGINST missing — building Postgres + yb_amp extension (./build.sh)"
+    bash "$REPO/build.sh" --release
 fi
 
 # 5) Build the binaries yb_amp_local spawns at runtime (it does not build them
@@ -408,18 +411,11 @@ CLUSTER_BINS=(--bin pageserver --bin safekeeper
               # yb_amp_local runs the three daemons under this.
               --bin endpoint-supervisor)
 echo ">>> building cluster binaries ($PROFILE)..."
-if [[ $PROFILE == release ]]; then
-    cargo build --release "${CLUSTER_BINS[@]}"
-    YB_AMP="$REPO/target/release/yb_amp_local"
-    _PROFILE_DIR=release
-else
-    cargo build "${CLUSTER_BINS[@]}"
-    YB_AMP="$REPO/target/debug/yb_amp_local"
-    _PROFILE_DIR=debug
-fi
+cargo build --release "${CLUSTER_BINS[@]}"
+YB_AMP="$REPO/target/release/yb_amp_local"
 # yb_amp_local and the controller it spawns are Go binaries, not cargo targets.
-( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
-( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
+( cd "$REPO/controller" && go build -o "$REPO/target/release/yb_amp_local" ./local/cmd/yb_amp_local )
+( cd "$REPO/controller" && go build -o "$REPO/target/release/controller" ./cmd/controller )
 
 # 6) Run-scoped, isolated cluster identifiers (mirrors run.sh / pg_regress.sh).
 RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
@@ -427,8 +423,8 @@ export YB_HOST="${YB_HOST:-127.0.0.1}"
 export YB_PORT="${YB_PORT:-5433}"
 export YB_DBNAME="${YB_DBNAME:-yb_storage_extensions_${RUN_ID}}"
 export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/extensions_${RUN_ID}}"
-# The cluster finds Postgres at runtime here; the compute (and our psql) need its libs.
-export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
+# POSTGRES_DISTRIB_DIR is exported by pg_tree.sh above; the compute (and our
+# psql) additionally need the install's libs on the loader path.
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"
 # Hand the bundled library dirs to the SUPERVISOR, exactly as the chart does in
 # a pod, rather than exporting LD_LIBRARY_PATH here: yb_amp_local scrubs the

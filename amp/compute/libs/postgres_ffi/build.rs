@@ -46,14 +46,22 @@ impl ParseCallbacks for PostgresFfiCallbacks {
 fn main() -> anyhow::Result<()> {
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=bindgen_deps.h");
+    // ...and whenever a different Postgres install is selected: the bindings below
+    // come from that tree's server headers, and the integration suites point this
+    // at the assertion-enabled tree while a plain build uses the release one (see
+    // test/integration/compute/pg_tree.sh). Without this, cargo never re-runs this
+    // script on the switch and keeps bindings from whichever install came first.
+    println!("cargo:rerun-if-env-changed=POSTGRES_INSTALL_DIR");
 
     // Finding the location of C headers for the Postgres server:
-    // - if POSTGRES_INSTALL_DIR is set look into it, otherwise look into `<project_root>/pg_install`
-    // - if there's a `bin/pg_config` file use it for getting include server, otherwise use `<project_root>/pg_install/{PG_MAJORVERSION}/include/postgresql/server`
+    // - if POSTGRES_INSTALL_DIR is set look into it, otherwise look into `<project_root>/pg_install-debug`
+    // - if there's a `bin/pg_config` file use it for getting include server, otherwise use `<project_root>/pg_install-debug/{PG_MAJORVERSION}/include/postgresql/server`
     let pg_install_dir = if let Some(postgres_install_dir) = env::var_os("POSTGRES_INSTALL_DIR") {
         postgres_install_dir.into()
     } else {
-        PathBuf::from("pg_install")
+        // The debug tree: what a plain `./build.sh` produces, so a bare cargo
+        // build or rust-analyzer needs no POSTGRES_INSTALL_DIR.
+        PathBuf::from("pg_install-debug")
     };
 
     {
@@ -62,7 +70,7 @@ fn main() -> anyhow::Result<()> {
         if pg_install_dir_versioned.is_relative() {
             let cwd = env::current_dir().context("Failed to get current_dir")?;
             // compute/libs/postgres_ffi -> repo root is three levels up
-            // (pg_install is a build output that stays at the repo root).
+            // (the install is a build output that stays at the repo root).
             pg_install_dir_versioned = cwd
                 .join("..")
                 .join("..")

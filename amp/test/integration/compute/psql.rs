@@ -7,10 +7,19 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// The Postgres install built from yb-amp's own vendored Postgres
-/// (`pg_install/v18`), relative to this crate (`<repo>/test/integration/compute`).
+/// The Postgres install built from yb-amp's own vendored Postgres — the same one
+/// the compute runs, so `psql`'s catalog queries match its major version.
+///
+/// `POSTGRES_DISTRIB_DIR` when the runner set it: run.sh points it at the tree
+/// matching its profile — `pg_install-debug/` for a default debug run,
+/// `pg_install-release/` for `--release` (see pg_tree.sh). Otherwise the
+/// repo-root default, relative to this crate
+/// (`<repo>/test/integration/compute`), which is the debug tree.
 fn pg_install() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../pg_install/v18")
+    match std::env::var_os("POSTGRES_DISTRIB_DIR") {
+        Some(root) => PathBuf::from(root).join("v18"),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../pg_install-debug/v18"),
+    }
 }
 
 /// Base `psql` command against a compute endpoint: trust auth (empty

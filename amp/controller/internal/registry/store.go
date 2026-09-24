@@ -91,7 +91,7 @@ func (s *Store) RegistryCounts(ctx context.Context) (branches int64, err error) 
 // --- PostgreSQL version -----------------------------------------------------
 
 // pgVersionNumPG18 is `PG_VERSION_NUM` of the PostgreSQL 18 build amp ships
-// (18.2 → 180002; see pg_install/v18 pg_config.h). It is the seed value the
+// (18.2 → 180002; see the install's v18 pg_config.h). It is the seed value the
 // controller records for a new branch's `pg_version`.
 const pgVersionNumPG18 = 180002
 

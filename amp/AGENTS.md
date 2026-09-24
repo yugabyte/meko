@@ -134,6 +134,16 @@ Code anchors:
   submodule commit, so prefer it over a bare `make`/`cargo build`. The logic
   lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin shim
   (`--pg-only` does just the PostgreSQL step, which `run.sh` reuses).
+- **`BUILD_TYPE` picks the cargo profile AND the PostgreSQL build.** `debug`
+  (the default) is `--enable-cassert` at `-O2` and installs to
+  `pg_install-debug/`; `release` has assertions off and installs to
+  `pg_install-release/`, with matching `build-*/` dirs. One tree each, because
+  the type is baked into `config.status` at configure time and never re-read, so
+  a shared tree silently served whoever configured it first (#1094). Both are
+  suffixed: the unsuffixed `pg_install/` held a release tree before the split. The integration suites follow the
+  same knob — default debug, `--release` for the release tree — and print which
+  PostgreSQL they got, refusing to run a debug suite on an assertion-free one.
+  Images state `BUILD_TYPE=release` explicitly rather than inherit the default.
 - Workspace builds with stable Rust. Some files use the `2024` edition.
 - Protobuf-codegen needs **protoc ≥ 3.15** (proto3 `optional` keyword).
   On `dev-server-hsunder` the system `protoc` is 3.5.0; release builds

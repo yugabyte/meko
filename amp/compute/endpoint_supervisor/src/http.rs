@@ -509,14 +509,14 @@ mod tests {
     /// The check's HTTP contract, which the controller's pre-check depends on: a
     /// map in, a `{name, reason}` list out, naming only what Postgres refuses.
     ///
-    /// Needs the compute's Postgres, so it skips where `pg_install` is not built
+    /// Needs the compute's Postgres, so it skips where the debug tree is not built
     /// — the same rule as the probe's own tests.
     #[test]
     fn the_check_names_what_postgres_refuses() {
         use std::io::{Read, Write};
 
         let pg_distrib =
-            camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install");
+            camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install-debug");
         if !pg_distrib.join("v18/bin/postgres").exists() {
             eprintln!("SKIP: no postgres at {pg_distrib}");
             return;

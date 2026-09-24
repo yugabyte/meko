@@ -1,9 +1,5 @@
 ROOT_PROJECT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-# Where to install Postgres, default is ./pg_install, maybe useful for package
-# managers.
-POSTGRES_INSTALL_DIR ?= $(ROOT_PROJECT_DIR)/pg_install
-
 # Supported PostgreSQL versions
 POSTGRES_VERSIONS = v18
 
@@ -13,8 +9,73 @@ POSTGRES_VERSIONS = v18
 # CARGO_PROFILE: Set to override the cargo profile to use. By default,
 # it is derived from BUILD_TYPE.
 
-# All intermediate build artifacts are stored here.
-BUILD_DIR := $(ROOT_PROJECT_DIR)/build
+#
+# BUILD_TYPE selects the cargo profile for the Rust amp stack, the compute
+# extensions linked against it, AND the PostgreSQL those extensions are built
+# against. One knob, because the two were never independently useful: the only
+# combination it gives up is a debug Rust stack on an assertion-free PostgreSQL,
+# and anyone who wants a fast local cluster builds --release.
+#
+# Each type gets its own install and build tree, so building one can never
+# clobber the other. That is the actual fix for #1094: the type is baked into
+# $(BUILD_DIR)/<v>/config.status at configure time and never re-read, so one
+# shared tree silently served whichever consumer configured it first.
+#
+#   BUILD_TYPE=debug    ->  pg_install-debug/<v>    build-debug/
+#   BUILD_TYPE=release  ->  pg_install-release/<v>  build-release/
+#
+# BOTH are suffixed, deliberately: the unsuffixed pg_install/ and build/ held a
+# RELEASE tree before this change, and config.status is never re-read. Naming
+# neither type after them means no leftover tree can be mistaken for one.
+#
+# debug is --enable-cassert, so a corruption bug trips an assertion on the spot.
+#
+BUILD_TYPE ?= debug
+ifeq ($(BUILD_TYPE),debug)
+	PG_TREE_SUFFIX := -debug
+	CARGO_PROFILE ?= --profile=dev
+	YBAMP_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/debug
+	PG_CONFIGURE_OPTS = --enable-debug --with-openssl --enable-cassert --enable-depend
+else ifeq ($(BUILD_TYPE),release)
+	PG_TREE_SUFFIX := -release
+	CARGO_PROFILE ?= --profile=release
+	# YBAMP_CARGO_ARTIFACT_TARGET_DIR is the directory where `cargo build` places
+	# the final build artifacts. There is unfortunately no easy way of changing
+	# it to a fully predictable path, nor to extract the path with a simple
+	# command. See https://github.com/rust-lang/cargo/issues/9661 and
+	# https://github.com/rust-lang/cargo/issues/6790.
+	YBAMP_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/release
+	PG_CONFIGURE_OPTS = --enable-debug --with-openssl
+else
+# Unindented: a tab-prefixed $(error) before the first target is taken for a
+# recipe line, and make reports that instead of this message.
+$(error Bad build type '$(BUILD_TYPE)', expected debug or release)
+endif
+
+WITH_SANITIZERS ?= no
+# Not per build type: assertions come from --enable-cassert and fire at any
+# optimisation level, so a debug PostgreSQL gains nothing from -O0 and costs
+# 1.5-2.2x for it. $(CFLAGS) comes last, so `CFLAGS=-O0 ./build.sh` still gets
+# you a tree to step through.
+PG_CFLAGS = -fsigned-char -O2 -g3 $(CFLAGS)
+PG_LDFLAGS = $(LDFLAGS)
+
+# Where to install Postgres, maybe useful for package managers. An explicit
+# override opts out of the per-type trees above, and then it is the caller's job
+# not to point two build types at one directory.
+POSTGRES_INSTALL_DIR ?= $(ROOT_PROJECT_DIR)/pg_install$(PG_TREE_SUFFIX)
+
+# All intermediate build artifacts are stored here. Per build type, because it
+# holds both the PostgreSQL build tree and the extension/walproposer objects, and
+# those objects are compiled against one tree's headers and then linked into a .so
+# installed into that same tree — so two build types must not share the directory.
+#
+# `:=`, not `?=`: the suites clean and stamp this tree at the path
+# `print-pg-dirs` reports. An ambient BUILD_DIR that make honoured and they did
+# not would point the two at different dirs, leaving the extension's
+# clean-rebuild guard to clear an unused dir and stamp a tree make never wrote —
+# so stale .o files relink into yb_amp.so, the ABI skew the guard exists to stop.
+BUILD_DIR := $(ROOT_PROJECT_DIR)/build$(PG_TREE_SUFFIX)
 
 # --- Controller versioning ---------------------------------------------------
 # The repo-root VERSION file is the single source of truth for the controller's
@@ -30,34 +91,6 @@ CONTROLLER_VERSION_PKG := github.com/yugabyte/amp/controller/internal/version
 CONTROLLER_LDFLAGS := -X '$(CONTROLLER_VERSION_PKG).Version=$(AMP_VERSION)' -X '$(CONTROLLER_VERSION_PKG).Commit=$(AMP_GIT_COMMIT)' -X '$(CONTROLLER_VERSION_PKG).BuildDate=$(AMP_BUILD_DATE)'
 
 ICU_PREFIX_DIR := /usr/local/icu
-
-#
-# We differentiate between release / debug build types using the BUILD_TYPE
-# environment variable.
-#
-BUILD_TYPE ?= debug
-WITH_SANITIZERS ?= no
-PG_CFLAGS = -fsigned-char
-ifeq ($(BUILD_TYPE),release)
-	PG_CONFIGURE_OPTS = --enable-debug --with-openssl
-	PG_CFLAGS += -O2 -g3 $(CFLAGS)
-	PG_LDFLAGS = $(LDFLAGS)
-	CARGO_PROFILE ?= --profile=release
-	# YBAMP_CARGO_ARTIFACT_TARGET_DIR is the directory where `cargo build` places
-	# the final build artifacts. There is unfortunately no easy way of changing
-	# it to a fully predictable path, nor to extract the path with a simple
-	# command. See https://github.com/rust-lang/cargo/issues/9661 and
-	# https://github.com/rust-lang/cargo/issues/6790.
-	YBAMP_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/release
-else ifeq ($(BUILD_TYPE),debug)
-	PG_CONFIGURE_OPTS = --enable-debug --with-openssl --enable-cassert --enable-depend
-	PG_CFLAGS += -O0 -g3 $(CFLAGS)
-	PG_LDFLAGS = $(LDFLAGS)
-	CARGO_PROFILE ?= --profile=dev
-	YBAMP_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/debug
-else
-	$(error Bad build type '$(BUILD_TYPE)', see Makefile for options)
-endif
 
 ifeq ($(WITH_SANITIZERS),yes)
 	PG_CFLAGS += -fsanitize=address -fsanitize=undefined -fno-sanitize-recover
@@ -290,10 +323,24 @@ controller-bundle-only:
 	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
 	CGO_ENABLED=0 go -C controller build -trimpath -ldflags "$(CONTROLLER_LDFLAGS)" -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
 
-# This removes everything
+# Print the PostgreSQL install dir and build dir for the selected BUILD_TYPE,
+# as `NAME=path` lines. Everything that consumes a tree (scripts/build.py,
+# test/integration/compute/pg_tree.sh) asks for the paths instead of re-deriving
+# the -release suffix, so they cannot disagree with what make installs. Both
+# consumers key off the names, so the order here is not load-bearing.
+.PHONY: print-pg-dirs
+print-pg-dirs:  ## print POSTGRES_INSTALL_DIR and BUILD_DIR for the selected BUILD_TYPE
+	@printf 'POSTGRES_INSTALL_DIR=%s\nBUILD_DIR=%s\n' \
+		'$(abspath $(POSTGRES_INSTALL_DIR))' '$(abspath $(BUILD_DIR))'
+
+# This removes everything, both PostgreSQL trees included — not just the one the
+# current BUILD_TYPE selects.
 .PHONY: distclean
 distclean:
-	$(RM) -r $(POSTGRES_INSTALL_DIR) $(BUILD_DIR)
+	$(RM) -r $(POSTGRES_INSTALL_DIR) $(BUILD_DIR) \
+		$(ROOT_PROJECT_DIR)/pg_install-debug $(ROOT_PROJECT_DIR)/pg_install-release \
+		$(ROOT_PROJECT_DIR)/build-debug $(ROOT_PROJECT_DIR)/build-release \
+		$(ROOT_PROJECT_DIR)/pg_install $(ROOT_PROJECT_DIR)/build
 	$(CARGO_CMD_PREFIX) cargo clean
 
 .PHONY: fmt

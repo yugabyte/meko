@@ -15,4 +15,10 @@ BIN="$REPO/target/release/yb_amp_local"
     exit 1
 }
 
+# The launcher defaults POSTGRES_DISTRIB_DIR to $cwd/pg_install — the release
+# bundle's layout, not a tree a checkout has — so the repo wrappers name the
+# tree matching their profile. An ambient value wins, for a caller pointing at a
+# tree it built elsewhere.
+export POSTGRES_DISTRIB_DIR="${POSTGRES_DISTRIB_DIR:-$REPO/pg_install-release}"
+
 exec "$BIN" "$@"

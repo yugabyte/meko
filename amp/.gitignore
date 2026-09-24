@@ -1,5 +1,12 @@
 /artifact_cache
 /.shim-cache
+# One PostgreSQL tree per BUILD_TYPE. Both suffixed: the unsuffixed pair below
+# held a release tree before the split and is left ignored so an old checkout
+# stays clean — `make distclean` reclaims it.
+/build-debug
+/pg_install-debug
+/build-release
+/pg_install-release
 /build
 /pg_install
 /target

@@ -251,7 +251,7 @@ hand:
 ```sh
 docker create --name x <image> /extract-only && docker export x | tar -C /tmp/ext -xf -
 # 1. every PG symbol it references must exist in our postgres, and none may be drifted
-nm -D --defined-only pg_install/v18/bin/postgres | awk '{print $NF}' | sort -u > /tmp/pg.syms
+nm -D --defined-only pg_install-debug/v18/bin/postgres | awk '{print $NF}' | sort -u > /tmp/pg.syms
 nm -D --undefined-only /tmp/ext/lib/<module>.so | awk '{print $NF}' | sort -u > /tmp/mod.syms
 comm -12 /tmp/mod.syms /tmp/pg.syms
 # 2. its libc/libstdc++ floor must be <= the endpoint base's (debian:bookworm-slim)

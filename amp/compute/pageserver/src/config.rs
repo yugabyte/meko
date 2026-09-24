@@ -534,8 +534,9 @@ impl PageServerConf {
     }
 
     pub fn dummy_conf(repo_dir: Utf8PathBuf) -> Self {
-        // compute/pageserver -> repo root is two levels up (pg_install stays at root).
-        let pg_distrib_dir = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install");
+        // compute/pageserver -> repo root is two levels up (the install stays at root).
+        let pg_distrib_dir =
+            Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install-debug");
 
         let mut config_toml = pageserver_api::config::ConfigToml {
             wait_lsn_timeout: Duration::from_secs(60),

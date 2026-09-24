@@ -24,7 +24,7 @@ ARG TAG=v1
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
 
-# 1. Build patched Postgres v18 -> pg_install/v18.
+# 1. Build patched Postgres v18 -> pg_install-release/v18.
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
 WORKDIR /home/nonroot
 # Postgres is configured --with-libxml (see Makefile) so the server exports the
@@ -40,6 +40,9 @@ COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18
 COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
 COPY --chown=nonroot scripts/ninstall.sh scripts/ninstall.sh
+# As in the pg image: BUILD_TYPE picks the PostgreSQL build as well as the cargo
+# profile, and the image states it rather than inheriting the Makefile's default
+# (debug, assertions on — see #1019).
 ENV BUILD_TYPE=release
 RUN set -e \
     && mold -run make -j "$(nproc)" -s postgres
@@ -68,7 +71,7 @@ ARG GIT_VERSION=local
 ARG BUILD_TAG
 
 # Reuse the Postgres build artifacts from the pg-build stage.
-COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install/ pg_install
+COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install-release/ pg_install-release
 COPY --chown=nonroot . .
 
 # The storage binaries link the yb_thin_client shim; stage it and point
@@ -80,13 +83,18 @@ ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
 # As in the pg image: use the Postgres copied from `pg-build` rather than
 # building another. `yb-amp-pg-ext` depends on `postgres-install-v18`, whose
 # configure stamp lives in BUILD_DIR — not copied across — so make would
-# re-configure and reinstall all of Postgres over the copied binaries, at the
-# Makefile's `?= debug` default: `--enable-cassert -O0`, in the Postgres this
-# image ships. PG_INSTALL_CACHED stubs those targets so nothing overwrites it.
+# re-configure and reinstall all of Postgres over the copied binaries.
+# PG_INSTALL_CACHED stubs those targets so nothing overwrites it.
+# This stage runs cargo directly, not through build.sh, so postgres_ffi's build
+# script gets no POSTGRES_INSTALL_DIR from make and would fall back to
+# <root>/pg_install-debug — the debug tree, which this image never builds.
+ENV POSTGRES_INSTALL_DIR=/home/nonroot/pg_install-release
 ENV PG_INSTALL_CACHED=1
-# Still needed, and not for Postgres: BUILD_TYPE also picks CARGO_PROFILE, and
-# `yb-amp-pg-ext` drives a cargo build of libcommunicator.a that is linked into
-# the yb_amp extension this image ships. Unset, that library is `--profile=dev`.
+# BUILD_TYPE picks POSTGRES_INSTALL_DIR, so it has to agree with the stage the
+# install was copied from — the extension builds against that tree's pg_config.
+# It also picks CARGO_PROFILE, and `yb-amp-pg-ext` drives a cargo build of
+# libcommunicator.a linked into the yb_amp extension this image ships; unset,
+# that library is `--profile=dev`.
 ENV BUILD_TYPE=release
 
 # `io-align-512` is the default pageserver feature, so a plain release
@@ -196,7 +204,7 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/reset-consistent-l
 COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so /opt/yb_thin_client/lib/libyb_thin_client.so
 
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
-COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
+COPY --from=build /home/nonroot/pg_install-release/v18 /usr/local/v18/
 
 # The supervisor — PID 1 under tini (see the ENTRYPOINT below).
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/endpoint-supervisor /usr/local/bin/

@@ -330,14 +330,18 @@ echo "$out" | grep -q '^t$' && ok "pg_stat_statements preloaded + created, track
 #     looks at how the binary was built.
 #
 #     This has been wrong before (#1019): the Dockerfile builds Postgres twice, and the
-#     second stage inherits no BUILD_TYPE, so the Makefile's `?= debug` default quietly
-#     reinstalled a cassert build over the release one. A dev tree looked fine, because
-#     build.sh sets the type; only the image was affected, and nothing asserted on it.
+#     second stage inherited no BUILD_TYPE — which selects PostgreSQL's build type and
+#     defaults to `debug`, so a cassert build was quietly reinstalled over the release
+#     one. A dev tree looked fine, because build.sh sets the type; only the image was
+#     affected, and nothing asserted on it. Both stages of both Dockerfiles now state
+#     BUILD_TYPE=release, and a debug build installs to a different tree entirely
+#     (pg_install-release/ vs pg_install-debug/), so a mismatch fails the COPY rather than
+#     silently shipping. This stays the check that would catch a new path in.
 asrt=$(psql_pod "$POD" 127.0.0.1 55433 <<<'SHOW debug_assertions;' 2>&1)
 if echo "$asrt" | grep -q '^off$'; then
   ok "shipped Postgres is a release build (debug_assertions=off)"
 else
-  bad "shipped Postgres has assertions enabled — a --enable-cassert -O0 build reached the image (debug_assertions: $(echo "$asrt"|tail -1))"
+  bad "shipped Postgres has assertions enabled — an --enable-cassert build reached the image (debug_assertions: $(echo "$asrt"|tail -1))"
 fi
 
 hdr "createBranch (fork default) -> task succeeded"

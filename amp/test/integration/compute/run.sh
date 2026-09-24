@@ -44,8 +44,13 @@ Options:
                   names carry the iteration, and the previous iteration's
                   endpoints are destroyed (logs kept under
                   iteration_<n>_logs/ in the run dir).
-  --release       build + run in release mode (default: debug, which is
-                  what the dev/integration loop normally wants)
+  --release       build + run release throughout — cluster binaries, the
+                  extension, and PostgreSQL — the same meaning build.sh gives
+                  it. A release PostgreSQL has assertions compiled OUT, so the
+                  run says so; CI always runs the default. On a checkout that
+                  has only run these suites the first --release builds a whole
+                  second PostgreSQL. (Default: debug, which is what the
+                  dev/integration loop normally wants.)
   --no-fail-stop  on failure, leave the cluster + DB running for postmortem
                   (default: a failed run stops the cluster + drops the DB but
                   keeps its *.log files under .integration-tests/run_<id>/)
@@ -173,16 +178,26 @@ fi
 # caches the shim itself, so this call is a cache hit that only prints the path.
 export LD_LIBRARY_PATH="$("$REPO/scripts/fetch-yb-thin-client.sh")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# Ensure the installed PostgreSQL matches the checked-out submodule commit
-# before cargo runs — postgres_ffi's bindings and the compute's extension .so
-# both link against it, so a stale pg_install (after a submodule bump or a PG
-# header/source change) surfaces as baffling ABI/wire mismatches. run.sh does
-# not build PG itself; delegate that single step to the build entry point, which
-# rebuilds PG only when the submodule commit drifted and drops the extension
-# stamp so the guard below recompiles the .so against the new headers.
-# `env -u PROFILE`: PGXS reads $PROFILE as profiling C flags (see the extension
-# guard below), so keep our debug|release value out of the sub-build's env.
-env -u PROFILE "$REPO/build.sh" --pg-only
+# Resolve the assertion-enabled PostgreSQL tree this suite runs against, and
+# point the cluster at it (POSTGRES_DISTRIB_DIR). See pg_tree.sh for why it is
+# separate from build.sh's release install.
+# shellcheck source=test/integration/compute/pg_tree.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pg_tree.sh"
+
+# Ensure that install matches the checked-out submodule commit before cargo runs
+# — the compute's extension .so links against it, so a stale one (after a
+# submodule bump or a PG header/source change) surfaces as baffling ABI/wire
+# mismatches. run.sh does not build PG itself; delegate that single step to the
+# build entry point, which rebuilds only when the submodule commit drifted and
+# drops the extension stamp so the guard below recompiles the .so against the
+# new headers.
+pg_tree_build
+
+# Say which PostgreSQL this run got — the suite's assertions are the whole point.
+# Before the cargo/extension builds below, for the same reason the YugabyteDB
+# preflight is: a run that would be refused should be refused in seconds, not
+# after several minutes of compiling.
+pg_tree_report
 
 # The safekeeper is built with its `testing` feature so failpoints
 # (`PUT /v1/failpoints`) are usable by fault-injection scenarios.
@@ -214,46 +229,9 @@ fi
 # next-to-itself controller lookup both resolve.
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
 
-# Rebuild the yb_amp Postgres extension when its C sources changed. cargo does
-# NOT build it — the launcher spawns a compute whose postgres loads
-# pg_install/v18/lib/postgresql/yb_amp.so at runtime (the walproposer +
-# pagestore smgr live in that .so). A stale .so silently runs an old compute
-# against freshly-built cluster binaries; when the change is to the
-# walproposer<->safekeeper wire/structs that surfaces as a hang or a segfault
-# that looks like a logic bug but is really a build skew.
-#
-# The extension's PGXS build has no header-dependency tracking (no .deps/), so
-# incremental `make` rebuilds a .o only when its own .c is newer, never when a
-# shared header like walproposer.h changes — which would leave stale .o files
-# with an old struct layout (an ABI mismatch). So when anything changed we
-# force a CLEAN rebuild of the extension build dir.
-#
-# Staleness is measured against a stamp file we `touch` after a successful
-# build — NOT the installed .so, whose mtime `ninstall.sh -C` deliberately
-# preserves when the rebuilt .so is byte-identical (which would make the guard
-# fire on every run). This is a no-op on the common Rust-only edit (the mtime
-# check is instant) and only pays the ~1-2 min recompile when C actually
-# changed.
-EXT_SO=$REPO/pg_install/v18/lib/postgresql/yb_amp.so
-EXT_STAMP=$REPO/build/.yb_amp_ext.stamp
-if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
-    || [[ -n "$(find "$REPO/compute/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
-    echo "run.sh: yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding" >&2
-    rm -rf "$REPO/build/pgxn-v18"
-    # `env -u PROFILE`: our `$PROFILE` (debug|release build type) collides with
-    # PostgreSQL PGXS's own PROFILE variable (Makefile.global: `ifdef PROFILE →
-    # CFLAGS += $(PROFILE)`, meant for profiling flags like -pg). If the caller
-    # exported PROFILE, our reassignment above re-exports it, the extension
-    # make inherits it, and PGXS appends its value as a bogus C flag
-    # (`gcc: error: <value>: No such file or directory`). Strip it for this make.
-    # No BUILD_TYPE, so this is a cassert Postgres — deliberately. The suite
-    # exists to catch corruption and lost-write bugs, and an assertion firing on
-    # the spot is the point; a release build would run the same tests blind. The
-    # shipped images are the opposite case and say so (deploy/*/Dockerfile).
-    env -u PROFILE make -C "$REPO" yb-amp-pg-ext-v18
-    mkdir -p "$REPO/build"
-    touch "$EXT_STAMP"
-fi
+# Rebuild the yb_amp Postgres extension when its C sources changed — see
+# pg_tree.sh for why cargo does not build it and why the rebuild is clean.
+pg_tree_rebuild_ext_if_stale
 
 # Run-scoped identifiers shared by the harness and the cleanup trap below.
 # The harness honours these env vars (src/cluster.rs::setup); pre-setting

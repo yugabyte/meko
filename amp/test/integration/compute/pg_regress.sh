@@ -10,10 +10,13 @@
 # pageserver/safekeeper -> YugabyteDB), creates the `regression`
 # database, runs the parallel schedule, and tears the cluster down.
 #
-# Standalone it builds what it needs, defaulting to RELEASE: the full suite is 230
-# tests with getpage/WAL round-trips, so a debug build is slower. Pass --debug to
-# override, or --no-build to run on a build a caller already produced — which is
-# what CI does, straight after run.sh in the same job.
+# Standalone it builds what it needs, defaulting to DEBUG — the same default
+# run.sh has, so the two share one build instead of recompiling the workspace
+# under a second profile. (Their cargo feature sets were already aligned for
+# that reason; diverging defaults undid it.) Pass --release for a faster run of
+# the full 230-test suite, which also means a release PostgreSQL with assertions
+# off (see pg_tree.sh). Or --no-build to run on a build a caller already
+# produced — which is what CI does, straight after run.sh in the same job.
 #
 # This script also builds the regression C support modules (regress,
 # refint, autoinc) via PGXS and installs them into the compute's $libdir,
@@ -32,13 +35,14 @@ Usage: test/integration/compute/pg_regress.sh [options]
 
 Options:
   --no-build          build nothing: use the Postgres install, yb_amp extension
-                      and cluster binaries already in the tree, taking the profile
-                      from whichever of target/{release,debug} holds them. Fails
-                      if any is missing. What CI uses, running straight after
-                      run.sh in the same job.
-  --debug             build/run the cluster binaries in debug (default: release)
-  --release           the default; accepted so `run.sh --release pg_regress`
-                      forwards cleanly
+                      and cluster binaries already in the tree, for the profile
+                      this run selected (--release, else debug). Fails if any is
+                      missing. What CI uses, running straight after run.sh in the
+                      same job.
+  --debug             the default; accepted so `run.sh pg_regress` forwards cleanly
+  --release           build/run release throughout — cluster binaries, extension
+                      and PostgreSQL. Faster over 230 tests, but a release
+                      PostgreSQL has assertions compiled out; the run says so
   -j, --jobs <n>      pg_regress --max-connections (default: 8). Higher = faster
                       but more PS->YB connection-pool pressure.
   --schedule <file>   schedule to run (default: the vendored parallel_schedule).
@@ -66,7 +70,7 @@ EOF
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO"
 
-PROFILE=release
+PROFILE=debug
 JOBS=8
 SCHEDULE=parallel_schedule
 CONTRIB=()
@@ -88,7 +92,42 @@ while [[ $# -gt 0 ]]; do
 done
 
 REG="$REPO/compute/vendor/postgres-v18/src/test/regress"
-PGINST="$REPO/pg_install/v18"
+
+CLUSTER_BINS=(pageserver safekeeper compute-ctl
+              # yb_amp_local runs the three daemons under this.
+              endpoint-supervisor
+              # Go, not cargo targets: the launcher and the controller it spawns.
+              yb_amp_local controller)
+
+# 0) Settle which profile this run uses, before anything derives from it.
+#    --no-build reuses the build for the profile the caller NAMED — debug unless
+#    --release — instead of probing target/ for whichever one looks complete.
+#    Probing had to break a tie by mtime, and the profile now also picks the
+#    PostgreSQL tree, so a stale target/release could take a run the caller meant
+#    as debug and quietly run it with assertions off.
+#    This has to happen BEFORE pg_tree.sh is sourced, which derives that tree
+#    from $PROFILE.
+if [[ $NO_BUILD == 1 ]]; then
+    _PROFILE_DIR=$PROFILE
+    # run.sh has no --debug flag: debug is its default, and it would take the
+    # unknown flag for a test name.
+    _hint=""
+    [[ $PROFILE == release ]] && _hint=" --release"
+    for _b in "${CLUSTER_BINS[@]}"; do
+        [[ -x "$REPO/target/$_PROFILE_DIR/$_b" ]] || {
+            echo "--no-build: target/$_PROFILE_DIR/$_b is missing or not executable." >&2
+            echo "Run 'test/integration/compute/run.sh$_hint' first, or drop --no-build." >&2
+            exit 1
+        }
+    done
+    unset _b _hint
+fi
+
+# The PostgreSQL tree this suite runs against, and the exports that point the
+# cluster at it. Follows $PROFILE. See pg_tree.sh.
+# shellcheck source=test/integration/compute/pg_tree.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pg_tree.sh"
+PGINST="$PG_TREE_INSTALL_VERSION_DIR"
 
 # 1) Vendored Postgres source carries the suite (sql/expected/schedule).
 if [[ ! -f "$REG/parallel_schedule" ]]; then
@@ -106,53 +145,21 @@ fi
 #
 #    --no-build: a caller already produced all of it in this tree, so touch
 #    nothing. CI relies on that — it runs this straight after run.sh in the same
-#    job, and building here would not just duplicate work but UNDO it: build.sh
-#    requires a release Postgres, while run.sh deliberately leaves a cassert one
-#    (the suite wants assertions firing), so each would wipe and rebuild
-#    pg_install behind the other, dragging the postgres_ffi-dependent crates with
-#    it. The profile comes from whatever is in target/, so it follows run.sh
-#    rather than needing to agree with it.
-CLUSTER_BINS=(pageserver safekeeper compute-ctl
-              # yb_amp_local runs the three daemons under this.
-              endpoint-supervisor
-              # Go, not cargo targets: the launcher and the controller it spawns.
-              yb_amp_local controller)
+#    job, on exactly what that step built. Its profile was settled in 0).
 if [[ $NO_BUILD == 1 ]]; then
-    for _p in release debug; do
-        _missing=0
-        for _b in "${CLUSTER_BINS[@]}"; do
-            [[ -x "$REPO/target/$_p/$_b" ]] || { _missing=1; break; }
-        done
-        [[ $_missing == 0 ]] && { _PROFILE_DIR=$_p; break; }
-    done
-    [[ -n ${_PROFILE_DIR:-} ]] || {
-        echo "--no-build: no complete cluster build in target/{release,debug}." >&2
-        echo "Run test/integration/compute/run.sh first, or drop --no-build." >&2
-        exit 1
-    }
     [[ -x "$PGINST/bin/postgres" && -f "$PGINST/lib/postgresql/yb_amp.so" ]] || {
-        echo "--no-build: pg_install/v18 has no postgres or no yb_amp.so." >&2
+        echo "--no-build: $PGINST has no postgres or no yb_amp.so." >&2
         exit 1
     }
-    PROFILE=$_PROFILE_DIR
     YB_AMP="$REPO/target/$_PROFILE_DIR/yb_amp_local"
     echo ">>> reusing the existing $_PROFILE_DIR build (--no-build)"
+    pg_tree_report
 else
-    # The extension gets a CLEAN rebuild when its sources changed — PGXS has no
-    # header dependency tracking — keyed on a stamp rather than the installed .so,
-    # whose mtime ninstall.sh preserves when the rebuild is byte-identical.
-    # `env -u PROFILE`: PGXS reads $PROFILE as C flags, and ours holds debug|release.
-    env -u PROFILE "$REPO/build.sh" --pg-only
-    EXT_SO="$PGINST/lib/postgresql/yb_amp.so"
-    EXT_STAMP="$REPO/build/.yb_amp_ext.stamp"
-    if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
-        || [[ -n "$(find "$REPO/compute/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
-        echo ">>> yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding"
-        rm -rf "$REPO/build/pgxn-v18"
-        env -u PROFILE make -C "$REPO" yb-amp-pg-ext-v18
-        mkdir -p "$REPO/build"
-        touch "$EXT_STAMP"
-    fi
+    pg_tree_build
+    # Before the extension + cluster builds below: a run that would be refused
+    # should be refused in seconds, not after minutes of compiling.
+    pg_tree_report
+    pg_tree_rebuild_ext_if_stale
 
     # Same features run.sh builds the cluster binaries with, so a tree it already
     # built is not recompiled under a second feature set.
@@ -180,9 +187,9 @@ fi
 #     references resolve.
 PG_CONFIG="$PGINST/bin/pg_config"
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"  # pg_config/make need it
-# Resolve the REAL pkglib the running postgres uses: pg_install is a symlink
-# in worktrees and `pg_config --pkglibdir` carries a stale baked build path,
-# so derive it from the binary location — that's what the loader strips.
+# Resolve the REAL pkglib the running postgres uses: the install root is a
+# symlink in worktrees and `pg_config --pkglibdir` carries a stale baked build
+# path, so derive it from the binary location — that's what the loader strips.
 PKGLIB="$(readlink -f "$PGINST/lib/postgresql")"
 echo ">>> building regression support modules (regress, refint, autoinc) -> $PKGLIB"
 tmod="$(mktemp -d)"
@@ -213,9 +220,8 @@ export YB_HOST="${YB_HOST:-127.0.0.1}"
 export YB_PORT="${YB_PORT:-5433}"
 export YB_DBNAME="${YB_DBNAME:-yb_storage_pgregress_${RUN_ID}}"
 export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/pg_regress_${RUN_ID}}"
-# The cluster needs to find the Postgres install at runtime; the compute
-# (and pg_regress's psql) need its libs.
-export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
+# POSTGRES_DISTRIB_DIR (how the cluster finds the install at runtime) is exported
+# by pg_tree.sh. The compute and pg_regress's psql need its libs.
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"
 
 # Low end of the OS ephemeral (dynamic) port range; mirrors the Rust harness's

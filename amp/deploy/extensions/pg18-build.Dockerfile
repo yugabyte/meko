@@ -111,5 +111,5 @@ RUN set -e \
 
 # The one path extension builds key off. Absolute so the generic
 # extension.Dockerfile needs no knowledge of the layout.
-ENV PG_CONFIG=/home/nonroot/pg_install/v18/bin/pg_config
-ENV PATH=/home/nonroot/pg_install/v18/bin:$PATH
+ENV PG_CONFIG=/home/nonroot/pg_install-release/v18/bin/pg_config
+ENV PATH=/home/nonroot/pg_install-release/v18/bin:$PATH

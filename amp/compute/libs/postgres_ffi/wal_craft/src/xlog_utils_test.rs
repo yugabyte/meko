@@ -35,7 +35,7 @@ fn test_end_of_wal<C: crate::Crafter>(test_name: &str) {
         .join("..");
     let cfg = Conf {
         pg_version,
-        pg_distrib_dir: top_path.join("pg_install"),
+        pg_distrib_dir: top_path.join("pg_install-debug"),
         datadir: top_path.join(format!("test_output/{test_name}-{PG_MAJORVERSION}")),
     };
     if cfg.datadir.exists() {

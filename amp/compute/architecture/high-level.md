@@ -120,7 +120,7 @@ A yb-amp install is:
 
 | Component | Role | Process binary |
 |---|---|---|
-| Compute | User-facing Postgres backend. Speaks the Postgres wire protocol to clients. | `pg_install/v18/bin/postgres` (with smgr patches) |
+| Compute | User-facing Postgres backend. Speaks the Postgres wire protocol to clients. | `pg_install-debug/v18/bin/postgres` (with smgr patches) |
 | `compute_ctl` | Supervisor for the compute: applies the spec, starts/stops PG, runs catalog migrations. | `target/debug/compute-ctl` |
 | Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `amp_storage.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/safekeeper` |
 | Pageserver | Materializes pages from WAL into `amp_storage.*` rows and serves them to the compute on demand. | `target/debug/pageserver` |

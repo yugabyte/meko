@@ -35,12 +35,40 @@ Default builds are debug; `--release` builds and runs the release binaries.
 
 `run.sh` also rebuilds the **`yb_amp` Postgres extension**
 (`make yb-amp-pg-ext-v18`) when its C sources changed — `cargo` does not build
-it, and the compute loads `pg_install/v18/lib/postgresql/yb_amp.so` at runtime,
+it, and the compute loads `<install>/lib/postgresql/yb_amp.so` at runtime,
 so a stale `.so` runs an old walproposer/compute against fresh cluster binaries
 (a wire/ABI skew that looks like a hang or segfault). Staleness is tracked via
-`build/.yb_amp_ext.stamp`; because the PGXS build has no header-dependency
-tracking, any C change forces a **clean** extension rebuild (~1–2 min), while
-Rust-only edits skip it entirely.
+`.yb_amp_ext.stamp` in the build dir; because the PGXS build has no
+header-dependency tracking, any C change forces a **clean** extension rebuild
+(~1–2 min), while Rust-only edits skip it entirely.
+
+### Which PostgreSQL the suites run
+
+By default `run.sh` and `pg_regress.sh` run against an **assertion-enabled**
+Postgres (`--enable-cassert`): these suites exist to catch corruption and lost-write bugs,
+and an `Assert` firing on the spot is the point — a release build runs the same
+tests blind. It is the default `BUILD_TYPE=debug` tree, `pg_install-debug/v18`
+(build artifacts under `build-debug/`), selected in the [`Makefile`](../../../Makefile) and
+resolved by [`pg_tree.sh`](pg_tree.sh) — the same tree a plain `./build.sh`
+produces, so the two share one build. The release Postgres the shipped bundle is
+staged from lives in `pg_install-release/`, so neither can clobber the other.
+Every run prints which one it got, and refuses to start on a release build.
+
+The assertions are compiled in at `-O2`: the optimisation level is independent
+of `--enable-cassert`, and `-O0` cost 1.5–2.2x for nothing.
+
+`--release` selects the release tree instead, meaning what it means to
+`build.sh` — release cluster binaries, release extension, release PostgreSQL with
+assertions off. Every run prints which one it got. CI runs the default on every
+push, so that is where the assertions are guaranteed.
+
+Note what that costs the first time: the first `--release` builds a **whole
+second PostgreSQL** into `pg_install-release/` (~5 min, and a second tree on
+disk) before the run starts. It is paid once and the tree is reused after.
+
+`build.sh --pg-only [--release]` is the only thing that builds either tree: the
+suites pass `PG_INSTALL_CACHED=1` to their own `make` so it cannot configure
+Postgres behind that call.
 
 The **`unit`** selection (part of the default and of `all`) runs the
 live-DB tests via `cargo test`, pointed at this run's cluster: the
@@ -141,8 +169,8 @@ Nothing central to edit — tests are auto-discovered.
   `.out` golden. A workload with *intentional* errors should `\set
   ON_ERROR_STOP 0` in its `.sql` (the runner otherwise aborts on the first
   error); see `fast/event-triggers.sql`. The `psql` used is the one built from
-  yb-amp's own Postgres (`pg_install/v18/bin/psql`), not whatever is on
-  `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
+  yb-amp's own Postgres (`$POSTGRES_DISTRIB_DIR/v18/bin/psql`), not whatever is
+  on `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
   version. Generate/refresh the golden with
   `INTEGRATION_REGEN_EXPECTED=1 test/integration/compute/run.sh <name>` and review the diff
   before committing. `.sql` workloads are discovered at runtime — no
@@ -192,14 +220,12 @@ defines for this suite (it lets `CREATE TABLESPACE` through, which
 
 In CI it runs as a second step of the integration job (`amp-pr-build.yml`), right
 after `run.sh`, as `pg_regress.sh --no-build`: it builds nothing and runs on what
-that step produced, taking the profile from whatever is in `target/`. Building
-there would undo `run.sh`'s work rather than merely duplicate it — `build.sh`
-requires a release Postgres and `run.sh`'s extension make leaves a cassert one, so
-each wipes the other's `pg_install`.
+that step produced, taking the profile from whatever is in `target/`.
 
-> Defaults to a **release** build — a debug build of the full suite is
-> painfully slow. Honours `YB_HOST`/`YB_PORT`, `INTEGRATION_PORT_BASE`,
-> `YB_AMP_REPO_DIR`, `YB_DBNAME`.
+> Defaults to **debug**, matching `run.sh`, so running both does not recompile
+> the workspace twice. `--release` is faster over 230 tests but builds release
+> throughout, PostgreSQL included, so assertions are off. Honours
+> `YB_HOST`/`YB_PORT`, `INTEGRATION_PORT_BASE`, `YB_AMP_REPO_DIR`, `YB_DBNAME`.
 
 ## Local extension test (`extensions.sh`)
 
@@ -214,7 +240,6 @@ GUCs — set here via `--pg-setting`:
 test/integration/compute/extensions.sh                 # pgvector smoke, release
 test/integration/compute/extensions.sh --ext pgvector  # explicit
 test/integration/compute/extensions.sh --regress       # run pgvector's upstream suite
-test/integration/compute/extensions.sh --debug         # debug cluster build
 test/integration/compute/extensions.sh --registry my   # override image registry
 test/integration/compute/extensions.sh --cache         # layer-cache the base build
 test/integration/compute/extensions.sh --keep          # leave the cluster up
@@ -262,7 +287,7 @@ time, upstream goldens untouched), so a clean tree is a genuine green. An
 extension with no `regress:` block errors under `--regress`.
 
 > **Requires docker** + `python3`/PyYAML, a YugabyteDB (`YB_HOST`/`YB_PORT`,
-> default `127.0.0.1:5433`), and a built Postgres (`pg_install/v18` — the script
+> default `127.0.0.1:5433`), and a built Postgres (`pg_install-debug/v18` — the script
 > runs `./build.sh` if it is missing). Heavy: the first run builds the
 > ABI-anchor PG18 base image in docker (several minutes). Primarily a
 > manual/local driver; it is not part of the per-PR CI, but the opt-in

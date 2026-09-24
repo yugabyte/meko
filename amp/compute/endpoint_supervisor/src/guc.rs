@@ -305,7 +305,7 @@ mod tests {
     }
 
     /// Needs the Postgres the compute runs. Absent in the plain unit-test job,
-    /// present wherever `pg_install` has been built — which is the job that runs
+    /// present wherever the debug tree has been built — which is the job that runs
     /// against a real cluster, and any developer's tree.
     mod live {
         use super::*;
@@ -315,7 +315,7 @@ mod tests {
                 Ok(v) => v.into(),
                 // From this file to the workspace's built Postgres.
                 Err(_) => {
-                    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install/v18/bin")
+                    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install-debug/v18/bin")
                 }
             };
             if dir.join("postgres").exists() {

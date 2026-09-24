@@ -51,6 +51,10 @@ COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
 COPY --chown=nonroot scripts/ninstall.sh scripts/ninstall.sh
 
+# BUILD_TYPE picks the cargo profile AND the PostgreSQL build. Stated rather
+# than left to the Makefile's default (debug, assertions on), because an image
+# whose build type comes from a default it never named is exactly how #1019
+# shipped a cassert build.
 ENV BUILD_TYPE=release
 RUN set -e \
     && mold -run make -j $(nproc) -s postgres
@@ -105,7 +109,7 @@ RUN set -e \
 
 # Perform the main build. We reuse the Postgres build artifacts from the intermediate 'pg-build'
 # layer, and the cargo dependencies built in the previous step.
-COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install/ pg_install
+COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install-release/ pg_install-release
 COPY --chown=nonroot . .
 COPY --chown=nonroot --from=plan     /home/nonroot/Cargo.lock               Cargo.lock
 
@@ -113,19 +117,22 @@ COPY --chown=nonroot --from=plan     /home/nonroot/Cargo.lock               Carg
 #
 # `yb-amp-pg-ext` depends on `postgres-install-v18`, and the configure stamp that
 # target keys on lives in BUILD_DIR — which is NOT copied from `pg-build`, only
-# `pg_install` is. Left to itself, make therefore re-configures and reinstalls
-# all of Postgres over the binaries that were copied, at whatever BUILD_TYPE
-# happens to be set: unset means the Makefile's `?= debug`, so a
-# `--enable-cassert -O0` build is what the image shipped. PG_INSTALL_CACHED stubs
+# `pg_install-release` is. Left to itself, make therefore re-configures and reinstalls
+# all of Postgres over the binaries that were copied. PG_INSTALL_CACHED stubs
 # those targets, so the extension builds against the copied install's pg_config
 # and nothing overwrites it — which is what the "reuse the Postgres build
 # artifacts" comment above has always claimed, and makes a source-only change
 # stop paying a full Postgres compile in a stage keyed on `COPY . .`.
+# This stage runs cargo directly, not through build.sh, so postgres_ffi's build
+# script gets no POSTGRES_INSTALL_DIR from make and would fall back to
+# <root>/pg_install-debug — the debug tree, which this image never builds.
+ENV POSTGRES_INSTALL_DIR=/home/nonroot/pg_install-release
 ENV PG_INSTALL_CACHED=1
-# Still needed, and not for Postgres: BUILD_TYPE also picks CARGO_PROFILE, and
-# `yb-amp-pg-ext` drives a cargo build of libcommunicator.a that is linked into
-# the yb_amp extension this image ships. Unset, that library is a `--profile=dev`
-# build.
+# BUILD_TYPE picks POSTGRES_INSTALL_DIR, so it has to agree with the stage the
+# install was copied from — the extension builds against that tree's pg_config.
+# It also picks CARGO_PROFILE, and `yb-amp-pg-ext` drives a cargo build of
+# libcommunicator.a that is linked into the yb_amp extension this image ships;
+# unset, that library is a `--profile=dev` build.
 ENV BUILD_TYPE=release
 
 # RUSTFLAGS is exported rather than prefixed onto the cargo command: the `make`
@@ -191,7 +198,7 @@ COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/reset-consi
 # varies, e.g. /usr/lib vs /usr/lib64).
 COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so /opt/yb_thin_client/lib/libyb_thin_client.so
 ENV LD_LIBRARY_PATH=/opt/yb_thin_client/lib
-COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
+COPY --from=build /home/nonroot/pg_install-release/v18 /usr/local/v18/
 
 # Deprecated: Old deployment scripts use this tarball which contains all the Postgres binaries.
 # That's obsolete, since all the same files are also present under /usr/local/v*. But to keep the
