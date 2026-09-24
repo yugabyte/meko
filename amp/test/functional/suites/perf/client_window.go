@@ -755,11 +755,14 @@ func (r *clientWindowRun) gate(s *core.StepHandle) error {
 	}
 	var gated, info []core.Datapoint
 	secFloor := r.params.StatementTimeout.Seconds()
+	// One second of probes: at 10 tps a single extra failed probe is +14% on a
+	// median of 7, far inside what the run-to-run count already varies by.
+	errFloor := float64(r.params.RateTPS)
 	for _, res := range r.results {
 		gated = append(gated,
 			core.Datapoint{Name: cwPrefix + res.Op + ".error_seconds", Value: res.ErrorSeconds, Unit: "s", Direction: core.LowerIsBetter, MinDelta: secFloor},
 			core.Datapoint{Name: cwPrefix + res.Op + ".first_success_after_seconds", Value: res.FirstSuccessAfter, Unit: "s", Direction: core.LowerIsBetter, MinDelta: secFloor},
-			core.Datapoint{Name: cwPrefix + res.Op + ".errors_total", Value: float64(res.Errors), Unit: "count", Direction: core.LowerIsBetter},
+			core.Datapoint{Name: cwPrefix + res.Op + ".errors_total", Value: float64(res.Errors), Unit: "count", Direction: core.LowerIsBetter, MinDelta: errFloor},
 		)
 		info = append(info,
 			core.Datapoint{Name: cwPrefix + res.Op + ".transport_errors", Value: float64(res.Transport), Unit: "count", Direction: core.LowerIsBetter},
