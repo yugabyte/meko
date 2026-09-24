@@ -4,17 +4,40 @@
 //! skip the block that would apply the spec's `encrypted_password`
 //! (`compute_tools/src/compute.rs`). Loopback still works through the `trust`
 //! rules in `pg_hba.conf`, but any client arriving from anywhere else — a
-//! published port, a Service, a port-forward — matches `host all all all md5`
-//! and finds no stored password. So the password is set here, over the loopback
-//! trust connection, once Postgres is answering queries.
+//! published port, a Service, a port-forward — matches
+//! `host all all all scram-sha-256` and finds no stored password. So the
+//! password is set here, over the loopback trust connection, once Postgres is
+//! answering queries.
+//!
+//! **The password is bootstrap state, not desired state.** Two rules, and both
+//! exist because this runs on EVERY boot while the catalog it writes to survives
+//! the pod:
+//!
+//! 1. No `COMPUTE_PASSWORD` means leave the role alone. The control plane sends
+//!    the verifier on the create and on nothing else, so a redeploy, a fleet
+//!    roll and a `read_only` endpoint all arrive here with it unset — and the
+//!    built-in default this used to fall back to would have re-passworded the
+//!    role to a well-known string on every one of them.
+//! 2. A role that already has a password keeps it. Otherwise a restart would
+//!    revert a password its owner set themselves with `ALTER ROLE`, which they
+//!    are superuser enough to do and have no reason to expect us to undo.
+//!
+//! Rule 2 has a known gap: a branch FORK inherits its parent's catalog, so the
+//! first endpoint on a fork finds a password already there and declines to apply
+//! the one its caller supplied. The fork answers to the parent's password and
+//! the caller's does not work. It is logged loudly rather than silently skipped
+//! — yugabyte/meko#1461 tracks making "has this endpoint applied its verifier?"
+//! answerable, which the catalog alone cannot answer.
 //!
 //! The log line this emits on success is a **contract**, not a nicety: the
 //! controller's Docker deployer tails the container's logs for
 //! [`READY_MARKER`] and treats it as the endpoint's readiness signal
 //! (`controller/internal/deploy/docker.go`). It waits on the password rather than
-//! on a TCP accept precisely because clients authenticate with md5. Change the
-//! string on one side and the other silently times out and tears the endpoint
-//! down.
+//! on a TCP accept precisely because clients authenticate by password. Change
+//! the string on one side and the other silently times out and tears the
+//! endpoint down. Every path that finishes the decision logs it — including the
+//! two that decide to change nothing, because "settled" is what the deployer is
+//! waiting for, not "wrote to pg_authid".
 
 use std::time::Duration;
 
@@ -48,42 +71,88 @@ fn alter_role_sql(password: &str) -> String {
     )
 }
 
-/// Sets the password, retrying until Postgres answers. Failure is a warning: the
-/// endpoint is otherwise up, and refusing to supervise it because remote auth
-/// could not be configured would turn a degraded endpoint into no endpoint.
+/// Does `cloud_admin` already have a password? `t`/`f` from a superuser-only
+/// catalog we can read because this connection IS the superuser, over loopback.
+const HAS_PASSWORD_SQL: &str =
+    "SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = 'cloud_admin'";
+
+/// Runs one statement through `psql`, returning its trimmed stdout.
+fn psql(psql_bin: &Utf8Path, port: u16, sql: &str) -> Result<String, String> {
+    let out = std::process::Command::new(psql_bin)
+        .args([
+            "-h",
+            crate::boot::LISTEN_HOST,
+            "-p",
+            &port.to_string(),
+            "-U",
+            "cloud_admin",
+            "-d",
+            "postgres",
+            // Tuples-only + unaligned, so a SELECT prints just `t` or `f`.
+            "-tA",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "--no-psqlrc",
+            "-c",
+            sql,
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Decides what the role's password should be and applies it if anything is to
+/// be done, retrying until Postgres answers. Failure is a warning: the endpoint
+/// is otherwise up, and refusing to supervise it because remote auth could not
+/// be configured would turn a degraded endpoint into no endpoint.
 ///
 /// Blocking, so callers that must keep supervising should run it on its own
 /// thread — see [`spawn`].
-pub fn set_cloud_admin_password(psql: &Utf8Path, port: u16, password: &str) {
-    let sql = alter_role_sql(password);
+pub fn configure_remote_auth(psql_bin: &Utf8Path, port: u16, password: Option<&str>) {
     let mut last = String::new();
     for attempt in 1..=ATTEMPTS {
-        let out = std::process::Command::new(psql)
-            .args([
-                "-h",
-                crate::boot::LISTEN_HOST,
-                "-p",
-                &port.to_string(),
-                "-U",
-                "cloud_admin",
-                "-d",
-                "postgres",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "--no-psqlrc",
-                "-c",
-                &sql,
-            ])
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {
-                // The controller is waiting for exactly this. Logged as a bare
-                // message so the line contains the marker verbatim.
-                tracing::info!("{READY_MARKER}");
-                return;
+        // The same query doubles as the wait for Postgres to answer queries at
+        // all, so nothing decides anything against a compute that is still
+        // restoring its basebackup.
+        match psql(psql_bin, port, HAS_PASSWORD_SQL) {
+            Ok(answer) => {
+                let has_password = answer == "t";
+                match (password, has_password) {
+                    (None, _) => {
+                        // Rule 1. Not a warning: this is every redeploy and every
+                        // read_only endpoint, not an anomaly.
+                        tracing::info!(
+                            "{READY_MARKER}: skipped, COMPUTE_PASSWORD is unset so the \
+                             cloud_admin password is left as the catalog has it"
+                        );
+                        return;
+                    }
+                    (Some(_), true) => {
+                        // Rule 2. Loud, because one shape of this is a fork whose
+                        // caller supplied a password that will not work.
+                        tracing::warn!(
+                            "{READY_MARKER}: skipped, cloud_admin already has a password \
+                             and this endpoint's own password was NOT applied. Expected on \
+                             a restart; on the FIRST endpoint of a forked branch it means \
+                             clients must use the parent branch's password (yugabyte/meko#1461)"
+                        );
+                        return;
+                    }
+                    (Some(pw), false) => match psql(psql_bin, port, &alter_role_sql(pw)) {
+                        Ok(_) => {
+                            // The controller is waiting for exactly this.
+                            tracing::info!("{READY_MARKER}");
+                            return;
+                        }
+                        Err(e) => last = e,
+                    },
+                }
             }
-            Ok(o) => last = String::from_utf8_lossy(&o.stderr).trim().to_string(),
-            Err(e) => last = e.to_string(),
+            Err(e) => last = e,
         }
         if attempt < ATTEMPTS {
             std::thread::sleep(INTERVAL);
@@ -95,14 +164,14 @@ pub fn set_cloud_admin_password(psql: &Utf8Path, port: u16, password: &str) {
     );
 }
 
-/// Runs [`set_cloud_admin_password`] on its own thread.
+/// Runs [`configure_remote_auth`] on its own thread.
 ///
 /// Detached on purpose: it waits on Postgres, and blocking the caller would delay
 /// the monitor loop — so a sibling that crashed meanwhile would not be restarted
 /// until this finished.
-pub fn spawn(psql: &Utf8Path, port: u16, password: &str) {
-    let (psql, password) = (psql.to_owned(), password.to_owned());
-    std::thread::spawn(move || set_cloud_admin_password(&psql, port, &password));
+pub fn spawn(psql_bin: &Utf8Path, port: u16, password: Option<&str>) {
+    let (psql_bin, password) = (psql_bin.to_owned(), password.map(str::to_owned));
+    std::thread::spawn(move || configure_remote_auth(&psql_bin, port, password.as_deref()));
 }
 
 #[cfg(test)]
@@ -144,6 +213,21 @@ mod tests {
             body.matches('\'').count() % 2,
             0,
             "unbalanced quotes: {body}"
+        );
+    }
+
+    /// A SCRAM verifier is what the control plane now sends, and it must survive
+    /// the escaping untouched: Postgres stores a well-formed one verbatim, and
+    /// anything altered on the way would be hashed AS the password instead.
+    #[test]
+    fn a_scram_verifier_passes_through_unchanged() {
+        let verifier = "SCRAM-SHA-256$4096:W22ZaJ0SNY7soEsUEjb6gQ==$\
+                        WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=:\
+                        wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=";
+        assert_eq!(quote_literal(verifier), verifier);
+        assert_eq!(
+            alter_role_sql(verifier),
+            format!("ALTER ROLE cloud_admin WITH PASSWORD '{verifier}'")
         );
     }
 

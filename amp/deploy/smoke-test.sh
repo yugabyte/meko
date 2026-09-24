@@ -344,6 +344,37 @@ else
   bad "shipped Postgres has assertions enabled — an --enable-cassert build reached the image (debug_assertions: $(echo "$asrt"|tail -1))"
 fi
 
+# (e) the password the create supplied is stored as a SCRAM verifier. This is the
+#     one property no other assertion here would catch: Postgres stores a
+#     well-formed verifier verbatim but silently hashes a MALFORMED one AS the
+#     password, so a broken verifier does not fail the deploy — it produces an
+#     endpoint whose password is the verifier string sitting in the release
+#     Secret, and whose real password authenticates nobody. `md5…` here means the
+#     control plane regressed to md5, which the `scram-sha-256` hba line refuses.
+#     13 characters, not 14: the verifier's next character is `$`, which would
+#     have to be escaped in the grep pattern below rather than anchoring it.
+rolpw=$(psql_pod "$POD" 127.0.0.1 55433 \
+  <<<"SELECT left(rolpassword, 13) FROM pg_authid WHERE rolname = 'cloud_admin';" 2>&1)
+echo "$rolpw" | grep -q '^SCRAM-SHA-256$' \
+  && ok "cloud_admin's stored verifier is SCRAM-SHA-256" \
+  || bad "cloud_admin's verifier is not SCRAM (got: $(echo "$rolpw"|tail -1)) — a malformed verifier is stored as the password itself"
+
+# (f) and it actually authenticates: connect over TCP as a remote client would,
+#     with the plaintext the create was given. Loopback is `trust`, so PGPASSWORD
+#     alone proves nothing — `require_auth=scram-sha-256` makes libpq refuse to
+#     authenticate any other way, which is what pins the negotiated method rather
+#     than the hba keyword (the server log prints `md5` for both).
+#     The pod dials its OWN pod IP rather than 127.0.0.1, which is what makes the
+#     connection match `host all all all scram-sha-256` instead of the loopback
+#     `trust` lines — and avoids the cross-pod psql that (b) explains is flaky.
+POD_IP=$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.status.podIP}' 2>/dev/null)
+authout=$(kubectl -n "$NS" exec -i "$POD" -- env PGPASSWORD="$EP_PASSWORD" \
+  "$PSQL_BIN" "host=$POD_IP port=55433 user=cloud_admin dbname=postgres require_auth=scram-sha-256" \
+  -tA -c 'SELECT 1;' 2>&1) || true
+echo "$authout" | grep -q '^1$' \
+  && ok "remote client authenticates with SCRAM (require_auth=scram-sha-256)" \
+  || bad "SCRAM authentication failed for cloud_admin: $(echo "$authout"|tail -1)"
+
 hdr "createBranch (fork default) -> task succeeded"
 # The default fork-point resolution reads the parent writer's safekeeper flush_lsn;
 # that read can transiently 400 in the first seconds after the writer becomes Ready

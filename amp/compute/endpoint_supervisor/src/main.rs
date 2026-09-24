@@ -148,7 +148,11 @@ pub struct Env {
     yb_sslkey: Option<String>,
     yb_password_env: Option<String>,
     endpoint_id: Option<String>,
-    compute_password: String,
+    /// The verifier for the compute default user's password, as the control
+    /// plane computed it. `None` — unset or empty — means the role's password is
+    /// left exactly as the catalog has it; see [`remote_auth`] for why that is
+    /// not the same as a default.
+    compute_password: Option<String>,
     /// Load the previous LFC state on compute startup.
     autoprewarm: bool,
     /// Save the LFC state this often. `None` means never.
@@ -328,7 +332,7 @@ impl Env {
             yb_sslkey: env_opt("YB_SSLKEY"),
             yb_password_env: env_opt("YB_PASSWORD_ENV"),
             endpoint_id,
-            compute_password: env_or("COMPUTE_PASSWORD", "cloud_admin"),
+            compute_password: env_opt("COMPUTE_PASSWORD"),
             autoprewarm: env_bool("AUTOPREWARM"),
             offload_lfc_interval_seconds: env_u64("OFFLOAD_LFC_INTERVAL_SECONDS")?,
             shared_preload_libraries: env_or(
@@ -736,7 +740,7 @@ fn serve_one_lease(
             remote_auth::spawn(
                 &l.pg_bin().join("psql"),
                 l.compute_port,
-                &env.compute_password,
+                env.compute_password.as_deref(),
             );
         }
 
@@ -1008,10 +1012,6 @@ pub fn render_config(
             safekeeper_addr: &l.safekeeper_compute_addr(),
             pageserver_connstring: &l.pageserver_connstring(),
             shared_preload_libraries: &env.shared_preload_libraries,
-            cloud_admin_password_md5: &spec::md5_role_password(
-                &env.compute_password,
-                "cloud_admin",
-            ),
             endpoint_id: env.endpoint_id.as_deref(),
             yb_storage_conn: env.yb_conn_typed_json(),
             autoprewarm: env.autoprewarm,
@@ -1328,7 +1328,7 @@ mod tests {
             yb_sslkey: None,
             yb_password_env: None,
             endpoint_id: None,
-            compute_password: "cloud_admin".into(),
+            compute_password: Some("cloud_admin".into()),
             autoprewarm: false,
             offload_lfc_interval_seconds: None,
             shared_preload_libraries: "yb_amp".into(),

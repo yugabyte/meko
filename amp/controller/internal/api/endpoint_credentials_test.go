@@ -29,9 +29,25 @@ func seedBranchForCreds(t *testing.T, client *api.ClientWithResponses, backend *
 
 func strptr(s string) *string { return &s }
 
+// isSCRAMVerifier reports whether s has the shape Postgres stores verbatim.
+// Deliberately not a recomputation: SCRAM salts randomly, so no caller can
+// predict the exact string, and the shape is the part this package owns. The
+// full parse lives in core's own tests.
+func isSCRAMVerifier(s string) bool {
+	rest, ok := strings.CutPrefix(s, "SCRAM-SHA-256$")
+	if !ok {
+		return false
+	}
+	params, keys, ok := strings.Cut(rest, "$")
+	if !ok {
+		return false
+	}
+	return strings.Contains(params, ":") && strings.Contains(keys, ":")
+}
+
 // The writer comes up with the caller's password on the compute's default user.
 // What reaches the deployer is the verifier for exactly that password — computed
-// over the right user, since an md5 verifier is salted with it.
+// over the right user.
 func TestCreateEndpointUsesTheCallersPassword(t *testing.T) {
 	dep := &fakeDeployer{}
 	prov := api.Provisioning{Deployer: dep}
@@ -57,11 +73,16 @@ func TestCreateEndpointUsesTheCallersPassword(t *testing.T) {
 		t.Fatalf("deployer saw %d specs, want 1", len(dep.created))
 	}
 	spec := dep.created[0]
-	if want := core.MD5PasswordVerifier(testPassword, core.ComputeDefaultUser); spec.PasswordMD5 != want {
-		t.Errorf("spec.PasswordMD5 = %q, want %q (the verifier for the password sent)", spec.PasswordMD5, want)
+	// The verifier cannot be recomputed and compared: SCRAM salts randomly, so
+	// deriving one here would produce a different (equally valid) string. What is
+	// checked is that a verifier of the right shape was sent and that the
+	// plaintext did not travel. That it authenticates the password is proved
+	// against a live Postgres, not here.
+	if !isSCRAMVerifier(spec.PasswordVerifier) {
+		t.Errorf("spec.PasswordVerifier = %q, want a SCRAM-SHA-256 verifier", spec.PasswordVerifier)
 	}
-	if strings.Contains(spec.PasswordMD5, testPassword) {
-		t.Errorf("the plaintext appears in what was sent to the deployer: %q", spec.PasswordMD5)
+	if strings.Contains(spec.PasswordVerifier, testPassword) {
+		t.Errorf("the plaintext appears in what was sent to the deployer: %q", spec.PasswordVerifier)
 	}
 
 	// Nothing reports the password back — not the endpoint, not the task.
@@ -180,8 +201,8 @@ func TestCreateClusterCredentialsTheWriter(t *testing.T) {
 	if len(dep.created) != 1 {
 		t.Fatalf("deployer saw %d specs, want 1 (the writer)", len(dep.created))
 	}
-	if got, want := dep.created[0].PasswordMD5, core.MD5PasswordVerifier(testPassword, core.ComputeDefaultUser); got != want {
-		t.Errorf("writer spec.PasswordMD5 = %q, want %q", got, want)
+	if got := dep.created[0].PasswordVerifier; !isSCRAMVerifier(got) {
+		t.Errorf("writer spec.PasswordVerifier = %q, want a SCRAM-SHA-256 verifier", got)
 	}
 
 	// Without a writer there is no endpoint to credential, so the request is
@@ -225,8 +246,8 @@ func TestRedeployDoesNotResetThePassword(t *testing.T) {
 	if len(dep.created) != 2 {
 		t.Fatalf("deployer saw %d specs, want 2 (the create and the upgrade's redeploy)", len(dep.created))
 	}
-	if pw := dep.created[1].PasswordMD5; pw != "" {
-		t.Errorf("redeploy spec.PasswordMD5 = %q, want empty: nothing stores the verifier, so a redeploy could only re-password with a wrong one", pw)
+	if pw := dep.created[1].PasswordVerifier; pw != "" {
+		t.Errorf("redeploy spec.PasswordVerifier = %q, want empty: nothing stores the verifier, so a redeploy could only re-password with a wrong one", pw)
 	}
 }
 
@@ -264,8 +285,8 @@ func TestReadOnlyEndpointSetsNoPassword(t *testing.T) {
 	if len(dep.created) != 2 {
 		t.Fatalf("deployer saw %d specs, want 2", len(dep.created))
 	}
-	if pw := dep.created[1].PasswordMD5; pw != "" {
-		t.Errorf("read_only spec.PasswordMD5 = %q, want empty: it would rotate the writer's credential", pw)
+	if pw := dep.created[1].PasswordVerifier; pw != "" {
+		t.Errorf("read_only spec.PasswordVerifier = %q, want empty: it would rotate the writer's credential", pw)
 	}
 
 	// And asking for one is refused rather than silently dropped.
@@ -285,7 +306,7 @@ func TestReadOnlyEndpointSetsNoPassword(t *testing.T) {
 func TestPreCredentialsEndpointDeploysUnchanged(t *testing.T) {
 	spec := deploy.EndpointSpecFrom(core.EndpointDeploy{ID: uuid.New(), BranchID: uuid.New(), PgVersion: 18},
 		deploy.YBConn{}, "", nil)
-	if spec.PasswordMD5 != "" {
-		t.Errorf("spec.PasswordMD5 = %q, want empty", spec.PasswordMD5)
+	if spec.PasswordVerifier != "" {
+		t.Errorf("spec.PasswordVerifier = %q, want empty", spec.PasswordVerifier)
 	}
 }

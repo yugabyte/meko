@@ -637,11 +637,18 @@ type CreateEndpointRequest struct {
 	// Password Password for the compute's default Postgres user (`cloud_admin`, the
 	// superuser `initdb` created) — who clients connect to `address` as.
 	// **Required** when creating a `read_write` endpoint; the controller
-	// mints none. What it keeps is the verifier Postgres itself stores,
-	// never the plaintext, so a password it generated could only be
-	// returned on this one response, and a caller that did not read it
-	// would own an endpoint nobody can log into. Requiring it means the
-	// credential only ever exists where its owner already has it.
+	// mints none. What it keeps is the verifier Postgres itself stores
+	// (SCRAM-SHA-256), never the plaintext, so a password it generated
+	// could only be returned on this one response, and a caller that did
+	// not read it would own an endpoint nobody can log into. Requiring it
+	// means the credential only ever exists where its owner already has it.
+	//
+	// Printable ASCII only (U+0020–U+007E). SCRAM normalizes a password
+	// with SASLprep before hashing it and the client does the same before
+	// authenticating; over this range that normalization changes nothing,
+	// so a verifier computed here and a proof computed by the client
+	// agree. A password outside it is a 400 rather than an endpoint whose
+	// password silently authenticates nobody.
 	//
 	// Not marked `required` in this schema because a `read_only` endpoint
 	// must NOT carry one: the user lives in the branch's catalog, which all

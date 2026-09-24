@@ -93,14 +93,17 @@ endpoint:
   # arriving from outside the pod can authenticate. Rendered into the release's
   # Secret and delivered as COMPUTE_PASSWORD.
   #
-  # Given as the verifier `pg_authid` stores, not the plaintext — `md5` followed
-  # by md5(password + user). Postgres stores a value of that shape verbatim
-  # instead of hashing it again, so the control plane never has to hand the pod
-  # a password it could read back. A plaintext value also works (Postgres hashes
-  # it), which is what the supervisor's own default falls back to.
+  # Given as the verifier `pg_authid` stores, not the plaintext:
+  # `SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`. Postgres stores
+  # a value of that shape verbatim instead of hashing it again, so the control
+  # plane never has to hand the pod a password it could read back. A plaintext
+  # value also works — Postgres hashes it, to SCRAM, per the compute spec's
+  # `password_encryption`.
   #
-  # Empty leaves the supervisor's default in place, which is the well-known
-  # `cloud_admin` — what every endpoint deployed before this had.
+  # Empty means the supervisor leaves the role's password exactly as the
+  # branch's catalog already has it. It does NOT fall back to a default: the
+  # control plane sends this on the create and on nothing else, so a redeploy
+  # and a fleet roll both arrive with it empty and must change nothing.
   password: ""
   # -- Postgres shared_preload_libraries for the compute. Extensions with
   # `preload: true` below are appended to this automatically.

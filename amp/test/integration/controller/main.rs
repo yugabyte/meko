@@ -44,6 +44,14 @@ const TASK_TIMEOUT: Duration = Duration::from_secs(120);
 /// need headroom beyond the metadata-task budget).
 const ENDPOINT_TASK_TIMEOUT: Duration = Duration::from_secs(240);
 
+/// The password this suite creates every endpoint with, and connects as.
+///
+/// It has to send one: `createEndpoint` requires a password on a `read_write`
+/// endpoint, and the supervisor sets no default, so an endpoint created without
+/// one has a `cloud_admin` that cannot authenticate at all. In the clear on
+/// purpose — these endpoints are torn down with the run.
+const ENDPOINT_PASSWORD: &str = "integration-cloud-admin-pw";
+
 /// Print a step banner. (The compute suite's `step` also tees to a run log;
 /// this suite just prints to stdout.)
 fn step(msg: &str) {
@@ -405,7 +413,7 @@ impl AmpClient {
         self.run_task(
             reqwest::Method::POST,
             &format!("/storage-pools/{pool}/clusters/{cluster}/branches/{branch}/endpoints"),
-            Some(json!({ "role": "read_write" })),
+            Some(json!({ "role": "read_write", "password": ENDPOINT_PASSWORD })),
             ENDPOINT_TASK_TIMEOUT,
         )
         .await?;
@@ -543,14 +551,14 @@ struct BranchEndpoint {
 }
 
 impl BranchEndpoint {
-    /// Build from the `host:port` the controller returned, with the endpoint's
-    /// `cloud_admin` password (set by the endpoint supervisor).
+    /// Build from the `host:port` the controller returned, with the password this
+    /// suite created the endpoint with ([`ENDPOINT_PASSWORD`]).
     fn from_address(label: &'static str, addr: &str, timeline_hex: String) -> Result<Self> {
         let (host, port) = addr
             .rsplit_once(':')
             .with_context(|| format!("endpoint address {addr:?} is not host:port"))?;
         let conn = format!(
-            "host={host} port={port} user=cloud_admin password=cloud_admin dbname=postgres"
+            "host={host} port={port} user=cloud_admin password={ENDPOINT_PASSWORD} dbname=postgres"
         );
         Ok(Self {
             label,

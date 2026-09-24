@@ -30,15 +30,22 @@ type CreateEndpointArgs struct {
 	// Name is the caller's handle for the endpoint, unique among its branch's
 	// endpoints. Empty means unnamed.
 	Name string `json:"name,omitempty"`
-	// PasswordMD5 is the password for the compute's default user, in `pg_authid`'s
-	// form (see core.MD5PasswordVerifier). Empty leaves the supervisor's default,
-	// which is what a pre-credentials endpoint's replay renders.
+	// PasswordVerifier is the password for the compute's default user, in
+	// `pg_authid`'s form (see core.SCRAMPasswordVerifier). Empty means the
+	// supervisor leaves the role's password alone — a redeploy, a read_only
+	// endpoint and a pre-credentials endpoint's replay all render it empty.
+	//
+	// The JSON key changed with the algorithm, so a create task written by an
+	// older controller and replayed by this one decodes it as empty. That is a
+	// fresh endpoint whose cloud_admin has no password (loopback only) rather
+	// than one carrying a wrong or default credential — see remote_auth's
+	// "unset means leave it alone".
 	//
 	// The verifier is the one credential-shaped thing the control plane holds, and
 	// it is held here — on the step, which no API route projects — rather than on
 	// the task input, which GET /tasks returns as `params`. The plaintext is never
 	// persisted anywhere.
-	PasswordMD5 string `json:"password_md5,omitempty"`
+	PasswordVerifier string `json:"password_verifier,omitempty"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities,
 	// e.g. "2" / "4Gi"), applied as request == limit for Guaranteed QoS. Carried
 	// in the args so a reclaim/replay deploys the same size. Empty falls back to
@@ -138,7 +145,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	}, s.yb, s.scURL, exts)
 	// The create is the only deploy that carries a verifier; EndpointSpecFrom
 	// cannot supply one because nothing stores it.
-	spec.PasswordMD5 = s.PasswordMD5
+	spec.PasswordVerifier = s.PasswordVerifier
 
 	// Record the endpoint row first: it claims the single-writer slot (a second
 	// writer is rejected here) and gives the deploy a stable id, before any

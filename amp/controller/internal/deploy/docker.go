@@ -102,10 +102,11 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 	if spec.EndpointID != "" {
 		env["ENDPOINT_ID"] = spec.EndpointID
 	}
-	// The compute default user's password. Empty leaves the supervisor's own
-	// default, which is what a redeploy (and any pre-credentials endpoint) renders.
-	if spec.PasswordMD5 != "" {
-		env["COMPUTE_PASSWORD"] = spec.PasswordMD5
+	// The compute default user's password. Empty means the variable is absent,
+	// which the supervisor reads as "leave the role's password as the catalog has
+	// it" — a redeploy (and any pre-credentials endpoint) renders no verifier.
+	if spec.PasswordVerifier != "" {
+		env["COMPUTE_PASSWORD"] = spec.PasswordVerifier
 	}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
@@ -260,7 +261,7 @@ func (d *DockerDeployer) waitReady(ctx context.Context, name string) error {
 	// remote_auth::READY_MARKER in compute/endpoint_supervisor, which the
 	// supervisor logs once the compute is up and its password is set. We wait on
 	// the password-set marker (not just a TCP accept) because clients connect
-	// with md5 auth. If you change either side, change both — otherwise this
+	// by password. If you change either side, change both — otherwise this
 	// silently times out and tears the endpoint down.
 	const marker = "set cloud_admin password for remote auth"
 	deadline := time.Now().Add(d.cfg.ReadyTimeout)

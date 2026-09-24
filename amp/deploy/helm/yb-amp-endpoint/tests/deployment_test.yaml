@@ -554,7 +554,7 @@ tests:
     set:
       yugabyte.existingSecret: my-yb-secret
       endpoint:
-        password: md50123456789abcdef0123456789abcdef
+        password: "SCRAM-SHA-256$4096:c2FsdHNhbHRzYWx0c2Ex$c3RvcmVka2V5c3RvcmVka2V5c3RvcmVkazA=:c2VydmVya2V5c2VydmVya2V5c2VydmVyazA="
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -567,8 +567,8 @@ tests:
 
   # A redeploy renders no password (nothing stores the verifier), and so does a
   # pre-credentials endpoint. Either way the env var must be absent rather than
-  # referencing a Secret key that is not there — the supervisor then keeps its
-  # own default.
+  # referencing a Secret key that is not there — the supervisor then leaves the
+  # role's password exactly as the branch's catalog has it.
   - it: omits the compute password when none is set
     template: templates/deployment.yaml
     # controller.url only so an `env:` block renders at all — the assertion is

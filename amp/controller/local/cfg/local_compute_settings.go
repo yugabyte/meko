@@ -54,13 +54,7 @@ func LocalComputeSettings(p PostgresqlConfParams) map[string]string {
 		// developer's compute on every interface of a shared machine.
 		"listen_addresses": p.ListenAddr,
 		"hot_standby":      "on",
-		// The supervisor's default is md5, which pairs with the md5 digest a
-		// deployment puts in the spec's cloud_admin role. A local compute is
-		// reached over loopback and never authenticates by password, so it takes
-		// the Postgres default instead — under md5, PG18 warns on every password
-		// set, which is noise a developer did not ask for.
-		"password_encryption": "scram-sha-256",
-		"wal_keep_size":       "0",
+		"wal_keep_size":    "0",
 		// 2 rather than the Postgres default, because the integration suite does
 		// a lot of concurrent work on underpowered machines.
 		"effective_io_concurrency": "2",

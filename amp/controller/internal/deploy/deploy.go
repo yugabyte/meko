@@ -103,11 +103,11 @@ type EndpointSpec struct {
 	// modes only. Allocated before the deploy rather than discovered after it,
 	// which is what lets the address be known up front instead of waited for.
 	Ingress IngressSlot
-	// PasswordMD5 is the password for the compute's default user, as `pg_authid`
-	// stores it (see core.MD5PasswordVerifier). Set on the create path only: the
+	// PasswordVerifier is the password for the compute's default user, as `pg_authid`
+	// stores it (see core.SCRAMPasswordVerifier). Set on the create path only: the
 	// plaintext is never persisted and the verifier is never read back, so a
 	// REDEPLOY renders it empty and the supervisor leaves the password alone.
-	PasswordMD5 string
+	PasswordVerifier string
 	// Extensions are the externalized PostgreSQL extensions to mount into the
 	// endpoint as read-only ImageVolumes (compute/architecture/extensions.md).
 	// The Kubernetes deployer renders one volume per entry and derives
@@ -271,7 +271,7 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 			RecordType: e.IngressRecordType,
 		},
 		Extensions: mounts,
-		// No PasswordMD5: there is nowhere to read one from. The password is
+		// No PasswordVerifier: there is nowhere to read one from. The password is
 		// already set in the branch's catalog, and re-rendering an empty verifier
 		// is what stops a redeploy resetting it.
 		// No pg_settings here: the endpoint's supervisor reads the branch's and

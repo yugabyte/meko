@@ -562,7 +562,7 @@ a ConfigMap + Secret):
 | `YB_PASSWORD` | _(unset)_ | YB password (from a Secret) |
 | `ENDPOINT_PG_VERSION` | `18` | compute Postgres major version; locates `pg_install/v{N}` (the image ships v18 only) |
 | `COMPUTE_PORT` | `55433` | compute Postgres port |
-| `COMPUTE_PASSWORD` | `cloud_admin` | password for the compute's default user (`cloud_admin`), set by the supervisor once Postgres answers so non-loopback clients can authenticate. May be a plaintext (Postgres hashes it) or the verifier `pg_authid` stores — `md5` + md5(password+user) — which is what the control plane sends, so it never hands the pod a password it could read back |
+| `COMPUTE_PASSWORD` | _(unset)_ | password for the compute's default user (`cloud_admin`), set by the supervisor once Postgres answers so non-loopback clients can authenticate. May be a plaintext (Postgres hashes it, to SCRAM) or the verifier `pg_authid` stores — `SCRAM-SHA-256$...` — which is what the control plane sends, so it never hands the pod something that can log in. Unset leaves the role's password as the catalog has it; the supervisor also declines to overwrite a password that is already set |
 | `SHARED_PRELOAD_LIBRARIES` | `yb_amp,pg_stat_statements` | compute `shared_preload_libraries` |
 | `EXTENSION_LIBRARY_PATH` | _(unset)_ | colon-separated dirs of system shared libraries a registered extension bundles (e.g. `/extensions/postgis/system`); appended to `LD_LIBRARY_PATH` for every child |
 | `TENANT_ID` / `TIMELINE_ID` | _(unset)_ | serve an existing tenant; unset ⇒ bootstrap a fresh one |
@@ -581,11 +581,16 @@ docker run --rm --name yb-endpoint \
   --network host \
   -e YB_HOST_PORTS=127.0.0.1:5433 \
   -e YB_USER=yugabyte -e YB_PASSWORD=yugabyte \
+  -e COMPUTE_PASSWORD=pick-a-password \
   yb-amp/neon-endpoint:dev
 
 # then, from the host:
-psql -h 127.0.0.1 -p 55433 -U cloud_admin -d postgres   # password: cloud_admin
+psql -h 127.0.0.1 -p 55433 -U cloud_admin -d postgres   # password: pick-a-password
 ```
+
+Without `COMPUTE_PASSWORD` the supervisor leaves `cloud_admin` with no password
+at all, and only loopback (which `pg_hba` trusts) can connect — there is no
+built-in default. Pass either a plaintext or the verifier `pg_authid` stores.
 
 (`--network host` lets the container reach a host YugabyteDB on `127.0.0.1:5433`
 and exposes the compute on the host's `55433`.)

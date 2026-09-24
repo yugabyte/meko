@@ -1485,7 +1485,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			ComputePort: k.cfg.ComputePort,
 			BranchId:    branchIDValue(spec.BranchID),
 			EndpointId:  spec.EndpointID,
-			Password:    spec.PasswordMD5,
+			Password:    spec.PasswordVerifier,
 			Resources:   resourceValues{CPU: cpu, Memory: memory},
 			Extensions:  extensionValuesFor(spec.Extensions),
 		},

@@ -17,12 +17,6 @@ use serde_json::{Value, json};
 
 use crate::pg_settings::Setting;
 
-/// `md5<md5(password + user)>`, the form `password_encryption = md5` expects.
-pub fn md5_role_password(password: &str, user: &str) -> String {
-    let digest = md5::compute(format!("{password}{user}").as_bytes());
-    format!("md5{digest:x}")
-}
-
 /// Everything the compute spec needs that is not a Postgres setting.
 pub struct ComputeSpecParams<'a> {
     pub compute_port: u16,
@@ -30,8 +24,6 @@ pub struct ComputeSpecParams<'a> {
     pub safekeeper_addr: &'a str,
     pub pageserver_connstring: &'a str,
     pub shared_preload_libraries: &'a str,
-    /// Already md5-hashed; see [`md5_role_password`].
-    pub cloud_admin_password_md5: &'a str,
     /// This endpoint's id, which the LFC state blob is keyed by. Without it
     /// `compute_ctl` cannot address its own state and prewarm is unavailable.
     pub endpoint_id: Option<&'a str>,
@@ -96,7 +88,12 @@ pub fn render_compute_spec(
     push("shared_buffers", "128MB".into(), "string");
     push("max_wal_senders", "10".into(), "integer");
     push("max_replication_slots", "10".into(), "integer");
-    push("password_encryption", "md5".into(), "enum");
+    // Governs what Postgres does with a PLAINTEXT password — a client's own
+    // `ALTER ROLE ... PASSWORD 'x'`, and remote_auth when COMPUTE_PASSWORD
+    // carries a plaintext rather than a verifier. It does NOT re-encode a
+    // verifier handed over already hashed, and it does not upgrade an existing
+    // md5 verifier: that one is keyed on what pg_authid holds, per role, forever.
+    push("password_encryption", "scram-sha-256".into(), "enum");
     push("restart_after_crash", "off".into(), "bool");
     push("synchronous_standby_names", "walproposer".into(), "string");
     push(
@@ -151,9 +148,15 @@ pub fn render_compute_spec(
                 "cluster_id": p.branch_id,
                 "name": "compute",
                 "state": "running",
+                // No `encrypted_password`: `skip_pg_catalog_updates` below makes
+                // compute_ctl skip the block that would apply one, so the field
+                // was inert — and wrong besides, since `Role::to_pg_options`
+                // prefixes a literal `md5` to anything not starting with
+                // SCRAM-SHA-256, which would have double-hashed the verifier the
+                // control plane sends. The password is remote_auth's, and only
+                // remote_auth's.
                 "roles": [{
                     "name": "cloud_admin",
-                    "encrypted_password": p.cloud_admin_password_md5,
                     "options": null,
                 }],
                 "databases": [],
@@ -176,7 +179,6 @@ mod tests {
             safekeeper_addr: "127.0.0.1:5454",
             pageserver_connstring: "host=127.0.0.1 port=64000",
             shared_preload_libraries: "yb_amp",
-            cloud_admin_password_md5: "md5deadbeef",
             endpoint_id: Some("3f2b1c4e-0000-4000-8000-000000000001"),
             yb_storage_conn: json!({"type": "YbStore", "host_ports": "h:5433",
                                     "user": "yugabyte", "dbname": "yb_storage"}),
@@ -205,16 +207,33 @@ mod tests {
             .map(|s| s["value"].as_str().unwrap().to_string())
     }
 
-    /// The md5 form is what `password_encryption = md5` expects; a wrong digest
-    /// means the compute comes up with a password nobody can authenticate with.
+    /// The GUC only governs a password Postgres hashes ITSELF — a client's
+    /// `ALTER ROLE ... PASSWORD 'plain'`, and remote_auth when COMPUTE_PASSWORD
+    /// carries a plaintext. Left at md5 those would keep producing md5
+    /// verifiers, which the `scram-sha-256` hba line then refuses.
     #[test]
-    fn md5_role_password_matches_postgres() {
-        // Same construction Postgres uses: md5(password || username).
+    fn a_password_postgres_hashes_itself_is_scram() {
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
         assert_eq!(
-            md5_role_password("cloud_admin", "cloud_admin"),
-            format!("md5{:x}", md5::compute(b"cloud_admincloud_admin"))
+            last_value(&spec, "password_encryption").as_deref(),
+            Some("scram-sha-256")
         );
-        assert!(md5_role_password("a", "b").starts_with("md5"));
+    }
+
+    /// The spec carries no password at all. It used to, inertly
+    /// (`skip_pg_catalog_updates`), and the value was an md5 digest that
+    /// `Role::to_pg_options` would have prefixed with another literal `md5`. The
+    /// role's password is remote_auth's alone.
+    #[test]
+    fn the_spec_carries_no_role_password() {
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
+        let role = &spec["spec"]["cluster"]["roles"][0];
+        assert_eq!(role["name"], "cloud_admin");
+        assert!(
+            role.get("encrypted_password").is_none(),
+            "the compute spec must not carry a role password: {role}"
+        );
+        assert_eq!(spec["spec"]["skip_pg_catalog_updates"], true);
     }
 
     /// Precedence is positional, because `compute_ctl` writes these in order and
@@ -265,10 +284,7 @@ mod tests {
             Some("host=127.0.0.1 port=64000")
         );
         assert_eq!(last_value(&spec, "port").as_deref(), Some("55433"));
-        assert_eq!(
-            spec["spec"]["cluster"]["roles"][0]["encrypted_password"],
-            "md5deadbeef"
-        );
+        assert_eq!(spec["spec"]["cluster"]["roles"][0]["name"], "cloud_admin");
     }
 
     /// The WAL-shape invariants: no full-page images from either source, because

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/voyager/migration"
 
 	"github.com/yugabyte/amp/controller/internal/deploy"
@@ -122,6 +123,24 @@ func (s *Service) VoyagerCreateMigrationTarget(ctx context.Context, in VoyagerCr
 		return nil, fmt.Errorf("migration target size: %s", shapeErr)
 	}
 
+	// PLACEHOLDER, tracked as yugabyte/meko#1473: the target comes up with the
+	// well-known password `cloud_admin`, because that is the credential
+	// attach_target records for the migrate job and nothing yet supplies a real
+	// one. It used to arrive here by accident — this plan builds
+	// CreateEndpointArgs directly, bypassing the handler that requires a
+	// password, so the supervisor fell back to a built-in default of the same
+	// name. That fallback is gone, so the placeholder is now explicit: without a
+	// verifier the role would have no password at all and the migrate job could
+	// not connect.
+	//
+	// A fixed password needs no plan-time/step-time care of its own: a replayed
+	// step may derive a different salt, but the same password still
+	// authenticates. A generated one would not be safe that way — see the issue.
+	verifier, err := core.SCRAMPasswordVerifier(voyagerTargetCredential)
+	if err != nil {
+		return nil, fmt.Errorf("migration target credential: %w", err)
+	}
+
 	steps := []StepSpec{
 		stepSpec(StepCreateCluster, CreateClusterArgs{
 			PoolID:    in.PoolID,
@@ -138,13 +157,14 @@ func (s *Service) VoyagerCreateMigrationTarget(ctx context.Context, in VoyagerCr
 			StartLSN:   "0/0",
 		}),
 		stepSpec(StepCreateEndpoint, CreateEndpointArgs{
-			EndpointID: endpointID,
-			ClusterID:  clusterID,
-			BranchID:   branchID,
-			Role:       roleReadWrite,
-			PgVersion:  voyagerTargetPgVersion,
-			CPU:        cpu,
-			Memory:     memory,
+			EndpointID:       endpointID,
+			ClusterID:        clusterID,
+			BranchID:         branchID,
+			Role:             roleReadWrite,
+			PgVersion:        voyagerTargetPgVersion,
+			CPU:              cpu,
+			Memory:           memory,
+			PasswordVerifier: verifier,
 		}),
 		stepSpec(StepVoyagerAttachTarget, VoyagerAttachTargetArgs{
 			MigrationID:        in.MigrationID,

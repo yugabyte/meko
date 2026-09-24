@@ -18,6 +18,11 @@ const StepVoyagerAttachTarget = "attach_target_to_migration"
 
 // voyagerTargetCredential is the fixed superuser role name a freshly deployed
 // AMP compute exposes; the migrate job uses it to connect to the target.
+//
+// It is ALSO the target's password, which is a placeholder rather than a design
+// — every other endpoint has required a caller-supplied one since #1272.
+// VoyagerCreateMigrationTarget passes the verifier for it so the two agree.
+// Replacing it with a real credential is yugabyte/meko#1473.
 const voyagerTargetCredential = "cloud_admin"
 
 // VoyagerAttachTargetArgs identifies the endpoint allocated by the plan, the

@@ -567,18 +567,59 @@ The deploy is **demo-grade**. What it currently takes for granted:
   any authn/authz. Do not expose publicly.
 - **`cloud_admin` is no longer well-known, but it is still shared.** An endpoint
   created through the API comes up with `cloud_admin`'s password set to one the
-  caller supplied, delivered as `COMPUTE_PASSWORD`; only an endpoint created
-  before this (or one whose create named no password) keeps the `cloud_admin` /
-  `cloud_admin` default. What has not changed is that it is ONE superuser per
+  caller supplied, delivered as `COMPUTE_PASSWORD`. There is no longer a default
+  to fall back to: a deploy that renders no verifier — a redeploy, a fleet roll,
+  a `read_only` endpoint — leaves the role's password exactly as the branch's
+  catalog has it, and an endpoint created before any of this keeps whatever it
+  was given then. What has not changed is that it is ONE superuser per
   branch, shared by every endpoint on it and inherited by forks — there is still
   no cluster isolation at the SQL layer, and no way for a customer to choose the
   user's name (yugabyte/meko#1354).
 
+  **One exception: a Voyager migration target.** Its plan builds the
+  create-endpoint step directly rather than through the handler that requires a
+  password, and the credential the migrate job connects with is a hardcoded
+  `cloud_admin` / `cloud_admin` — so the plan passes the verifier for exactly
+  that, to keep the two halves agreeing. The target is a `cluster_ip` endpoint
+  (the plan requests no other connectivity), so it is reachable in-cluster and
+  over the tailnet, not from the internet. Giving it a real credential is
+  yugabyte/meko#1473.
+
   The control plane stores no password and generates none: what travels to the
   pod (and sits in the release Secret and the create task's step row) is the
-  verifier `pg_authid` itself holds — md5 today, which is its own problem
-  (yugabyte/meko#1351). The plaintext exists only in the request that set it,
-  which is why the caller has to bring one.
+  verifier `pg_authid` itself holds — **SCRAM-SHA-256**, so it is not
+  password-equivalent and neither artifact can be used to log in. The plaintext
+  exists only in the request that set it, which is why the caller has to bring
+  one, and it must be printable ASCII (SASLprep — see `createEndpoint`'s
+  `password`).
+
+  The supervisor applies that verifier only on a role that has no password yet,
+  and does nothing at all when the pod carries no `COMPUTE_PASSWORD`. So a
+  redeploy or a fleet roll — neither of which renders a verifier — leaves the
+  credential alone instead of resetting it, and a password a customer set
+  themselves survives a restart.
+
+  **Migration.** The `pg_hba` rule is `scram-sha-256` and ships in the endpoint
+  image, so an endpoint created before this keeps working until it is rolled
+  onto an image carrying it. At that roll its md5-era `cloud_admin` can no
+  longer authenticate — every remote client gets `password authentication
+  failed` — while loopback stays `trust` and the data is untouched. The fix is
+  one statement per endpoint, run **after** the roll (before it,
+  `password_encryption` is still md5 and this just writes another md5 verifier):
+
+  ```bash
+  # deploy/… , not a bare name: yb-ep-<endpoint-id> is the Deployment, and the
+  # pod carries a generated suffix.
+  kubectl -n "$NS" exec -it deploy/yb-ep-<endpoint-id> -- \
+    /usr/local/v18/bin/psql -h 127.0.0.1 -p 55433 -U cloud_admin -d postgres \
+    -v ON_ERROR_STOP=1 -c "ALTER ROLE cloud_admin PASSWORD '<original password>'"
+  ```
+
+  It sticks: the roll is what removed `COMPUTE_PASSWORD` from the pod, so
+  nothing re-asserts the old verifier on a later restart. To find the endpoints
+  that still need it, `SELECT left(rolpassword, 4) FROM pg_authid WHERE rolname
+  = 'cloud_admin'` reads `md5…` rather than `SCRA`. Recreating the endpoint
+  works too, and is simpler where the data is disposable.
 - **Postgres v18 only.** create-cluster rejects any other `pg_version`.
 - **One pageserver+safekeeper per endpoint pod**, registered with a **unique SC
   node id derived from the branch id** (a 31-bit hash). Collision-resistant, not

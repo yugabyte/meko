@@ -389,8 +389,11 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		// Resolved exactly as `createEndpoint` resolves it, so the one-call
 		// onboarding path's writer is credentialed like any other endpoint —
 		// including requiring a password.
-		if verifier, apiErr = endpointCredentials(request.Body.Password,
-			deploy.AppliesComputePassword(c.prov.Deployer)); apiErr != nil {
+		var err error
+		if verifier, apiErr, err = endpointCredentials(request.Body.Password,
+			deploy.AppliesComputePassword(c.prov.Deployer)); err != nil {
+			return nil, err
+		} else if apiErr != nil {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
 		}
 	}
@@ -400,17 +403,17 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	// write endpoint are all created by the worker; a duplicate cluster name now
 	// surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateCluster(ctx, task.CreateClusterInput{
-		PoolID:       request.PoolId,
-		Name:         name,
-		PgVersion:    pgVersion,
-		WithWriter:   withWriter,
-		CPU:          cpu,
-		Memory:       memory,
-		Connectivity: connectivity,
-		AllowedCIDRs: allowedCIDRs,
-		Engine:       engine,
-		Extensions:   exts,
-		PasswordMD5:  verifier,
+		PoolID:           request.PoolId,
+		Name:             name,
+		PgVersion:        pgVersion,
+		WithWriter:       withWriter,
+		CPU:              cpu,
+		Memory:           memory,
+		Connectivity:     connectivity,
+		AllowedCIDRs:     allowedCIDRs,
+		Engine:           engine,
+		Extensions:       exts,
+		PasswordVerifier: verifier,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create cluster task: %w", err)
@@ -896,16 +899,6 @@ func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
 }
 
 // endpointCredentials turns the caller's password into the verifier the pod
-// gets, which is all anything downstream ever sees — the plaintext is used to
-// compute it and then dropped.
-//
-// The password is REQUIRED. The controller does not mint one: a generated
-// password has to be handed back on the 202 to be usable at all, and that is a
-// credential delivered through a response body nobody may have read — the
-// create-cluster wizard discarded it, and a YCP-driven create has no reader at
-// all. Making the caller supply it means the credential only ever exists
-// somewhere its owner already has it.
-// endpointCredentials turns the caller's password into the verifier the pod
 // gets. The plaintext is used to compute that and then dropped — it is never
 // persisted, and no response reports it.
 //
@@ -918,23 +911,31 @@ func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
 //
 // required says whether this deployer's endpoints actually apply it. They all do
 // except the local driver — see deploy.ComputePasswordApplier.
-func endpointCredentials(password *string, required bool) (verifier string, apiErr *Error) {
+//
+// apiErr is the caller's fault and becomes a 400; err is ours (deriving the
+// verifier needs the system CSPRNG) and becomes a 500, because answering a
+// create with 400 would tell the caller to fix a password that is fine.
+func endpointCredentials(password *string, required bool) (verifier string, apiErr *Error, err error) {
 	if password == nil {
 		if !required {
 			// Nothing will apply it, so there is nothing to set.
-			return "", nil
+			return "", nil, nil
 		}
 		e := apiError("invalid_request", "password is required for a read_write endpoint")
-		return "", &e
+		return "", &e, nil
 	}
 	// NOT trimmed: a password is bytes the caller chose, and quietly altering
 	// them yields a credential that does not authenticate.
 	plain := *password
 	if err := core.ValidateEndpointPassword(plain); err != nil {
 		e := apiError("invalid_argument", err.Error())
-		return "", &e
+		return "", &e, nil
 	}
-	return core.MD5PasswordVerifier(plain, core.ComputeDefaultUser), nil
+	v, err := core.SCRAMPasswordVerifier(plain)
+	if err != nil {
+		return "", nil, fmt.Errorf("derive the password verifier: %w", err)
+	}
+	return v, nil, nil
 }
 
 func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error) {
@@ -1070,8 +1071,11 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	var verifier string
 	if role == core.RoleReadWrite {
 		var apiErr *Error
-		if verifier, apiErr = endpointCredentials(reqPassword,
-			deploy.AppliesComputePassword(c.prov.Deployer)); apiErr != nil {
+		var err error
+		if verifier, apiErr, err = endpointCredentials(reqPassword,
+			deploy.AppliesComputePassword(c.prov.Deployer)); err != nil {
+			return nil, err
+		} else if apiErr != nil {
 			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
 		}
 	} else if reqPassword != nil {
@@ -1097,7 +1101,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		SafekeeperSettings: safekeeperSettings,
 		Connectivity:       connectivity,
 		AllowedCIDRs:       allowedCIDRs,
-		PasswordMD5:        verifier,
+		PasswordVerifier:   verifier,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)

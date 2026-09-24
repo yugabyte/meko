@@ -2,8 +2,13 @@ package task
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/pbkdf2"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -202,6 +207,78 @@ func TestServiceCreateMigrationTargetPlan(t *testing.T) {
 	if params != in {
 		t.Errorf("params = %+v, want %+v (including vcpu)", params, in)
 	}
+}
+
+// The plan must credential the target with the SAME password attach_target
+// records, or the endpoint comes up with a password the migrate job does not
+// have. Nothing downstream would notice: the deploy succeeds and the connection
+// fails much later. Both halves are the placeholder tracked as
+// yugabyte/meko#1473 — when that lands, this test moves to the real credential
+// rather than being deleted.
+func TestMigrationTargetIsCredentialledWithThePasswordAttachRecords(t *testing.T) {
+	mem := NewMemStore()
+	svc := NewService(&capturingTaskStore{Store: mem}, NewMemStore().Subtasks())
+	tk, err := svc.VoyagerCreateMigrationTarget(t.Context(), VoyagerCreateMigrationTargetInput{
+		MigrationID: uuid.New(), PoolID: uuid.New(), ProjectName: "p", TargetDatabaseName: "d", VCPU: 2,
+	})
+	if err != nil {
+		t.Fatalf("VoyagerCreateMigrationTarget: %v", err)
+	}
+	steps, err := mem.Steps(t.Context(), tk.ID)
+	if err != nil {
+		t.Fatalf("Steps: %v", err)
+	}
+	var endpoint CreateEndpointArgs
+	decodeArgs(t, steps[2], &endpoint)
+	if endpoint.PasswordVerifier == "" {
+		t.Fatal("the create_endpoint step carries no verifier: the target would come up " +
+			"with no password at all and the migrate job could not connect")
+	}
+	if !scramVerifierAuthenticates(t, endpoint.PasswordVerifier, voyagerTargetCredential) {
+		t.Errorf("the verifier does not authenticate %q, which is what attach_target "+
+			"records as the target password", voyagerTargetCredential)
+	}
+}
+
+// scramVerifierAuthenticates re-derives the verifier's StoredKey from a
+// candidate password, using the salt and iteration count the verifier itself
+// carries — which is what a server does to check a client proof. A shape check
+// would not catch the failure that matters here: a well-formed verifier for the
+// WRONG password.
+func scramVerifierAuthenticates(t *testing.T, verifier, password string) bool {
+	t.Helper()
+	rest, ok := strings.CutPrefix(verifier, "SCRAM-SHA-256$")
+	if !ok {
+		t.Fatalf("verifier %q is not SCRAM-SHA-256", verifier)
+	}
+	params, keys, ok := strings.Cut(rest, "$")
+	if !ok {
+		t.Fatalf("verifier %q has no key section", verifier)
+	}
+	iterText, saltB64, ok := strings.Cut(params, ":")
+	if !ok {
+		t.Fatalf("verifier %q has no <iterations>:<salt>", verifier)
+	}
+	iters, err := strconv.Atoi(iterText)
+	if err != nil {
+		t.Fatalf("verifier %q has a non-numeric iteration count", verifier)
+	}
+	salt, err := base64.StdEncoding.DecodeString(saltB64)
+	if err != nil {
+		t.Fatalf("verifier %q has an undecodable salt", verifier)
+	}
+	storedB64, _, ok := strings.Cut(keys, ":")
+	if !ok {
+		t.Fatalf("verifier %q has no <StoredKey>:<ServerKey>", verifier)
+	}
+	salted, err := pbkdf2.Key(sha256.New, password, salt, iters, sha256.Size)
+	if err != nil {
+		t.Fatalf("pbkdf2: %v", err)
+	}
+	mac := hmac.New(sha256.New, salted)
+	mac.Write([]byte("Client Key"))
+	stored := sha256.Sum256(mac.Sum(nil))
+	return base64.StdEncoding.EncodeToString(stored[:]) == storedB64
 }
 
 func TestServiceCreateMigrationTargetSizingIsOptional(t *testing.T) {

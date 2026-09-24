@@ -70,18 +70,18 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	if !reflect.DeepEqual(spec.AllowedCIDRs, []string{"10.0.0.0/16"}) {
 		t.Errorf("AllowedCIDRs = %+v, want [10.0.0.0/16]", spec.AllowedCIDRs)
 	}
-	// PasswordMD5 is the one field this assembler must NOT fill, so it is exempt
+	// PasswordVerifier is the one field this assembler must NOT fill, so it is exempt
 	// from the sweep below and asserted empty instead. Nothing stores the
-	// verifier — see EndpointSpec.PasswordMD5 — so a redeploy rendering one
+	// verifier — see EndpointSpec.PasswordVerifier — so a redeploy rendering one
 	// could only render a WRONG one, resetting a password the caller already
 	// holds. The create step sets it directly.
-	if spec.PasswordMD5 != "" {
-		t.Errorf("PasswordMD5 = %q, want empty: a redeploy must not re-password the compute user", spec.PasswordMD5)
+	if spec.PasswordVerifier != "" {
+		t.Errorf("PasswordVerifier = %q, want empty: a redeploy must not re-password the compute user", spec.PasswordVerifier)
 	}
 
 	v := reflect.ValueOf(spec)
 	for i := range v.NumField() {
-		if v.Type().Field(i).Name == "PasswordMD5" {
+		if v.Type().Field(i).Name == "PasswordVerifier" {
 			continue
 		}
 		if v.Field(i).IsZero() {

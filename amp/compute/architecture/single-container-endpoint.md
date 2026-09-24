@@ -281,13 +281,27 @@ The supervisor materializes the branch itself:
   (`remote_auth::READY_MARKER`).
 
   The password is `COMPUTE_PASSWORD`, and from the control plane it
-  arrives already hashed — the form `pg_authid` stores under the spec's
-  `password_encryption = md5`. Postgres keeps a value of that shape
-  verbatim rather than hashing it again, which is how a caller-supplied
-  password reaches the role without the control plane ever holding
-  something it could read back. Nothing here changes for that: the
-  supervisor sets whatever it is given, and its own `cloud_admin`
-  default is what an endpoint gets when the control plane sends none.
+  arrives already hashed — a `SCRAM-SHA-256$...` verifier, the form
+  `pg_authid` stores under the spec's
+  `password_encryption = scram-sha-256`. Postgres keeps a value of that
+  shape verbatim rather than hashing it again, which is how a
+  caller-supplied password reaches the role without the control plane
+  ever holding something that can log in.
+
+  The supervisor treats it as **bootstrap state, not desired state**,
+  because this runs on every boot while the catalog it writes survives
+  the pod. It applies the verifier only when `COMPUTE_PASSWORD` is set
+  *and* `cloud_admin` has no password yet. An unset variable — every
+  redeploy, every fleet roll, every `read_only` endpoint — leaves the
+  role alone rather than falling back to a default, and a role that
+  already has a password keeps it, so a password its owner set with
+  `ALTER ROLE` survives a restart. The gap in the second rule is a
+  forked branch, whose first endpoint inherits the parent's password and
+  declines its own (yugabyte/meko#1461).
+
+  All three outcomes log `remote_auth::READY_MARKER`, including the two
+  that change nothing: the Docker deployer waits on that line, and
+  "settled" is what it needs to know, not "wrote to `pg_authid`".
 
 ## Fencing is the supervisor's, not the pageserver's
 

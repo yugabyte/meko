@@ -13,7 +13,7 @@ use crate::compute::ComputeNodeParams;
 use crate::config;
 use crate::metrics::{CPLANE_REQUESTS_TOTAL, CPlaneRequestRPC, UNKNOWN_HTTP_STATUS};
 use crate::migration::MigrationRunner;
-use crate::params::PG_HBA_ALL_MD5;
+use crate::params::PG_HBA_ALL_SCRAM;
 
 // Do control plane request and return response if any. In case of error it
 // returns a bool flag indicating whether it makes sense to retry the request
@@ -137,7 +137,7 @@ pub fn update_pg_hba(pgdata_path: &Path) -> Result<()> {
     // XXX: consider making it a part of config.json
     let pghba_path = pgdata_path.join("pg_hba.conf");
 
-    if config::line_in_file(&pghba_path, PG_HBA_ALL_MD5)? {
+    if config::line_in_file(&pghba_path, PG_HBA_ALL_SCRAM)? {
         info!("updated pg_hba.conf to allow external connections");
     } else {
         info!("pg_hba.conf is up-to-date");
