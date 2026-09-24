@@ -1678,7 +1678,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 			t.Errorf("%s = %s, want %s", key, got, want)
 		}
 	}
-	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change,leader_stepdown,tablet_split,master_leader_change" {
+	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change,leader_stepdown,tablet_split,master_leader_change,add_remove_tserver,disk_latency" {
 		t.Errorf("stress.backing_maintenance.operations = %v", ops)
 	}
 	if tables := cfg.GetStringSlice("stress.backing_maintenance.tablet_tables", nil); strings.Join(tables, ",") != "wals,pages" {

@@ -1885,9 +1885,9 @@ stress:
     # The topology operations (leader_stepdown, tablet_split,
     # master_leader_change) move where the data or its leadership lives while
     # the tenants write, which is the class of bug meko#811, #1048 and #1119
-    # came from. add_remove_tserver and disk_latency are selectable but off
-    # until they have three green runs.
-    operations: ["gflag_change", "leader_stepdown", "tablet_split", "master_leader_change"]
+    # came from. add_remove_tserver grows the universe by one tserver and
+    # drains it back; disk_latency slows one replica.
+    operations: ["gflag_change", "leader_stepdown", "tablet_split", "master_leader_change", "add_remove_tserver", "disk_latency"]
     # Each tenant gets its own amp cluster, endpoint, journaled writer and a
     # distinct workload: 0 SqlTransactions, 1 SqlBankTransfer, 2 TPC-C, then
     # repeating. Below 3 tenants some workloads do not run.

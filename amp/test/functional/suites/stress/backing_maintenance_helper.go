@@ -68,9 +68,8 @@ var DefaultMaintenanceTabletTables = []string{"wals", "pages"}
 // by default: the first proves strictly less than gflag_change, the second
 // needs more nodes than the default universe's RF gives it, and the third needs
 // the universe created a train behind the target, which a sweep on the current
-// release is not. add_remove_tserver and disk_latency are off until they have
-// three green runs.
-var DefaultMaintenanceOperations = []string{OpGflagChange, OpLeaderStepdown, OpTabletSplit, OpMasterLeaderChange}
+// release is not.
+var DefaultMaintenanceOperations = []string{OpGflagChange, OpLeaderStepdown, OpTabletSplit, OpMasterLeaderChange, OpAddRemoveTServer, OpDiskLatency}
 
 var DefaultMaintenanceWorkloads = []string{"SqlInserts", "SqlTransactions", "SqlBankTransfer"}
 
