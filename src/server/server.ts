@@ -7,7 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, LoginRequest, ServerEvent,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, DiscardCheck, LoginRequest, ServerEvent,
   SessionAction, Settings, SetupRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import {
@@ -22,7 +22,7 @@ import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 
-const ACTIONS: SessionAction[] = ['approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive'];
+const ACTIONS: SessionAction[] = ['approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard'];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 
 export interface ServerOptions {
@@ -212,6 +212,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
     return core.sessions.action(req.params.id, action);
   });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     core.sessions.row(req.params.id);
     const r = get<{ markdown: string; updated_at: number }>(db, 'SELECT markdown, updated_at FROM designs WHERE session_id = ?', req.params.id);

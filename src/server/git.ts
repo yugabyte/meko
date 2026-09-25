@@ -141,6 +141,21 @@ export async function worktreeClean(path: string): Promise<boolean> {
   return s === '';
 }
 
+/** Changed or untracked files in a worktree; 0 when it is missing. */
+export async function uncommittedCount(path: string): Promise<number> {
+  if (!existsSync(path)) return 0;
+  const s = await tryGit(path, 'status', '--porcelain');
+  return s ? s.split('\n').filter(Boolean).length : 0;
+}
+
+/** Commits on a branch that no remote has and the local base lacks; 0 when the branch is gone. */
+export async function unpushedCount(repo: string, branch: string, base: string): Promise<number> {
+  if (!(await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`))) return 0;
+  const baseRef = (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${base}`)) ? [base] : [];
+  const n = await tryGit(repo, 'rev-list', '--count', branch, '--not', '--remotes', ...baseRef);
+  return n ? Number(n) : 0;
+}
+
 export async function removeWorktree(repo: string, path: string, force = false): Promise<boolean> {
   if (!existsSync(path)) {
     await tryGit(repo, 'worktree', 'prune');

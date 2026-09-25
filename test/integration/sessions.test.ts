@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
-import { run } from '../../src/server/db.js';
+import { get, run } from '../../src/server/db.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
@@ -76,6 +76,39 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(branches).toContain('ak/fix-the-thing'); // archive keeps the branch
     expect(env.core.state().projects[0].sessions).toHaveLength(0);
     expect(env.core.state().projects[0].usage.messages).toBe(2); // archived sessions still count
+  });
+
+  it('archive keeps a worktree with uncommitted changes, and its branch', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Keep me', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    writeFileSync(join(s.worktreePath, 'draft.txt'), 'wip\n');
+    await env.core.sessions.action(s.id, 'archive');
+    expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(true);
+    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).toContain('ak/keep-me');
+  });
+
+  it('discards a session with uncommitted and unpushed work', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Throw away', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const g = (...a: string[]) => execFileSync('git', a, { cwd: s.worktreePath, stdio: 'ignore' });
+    writeFileSync(join(s.worktreePath, 'done.txt'), 'committed\n');
+    g('add', 'done.txt');
+    g('commit', '-q', '-m', 'local only');
+    writeFileSync(join(s.worktreePath, 'draft.txt'), 'wip\n');
+
+    expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: true, uncommittedFiles: 1, unpushedCommits: 1 });
+
+    await env.core.sessions.action(s.id, 'discard');
+    expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
+    expect(existsSync(s.worktreePath)).toBe(false);
+    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).not.toContain('ak/throw-away');
+    expect(env.core.state().projects[0].sessions).toHaveLength(0);
+    expect(env.core.state().projects[0].usage.messages).toBeGreaterThan(0); // discarded sessions still count
+    const last = get<{ kind: string }>(env.core.db, 'SELECT kind FROM session_events WHERE session_id = ? ORDER BY id DESC LIMIT 1', s.id);
+    expect(last?.kind).toBe('discarded');
+    await expect(env.core.sessions.action(s.id, 'discard')).rejects.toThrow(/archived/);
   });
 
   it('captures the design and moves to Code when it is approved', async () => {

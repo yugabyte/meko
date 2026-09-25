@@ -269,6 +269,15 @@ export interface Settings {
   port: number;
 }
 
+/** What Discard would throw away. */
+export interface DiscardCheck {
+  worktreeExists: boolean;
+  /** Changed or untracked files in the worktree. */
+  uncommittedFiles: number;
+  /** Commits on the branch that no remote has. */
+  unpushedCommits: number;
+}
+
 export interface DesignDoc {
   markdown: string | null;
   updatedAt: number | null;
@@ -331,7 +340,8 @@ export type SessionAction =
   | 'request-review'
   | 'force-review'
   | 'resume'
-  | 'archive';
+  | 'archive'
+  | 'discard';
 
 export interface TotpEnrollResponse {
   secret: string;
@@ -385,6 +395,7 @@ export type TermServerMessage =
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
 // GET    /api/sessions/:id/design              → DesignDoc
+// GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        Partial<Settings>→ Settings
 // GET    /api/update                           → UpdateStatus

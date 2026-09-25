@@ -410,6 +410,7 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
       <tr><td>Close tab</td><td>Kills the pty only. tmux and Claude keep running.</td></tr>
       <tr><td>Claude exits</td><td>The pane dies and the status becomes <em>exited</em>. <b>Resume</b> relaunches <code>claude --resume &lt;uuid&gt;</code> in the same worktree.</td></tr>
       <tr><td>Archive</td><td>Kills the tmux session. The worktree is removed if it is clean, and the branch is always kept. The record stays, so the session can be restored later.</td></tr>
+      <tr><td>Discard</td><td>Chosen in Archive's confirmation step. Kills the tmux session, force-removes the worktree even with uncommitted changes, and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive.</td></tr>
       <tr><td>Delete project</td><td>Removes the records and worktrees after confirmation. Never deletes the repo or the datapacks.</td></tr>
     </tbody>
   </table></div>

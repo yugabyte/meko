@@ -3,6 +3,7 @@ import {
   STAGES,
   STARTUP_STEPS,
   STAGE_LABELS,
+  type DiscardCheck,
   type ProjectWithSessions,
   type Session,
   type SessionAction,
@@ -59,7 +60,7 @@ export function ProjectView({
     if (!session) return;
     try {
       await api.sessionAction(session.id, action);
-      if (action === 'archive') disposeTerminal(session.id);
+      if (action === 'archive' || action === 'discard') disposeTerminal(session.id);
     } catch (e) {
       onError(errorMessage(e));
     }
@@ -107,16 +108,7 @@ export function ProjectView({
             Resume
           </button>
         )}
-        {session && (
-          <ConfirmButton
-            className="btn small"
-            label="Archive"
-            confirmLabel="Archive"
-            prompt="End this session? The branch is kept."
-            danger
-            onConfirm={() => act('archive')}
-          />
-        )}
+        {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
       </header>
 
       {session && <StageBar session={session} project={project} onAct={act} />}
@@ -184,6 +176,83 @@ export function ProjectView({
         </footer>
       )}
     </div>
+  );
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost. */
+function EndSessionButton({ session, onAct }: { session: Session; onAct: (a: SessionAction) => Promise<void> }) {
+  const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
+  const [check, setCheck] = useState<DiscardCheck | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async (action: SessionAction) => {
+    setBusy(true);
+    try {
+      await onAct(action);
+    } finally {
+      setBusy(false);
+      setStep('closed');
+    }
+  };
+
+  const askDiscard = async () => {
+    setStep('checking');
+    try {
+      setCheck(await api.discardCheck(session.id));
+    } catch {
+      setCheck(null);
+    }
+    setStep('discard');
+  };
+
+  if (step === 'closed') {
+    return (
+      <button className="btn small" onClick={() => setStep('choose')}>
+        Archive
+      </button>
+    );
+  }
+  const cancel = (
+    <button className="btn ghost" disabled={busy} onClick={() => setStep('closed')}>
+      Cancel
+    </button>
+  );
+  if (step !== 'discard') {
+    return (
+      <span className="confirm-inline">
+        <span className="confirm-prompt">End this session?</span>
+        <button className="btn primary" disabled={busy || step === 'checking'} onClick={() => run('archive')}>
+          Archive (keep branch)
+        </button>
+        <button className="btn danger" disabled={busy || step === 'checking'} onClick={askDiscard}>
+          {step === 'checking' ? 'Checking…' : 'Discard…'}
+        </button>
+        {cancel}
+      </span>
+    );
+  }
+  const warnings: string[] = [];
+  if (!check) warnings.push('Could not check for unsaved work.');
+  else {
+    if (check.uncommittedFiles) warnings.push(`${plural(check.uncommittedFiles, 'uncommitted file')} will be lost.`);
+    if (check.unpushedCommits) warnings.push(`${plural(check.unpushedCommits, 'commit')} never pushed will be lost.`);
+  }
+  if (session.prNumber) warnings.push(`PR #${session.prNumber} and the remote branch stay on GitHub.`);
+  return (
+    <span className="confirm-inline">
+      <span className="confirm-prompt">Delete the worktree and branch {session.branch}?</span>
+      {warnings.map((w) => (
+        <span key={w} className="confirm-warn">
+          {w}
+        </span>
+      ))}
+      <button className="btn danger" disabled={busy} onClick={() => run('discard')}>
+        Discard
+      </button>
+      {cancel}
+    </span>
   );
 }
 

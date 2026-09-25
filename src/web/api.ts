@@ -5,6 +5,7 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   DesignDoc,
+  DiscardCheck,
   LoginRequest,
   MekoDatapack,
   Project,
@@ -103,6 +104,7 @@ export const api = {
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
+  discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
 
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: Partial<Settings>) => request<Settings>('PUT', '/api/settings', b),

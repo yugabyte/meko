@@ -1,11 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CreateSessionRequest, Session, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { CreateSessionRequest, DiscardCheck, Session, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { get, run, tx } from './db.js';
-import { addWorktree, diffStat, removeWorktree, restoreWorktree, tryGit, worktreeClean } from './git.js';
+import { addWorktree, diffStat, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean } from './git.js';
 import type { HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
@@ -514,6 +514,7 @@ export class SessionManager {
       case 'force-review': await lc.requestReview(row, true); break;
       case 'resume': await this.resume(row); break;
       case 'archive': await this.archive(row, { keepBranch: true }); break;
+      case 'discard': await this.archive(row, { keepBranch: false, force: true }); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
@@ -540,8 +541,22 @@ export class SessionManager {
     this.event(row.id, 'resumed', 'Resumed');
   }
 
-  /** Stops Claude and removes the worktree if it's clean. The branch is kept unless asked. */
-  async archive(row: SessionRow, opts: { keepBranch: boolean; stage?: Stage }): Promise<{ worktreeRemoved: boolean }> {
+  /** What Discard would throw away: uncommitted files and commits no remote has. */
+  async discardCheck(id: string): Promise<DiscardCheck> {
+    const row = this.row(id);
+    const p = projectRow(this.db, row.project_id);
+    const [uncommittedFiles, unpushedCommits] = await Promise.all([
+      uncommittedCount(row.worktree_path),
+      p ? unpushedCount(p.repo_path, row.branch, row.base_branch) : 0,
+    ]);
+    return { worktreeExists: existsSync(row.worktree_path), uncommittedFiles, unpushedCommits };
+  }
+
+  /**
+   * Stops Claude and removes the worktree if it's clean. The branch is kept unless asked.
+   * With force (Discard), the worktree is removed even with uncommitted changes.
+   */
+  async archive(row: SessionRow, opts: { keepBranch: boolean; force?: boolean; stage?: Stage }): Promise<{ worktreeRemoved: boolean }> {
     this.stopping.add(row.id);
     try {
       this.ingestUsage(row.id);
@@ -550,8 +565,8 @@ export class SessionManager {
       const p = projectRow(this.db, row.project_id);
       let worktreeRemoved = false;
       if (p) {
-        if (!existsSync(row.worktree_path) || (await worktreeClean(row.worktree_path))) {
-          worktreeRemoved = await removeWorktree(p.repo_path, row.worktree_path);
+        if (opts.force || !existsSync(row.worktree_path) || (await worktreeClean(row.worktree_path))) {
+          worktreeRemoved = await removeWorktree(p.repo_path, row.worktree_path, opts.force);
         }
         if (worktreeRemoved && !opts.keepBranch) await tryGit(p.repo_path, 'branch', '-D', row.branch);
       }
@@ -560,7 +575,13 @@ export class SessionManager {
       this.planPending.delete(row.id);
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
-      this.event(row.id, 'archived', worktreeRemoved ? 'Archived; worktree removed' : 'Archived; worktree kept because it has uncommitted changes');
+      if (opts.force) {
+        this.event(row.id, 'discarded', worktreeRemoved
+          ? `Discarded; worktree and branch ${row.branch} deleted`
+          : `Discarded, but the worktree at ${row.worktree_path} could not be removed, so branch ${row.branch} was kept`);
+      } else {
+        this.event(row.id, 'archived', worktreeRemoved ? 'Archived; worktree removed' : 'Archived; worktree kept because it has uncommitted changes');
+      }
       this.core.changed();
       return { worktreeRemoved };
     } finally {
