@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.13 (implemented)</span>
+  <span class="label">Design · v0.14 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -227,7 +227,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI and releases, date-based versions (<code>0.YYYYMMDD.N</code>), tarball releases, and an update check built into the server.</td></tr>
       <tr><td>Repo &amp; license</td><td>Internal at <code>github.com/yugabyte/agent-k-local</code> for now, to be made public later. Apache-2.0.</td></tr>
       <tr><td>Sharing</td><td>Everyone installs their own copy. One owner per install, with no shared instances.</td></tr>
-      <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon. A native Mac wrapper is deferred.</td></tr>
+      <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon: the web app manifest (<code>manifest.webmanifest</code>) names it "AgentK" and supplies the logo as regular and maskable icons. A native Mac wrapper is deferred.</td></tr>
     </tbody>
   </table></div>
 </section>

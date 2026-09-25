@@ -1,3 +1,7 @@
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeEnv, type TestEnv } from '../helpers.js';
@@ -110,5 +114,55 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(changes.statusCode).toBe(200);
     expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0 });
     expect((await app.inject({ url: `/api/sessions/${s.json().id}/changes` })).statusCode).toBe(401);
+  });
+});
+
+describe('web app: manifest and icons for the installed app', () => {
+  const web = fileURLToPath(new URL('../../src/web/', import.meta.url));
+  let env: TestEnv;
+  let app: FastifyInstance;
+  let webDir: string;
+  beforeEach(async () => {
+    env = await makeEnv();
+    // Lay the files out the way `vite build` does: index.html plus public/ at the root.
+    webDir = mkdtempSync(join(tmpdir(), 'ak-web-'));
+    cpSync(join(web, 'index.html'), join(webDir, 'index.html'));
+    cpSync(join(web, 'public'), webDir, { recursive: true });
+    app = await buildServer(env.core, { tls: null, webDir, updater: null });
+  });
+  afterEach(async () => {
+    await app.close();
+    await env.cleanup();
+    rmSync(webDir, { recursive: true, force: true });
+  });
+
+  /** Width and height from a PNG's IHDR chunk. */
+  const pngSize = (b: Buffer) => ({ png: b.subarray(1, 4).toString() === 'PNG', w: b.readUInt32BE(16), h: b.readUInt32BE(20) });
+
+  it('links the manifest from index.html', async () => {
+    const res = await app.inject({ url: '/' });
+    expect(res.body).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
+  });
+
+  it('serves the manifest and its square icons without sign-in', async () => {
+    const res = await app.inject({ url: '/manifest.webmanifest' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/^application\/manifest\+json/);
+    const manifest = res.json() as { name: string; short_name: string; icons: { src: string; sizes: string; purpose: string }[] };
+    expect(manifest).toMatchObject({ name: 'AgentK Local', short_name: 'AgentK', start_url: '/', display: 'standalone' });
+    expect(manifest.icons.map((i) => `${i.sizes} ${i.purpose}`)).toEqual(['192x192 any', '512x512 any', '512x512 maskable']);
+    for (const icon of manifest.icons) {
+      const img = await app.inject({ url: icon.src });
+      expect(img.statusCode, icon.src).toBe(200);
+      expect(img.headers['content-type']).toBe('image/png');
+      const [w, h] = icon.sizes.split('x').map(Number);
+      expect(pngSize(img.rawPayload), icon.src).toEqual({ png: true, w, h });
+    }
+    for (const [url, size] of [['/icons/favicon-32.png', 32], ['/icons/apple-touch-icon.png', 180]] as const) {
+      const img = await app.inject({ url });
+      expect(img.statusCode, url).toBe(200);
+      expect(pngSize(img.rawPayload), url).toEqual({ png: true, w: size, h: size });
+    }
+    expect((await app.inject({ url: '/api/state' })).statusCode).toBe(401);
   });
 });
