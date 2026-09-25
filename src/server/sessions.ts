@@ -1,11 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
-import type { CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { get, run, tx } from './db.js';
-import { changes, diffStat } from './changes.js';
+import { changedImage, changes, diffStat } from './changes.js';
 import { addWorktree, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult } from './git.js';
 import type { GuardDecision, HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
@@ -638,6 +638,20 @@ export class SessionManager {
     const c = await changes(row.worktree_path, row.base_branch);
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
     return c;
+  }
+
+  /** One side of a changed image, for the Changes panel's preview. */
+  async changedImage(id: string, path: string, side: ChangeSide): Promise<{ type: string; data: Buffer }> {
+    const row = this.row(id);
+    if (!existsSync(row.worktree_path)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
+    let img: { type: string; data: Buffer } | null;
+    try {
+      img = await changedImage(row.worktree_path, row.base_branch, path, side);
+    } catch {
+      throw new HttpError(400, 'Only image files inside this session\'s repo can be previewed.');
+    }
+    if (!img) throw new HttpError(404, side === 'old' ? 'This image isn\'t in the base branch.' : 'This image isn\'t in the worktree, or it is too large to preview.');
+    return img;
   }
 
   async discardCheck(id: string): Promise<DiscardCheck> {

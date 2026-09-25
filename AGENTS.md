@@ -40,7 +40,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/hooks.ts` | Unix-socket receiver for Claude Code hook events. |
 | `src/server/tmux.ts`, `git.ts`, `github.ts` | Thin wrappers over the tmux, git and gh CLIs. |
 | `src/server/design.ts` | Reading a session's design: the markdown design file, or the page and claude.ai link of a published Artifact. The Design-stage edit guard is `SessionManager.guard()` (hook `guard.sh`, route `/guard` on the hook socket). |
-| `src/server/changes.ts` | What a session changed vs. its base (committed, uncommitted, untracked): footer diff size and the Changes panel's per-file patches, with size caps. |
+| `src/server/changes.ts` | What a session changed vs. its base (committed, uncommitted, untracked): footer diff size and the Changes panel's per-file patches, with size caps, and both sides of changed images for previews. |
 | `src/server/comments.ts` | Review comments on a session's diff: drafts, validation, formatting them for Claude, and delivery (now if Claude is at its prompt, else at the next turn end). |
 | `src/server/meko.ts` | Meko MCP client. |
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents) and per session/project/model/day totals. |

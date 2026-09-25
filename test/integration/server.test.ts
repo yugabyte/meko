@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -136,6 +136,21 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect((await app.inject({ method: 'DELETE', url: `${url}/${cid}`, headers: { cookie } })).statusCode).toBe(404);
     const nothing = await app.inject({ method: 'POST', url: `${url}/send`, headers: { cookie } });
     expect(nothing.statusCode).toBe(409);
+
+    // Image previews: behind login, images only, served so the browser never runs them.
+    const sid = s.json().id;
+    const img = (q: string, withCookie = true) => app.inject({ url: `/api/sessions/${sid}/changes/image?${q}`, headers: withCookie ? { cookie } : {} });
+    writeFileSync(join(s.json().worktreePath, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    expect((await img('path=pic.png&side=new', false)).statusCode).toBe(401);
+    expect((await img('path=pic.png&side=sideways')).statusCode).toBe(400);
+    expect((await img('path=README.md&side=new')).statusCode).toBe(400);
+    expect((await img('path=pic.png&side=old')).statusCode).toBe(404);
+    const pic = await img('path=pic.png&side=new');
+    expect(pic.statusCode).toBe(200);
+    expect(pic.headers['content-type']).toBe('image/png');
+    expect(pic.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
+    expect(pic.headers['x-content-type-options']).toBe('nosniff');
+    expect(pic.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
   });
 });
 

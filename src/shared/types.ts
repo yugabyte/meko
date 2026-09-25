@@ -302,6 +302,20 @@ export interface DiscardCheck {
 
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
 
+/** Image files the Changes panel previews instead of "Binary file", by extension, with their content type. */
+export const PREVIEW_IMAGE_TYPES: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon',
+};
+
+/** The content type to preview a path with, or null when it isn't a previewable image. */
+export function previewImageType(path: string): string | null {
+  const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
+  return (ext && PREVIEW_IMAGE_TYPES[ext]) || null;
+}
+
+/** Which version of a changed file: the base's (old) or the worktree's (new). */
+export type ChangeSide = 'old' | 'new';
+
 /** One file that differs between a session's worktree and where its branch left the base. */
 export interface ChangedFile {
   path: string;
@@ -496,6 +510,7 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/design              → DesignDoc
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
+// GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)

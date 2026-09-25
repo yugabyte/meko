@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo } from '../helpers.js';
 import { addWorktree } from '../../src/server/git.js';
-import { changes, diffStat } from '../../src/server/changes.js';
+import { changedImage, changes, diffStat } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
@@ -137,6 +137,38 @@ describe('changes vs. the base (real git)', () => {
 
     // The footer's numbers match the panel, untracked files included.
     expect(await diffStat(wt, 'main')).toEqual({ added: c.added, removed: c.removed });
+  });
+
+  it('serves both sides of a changed image, and only images inside the repo', async () => {
+    const png = (n: number) => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, n]);
+    mkdirSync(join(repo, 'img'));
+    writeFileSync(join(repo, 'img', 'logo.png'), png(1));
+    writeFileSync(join(repo, 'img', 'gone.png'), png(2));
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'images');
+    rmSync(wt, { recursive: true, force: true });
+    git(repo, 'worktree', 'prune');
+    git(repo, 'branch', '-D', 'ak/x');
+    await addWorktree(repo, wt, 'ak/x', 'main');
+    writeFileSync(join(wt, 'img', 'logo.png'), png(9)); // uncommitted edit
+    unlinkSync(join(wt, 'img', 'gone.png'));
+    writeFileSync(join(wt, 'new.png'), png(5)); // untracked
+
+    expect(await changedImage(wt, 'main', 'img/logo.png', 'old')).toEqual({ type: 'image/png', data: png(1) });
+    expect(await changedImage(wt, 'main', 'img/logo.png', 'new')).toEqual({ type: 'image/png', data: png(9) });
+    expect(await changedImage(wt, 'main', 'new.png', 'old')).toBeNull();
+    expect((await changedImage(wt, 'main', 'new.png', 'new'))?.data).toEqual(png(5));
+    expect(await changedImage(wt, 'main', 'img/gone.png', 'new')).toBeNull();
+    expect((await changedImage(wt, 'main', 'img/gone.png', 'old'))?.data).toEqual(png(2));
+    const c = (await changes(wt, 'main'))!;
+    expect(c.files.find((f) => f.path === 'img/logo.png')).toMatchObject({ binary: true, patch: null });
+
+    // Never a non-image, a path out of the repo, or a symlink that leads out of it.
+    writeFileSync(join(home, 'secret.png'), png(7));
+    symlinkSync(join(home, 'secret.png'), join(wt, 'link.png'));
+    for (const [path, side] of [['README.md', 'new'], ['../secret.png', 'new'], ['img/../../secret.png', 'old'], [join(home, 'secret.png'), 'new'], ['link.png', 'new']] as const) {
+      await expect(changedImage(wt, 'main', path, side), `${path} (${side})`).rejects.toThrow(/not a previewable image/);
+    }
   });
 
   it('is empty on a fresh branch', async () => {

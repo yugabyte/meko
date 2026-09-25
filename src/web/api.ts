@@ -2,6 +2,7 @@ import type {
   AppState,
   AttachDatapackRequest,
   AuthStatus,
+  ChangeSide,
   CreateProjectRequest,
   CreateSessionRequest,
   DesignDoc,
@@ -108,6 +109,9 @@ export const api = {
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
+  /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
+  changeImageUrl: (id: string, path: string, side: ChangeSide, v: number) =>
+    `/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}`,
   comments: (id: string) => get<ReviewComment[]>(`/api/sessions/${enc(id)}/comments`),
   addComment: (id: string, b: NewComment) => post<ReviewComment>(`/api/sessions/${enc(id)}/comments`, b),
   editComment: (id: string, cid: string, body: string) =>

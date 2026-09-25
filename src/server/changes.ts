@@ -1,7 +1,7 @@
-import { lstatSync, readFileSync, readlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import type { ChangedFile, ChangeKind, SessionChanges } from '../shared/types.js';
-import { gitRaw, tryGit } from './git.js';
+import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, join, normalize, sep } from 'node:path';
+import { previewImageType, type ChangedFile, type ChangeKind, type ChangeSide, type SessionChanges } from '../shared/types.js';
+import { gitBuffer, gitRaw, tryGit } from './git.js';
 
 /** A single file's patch is cut here. */
 export const FILE_PATCH_CAP = 256 * 1024;
@@ -103,6 +103,48 @@ export function capPatches(files: ChangedFile[]): number {
     total += f.patch.length;
   }
   return omitted;
+}
+
+/** Largest image the Changes panel previews. */
+export const IMAGE_PREVIEW_MAX = 20 * 1024 * 1024;
+
+/** A repo-relative path that stays inside the repo: no absolute paths, `..` segments or NULs. */
+function safeRelative(path: string): boolean {
+  if (!path || path.includes('\0') || isAbsolute(path)) return false;
+  const n = normalize(path);
+  return n !== '..' && !n.startsWith(`..${sep}`) && !n.split(sep).includes('..');
+}
+
+/**
+ * One side of a changed image for the Changes panel: the base version (`old`, from the merge
+ * base in git) or the worktree's (`new`, uncommitted edits included). Only image types are
+ * served. Null when that side doesn't exist (an added file has no old side, a deleted one no
+ * new side) or is too large; throws on a path that isn't a previewable image inside the repo.
+ */
+export async function changedImage(worktree: string, base: string, path: string, side: ChangeSide): Promise<{ type: string; data: Buffer } | null> {
+  const type = previewImageType(path);
+  if (!type || !safeRelative(path)) throw new Error('not a previewable image in this repo');
+  if (side === 'new') {
+    const full = join(worktree, path);
+    let real: string;
+    try {
+      real = realpathSync(full);
+    } catch {
+      return null;
+    }
+    // A symlink must not lead out of the worktree.
+    const root = realpathSync(worktree);
+    if (real !== root && !real.startsWith(root + sep)) throw new Error('not a previewable image in this repo');
+    const st = statSync(real);
+    if (!st.isFile() || st.size > IMAGE_PREVIEW_MAX) return null;
+    return { type, data: readFileSync(real) };
+  }
+  const mb = await diffBase(worktree, base);
+  if (!mb) return null;
+  const spec = `${mb.sha}:${path.split(sep).join('/')}`;
+  const size = Number(await tryGit(worktree, 'cat-file', '-s', spec));
+  if (!size || size > IMAGE_PREVIEW_MAX) return null;
+  return { type, data: await gitBuffer(worktree, 'cat-file', 'blob', spec) };
 }
 
 /** Splits `git diff` output into one chunk per file, at each `diff --git ` line. */

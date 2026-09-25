@@ -214,6 +214,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {
+    const { path = '', side } = req.query;
+    if (side !== 'old' && side !== 'new') throw new HttpError(400, "side must be 'old' or 'new'.");
+    const img = await core.sessions.changedImage(req.params.id, path, side);
+    // Bytes from the repo: never let the browser run or sniff them, even when opened directly.
+    return reply
+      .type(img.type)
+      .header('Content-Security-Policy', "default-src 'none'; sandbox")
+      .header('Content-Disposition', 'inline')
+      .send(img.data);
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/sessions/:id/comments/send', async (req): Promise<SendCommentsResult> => core.comments.send(req.params.id));

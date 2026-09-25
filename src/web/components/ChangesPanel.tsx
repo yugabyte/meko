@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import type {
-  ChangedFile, ChangeKind, CommentSide, CommentState, ReviewComment, Session, SessionChanges,
+import {
+  previewImageType,
+  type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
+  type SessionChanges,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { anchorComment, parsePatch, sideLine, type DiffLine } from '../diff';
@@ -45,6 +47,8 @@ const isTyping = (t: EventTarget) => t instanceof HTMLElement && !!t.closest('in
 export function ChangesPanel({ session, onClose }: { session: Session; onClose: () => void }) {
   const touch = useTouch();
   const [data, setData] = useState<SessionChanges | null>(null);
+  /** When the diff was last fetched; image previews reload with it. */
+  const [fetchedAt, setFetchedAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
@@ -71,7 +75,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     setLoading(true);
     api
       .changes(session.id)
-      .then((d) => !cancelled && (setData(d), setError(null)))
+      .then((d) => !cancelled && (setData(d), setFetchedAt(Date.now()), setError(null)))
       .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -384,6 +388,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                     )}
                     <FileDiff
                       file={f}
+                      imageUrl={(side, path) => api.changeImageUrl(session.id, path, side, fetchedAt)}
                       lines={parsed.get(f.path) ?? null}
                       renderAfter={(i) => {
                         const cs = placed.at.get(f.path)?.get(i);
@@ -665,14 +670,53 @@ function CommentEditor({
   );
 }
 
+/** A changed image: the base's version next to the worktree's, or just the one that exists. */
+function ImageDiff({ file, imageUrl }: { file: ChangedFile; imageUrl: (side: ChangeSide, path: string) => string }) {
+  const hasOld = file.kind !== 'added' && file.kind !== 'untracked';
+  const hasNew = file.kind !== 'deleted';
+  return (
+    <div className="img-diff">
+      {hasOld && <ImageSide label={hasNew ? 'Before' : 'Deleted'} src={imageUrl('old', file.oldPath ?? file.path)} />}
+      {hasNew && <ImageSide label={hasOld ? 'After' : 'Added'} src={imageUrl('new', file.path)} />}
+    </div>
+  );
+}
+
+function ImageSide({ label, src }: { label: string; src: string }) {
+  const [size, setSize] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  return (
+    <figure className="img-side">
+      <figcaption>
+        <b>{label}</b>
+        {size && <span className="muted mono">{size}</span>}
+      </figcaption>
+      {failed ? (
+        <p className="chg-note">This image couldn’t be shown.</p>
+      ) : (
+        <a className="img-box" href={src} target="_blank" rel="noopener noreferrer" title="Open full size in a new tab">
+          <img
+            src={src}
+            alt={`${label} image`}
+            onLoad={(e) => setSize(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)}
+            onError={() => setFailed(true)}
+          />
+        </a>
+      )}
+    </figure>
+  );
+}
+
 function FileDiff({
   file,
+  imageUrl,
   lines,
   renderAfter,
   picked,
   onComment,
 }: {
   file: ChangedFile;
+  imageUrl: (side: ChangeSide, path: string) => string;
   lines: DiffLine[] | null;
   /** Comment threads (or the editor) shown under row i, or null. */
   renderAfter: (i: number) => ReactNode;
@@ -680,7 +724,9 @@ function FileDiff({
   picked: { side: CommentSide; line: number; endLine: number } | null;
   onComment: (i: number, shift: boolean) => void;
 }) {
-  if (file.binary) return <p className="chg-note">Binary file, not shown.</p>;
+  if (file.binary) {
+    return previewImageType(file.path) ? <ImageDiff file={file} imageUrl={imageUrl} /> : <p className="chg-note">Binary file, not shown.</p>;
+  }
   if (!lines) return <p className="chg-note">This diff is too large to show here.</p>;
   if (lines.length === 0) return <p className="chg-note">{file.kind === 'untracked' ? 'Empty file.' : 'No content changes.'}</p>;
   return (
