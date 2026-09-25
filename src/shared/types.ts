@@ -205,6 +205,24 @@ export interface AppState {
   update: UpdateStatus;
   version: string;
   username: string;
+  /** The account's plan usage limits, or null when no session has reported them (API-key accounts never do). */
+  limits: PlanLimits | null;
+}
+
+/** One plan usage window, as Claude Code reports it to its status line (Pro and Max plans). */
+export interface LimitWindow {
+  /** 0–100. */
+  usedPercent: number;
+  /** When the window resets, in ms since the epoch. */
+  resetsAt: number;
+}
+
+/** The 5-hour and weekly limits from the newest status line report of any session. */
+export interface PlanLimits {
+  fiveHour: LimitWindow | null;
+  sevenDay: LimitWindow | null;
+  /** When a session last reported them. */
+  updatedAt: number;
 }
 
 export interface RepoInfo {

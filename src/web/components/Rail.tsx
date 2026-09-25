@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import type { ProjectWithSessions } from '../../shared/types';
+import { useEffect, useState } from 'react';
+import type { LimitWindow, PlanLimits, ProjectWithSessions } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import type { ThemePref } from '../theme';
-import { aggregateStatus, cx, formatTokens, isMac, liveSessions, repoFolder, totalTokens } from '../util';
+import { aggregateStatus, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
 import { StatusDot } from './common';
 
 export function Rail({
@@ -10,6 +10,7 @@ export function Rail({
   currentId,
   username,
   version,
+  limits,
   theme,
   onCycleTheme,
   onSelect,
@@ -24,6 +25,7 @@ export function Rail({
   currentId: string | null;
   username: string;
   version: string;
+  limits: PlanLimits | null;
   theme: ThemePref;
   onCycleTheme: () => void;
   onSelect: (p: ProjectWithSessions) => void;
@@ -103,6 +105,7 @@ export function Rail({
         )}
       </div>
       <div className="rail-foot">
+        <Limits limits={limits} />
         <div className="rail-actions">
           <button className="icon-btn" onClick={onSettings} title="Settings" aria-label="Settings">
             <Icon d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
@@ -131,6 +134,58 @@ export function Rail({
         </div>
       </div>
     </nav>
+  );
+}
+
+/** When a window resets: a time today, else a weekday and time, else a date. */
+function resetLabel(ms: number, now: number): string {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === new Date(now).toDateString()) return time;
+  if (ms - now < 6 * 86_400_000) return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/** The account's 5-hour and weekly plan limits, from the newest status line report of any session. */
+function Limits({ limits }: { limits: PlanLimits | null }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  if (!limits) return null;
+  // A window whose reset time has passed no longer applies, even before the server says so.
+  const rows = (
+    [
+      ['5-hour', limits.fiveHour],
+      ['Weekly', limits.sevenDay],
+    ] as [string, LimitWindow | null][]
+  ).filter((r): r is [string, LimitWindow] => !!r[1] && r[1].resetsAt > now);
+  if (!rows.length) return null;
+  return (
+    <div className="limits" aria-label="Plan usage limits">
+      {rows.map(([label, w]) => {
+        const pct = Math.round(w.usedPercent);
+        const level = pct >= 95 ? 'bad' : pct >= 80 ? 'warn' : null;
+        const reset = resetLabel(w.resetsAt, now);
+        return (
+          <div key={label} className={cx('lim', level)} title={`${label} limit: ${pct}% used, resets ${new Date(w.resetsAt).toLocaleString()}`}>
+            <div className="lim-hd">
+              <span>{label}</span>
+              <span className="lim-pct">
+                {level && <span aria-hidden="true">▲ </span>}
+                {pct}%
+              </span>
+            </div>
+            <div className="lim-bar" role="meter" aria-label={`${label} limit used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+              <i style={{ width: `${Math.max(pct, 2)}%` }} />
+            </div>
+            <div className="lim-reset">Resets {reset}</div>
+          </div>
+        );
+      })}
+      <div className="lim-age">As of {relativeTime(limits.updatedAt, now).toLowerCase()}</div>
+    </div>
   );
 }
 

@@ -233,6 +233,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         currentId={currentProject?.id ?? null}
         username={state.username || auth.username || ''}
         version={state.version}
+        limits={state.limits ?? null}
         theme={theme}
         onCycleTheme={cycleTheme}
         onSelect={(p) => {

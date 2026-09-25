@@ -12,7 +12,7 @@ import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import { loadPrompt, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
-import { EDIT_TOOLS, transcriptPathFor, writeLauncher } from './claude.js';
+import { EDIT_TOOLS, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
@@ -270,7 +270,10 @@ export class SessionManager {
   private env(row: SessionRow): Record<string, string> {
     const dps = projectDatapacks(this.db, row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
+    // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
+    const statusLine = userStatusLine(row.worktree_path)?.command;
     return {
+      ...(statusLine ? { AK_USER_STATUSLINE: statusLine } : {}),
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       AK_HOOK_SOCK: this.core.paths.hookSock,
@@ -381,6 +384,12 @@ export class SessionManager {
           `Publish the design as an Artifact, or write it to ${this.designFile(row)}.`,
       },
     };
+  }
+
+  /** A status line run: only its plan usage limits are kept. */
+  onStatusLine(token: string, input: unknown): void {
+    const row = this.byToken(token);
+    if (row?.desired === 'running') this.core.limits.report(input);
   }
 
   async onHook(token: string, p: HookPayload): Promise<void> {

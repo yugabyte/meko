@@ -22,7 +22,8 @@ your devserver, and you use it from a browser:
   markdown. You approve the design, opening the PR and merging. The server waits for reviews and CI and hands AgentK
   findings to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
-  subagents included.
+  subagents included. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
+  and when they reset.
 - **Meko datapacks** give every project a memory: one dedicated datapack plus any number of
   shared ones.
 - **Survives restarts:** after a host reboot, every open session is brought back with

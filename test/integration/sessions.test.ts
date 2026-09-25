@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
@@ -295,6 +295,30 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await env.core.sessions.recover();
     expect(argvLog(env).length).toBe(launches);
     await waitFor(() => captureLog(env).length, (n) => n > captured, 10000, 'catch-up capture on boot');
+  });
+
+  it("reports plan limits from the status line and still prints the user's own status line", async () => {
+    // The user's status line, which ours replaces and then runs with the same input.
+    mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+    writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: `cat > '${join(env.fakeDir, 'user-statusline.in')}'; printf 'my status'`, padding: 2 },
+    }));
+    const { writeHookFiles } = await import('../../src/server/claude.js');
+    writeHookFiles(env.core.paths);
+    const settings = JSON.parse(readFileSync(join(env.core.paths.run, 'hooks.json'), 'utf8'));
+    expect(settings.statusLine).toEqual({ type: 'command', command: join(env.core.paths.run, 'statusline.sh'), padding: 2 });
+    expect(env.core.state().limits).toBeNull();
+
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Limits', prompt: 'STATUSLINE', skipDesign: true });
+    const limits = await waitFor(() => env.core.state().limits, (l) => l !== null, 10000, 'plan limits');
+    expect(limits).toMatchObject({ fiveHour: { usedPercent: 42, resetsAt: 4102444800000 }, sevenDay: { usedPercent: 18 } });
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'turn end');
+    expect(readFileSync(join(env.fakeDir, 'statusline.out'), 'utf8')).toBe('my status');
+    expect(JSON.parse(readFileSync(join(env.fakeDir, 'user-statusline.in'), 'utf8')).rate_limits.five_hour.used_percentage).toBe(42);
+    function get() {
+      return env.core.sessions.get(s.id);
+    }
   });
 
   it('sends review comments to Claude now when idle, or when its turn ends', async () => {

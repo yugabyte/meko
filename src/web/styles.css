@@ -511,6 +511,61 @@ textarea.input {
   display: flex;
   gap: 2px;
 }
+/* Plan usage limits (5-hour and weekly), above the rail's buttons. */
+.limits {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.lim {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+}
+.lim-hd {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink);
+}
+.lim-pct {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.lim-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--sunk);
+  border: 1px solid var(--rule);
+  overflow: hidden;
+}
+.lim-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.lim.warn .lim-pct {
+  color: var(--warn);
+  font-weight: 600;
+}
+.lim.warn .lim-bar i {
+  background: var(--warn);
+}
+.lim.bad .lim-pct {
+  color: var(--bad);
+  font-weight: 600;
+}
+.lim.bad .lim-bar i {
+  background: var(--bad);
+}
+.lim-reset,
+.lim-age {
+  color: var(--muted);
+  font-size: 11px;
+}
 .me {
   display: flex;
   justify-content: space-between;

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { Paths } from './paths.js';
@@ -54,6 +54,28 @@ curl -sf --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
 exit 0
 `;
 
+/**
+ * Status line: Claude Code runs it with a JSON description of the session, which includes
+ * the plan usage limits (5-hour and weekly) on Pro and Max plans. It passes those to the
+ * server in the background, then runs the user's own status line command with the same
+ * input, so the terminal looks as it would without AgentK Local.
+ */
+const STATUSLINE_SCRIPT = `#!/bin/sh
+# Written by agent-k-local. Reports plan usage limits, then prints the user's status line.
+input=$(cat)
+if [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ]; then
+  case $input in
+    *'"rate_limits"'*)
+      printf '%s' "$input" | curl -s -o /dev/null --max-time 2 --unix-socket "$AK_HOOK_SOCK" \\
+        -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+        --data-binary @- http://localhost/statusline >/dev/null 2>&1 &
+      ;;
+  esac
+fi
+[ -n "$AK_USER_STATUSLINE" ] && printf '%s' "$input" | sh -c "$AK_USER_STATUSLINE"
+exit 0
+`;
+
 /** File-editing tools the Design-stage guard checks. */
 export const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
@@ -63,6 +85,52 @@ export function guardScriptPath(paths: Paths): string {
 
 export function hookScriptPath(paths: Paths): string {
   return join(paths.run, 'hook.sh');
+}
+
+export function statusLineScriptPath(paths: Paths): string {
+  return join(paths.run, 'statusline.sh');
+}
+
+export interface StatusLineSetting {
+  type?: string;
+  command?: string;
+  padding?: number;
+  refreshInterval?: number;
+}
+
+/** Claude Code's user settings folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`). */
+export function claudeUserDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+}
+
+function readStatusLine(file: string): StatusLineSetting | null {
+  try {
+    const sl = (JSON.parse(readFileSync(file, 'utf8')) as { statusLine?: unknown }).statusLine;
+    if (!sl || typeof sl !== 'object') return null;
+    const s = sl as StatusLineSetting;
+    // Never wrap our own script (for example, settings copied from a session).
+    return s.type === 'command' && typeof s.command === 'string' && s.command.trim() && !s.command.includes('statusline.sh')
+      ? s
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The status line Claude Code would run without ours, since ours (passed with --settings)
+ * replaces it: local project settings first, then project, then user settings.
+ */
+export function userStatusLine(worktree: string | null): StatusLineSetting | null {
+  const files = [
+    ...(worktree ? [join(worktree, '.claude', 'settings.local.json'), join(worktree, '.claude', 'settings.json')] : []),
+    join(claudeUserDir(), 'settings.json'),
+  ];
+  for (const f of files) {
+    const sl = readStatusLine(f);
+    if (sl) return sl;
+  }
+  return null;
 }
 
 export function hooksSettingsPath(paths: Paths): string {
@@ -78,6 +146,11 @@ export function writeHookFiles(paths: Paths): void {
   const guard = guardScriptPath(paths);
   writeFileSync(guard, GUARD_SCRIPT);
   chmodSync(guard, 0o755);
+  const statusLine = statusLineScriptPath(paths);
+  writeFileSync(statusLine, STATUSLINE_SCRIPT);
+  chmodSync(statusLine, 0o755);
+  // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE).
+  const mine = userStatusLine(null);
   const cmd = { type: 'command', command: script, timeout: 5 };
   const all = [{ hooks: [cmd] }];
   const settings = {
@@ -85,6 +158,12 @@ export function writeHookFiles(paths: Paths): void {
     // Artifact (private by default), shouldn't stop for a permission prompt.
     permissions: {
       allow: [`Write(/${paths.designs}/**)`, `Edit(/${paths.designs}/**)`, 'Artifact'],
+    },
+    statusLine: {
+      type: 'command',
+      command: statusLine,
+      ...(typeof mine?.padding === 'number' ? { padding: mine.padding } : {}),
+      ...(typeof mine?.refreshInterval === 'number' ? { refreshInterval: mine.refreshInterval } : {}),
     },
     hooks: {
       SessionStart: all,

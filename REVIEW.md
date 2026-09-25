@@ -15,6 +15,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Auto-continue guards hold (once per 15 minutes; parked after two recoveries in an hour).
 - [ ] Status changes come from hook events or pane checks, not guesses. Deliberate stops (archive,
       cleanup) don't show up as "exited".
+- [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
+      user's own status line with the same input, and never prints anything of its own.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).
 
 ## 2. Security

@@ -71,6 +71,20 @@ async function turn(text) {
       tool_response: 'Published https://claude.ai/code/artifact/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b (private).',
     });
   }
+  if (text.includes('STATUSLINE')) {
+    // Like Claude Code: runs the status line command with the session's JSON, plan limits included.
+    const input = JSON.stringify({
+      session_id: sessionId, model: { id: 'claude-fake-1' },
+      rate_limits: { five_hour: { used_percentage: 42, resets_at: 4102444800 }, seven_day: { used_percentage: 18, resets_at: 4102444800 } },
+    });
+    let out = '';
+    try {
+      out = execFileSync('sh', ['-c', settings.statusLine.command], { input, stdio: ['pipe', 'pipe', 'ignore'] }).toString();
+    } catch {
+      /* a failing status line shows nothing */
+    }
+    writeFileSync(join(dir, 'statusline.out'), out);
+  }
   if (text.includes('EDIT_REPO')) {
     // Asks the edit guard about a file in the repo and one outside it, and records the answers.
     for (const file of [join(process.cwd(), 'src.ts'), join(dir, 'scratch.txt')]) {

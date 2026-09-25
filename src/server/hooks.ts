@@ -31,6 +31,7 @@ export function startHookServer(
   sockPath: string,
   onEvent: (token: string, payload: HookPayload) => void,
   onGuard: (token: string, payload: HookPayload) => GuardDecision = () => null,
+  onStatusLine: (token: string, input: unknown) => void = () => undefined,
 ): Promise<Server> {
   const dir = dirname(sockPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -41,7 +42,7 @@ export function startHookServer(
   if (st.mode & 0o077) chmodSync(dir, 0o700);
   rmSync(sockPath, { force: true });
   const server = createServer((req, res) => {
-    if (req.method !== 'POST' || (req.url !== '/hook' && req.url !== '/guard')) {
+    if (req.method !== 'POST' || (req.url !== '/hook' && req.url !== '/guard' && req.url !== '/statusline')) {
       res.writeHead(404).end();
       return;
     }
@@ -67,7 +68,8 @@ export function startHookServer(
       res.writeHead(204).end();
       if (!token) return;
       try {
-        onEvent(token, JSON.parse(body) as HookPayload);
+        if (req.url === '/statusline') onStatusLine(token, JSON.parse(body));
+        else onEvent(token, JSON.parse(body) as HookPayload);
       } catch {
         /* malformed payload: ignore */
       }

@@ -11,6 +11,7 @@ import { resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './confi
 import { run, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
+import { PlanLimitsStore } from './limits.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { MekoClient } from './meko.js';
 import type { Paths } from './paths.js';
@@ -50,6 +51,7 @@ export class Core extends EventEmitter {
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
   readonly comments: CommentService;
+  readonly limits: PlanLimitsStore;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -81,6 +83,7 @@ export class Core extends EventEmitter {
     this.sessions = new SessionManager(this);
     this.lifecycle = new Lifecycle(this);
     this.comments = new CommentService(this);
+    this.limits = new PlanLimitsStore(this.db, () => this.changed());
   }
 
   get config(): Config {
@@ -121,6 +124,7 @@ export class Core extends EventEmitter {
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
       username: getOwner(this.db)?.username ?? this.username,
+      limits: this.limits.current(),
     };
   }
 
@@ -139,6 +143,7 @@ export class Core extends EventEmitter {
         this.sessions.onHook(token, payload).catch((e) => this.log.error('hook handling failed', e));
       },
       (token, payload) => this.sessions.guard(token, payload),
+      (token, input) => this.sessions.onStatusLine(token, input),
     );
     await this.tmux.ensureServer();
     await this.checkMeko();
