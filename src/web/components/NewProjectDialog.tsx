@@ -34,7 +34,6 @@ export function NewProjectDialog({
   const [cloneUrl, setCloneUrl] = useState('');
   const [folder, setFolder] = useState('');
   const [name, setName] = useState('');
-  const [nameTouched, setNameTouched] = useState(false);
 
   const [datapacks, setDatapacks] = useState<MekoDatapack[] | null>(null);
   const [dpError, setDpError] = useState<string | null>(null);
@@ -61,14 +60,11 @@ export function NewProjectDialog({
       .catch((e) => setDpError(errorMessage(e)));
   }, []);
 
-  // Keep the project name and default datapack name in step with the chosen repo until edited.
-  const suggested =
+  // The project name is always typed, never taken from the repo. The default datapack name
+  // follows the chosen repo and the typed name until edited: adlc/proj/<repo>/<project_name>.
+  const repoName =
     source === 'list' ? (selected?.name ?? '') : source === 'clone' ? nameFromUrl(cloneUrl) : nameFromPath(folder);
-  useEffect(() => {
-    if (!nameTouched) setName(suggested);
-  }, [suggested, nameTouched]);
-  // Datapack naming convention: adlc/proj/<repo>/<project_name>.
-  const defaultDp = `adlc/proj/${slugify(suggested) || 'repo'}/${slugify(name) || 'project'}`;
+  const defaultDp = `adlc/proj/${slugify(repoName) || 'repo'}/${slugify(name) || 'project'}`;
   useEffect(() => {
     if (!dpNameTouched) setDpName(defaultDp);
   }, [defaultDp, dpNameTouched]);
@@ -231,10 +227,7 @@ export function NewProjectDialog({
             id="np-name"
             className="input"
             value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setNameTouched(true);
-            }}
+            onChange={(e) => setName(e.target.value)}
           />
         </Field>
         <Field label="Dedicated datapack">
