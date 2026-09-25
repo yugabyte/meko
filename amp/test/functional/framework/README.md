@@ -140,7 +140,9 @@ API server (`k8s.APIServerUnreachableError`) never observed the product, so it
 lands `env_failed` too — joined with any other error it stays `failed`. And a
 fourth: any failure recorded while the shared control plane's own namespace is
 gone or Terminating, which nothing in the product can cause
-(`SharedInfraGoneChecker`).
+(`SharedInfraGoneChecker`). A fifth: a chaos test whose backing pod the scheduler
+cannot place again after the fault (`PodState.Unschedulable`, e.g. `Insufficient
+cpu` in the PV's zone) marks that wait, or the YBA roll it failed, `core.EnvFail`.
 
 **Env-failure retries** (`core/retry.go`). A test whose environment failed for a
 SCHEDULING-CLASS reason — pod unschedulable, insufficient cpu/memory,

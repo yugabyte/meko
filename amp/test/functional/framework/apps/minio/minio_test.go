@@ -3,7 +3,6 @@ package minio
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 	"github.com/yugabyte/amp/test/functional/framework/kubemeta"
@@ -13,8 +12,8 @@ import (
 // drops them leaks past teardown.
 func TestManifestsCarryTheJanitorLabels(t *testing.T) {
 	for name, m := range map[string]string{
-		"server":  serverManifest(Spec{Name: "minio-1", Bucket: "b"}),
-		"oneShot": oneShotManifest("minio-1-mb", "minio/mc:latest", "true"),
+		"server": serverManifest(Spec{Name: "minio-1", Bucket: "b"}),
+		"bucket": bucketManifest("minio-1-mb", Spec{Name: "minio-1", Bucket: "b", ClientImage: "mc:latest"}, "http://minio-1.ns.svc.cluster.local:9000"),
 	} {
 		if !strings.Contains(m, kubemeta.TestLabel+": \""+kubemeta.TestLabelValue+"\"") {
 			t.Errorf("%s manifest is missing the %s label:\n%s", name, kubemeta.TestLabel, m)
@@ -63,31 +62,21 @@ func TestServerManifestCarriesRootCredentialsAndReadiness(t *testing.T) {
 }
 
 // Regression: the bootstrap ran once and died on "connection refused" because
-// kube-proxy had not published the Service endpoint yet, which happens some
-// moment after the server pod reports Ready. The script must retry.
-func TestBucketScriptRetriesUntilTheServiceAnswers(t *testing.T) {
-	script := bucketScript(Spec{Bucket: "ampqa-backups"}, "http://minio-1.ns.svc.cluster.local:9000")
-	for _, want := range []string{"for i in $(seq 1 60)", "sleep 2", "exit 0", "exit 1"} {
-		if !strings.Contains(script, want) {
-			t.Errorf("script missing %q, so a single failed attempt aborts the run:\n%s", want, script)
+// kube-proxy had not published the Service endpoint yet. The client image has no
+// shell to loop in, so the kubelet has to be the one retrying.
+func TestBucketManifestRetriesUntilTheServiceAnswers(t *testing.T) {
+	m := bucketManifest("minio-1-mb", Spec{Bucket: "ampqa-backups", ClientImage: "mc:latest"}, "http://minio-1.ns.svc.cluster.local:9000")
+	for _, want := range []string{
+		"restartPolicy: OnFailure",
+		`args: ["mb", "--ignore-existing", "target/ampqa-backups"]`,
+		`value: "http://` + AccessKey + ":" + SecretKey + `@minio-1.ns.svc.cluster.local:9000"`,
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("bucket manifest missing %q:\n%s", want, m)
 		}
 	}
-	if !strings.Contains(script, "mc mb --ignore-existing target/ampqa-backups") {
-		t.Errorf("bucket create is not idempotent:\n%s", script)
-	}
-	// The in-pod retry must give up before the pod-level wait does, or the
-	// failure surfaces as an opaque timeout instead of mc's own error.
-	if budget := time.Duration(bucketAttempts) * bucketRetry; budget >= 5*time.Minute {
-		t.Errorf("in-pod retry budget %s exceeds the default ReadyTimeout", budget)
-	}
-}
-
-// The bootstrap script is embedded in YAML as a quoted scalar, so an unescaped
-// quote would produce a manifest kubectl rejects.
-func TestOneShotManifestQuotesTheScript(t *testing.T) {
-	m := oneShotManifest("mb", "minio/mc:latest", `mc alias set target "http://h:9000" k s`)
-	if !strings.Contains(m, `command: ["sh", "-c", "mc alias set target \"http://h:9000\" k s"]`) {
-		t.Errorf("script not escaped into the command:\n%s", m)
+	if strings.Contains(m, "sh") && strings.Contains(m, `"-c"`) {
+		t.Errorf("bucket manifest runs a shell the client image does not have:\n%s", m)
 	}
 }
 

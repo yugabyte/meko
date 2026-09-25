@@ -81,7 +81,7 @@ func TestDiagnosticsCommands(t *testing.T) {
 		on("logs amp-controller-0 --previous", execpkg.Result{Stdout: "crashed\n"}).
 		on("describe pod amp-controller-0", execpkg.Result{Stdout: "Events:\n  BackOff\n"}).
 		on("get events", execpkg.Result{Stdout: "0s Warning BackOff\n"}).
-		on("get pods -o jsonpath", execpkg.Result{Stdout: "amp-controller-0\tRunning\tTrue\nyb-ep-abc\tPending\t\n"})
+		on("get pods -o jsonpath", execpkg.Result{Stdout: "amp-controller-0\tRunning\tTrue\tu1\t0,\t|\nyb-ep-abc\tPending\t\tu2\t\tUnschedulable|0/3 nodes are available: 3 Insufficient cpu.\n"})
 	k := testKubectl(sr)
 	ctx := context.Background()
 
@@ -101,10 +101,10 @@ func TestDiagnosticsCommands(t *testing.T) {
 	if len(states) != 2 {
 		t.Fatalf("PodStates count = %d, want 2 (%+v)", len(states), states)
 	}
-	if states[0] != (PodState{Name: "amp-controller-0", Phase: "Running", Ready: true}) {
+	if states[0] != (PodState{Name: "amp-controller-0", Phase: "Running", Ready: true, UID: "u1"}) {
 		t.Errorf("state[0] = %+v, want Running/Ready controller", states[0])
 	}
-	if states[1] != (PodState{Name: "yb-ep-abc", Phase: "Pending", Ready: false}) {
+	if states[1] != (PodState{Name: "yb-ep-abc", Phase: "Pending", UID: "u2", Unschedulable: "0/3 nodes are available: 3 Insufficient cpu."}) {
 		t.Errorf("state[1] = %+v, want Pending/not-ready endpoint", states[1])
 	}
 

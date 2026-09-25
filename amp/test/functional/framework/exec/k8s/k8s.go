@@ -534,10 +534,13 @@ type PodState struct {
 	Ready    bool
 	UID      string
 	Restarts int
+	// Unschedulable is the scheduler's PodScheduled=False message, e.g.
+	// "0/47 nodes are available: 41 Insufficient cpu"; empty once placed.
+	Unschedulable string
 }
 
 func (k *Kubectl) PodStates(ctx context.Context) ([]PodState, error) {
-	const jsonpath = `{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\t"}{.metadata.uid}{"\t"}{range .status.containerStatuses[*]}{.restartCount}{","}{end}{"\n"}{end}`
+	const jsonpath = `{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\t"}{.metadata.uid}{"\t"}{range .status.containerStatuses[*]}{.restartCount}{","}{end}{"\t"}{range .status.conditions[?(@.type=="PodScheduled")]}{.reason}{"|"}{.message}{end}{"\n"}{end}`
 	res, err := k.exec(ctx, nil, "get", "pods", "-o", "jsonpath="+jsonpath)
 	if err != nil {
 		return nil, err
@@ -564,6 +567,11 @@ func (k *Kubectl) PodStates(ctx context.Context) ([]PodState, error) {
 				if v, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
 					st.Restarts += v
 				}
+			}
+		}
+		if len(fields) > 5 {
+			if reason, msg, ok := strings.Cut(strings.TrimSpace(fields[5]), "|"); ok && reason == "Unschedulable" {
+				st.Unschedulable = strings.TrimSpace(msg)
 			}
 		}
 		if st.Name != "" {

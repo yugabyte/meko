@@ -699,7 +699,33 @@ func (r *clientWindowRun) backingRoll(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("the backing is not a YBA universe, so it cannot be rolled through YBA")
 	}
 	start := time.Now()
-	return start, maintainer.RestartUniverseAndWait(ctx, universeID, yba.UpgradeRolling, r.params.BackingRollSleep)
+	err := maintainer.RestartUniverseAndWait(ctx, universeID, yba.UpgradeRolling, r.params.BackingRollSleep)
+	if err != nil {
+		if stuck := unschedulableBackingPods(ctx, r.t.Env); stuck != "" {
+			return start, core.EnvFail("%w (a YugabyteDB pod of the backing is unschedulable: %s)", err, stuck)
+		}
+	}
+	return start, err
+}
+
+// YBA's task error carries no reason, and a roll cannot finish while a master or
+// tserver it replaced sits unplaced, so that is taken as the cause.
+func unschedulableBackingPods(ctx context.Context, env any) string {
+	be, ok := env.(interface{ BackingKube() *k8s.Kubectl })
+	if !ok || be.BackingKube() == nil {
+		return ""
+	}
+	states, err := be.BackingKube().PodStates(ctx)
+	if err != nil {
+		return ""
+	}
+	var stuck []string
+	for _, st := range states {
+		if st.Unschedulable != "" && (strings.Contains(st.Name, "yb-tserver-") || strings.Contains(st.Name, "yb-master-")) {
+			stuck = append(stuck, st.Name+": "+st.Unschedulable)
+		}
+	}
+	return strings.Join(stuck, "; ")
 }
 
 func (r *clientWindowRun) checkJava(s *core.StepHandle) error {

@@ -8,6 +8,7 @@ package minio
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,23 +25,19 @@ const (
 	// DefaultServerImage / DefaultClientImage run the server and the one-shot
 	// bucket bootstrap.
 	//
-	// quay.io and an immutable RELEASE tag, not Docker Hub and not `latest`:
-	// `docker.io/minio/minio:latest` stopped resolving ("not found") and took
-	// backing_backup_restore with it, and the repository itself now 404s on the
-	// Hub API. Pinning only stops the tag moving under us — the manifests hand
-	// the ref straight to the kubelet, so quay dropping the repository breaks
-	// the suite exactly the same way, and nothing here mirrors or caches it.
-	DefaultServerImage = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
-	DefaultClientImage = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
+	// Chainguard's: MinIO stopped publishing images, and both docker.io/minio
+	// and quay.io/minio now refuse anonymous pulls. The free tier serves only
+	// `latest`. The client image has no shell, so the bucket bootstrap is a bare
+	// `mc` invocation retried by the kubelet.
+	DefaultServerImage = "cgr.dev/chainguard/minio:latest"
+	DefaultClientImage = "cgr.dev/chainguard/minio-client:latest"
 
 	port      = 9000
 	readyPoll = 3 * time.Second
 
-	// bucketAttempts/bucketRetry bound the in-pod retry of the bucket
-	// bootstrap. Their product must stay under Spec.ReadyTimeout, which is
-	// what gives up on the pod as a whole.
-	bucketAttempts = 60
-	bucketRetry    = 2 * time.Second
+	// Four attempts span ~70s of kubelet backoff (10s, 20s, 40s), far past the
+	// Service-endpoint race the restarts exist for.
+	bucketMaxRestarts = 3
 )
 
 // Spec configures one deployment.
@@ -108,41 +105,53 @@ func Deploy(ctx context.Context, kube *k8s.Kubectl, spec Spec) (*Server, error) 
 func makeBucket(ctx context.Context, kube *k8s.Kubectl, spec Spec, endpoint string) error {
 	name := spec.Name + "-mb"
 	_ = kube.Delete(ctx, "pod", name)
-	if err := kube.Apply(ctx, oneShotManifest(name, spec.ClientImage, bucketScript(spec, endpoint))); err != nil {
+	if err := kube.Apply(ctx, bucketManifest(name, spec, endpoint)); err != nil {
 		return fmt.Errorf("minio: apply bucket bootstrap: %w", err)
+	}
+	fail := func(format string, args ...any) error {
+		logs, _ := kube.LogsPrevious(ctx, name, "", 20)
+		if strings.TrimSpace(logs) == "" {
+			logs, _ = kube.Logs(ctx, "pod/"+name, "", 20)
+		}
+		_ = kube.Delete(ctx, "pod", name)
+		return fmt.Errorf("minio: "+format+"%s", append(args, k8s.LogTail("logs", logs))...)
 	}
 	deadline := time.Now().Add(spec.ReadyTimeout)
 	for {
-		phase, err := kube.Get(ctx, "pod", name, "{.status.phase}")
+		out, err := kube.Get(ctx, "pod", name, "{.status.phase} {.status.containerStatuses[0].restartCount}")
 		if err == nil {
-			switch strings.TrimSpace(phase) {
-			case "Succeeded":
+			phase, restarts, _ := strings.Cut(strings.TrimSpace(out), " ")
+			if phase == "Succeeded" {
 				return nil
-			case "Failed":
-				logs, _ := kube.Logs(ctx, "pod/"+name, "", 20)
-				return fmt.Errorf("minio: bucket bootstrap failed%s", k8s.LogTail("logs", logs))
+			}
+			if n, _ := strconv.Atoi(restarts); n >= bucketMaxRestarts {
+				return fail("bucket bootstrap failed %d times", n+1)
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("minio: bucket bootstrap did not finish in %s", spec.ReadyTimeout)
+			return fail("bucket bootstrap did not finish in %s", spec.ReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():
+			_ = kube.Delete(context.WithoutCancel(ctx), "pod", name)
 			return fmt.Errorf("minio: waiting for bucket bootstrap: %w", ctx.Err())
 		case <-time.After(readyPoll):
 		}
 	}
 }
 
-// bucketScript retries in-pod: kube-proxy publishes the Service's endpoint
-// some moment AFTER the server pod reports Ready, and until it does the
-// ClusterIP refuses the connection outright. `mc` does not retry that itself,
-// so a single-shot script dies on a race the caller cannot see.
-func bucketScript(spec Spec, endpoint string) string {
-	return fmt.Sprintf(
-		"for i in $(seq 1 %d); do mc alias set target %s %s %s && mc mb --ignore-existing target/%s && exit 0; sleep %d; done; echo minio unreachable after %d attempts; exit 1",
-		bucketAttempts, endpoint, AccessKey, SecretKey, spec.Bucket,
-		int(bucketRetry.Seconds()), bucketAttempts)
+// bucketManifest restarts mc until it succeeds: kube-proxy publishes the
+// Service's endpoint some moment AFTER the server pod reports Ready, and until
+// it does the ClusterIP refuses the connection and mc exits 1.
+func bucketManifest(name string, spec Spec, endpoint string) string {
+	host := strings.Replace(endpoint, "://", "://"+AccessKey+":"+SecretKey+"@", 1)
+	var b strings.Builder
+	fmt.Fprintf(&b, "apiVersion: v1\nkind: Pod\nmetadata:\n  name: %s\n  labels:\n%s", name, labels())
+	b.WriteString("spec:\n  restartPolicy: OnFailure\n  containers:\n")
+	fmt.Fprintf(&b, "    - name: mc\n      image: %s\n", spec.ClientImage)
+	fmt.Fprintf(&b, "      args: [\"mb\", \"--ignore-existing\", %q]\n", "target/"+spec.Bucket)
+	fmt.Fprintf(&b, "      env:\n        - name: MC_HOST_target\n          value: %q\n", host)
+	return b.String()
 }
 
 func labels() string {
@@ -161,13 +170,5 @@ func serverManifest(spec Spec) string {
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "apiVersion: v1\nkind: Service\nmetadata:\n  name: %s\n  labels:\n%s", spec.Name, labels())
 	fmt.Fprintf(&b, "spec:\n  selector:\n    app: %s\n  ports:\n    - port: %d\n      targetPort: %d\n", spec.Name, port, port)
-	return b.String()
-}
-
-func oneShotManifest(name, image, script string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "apiVersion: v1\nkind: Pod\nmetadata:\n  name: %s\n  labels:\n%s", name, labels())
-	b.WriteString("spec:\n  restartPolicy: Never\n  containers:\n")
-	fmt.Fprintf(&b, "    - name: mc\n      image: %s\n      command: [\"sh\", \"-c\", %q]\n", image, script)
 	return b.String()
 }

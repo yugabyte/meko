@@ -2006,8 +2006,8 @@ stress:
     # storage_config_name is the YBA storage config registered for the MinIO
     # (reused when it already exists, so kept envs don't stack duplicates).
     storage_config_name: "ampqa-minio"
-    minio_server_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
-    minio_client_image: "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
+    minio_server_image: "cgr.dev/chainguard/minio:latest"
+    minio_client_image: "cgr.dev/chainguard/minio-client:latest"
     # storage_ready_timeout bounds the MinIO pod start and bucket bootstrap.
     storage_ready_timeout: "5m"
     # probe_rows sizes each probe database (backup/restore round-trip checksum,

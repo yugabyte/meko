@@ -145,7 +145,7 @@ func awaitBackingReady(t *core.T, kube *k8s.Kubectl, settle time.Duration) (time
 	deadline := start.Add(settle)
 	stable := 0
 	for {
-		why, err := backingNotReady(t, kube)
+		why, onlyUnschedulable, err := backingNotReady(t, kube)
 		if err != nil {
 			why = err.Error()
 		}
@@ -163,6 +163,10 @@ func awaitBackingReady(t *core.T, kube *k8s.Kubectl, settle time.Duration) (time
 		if time.Now().After(deadline) {
 			if why == "" {
 				why = fmt.Sprintf("its pods keep dropping out of Ready before holding it for %d polls", backingReadySettled)
+			}
+			if onlyUnschedulable {
+				return time.Since(start), core.EnvFail(
+					"the backing is still not serving %s after the chaos stopped, and every pod it is missing is one the scheduler cannot place: %s", settle, why)
 			}
 			return time.Since(start), fmt.Errorf(
 				"the backing is still not serving %s after the chaos stopped: %s", settle, why)
@@ -267,23 +271,26 @@ func leaderlessTablets(ctx context.Context, admin *ybadmin.Client, database stri
 	return out, raw.String(), nil
 }
 
-func backingNotReady(t *core.T, kube *k8s.Kubectl) (string, error) {
+// onlyUnschedulable holds only when every not-ready pod is unplaced: a placed pod
+// that is not Ready is a product signal even beside one the cluster had no room for.
+func backingNotReady(t *core.T, kube *k8s.Kubectl) (why string, onlyUnschedulable bool, err error) {
 	pods, err := backingPods(t, kube)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(pods) == 0 {
-		return fmt.Sprintf("no backing pod exists in namespace %q yet", kube.Namespace()), nil
+		return fmt.Sprintf("no backing pod exists in namespace %q yet", kube.Namespace()), false, nil
 	}
 	states, err := kube.PodStates(t.Context)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	byName := make(map[string]k8s.PodState, len(states))
 	for _, st := range states {
 		byName[st.Name] = st
 	}
 	var bad []string
+	unplaced := 0
 	for _, pod := range pods {
 		st, ok := byName[pod]
 		if !ok {
@@ -291,8 +298,13 @@ func backingNotReady(t *core.T, kube *k8s.Kubectl) (string, error) {
 			continue
 		}
 		if st.Phase != "Running" || !st.Ready {
+			if st.Unschedulable != "" {
+				unplaced++
+				bad = append(bad, fmt.Sprintf("%s (%s, unschedulable: %s)", pod, st.Phase, st.Unschedulable))
+				continue
+			}
 			bad = append(bad, fmt.Sprintf("%s (%s, ready=%v)", pod, st.Phase, st.Ready))
 		}
 	}
-	return strings.Join(bad, ", "), nil
+	return strings.Join(bad, ", "), len(bad) > 0 && unplaced == len(bad), nil
 }
