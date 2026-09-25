@@ -30,7 +30,7 @@ your devserver, and you use it from a browser:
   `claude --resume`, and sessions that were mid-turn are told to continue.
 - **Updates itself** from GitHub Releases without interrupting running sessions.
 
-![AgentK Local: a session in the Code stage, with the live Claude Code terminal](docs/screenshots/workbench.png)
+![AgentK Local: a session in the Code stage, with the live Claude Code terminal, the Changes panel with a draft review comment, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
 
 <table>
   <tr>
