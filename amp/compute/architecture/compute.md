@@ -248,7 +248,7 @@ The pageserver-facing GUCs (all in `pg_init_libpagestore()`):
 | `yb_amp.max_cluster_size` | SIGHUP | `-1` | Cluster size limit (MB); `-1` disables |
 | `yb_amp.flush_output_after` | USERSET | `8` | Flush the request buffer after N unflushed requests |
 | `yb_amp.max_reconnect_attempts` | USERSET | `60` | Reconnect attempts (1s each) before giving up |
-| `yb_amp.readahead_buffer_size` | USERSET | `128` | Size of the prefetch ring (16–1024) |
+| `yb_amp.readahead_buffer_size` | USERSET | `512` | Size of the prefetch ring (16–1024). The default is computed at build time as 2 × `io_combine_limit` × the larger of PG's `effective_io_concurrency` / `maintenance_io_concurrency` defaults. Must be at least `io_combine_limit` × the largest `effective_io_concurrency` / `maintenance_io_concurrency` in use, or prefetched pages are discarded and fetched twice |
 | `yb_amp.readahead_getpage_pull_timeout` | USERSET | `50 ms` | Interval to actively pull outstanding readahead responses |
 | `yb_amp.pageserver_response_log_timeout` | SUSET | `10 s` | Log a message if the pageserver is silent this long |
 | `yb_amp.pageserver_response_disconnect_timeout` | SUSET | `30 s` | Disconnect and reconnect after this much silence |

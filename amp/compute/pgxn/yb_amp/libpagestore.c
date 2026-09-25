@@ -26,6 +26,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/interrupt.h"
 #include "storage/buf_internals.h"
+#include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -70,7 +71,20 @@ int32		max_cluster_size;
 char	   *pageserver_connstring;
 char	   *yb_amp_auth_token;
 
-int			readahead_buffer_size = 128;
+#define MIN_READAHEAD_BUFFER_SIZE 16
+#define MAX_READAHEAD_BUFFER_SIZE 1024
+/*
+ * Per-stream prefetch limit = max(effective_io_concurrency, maintenance_io_concurrency) * io_combine_limit.
+ * 2x it, as a backend can run several streams at once (e.g. a join).
+ */
+#define DEFAULT_READAHEAD_BUFFER_SIZE \
+	(2 * Max(DEFAULT_EFFECTIVE_IO_CONCURRENCY, DEFAULT_MAINTENANCE_IO_CONCURRENCY) * \
+	 DEFAULT_IO_COMBINE_LIMIT)
+StaticAssertDecl(DEFAULT_READAHEAD_BUFFER_SIZE >= MIN_READAHEAD_BUFFER_SIZE &&
+				 DEFAULT_READAHEAD_BUFFER_SIZE <= MAX_READAHEAD_BUFFER_SIZE,
+				 "yb_amp.readahead_buffer_size default outside its GUC range");
+
+int			readahead_buffer_size = DEFAULT_READAHEAD_BUFFER_SIZE;
 int			flush_every_n_requests = 8;
 
 static int	yb_amp_compute_mode = 0;
@@ -1183,12 +1197,14 @@ pg_init_libpagestore(void)
 							"number of prefetches to buffer",
 							"This buffer is used to hold and manage prefetched "
 							"data; so it is important that this buffer is at "
-							"least as large as the configured value of all "
-							"tablespaces' effective_io_concurrency and "
-							"maintenance_io_concurrency, and your sessions' "
-							"values for these settings.",
+							"least as large as io_combine_limit times the "
+							"largest effective_io_concurrency or "
+							"maintenance_io_concurrency in use (tablespace or "
+							"session). A smaller buffer discards prefetched "
+							"pages before they are read, so each is fetched twice.",
 							&readahead_buffer_size,
-							128, 16, 1024,
+							DEFAULT_READAHEAD_BUFFER_SIZE, MIN_READAHEAD_BUFFER_SIZE,
+							MAX_READAHEAD_BUFFER_SIZE,
 							PGC_USERSET,
 							0,	/* no flags required */
 							NULL, (GucIntAssignHook) &readahead_buffer_resize, NULL);
