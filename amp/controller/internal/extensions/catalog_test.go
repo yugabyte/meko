@@ -216,6 +216,97 @@ func TestCatalogRequiresMatchesManifest(t *testing.T) {
 	}
 }
 
+// manifestExtensions reads the build manifest's extension rows through the UI's
+// generated catalog, as the other parity tests here do.
+func manifestExtensions(t *testing.T) map[string]struct {
+	Version       string
+	ImageRevision int
+	Settings      map[string]string
+} {
+	t.Helper()
+	const generated = "../../../amp_ui/src/config/extensions.json"
+	raw, err := os.ReadFile(generated)
+	if err != nil {
+		t.Skipf("generated UI catalog not readable (%v) — amp_ui may be absent", err)
+	}
+	var cfg struct {
+		Extensions []struct {
+			Name          string            `json:"name"`
+			Version       string            `json:"version"`
+			ImageRevision int               `json:"imageRevision"`
+			Settings      map[string]string `json:"settings"`
+		} `json:"extensions"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse %s: %v", generated, err)
+	}
+	out := map[string]struct {
+		Version       string
+		ImageRevision int
+		Settings      map[string]string
+	}{}
+	for _, e := range cfg.Extensions {
+		out[e.Name] = struct {
+			Version       string
+			ImageRevision int
+			Settings      map[string]string
+		}{e.Version, e.ImageRevision, e.Settings}
+	}
+	return out
+}
+
+// build.sh tags from the manifest and the controller resolves from this table,
+// so a version or revision that differs between them points every endpoint at
+// an image that was never built — or, worse, at a stale one that was.
+func TestCatalogImageTagsMatchManifest(t *testing.T) {
+	manifest := manifestExtensions(t)
+	for _, e := range builtin {
+		m, ok := manifest[e.Name]
+		if !ok {
+			t.Errorf("catalog has %s, the manifest does not", e.Name)
+			continue
+		}
+		if got, want := ImageTag(e.Version, e.ImageRevision), ImageTag(m.Version, m.ImageRevision); got != want {
+			t.Errorf("%s: catalog tag %q, manifest tag %q", e.Name, got, want)
+		}
+	}
+}
+
+// The settings an endpoint starts with come from this table in the product and
+// from the manifest in the local harness; they have to be the same settings.
+func TestCatalogSettingsMatchManifest(t *testing.T) {
+	manifest := manifestExtensions(t)
+	for _, e := range builtin {
+		want := manifest[e.Name].Settings
+		if len(e.Settings) == 0 && len(want) == 0 {
+			continue
+		}
+		if !reflect.DeepEqual(e.Settings, want) {
+			t.Errorf("%s: catalog settings %v, manifest settings %v", e.Name, e.Settings, want)
+		}
+	}
+}
+
+func TestImageTag(t *testing.T) {
+	for _, tc := range []struct {
+		version  string
+		revision int
+		want     string
+	}{
+		{"0.8.2", 0, "0.8.2"},
+		{"0.8.2", 1, "0.8.2"},
+		{"0.116-0", 3, "0.116-0-r3"},
+	} {
+		if got := ImageTag(tc.version, tc.revision); got != tc.want {
+			t.Errorf("ImageTag(%q, %d) = %q, want %q", tc.version, tc.revision, got, tc.want)
+		}
+	}
+	c := NewCatalog("quay.io/yugabyte")
+	if got := c.Resolve([]string{"documentdb"})[0].Image; got != "quay.io/yugabyte/amp-ext-documentdb:0.116-0-r3" {
+		t.Errorf("documentdb resolves to %q", got)
+	}
+}
+
 // names is the resolved mount set's names, in order.
 func names(rs []Resolved) []string {
 	out := make([]string, len(rs))

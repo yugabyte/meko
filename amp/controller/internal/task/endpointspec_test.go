@@ -59,14 +59,19 @@ func TestResolveBranchExtensionsCarriesThePreloadLibrary(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	// The catalog closes over documentdb's Requires, so the branch's one opted-in
-	// name resolves to three mounts. Only documentdb carries a Library; the other
-	// two preload (or not) under their own names.
+	// name resolves to three mounts. Only documentdb carries a Library, and the
+	// settings that name its database; the other two preload (or not) under
+	// their own names.
 	want := []deploy.Extension{
 		{
 			Name:    "documentdb",
-			Image:   "quay.io/yugabyte/amp-ext-documentdb:0.116-0",
+			Image:   "quay.io/yugabyte/amp-ext-documentdb:0.116-0-r3",
 			Preload: true,
 			Library: "pg_documentdb_core,pg_documentdb",
+			Settings: map[string]string{
+				"cron.database_name":                 "documentdb",
+				"documentdb.bg_worker_database_name": "documentdb",
+			},
 		},
 		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"},
 		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6.7", Preload: true},

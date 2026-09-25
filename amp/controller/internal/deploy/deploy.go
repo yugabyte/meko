@@ -237,6 +237,9 @@ type Extension struct {
 	// ABIExtraExempt lists modules allowed to differ from the server in
 	// FMGR_ABI_EXTRA — an image built against stock PostgreSQL.
 	ABIExtraExempt []string
+	// Settings are server settings the extension needs the compute started
+	// with (documentdb's cron.database_name, say); the chart merges them in.
+	Settings map[string]string
 }
 
 // EndpointName is the deployer's stable instance handle for an endpoint (the

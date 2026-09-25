@@ -62,6 +62,62 @@ fn extension_queries(libs: &str) -> Vec<String> {
         .collect()
 }
 
+/// Extensions that live in a database of their own, keyed like
+/// [`PRELOADED_EXTENSIONS`] by a preloaded library: `(library, database, extension)`.
+///
+/// documentdb is the one. Its gateway sidecar serves nothing until the extension
+/// exists (it retries its startup on `3F000` and never binds its port), so an
+/// endpoint that mounts it must create it without anyone running SQL. It gets a
+/// `documentdb` database rather than `postgres` so its catalog and collections
+/// stay out of the user's default database. The endpoint is also started with
+/// `cron.database_name` and `documentdb.bg_worker_database_name` naming that
+/// database (the controller's catalog sets both): `CASCADE` creates pg_cron in
+/// it, which pg_cron refuses anywhere else, and documentdb's background index
+/// builds run there.
+const DATABASE_EXTENSIONS: &[(&str, &str, &str)] = &[("pg_documentdb", "documentdb", "documentdb")];
+
+/// A database and the extension to create in it, for [`DATABASE_EXTENSIONS`].
+#[derive(Debug, PartialEq, Eq)]
+pub struct DatabaseExtension {
+    pub database: &'static str,
+    /// Idempotent, and `CASCADE`: the extension's requirements (documentdb's are
+    /// documentdb_core, pg_cron, tsm_system_rows and vector) are mounted but not
+    /// created.
+    ///
+    /// compute_ctl's connections carry `search_path=''`, so a relocatable
+    /// requirement created by `CASCADE` (vector, tsm_system_rows) would have no
+    /// schema to land in and fail with "no schema has been selected to create
+    /// in". The statement sets `public` for itself, which is where a user's own
+    /// `CREATE EXTENSION ... CASCADE` would put them. documentdb's own schemas are
+    /// fixed by its control files.
+    pub create: String,
+}
+
+/// The [`DATABASE_EXTENSIONS`] entries the spec's effective
+/// `shared_preload_libraries` names.
+pub fn preloaded_database_extensions(spec: &ComputeSpec) -> Vec<DatabaseExtension> {
+    shared_preload_libraries(
+        &spec.cluster.settings,
+        spec.cluster.postgresql_conf.as_deref(),
+    )
+    .map(|libs| database_extensions(&libs))
+    .unwrap_or_default()
+}
+
+fn database_extensions(libs: &str) -> Vec<DatabaseExtension> {
+    let preloaded: Vec<&str> = libs.split(',').map(str::trim).collect();
+    DATABASE_EXTENSIONS
+        .iter()
+        .filter(|(library, _, _)| preloaded.contains(library))
+        .map(|(_, database, extension)| DatabaseExtension {
+            database,
+            create: format!(
+                "SET search_path = public; CREATE EXTENSION IF NOT EXISTS {extension} CASCADE"
+            ),
+        })
+        .collect()
+}
+
 /// The `shared_preload_libraries` value the postmaster actually started with.
 ///
 /// Two things make this more than a `settings.find()`: the spec layers overrides
@@ -1180,7 +1236,9 @@ async fn get_operations<'a>(
 mod tests {
     use compute_api::spec::GenericOption;
 
-    use super::{extension_queries, shared_preload_libraries};
+    use super::{
+        DatabaseExtension, database_extensions, extension_queries, shared_preload_libraries,
+    };
 
     fn opt(name: &str, value: &str) -> GenericOption {
         GenericOption {
@@ -1226,6 +1284,26 @@ mod tests {
         assert!(extension_queries("yb_amp").is_empty());
         // A substring match would fire on this; the list is comma-separated names.
         assert!(extension_queries("yb_amp,pg_stat_statements_foo").is_empty());
+    }
+
+    /// `pg_documentdb` is the key that brings the database. The image ships two
+    /// libraries and the chart always preloads both, but only that one is
+    /// matched: `pg_documentdb_core` alone brings nothing.
+    #[test]
+    fn documentdb_gets_its_own_database_only_when_preloaded() {
+        assert_eq!(
+            database_extensions("yb_amp,pg_stat_statements,pg_documentdb_core,pg_documentdb"),
+            vec![DatabaseExtension {
+                database: "documentdb",
+                create:
+                    "SET search_path = public; CREATE EXTENSION IF NOT EXISTS documentdb CASCADE"
+                        .to_string(),
+            }]
+        );
+        assert!(database_extensions("yb_amp,pg_stat_statements").is_empty());
+        assert!(database_extensions("yb_amp,pg_documentdb_core").is_empty());
+        // Names, not substrings.
+        assert!(database_extensions("yb_amp,pg_documentdb_extended_rum").is_empty());
     }
 
     #[test]

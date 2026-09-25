@@ -76,7 +76,8 @@ data:
         compute (the image bakes LD_LIBRARY_PATH, so the chart must not set it
         here — an env entry of that name REPLACES the image's), and
       * any module waived from the FMGR_ABI_EXTRA check to
-        yb_amp_abi_extra_exempt_libraries.
+        yb_amp_abi_extra_exempt_libraries, and
+      * any settings the extension declares (the catalog's Settings), set as-is.
     extension_control_path entries are sharedir bases: PG18 appends "/extension"
     to each non-$system entry itself (get_extension_control_directories), so we
     pass the share dir, NOT share/.../extension.
@@ -113,6 +114,10 @@ data:
   {{- end }}
   {{- if .preload }}
   {{- $preload = printf "%s,%s" $preload (default .name .library) }}
+  {{- end }}
+  {{- /* Settings the extension needs the compute started with (documentdb's name its database). */ -}}
+  {{- range $k, $v := .settings }}
+  {{- $_ := set $extra $k $v }}
   {{- end }}
   {{- end }}
   {{- $_ := set $extra "extension_control_path" (join ":" $ctrlPaths) }}

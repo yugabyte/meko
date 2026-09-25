@@ -337,10 +337,14 @@ no local-disk path yet).
   `tests/guaranteed-qos.sh` asserts per scenario.
 
   The gateway's probes are `tcpSocket` on its own port, deliberately not its
-  `check` subcommand: readiness is pod-wide, and `check` verifies the documentdb
-  extension is loaded — which is the user's `CREATE EXTENSION`, not something the
-  deploy does. Gating on it would keep every documentdb endpoint out of Ready and
-  fail `helm --wait` on a healthy compute.
+  `check` subcommand, since readiness is pod-wide. The port still waits on the
+  extension: the gateway binds only once the documentdb schema exists, retrying
+  every 10s until then. compute_ctl creates it after the compute is up: a
+  `documentdb` database, then `CREATE EXTENSION documentdb CASCADE` in it,
+  whenever `pg_documentdb` is preloaded, retried until it succeeds
+  (compute/architecture/extensions.md, "documentdb creates itself"). So the
+  gateway's startupProbe budget follows the endpoint container's own, derived
+  below from `--deploy-timeout`, rather than a short one of its own.
 
   It also derives the pod's **bootstrap budget** from `--deploy-timeout`:
   `startupProbe.failureThreshold` and the Deployment's `progressDeadlineSeconds`.

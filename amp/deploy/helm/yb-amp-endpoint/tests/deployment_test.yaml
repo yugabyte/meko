@@ -620,6 +620,14 @@ tests:
           path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].readinessProbe.exec
       - isNull:
           path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].startupProbe.exec
+      # It binds only after compute_ctl has created the extension, so its startup
+      # budget is the endpoint container's, not a short one of its own.
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].startupProbe.periodSeconds
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].startupProbe.failureThreshold
+          value: 301
       - equal:
           path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].securityContext.allowPrivilegeEscalation
           value: false

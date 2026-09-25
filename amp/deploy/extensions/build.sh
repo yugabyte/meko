@@ -28,15 +28,31 @@
 #                  cache to populate — if it can only pull, the export 401s, the
 #                  build still succeeds, but every run stays cold (no speedup).
 #   --force        rebuild extension images even if the target tag already
-#                  exists. By default an extension whose <version> tag is already
-#                  present is skipped — extension tags are immutable (version-
-#                  pinned), so re-running the build is wasted work. "Present" is
-#                  checked in the registry (`docker manifest inspect`) with --push,
-#                  else in the local image store (`docker image inspect`). The
-#                  ABI-anchor base is always (re)built regardless.
+#                  exists. By default an extension whose tag is already present
+#                  is skipped — extension tags are immutable, so re-running the
+#                  build is wasted work. "Present" is checked in the registry
+#                  with --push, else in the local image store. The ABI-anchor
+#                  base is always (re)built regardless.
 #   --registry REG override the manifest's registry
 #   --base-only    build just the ABI-anchor base image, no extensions
 #   NAME ...       build only these extensions (default: all in the manifest)
+#
+# The tag is <version>, or <version>-r<N> for a row with `image_revision: N`
+# (N >= 2). Every image is labelled org.yugabyte.amp.ext-recipe with a hash of
+# the extension's own recipe: the row's build fields, its Dockerfile and its
+# patch. The ABI-anchor base it builds FROM is not part of it, so a base change
+# (the vendored PG, pg18-build.Dockerfile) does not invalidate a tag; one that can
+# affect the extensions has to bump their image_revision by hand.
+#   * With --push (the registry, whose tags are immutable): an existing tag whose
+#     label differs is a build ERROR, not a skip — a recipe change without an
+#     `image_revision` bump, which would otherwise leave the registry serving the
+#     old recipe under a tag that looks current. This holds for every tag built
+#     with the label. The tags published before it (the revision-1 pgvector,
+#     pg_cron, hexabridge and age) carry none, so their recipe cannot be checked:
+#     they are skipped with a warning, and bumping one's revision brings it under
+#     the guard.
+#   * Locally (no --push): a local tag is just a cache, so an image whose label
+#     differs, or is missing, is rebuilt rather than refused.
 #
 # A private-source extension (e.g. hexabridge) is fetched with an auth header when
 # AMP_EXT_GH_TOKEN is set in the environment: it is passed to the build as a
@@ -72,7 +88,7 @@ while [[ $# -gt 0 ]]; do
     --cache) cache=true; shift ;;
     --force) force=true; shift ;;
     --registry) registry_override="${2:?--registry needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *) only+=("$1"); shift ;;
   esac
@@ -99,9 +115,31 @@ def norm(v):
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
+import hashlib, json, os
+root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[1]))))
+BUILD_FIELDS = ("name","version","image_revision","url","patch","prep","trusted","dockerfile","make_targets")
+def recipe(e):
+    # The extension's own recipe: the row's build fields plus the bytes of its
+    # Dockerfile and patch. A comment edit in the manifest, or a runtime-only
+    # field (preload, library, settings, regress), changes nothing. The ABI-anchor
+    # base it builds FROM is deliberately NOT hashed (pg18-build.Dockerfile, the
+    # vendored postgres-v18, Makefile, postgres.mk): every vendored-PG bump would
+    # otherwise invalidate every labelled tag. A base change that can affect the
+    # extensions built on it has to bump their image_revision by hand.
+    h = hashlib.sha256()
+    h.update(json.dumps({k: norm(e.get(k)) for k in BUILD_FIELDS}, sort_keys=True).encode())
+    dockerfile = e.get("dockerfile") or "deploy/extensions/extension.Dockerfile"
+    for path in [dockerfile] + (["compute/image/patches/" + e["patch"]] if e.get("patch") else []):
+        with open(os.path.join(root, path), "rb") as f:
+            h.update(path.encode() + b"\0" + f.read())
+    return h.hexdigest()
+def tag(e):
+    rev = int(e.get("image_revision") or 1)
+    return str(e["version"]) + ("-r%d" % rev if rev > 1 else "")
 for e in m.get("extensions", []):
     fields = [norm(e.get(k)) for k in
               ("name","version","url","patch","prep","trusted","dockerfile","make_targets")]
+    fields += [tag(e), recipe(e)]
     print("EXT" + US + US.join(f.replace(US, " ") for f in fields))
 PY
 }
@@ -172,7 +210,7 @@ fi
 
 # exists reports whether the image tag is already published (--push) or already
 # in the local store. Extension tags are immutable, so an existing tag means the
-# build is redundant.
+# build is redundant — provided it was built from the same recipe (recipe_of).
 exists() {
   local img="$1"
   if $push; then
@@ -182,17 +220,51 @@ exists() {
   fi
 }
 
+# recipe_of prints the existing image's recipe label, or nothing when it has
+# none. Reading the labels failing is NOT "no label": that would switch the guard
+# off with a skip message, so it fails instead.
+RECIPE_LABEL=org.yugabyte.amp.ext-recipe
+recipe_of() {
+  local img="$1" labels
+  if $push; then
+    labels=$(docker buildx imagetools inspect "$img" --format '{{ json .Image.Config.Labels }}') || {
+      echo "error: cannot read the labels of ${img}" >&2; return 1; }
+  else
+    labels=$(docker image inspect "$img" --format '{{ json .Config.Labels }}') || {
+      echo "error: cannot read the labels of ${img}" >&2; return 1; }
+  fi
+  python3 -c 'import json, sys; print((json.loads(sys.argv[1] or "null") or {}).get(sys.argv[2], ""))' \
+    "${labels:-null}" "$RECIPE_LABEL"
+}
+
 for row in "${ext_rows[@]}"; do
-  IFS=$'\x1f' read -r name version url patch prep trusted dockerfile make_targets <<<"$row"
+  IFS=$'\x1f' read -r name version url patch prep trusted dockerfile make_targets tag recipe <<<"$row"
   want "$name" || continue
 
-  image="${registry}/amp-ext-${name}:${version}"
+  image="${registry}/amp-ext-${name}:${tag}"
   file="$here/extension.Dockerfile"
   [[ -n "$dockerfile" ]] && file="$repo_root/$dockerfile"
 
   if ! $force && exists "$image"; then
-    echo ">> ${image} already exists — skipping (use --force to rebuild)"
-    continue
+    have=$(recipe_of "$image") || exit 1
+    if [[ "$have" == "$recipe" ]]; then
+      echo ">> ${image} already exists, same recipe — skipping (use --force to rebuild)"
+      continue
+    fi
+    if ! $push; then
+      # A local tag is a cache, not a release: rebuild it from the recipe.
+      echo ">> ${image} exists locally from ${have:-an unlabelled build}; the recipe changed — rebuilding"
+    elif [[ -z "$have" ]]; then
+      echo ">> ${image} already exists (built before recipe labels; not verifiable) — skipping"
+      continue
+    else
+      echo "error: ${image} exists but was built from a different recipe" >&2
+      echo "  registry: ${have}" >&2
+      echo "  manifest: ${recipe}" >&2
+      echo "  Tags are immutable: bump ${name}'s image_revision in extensions.yaml and the" >&2
+      echo "  controller catalog (catalog.go ImageRevision), so the new recipe gets a new tag." >&2
+      exit 1
+    fi
   fi
 
   echo ">> building ${image} (${file#"$repo_root"/})"
@@ -205,6 +277,7 @@ for row in "${ext_rows[@]}"; do
     --build-arg "PREP=${prep}" \
     --build-arg "TRUSTED=${trusted}" \
     --build-arg "MAKE_TARGETS=${make_targets}" \
+    --label "${RECIPE_LABEL}=${recipe}" \
     -f "$file" "$repo_root"
 
   if $push; then

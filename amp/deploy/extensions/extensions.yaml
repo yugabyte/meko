@@ -11,6 +11,20 @@
 # them. Keep this the single source of truth for versions. Checksums are not
 # here: every `url` (and anything a `prep` fetches) is pinned in
 # downloads_checksum.txt, and a URL with no pin there fails the build.
+#
+# Image tags are immutable: build.sh never rebuilds a tag that exists. A row
+# whose recipe changes (its patch, prep, Dockerfile, build flags) under the
+# same `version` therefore sets `image_revision:`, which makes the tag
+# <version>-r<N> from 2 on; the controller catalog carries the same number.
+# build.sh labels each image with a hash of its recipe and fails, rather than
+# skipping, on an existing registry tag whose label differs — so for any tag
+# built with the label, a forgotten bump is a build error, not a stale image in
+# the registry. The revision-1 pgvector, pg_cron, hexabridge and age tags were
+# published before the label, so a recipe change to one of those is NOT caught:
+# bump its image_revision with the change, which also brings it under the guard.
+# The recipe is the row, its Dockerfile and its patch; the ABI-anchor base
+# (pg18-build.Dockerfile, the vendored PG) is not in it, so a base change that
+# can affect the extensions has to bump their revisions by hand.
 
 # Container registry the built images are tagged/pushed under. Extension images
 # are <registry>/amp-ext-<name>:<version>; the base is <registry>/amp-pg18-build.
@@ -166,6 +180,11 @@ extensions:
     # upstream calls its paved-road default — so it builds against the forked
     # PG18 ABI base with no back-porting.
     version: "0.116-0"
+    # 0.116-0 (revision 1) was published from an early recipe that still created
+    # the postgis GIST operator classes, so CREATE EXTENSION failed on it.
+    # Revision 3: the download-checksum change (extension.Dockerfile fetching
+    # through safe_curl.sh) changed the recipe revision 2 was built from.
+    image_revision: 3
     url: https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
     # Drops postgis from `requires` AND gates the postgis-dependent geospatial
     # GIST op classes out of the install SQL (the `requires` line alone is not
@@ -197,6 +216,15 @@ extensions:
     # Comma-separated because shared_preload_libraries takes a list and this row
     # needs two of them.
     library: pg_documentdb_core,pg_documentdb
+    # Server settings an endpoint mounting it starts with; the controller
+    # catalog's Settings mirror these. compute_ctl creates the extension in a
+    # `documentdb` database whenever pg_documentdb is preloaded — the gateway
+    # serves nothing until it exists — and both name that database: pg_cron
+    # refuses CREATE EXTENSION anywhere but cron.database_name, and documentdb's
+    # background index builds run in documentdb.bg_worker_database_name.
+    settings:
+      cron.database_name: documentdb
+      documentdb.bg_worker_database_name: documentdb
     prep: ""
     dockerfile: ""
     # A bare `make` also descends into internal/pg_documentdb_distributed, which

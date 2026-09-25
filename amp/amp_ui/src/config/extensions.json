@@ -67,7 +67,12 @@
       "requires": [
         "pgvector",
         "pg_cron"
-      ]
+      ],
+      "imageRevision": 3,
+      "settings": {
+        "cron.database_name": "documentdb",
+        "documentdb.bg_worker_database_name": "documentdb"
+      }
     }
   ]
 }

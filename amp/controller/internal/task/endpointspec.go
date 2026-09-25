@@ -43,6 +43,7 @@ func resolveBranchExtensions(ctx context.Context, catalog *extensions.Service, s
 			LibraryPath:    x.Layout.LibraryPath,
 			EnvPaths:       x.Layout.EnvPaths,
 			ABIExtraExempt: x.ABIExtraExempt,
+			Settings:       x.Settings,
 		})
 	}
 	return specs, nil

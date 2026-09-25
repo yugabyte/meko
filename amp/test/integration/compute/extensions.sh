@@ -161,7 +161,9 @@ PGINST="$PG_TREE_INSTALL_VERSION_DIR"
 
 # 1) Resolve each extension's manifest row: the image tag is the single source
 #    of truth in extensions.yaml, so read it the same way build.sh does rather
-#    than reconstruct it here. Emits (per name): registry, version, control, preload.
+#    than reconstruct it here. Emits (per name): registry, image tag (version,
+#    -r<N> from image_revision 2 on), control, preload, library, and the row's
+#    `settings` as key=value pairs joined with `|`.
 read_row() {
     python3 - "$MANIFEST" "$1" <<'PY'
 import sys, yaml
@@ -173,7 +175,15 @@ for e in m.get("extensions", []):
         control = e.get("control") or name
         library = e.get("library") or control
         preload = "true" if e.get("preload") else "false"
-        print("%s\t%s\t%s\t%s\t%s" % (reg, e.get("version", ""), control, preload, library))
+        rev = int(e.get("image_revision") or 1)
+        tag = str(e.get("version", "")) + ("-r%d" % rev if rev > 1 and e.get("version") else "")
+        settings = []
+        for k, v in (e.get("settings") or {}).items():
+            kv = "%s=%s" % (k, v)
+            if "|" in kv or "\t" in kv:
+                sys.exit("%s: setting %r cannot be passed through the harness" % (name, kv))
+            settings.append(kv)
+        print("%s\t%s\t%s\t%s\t%s\t%s" % (reg, tag, control, preload, library, "|".join(settings)))
         break
 else:
     sys.exit("extension %r not found in %s" % (name, sys.argv[1]))
@@ -217,8 +227,15 @@ fi
 declare -a EXT_VERSIONS EXT_CONTROLS EXT_PRELOADS EXT_IMAGES EXT_PREBUILT EXT_LIBRARIES
 declare -a EXT_SHARE EXT_LIB EXT_LIBPATH EXT_ENVPATHS
 ABI_EXEMPT=()
+# Server settings the mounted extensions declare (manifest `settings:`, which the
+# controller catalog mirrors and the chart applies), as --pg-setting pairs.
+EXT_PG_SETTINGS=()
 for _n in "${EXT_NAMES[@]}"; do
-    IFS=$'\t' read -r _reg _ver _ctrl _pre _lib < <(read_row "$_n")
+    IFS=$'\t' read -r _reg _ver _ctrl _pre _lib _settings < <(read_row "$_n")
+    if [[ -n "$_settings" ]]; then
+        IFS='|' read -r -a _kvs <<<"$_settings"
+        for _kv in "${_kvs[@]}"; do EXT_PG_SETTINGS+=(--pg-setting "$_kv"); done
+    fi
     [[ -n "$REGISTRY_OVERRIDE" ]] && _reg="$REGISTRY_OVERRIDE"
     [[ -n "$_ver" ]] || { echo "no version for '$_n' in $MANIFEST" >&2; exit 1; }
     EXT_VERSIONS+=("$_ver"); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
@@ -580,6 +597,10 @@ PG_SETTINGS=(
     # the stock default (off), so restore it — otherwise AGE's expr/cypher_with
     # EXPLAIN tests diverge on a value that can't be blessed. Harmless elsewhere.
     --pg-setting "compute_query_id=off"
+    # The extensions' own settings first, so a regress run's pg_settings, which
+    # come after, win where they name the same setting (documentdb's regress run
+    # points cron.database_name at contrib_regression).
+    "${EXT_PG_SETTINGS[@]}"
     "${REG_PG_SETTINGS[@]}"
 )
 # A registered image built against stock PG18 carries abi_extra "PostgreSQL"
@@ -606,6 +627,12 @@ yb endpoint start ext -t 600s
 #    compute's major version). Connect as cloud_admin over loopback (pg_hba
 #    trusts it, no password). -tA prints raw values for exact-match grepping.
 PSQL=("$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d postgres -tA -v ON_ERROR_STOP=1)
+# The same, in another database: documentdb lives in its own, and pg_cron in
+# whichever cron.database_name names.
+psql_in() {
+    local db="$1"; shift
+    "$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d "$db" -tA -v ON_ERROR_STOP=1 "$@"
+}
 
 # --regress: run the extension's own upstream regression suite against the live
 # compute (the local-deploy analogue of pg_regress.sh for core Postgres, #608),
@@ -898,9 +925,12 @@ elif [[ "$EXT_NAME" == pg_cron ]]; then
     # background-worker scheduler is running. Assert the full functional path, not
     # just registration: CREATE EXTENSION, schedule a sub-minute job, and wait for
     # cron's own bookkeeping to report a succeeded run. The scheduler binds to one
-    # db via cron.database_name (default "postgres", which this endpoint serves) —
-    # the same db we connect to — so the marker row the job writes is visible here.
-    out=$("${PSQL[@]}" <<'SQL' 2>&1
+    # db via cron.database_name — the default "postgres", or "documentdb" when
+    # documentdb is mounted (its settings) — and pg_cron can only be created there,
+    # so everything below runs in that db and the job's marker row is visible.
+    crondb=postgres
+    for _m in "${EXT_NAMES[@]}"; do [[ "$_m" == documentdb ]] && crondb=documentdb; done
+    out=$(psql_in "$crondb" <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 SELECT 'CRONDB:'||current_setting('cron.database_name');
 DROP TABLE IF EXISTS cron_marker;
@@ -908,8 +938,8 @@ CREATE TABLE cron_marker (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFA
 SELECT 'JOBID:'||cron.schedule('amp_pgcron_probe', '5 seconds', $$INSERT INTO cron_marker DEFAULT VALUES$$);
 SQL
 )
-    if ! echo "$out" | grep -q '^CRONDB:postgres$'; then
-        echo ">>> FAIL pg_cron: cron.database_name is not the default postgres; output:" >&2
+    if ! echo "$out" | grep -q "^CRONDB:${crondb}\$"; then
+        echo ">>> FAIL pg_cron: cron.database_name is not $crondb; output:" >&2
         echo "$out" >&2
         exit 1
     fi
@@ -926,15 +956,15 @@ SQL
     deadline=$(( $(date +%s) + 120 ))
     fired=0
     while (( $(date +%s) < deadline )); do
-        succeeded=$("${PSQL[@]}" -c "SELECT count(*) FROM cron.job_run_details WHERE jobid=${jobid:-0} AND status='succeeded'" 2>/dev/null || echo 0)
+        succeeded=$(psql_in "$crondb" -c "SELECT count(*) FROM cron.job_run_details WHERE jobid=${jobid:-0} AND status='succeeded'" 2>/dev/null || echo 0)
         if [[ "${succeeded:-0}" -gt 0 ]]; then
-            fired=$("${PSQL[@]}" -c "SELECT count(*) FROM cron_marker" 2>/dev/null || echo 0)
+            fired=$(psql_in "$crondb" -c "SELECT count(*) FROM cron_marker" 2>/dev/null || echo 0)
             break
         fi
         sleep 2
     done
     # Best-effort unschedule so a --keep cluster isn't left with a firing job.
-    "${PSQL[@]}" -c "SELECT cron.unschedule('amp_pgcron_probe')" >/dev/null 2>&1 || true
+    psql_in "$crondb" -c "SELECT cron.unschedule('amp_pgcron_probe')" >/dev/null 2>&1 || true
     if [[ "${fired:-0}" -gt 0 ]]; then
         echo ">>> PASS pg_cron: preload + CREATE EXTENSION + scheduled job fired ($fired run(s))"
     else
@@ -1038,18 +1068,28 @@ SQL
         exit 1
     fi
 elif [[ "$EXT_NAME" == documentdb ]]; then
-    # documentdb's control file requires documentdb_core, pg_cron,
-    # tsm_system_rows and vector, and CREATE EXTENSION installs none of them
-    # without CASCADE — the generic smoke below would fail on
-    # `required extension "documentdb_core" is not installed`. The `requires`
-    # closure above has already mounted pgvector and pg_cron for CASCADE to find.
+    # Nobody runs CREATE EXTENSION here: compute_ctl creates a `documentdb`
+    # database and the extension in it (with CASCADE, for documentdb_core,
+    # pg_cron, tsm_system_rows and vector) whenever pg_documentdb is preloaded,
+    # because the gateway serves nothing until it exists. It does that in the
+    # background after startup, so wait for it.
+    ddbver=""
+    for ((_w=0; _w<90; _w++)); do
+        ddbver=$(psql_in documentdb -c "SELECT extversion FROM pg_extension WHERE extname = 'documentdb'" 2>/dev/null || true)
+        [[ -n "$ddbver" ]] && break
+        sleep 2
+    done
+    if [[ -z "$ddbver" ]]; then
+        echo ">>> FAIL documentdb: compute_ctl did not create the extension in database documentdb within 180s" >&2
+        exit 1
+    fi
+    echo ">>> documentdb $ddbver created by compute_ctl in database documentdb"
     #
-    # Past registration, it asserts the document path the gateway drives:
-    # insert through documentdb_api, then query with a filter, which goes
-    # through bson and the @@ operator rather than plain SQL. bsonUseEJson
-    # prints the insert result as JSON instead of BSONHEX.
-    out=$("${PSQL[@]}" <<'SQL' 2>&1
-CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;
+    # Past that, the document path the gateway drives: insert through
+    # documentdb_api, then query with a filter, which goes through bson and the
+    # @@ operator rather than plain SQL. bsonUseEJson prints the insert result
+    # as JSON instead of BSONHEX.
+    out=$(psql_in documentdb <<'SQL' 2>&1
 SET documentdb_core.bsonUseEJson = on;
 SELECT 'INSERT:'||documentdb_api.insert_one('amp_smoke', 'probe', '{ "_id": 1, "a": 1 }')::text;
 SELECT 'INSERT:'||documentdb_api.insert_one('amp_smoke', 'probe', '{ "_id": 2, "a": 2 }')::text;
@@ -1061,7 +1101,7 @@ SQL
     if [[ "$(echo "$out" | grep -c '^INSERT:{ "n" : { "$numberInt" : "1" }, "ok" : { "$numberDouble" : "1.0" } }$')" == 2 ]] \
        && echo "$out" | grep -q '^MATCH:{ "" : { "$numberInt" : "2" } }$' \
        && echo "$out" | grep -q '^TOTAL:2$'; then
-        echo ">>> PASS documentdb: CREATE EXTENSION ... CASCADE + insert_one x2 + filtered find"
+        echo ">>> PASS documentdb: auto-created in its own database + insert_one x2 + filtered find"
     else
         echo ">>> FAIL documentdb checks; output:" >&2
         echo "$out" >&2

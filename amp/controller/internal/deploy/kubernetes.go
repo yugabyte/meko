@@ -1410,6 +1410,7 @@ type extensionValues struct {
 	LibraryPath    []string          `json:"libraryPath,omitempty"`
 	EnvPaths       map[string]string `json:"envPaths,omitempty"`
 	ABIExtraExempt []string          `json:"abiExtraExempt,omitempty"`
+	Settings       map[string]string `json:"settings,omitempty"`
 }
 
 // resourceValues is the endpoint container's reservation. cpu and memory are
@@ -1592,6 +1593,7 @@ func extensionValuesFor(exts []Extension) []extensionValues {
 			LibraryPath:    e.LibraryPath,
 			EnvPaths:       e.EnvPaths,
 			ABIExtraExempt: e.ABIExtraExempt,
+			Settings:       e.Settings,
 		}
 	}
 	return out

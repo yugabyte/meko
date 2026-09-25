@@ -55,7 +55,9 @@ use crate::rsyslog::{
     launch_pgaudit_gc,
 };
 use crate::spec::*;
-use crate::spec_apply::preloaded_extension_queries;
+use crate::spec_apply::{
+    DatabaseExtension, preloaded_database_extensions, preloaded_extension_queries,
+};
 use crate::swap::resize_swap;
 use crate::sync_sk::{check_if_synced, ping_safekeeper};
 use crate::tls::watch_cert_for_changes;
@@ -1795,8 +1797,10 @@ impl ComputeNode {
 
     /// Do post configuration of the already started Postgres. This function spawns a background task to
     /// configure the database after applying the compute spec. Currently, it upgrades the yb_amp extension
-    /// version and creates the extensions the spec's preloaded libraries need. In the future, it may
-    /// upgrade all 3rd-party extensions.
+    /// version and creates the extensions the spec's preloaded libraries need, including those that
+    /// live in a database of their own (documentdb), which it creates first — those in a task of
+    /// their own, retried until they succeed. In the future, it may upgrade all 3rd-party
+    /// extensions.
     ///
     /// The preloaded extensions are created here rather than in the
     /// `HandleOtherExtensions` spec-apply phase because this runs whether or not the
@@ -1805,6 +1809,8 @@ impl ComputeNode {
     pub fn post_apply_config(&self, spec: &ComputeSpec) -> Result<()> {
         let conf = self.get_tokio_conn_conf(Some("compute_ctl:post_apply_config"));
         let extensions = preloaded_extension_queries(spec);
+        let database_extensions = preloaded_database_extensions(spec);
+        let conf_for_databases = conf.clone();
         tokio::spawn(async move {
             let res = async {
                 let (mut client, connection) = conf.connect(NoTls).await?;
@@ -1831,6 +1837,30 @@ impl ComputeNode {
                 error!("error while post_apply_config: {err:#}");
             }
         });
+        // An extension in a database of its own is not best-effort: documentdb's
+        // gateway serves nothing, and holds the pod un-Ready, until it exists. So
+        // it runs on its own, whatever became of the steps above, and retries
+        // until it succeeds — a transient connect failure must not leave the
+        // endpoint hanging with nothing to restart it.
+        for dbx in database_extensions {
+            let conf = conf_for_databases.clone();
+            tokio::spawn(async move {
+                let mut backoff = Duration::from_secs(1);
+                loop {
+                    match create_database_extension(&conf, &dbx).await {
+                        Ok(()) => break,
+                        Err(err) => {
+                            error!(
+                                "post_apply_config: {} in {} failed, retrying in {backoff:?}: {err:#}",
+                                dbx.create, dbx.database
+                            );
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(Duration::from_secs(10));
+                        }
+                    }
+                }
+            });
+        }
         Ok(())
     }
 
@@ -2911,6 +2941,57 @@ impl<T: 'static> JoinSetExt<T> for tokio::task::JoinSet<T> {
             f()
         })
     }
+}
+
+/// Create a [`DatabaseExtension`]: its database if it is missing, then the
+/// extension in it, over a connection to that database. Idempotent, so the
+/// caller can retry it.
+async fn create_database_extension(
+    conf: &tokio_postgres::Config,
+    dbx: &DatabaseExtension,
+) -> Result<()> {
+    let (client, connection) = conf.connect(NoTls).await.context("connect")?;
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {e}");
+        }
+    });
+    // CREATE DATABASE has no IF NOT EXISTS. A fork inherits the database from its
+    // parent, so on most starts it exists already.
+    let exists = client
+        .query_opt(
+            "SELECT 1 FROM pg_database WHERE datname = $1",
+            &[&dbx.database],
+        )
+        .await
+        .with_context(|| format!("look up database {}", dbx.database))?
+        .is_some();
+    if !exists {
+        let create = format!("CREATE DATABASE {}", dbx.database.to_string().pg_quote());
+        info!("post_apply_config: {create}");
+        if let Err(e) = client.simple_query(&create).await {
+            if e.code() != Some(&SqlState::DUPLICATE_DATABASE) {
+                return Err(anyhow::Error::new(e).context(format!("run {create}")));
+            }
+        }
+    }
+    let mut db_conf = conf.clone();
+    db_conf.dbname(dbx.database);
+    let (db_client, db_connection) = db_conf
+        .connect(NoTls)
+        .await
+        .with_context(|| format!("connect to database {}", dbx.database))?;
+    tokio::spawn(async move {
+        if let Err(e) = db_connection.await {
+            eprintln!("connection error: {e}");
+        }
+    });
+    info!("post_apply_config: in {}: {}", dbx.database, dbx.create);
+    db_client
+        .simple_query(&dbx.create)
+        .await
+        .with_context(|| format!("run {} in {}", dbx.create, dbx.database))?;
+    Ok(())
 }
 
 #[cfg(test)]

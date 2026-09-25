@@ -311,15 +311,20 @@ spec:
           # all: helm --wait failed every create, on a healthy compute.
           #
           # So probe what this container is responsible for — its own listener —
-          # exactly as the endpoint container probes pg-compute. The budget can
-          # be small for the same reason: the gateway binds at once rather than
-          # waiting for the compute to finish bootstrap, so it no longer has to
-          # track the endpoint's startup allowance.
+          # exactly as the endpoint container probes pg-compute.
+          #
+          # The gateway does NOT bind at once: it binds only after its startup
+          # has found the documentdb schema, retrying every 10s until then. That
+          # schema is created by compute_ctl once the compute is up (it creates
+          # the documentdb database and the extension in it whenever
+          # pg_documentdb is preloaded). So this probe waits on the compute's
+          # bootstrap too, and its budget follows the endpoint container's,
+          # which the controller sizes from its deploy timeout.
           startupProbe:
             tcpSocket:
               port: documentdb
-            periodSeconds: {{ .Values.documentdbGateway.startupProbe.periodSeconds }}
-            failureThreshold: {{ .Values.documentdbGateway.startupProbe.failureThreshold }}
+            periodSeconds: {{ .Values.documentdbGateway.startupProbe.periodSeconds | default .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.documentdbGateway.startupProbe.failureThreshold | default .Values.startupProbe.failureThreshold }}
           readinessProbe:
             tcpSocket:
               port: documentdb

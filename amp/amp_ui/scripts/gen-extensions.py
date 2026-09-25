@@ -63,6 +63,16 @@ def build() -> str:
         requires = list(ext.get("requires") or [])
         if requires:
             entry["requires"] = requires
+        # image_revision and settings are not shown by the picker; they are here
+        # so the controller catalog can be checked against the manifest through
+        # this one file (TestCatalogImageTagsMatchManifest,
+        # TestCatalogSettingsMatchManifest).
+        revision = int(ext.get("image_revision") or 1)
+        if revision > 1:
+            entry["imageRevision"] = revision
+        settings = ext.get("settings") or {}
+        if settings:
+            entry["settings"] = {str(k): str(v) for k, v in settings.items()}
         entries.append(entry)
     if not entries:
         sys.exit("manifest lists no extensions")

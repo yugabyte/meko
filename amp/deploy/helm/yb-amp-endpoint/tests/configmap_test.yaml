@@ -203,6 +203,34 @@ tests:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"dynamic_library_path":"\$libdir:/extensions/vector/lib/postgresql"'
 
+  # An extension's own settings reach the compute as-is: documentdb's name the
+  # database compute_ctl creates it in, and without them CREATE EXTENSION
+  # ... CASCADE cannot create pg_cron there.
+  - it: merges a mounted extension's settings into the compute's settings
+    set:
+      endpoint:
+        extensions:
+          - name: documentdb
+            image: quay.io/yugabyte/amp-ext-documentdb:0.116-0-r3
+            preload: true
+            library: pg_documentdb_core,pg_documentdb
+            settings:
+              cron.database_name: documentdb
+              documentdb.bg_worker_database_name: documentdb
+    asserts:
+      - equal:
+          path: data.SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp,pg_stat_statements,pg_documentdb_core,pg_documentdb"
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"cron.database_name":"documentdb"'
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"documentdb.bg_worker_database_name":"documentdb"'
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"extension_control_path":"\$system:/extensions/documentdb/share/postgresql"'
+
   # A REGISTERED extension: a prebuilt third-party image whose tree is not laid
   # out the way deploy/extensions lays one out. Everything below is per-entry and
   # defaults to the amp layout, so a built-in renders exactly as it did before.

@@ -549,8 +549,12 @@ paths:
         mount set is behind it so the new ImageVolume mounts take effect, returning `202` + the
         `Task` with a `Location` header. Adding extensions is per branch. Idempotent
         (an already-enabled extension is a no-op). Cheap validation is synchronous:
-        `400` for an empty list, an unknown extension name, or when externalized
-        extensions are unavailable (e.g. the Docker driver); `404` if the pool,
+        `400` for an empty list, an unknown extension name, when externalized
+        extensions are unavailable (e.g. the Docker driver), or for `documentdb` on
+        a branch that already has `pg_cron` (documentdb runs pg_cron in its own
+        `documentdb` database, `cron.database_name`, which would stop the pg_cron
+        jobs already scheduled in `postgres`; create a cluster with engine
+        `documentdb` instead); `404` if the pool,
         cluster, or branch does not exist. **First-writer-wins**: while an add for
         this branch is in flight, a concurrent one is rejected with `409` until the
         first reaches a terminal state — two adds redeploy overlapping sets of the

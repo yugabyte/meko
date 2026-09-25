@@ -63,8 +63,13 @@ must contain **only** libraries that are actually mounted, or the postmaster fai
 to start — so the controller/chart only add a preload entry for an extension it is
 also mounting.
 
-`pg_cron`'s scheduler binds to one database via `cron.database_name` (default
-`postgres`, which every endpoint serves, so opting in needs no extra config); a
+`pg_cron`'s scheduler binds to one database via `cron.database_name`, and
+`CREATE EXTENSION pg_cron` is refused in any other. It defaults to `postgres`,
+which every endpoint serves, so opting in needs no extra config. **On a branch
+that mounts documentdb it is `documentdb` instead, fixed by the catalog**
+(documentdb's Settings, under "Engines"): the scheduler runs there, and pg_cron
+cannot be created in `postgres`. A branch's own `pg_settings` still apply on
+top, so overriding it there would break documentdb's `CASCADE`. Elsewhere a
 non-default database is set through the endpoint's `pg_settings`.
 
 ## Build pipeline (`deploy/extensions/`)
@@ -143,9 +148,30 @@ extension is tagged and released on its own cadence.
   Only the `:buildcache` tag is pushed — never the base image — so it needs a
   buildx docker-container builder and a registry login; it is a CI opt-in (the
   GKE `amp_deploy_gke_extensions` step passes it), not for a plain local build.
-  Extension image tags are immutable (version-pinned), so an extension whose tag
-  already exists (checked in the registry with `--push`, else the local store) is
-  **skipped**; pass `--force` to rebuild. `AMP_EXT_GH_TOKEN` in the environment is
+  Extension image tags are immutable, so an extension whose tag already exists
+  (checked in the registry with `--push`, else the local store) is **skipped**;
+  pass `--force` to rebuild. The tag is the row's `version`, or
+  `<version>-r<N>` from `image_revision: N` (N >= 2).
+
+  Skipping on an existing tag is also how a recipe change got lost: documentdb's
+  `0.116-0` was published from an early patch, the final one never reached the
+  registry, and every deployed documentdb endpoint pulled the stale image. So
+  each image is now **labelled** `org.yugabyte.amp.ext-recipe` with a hash of
+  what it was built from: the row's build fields, its Dockerfile and its patch.
+  The ABI-anchor base it builds `FROM` is deliberately not part of that hash:
+  every vendored-PG bump would otherwise invalidate every labelled tag. So a base
+  change that can affect the extensions built on it has to bump their
+  `image_revision` by hand.
+  An existing tag whose label differs **fails the build** and names the fix,
+  which is to bump `image_revision` in the manifest and `ImageRevision` in the
+  catalog, so the new recipe gets a new tag. `TestCatalogImageTagsMatchManifest`
+  keeps those two in step. This holds for every tag built with the label,
+  including a new extension's first. The tags published before the label (the
+  revision-1 pgvector, pg_cron, hexabridge and age) are skipped with a warning,
+  since their recipe cannot be checked: a recipe change to one of those is not
+  caught unless it bumps that row's revision, which also brings it under the
+  guard. A **local** build (no `--push`) rebuilds a stale or unlabelled image
+  instead of refusing it, since a local tag is only a cache. `AMP_EXT_GH_TOKEN` in the environment is
   forwarded to each build as the `gh_token` secret above, so a private-source
   extension (hexabridge) can fetch — CI sets it from the `HEXABRIDGE_GH_PULL`
   secret; it is empty on forks, so the hexabridge steps skip there.
@@ -293,9 +319,10 @@ PostGIS, which is the worked example throughout.
 ## Endpoint wiring (Helm chart)
 
 The [`yb-amp-endpoint`](../../deploy/helm/yb-amp-endpoint) chart takes an
-`endpoint.extensions` list — each entry `{ name, image, preload, library }` plus
-the optional layout fields a registered image carries (`sharePath`, `libPath`,
-`libraryPath`, `envPaths`, `abiExtraExempt`), all defaulting to the amp layout:
+`endpoint.extensions` list. Each entry is `{ name, image, preload, library }`,
+plus an optional `settings` map and the optional layout fields a registered
+image carries (`sharePath`, `libPath`, `libraryPath`, `envPaths`,
+`abiExtraExempt`), all defaulting to the amp layout:
 
 - **[`deployment.yaml`](../../deploy/helm/yb-amp-endpoint/templates/deployment.yaml)**
   renders one read-only ImageVolume per entry, mounted at `/extensions/<name>`,
@@ -307,9 +334,12 @@ the optional layout fields a registered image carries (`sharePath`, `libPath`,
   `$system` / `$libdir`, each entry's `sharePath` / `libPath` joined onto its
   mount root), merges any `abiExtraExempt` names into
   `yb_amp_abi_extra_exempt_libraries`, and appends any `preload` entries to
-  `SHARED_PRELOAD_LIBRARIES`. The GUCs are merged into
-  `COMPUTE_EXTRA_SETTINGS_JSON`, which the supervisor renders into the compute's
-  `postgresql.conf`. Any `libraryPath` dirs go into a separate
+  `SHARED_PRELOAD_LIBRARIES`. The GUCs, and each entry's `settings` as-is, are
+  merged into `COMPUTE_EXTRA_SETTINGS_JSON`, which the supervisor renders into
+  the compute's `postgresql.conf`. `settings` come from the catalog's
+  `Settings`, which mirrors the manifest's `settings:`
+  (`TestCatalogSettingsMatchManifest`). They are for settings an extension
+  cannot work without, typically startup-only ones. documentdb's are below. Any `libraryPath` dirs go into a separate
   `EXTENSION_LIBRARY_PATH` — not a GUC, since the loader reads it, not Postgres.
 
 With `endpoint.extensions` empty, the chart output is unchanged from before —
@@ -431,6 +461,34 @@ records the engine on the cluster row (`amp_registry.clusters.engine`).
 | `aidb` | pgvector, age, pg_cron |
 | `oracle` | hexabridge |
 | `documentdb` | documentdb, pgvector, pg_cron |
+
+**documentdb creates itself.** The gateway sidecar serves nothing until the
+extension exists: its startup retries on the missing schema and never binds
+its port. So an endpoint that mounts documentdb creates it without anyone
+running SQL:
+
+- compute_ctl's `post_apply_config` creates a **`documentdb` database**, then
+  `CREATE EXTENSION IF NOT EXISTS documentdb CASCADE` in it, whenever
+  `pg_documentdb` is preloaded. This is the same hook that creates
+  `pg_stat_statements` when its library is preloaded. It runs only on a
+  primary, in a task of its own that retries until it succeeds: the gateway
+  holds the pod un-Ready until the extension exists, so a transient failure
+  must not be final. A fork inherits both from its parent. `CASCADE` creates
+  documentdb_core, pg_cron, tsm_system_rows and vector.
+- It is a database of its own so documentdb's catalog and collections stay out
+  of the user's `postgres`.
+- The catalog's documentdb entry sets `cron.database_name` and
+  `documentdb.bg_worker_database_name` to `documentdb`. Both are startup-only.
+  pg_cron refuses `CREATE EXTENSION` anywhere but `cron.database_name`, and
+  documentdb's background index builds run in its worker database. So on a
+  documentdb branch, pg_cron lives in `documentdb` too. That is also why
+  `addBranchExtensions` refuses (`400`, permanent) to add documentdb to a branch
+  that already has pg_cron: it would move the scheduler, and the jobs already in
+  `postgres`'s `cron.job` would silently stop firing. A documentdb cluster
+  gets pg_cron in its own database from the start.
+- The gateway connects to `documentdb`. Its startup probe follows the endpoint
+  container's, since it can only bind once the compute is up and the
+  extension created.
 
 The recorded engine is **provenance, not a constraint**: it names what the
 cluster was created as and is never re-derived. It cannot go stale either —
@@ -556,6 +614,14 @@ The resolved set is also recorded in the endpoint's recreate `config` blob for
 audit / recreate.
 
 ## Adding a new extension
+
+> **Changing an extension that is already published** (its patch, `prep`,
+> Dockerfile or build flags, under the same `version`): bump `image_revision`
+> in its manifest row, and `ImageRevision` in the catalog, in the same PR.
+> For a tag built with the recipe label, `build.sh --push` refuses to go on
+> without it, because the existing tag was built from the old recipe. For the
+> four tags published before the label (pgvector, pg_cron, hexabridge, age)
+> nothing catches a missed bump, so it is on the author.
 
 1. **Create the Quay repository first.** A new extension means a new image,
    `quay.io/<registry>/amp-ext-<name>`, and the CI robot can push to repositories

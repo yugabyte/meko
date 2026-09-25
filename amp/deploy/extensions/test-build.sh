@@ -95,6 +95,22 @@ for e in exts:
     assert not re.search(r"\b(curl|wget)\b", prep), f"{name}: prep must fetch with `sh \"$SAFE_CURL\" fetch`, not curl/wget"
     for u in url_re.findall(prep):
         assert u in pinned, f"{name}: prep fetches {u}, which is not pinned in downloads_checksum.txt"
+    # image_revision: counts rebuilds of one version from a changed recipe, and
+    # makes the tag <version>-r<N> from 2 on. build.sh refuses an existing tag
+    # built from another recipe, so this is what a recipe change must bump.
+    rev = e.get("image_revision")
+    if rev is not None:
+        assert isinstance(rev, int) and not isinstance(rev, bool) and rev >= 1, \
+            f"{name}: image_revision must be an integer >= 1, got {rev!r}"
+    # settings: server settings an endpoint mounting it starts with, merged into
+    # the compute's settings by the chart (from the catalog) and by the harness.
+    settings = e.get("settings")
+    if settings is not None:
+        assert isinstance(settings, dict) and settings, f"{name}: settings must be a non-empty mapping"
+        for k, v in settings.items():
+            assert guc_re.match(str(k)), f"{name}: settings key {k!r} is not a GUC name"
+            assert isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v) != "", \
+                f"{name}: settings {k} must be a scalar value"
     # patch, if named, must exist under compute/image/patches/
     patch = e.get("patch")
     if patch:
@@ -181,7 +197,7 @@ command -v docker >/dev/null 2>&1 || fail "--docker requires docker on PATH"
 # Read the version + control basename for NAME (the control need not equal the
 # package name — pgvector ships "vector"), so we know the image tag and the
 # files to expect.
-read -r version control library < <(python3 - "$manifest" "$name" <<'PY'
+read -r tag control library < <(python3 - "$manifest" "$name" <<'PY'
 import sys, yaml
 with open(sys.argv[1]) as f:
     m = yaml.safe_load(f)
@@ -189,7 +205,9 @@ for e in m.get("extensions", []):
     if e.get("name") == sys.argv[2]:
         # library, when set, names the shared objects the image actually ships;
         # they need not include <control>.so at all.
-        print(e["version"], e.get("control") or e["name"], e.get("library") or "")
+        rev = int(e.get("image_revision") or 1)
+        tag = str(e["version"]) + ("-r%d" % rev if rev > 1 else "")
+        print(tag, e.get("control") or e["name"], e.get("library") or "")
         break
 else:
     sys.exit(f"no extension named {sys.argv[2]!r} in manifest")
@@ -197,7 +215,7 @@ PY
 )
 
 reg="amptest"
-image="${reg}/amp-ext-${name}:${version}"
+image="${reg}/amp-ext-${name}:${tag}"
 echo ">> docker: building ${image} via build.sh (cold; this compiles PG18 and may take many minutes)"
 "$here/build.sh" --registry "$reg" "$name"
 

@@ -523,13 +523,29 @@ func (c *Controllers) AddBranchExtensions(ctx context.Context, request AddBranch
 
 	// Cheap pre-check: the branch must exist (404). The union + per-endpoint
 	// redeploy runs as the task's idempotent add_branch_extensions step.
-	if _, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId); err != nil {
+	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId)
+	if err != nil {
 		switch {
 		case errors.Is(err, core.ErrNotFound):
 			return AddBranchExtensions404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
 		default:
 			return nil, fmt.Errorf("get branch: %w", err)
 		}
+	}
+	// documentdb starts the compute with cron.database_name=documentdb (its
+	// catalog Settings): pg_cron can only be created in the database that names,
+	// and documentdb needs it there. On a branch already running pg_cron that
+	// would move the scheduler, and the jobs in postgres's cron.job would silently
+	// stop firing. Refused rather than done quietly: a documentdb cluster gets
+	// pg_cron in its own database from the start. A 400, not a 409: the refusal is
+	// permanent, and a 409 here means "an add is in flight, retry" — the YCP agent
+	// reads it that way (reconcile/ampbackend mutateTask) and would retry forever.
+	if slices.Contains(exts, "documentdb") && !slices.Contains(br.Extensions, "documentdb") &&
+		slices.Contains(br.Extensions, "pg_cron") {
+		return AddBranchExtensions400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"documentdb cannot be added to a branch that already has pg_cron: documentdb runs pg_cron "+
+				"in its own `documentdb` database, which would stop the pg_cron jobs scheduled in "+
+				"`postgres` on this branch. Create a cluster with engine \"documentdb\" instead"))}, nil
 	}
 
 	t, err := c.tasks.AddBranchExtensions(ctx, task.AddBranchExtensionsInput{

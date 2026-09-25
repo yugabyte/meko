@@ -24,6 +24,13 @@ type Extension struct {
 	Name string
 	// Version is the pinned upstream version — the image tag (amp-ext-<Name>:<Version>).
 	Version string
+	// ImageRevision counts rebuilds of the same Version from a changed recipe
+	// (patch, Dockerfile, build flags). Tags are immutable and build.sh skips an
+	// existing one, so a recipe change under an unchanged Version never reaches
+	// the registry; a revision above 1 makes the tag <Version>-r<N> instead.
+	// Mirrors `image_revision:` in deploy/extensions/extensions.yaml —
+	// TestCatalogImageTagsMatchManifest keeps the two in step.
+	ImageRevision int
 	// Preload => the extension must be in shared_preload_libraries, so adding it
 	// to a running endpoint needs a postmaster restart (not just a mount).
 	Preload bool
@@ -63,6 +70,11 @@ type Extension struct {
 	// "vector"), and it mirrors `requires:` in deploy/extensions/extensions.yaml —
 	// TestCatalogRequiresMatchesManifest keeps the two in step.
 	Requires []string
+	// Settings are server settings an endpoint mounting this extension starts
+	// with — ones it cannot work without, typically startup-only. documentdb's
+	// name the database compute_ctl creates it in. The chart merges them into the
+	// compute's settings; a branch's own pg_settings still apply on top.
+	Settings map[string]string
 }
 
 // Layout is where an extension image keeps its pieces, relative to the mount
@@ -94,6 +106,7 @@ type Resolved struct {
 	Library        string
 	Layout         Layout
 	ABIExtraExempt []string
+	Settings       map[string]string
 }
 
 // Catalog is the fixed set of known extensions plus the registry their images
@@ -129,8 +142,10 @@ var builtin = []Extension{
 	// pgvector, but Preload: true — its library must be in
 	// shared_preload_libraries (the chart appends it), so an endpoint that opts
 	// in needs a postmaster restart. Its scheduler binds to one database via the
-	// cron.database_name GUC (default "postgres", which every endpoint serves);
-	// a non-default database is set through the endpoint's pg_settings.
+	// cron.database_name GUC, default "postgres", which every endpoint serves. On
+	// a branch that mounts documentdb it is "documentdb" (documentdb's Settings
+	// below), and pg_cron cannot be created in postgres there. Elsewhere a
+	// non-default database is set through the endpoint's pg_settings.
 	{Name: "pg_cron", Version: "1.6.7", Default: false, Preload: true,
 		Description: "Cron-style job scheduler"},
 	// hexabridge: HexaCluster's Oracle-compatibility layer. Opt-in per branch
@@ -163,10 +178,23 @@ var builtin = []Extension{
 	// is required too and amp does not ship it — dropping it needs both a
 	// `requires` edit AND gating the install SQL's GIST operator classes, which
 	// is documentdb-no-postgis.patch's job (see compute/architecture/extensions.md).
-	{Name: "documentdb", Version: "0.116-0", Default: false, Preload: true,
+	//
+	// compute_ctl creates it, in a `documentdb` database of its own, whenever
+	// pg_documentdb is preloaded: the gateway serves nothing until it exists.
+	// Both settings name that database — pg_cron refuses CREATE EXTENSION
+	// anywhere but cron.database_name, and documentdb's background index builds
+	// run in documentdb.bg_worker_database_name. Both are startup-only. Revision
+	// 1 was published from an early recipe that still created the postgis
+	// operator classes; revision 3 is the recipe after the download-checksum
+	// change moved extension.Dockerfile onto safe_curl.sh.
+	{Name: "documentdb", Version: "0.116-0", ImageRevision: 3, Default: false, Preload: true,
 		Description: "DocumentDB — MongoDB-compatible document store",
 		Library:     "pg_documentdb_core,pg_documentdb",
-		Requires:    []string{"pgvector", "pg_cron"}},
+		Requires:    []string{"pgvector", "pg_cron"},
+		Settings: map[string]string{
+			"cron.database_name":                 "documentdb",
+			"documentdb.bg_worker_database_name": "documentdb",
+		}},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.
@@ -184,15 +212,24 @@ func NewCatalog(registry string) *Catalog {
 	return c
 }
 
-// image builds an entry's full image reference: <registry>/amp-ext-<name>:<version>,
-// or "amp-ext-<name>:<version>" when the registry is empty. An entry carrying an
+// ImageTag is an amp-built image's tag: its Version, suffixed -r<N> from the
+// second ImageRevision on. deploy/extensions/build.sh tags with the same rule.
+func ImageTag(version string, revision int) string {
+	if revision > 1 {
+		return fmt.Sprintf("%s-r%d", version, revision)
+	}
+	return version
+}
+
+// image builds an entry's full image reference: <registry>/amp-ext-<name>:<tag>,
+// or "amp-ext-<name>:<tag>" when the registry is empty. An entry carrying an
 // ImageRef (every registered one) is used verbatim — the amp registry flag says
 // where WE publish and nothing about where someone else does.
 func image(e Extension, registry string) string {
 	if e.ImageRef != "" {
 		return e.ImageRef
 	}
-	ref := fmt.Sprintf("amp-ext-%s:%s", e.Name, e.Version)
+	ref := fmt.Sprintf("amp-ext-%s:%s", e.Name, ImageTag(e.Version, e.ImageRevision))
 	if registry == "" {
 		return ref
 	}
@@ -210,6 +247,7 @@ func resolve(e Extension, registry string) Resolved {
 		Library:        e.Library,
 		Layout:         e.Layout,
 		ABIExtraExempt: e.ABIExtraExempt,
+		Settings:       e.Settings,
 	}
 }
 

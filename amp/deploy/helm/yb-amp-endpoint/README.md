@@ -27,7 +27,8 @@ The chart renders:
   default) a `postgres_exporter` sidecar for Postgres metrics, and a
   `documentdb-gateway` sidecar on any endpoint whose branch mounts `documentdb`
   (`documentdbGateway.enabled` overrides that either way). The gateway also adds
-  a `documentdb` port to the Service and a Secret holding its backend URL. PGDATA is
+  a `documentdb` port to the Service and a Secret holding its backend URL, which
+  names the `documentdb` database compute_ctl creates the extension in. PGDATA is
   ephemeral and durable state lives in YugabyteDB, so `/data` is an `emptyDir`
   scratch volume by default; when `persistence.storageClass` is set it is a
   PersistentVolumeClaim instead. The Deployment always uses the `Recreate`
