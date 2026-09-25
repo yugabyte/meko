@@ -2211,9 +2211,12 @@ perf:
   # perf.gate.min_runs A/A runs exist (perf.baseline.aa) a datapoint's allowance
   # is its A/A band, |median| + mad_k x MAD of the A/A deltas. Otherwise it is
   # the flat throughput_drop_pct / latency_rise_pct below, which
-  # use_history_band may widen to the portal's cross-run dispersion. With pairs
-  # (provision i or iteration i of each arm) a violation also needs a sign test:
-  # enough pairs worse for one-sided p <= 0.125, which for three pairs is all three.
+  # use_history_band may widen to the portal's cross-run dispersion. A benchmark
+  # pairs provision i of each arm, independent stacks, and a violation also needs
+  # a sign test: enough pairs worse for one-sided p <= 0.125, which for three
+  # pairs is all three. lifecycle and microbench arms are one stack each, so
+  # they have no pairs, and a datapoint with no A/A or history band is reported
+  # no_band rather than judged on the flat threshold.
   live_arm:
     use_history_band: true
     # An allowance past this is reported "noisy" and not failed on.

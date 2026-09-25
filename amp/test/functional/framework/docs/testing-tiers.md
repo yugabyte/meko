@@ -144,8 +144,9 @@ tests need (a single run would demand every cloud credential at once):
   band where `perf.baseline.aa` runs have built one. A band past
   `perf.live_arm.max_band_pct` (live verdict) or `perf.gate.max_band_pct`
   (history gate) is reported `noisy` and never failed on. A benchmark fails on
-  one datapoint past its allowance; the lifecycle and microbench arms need
-  `perf.live_arm.min_violations`. A benchmark with its live arm holds 6 of the
+  one datapoint past its allowance; the lifecycle and microbench arms, one stack
+  each, need `perf.live_arm.min_violations` and a measured band (A/A or history),
+  and report `no_band` until one exists. A benchmark with its live arm holds 6 of the
   cluster's `sched.cluster_slots.capacity` (12) stack slots, so at most two run
   at once across every run on the cluster; the rest wait before their body. The
   portal-history comparison stays informational (its band/verdict are

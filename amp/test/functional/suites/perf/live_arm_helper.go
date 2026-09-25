@@ -269,6 +269,18 @@ type liveArmPolicy struct {
 	GrossFactor    float64
 	MinViolations  int
 	Pairs          map[string][]float64
+	// RequireBand reports a datapoint with neither an A/A nor a history band
+	// as "no_band". Once a band exists the allowance is as for any datapoint,
+	// the larger of the band and the flat threshold.
+	RequireBand bool
+}
+
+func (p liveArmPolicy) hasBand(dp core.Datapoint) bool {
+	if _, ok := p.AABands[dp.Name]; ok {
+		return true
+	}
+	_, ok := p.Bands[dp.Name]
+	return ok && p.UseHistoryBand
 }
 
 func (p liveArmPolicy) allowanceFor(dp core.Datapoint) float64 {
@@ -371,6 +383,8 @@ func liveArmGateDeltas(current, base []core.Datapoint, curBest, baseBest map[str
 		verdict := "ok"
 		switch {
 		case allowed <= 0 || d <= allowed:
+		case pol.RequireBand && !pol.hasBand(dp):
+			verdict = "no_band"
 		case pol.MaxBandPct > 0 && allowed > pol.MaxBandPct:
 			verdict = "noisy"
 		// A percentage gate needs signal: one-shot ms-scale ops through two
@@ -429,6 +443,12 @@ func liveArmGateDeltas(current, base []core.Datapoint, curBest, baseBest map[str
 type liveGateOpts struct {
 	MinViolations int
 	NoHistoryBand bool
+	// SingleStackPair is a suite whose arms are one stack each (lifecycle,
+	// microbench). Its repeated phases run on that one pair, so they are one
+	// comparison, not independent pairs: a single statement timed on two stacks
+	// lands 1.9x apart on the same image (microbench.insert_cold, run 0a532e7e),
+	// so it is not judged at all until a measured band exists.
+	SingleStackPair bool
 }
 
 func liveGate(t *core.T, s *core.StepHandle, testName string, id Identity, gated, baseGated []core.Datapoint,
@@ -442,6 +462,9 @@ func liveGate(t *core.T, s *core.StepHandle, testName string, id Identity, gated
 	}
 	if opts.NoHistoryBand {
 		pol.UseHistoryBand = false
+	}
+	if opts.SingleStackPair {
+		pol.Pairs, pol.RequireBand = nil, true
 	}
 	pol.Bands = historyBands(t, pg, testName, gated, id, logf)
 	pol.AABands = aaBands(t, pg, testName, gated, id, logf)
@@ -459,30 +482,6 @@ func liveGate(t *core.T, s *core.StepHandle, testName string, id Identity, gated
 		err = nil
 	}
 	return append(liveArmDatapoints(baseGated), armDeltaDatapoints(deltas)...), err
-}
-
-// phasePairs pairs the two arms' phase timings by (name, iteration) and returns
-// each gated group's per-pair deltas under prefix+group.
-func phasePairs(cur, base []phaseResult, prefix string) map[string][]float64 {
-	type key struct {
-		name string
-		iter int
-	}
-	ref := map[key]float64{}
-	for _, r := range base {
-		ref[key{r.Name, r.Iter}] = r.MS
-	}
-	out := map[string][]float64{}
-	for _, r := range cur {
-		b, ok := ref[key{r.Name, r.Iter}]
-		if !ok {
-			continue
-		}
-		if d, ok := regressionPct(b, r.MS, core.LowerIsBetter); ok {
-			out[prefix+r.Group] = append(out[prefix+r.Group], d)
-		}
-	}
-	return out
 }
 
 // armDeltaSuffix names the informational datapoint carrying a datapoint's

@@ -285,7 +285,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 			baseGated, _, _ := microbenchDatapoints(baseResults, params)
 			extra, gerr := liveGate(t, s, testNameMicrobench, id, gated, baseGated,
 				microbenchBestValues(results), microbenchBestValues(baseResults),
-				phasePairs(results, baseResults, microbenchDatapointPrefix), tag, liveGateOpts{}, logf)
+				nil, tag, liveGateOpts{SingleStackPair: true}, logf)
 			lbErr = gerr
 			info = append(info, extra...)
 		}
@@ -300,9 +300,6 @@ type phaseResult struct {
 	Name  string
 	Group string
 	MS    float64
-	// Iter is the iteration that produced it (0 when the test runs once); the
-	// live arm pairs the arms' timings on (Name, Iter).
-	Iter int
 }
 
 // phase is one labelled statement to time.

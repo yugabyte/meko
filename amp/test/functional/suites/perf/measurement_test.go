@@ -72,27 +72,6 @@ func TestLiveArmGateNoisyIsNotFailed(t *testing.T) {
 	}
 }
 
-func TestPhasePairs(t *testing.T) {
-	cur := []phaseResult{
-		{Name: "load", Group: "load", MS: 110, Iter: 1},
-		{Name: "load", Group: "load", MS: 120, Iter: 2},
-		{Name: "ins_1", Group: "ins", MS: 50},
-		{Name: "ins_2", Group: "ins", MS: 60},
-	}
-	base := []phaseResult{
-		{Name: "load", Group: "load", MS: 100, Iter: 2},
-		{Name: "load", Group: "load", MS: 100, Iter: 1},
-		{Name: "ins_1", Group: "ins", MS: 50},
-	}
-	got := phasePairs(cur, base, "p.")
-	if l := got["p.load"]; len(l) != 2 || l[0] != 10 || l[1] != 20 {
-		t.Errorf("load pairs = %v, want [10 20] paired by iteration", l)
-	}
-	if l := got["p.ins"]; len(l) != 1 || l[0] != 0 {
-		t.Errorf("ins pairs = %v, want [0]: ins_2 has no baseline twin", l)
-	}
-}
-
 func TestProvisionPairs(t *testing.T) {
 	spec := benchWorkloadSpec{datapoints: pgbenchDatapoints}
 	bench := func(tps float64) BenchResult { return BenchResult{TPS: aggregate([]float64{tps})} }
@@ -395,5 +374,19 @@ func TestCompareSettings(t *testing.T) {
 	}
 	if compareSettings(names, want, "128MB\n") == nil {
 		t.Error("a short answer must fail")
+	}
+}
+
+func TestSingleStackPairNeedsABand(t *testing.T) {
+	cur := []core.Datapoint{{Name: "microbench.insert_cold", Value: 3206, Unit: "ms", Direction: core.LowerIsBetter}}
+	base := []core.Datapoint{{Name: "microbench.insert_cold", Value: 1687, Unit: "ms", Direction: core.LowerIsBetter}}
+	pol := liveArmPolicy{Thr: float64Thresholds{DropPct: 20, RisePct: 35}, MinViolations: 1, GrossFactor: 2, RequireBand: true, UseHistoryBand: true}
+	table, _, err := liveArmGate(cur, base, nil, nil, pol, "0.260923.0")
+	if err != nil || !strings.Contains(table, "no_band") {
+		t.Errorf("one timed statement per arm, no band yet: must report no_band, not fail: %v\n%s", err, table)
+	}
+	pol.Bands = map[string]float64{"microbench.insert_cold": 40}
+	if _, _, err := liveArmGate(cur, base, nil, nil, pol, "0.260923.0"); err == nil {
+		t.Error("with a measured band a 90% rise past it (and past the gross bar) still fails")
 	}
 }

@@ -315,7 +315,7 @@ func (r *lifecycleRun) setIteration(s *core.StepHandle) {
 }
 
 func (r *lifecycleRun) record(name string, ms float64) {
-	r.results = append(r.results, phaseResult{Name: name, Group: name, MS: ms, Iter: r.pairIter})
+	r.results = append(r.results, phaseResult{Name: name, Group: name, MS: ms})
 	arm := ""
 	if r.baseline != "" {
 		arm = "[baseline] "
@@ -648,7 +648,7 @@ func gateLifecycle(t *core.T, p lifecycleParams, id Identity, results []phaseRes
 			baseGated, _, _ := lifecycleDatapoints(baseResults, nil, p)
 			extra, gerr := liveGate(t, s, testNameLifecycle, id, gated, baseGated,
 				lifecycleBestValues(results), lifecycleBestValues(baseResults),
-				trackedPairs(phasePairs(results, baseResults, lifecyclePrefix)), tag, liveGateOpts{}, logf)
+				nil, tag, liveGateOpts{SingleStackPair: true}, logf)
 			lbErr = gerr
 			info = append(info, extra...)
 		}
@@ -665,16 +665,6 @@ var trackedPhases = []string{
 	"fork_small", "fork_loaded", "load",
 	"fork_count_cold", "fork_count_warm", "fork_insert",
 	"delete_half", "count_after_delete", "drop_table", "delete_fork_branch",
-}
-
-func trackedPairs(pairs map[string][]float64) map[string][]float64 {
-	out := map[string][]float64{}
-	for _, g := range trackedPhases {
-		if p, ok := pairs[lifecyclePrefix+g]; ok {
-			out[lifecyclePrefix+g] = p
-		}
-	}
-	return out
 }
 
 // lifecycleBestValues is each tracked phase's best iteration, keyed like the
