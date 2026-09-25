@@ -234,10 +234,9 @@ export function ProjectView({
               className={cx('foot-btn', panel === 'changes' && 'on')}
               onClick={() => toggle('changes')}
               aria-expanded={panel === 'changes'}
-              title="Show every file changed on this branch"
+              title={`Show every file changed on this branch since ${session.baseBranch}`}
             >
-              <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>{' '}
-              vs {session.baseBranch}
+              <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>
               {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>
           )}
