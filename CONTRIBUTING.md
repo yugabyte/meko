@@ -56,8 +56,12 @@ sorts higher.
    UI, and production dependencies. Each tarball is smoke-tested (`version` and `selftest`).
 3. It creates the tag and GitHub release `v<version>` with the tarballs, `SHA256SUMS` and
    `install.sh`, and attests build provenance where the plan allows.
-4. Running installs pick the release up on their next update check (every 6 hours) and update
-   themselves without interrupting sessions.
+4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
+   A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
+   Tags are kept, so release notes and version numbering are unaffected.
+5. Running installs pick the release up on their next update check (every 6 hours) and update
+   themselves without interrupting sessions. Once a version has been healthy for 30s, the server
+   deletes installed versions under `~/.agent-k-local/app/` beyond the newest 5 in each lane.
 
 Run the Release workflow by hand with **force** to release without feat/fix/perf commits, or with
 a **tag** to rebuild the assets of an existing release.

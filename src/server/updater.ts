@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { UpdateStatus } from '../shared/types.js';
@@ -51,6 +51,36 @@ export function compareSemver(a: string, b: string): number {
     }
   }
   return 0;
+}
+
+/**
+ * A version's lane: its first prerelease identifier (0.1.2-beta.3 → beta), "prerelease" for a
+ * numeric one or a GitHub prerelease without one, else "stable". scripts/prune-releases.sh
+ * uses the same rule for GitHub Releases.
+ */
+export function releaseLane(v: string, prerelease = false): string {
+  const pre = parseSemver(v)?.pre[0];
+  if (pre && !/^\d+$/.test(pre)) return pre;
+  return pre || prerelease ? 'prerelease' : 'stable';
+}
+
+/** Installed versions to keep per lane under app/. */
+export const KEEP_PER_LANE = 5;
+
+/** Version dirs to delete: all but the newest `keep` in each lane, never a protected one. */
+export function versionsToPrune(names: string[], keep: number, protect: Set<string>): string[] {
+  const lanes = new Map<string, string[]>();
+  for (const n of names) {
+    if (!parseSemver(n)) continue;
+    const lane = releaseLane(n);
+    lanes.set(lane, [...(lanes.get(lane) ?? []), n]);
+  }
+  const out: string[] = [];
+  for (const vs of lanes.values()) {
+    vs.sort((a, b) => compareSemver(b, a));
+    out.push(...vs.slice(keep).filter((v) => !protect.has(v)));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +478,30 @@ export class Updater {
 
   /** Called by the server once it has been healthy for 30s after boot. */
   markHealthy(): void {
+    this.clearPending();
+    if (this.enabled) this.pruneVersions();
+  }
+
+  /** Deletes installed versions beyond the newest few in each lane, keeping the running one. */
+  private pruneVersions(): void {
+    const { app } = this.deps.paths;
+    let names: string[];
+    try {
+      names = readdirSync(app);
+    } catch {
+      return;
+    }
+    for (const v of versionsToPrune(names, KEEP_PER_LANE, new Set([this.currentDirName(), this.deps.version]))) {
+      try {
+        rmSync(join(app, v), { recursive: true, force: true });
+        this.deps.log(`Removed old version ${v}`);
+      } catch (e) {
+        this.deps.log(`Removing old version ${v} failed: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  private clearPending(): void {
     let pending: PendingUpdate;
     try {
       pending = JSON.parse(readFileSync(this.deps.paths.updatePending, 'utf8')) as PendingUpdate;

@@ -601,7 +601,7 @@ sequenceDiagram
   <div class="grid2">
     <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
     <div class="card"><span class="label">On push to main</span><h3>Versioning</h3><p>Versions are <code>0.YYYYMMDD.N</code>: the UTC date, and <code>N</code> counting from 0 for each release that day. A push with any <code>feat</code>, <code>fix</code> or <code>perf</code> commit since the last release runs the tests and cuts the next version; its Conventional Commit subjects become the release notes.</p></div>
-    <div class="card"><span class="label">After the tests</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node 22 runtime, node-pty (built with gcc-toolset-13) and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
+    <div class="card"><span class="label">After the tests</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node 22 runtime, node-pty (built with gcc-toolset-13) and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>. Afterwards, releases beyond the newest 5 in each lane (<code>stable</code>, or the prerelease identifier such as <code>beta</code>) are deleted; their tags stay.</p></div>
   </div>
   <div class="callout">
     <span class="label">glibc</span>
@@ -626,6 +626,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
       <li>restarts only the web server unit. Sessions keep running;</li>
       <li>if <code>/healthz</code> fails within 30 seconds, points back to the previous version and marks the new one as bad.</li>
     </ol>
+    <p>Once a version has been healthy for 30 seconds, the server deletes installed versions under <code>app/</code> beyond the newest 5 in each lane, never the running one.</p>
     <p>The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance window, because they never touch tmux.</p>
   </div>
 </section>

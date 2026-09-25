@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
   symlinkSync,
@@ -21,9 +22,11 @@ import {
   compareSemver,
   parseSha256Sums,
   pickLatest,
+  releaseLane,
   tarballName,
   Updater,
   verifySha256,
+  versionsToPrune,
   type Release,
   type ReleaseSource,
 } from '../../src/server/updater.js';
@@ -54,6 +57,23 @@ function rel(version: string, extra: Partial<Release> = {}): Release {
     ...extra,
   };
 }
+
+describe('release lanes', () => {
+  it('groups versions by their prerelease identifier', () => {
+    expect(releaseLane('0.20260925.9')).toBe('stable');
+    expect(releaseLane('v0.20260925.9')).toBe('stable');
+    expect(releaseLane('0.20260925.9', true)).toBe('prerelease');
+    expect(releaseLane('1.0.0-beta.2')).toBe('beta');
+    expect(releaseLane('0.20260925.6-dp-links')).toBe('dp-links');
+    expect(releaseLane('1.0.0-1')).toBe('prerelease');
+  });
+
+  it('keeps the newest few in each lane and never a protected version', () => {
+    const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.2.0-beta.1', '0.2.0-beta.2', '0.2.0-rc.1'];
+    expect(versionsToPrune(names, 2, new Set()).sort()).toEqual(['0.1.0', '0.1.1', '0.1.2']);
+    expect(versionsToPrune(names, 1, new Set(['0.1.0'])).sort()).toEqual(['0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']);
+  });
+});
 
 describe('pickLatest', () => {
   const releases = [rel('0.2.0'), rel('0.3.0'), rel('0.4.0-rc.1'), rel('0.3.1', { draft: true })];
@@ -273,6 +293,13 @@ describe('Updater', () => {
     expect(existsSync(fx.paths.updatePending)).toBe(false);
     expect(u.status().justUpdatedFrom).toBe('0.0.9');
     expect(fx.kv.get('update.justUpdatedFrom')).toBe('0.0.9');
+  });
+
+  it('markHealthy removes installed versions beyond five per lane', () => {
+    for (const v of ['0.0.1', '0.0.2', '0.0.3', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.0.1-beta.1']) mkdirSync(join(fx.paths.app, v));
+    const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
+    u.markHealthy();
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.1-beta.1', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.1.0', 'current']);
   });
 });
 

@@ -208,3 +208,12 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist-release/*.tar.gz
+
+      - name: Delete releases beyond the newest 5 in each lane
+        if: needs.plan.outputs.rebuild == 'false'
+        # A failed prune never fails the release; the next one tries again.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: 5
+        run: sh scripts/prune-releases.sh
