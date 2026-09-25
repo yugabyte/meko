@@ -38,6 +38,8 @@ const THEME = {
   brightWhite: '#F2F5F3',
 };
 
+const FONT = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+
 const FONT_KEY = 'ak-term-font';
 /** Phones get a smaller font so Claude Code has about 48 columns instead of 38. */
 const defaultFont = () => (matches(MOBILE_QUERY) ? 11 : 13);
@@ -83,7 +85,7 @@ class SessionTerminal {
     this.el = document.createElement('div');
     this.el.className = 'xterm-host';
     this.term = new Terminal({
-      fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      fontFamily: FONT,
       fontSize: storedFont() ?? defaultFont(),
       lineHeight: 1.15,
       cursorBlink: true,
@@ -108,6 +110,17 @@ class SessionTerminal {
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: true });
     this.el.addEventListener('touchcancel', this.touchEnd, { capture: true, passive: true });
+    // xterm measures its cells when it opens. If the web font arrives later (a cold cache), the
+    // cells were measured with a fallback font and the rows no longer fit: re-measure and refit.
+    document.fonts?.load(`13px ${FONT}`).then(
+      () => {
+        if (this.disposed || !document.fonts.check(`13px ${FONT}`)) return;
+        this.term.options.fontFamily = `${FONT}, monospace`;
+        this.term.options.fontFamily = FONT;
+        this.refit();
+      },
+      () => undefined,
+    );
     this.term.onData((data) => this.send({ type: 'input', data }));
     this.term.onBinary((data) => this.send({ type: 'input', data }));
     // tmux sends a mouse selection as OSC 52 (set-clipboard on); put it on the browser clipboard.
