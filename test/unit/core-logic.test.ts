@@ -6,7 +6,7 @@ import {
   LoginLimiter, base32Decode, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
 import { DEFAULT_CONFIG, loadConfig, mekoWebUrl, resolveMekoWebUrl, saveConfig } from '../../src/server/config.js';
-import { openDb, schemaVersion } from '../../src/server/db.js';
+import { openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, isLogin } from '../../src/server/github.js';
 import { pinSlug, projectAgentId } from '../../src/server/meko.js';
@@ -86,6 +86,14 @@ describe('config and db', () => {
   it('migrates a fresh database', () => {
     const db = openDb(':memory:');
     expect(schemaVersion(db)).toBeGreaterThan(0);
+  });
+
+  it('lets several projects share a repo path', () => {
+    const db = openDb(':memory:');
+    const add = (id: string) =>
+      run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES (?, ?, '/code/api', 'main', 0)`, id, id);
+    add('api');
+    expect(() => add('api-tools')).not.toThrow();
   });
 });
 

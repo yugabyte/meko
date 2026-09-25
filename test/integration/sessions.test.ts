@@ -36,8 +36,45 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(p.datapacks).toEqual([{ id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }]);
     const pin = JSON.parse(readFileSync(join(process.env.MEKO_WATERMARK_DIR!, 'pin-claude_code_demo-repo.json'), 'utf8'));
     expect(pin.datapack_id).toBe('dp-agent-k-local-test-demo');
-    expect((await env.core.projects.repos()).repos[0].projectId).toBe('demo-repo');
-    await expect(newProject()).rejects.toThrow(/already belongs/);
+    expect((await env.core.projects.repos()).repos[0].projects).toEqual([{ id: 'demo-repo', name: 'Demo' }]);
+  });
+
+  it('lets several projects share a repo, each with its own datapack, sessions and worktrees', async () => {
+    const first = await newProject();
+    const second = await env.core.projects.create({
+      repoPath: env.repo, name: 'Release tooling', datapack: { mode: 'create', name: 'agent-k-local/test/release' },
+    });
+    expect(second.id).toBe('demo-repo-release-tooling');
+    expect(second.repoPath).toBe(first.repoPath);
+    expect(second.datapacks).toEqual([{ id: 'dp-agent-k-local-test-release', name: 'agent-k-local/test/release', role: 'dedicated' }]);
+    const pin = JSON.parse(readFileSync(join(process.env.MEKO_WATERMARK_DIR!, 'pin-claude_code_demo-repo-release-tooling.json'), 'utf8'));
+    expect(pin.datapack_id).toBe('dp-agent-k-local-test-release');
+    const repos = (await env.core.projects.repos()).repos;
+    expect(repos).toHaveLength(1);
+    expect(repos[0].projects).toEqual([{ id: 'demo-repo', name: 'Demo' }, { id: 'demo-repo-release-tooling', name: 'Release tooling' }]);
+
+    // Names only have to differ within a repo.
+    await expect(env.core.projects.create({ repoPath: env.repo, name: ' demo ', datapack: { mode: 'existing', id: 'dp-x', name: 'x' } }))
+      .rejects.toThrow(/already has a project named "Demo"/);
+
+    // The same session name in both projects gets separate branches, worktrees and tmux sessions.
+    const a = await env.core.sessions.create(first.id, { name: 'Fix it', prompt: 'hi', skipDesign: true });
+    const b = await env.core.sessions.create(second.id, { name: 'Fix it', prompt: 'hi', skipDesign: true });
+    expect([a.branch, b.branch]).toEqual(['ak/fix-it', 'ak/fix-it-2']);
+    expect(a.worktreePath).not.toBe(b.worktreePath);
+    expect(a.tmuxName).not.toBe(b.tmuxName);
+    await waitFor(() => env.core.sessions.get(b.id).status, (st) => st === 'idle', 10000, 'second project session');
+    expect(argvLog(env).find((l) => l.env.MEKO_AGENT_ID === 'claude_code:demo-repo-release-tooling')?.env.MEKO_DATAPACK_ID)
+      .toBe('dp-agent-k-local-test-release');
+
+    // Deleting one project leaves the other's session, worktree and branch alone.
+    await env.core.projects.delete(first.id);
+    expect(existsSync(a.worktreePath)).toBe(false);
+    expect(existsSync(b.worktreePath)).toBe(true);
+    expect((await env.core.tmux.panes()).has(b.tmuxName)).toBe(true);
+    expect(env.core.sessions.get(b.id).status).toBe('idle');
+    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).toContain('ak/fix-it-2');
+    expect((await env.core.projects.repos()).repos[0].projects).toEqual([{ id: 'demo-repo-release-tooling', name: 'Release tooling' }]);
   });
 
   it('refuses to create a project when Meko is down', async () => {

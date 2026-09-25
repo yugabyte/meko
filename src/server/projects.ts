@@ -47,14 +47,15 @@ export class ProjectService {
     const cfg = this.core.config;
     const roots = repoRoots(cfg);
     const scanned = await scanRepos(roots, cfg.repos.depth);
-    const used = new Map(projectRows(this.db).map((p) => [resolve(p.repo_path), p]));
+    const used = new Map<string, { id: string; name: string }[]>();
+    for (const p of projectRows(this.db)) {
+      const key = resolve(p.repo_path);
+      used.set(key, [...(used.get(key) ?? []), { id: p.id, name: p.name }]);
+    }
     return {
       roots: cfg.repos.roots,
       repos: scanned
-        .map((r) => {
-          const p = used.get(resolve(r.path));
-          return { ...r, projectId: p?.id ?? null, projectName: p?.name ?? null };
-        })
+        .map((r) => ({ ...r, projects: used.get(resolve(r.path)) ?? [] }))
         .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt),
     };
   }
@@ -83,8 +84,10 @@ export class ProjectService {
       repoPath = resolve(expandHome(req.repoPath!));
     }
     if (!isMainRepo(repoPath)) throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree).`);
-    const clash = projectRows(this.db).find((p) => resolve(p.repo_path) === repoPath);
-    if (clash) throw new HttpError(409, `That repo already belongs to the project "${clash.name}".`);
+    // A repo can back several projects, but not two with the same name.
+    const siblings = projectRows(this.db).filter((p) => resolve(p.repo_path) === repoPath);
+    const clash = siblings.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
+    if (clash) throw new HttpError(409, `That repo already has a project named "${clash.name}". Pick another name.`);
 
     // Datapack first: if Meko refuses, nothing is written locally.
     let dp: { id: string; name: string };
@@ -100,7 +103,9 @@ export class ProjectService {
       dp = { id: req.datapack.id, name: req.datapack.name };
     }
 
-    const id = this.uniqueId(slugify(repoPath.split('/').pop() ?? name));
+    // The first project on a repo is named after it; later ones add their own name.
+    const repoSlug = slugify(repoPath.split('/').pop() ?? name);
+    const id = this.uniqueId(siblings.length ? slugify(`${repoSlug}-${slugify(name)}`, 60) : repoSlug);
     const settings = { ...DEFAULT_SETTINGS, reviewer: await detectReviewer(repoPath, DEFAULT_SETTINGS.reviewerLogin) };
     const branch = await defaultBranch(repoPath);
     const pos = (get<{ m: number | null }>(this.db, 'SELECT MAX(position) AS m FROM projects WHERE deleted_at IS NULL')?.m ?? -1) + 1;

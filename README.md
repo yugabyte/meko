@@ -6,6 +6,7 @@ A self-hosted workbench for [Claude Code](https://claude.com/claude-code). It ru
 your devserver, and you use it from a browser:
 
 - **Projects** in a left rail, each one a git repo picked from your repos folder (`~/code` by default).
+  A repo can back several projects, each with its own datapack, settings and sessions.
   New sessions start from the base branch after it's fast-forwarded to `origin`.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You

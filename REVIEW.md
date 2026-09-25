@@ -54,6 +54,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
 - [ ] Every project still has exactly one dedicated datapack; sessions get `MEKO_AGENT_ID` and the pin.
+- [ ] Several projects can share a repo: per-project state (worktrees, tmux names, pins, lookups) is
+      keyed by project id, not repo path, and git work on the repo only touches the session's own branch.
 - [ ] Meko failures degrade gracefully (banner, logged warning) and never kill running sessions.
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub.
 - [ ] Token usage stays incremental (byte offsets) and deduplicated by message id; subagent

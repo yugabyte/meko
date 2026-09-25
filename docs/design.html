@@ -197,10 +197,10 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.15 (implemented)</span>
+  <span class="label">Design · v0.16 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
-  <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
+  <div class="meta"><span class="pill">Draft for review</span><span>25 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
 </header>
 
 <section id="decisions">
@@ -325,7 +325,7 @@ flowchart LR
     <span><i class="dot exited"></i>Exited</span>
   </div>
   <h3>New project</h3>
-  <p>A new project starts from a repo you already have. The dialog lists every git repo directly under your repos folder (<code>~/code</code> by default), with the most recently touched first. Repos that already belong to a project are shown dimmed.</p>
+  <p>A new project starts from a repo you already have. The dialog lists every git repo directly under your repos folder (<code>~/code</code> by default), with the most recently touched first. A repo can back several projects: one that already has a project is marked with its name (<em>In "infra"</em>, or <em>In 2 projects</em>) and can still be picked. Each project on a repo gets its own datapack, Meko agent id, settings, sessions and worktrees; project names must differ within a repo. Their session branches share the repo, so a branch name that another project already uses gets a number added (<code>ak/fix-tests-2</code>). Per-repo files such as <code>.agent-k/stages/</code> overrides apply to every project on the repo.</p>
   <div class="mockwrap">
     <div class="picker" role="img" aria-label="Mockup of the New project dialog listing git repos under ~/code">
       <div class="hd"><b>New project</b><span class="mono" style="color:var(--muted);font-size:11.5px">~/code · 32 repos</span></div>
@@ -335,7 +335,7 @@ flowchart LR
           <div class="repo sel"><span class="radio"></span><span class="nm">billing-api</span><span class="rm">github.com/acme/billing-api</span><span class="br">main</span><span class="when">2 hours ago</span></div>
           <div class="repo"><span class="radio"></span><span class="nm">docs-site</span><span class="rm">github.com/acme/docs-site</span><span class="br">feat/search</span><span class="when">Yesterday</span></div>
           <div class="repo"><span class="radio"></span><span class="nm">perf-lab</span><span class="rm">no remote</span><span class="br">main</span><span class="when">3 days ago</span></div>
-          <div class="repo used"><span class="radio"></span><span class="nm">infra</span><span class="rm">github.com/acme/infra</span><span class="br">main</span><span class="when">In project "infra"</span></div>
+          <div class="repo used"><span class="radio"></span><span class="nm">infra</span><span class="rm">github.com/acme/infra</span><span class="br">main</span><span class="when">In "infra"</span></div>
           <div class="repo"><span class="radio"></span><span class="nm">ledger-core</span><span class="rm">github.com/acme/ledger-core</span><span class="br">master</span><span class="when">2 weeks ago</span></div>
         </div>
         <div class="fields">
@@ -423,8 +423,8 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
   </table></div>
 <pre class="code"><span class="c">-- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.</span>
 <span class="k">CREATE TABLE</span> projects (
-  id TEXT PRIMARY KEY,            <span class="c">-- slug, e.g. billing-api</span>
-  name TEXT NOT NULL, repo_path TEXT NOT NULL UNIQUE, default_branch TEXT NOT NULL,
+  id TEXT PRIMARY KEY,            <span class="c">-- slug of the repo, e.g. billing-api; later projects on it add their name: billing-api-release-tooling</span>
+  name TEXT NOT NULL, repo_path TEXT NOT NULL, default_branch TEXT NOT NULL,   <span class="c">-- several projects may share a repo</span>
   position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER);
 <span class="k">CREATE TABLE</span> project_datapacks (
   project_id TEXT REFERENCES projects, datapack_id TEXT, name TEXT,

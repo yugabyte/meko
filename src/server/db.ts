@@ -172,6 +172,8 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX review_comments_session ON review_comments(session_id, state);
   `,
+  // 6: several projects may share a repo.
+  `DROP INDEX projects_repo;`,
 ];
 
 export function openDb(path: string): Db {

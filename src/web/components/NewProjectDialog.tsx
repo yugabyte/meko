@@ -15,6 +15,10 @@ function nameFromPath(p: string): string {
   return p.trim().replace(/\/+$/, '').split('/').pop() ?? '';
 }
 
+function projectList(r: RepoInfo): string {
+  return r.projects.map((p) => `“${p.name}”`).join(', ');
+}
+
 export function NewProjectDialog({
   mekoOk,
   onClose,
@@ -174,26 +178,38 @@ export function NewProjectDialog({
             {!repos && !reposError && <p className="muted pad">Scanning {roots.join(', ') || 'your repos folder'}…</p>}
             {repos && shown.length === 0 && <p className="muted pad">No repos match.</p>}
             {shown.map((r) => {
-              const used = !!r.projectId;
+              const used = r.projects.length > 0;
               return (
                 <button
                   key={r.path}
                   role="option"
                   aria-selected={selected?.path === r.path}
                   className={cx('repo', selected?.path === r.path && 'sel', used && 'used')}
-                  disabled={used}
                   onClick={() => setSelected(r)}
-                  title={r.path}
+                  title={used ? `${r.path}\nIn ${projectList(r)}` : r.path}
                 >
                   <span className="radio" />
                   <span className="nm">{r.name}</span>
                   <span className="rm">{r.remote ?? 'no remote'}</span>
                   <span className="br">{r.branch ?? '—'}</span>
-                  <span className="when">{used ? `In project “${r.projectName}”` : relativeTime(r.lastTouchedAt)}</span>
+                  <span className="when">
+                    {!used
+                      ? relativeTime(r.lastTouchedAt)
+                      : r.projects.length === 1
+                        ? `In “${r.projects[0].name}”`
+                        : `In ${r.projects.length} projects`}
+                  </span>
                 </button>
               );
             })}
           </div>
+          {selected && selected.projects.length > 0 && (
+            <p className="hint repo-note">
+              This repo already has {selected.projects.length === 1 ? 'project' : 'projects'} {projectList(selected)}. The
+              new project gets its own datapack, sessions and worktrees. Branches share the repo, so a clashing
+              branch name gets a number added.
+            </p>
+          )}
         </>
       )}
       {source === 'clone' && (

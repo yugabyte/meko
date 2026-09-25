@@ -1130,9 +1130,11 @@ a.icon-btn {
 .repo.sel {
   background: var(--accent-soft);
 }
-.repo.used {
-  color: var(--muted);
-  cursor: default;
+.repo.used .nm {
+  font-weight: 500;
+}
+.repo-note {
+  margin: 8px 0 0;
 }
 .radio {
   width: 14px;

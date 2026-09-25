@@ -231,9 +231,8 @@ export interface RepoInfo {
   remote: string | null;
   branch: string | null;
   lastTouchedAt: number;
-  /** Set when a project already uses this repo. */
-  projectId: string | null;
-  projectName: string | null;
+  /** Projects that already use this repo (a repo can have several). */
+  projects: { id: string; name: string }[];
 }
 
 export interface ReposResponse {

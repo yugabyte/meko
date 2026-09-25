@@ -92,6 +92,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const cookie = await setup();
     const repos = (await app.inject({ url: '/api/repos', headers: { cookie } })).json();
     expect(repos.repos).toHaveLength(1);
+    expect(repos.repos[0].projects).toEqual([]);
     const p = await app.inject({
       method: 'POST', url: '/api/projects', headers: { cookie },
       payload: { repoPath: repos.repos[0].path, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } },
