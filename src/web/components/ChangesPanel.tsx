@@ -342,25 +342,15 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                 {thread(placed.gone, { outdated: true, withPath: true })}
               </div>
             )}
-            <ul className="chg-list">
-              {files.map((f) => (
-                <li key={f.path}>
-                  <button className="chg-row" onClick={() => jump(f.path)}>
-                    <KindBadge kind={f.kind} />
-                    <FilePath file={f} />
-                    <Counts file={f} comments={countByPath.get(f.path) ?? 0} />
-                  </button>
-                </li>
-              ))}
-            </ul>
             {touch ? (
               <p className="muted small chg-hint">
-                Tap <b>+</b> beside a line to comment on it. Before you type, tap <b>+</b> on another line to cover a range.
+                Use <b>Files</b> to move between files. Tap <b>+</b> beside a line to comment on it; before you type, tap <b>+</b> on
+                another line to cover a range.
               </p>
             ) : (
               <p className="muted small chg-hint">
-                Click <b>+</b> beside a line to comment on it; shift-click another line to cover a range. Press <kbd>[</kbd> or{' '}
-                <kbd>]</kbd> for the previous or next file.
+                Use <b>Files</b> or press <kbd>[</kbd> and <kbd>]</kbd> to move between files. Click <b>+</b> beside a line to
+                comment on it; shift-click another line to cover a range.
               </p>
             )}
             {files.map((f, n) => (

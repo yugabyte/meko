@@ -1448,17 +1448,6 @@ a.icon-btn {
 .changes-body {
   padding: 12px 14px 32px;
 }
-.chg-list {
-  list-style: none;
-  margin: 0 0 16px;
-  padding: 0;
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.chg-list li + li {
-  border-top: 1px solid var(--rule);
-}
 .chg-row,
 .chg-file-hd {
   display: grid;
@@ -1614,7 +1603,7 @@ a.icon-btn {
   background: var(--sunk);
 }
 .chg-hint {
-  margin: -8px 0 14px;
+  margin: 0 0 12px;
 }
 .chg-bar {
   display: flex;
