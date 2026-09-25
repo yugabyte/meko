@@ -38,5 +38,4 @@ with a finger. Before you finish a UI change:
 ## Checking it
 
 `npm run dev` serves the UI on :5173. Use your browser's device toolbar with touch emulation. For a
-real phone, open the installed instance's HTTPS address. Retake `docs/screenshots/mobile.png` when
-the phone layout of the session screen changes visibly.
+real phone, open the installed instance's HTTPS address.
