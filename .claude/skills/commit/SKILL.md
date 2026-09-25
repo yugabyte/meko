@@ -46,4 +46,4 @@ loses open work.
    certificates, or anything under `~/.agent-k-local`.
 3. Write the message per the rules above and commit with a heredoc so formatting is preserved:
    `git commit -F- <<'EOF' ... EOF`.
-4. Don't push unless asked. `main` is protected: work on a branch and open a PR.
+4. For now, commit directly to `main` and push (`git push origin main`); no PRs needed yet.

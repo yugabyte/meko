@@ -1,0 +1,123 @@
+import type {
+  AppState,
+  AttachDatapackRequest,
+  AuthStatus,
+  CreateProjectRequest,
+  CreateSessionRequest,
+  DesignDoc,
+  LoginRequest,
+  MekoDatapack,
+  Project,
+  ProjectHome,
+  ReposResponse,
+  SearchResult,
+  Session,
+  SessionAction,
+  Settings,
+  SetupRequest,
+  TotpEnrollResponse,
+  UpdateProjectRequest,
+  UpdateStatus,
+} from '../shared/types';
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public body: Record<string, unknown> = {},
+  ) {
+    super(message);
+  }
+}
+
+/** Called when any request comes back 401, so the app can drop to the login screen. */
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  onUnauthorized = fn;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, opts: { quiet401?: boolean } = {}): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      credentials: 'same-origin',
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError(0, 'Can’t reach the agent-k-local server. Check that it is running.');
+  }
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  let data: unknown = undefined;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text };
+    }
+  }
+  if (!res.ok) {
+    const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    const msg =
+      typeof obj.error === 'string'
+        ? obj.error
+        : res.status === 429
+          ? 'Too many attempts. Wait a few minutes and try again.'
+          : `Request failed (${res.status}).`;
+    if (res.status === 401 && !opts.quiet401) onUnauthorized?.();
+    throw new ApiError(res.status, msg, obj);
+  }
+  return data as T;
+}
+
+const get = <T>(p: string) => request<T>('GET', p);
+const post = <T>(p: string, body?: unknown) => request<T>('POST', p, body ?? {});
+const enc = encodeURIComponent;
+
+export const api = {
+  authStatus: () => request<AuthStatus>('GET', '/api/auth/status', undefined, { quiet401: true }),
+  setup: (b: SetupRequest) => request<void>('POST', '/api/auth/setup', b, { quiet401: true }),
+  login: (b: LoginRequest) => request<void>('POST', '/api/auth/login', b, { quiet401: true }),
+  logout: () => post<void>('/api/auth/logout'),
+  changePassword: (current: string, next: string) => post<void>('/api/auth/password', { current, next }),
+  totpEnroll: () => post<TotpEnrollResponse>('/api/auth/totp/enroll'),
+  totpConfirm: (code: string) => post<void>('/api/auth/totp/confirm', { code }),
+  totpDisable: (code: string) => post<void>('/api/auth/totp/disable', { code }),
+
+  state: () => get<AppState>('/api/state'),
+  repos: () => get<ReposResponse>('/api/repos'),
+  datapacks: () => get<MekoDatapack[]>('/api/meko/datapacks'),
+
+  createProject: (b: CreateProjectRequest) => post<Project>('/api/projects', b),
+  updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
+  deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
+  branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
+  attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
+  detachDatapack: (id: string, dpId: string) =>
+    request<Project>('DELETE', `/api/projects/${enc(id)}/datapacks/${enc(dpId)}`),
+  home: (id: string) => get<ProjectHome>(`/api/projects/${enc(id)}/home`),
+  search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
+  createSession: (projectId: string, b: CreateSessionRequest) =>
+    post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
+  sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
+  design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
+
+  settings: () => get<Settings>('/api/settings'),
+  saveSettings: (b: Partial<Settings>) => request<Settings>('PUT', '/api/settings', b),
+  update: () => get<UpdateStatus>('/api/update'),
+  checkUpdate: () => post<UpdateStatus>('/api/update/check'),
+  applyUpdate: () => post<UpdateStatus>('/api/update/apply'),
+};
+
+export function errorMessage(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+export function wsUrl(path: string): string {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}${path}`;
+}

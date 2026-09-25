@@ -1,0 +1,17 @@
+[Unit]
+Description=agent-k-local tmux server (hosts every Claude session)
+Documentation=https://github.com/yugabyte/agent-k-local
+StartLimitIntervalSec=0
+
+[Service]
+Type=forking
+Environment=AK_HOME=@AK_HOME@
+# A keepalive session keeps the tmux server running even with no Claude sessions.
+ExecStart=@TMUX@ -L agentk -f @AK_HOME@/tmux.conf new-session -d -s _ak "sleep infinity"
+ExecStop=@TMUX@ -L agentk kill-server
+Restart=always
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

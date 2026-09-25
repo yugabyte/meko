@@ -1,0 +1,61 @@
+#!/bin/sh
+# agent-k-local launcher, installed as <AK_HOME>/app/<version>/bin/agent-k-local.
+#
+# Runs the bundled Node on the bundled server. For `serve`, it also handles
+# rollback after a bad self-update: the updater writes update-pending.json
+# before restarting into a new version, and the server deletes it once it has
+# been healthy for 30s. If the new version fails to come up three times in a
+# row, this wrapper switches app/current back to the previous version, records
+# the bad one, and starts the previous version instead.
+set -eu
+
+# Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<ver>).
+self=$0
+while [ -h "$self" ]; do
+  dir=$(cd -P "$(dirname "$self")" && pwd)
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$dir/$link ;;
+  esac
+done
+bin_dir=$(cd -P "$(dirname "$self")" && pwd)
+AK_APP_DIR=$(cd -P "$bin_dir/.." && pwd)
+AK_VERSION=$(cat "$AK_APP_DIR/VERSION" 2>/dev/null || echo unknown)
+export AK_APP_DIR AK_VERSION
+
+node="$AK_APP_DIR/node/bin/node"
+cli="$AK_APP_DIR/lib/dist/server/cli.js"
+ak_home=${AK_HOME:-$HOME/.agent-k-local}
+
+if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
+  # Bump the attempt counter; print "<attempts> <from> <to>".
+  # shellcheck disable=SC2016 # the single-quoted text is JavaScript, not shell
+  state=$("$node" -e '
+    const fs = require("fs");
+    const f = process.argv[1];
+    let p;
+    try { p = JSON.parse(fs.readFileSync(f, "utf8")); } catch { process.exit(3); }
+    p.attempts = (Number(p.attempts) || 0) + 1;
+    fs.writeFileSync(f + ".tmp", JSON.stringify(p));
+    fs.renameSync(f + ".tmp", f);
+    process.stdout.write(`${p.attempts} ${p.from || ""} ${p.to || ""}`);
+  ' "$ak_home/update-pending.json") || state=""
+
+  if [ -n "$state" ]; then
+    attempts=${state%% *}
+    rest=${state#* }
+    from=${rest%% *}
+    to=${rest#* }
+    if [ "$attempts" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
+      echo "agent-k-local: version $to failed to start $attempts times; rolling back to $from" >&2
+      ln -sfn "$from" "$ak_home/app/current.rollback"
+      mv -Tf "$ak_home/app/current.rollback" "$ak_home/app/current"
+      [ -n "$to" ] && printf '%s\n' "$to" >> "$ak_home/bad-versions"
+      rm -f "$ak_home/update-pending.json"
+      exec "$ak_home/app/$from/bin/agent-k-local" "$@"
+    fi
+  fi
+fi
+
+exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"

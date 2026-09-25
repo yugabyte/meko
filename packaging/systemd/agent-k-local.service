@@ -1,0 +1,21 @@
+[Unit]
+Description=agent-k-local web server
+Documentation=https://github.com/yugabyte/agent-k-local
+# tmux runs in its own unit so restarting or updating this one never kills sessions.
+Wants=agent-k-local-tmux.service
+After=agent-k-local-tmux.service network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=AK_HOME=@AK_HOME@
+ExecStart=@AK_HOME@/app/current/bin/agent-k-local serve
+Restart=always
+RestartSec=2
+# Only the server process belongs to this unit; it never forks tmux here
+# (it asks the tmux unit's server to create sessions over the socket).
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

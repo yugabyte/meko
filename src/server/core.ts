@@ -1,0 +1,173 @@
+import { EventEmitter } from 'node:events';
+import type { Server } from 'node:http';
+import { mkdirSync, rmSync } from 'node:fs';
+import { ensureWorkspaceTrust } from './trust.js';
+import { userInfo } from 'node:os';
+import type { AppState, MekoStatus, ServerEvent, UpdateStatus } from '../shared/types.js';
+import { saveConfig, type Config } from './config.js';
+import { run, type Db } from './db.js';
+import { startHookServer } from './hooks.js';
+import { writeHookFiles } from './claude.js';
+import { consoleLogger, errMsg, type Logger } from './log.js';
+import { MekoClient } from './meko.js';
+import type { Paths } from './paths.js';
+import { ProjectService } from './projects.js';
+import { SessionManager } from './sessions.js';
+import { Lifecycle } from './lifecycle.js';
+import { projectRows, toProject } from './store.js';
+import { Tmux, writeTmuxConf } from './tmux.js';
+
+export interface CoreOptions {
+  paths: Paths;
+  config: Config;
+  db: Db;
+  version: string;
+  meko: MekoClient;
+  tmux?: Tmux;
+  log?: Logger;
+  /** Timers for reconcile, GitHub polling and Meko checks. Tests turn these off. */
+  timers?: boolean;
+}
+
+type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
+
+export class Core extends EventEmitter {
+  readonly paths: Paths;
+  readonly db: Db;
+  readonly version: string;
+  readonly username: string;
+  readonly meko: MekoClient;
+  readonly tmux: Tmux;
+  readonly log: Logger;
+  readonly projects: ProjectService;
+  readonly sessions: SessionManager;
+  readonly lifecycle: Lifecycle;
+  mekoStatus: MekoStatus = { ok: true, error: null, checkedAt: null };
+  updateStatus: () => UpdateStatus;
+  private cfg: Config;
+  private timersOn: boolean;
+  private intervals: NodeJS.Timeout[] = [];
+  private hookServer: Server | null = null;
+
+  constructor(o: CoreOptions) {
+    super();
+    this.paths = o.paths;
+    this.db = o.db;
+    this.version = o.version;
+    this.cfg = o.config;
+    this.meko = o.meko;
+    this.log = o.log ?? consoleLogger;
+    this.tmux = o.tmux ?? new Tmux(o.config.tmux.socket, o.paths.tmuxConf);
+    this.timersOn = o.timers ?? true;
+    this.username = safeUsername();
+    this.updateStatus = () => ({
+      current: this.version, channel: this.cfg.update.channel, latest: null, available: false, applying: false,
+      lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
+    });
+    this.projects = new ProjectService(this);
+    this.sessions = new SessionManager(this);
+    this.lifecycle = new Lifecycle(this);
+  }
+
+  get config(): Config {
+    return this.cfg;
+  }
+
+  updateConfig(fn: (c: Config) => void): Config {
+    const next = structuredClone(this.cfg);
+    fn(next);
+    saveConfig(this.paths, next);
+    this.cfg = next;
+    this.changed();
+    return next;
+  }
+
+  /** Something visible changed; the server debounces and broadcasts state. */
+  changed(): void {
+    this.emit('change');
+  }
+
+  notify(n: Omit<NotifyEvent, 'type'>): void {
+    this.emit('notify', { type: 'notify', ...n } satisfies NotifyEvent);
+  }
+
+  state(): AppState {
+    return {
+      projects: projectRows(this.db).map((r) => ({ ...toProject(this.db, r), sessions: this.sessions.listForProject(r.id) })),
+      meko: this.mekoStatus,
+      update: this.updateStatus(),
+      version: this.version,
+      username: this.username,
+    };
+  }
+
+  async start(): Promise<void> {
+    writeTmuxConf(this.paths);
+    writeHookFiles(this.paths);
+    mkdirSync(this.paths.worktrees, { recursive: true });
+    try {
+      if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);
+    } catch (e) {
+      this.log.warn('could not update Claude Code folder trust', errMsg(e));
+    }
+    this.hookServer = await startHookServer(this.paths.hookSock, (token, payload) => {
+      this.sessions.onHook(token, payload).catch((e) => this.log.error('hook handling failed', e));
+    });
+    await this.tmux.ensureServer();
+    await this.checkMeko();
+    await this.sessions.recover();
+    run(this.db, 'DELETE FROM session_events WHERE at < ?', Date.now() - 30 * 24 * 3600 * 1000);
+    if (this.timersOn) {
+      this.every(5000, () => this.sessions.reconcile());
+      this.every(60000, () => this.checkMeko());
+      this.every(60000, () => this.sessions.refreshDiffStats());
+      this.lifecycle.start();
+    }
+  }
+
+  async stop(): Promise<void> {
+    for (const i of this.intervals) clearInterval(i);
+    this.intervals = [];
+    this.lifecycle.stop();
+    await new Promise<void>((r) => (this.hookServer ? this.hookServer.close(() => r()) : r()));
+    rmSync(this.paths.hookSock, { force: true });
+    await this.meko.close();
+  }
+
+  private every(ms: number, fn: () => Promise<unknown> | unknown): void {
+    let running = false;
+    this.intervals.push(
+      setInterval(async () => {
+        if (running) return;
+        running = true;
+        try {
+          await fn();
+        } catch (e) {
+          this.log.warn('periodic task failed', errMsg(e));
+        } finally {
+          running = false;
+        }
+      }, ms),
+    );
+  }
+
+  async checkMeko(): Promise<void> {
+    const before = this.mekoStatus.ok;
+    try {
+      await this.meko.check();
+      this.mekoStatus = { ok: true, error: null, checkedAt: Date.now() };
+    } catch (e) {
+      this.mekoStatus = { ok: false, error: errMsg(e), checkedAt: Date.now() };
+      if (before) this.log.warn('Meko unreachable', this.mekoStatus.error);
+    }
+    if (before !== this.mekoStatus.ok) this.changed();
+  }
+}
+
+function safeUsername(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return process.env.USER ?? 'user';
+  }
+}

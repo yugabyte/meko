@@ -1,0 +1,312 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import fastifyStatic from '@fastify/static';
+import fastifyWebsocket from '@fastify/websocket';
+import QRCode from 'qrcode';
+import type { WebSocket } from 'ws';
+import type {
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, LoginRequest, ServerEvent,
+  SessionAction, Settings, SetupRequest, UpdateProjectRequest,
+} from '../shared/types.js';
+import {
+  COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, changePassword, consumeSetupToken, createAuthSession, deleteAuthSession,
+  getOwner, newTotpSecret, otpauthUrl, setOwner, totpVerify, validateAuthSession, validatePassword, verifyPassword,
+} from './auth.js';
+import type { Core } from './core.js';
+import { audit, get, kvGet, run } from './db.js';
+import { errMsg } from './log.js';
+import { HttpError } from './projects.js';
+import { attachTerminal } from './terminal.js';
+import type { TlsMaterial } from './tls.js';
+import type { Updater } from './updater.js';
+
+const ACTIONS: SessionAction[] = ['approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive'];
+const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
+
+export interface ServerOptions {
+  tls: TlsMaterial | null;
+  webDir: string | null;
+  updater: Updater | null;
+}
+
+export async function buildServer(core: Core, opts: ServerOptions): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 1024 * 1024,
+    ...(opts.tls ? { https: { cert: opts.tls.cert, key: opts.tls.key } } : {}),
+  }) as unknown as FastifyInstance;
+  const db = core.db;
+  const limiter = new LoginLimiter();
+  const secure = !!opts.tls;
+
+  await app.register(fastifyCookie);
+  await app.register(fastifyWebsocket, { options: { maxPayload: 1024 * 1024 } });
+
+  const authed = (req: FastifyRequest) => validateAuthSession(db, req.cookies[COOKIE_NAME]);
+
+  /** Same-origin check for writes and WebSocket upgrades (defense in depth on top of SameSite=Strict). */
+  const sameOrigin = (req: FastifyRequest) => {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    try {
+      return new URL(origin).host === req.headers.host;
+    } catch {
+      return false;
+    }
+  };
+
+  app.addHook('onSend', async (req, reply, payload) => {
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'same-origin');
+    if (secure) reply.header('Strict-Transport-Security', 'max-age=31536000');
+    if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+    return payload;
+  });
+
+  app.addHook('onRequest', async (req, reply) => {
+    const path = req.url.split('?')[0];
+    if (!path.startsWith('/api/')) return;
+    if (req.method !== 'GET' && !sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
+    if (PUBLIC_API.has(path)) return;
+    if (!authed(req)) return reply.code(401).send({ error: 'Sign in first.' });
+  });
+
+  app.setErrorHandler((err: unknown, req, reply) => {
+    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
+    const e = err as { statusCode?: number; message?: string };
+    if (e.statusCode && e.statusCode < 500) return reply.code(e.statusCode).send({ error: e.message ?? 'Bad request.' });
+    core.log.error(`${req.method} ${req.url} failed`, err);
+    return reply.code(500).send({ error: errMsg(err) });
+  });
+
+  const setCookie = (reply: FastifyReply, token: string) =>
+    reply.setCookie(COOKIE_NAME, token, { httpOnly: true, secure, sameSite: 'strict', path: '/', maxAge: SESSION_MAX_AGE_S });
+
+  // ---- health ----
+  app.get('/healthz', async () => ({ ok: true, version: core.version }));
+
+  // ---- auth ----
+  app.get('/api/auth/status', async (req): Promise<AuthStatus> => {
+    const owner = getOwner(db);
+    const tokenOutstanding = !!kvGet(db, 'setup_token');
+    return {
+      setupRequired: !owner || (tokenOutstanding && !authed(req)),
+      loggedIn: authed(req),
+      username: owner && authed(req) ? owner.username : null,
+      totpEnabled: !!owner?.totp_secret,
+    };
+  });
+
+  app.post<{ Body: SetupRequest }>('/api/auth/setup', async (req, reply) => {
+    const { token, username, password } = req.body ?? ({} as SetupRequest);
+    const ip = req.ip;
+    if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(username ?? '')) return reply.code(400).send({ error: 'Use letters, digits, dots, dashes or underscores for the username.' });
+    const bad = validatePassword(password ?? '');
+    if (bad) return reply.code(400).send({ error: bad });
+    if (!consumeSetupToken(db, token ?? '')) {
+      limiter.fail(ip);
+      return reply.code(403).send({ error: 'This setup link is invalid or already used. Run `agent-k-local setup-link` on the host for a new one.' });
+    }
+    setOwner(db, username, password);
+    audit(db, 'owner_set', { username, ip });
+    setCookie(reply, createAuthSession(db, req.headers['user-agent'], ip));
+    return reply.code(204).send();
+  });
+
+  app.post<{ Body: LoginRequest }>('/api/auth/login', async (req, reply) => {
+    const ip = req.ip;
+    if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many failed attempts. Try again in 15 minutes.' });
+    const { username, password, totp } = req.body ?? ({} as LoginRequest);
+    const owner = getOwner(db);
+    if (!owner || owner.username !== username || !verifyPassword(password ?? '', owner.pw_scrypt)) {
+      limiter.fail(ip);
+      audit(db, 'login_failed', { username, ip });
+      return reply.code(401).send({ error: 'Wrong username or password.' });
+    }
+    if (owner.totp_secret) {
+      if (!totp) return reply.code(401).send({ error: 'Enter the code from your authenticator app.', totpRequired: true });
+      if (!totpVerify(owner.totp_secret, totp)) {
+        limiter.fail(ip);
+        audit(db, 'login_failed_totp', { username, ip });
+        return reply.code(401).send({ error: 'That code is wrong or expired.', totpRequired: true });
+      }
+    }
+    limiter.reset(ip);
+    audit(db, 'login', { username, ip });
+    setCookie(reply, createAuthSession(db, req.headers['user-agent'], ip));
+    return reply.code(204).send();
+  });
+
+  app.post('/api/auth/logout', async (req, reply) => {
+    deleteAuthSession(db, req.cookies[COOKIE_NAME]);
+    reply.clearCookie(COOKIE_NAME, { path: '/' });
+    return reply.code(204).send();
+  });
+
+  app.post<{ Body: { current: string; next: string } }>('/api/auth/password', async (req, reply) => {
+    const err = changePassword(db, req.body?.current ?? '', req.body?.next ?? '');
+    if (err) return reply.code(400).send({ error: err });
+    return reply.code(204).send();
+  });
+
+  app.post('/api/auth/totp/enroll', async () => {
+    const owner = getOwner(db)!;
+    const secret = newTotpSecret();
+    run(db, 'UPDATE owner SET totp_pending = ? WHERE id = 1', secret);
+    const url = otpauthUrl(secret, owner.username);
+    return { secret, otpauthUrl: url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }) };
+  });
+
+  app.post<{ Body: { code: string } }>('/api/auth/totp/confirm', async (req, reply) => {
+    const owner = getOwner(db)!;
+    if (!owner.totp_pending || !totpVerify(owner.totp_pending, req.body?.code ?? '')) {
+      return reply.code(400).send({ error: 'That code doesn\'t match. Check the time on your phone and try again.' });
+    }
+    run(db, 'UPDATE owner SET totp_secret = totp_pending, totp_pending = NULL WHERE id = 1');
+    audit(db, 'totp_enabled');
+    return reply.code(204).send();
+  });
+
+  app.post<{ Body: { code: string } }>('/api/auth/totp/disable', async (req, reply) => {
+    const owner = getOwner(db)!;
+    if (!owner.totp_secret || !totpVerify(owner.totp_secret, req.body?.code ?? '')) {
+      return reply.code(400).send({ error: 'That code is wrong or expired.' });
+    }
+    run(db, 'UPDATE owner SET totp_secret = NULL WHERE id = 1');
+    audit(db, 'totp_disabled');
+    return reply.code(204).send();
+  });
+
+  // ---- state, repos, datapacks ----
+  app.get('/api/state', async () => core.state());
+  app.get('/api/repos', async () => core.projects.repos());
+  app.get('/api/meko/datapacks', async () => {
+    try {
+      return await core.meko.listDatapacks();
+    } catch (e) {
+      throw new HttpError(502, `Couldn't list datapacks from Meko: ${errMsg(e)}`);
+    }
+  });
+
+  // ---- projects ----
+  app.post<{ Body: CreateProjectRequest }>('/api/projects', async (req) => core.projects.create(req.body));
+  app.patch<{ Params: { id: string }; Body: UpdateProjectRequest }>('/api/projects/:id', async (req) => core.projects.update(req.params.id, req.body ?? {}));
+  app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
+    await core.projects.delete(req.params.id);
+    return reply.code(204).send();
+  });
+  app.get<{ Params: { id: string } }>('/api/projects/:id/branches', async (req) => core.projects.branches(req.params.id));
+  app.post<{ Params: { id: string }; Body: AttachDatapackRequest }>('/api/projects/:id/datapacks', async (req) => core.projects.attachDatapack(req.params.id, req.body));
+  app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
+  app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));
+  app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
+
+  // ---- sessions ----
+  app.post<{ Params: { id: string }; Body: CreateSessionRequest }>('/api/projects/:id/sessions', async (req) => core.sessions.create(req.params.id, req.body ?? ({} as CreateSessionRequest)));
+  app.post<{ Params: { id: string; action: string } }>('/api/sessions/:id/actions/:action', async (req) => {
+    const action = req.params.action as SessionAction;
+    if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
+    return core.sessions.action(req.params.id, action);
+  });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
+    core.sessions.row(req.params.id);
+    const r = get<{ markdown: string; updated_at: number }>(db, 'SELECT markdown, updated_at FROM designs WHERE session_id = ?', req.params.id);
+    return { markdown: r?.markdown ?? null, updatedAt: r?.updated_at ?? null };
+  });
+
+  // ---- settings ----
+  const settings = (): Settings => ({
+    reposRoots: core.config.repos.roots,
+    reposDepth: core.config.repos.depth,
+    cloneInto: core.config.repos.cloneInto,
+    updateChannel: core.config.update.channel,
+    bind: core.config.server.bind,
+    port: core.config.server.port,
+  });
+  app.get('/api/settings', async () => settings());
+  app.put<{ Body: Partial<Settings> }>('/api/settings', async (req) => {
+    const b = req.body ?? {};
+    if (b.reposRoots !== undefined && (!Array.isArray(b.reposRoots) || !b.reposRoots.length || b.reposRoots.some((r) => typeof r !== 'string' || !r.trim()))) {
+      throw new HttpError(400, 'List at least one repos folder.');
+    }
+    if (b.reposDepth !== undefined && (!Number.isInteger(b.reposDepth) || b.reposDepth < 1 || b.reposDepth > 4)) throw new HttpError(400, 'Scan depth must be between 1 and 4.');
+    if (b.updateChannel !== undefined && !['stable', 'prerelease', 'off'].includes(b.updateChannel)) throw new HttpError(400, 'Unknown update channel.');
+    core.updateConfig((c) => {
+      if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
+      if (b.reposDepth) c.repos.depth = b.reposDepth;
+      if (b.cloneInto?.trim()) c.repos.cloneInto = b.cloneInto.trim();
+      if (b.updateChannel) c.update.channel = b.updateChannel;
+    });
+    return settings();
+  });
+
+  // ---- updates ----
+  app.get('/api/update', async () => (opts.updater ? opts.updater.status() : core.updateStatus()));
+  app.post('/api/update/check', async () => (opts.updater ? opts.updater.check() : core.updateStatus()));
+  app.post('/api/update/apply', async () => {
+    if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
+    return opts.updater.apply();
+  });
+
+  // ---- websockets ----
+  const clients = new Set<WebSocket>();
+  let pending: NodeJS.Timeout | null = null;
+  const broadcast = (ev: ServerEvent) => {
+    const msg = JSON.stringify(ev);
+    for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(msg);
+  };
+  core.on('change', () => {
+    pending ??= setTimeout(() => {
+      pending = null;
+      if (clients.size) broadcast({ type: 'state', state: core.state() });
+    }, 100);
+  });
+  core.on('notify', (ev: ServerEvent) => broadcast(ev));
+
+  const wsGuard = (socket: WebSocket, req: FastifyRequest): boolean => {
+    if (!sameOrigin(req) || !authed(req)) {
+      socket.close(4401, 'unauthorized');
+      return false;
+    }
+    return true;
+  };
+
+  app.get('/ws/events', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    if (!wsGuard(socket, req)) return;
+    clients.add(socket);
+    socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+    socket.on('close', () => clients.delete(socket));
+  });
+
+  app.get<{ Params: { id: string } }>('/ws/term/:id', { websocket: true }, (socket: WebSocket, req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!wsGuard(socket, req)) return;
+    attachTerminal(core, socket, req.params.id);
+  });
+
+  // ---- web app ----
+  if (opts.webDir) {
+    await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: ['index.html'] });
+    const indexHtml = readFileSync(join(opts.webDir, 'index.html'), 'utf8');
+    app.setNotFoundHandler((req, reply) => {
+      const path = req.url.split('?')[0];
+      if (req.method !== 'GET' || path.startsWith('/api/') || path.startsWith('/ws/')) {
+        return reply.code(404).send({ error: 'Not found.' });
+      }
+      return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml);
+    });
+  }
+
+  return app;
+}
+
+export function findWebDir(serverDir: string): string | null {
+  // dist/server → dist/web; src/server (tsx dev) → dist/web at the repo root.
+  for (const c of [join(serverDir, '..', 'web'), join(serverDir, '..', '..', 'dist', 'web')]) {
+    if (existsSync(join(c, 'index.html')) && existsSync(join(c, 'assets'))) return c;
+  }
+  return null;
+}

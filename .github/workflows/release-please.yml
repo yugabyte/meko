@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)build assets for, e.g. v0.2.0
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
+
+env:
+  # Bundled runtime. Bump deliberately; the SHASUMS256 check below pins the bytes.
+  NODE_VERSION: 22.18.0
+
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  resolve:
+    needs: release-please
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.release-please.outputs.release_created == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+    steps:
+      - id: r
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          RP_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          tag="${DISPATCH_TAG:-$RP_TAG}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    if: always() && needs.resolve.result == 'success'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # AlmaLinux 8 = glibc 2.28, so the native node-pty build loads on RHEL 8 devservers.
+    container: almalinux:8
+    timeout-minutes: 40
+    steps:
+      - name: Install build toolchain
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc-toolset-13-gcc-c++ make python3.11 git tar xz findutils which
+          git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Download Node ${{ env.NODE_VERSION }}
+        run: |
+          set -eu
+          dist="node-v${NODE_VERSION}-linux-${{ matrix.arch }}"
+          cd /tmp
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.xz"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+          grep " ${dist}.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+          tar -xJf "${dist}.tar.xz"
+          echo "NODE_DIR=/tmp/${dist}" >> "$GITHUB_ENV"
+          echo "/tmp/${dist}/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies (gcc-toolset-13 for node-pty)
+        run: |
+          set -eu
+          export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc
+          export CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
+          export npm_config_python=/usr/bin/python3.11
+          node --version
+          npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Prune dev dependencies
+        run: npm prune --omit=dev
+
+      - name: Package
+        run: |
+          sh scripts/package-release.sh \
+            "${{ needs.resolve.outputs.version }}" "${{ matrix.arch }}" "$NODE_DIR" out
+
+      - name: Smoke-test the tarball
+        run: |
+          set -eu
+          mkdir -p /tmp/smoke
+          tar -xzf out/*.tar.gz -C /tmp/smoke
+          /tmp/smoke/agent-k-local-*/bin/agent-k-local version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.arch }}
+          path: out/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [resolve, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist-release
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cp ../scripts/install.sh install.sh
+          cat SHA256SUMS
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: gh release upload "$TAG" dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Attest build provenance
+        # Artifact attestations need GitHub Enterprise Cloud for internal repos.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist-release/*.tar.gz

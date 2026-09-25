@@ -196,7 +196,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.6</span>
+  <span class="label">Design · v0.7 (implemented)</span>
   <h1>agent-k-local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -214,7 +214,9 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Working copy</td><td>Each session gets its own git worktree on its own branch.</td></tr>
       <tr><td>Datapacks</td><td>Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets).</td></tr>
       <tr><td>Meko</td><td>Required. Every install needs a working Meko key and the Meko plugin, and every project needs a dedicated datapack.</td></tr>
-      <tr><td>Meko wiring</td><td>Sessions get <code>MEKO_DATAPACK_ID</code> and <code>MEKO_AGENT_ID</code> env vars. This needs a small change to the Meko plugin hooks.</td></tr>
+      <tr><td>Meko wiring</td><td>Sessions get <code>MEKO_AGENT_ID=claude_code:&lt;project&gt;</code>, and the project's datapack is pinned for that agent id. The Meko hooks already honour both, so no plugin change is needed.</td></tr>
+      <tr><td>Datapack names</td><td>New dedicated datapacks default to <code>adlc/proj/&lt;repo&gt;/&lt;project_name&gt;</code>.</td></tr>
+      <tr><td>Runtime</td><td>Node 22 (bundled in releases). State uses the built-in <code>node:sqlite</code>; node-pty is the only native module.</td></tr>
       <tr><td>Network</td><td>Reachable directly on the corp network over HTTPS, behind a login.</td></tr>
       <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by agent-k-local are shown.</td></tr>
       <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
@@ -470,7 +472,7 @@ stateDiagram-v2
       <tr><td>3 · PR</td><td>Commits with the repo's own commit conventions, pushes the branch, and runs <code>gh pr create</code> with a summary taken from the design.</td><td>Records the PR number and URL and links them in the header.</td><td>Automatically, once the PR exists.</td></tr>
       <tr><td>4 · Review</td><td>When a review arrives, runs <code>/akr</code>: verifies each finding, fixes it, replies on every thread, votes, and pushes.</td><td>Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends <code>/akr</code> into the session.</td><td>You click <b>Merge</b>. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in.</td></tr>
       <tr><td>5 · Merge</td><td>Nothing.</td><td>Runs <code>gh pr merge</code> using the repo's merge method (or <code>gh stack</code> for a stacked PR) and deletes the remote branch.</td><td>Automatically, once GitHub reports the PR as merged.</td></tr>
-      <tr><td>6 · Cleanup</td><td>Writes a short summary of what shipped, with the PR link, to the dedicated datapack.</td><td>Ends the tmux session, removes the worktree, deletes the local branch, runs <code>git fetch --prune</code> in your main checkout, and archives the session.</td><td>Done. The session record and its history stay.</td></tr>
+      <tr><td>6 · Cleanup</td><td>Nothing.</td><td>Writes a summary of what shipped (PR title, link and description) to the dedicated datapack. Ends the tmux session, removes the worktree, deletes the local branch, runs <code>git fetch --prune</code> in your main checkout, and archives the session.</td><td>Done. The session record and its history stay.</td></tr>
     </tbody>
   </table></div>
   <div class="grid2">
@@ -484,7 +486,7 @@ stateDiagram-v2
 <section id="datapacks">
   <h2>Datapacks</h2>
   <div class="grid2">
-    <div class="card"><span class="label">One per project</span><h3>Dedicated datapack</h3><p>It's created automatically with the project (named after it), or you can pick an existing one. It is the only place session transcripts and extracted memories are written.</p></div>
+    <div class="card"><span class="label">One per project</span><h3>Dedicated datapack</h3><p>It's created with the project, named <code>adlc/proj/&lt;repo&gt;/&lt;project_name&gt;</code> by default, or you can pick an existing one. It is the only place session transcripts and extracted memories are written.</p></div>
     <div class="card"><span class="label">Zero or more</span><h3>Shared datapacks</h3><p>These are attached from your <code>datapack_list</code>: a team knowledge base, org conventions, another project's memory. They are read-only from this project's point of view, and one datapack can be attached to many projects.</p></div>
   </div>
   <p>Each session is launched with this environment:</p>
@@ -493,14 +495,13 @@ stateDiagram-v2
 <span class="k">MEKO_DATAPACK_IDS</span>=dp_7f3…,dp_a01…,dp_c9e… <span class="c"># everything this session may read</span>
 <span class="k">AK_SESSION</span>=billing-api/fix-retry-backoff</pre>
   <p>A short <code>--append-system-prompt</code> also lists the attached datapacks by name and purpose, so Claude knows to pass the right <code>datapack_id</code> when it searches them.</p>
-  <div class="callout warn">
-    <span class="label">Needs a Meko plugin change</span>
-    <p>Today the Meko hooks derive <code>agent_id</code> from the working directory's basename and read the datapack from a pin file. With a worktree per session, every session would get its own <code>agent_id</code>. The plugin needs to honour these environment variables first:</p>
-    <ul>
-      <li><code>MEKO_DATAPACK_ID</code> takes priority over the pin file, which takes priority over the server default.</li>
-      <li><code>MEKO_AGENT_ID</code> takes priority over <code>claude_code:&lt;basename&gt;</code>. It must also be written into the watermark, so the PreCompact and SessionEnd capture uses the same bucket.</li>
-    </ul>
-    <p>This is a small PR to the <code>meko-agent-skills</code> plugin. Until it lands, agent-k-local writes a pin file for each worktree as a fallback.</p>
+  <div class="callout">
+    <span class="label">No Meko plugin change needed</span>
+    <p>The Meko hooks already take <code>MEKO_AGENT_ID</code> over the folder name, and they read the datapack pin from <code>~/.claude/meko-capture/pin-&lt;agent id&gt;.json</code>. agent-k-local sets <code>MEKO_AGENT_ID=claude_code:&lt;project&gt;</code> for every session and writes that pin when the project is created. So every worktree of a project shares one memory bucket, and capture goes into the dedicated datapack. <code>MEKO_DATAPACK_ID</code> is set too, for when the hooks learn to read it.</p>
+  </div>
+  <div class="callout">
+    <span class="label">Folder trust</span>
+    <p>Claude Code asks "Do you trust this folder?" the first time it runs somewhere new, and fires no hooks until that's answered. Every session is a new worktree, so at startup the server marks the worktrees root as trusted in <code>~/.claude.json</code>, unless a parent folder already is. If the prompt still appears, the session shows <em>needs you</em> with an explanation.</p>
   </div>
   <div class="callout">
     <span class="label">Meko is required</span>
@@ -583,14 +584,14 @@ sequenceDiagram
   <div class="grid2">
     <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
     <div class="card"><span class="label">On merge to main</span><h3>release-please</h3><p>release-please keeps a release PR open with the next version and the changelog, both derived from Conventional Commits. Merging it creates the tag.</p></div>
-    <div class="card"><span class="label">On tag</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node runtime, prebuilt node-pty and better-sqlite3, and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
+    <div class="card"><span class="label">On tag</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node 22 runtime, node-pty (built with gcc-toolset-13) and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
   </div>
   <div class="callout">
     <span class="label">glibc</span>
     <p>RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run in an AlmaLinux 8 container rather than on <code>ubuntu-latest</code>, so the binary loads on older hosts.</p>
   </div>
-<pre class="code"><span class="c"># install (one line, no root)</span>
-curl -fsSL https://github.com/&lt;owner&gt;/agent-k-local/releases/latest/download/install.sh | sh
+<pre class="code"><span class="c"># install (one line, no root). The repo is internal for now, so this uses gh.</span>
+gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 <span class="c"># what it does</span>
 <span class="c">#  1. checks for tmux ≥ 2.7, git, claude, and the meko-agent-skills plugin</span>
@@ -617,9 +618,9 @@ curl -fsSL https://github.com/&lt;owner&gt;/agent-k-local/releases/latest/downlo
   <div class="tablewrap"><table>
     <thead><tr><th>Layer</th><th>Choice</th><th>Why</th></tr></thead>
     <tbody>
-      <tr><td>Server</td><td>Node 20 + TypeScript, Fastify, <code>ws</code>, <code>node-pty</code></td><td>node-pty builds on the target host. Using one language across server and web keeps it simple.</td></tr>
+      <tr><td>Server</td><td>Node 22 + TypeScript, Fastify, <code>ws</code>, <code>node-pty</code></td><td>node-pty builds on the target host. Using one language across server and web keeps it simple.</td></tr>
       <tr><td>Web</td><td>Vite + React, xterm.js with the fit and web-links addons</td><td>xterm.js is the standard browser terminal. React handles the rail, tabs and dialogs.</td></tr>
-      <tr><td>State</td><td>SQLite via <code>better-sqlite3</code>, WAL, <code>user_version</code> migrations</td><td>A synchronous API suits a single-writer server. It's a native module like node-pty and goes through the same AlmaLinux 8 build.</td></tr>
+      <tr><td>State</td><td>SQLite via the built-in <code>node:sqlite</code>, WAL, <code>user_version</code> migrations</td><td>A synchronous API suits a single-writer server, and it needs no native module.</td></tr>
       <tr><td>Processes</td><td>tmux on a private socket, in its own systemd user unit</td><td>tmux keeps sessions alive when the server restarts, and you can still attach from iTerm.</td></tr>
       <tr><td>Integrations</td><td>Meko MCP over HTTP (required), Claude Code hooks, git worktrees</td><td>Meko is a core dependency. The hooks and git are thin adapters.</td></tr>
       <tr><td>Release</td><td>GitHub Actions, release-please, artifact attestations</td><td>Versioning and supply-chain checks with no extra tooling.</td></tr>
@@ -632,7 +633,7 @@ curl -fsSL https://github.com/&lt;owner&gt;/agent-k-local/releases/latest/downlo
   <h2>Milestones</h2>
   <div class="ms">
     <div><h3><span class="mono">M0</span>Repo</h3><p>Git repo, the commit skill without agent attribution, CLAUDE.md, a license, the CI skeleton, and publishing to GitHub.</p></div>
-    <div><h3><span class="mono">M1</span>Core</h3><p>The server with login and TLS, a Meko connection check, the New project repo picker with a mandatory dedicated datapack, worktree-backed sessions in tmux launched with the Meko env vars, and the browser terminal, rail and tabs. The Meko plugin PR for <code>MEKO_DATAPACK_ID</code> and <code>MEKO_AGENT_ID</code> ships alongside.</p></div>
+    <div><h3><span class="mono">M1</span>Core</h3><p>The server with login and TLS, a Meko connection check, the New project repo picker with a mandatory dedicated datapack, worktree-backed sessions in tmux launched with the Meko env vars, and the browser terminal, rail and tabs. Folder trust for worktrees is handled automatically.</p></div>
     <div><h3><span class="mono">M2</span>Status and durability</h3><p>Hooks drive the badges and notifications. The two systemd units, recovery on boot with guarded auto-continue, resume for exited sessions, and the "Meko unreachable" banner.</p></div>
     <div><h3><span class="mono">M3</span>Task lifecycle</h3><p>Stages and gates, the design panel, opening the PR, the AgentK review loop with <code>/akr</code>, merge, and cleanup of worktrees and branches.</p></div>
     <div><h3><span class="mono">M4</span>Shared datapacks</h3><p>Attaching shared datapacks, <code>MEKO_DATAPACK_IDS</code> and the system-prompt listing, and the project home page with activity and search.</p></div>

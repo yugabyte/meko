@@ -1,0 +1,42 @@
+import { useEffect, useReducer, useRef } from 'react';
+import type { SessionStatus } from '../../shared/types';
+import { getTerminal } from '../terminals';
+
+export function TerminalPane({ sessionId, status }: { sessionId: string; status: SessionStatus }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [, rerender] = useReducer((x: number) => x + 1, 0);
+  const term = getTerminal(sessionId);
+  const prevStatus = useRef(status);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    term.attach(host);
+    const unsub = term.subscribe(rerender);
+    return () => {
+      unsub();
+      term.detach();
+    };
+  }, [term]);
+
+  // After Resume the pane is live again: reconnect straight away instead of waiting for backoff.
+  useEffect(() => {
+    if (prevStatus.current === 'exited' && status !== 'exited') term.reconnect();
+    prevStatus.current = status;
+  }, [status, term]);
+
+  let overlay: string | null = null;
+  if (term.conn === 'connecting' && status !== 'exited') overlay = 'Connecting to the session…';
+  else if (term.conn === 'closed') overlay = 'Connection lost. Reconnecting…';
+  else if (term.conn === 'ended' && status !== 'exited') overlay = term.message ?? 'The terminal closed.';
+
+  return (
+    <div className="term-wrap" onClick={() => term.focus()}>
+      <div className="term-host" ref={hostRef} />
+      {overlay && <div className="term-overlay">{overlay}</div>}
+      {status === 'exited' && (
+        <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
+      )}
+    </div>
+  );
+}
