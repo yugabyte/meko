@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+*.pem
+*.key
+state.db
+.claude/settings.local.json
+.DS_Store
+state.db-*
+*.bak-*

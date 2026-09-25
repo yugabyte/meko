@@ -1,0 +1,587 @@
+<title>agent-k-local design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --bg:#F5F6F4; --surface:#FFFFFF; --sunk:#ECEFEC; --ink:#1A1F1C; --muted:#5E6A64; --rule:#D9DFDB;
+  --accent:#2B55C0; --accent-soft:#E4EAFA;
+  --ok:#23845A; --warn:#B86E00; --warn-soft:#FFF1DA; --bad:#B42318; --idle:#8A948F;
+  --term:#101412; --term-ink:#D5DDD8; --term-dim:#7C8A83; --term-accent:#8FB0FF; --term-ok:#6FD19F; --term-warn:#F2B35B;
+  --rail:#E9ECE9;
+  --display:"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#111513; --surface:#181D1A; --sunk:#1F2521; --ink:#E4E9E6; --muted:#9BA7A1; --rule:#2B332E;
+    --accent:#86A4FF; --accent-soft:#1E2A4A;
+    --ok:#5CC592; --warn:#E9A64A; --warn-soft:#3A2C14; --bad:#F07366; --idle:#77827C;
+    --term:#0B0E0C; --rail:#151A17;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#111513; --surface:#181D1A; --sunk:#1F2521; --ink:#E4E9E6; --muted:#9BA7A1; --rule:#2B332E;
+  --accent:#86A4FF; --accent-soft:#1E2A4A;
+  --ok:#5CC592; --warn:#E9A64A; --warn-soft:#3A2C14; --bad:#F07366; --idle:#77827C;
+  --term:#0B0E0C; --rail:#151A17;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.6;padding-inline:20px;padding-block:0 80px}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-size:.86em}
+code{background:var(--sunk);padding:.1em .35em;border-radius:4px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;line-height:1.15;margin:0}
+h1{font-size:clamp(2.2rem,5vw,3.2rem);font-weight:700;letter-spacing:-.02em}
+h2{font-size:1.65rem;font-weight:700;letter-spacing:-.01em}
+h3{font-size:1.1rem;font-weight:600;font-family:var(--body)}
+p{margin:0}
+.layout{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:1fr;gap:40px}
+@media (min-width:1100px){.layout{grid-template-columns:200px minmax(0,1fr)}}
+nav.toc{display:none}
+@media (min-width:1100px){
+  nav.toc{display:block;position:sticky;top:calc(env(safe-area-inset-top,0px) + 28px);align-self:start;padding-top:36px}
+}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:2px;border-left:1px solid var(--rule)}
+nav.toc a{display:block;padding:4px 12px;color:var(--muted);text-decoration:none;font-size:.88rem;border-left:2px solid transparent;margin-left:-1px}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--ink);border-left-color:var(--accent);outline:none}
+.label{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+main{min-width:0;display:grid;gap:64px;padding-top:36px}
+header.top{display:grid;gap:16px;max-width:760px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:.9rem}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:.8rem;font-weight:600;background:var(--warn-soft);color:var(--warn)}
+.lede{font-size:1.15rem;color:var(--ink);max-width:68ch}
+section{display:grid;gap:18px;scroll-margin-top:24px}
+section > p, section > ul, section > ol{max-width:70ch}
+ul,ol{margin:0;padding-left:1.25em;display:grid;gap:6px}
+.prose{display:grid;gap:14px;max-width:70ch}
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{text-align:left;vertical-align:top;padding:10px 14px;border-bottom:1px solid var(--rule)}
+th{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--sunk)}
+tr:last-child td{border-bottom:0}
+td:first-child{font-weight:500;white-space:nowrap}
+.callout{border:1px solid var(--rule);background:var(--surface);border-radius:10px;padding:16px 18px;display:grid;gap:8px;max-width:78ch}
+.callout.warn{background:var(--warn-soft);border-color:transparent}
+.callout .label{color:inherit;opacity:.8}
+.grid2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;display:grid;gap:8px;align-content:start}
+pre.code{margin:0;background:var(--term);color:var(--term-ink);font-family:var(--mono);font-size:.82rem;line-height:1.55;padding:16px 18px;border-radius:10px;overflow-x:auto}
+pre.code .c{color:var(--term-dim)}
+pre.code .k{color:var(--term-accent)}
+.diagram{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:16px}
+pre.mermaid{margin:0;background:transparent}
+
+/* ---------- App mockup ---------- */
+.mockwrap{overflow-x:auto;padding-bottom:4px}
+.mock{min-width:820px;border:1px solid var(--rule);border-radius:12px;overflow:hidden;background:var(--surface);box-shadow:0 18px 40px -24px rgba(0,0,0,.35);display:grid;grid-template-rows:auto 1fr;font-size:13px;line-height:1.45}
+.chrome{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--sunk);border-bottom:1px solid var(--rule)}
+.chrome i{width:10px;height:10px;border-radius:50%;background:var(--rule);display:block}
+.chrome .url{margin-left:12px;flex:1;max-width:420px;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:2px 10px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.app{display:grid;grid-template-columns:210px 1fr;min-height:440px}
+.rail{background:var(--rail);border-right:1px solid var(--rule);display:flex;flex-direction:column;padding:12px 8px;gap:4px}
+.brand{font-family:var(--display);font-weight:700;font-size:15px;padding:2px 8px 10px}
+.proj{display:grid;grid-template-columns:14px 1fr auto;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;color:var(--ink)}
+.proj.sel{background:var(--surface);box-shadow:0 0 0 1px var(--rule)}
+.proj .n{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px}
+.rail .spacer{flex:1}
+.rail .add{color:var(--muted);padding:7px 8px}
+.rail .me{border-top:1px solid var(--rule);padding:10px 8px 0;color:var(--muted);font-size:12px;display:flex;justify-content:space-between}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:none}
+.dot.working{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+.dot.needs{background:var(--warn);border-radius:2px;transform:rotate(45deg);width:9px;height:9px}
+.dot.idle{border:2px solid var(--idle)}
+.dot.exited{background:var(--bad);border-radius:2px}
+.dot.recovered{background:var(--accent)}
+@media (prefers-reduced-motion:no-preference){
+  .dot.working{animation:pulse 1.8s ease-in-out infinite}
+  @keyframes pulse{50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--ok) 8%,transparent)}}
+}
+.mainpane{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+.crumb{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--rule)}
+.crumb b{font-weight:600}
+.crumb .sp{flex:1}
+.crumb .btn{border:1px solid var(--rule);border-radius:6px;padding:2px 8px;color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:2px;padding:6px 10px 0;border-bottom:1px solid var(--rule);background:var(--sunk)}
+.tab{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px 7px 0 0;color:var(--muted)}
+.tab.sel{background:var(--term);color:var(--term-ink)}
+.tab.new{color:var(--accent)}
+.term{background:var(--term);color:var(--term-ink);font-family:var(--mono);font-size:12px;line-height:1.6;padding:14px 16px;white-space:pre;overflow:hidden}
+.term .d{color:var(--term-dim)} .term .a{color:var(--term-accent)} .term .g{color:var(--term-ok)} .term .w{color:var(--term-warn)}
+.foot{display:flex;flex-wrap:wrap;gap:4px 18px;padding:7px 14px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:.88rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+
+/* project home mini mock */
+.home{min-width:640px;border:1px solid var(--rule);border-radius:12px;background:var(--surface);padding:18px;display:grid;gap:14px;font-size:13px}
+.home .row{display:grid;grid-template-columns:1.1fr 1fr;gap:14px}
+.home .box{border:1px solid var(--rule);border-radius:8px;padding:12px;display:grid;gap:8px;align-content:start}
+.dp{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px dashed var(--rule)}
+.dp:last-child{border-bottom:0}
+.tag{font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:1px 7px;border-radius:999px;background:var(--accent-soft);color:var(--accent)}
+.tag.shared{background:var(--sunk);color:var(--muted)}
+.home .num{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px}
+.act{display:grid;grid-template-columns:62px 1fr;gap:10px;color:var(--ink)}
+.act time{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px}
+.search{border:1px solid var(--rule);border-radius:7px;padding:6px 10px;color:var(--muted)}
+
+/* new project picker mock */
+.picker{min-width:640px;max-width:760px;border:1px solid var(--rule);border-radius:12px;background:var(--surface);box-shadow:0 18px 40px -24px rgba(0,0,0,.35);display:grid;font-size:13px}
+.picker .hd{display:flex;justify-content:space-between;align-items:baseline;padding:14px 18px;border-bottom:1px solid var(--rule)}
+.picker .hd b{font-family:var(--display);font-size:17px}
+.picker .body{display:grid;gap:10px;padding:14px 18px}
+.picker .filter{display:flex;gap:8px;align-items:center}
+.picker .filter .search{flex:1}
+.picker .seg{display:flex;border:1px solid var(--rule);border-radius:7px;overflow:hidden;font-size:12px}
+.picker .seg span{padding:5px 10px;color:var(--muted)}
+.picker .seg span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.repos{border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+.repo{display:grid;grid-template-columns:18px minmax(0,1.3fr) minmax(0,1fr) 90px 110px;gap:12px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--rule)}
+.repo:last-child{border-bottom:0}
+.repo.sel{background:var(--accent-soft)}
+.repo.used{color:var(--muted)}
+.repo .radio{width:14px;height:14px;border-radius:50%;border:2px solid var(--idle)}
+.repo.sel .radio{border-color:var(--accent);box-shadow:inset 0 0 0 3px var(--surface);background:var(--accent)}
+.repo .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo .rm{font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo .br{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.repo .when{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;text-align:right}
+.picker .fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.picker .field{display:grid;gap:4px}
+.picker .input{border:1px solid var(--rule);border-radius:7px;padding:6px 10px;background:var(--bg)}
+.picker .ft{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-top:1px solid var(--rule)}
+.picker .ft .alt{display:flex;gap:16px;color:var(--accent);font-size:12px}
+.picker .ft .go{background:var(--accent);color:var(--surface);border-radius:7px;padding:6px 14px;font-weight:600}
+
+/* milestones */
+.ms{display:grid;gap:0;border-left:2px solid var(--rule);margin-left:6px}
+.ms > div{position:relative;padding:0 0 22px 24px;display:grid;gap:6px;max-width:74ch}
+.ms > div::before{content:"";position:absolute;left:-7px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--bg);border:2px solid var(--accent)}
+.ms h3 .mono{color:var(--accent);margin-right:8px}
+.q{display:grid;gap:12px;counter-reset:q;padding:0;list-style:none}
+.q li{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:grid;gap:6px;max-width:78ch}
+.q b{font-weight:600}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <ol>
+    <li><a href="#decisions">Decisions</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#app">The app</a></li>
+    <li><a href="#sessions">Projects &amp; sessions</a></li>
+    <li><a href="#datapacks">Datapacks</a></li>
+    <li><a href="#login">Login &amp; security</a></li>
+    <li><a href="#recovery">Crash recovery</a></li>
+    <li><a href="#releases">Releases &amp; updates</a></li>
+    <li><a href="#stack">Tech stack</a></li>
+    <li><a href="#milestones">Milestones</a></li>
+    <li><a href="#questions">Open questions</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="top">
+  <span class="label">Design · v0.5</span>
+  <h1>agent-k-local</h1>
+  <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each project records its work in Meko datapacks.</p>
+  <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local · Apache-2.0</span></div>
+</header>
+
+<section id="decisions">
+  <h2>Decisions so far</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Topic</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>Session UI</td><td>Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface.</td></tr>
+      <tr><td>Process host</td><td>tmux on a dedicated socket, in its own systemd unit, so the server can restart or update without touching sessions.</td></tr>
+      <tr><td>New project</td><td>Pick a repo from a list of the git repos under <code>~/code</code>. The folder is configurable, and you can clone a repo into it from a URL.</td></tr>
+      <tr><td>Local state</td><td>SQLite (<code>~/.agent-k-local/state.db</code>), WAL mode, schema versioned with <code>PRAGMA user_version</code>.</td></tr>
+      <tr><td>Working copy</td><td>Each session gets its own git worktree on its own branch.</td></tr>
+      <tr><td>Datapacks</td><td>Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets).</td></tr>
+      <tr><td>Meko</td><td>Required. Every install needs a working Meko key and the Meko plugin, and every project needs a dedicated datapack.</td></tr>
+      <tr><td>Meko wiring</td><td>Sessions get <code>MEKO_DATAPACK_ID</code> and <code>MEKO_AGENT_ID</code> env vars. This needs a small change to the Meko plugin hooks.</td></tr>
+      <tr><td>Network</td><td>Reachable directly on the corp network over HTTPS, behind a login.</td></tr>
+      <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by agent-k-local are shown.</td></tr>
+      <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>.</td></tr>
+      <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI, release-please for versions, tarball releases, and an update check built into the server.</td></tr>
+      <tr><td>Repo &amp; license</td><td>Public at <code>github.com/yugabyte/agent-k-local</code>, Apache-2.0.</td></tr>
+      <tr><td>Sharing</td><td>Everyone installs their own copy. One owner per install, with no shared instances.</td></tr>
+      <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon. A native Mac wrapper is deferred.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="architecture">
+  <h2>Architecture</h2>
+  <p>There are three long-lived pieces on the host: the web server, the tmux server that owns every Claude process, and the state directory at <code>~/.agent-k-local</code>. The server is stateless enough to be killed at any time. tmux and the on-disk state are what carry your work.</p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  subgraph Mac["Your laptop"]
+    B["Browser or installed web app"]
+  end
+  subgraph Host["Devserver, headless"]
+    S["agent-k-local server<br/>HTTPS :7777"]
+    H["hook.sock<br/>unix socket"]
+    T["tmux server<br/>own systemd unit"]
+    C1["claude in worktree A"]
+    C2["claude in worktree B"]
+    ST[("~/.agent-k-local<br/>state, certs, app versions")]
+    U["updater"]
+  end
+  M["Meko MCP"]
+  GH["GitHub Releases"]
+  B -- "HTTPS + WebSocket, cookie auth" --> S
+  S -- "node-pty runs tmux attach" --> T
+  T --> C1
+  T --> C2
+  C1 -- "Claude hooks" --> H
+  C2 -- "Claude hooks" --> H
+  H --> S
+  S --- ST
+  S -- "datapack list and create" --> M
+  C1 -- "capture into MEKO_DATAPACK_ID" --> M
+  U -- "poll, download, verify" --> GH
+</pre>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3>Terminal path</h3><p>When you open a tab, the browser opens a WebSocket. The server spawns <code>tmux -L agentk attach -t ak-…</code> in a pty and pipes it through. Closing the tab kills only that pty, and Claude keeps running.</p></div>
+    <div class="card"><h3>Status path</h3><p>Each session starts with <code>claude --settings</code> pointing at an agent-k hooks file. The <code>SessionStart</code>, <code>UserPromptSubmit</code>, <code>Notification</code> and <code>Stop</code> hooks post to a unix socket, which drives the badges in the rail. Your global Claude settings stay untouched.</p></div>
+  </div>
+</section>
+
+<section id="app">
+  <h2>The app</h2>
+  <p>The left rail holds projects, with the most urgent session state shown on each. The top tabs hold that project's sessions. The main pane is the live Claude terminal, and the footer shows where the session is working.</p>
+  <div class="mockwrap">
+    <div class="mock" role="img" aria-label="Mockup of the agent-k-local window with the project rail, session tabs and a live Claude terminal">
+      <div class="chrome"><i></i><i></i><i></i><span class="url">https://devbox.corp.example:7777/p/billing-api/s/fix-retry-backoff</span></div>
+      <div class="app">
+        <div class="rail">
+          <div class="brand">agent-k-local</div>
+          <div class="proj sel"><span class="dot needs"></span><span>billing-api</span><span class="n">3</span></div>
+          <div class="proj"><span class="dot working"></span><span>docs-site</span><span class="n">1</span></div>
+          <div class="proj"><span class="dot recovered"></span><span>agent-k-local</span><span class="n">2</span></div>
+          <div class="proj"><span class="dot idle"></span><span>infra</span><span class="n">1</span></div>
+          <div class="proj"><span class="dot idle"></span><span>perf-lab</span><span class="n">0</span></div>
+          <div class="add">+ New project</div>
+          <div class="spacer"></div>
+          <div class="me"><span>signed in · you</span><span>v0.4.1</span></div>
+        </div>
+        <div class="mainpane">
+          <div class="crumb"><span style="color:var(--muted)">billing-api</span><span style="color:var(--muted)">/</span><b>fix retry backoff</b><span class="dot working"></span><span style="color:var(--muted);font-size:12px">working · 4m</span><span class="sp"></span><span class="btn">Project home</span><span class="btn">Archive</span></div>
+          <div class="tabs">
+            <div class="tab sel"><span class="dot working"></span>fix retry backoff</div>
+            <div class="tab"><span class="dot needs"></span>review PR #412</div>
+            <div class="tab"><span class="dot idle"></span>flaky test hunt</div>
+            <div class="tab new">+ New session</div>
+          </div>
+<div class="term"><span class="d">╭──────────────────────────────────────────────────────────────╮</span>
+<span class="d">│</span> <span class="a">✻</span> Claude Code   <span class="d">~/.agent-k-local/worktrees/billing-api/fix-retry-backoff</span>
+<span class="d">╰──────────────────────────────────────────────────────────────╯</span>
+
+<span class="a">&gt;</span> The retry loop in client/http.ts ignores Retry-After. Fix it and add a test.
+
+<span class="g">●</span> Read <span class="d">client/http.ts</span> <span class="d">(212 lines)</span>
+<span class="g">●</span> Update <span class="d">client/http.ts</span>
+    <span class="d">  87</span> <span class="w">-</span>  const delay = base * 2 ** attempt;
+    <span class="d">  87</span> <span class="g">+</span>  const delay = retryAfterMs(res) ?? base * 2 ** attempt;
+<span class="g">●</span> Bash <span class="d">npm test -- http.spec.ts</span>
+    <span class="d">  ✓ honours Retry-After seconds  ✓ falls back to backoff</span>
+
+<span class="a">✶</span> Writing edge case for HTTP-date Retry-After… <span class="d">(esc to interrupt)</span></div>
+          <div class="foot"><span>branch ak/fix-retry-backoff</span><span>+14 −3 vs main</span><span>datapack billing-api · +2 shared</span><span>opus · 38k ctx</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><i class="dot working"></i>Working</span>
+    <span><i class="dot needs"></i>Needs you: a permission prompt or a question</span>
+    <span><i class="dot idle"></i>Idle, waiting for your next prompt</span>
+    <span><i class="dot recovered"></i>Recovered after a restart</span>
+    <span><i class="dot exited"></i>Exited</span>
+  </div>
+  <h3>New project</h3>
+  <p>A new project starts from a repo you already have. The dialog lists every git repo directly under your repos folder (<code>~/code</code> by default), with the most recently touched first. Repos that already belong to a project are shown dimmed.</p>
+  <div class="mockwrap">
+    <div class="picker" role="img" aria-label="Mockup of the New project dialog listing git repos under ~/code">
+      <div class="hd"><b>New project</b><span class="mono" style="color:var(--muted);font-size:11.5px">~/code · 32 repos</span></div>
+      <div class="body">
+        <div class="filter"><div class="search">Filter repos…</div><div class="seg"><span class="on">Recent</span><span>A–Z</span></div></div>
+        <div class="repos">
+          <div class="repo sel"><span class="radio"></span><span class="nm">billing-api</span><span class="rm">github.com/acme/billing-api</span><span class="br">main</span><span class="when">2 hours ago</span></div>
+          <div class="repo"><span class="radio"></span><span class="nm">docs-site</span><span class="rm">github.com/acme/docs-site</span><span class="br">feat/search</span><span class="when">Yesterday</span></div>
+          <div class="repo"><span class="radio"></span><span class="nm">perf-lab</span><span class="rm">no remote</span><span class="br">main</span><span class="when">3 days ago</span></div>
+          <div class="repo used"><span class="radio"></span><span class="nm">infra</span><span class="rm">github.com/acme/infra</span><span class="br">main</span><span class="when">In project "infra"</span></div>
+          <div class="repo"><span class="radio"></span><span class="nm">ledger-core</span><span class="rm">github.com/acme/ledger-core</span><span class="br">master</span><span class="when">2 weeks ago</span></div>
+        </div>
+        <div class="fields">
+          <div class="field"><span class="label">Project name</span><div class="input">billing-api</div></div>
+          <div class="field"><span class="label">Dedicated datapack</span><div class="input">Create "billing-api" ▾</div></div>
+        </div>
+      </div>
+      <div class="ft"><div class="alt"><span>Clone from URL…</span><span>Other folder…</span></div><span class="go">Create project</span></div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3>What the list shows</h3><p>For each repo: its folder name, the <code>origin</code> remote, the current branch, and when it was last touched. The server scans the folder when the dialog opens, so repos you clone by hand appear straight away.</p></div>
+    <div class="card"><h3>What it leaves out</h3><p>Folders that aren't git repos, and git worktrees (a <code>.git</code> <em>file</em> rather than a directory), are left out. Only the top level is scanned by default. The scan depth and the list of folders are both settings.</p></div>
+    <div class="card"><h3>Clone from URL</h3><p>Paste a git URL and the server clones it into <code>~/code/&lt;name&gt;</code> using your existing git credentials, then selects it. "Other folder" takes any repo path on the host.</p></div>
+  </div>
+  <p>Picking a repo fills in the project name and suggests a new dedicated datapack with the same name. You can switch that to an existing datapack before creating the project.</p>
+  <div class="grid2">
+    <div class="card"><h3>New session</h3><p>You give it a name and, optionally, a first prompt and a base branch (the default is the project's default branch). The server creates the worktree and branch, starts Claude inside it, and focuses the tab.</p></div>
+    <div class="card"><h3>Keyboard</h3><p><code>⌘1–9</code> switches projects, <code>⌃Tab</code> cycles sessions, and <code>⌘K</code> opens a palette to jump to any session, create one, or search the project's datapacks. Keys pass through to the terminal whenever it has focus.</p></div>
+    <div class="card"><h3>Notifications</h3><p>A browser notification fires when any session moves to <em>needs you</em> or finishes a turn while its tab is hidden. You can mute it per project.</p></div>
+  </div>
+  <h3>Project home</h3>
+  <div class="mockwrap">
+    <div class="home" role="img" aria-label="Mockup of the project home page with datapacks and recent activity">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><b style="font-family:var(--display);font-size:18px">billing-api</b><span class="mono" style="color:var(--muted);font-size:11.5px">~/code/billing-api · main</span></div>
+      <div class="search">Search this project's memory and knowledge…</div>
+      <div class="row">
+        <div class="box">
+          <span class="label">Datapacks</span>
+          <div class="dp"><span>billing-api</span><span class="tag">dedicated</span><span class="num">412 mem</span></div>
+          <div class="dp"><span>payments-team-kb</span><span class="tag shared">shared</span><span class="num">1.9k kb</span></div>
+          <div class="dp"><span>eng-conventions</span><span class="tag shared">shared</span><span class="num">86 kb</span></div>
+          <span style="color:var(--accent);font-size:12px">+ Attach datapack</span>
+        </div>
+        <div class="box">
+          <span class="label">Recent activity</span>
+          <div class="act"><time>10:42</time><span>fix retry backoff: tests passing, 1 edge case left</span></div>
+          <div class="act"><time>10:15</time><span>review PR #412: waiting on a permission prompt</span></div>
+          <div class="act"><time>Yesterday</time><span>Memory: "idempotency keys expire after 24h"</span></div>
+          <div class="act"><time>Yesterday</time><span>flaky test hunt: archived, branch kept</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="sessions">
+  <h2>Projects, worktrees and sessions</h2>
+  <div class="prose">
+    <p>A <b>project</b> is a git repository on the host, picked from your repos folder (<code>~/code</code>) or cloned into it at creation. The project only points at the repo. It never moves or modifies your main checkout. A <b>session</b> is one task. It has one worktree, one branch and one Claude conversation. Worktrees live outside the repo so they never show up in <code>git status</code>.</p>
+  </div>
+<pre class="code"><span class="c"># layout on the host</span>
+~/.agent-k-local/
+  config.toml              <span class="c"># port, TLS paths, update channel, Meko key reference, repo roots</span>
+  state.db                 <span class="c"># SQLite: projects, sessions, events, auth (WAL)</span>
+  hook.sock                <span class="c"># Claude hooks → server</span>
+  certs/                   <span class="c"># self-signed pair, or symlinks to your own</span>
+  app/0.4.1/  app/current → 0.4.1
+  worktrees/&lt;project&gt;/&lt;session&gt;/   <span class="c"># git worktree, branch ak/&lt;session&gt;</span>
+
+<span class="c"># config.toml (excerpt)</span>
+[repos]
+roots = ["~/code"]        <span class="c"># folders the New project dialog lists</span>
+depth = 1                 <span class="c"># 1 = only direct children</span>
+clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repos</span></pre>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Action</th><th>What the server does</th></tr></thead>
+    <tbody>
+      <tr><td>New session</td><td><code>git worktree add … -b ak/&lt;slug&gt; &lt;base&gt;</code>, then <code>tmux -L agentk new -d -s ak-&lt;proj&gt;-&lt;slug&gt; -c &lt;worktree&gt;</code> running <code>claude --session-id &lt;uuid&gt; --settings &lt;hooks&gt; -n "&lt;name&gt;" [prompt]</code> with the Meko env vars set.</td></tr>
+      <tr><td>Open tab</td><td>Spawns a pty on <code>tmux attach</code>, one per viewer. The terminal is resized to fit the browser.</td></tr>
+      <tr><td>Close tab</td><td>Kills the pty only. tmux and Claude keep running.</td></tr>
+      <tr><td>Claude exits</td><td>The pane dies and the status becomes <em>exited</em>. <b>Resume</b> relaunches <code>claude --resume &lt;uuid&gt;</code> in the same worktree.</td></tr>
+      <tr><td>Archive</td><td>Kills the tmux session. The worktree is removed if it is clean, and the branch is always kept. The record stays, so the session can be restored later.</td></tr>
+      <tr><td>Delete project</td><td>Removes the records and worktrees after confirmation. Never deletes the repo or the datapacks.</td></tr>
+    </tbody>
+  </table></div>
+<pre class="code"><span class="c">-- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.</span>
+<span class="k">CREATE TABLE</span> projects (
+  id TEXT PRIMARY KEY,            <span class="c">-- slug, e.g. billing-api</span>
+  name TEXT NOT NULL, repo_path TEXT NOT NULL UNIQUE, default_branch TEXT NOT NULL,
+  position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER);
+<span class="k">CREATE TABLE</span> project_datapacks (
+  project_id TEXT REFERENCES projects, datapack_id TEXT, name TEXT,
+  role TEXT CHECK (role IN ('dedicated','shared')),
+  PRIMARY KEY (project_id, datapack_id));
+<span class="k">CREATE UNIQUE INDEX</span> one_dedicated <span class="k">ON</span> project_datapacks(project_id) <span class="k">WHERE</span> role = 'dedicated';
+<span class="k">CREATE TABLE</span> sessions (
+  id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, name TEXT,
+  claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
+  desired TEXT CHECK (desired IN ('running','archived')),   <span class="c">-- what recovery restores</span>
+  status TEXT,                    <span class="c">-- working | needs_input | idle | exited | recovered</span>
+  last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
+<span class="k">CREATE TABLE</span> session_events (  <span class="c">-- every hook call; feeds badges + project activity</span>
+  id INTEGER PRIMARY KEY, session_id TEXT, kind TEXT, payload_json TEXT, at INTEGER);
+<span class="k">CREATE TABLE</span> owner (id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT, pw_scrypt TEXT, totp_secret TEXT);
+<span class="k">CREATE TABLE</span> auth_sessions (token_sha256 TEXT PRIMARY KEY, created_at INTEGER, expires_at INTEGER, user_agent TEXT, ip TEXT);
+<span class="k">CREATE TABLE</span> audit_log (id INTEGER PRIMARY KEY, at INTEGER, action TEXT, detail_json TEXT);
+<span class="k">CREATE TABLE</span> kv (key TEXT PRIMARY KEY, value TEXT);   <span class="c">-- UI prefs, update state, bad versions</span></pre>
+  <div class="grid2">
+    <div class="card"><h3>Why SQLite</h3><p>You get transactions across projects, sessions and datapacks, an event history for the activity feed, and crash safety without hand-rolled atomic file writes. It's still one file you can back up or inspect with the <code>sqlite3</code> CLI.</p></div>
+    <div class="card"><h3>Settings</h3><p><code>journal_mode=WAL</code>, <code>synchronous=FULL</code> (so a host crash never loses a committed session record), <code>foreign_keys=ON</code> and <code>busy_timeout=5000</code>. There are so few writes that FULL sync costs nothing noticeable. Old <code>session_events</code> are pruned after 30 days.</p></div>
+    <div class="card"><h3>Not on NFS</h3><p>SQLite locking is unreliable on network filesystems. The installer checks the filesystem type of <code>~/.agent-k-local</code>. If it's NFS, the installer puts <code>state.db</code> on local disk (<code>$XDG_STATE_HOME</code>, then <code>/var/tmp/$USER</code>) and records the path in <code>config.toml</code>.</p></div>
+  </div>
+  <p><code>config.toml</code> keeps only what's needed before the database opens: the port, TLS paths, repo roots, the update channel and the database path. Everything the UI changes lives in <code>state.db</code>.</p>
+</section>
+
+<section id="datapacks">
+  <h2>Datapacks</h2>
+  <div class="grid2">
+    <div class="card"><span class="label">One per project</span><h3>Dedicated datapack</h3><p>It's created automatically with the project (named after it), or you can pick an existing one. It is the only place session transcripts and extracted memories are written.</p></div>
+    <div class="card"><span class="label">Zero or more</span><h3>Shared datapacks</h3><p>These are attached from your <code>datapack_list</code>: a team knowledge base, org conventions, another project's memory. They are read-only from this project's point of view, and one datapack can be attached to many projects.</p></div>
+  </div>
+  <p>Each session is launched with this environment:</p>
+<pre class="code"><span class="k">MEKO_DATAPACK_ID</span>=dp_7f3…                 <span class="c"># dedicated: capture + memory writes</span>
+<span class="k">MEKO_AGENT_ID</span>=claude_code:billing-api     <span class="c"># one memory bucket per project, not per worktree dir</span>
+<span class="k">MEKO_DATAPACK_IDS</span>=dp_7f3…,dp_a01…,dp_c9e… <span class="c"># everything this session may read</span>
+<span class="k">AK_SESSION</span>=billing-api/fix-retry-backoff</pre>
+  <p>A short <code>--append-system-prompt</code> also lists the attached datapacks by name and purpose, so Claude knows to pass the right <code>datapack_id</code> when it searches them.</p>
+  <div class="callout warn">
+    <span class="label">Needs a Meko plugin change</span>
+    <p>Today the Meko hooks derive <code>agent_id</code> from the working directory's basename and read the datapack from a pin file. With a worktree per session, every session would get its own <code>agent_id</code>. The plugin needs to honour these environment variables first:</p>
+    <ul>
+      <li><code>MEKO_DATAPACK_ID</code> takes priority over the pin file, which takes priority over the server default.</li>
+      <li><code>MEKO_AGENT_ID</code> takes priority over <code>claude_code:&lt;basename&gt;</code>. It must also be written into the watermark, so the PreCompact and SessionEnd capture uses the same bucket.</li>
+    </ul>
+    <p>This is a small PR to the <code>meko-agent-skills</code> plugin. Until it lands, agent-k-local writes a pin file for each worktree as a fallback.</p>
+  </div>
+  <div class="callout">
+    <span class="label">Meko is required</span>
+    <p>agent-k-local doesn't run without Meko. Datapacks are how a project keeps track of its work, so there is no mode without them.</p>
+    <ul>
+      <li><b>At install:</b> the installer needs a Meko API key. It reuses <code>MEKO_API_KEY</code> from <code>~/.claude/settings.json</code> if one is there, and asks for one otherwise. It also checks that the <code>meko-agent-skills</code> plugin is installed at a version that honours the env vars above. The install stops if the key doesn't work or the plugin is missing.</li>
+      <li><b>At project creation:</b> a dedicated datapack is mandatory. <b>Create project</b> stays disabled until one is chosen or created.</li>
+      <li><b>At session start:</b> every session gets the Meko environment. The server refuses to start a session for a project whose dedicated datapack it can't resolve.</li>
+      <li><b>If Meko goes down:</b> running sessions keep going, and the rail shows a "Meko unreachable" banner. The Meko hooks capture from the transcript on disk, so they catch up once the service is back. New projects can't be created until then.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="login">
+  <h2>Login and security</h2>
+  <div class="prose">
+    <p>The terminal is a shell running as your Unix user, so the web login protects the same thing as your SSH key. Each install serves exactly one owner. Sharing the app means other people install their own copy.</p>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3>First run</h3><p>The installer prints a one-time setup link: <code>https://host:7777/setup?token=…</code>. You open it, choose a username and password, and can optionally enrol TOTP. The token stops working after it is used.</p></div>
+    <div class="card"><h3>Sessions</h3><p>Passwords are hashed with scrypt. After login you get an <code>HttpOnly</code>, <code>Secure</code>, <code>SameSite=Strict</code> cookie that lasts 14 days, renewed as you use the app. Every WebSocket upgrade checks both the cookie and the <code>Origin</code> header.</p></div>
+    <div class="card"><h3>TLS is mandatory</h3><p>Any address other than localhost requires HTTPS. You can point it at your own certificate from the corp CA, or let it generate a self-signed pair and show the fingerprint so you can trust it once on your laptop.</p></div>
+    <div class="card"><h3>Guard rails</h3><p>Failed logins are rate-limited, with a lockout after repeated failures. There is an audit log of logins and new sessions. Hooks use the local unix socket with a per-session token, never the network port.</p></div>
+  </div>
+  <p style="color:var(--muted)">Later: passkeys (WebAuthn), and single sign-on with Google Workspace or another OIDC provider.</p>
+</section>
+
+<section id="recovery">
+  <h2>Surviving crashes, restarts and updates</h2>
+  <div class="prose">
+    <p>Two systemd user units run with lingering enabled, so they start at boot without anyone logging in:</p>
+    <ul>
+      <li><code>agent-k-local-tmux.service</code> owns the tmux server on socket <code>agentk</code>. It is never restarted by updates.</li>
+      <li><code>agent-k-local.service</code> is the web server, with <code>Restart=always</code>. Updates restart only this unit.</li>
+    </ul>
+    <p>Keeping tmux in its own unit is the key point. If tmux were a child of the server's unit, systemd would kill every Claude session on each update.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Event</th><th>What survives</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td>Server crash or update</td><td>Everything</td><td>systemd restarts the server. It matches <code>state.db</code> against the running tmux sessions, and browsers reconnect automatically.</td></tr>
+      <tr><td>tmux crash</td><td>Worktrees, transcripts, state</td><td>The unit restarts tmux, and the server relaunches every session with <code>desired: running</code> using <code>claude --resume</code>.</td></tr>
+      <tr><td>Host reboot or crash</td><td>Worktrees, transcripts, state</td><td>Both units start at boot and the same recovery runs. Sessions show as <em>recovered</em> until you interact.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  participant SD as systemd user
+  participant T as tmux unit
+  participant S as server
+  participant C as claude
+  SD->>T: start at boot (linger)
+  SD->>S: start
+  S->>S: open state.db
+  S->>T: list sessions
+  loop each session with desired = running and no pane
+    S->>S: verify worktree, recreate from branch if missing
+    S->>T: new-session in worktree
+    T->>C: claude --resume session-id
+    C-->>S: SessionStart hook
+    S->>S: mark as recovered
+  end
+</pre>
+  </div>
+  <p>A turn that was in progress when the host died is lost, but the conversation up to that point comes back. By default recovery does <b>not</b> send a "continue" prompt, because repeating half-done tool calls can have side effects. A per-project setting can turn automatic continue on.</p>
+</section>
+
+<section id="releases">
+  <h2>Releases and auto-update</h2>
+  <div class="grid2">
+    <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
+    <div class="card"><span class="label">On merge to main</span><h3>release-please</h3><p>release-please keeps a release PR open with the next version and the changelog, both derived from Conventional Commits. Merging it creates the tag.</p></div>
+    <div class="card"><span class="label">On tag</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code>, <code>linux-arm64</code> and <code>darwin-arm64</code>. Each bundles the Node runtime, prebuilt node-pty and better-sqlite3, and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
+  </div>
+  <div class="callout">
+    <span class="label">glibc</span>
+    <p>RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run in an AlmaLinux 8 container rather than on <code>ubuntu-latest</code>, so the binary loads on older hosts.</p>
+  </div>
+<pre class="code"><span class="c"># install (one line, no root)</span>
+curl -fsSL https://github.com/&lt;owner&gt;/agent-k-local/releases/latest/download/install.sh | sh
+
+<span class="c"># what it does</span>
+<span class="c">#  1. checks for tmux ≥ 2.7, git, claude, and the meko-agent-skills plugin</span>
+<span class="c">#     verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks)</span>
+<span class="c">#  2. unpacks to ~/.agent-k-local/app/&lt;ver&gt;, points app/current at it</span>
+<span class="c">#  3. installs both systemd user units (launchd agents on macOS), enables linger if allowed</span>
+<span class="c">#  4. asks for your repos folder (default ~/code) and writes config.toml</span>
+<span class="c">#  5. prints the one-time setup link</span></pre>
+  <div class="prose">
+    <p><b>Update loop.</b> The server checks the GitHub Releases API at startup and every 6 hours. The channel can be <em>stable</em>, <em>prerelease</em> or <em>off</em>. When a newer version appears, the server:</p>
+    <ol>
+      <li>downloads the tarball and verifies it against <code>SHA256SUMS</code>, and against the attestation if <code>gh</code> is available;</li>
+      <li>unpacks it next to the current version and runs its self-test;</li>
+      <li>snapshots the database with <code>VACUUM INTO state.db.bak-&lt;old-ver&gt;</code>, lets the new version run its migrations on start, and points <code>app/current</code> at the new version;</li>
+      <li>restarts only the web server unit. Sessions keep running;</li>
+      <li>if <code>/healthz</code> fails within 30 seconds, points back to the previous version and marks the new one as bad.</li>
+    </ol>
+    <p>The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance window, because they never touch tmux.</p>
+  </div>
+</section>
+
+<section id="stack">
+  <h2>Tech stack</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Layer</th><th>Choice</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Server</td><td>Node 20 + TypeScript, Fastify, <code>ws</code>, <code>node-pty</code></td><td>node-pty builds on the target host. Using one language across server and web keeps it simple.</td></tr>
+      <tr><td>Web</td><td>Vite + React, xterm.js with the fit and web-links addons</td><td>xterm.js is the standard browser terminal. React handles the rail, tabs and dialogs.</td></tr>
+      <tr><td>State</td><td>SQLite via <code>better-sqlite3</code>, WAL, <code>user_version</code> migrations</td><td>A synchronous API suits a single-writer server. It's a native module like node-pty and goes through the same AlmaLinux 8 build.</td></tr>
+      <tr><td>Processes</td><td>tmux on a private socket, in its own systemd user unit</td><td>tmux keeps sessions alive when the server restarts, and you can still attach from iTerm.</td></tr>
+      <tr><td>Integrations</td><td>Meko MCP over HTTP (required), Claude Code hooks, git worktrees</td><td>Meko is a core dependency. The hooks and git are thin adapters.</td></tr>
+      <tr><td>Release</td><td>GitHub Actions, release-please, artifact attestations</td><td>Versioning and supply-chain checks with no extra tooling.</td></tr>
+    </tbody>
+  </table></div>
+  <p style="color:var(--muted)">Escape hatch: <code>ssh host -t tmux -L agentk attach -t ak-billing-api-fix-retry-backoff</code> attaches to any session from iTerm.</p>
+</section>
+
+<section id="milestones">
+  <h2>Milestones</h2>
+  <div class="ms">
+    <div><h3><span class="mono">M0</span>Repo</h3><p>Git repo, the commit skill without agent attribution, CLAUDE.md, a license, the CI skeleton, and publishing to GitHub.</p></div>
+    <div><h3><span class="mono">M1</span>Core</h3><p>The server with login and TLS, a Meko connection check, the New project repo picker with a mandatory dedicated datapack, worktree-backed sessions in tmux launched with the Meko env vars, and the browser terminal, rail and tabs. The Meko plugin PR for <code>MEKO_DATAPACK_ID</code> and <code>MEKO_AGENT_ID</code> ships alongside.</p></div>
+    <div><h3><span class="mono">M2</span>Status and durability</h3><p>Hooks drive the badges and notifications. The two systemd units, recovery on boot, resume for exited sessions, and the "Meko unreachable" banner.</p></div>
+    <div><h3><span class="mono">M3</span>Shared datapacks</h3><p>Attaching shared datapacks, <code>MEKO_DATAPACK_IDS</code> and the system-prompt listing, and the project home page with activity and search.</p></div>
+    <div><h3><span class="mono">M4</span>Ship it</h3><p>The release pipeline, <code>install.sh</code>, the update loop with rollback, and the first public release.</p></div>
+    <div><h3><span class="mono">M5</span>Polish</h3><p>The command palette, a diff view per session, merging or opening a PR from a session, passkeys, and a native Mac wrapper if the browser gets annoying.</p></div>
+  </div>
+</section>
+
+<section id="questions">
+  <h2>Open questions</h2>
+  <ol class="q">
+    <li><b>macOS as a host.</b> Should the server also run locally on a Mac, or are Linux devservers enough for now?</li>
+    <li><b>Session end.</b> When a task is done, should the app offer "merge to main" or "open PR", or just archive and leave the branch?</li>
+    <li><b>Auto-continue after a crash.</b> Leave it off by default, as proposed?</li>
+  </ol>
+</section>
+</main>
+</div>
