@@ -1,0 +1,210 @@
+name: Release
+
+# Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day.
+# A push to main cuts a release when it contains feat/fix/perf commits since the last
+# release tag and the tests pass. Run the workflow by hand to force a release, or to
+# rebuild the assets of an existing tag.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release even if there are no feat/fix/perf commits
+        type: boolean
+        default: false
+      tag:
+        description: Rebuild assets for this existing tag instead (e.g. v0.20260924.0)
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+# One release at a time, so two pushes on the same day can't claim the same number.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # Bundled runtime. Bump deliberately; the SHASUMS256 check below pins the bytes.
+  NODE_VERSION: 22.18.0
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.p.outputs.release }}
+      rebuild: ${{ steps.p.outputs.rebuild }}
+      version: ${{ steps.p.outputs.version }}
+      tag: ${{ steps.p.outputs.tag }}
+      ref: ${{ steps.p.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: p
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -eu
+          if [ -n "${DISPATCH_TAG:-}" ]; then
+            git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
+            { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=${DISPATCH_TAG#v}"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if sh scripts/release-notes.sh > /dev/null || [ "${FORCE:-false}" = "true" ]; then
+            version=$(sh scripts/next-version.sh)
+            echo "Releasing $version"
+            { echo "release=true"; echo "rebuild=false"; echo "tag=v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing to release: no feat/fix/perf commits since the last release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.rebuild == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y tmux git build-essential
+      - run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  build:
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.release == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # AlmaLinux 8 = glibc 2.28, so the native node-pty build loads on RHEL 8 devservers.
+    container: almalinux:8
+    timeout-minutes: 40
+    steps:
+      - name: Install build toolchain
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc-toolset-13-gcc-c++ make python3.11 git tar xz findutils which
+          git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+
+      - name: Download Node ${{ env.NODE_VERSION }}
+        run: |
+          set -eu
+          dist="node-v${NODE_VERSION}-linux-${{ matrix.arch }}"
+          cd /tmp
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.xz"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+          grep " ${dist}.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+          tar -xJf "${dist}.tar.xz"
+          echo "NODE_DIR=/tmp/${dist}" >> "$GITHUB_ENV"
+          echo "/tmp/${dist}/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies (gcc-toolset-13 for node-pty)
+        run: |
+          set -eu
+          export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc
+          export CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
+          export npm_config_python=/usr/bin/python3.11
+          node --version
+          npm ci
+
+      - name: Stamp version
+        run: npm pkg set version="${{ needs.plan.outputs.version }}"
+
+      - name: Build
+        run: npm run build
+
+      - name: Prune dev dependencies
+        run: npm prune --omit=dev
+
+      - name: Package
+        run: |
+          sh scripts/package-release.sh \
+            "${{ needs.plan.outputs.version }}" "${{ matrix.arch }}" "$NODE_DIR" out
+
+      - name: Smoke-test the tarball
+        run: |
+          set -eu
+          mkdir -p /tmp/smoke
+          tar -xzf out/*.tar.gz -C /tmp/smoke
+          v=$(/tmp/smoke/agent-k-local-*/bin/agent-k-local version)
+          test "$v" = "${{ needs.plan.outputs.version }}"
+          /tmp/smoke/agent-k-local-*/bin/agent-k-local selftest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.arch }}
+          path: out/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist-release
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cp ../scripts/install.sh install.sh
+          cat SHA256SUMS
+
+      - name: Create the release
+        if: needs.plan.outputs.rebuild == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.ref }}
+        run: |
+          set -eu
+          sh scripts/release-notes.sh > notes.md || echo "Maintenance release." > notes.md
+          gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY" \
+            dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
+
+      - name: Replace assets on an existing release
+        if: needs.plan.outputs.rebuild == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: gh release upload "$TAG" dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Attest build provenance
+        # Artifact attestations need GitHub Enterprise Cloud for internal repos.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist-release/*.tar.gz

@@ -125,3 +125,13 @@ describe('Claude folder trust', () => {
     expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('already');
   });
 });
+
+describe('date-based versions', () => {
+  it('orders 0.YYYYMMDD.N releases correctly', async () => {
+    const { compareSemver } = await import('../../src/server/updater.js');
+    expect(compareSemver('0.20260924.10', '0.20260924.9')).toBeGreaterThan(0);
+    expect(compareSemver('0.20260925.0', '0.20260924.12')).toBeGreaterThan(0);
+    expect(compareSemver('v0.20260924.0', '0.20260924.0')).toBe(0);
+    expect(compareSemver('0.20260924.0', '0.0.0-dev')).toBeGreaterThan(0);
+  });
+});

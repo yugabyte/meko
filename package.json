@@ -1,6 +1,6 @@
 {
   "name": "agent-k-local",
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
   "description": "Self-hosted web workbench for Claude Code: projects, worktree-per-session, Meko datapacks",
   "license": "Apache-2.0",
   "private": true,

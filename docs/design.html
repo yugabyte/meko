@@ -196,7 +196,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.7 (implemented)</span>
+  <span class="label">Design · v0.8 (implemented)</span>
   <h1>agent-k-local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -222,7 +222,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
       <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge → Cleanup, with three human gates. More ADLC stages plug in later.</td></tr>
       <tr><td>Host OS</td><td>Linux devservers only for now. macOS is deferred.</td></tr>
-      <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI, release-please for versions, tarball releases, and an update check built into the server.</td></tr>
+      <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI and releases, date-based versions (<code>0.YYYYMMDD.N</code>), tarball releases, and an update check built into the server.</td></tr>
       <tr><td>Repo &amp; license</td><td>Internal at <code>github.com/yugabyte/agent-k-local</code> for now, to be made public later. Apache-2.0.</td></tr>
       <tr><td>Sharing</td><td>Everyone installs their own copy. One owner per install, with no shared instances.</td></tr>
       <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon. A native Mac wrapper is deferred.</td></tr>
@@ -583,8 +583,8 @@ sequenceDiagram
   <h2>Releases and auto-update</h2>
   <div class="grid2">
     <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
-    <div class="card"><span class="label">On merge to main</span><h3>release-please</h3><p>release-please keeps a release PR open with the next version and the changelog, both derived from Conventional Commits. Merging it creates the tag.</p></div>
-    <div class="card"><span class="label">On tag</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node 22 runtime, node-pty (built with gcc-toolset-13) and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
+    <div class="card"><span class="label">On push to main</span><h3>Versioning</h3><p>Versions are <code>0.YYYYMMDD.N</code>: the UTC date, and <code>N</code> counting from 0 for each release that day. A push with any <code>feat</code>, <code>fix</code> or <code>perf</code> commit since the last release runs the tests and cuts the next version; its Conventional Commit subjects become the release notes.</p></div>
+    <div class="card"><span class="label">After the tests</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node 22 runtime, node-pty (built with gcc-toolset-13) and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
   </div>
   <div class="callout">
     <span class="label">glibc</span>
@@ -623,7 +623,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
       <tr><td>State</td><td>SQLite via the built-in <code>node:sqlite</code>, WAL, <code>user_version</code> migrations</td><td>A synchronous API suits a single-writer server, and it needs no native module.</td></tr>
       <tr><td>Processes</td><td>tmux on a private socket, in its own systemd user unit</td><td>tmux keeps sessions alive when the server restarts, and you can still attach from iTerm.</td></tr>
       <tr><td>Integrations</td><td>Meko MCP over HTTP (required), Claude Code hooks, git worktrees</td><td>Meko is a core dependency. The hooks and git are thin adapters.</td></tr>
-      <tr><td>Release</td><td>GitHub Actions, release-please, artifact attestations</td><td>Versioning and supply-chain checks with no extra tooling.</td></tr>
+      <tr><td>Release</td><td>GitHub Actions, date-based versions, artifact attestations</td><td>Versioning and supply-chain checks with no extra tooling.</td></tr>
     </tbody>
   </table></div>
   <p style="color:var(--muted)">Escape hatch: <code>ssh host -t tmux -L agentk attach -t ak-billing-api-fix-retry-backoff</code> attaches to any session from iTerm.</p>

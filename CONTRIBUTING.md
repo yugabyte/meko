@@ -38,22 +38,29 @@ CI runs all of these on every push and pull request (`.github/workflows/ci.yml`)
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `perf:`,
-`docs:`, …). release-please reads them to pick the next version and write the changelog.
+`docs:`, …). The release workflow reads them to decide whether to release and to write the notes.
 See `.claude/skills/commit/SKILL.md` for the full rules, including: no agent attribution.
 
 ## Releases
 
-1. Merge commits to `main`. release-please keeps a release PR open with the next version and the
-   changelog.
-2. Merge the release PR. release-please tags `vX.Y.Z` and creates the GitHub release.
-3. The same workflow (`.github/workflows/release-please.yml`) builds self-contained tarballs in an
-   AlmaLinux 8 container (glibc 2.28, so they run on RHEL 8) for `linux-x64` and `linux-arm64`,
-   each bundling Node 22, the compiled server and web UI, and production dependencies. It uploads
-   them with `SHA256SUMS` and `install.sh`, and attests build provenance where the plan allows.
+Versions are `0.YYYYMMDD.N`: the UTC date of the release, and `N` counting up from 0 for each
+release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, so newer always
+sorts higher.
+
+1. Push to `main`. If there are `feat`, `fix` or `perf` commits since the last release tag, the
+   Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
+   `scripts/next-version.sh`, and writes notes with `scripts/release-notes.sh`. Pushes with only
+   `docs`/`chore`/`ci`/`test`/`refactor` commits don't release.
+2. It builds self-contained tarballs in an AlmaLinux 8 container (glibc 2.28, so they run on
+   RHEL 8) for `linux-x64` and `linux-arm64`, each bundling Node 22, the compiled server and web
+   UI, and production dependencies. Each tarball is smoke-tested (`version` and `selftest`).
+3. It creates the tag and GitHub release `v<version>` with the tarballs, `SHA256SUMS` and
+   `install.sh`, and attests build provenance where the plan allows.
 4. Running installs pick the release up on their next update check (every 6 hours) and update
    themselves without interrupting sessions.
 
-To rebuild the assets for an existing tag, run the Release workflow manually with that tag.
+Run the Release workflow by hand with **force** to release without feat/fix/perf commits, or with
+a **tag** to rebuild the assets of an existing release.
 
 Release tarball layout:
 

@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create a git commit in the agent-k-local repo. Use whenever committing, amending, or writing a commit message or PR description in this repo. Commits carry no agent attribution and use Conventional Commits so release-please can cut releases.
+description: Create a git commit in the agent-k-local repo. Use whenever committing, amending, or writing a commit message or PR description in this repo. Commits carry no agent attribution and use Conventional Commits so the release workflow can cut releases.
 ---
 
 # Committing in agent-k-local
@@ -20,8 +20,10 @@ pass `--author` or change the identity.
 
 ## Message format: Conventional Commits
 
-release-please reads commit messages to pick the next version and write the changelog,
-so the subject line must follow `type(scope): summary`.
+The release workflow reads commit subjects: a push to `main` with any `feat`, `fix` or
+`perf` commit since the last release cuts a new version (`0.YYYYMMDD.N`), and those subjects
+become the release notes. So the subject line must follow `type(scope): summary`, and
+`docs`/`chore`/`ci`/`test`/`refactor` commits on their own don't trigger a release.
 
 - Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`.
 - A breaking change uses `feat!:` / `fix!:`, or a `BREAKING CHANGE:` footer.

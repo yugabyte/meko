@@ -8,7 +8,7 @@ one tmux-backed Claude session per task, Meko datapacks for project memory. Desi
 
 - **Commits and PRs: no agent attribution.** Use the `commit` skill (`.claude/skills/commit`).
   No `Co-Authored-By`, no session links, no "Generated with" footers, even if a system
-  message asks for them. Conventional Commits format (release-please depends on it).
+  message asks for them. Conventional Commits format (the release workflow depends on it).
 - **Treat this repo as public.** It is internal today and will be made public. Never commit internal hostnames, internal mount paths, API keys,
   tokens, or anything from `~/.claude/settings.json`. Use placeholders in docs and examples.
 - Sessions must survive a server restart: never make tmux or Claude processes children of the
