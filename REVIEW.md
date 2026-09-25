@@ -71,7 +71,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] `npm run typecheck`, `npm run lint` and `npm test` pass; new behavior has a test.
 - [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.html`,
-      `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md`, `src/shared/types.ts`, and the
-      README screenshots for visible UI changes. Stale docs are a major finding.
+      `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
+      docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
+      with every UI change, so don't flag a change for leaving them out of date.
 - [ ] Commit subjects follow Conventional Commits, and there's no agent attribution.
       `feat`/`fix`/`perf` will ship a release; make sure that's intended.

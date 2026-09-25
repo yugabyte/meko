@@ -21,4 +21,3 @@ a **major** finding.
 - [ ] The desktop layout is unchanged unless the change is meant for it.
 - [ ] Touch input to the terminal goes through `terminals.ts` / `keys.ts`, and `keys.ts` changes
       have tests. The terminal doesn't take focus on touch screens outside typing mode.
-- [ ] `docs/screenshots/mobile.png` is retaken if the phone session screen changed visibly.

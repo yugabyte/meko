@@ -98,7 +98,6 @@ Docs are part of the change. Update them **in the same commit** as the code:
 |---|---|
 | Behavior, architecture, lifecycle, security or data model | `docs/design.html` (and bump its version label) |
 | Features, requirements, install steps | `README.md` |
-| Anything visible in the UI | `docs/screenshots/*.png` (retake them from a demo instance with neutral paths and names), including `mobile.png` for the phone layout |
 | Dev setup, checks, release process | `CONTRIBUTING.md` |
 | Module layout, invariants, commands, conventions | `AGENTS.md` |
 | What reviewers should check | `REVIEW.md` |
