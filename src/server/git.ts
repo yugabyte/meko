@@ -6,8 +6,13 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 
 export async function git(cwd: string, ...args: string[]): Promise<string> {
+  return (await gitRaw(cwd, ...args)).trim();
+}
+
+/** Like git(), but stdout is returned untrimmed (porcelain lines can start with a space). */
+export async function gitRaw(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-  return stdout.trim();
+  return stdout;
 }
 
 export async function tryGit(cwd: string, ...args: string[]): Promise<string | null> {
@@ -114,18 +119,78 @@ export async function listBranches(repo: string): Promise<string[]> {
   return local.split('\n').filter(Boolean);
 }
 
+/** What happened to the local base branch before a new session branched from it. */
+export type SyncResult =
+  | { kind: 'updated' | 'current' | 'no-upstream' }
+  | { kind: 'skipped'; reason: string };
+
 /**
- * Creates a worktree on a new branch. The base is origin/<base> when it exists
- * (after a fetch) so new work starts from the latest upstream.
+ * Creates a worktree. A new branch starts from the local <base>, fast-forwarded
+ * to origin/<base> first (after a fetch) so new work starts from the latest
+ * upstream. If <base> can't be fast-forwarded, the branch starts from
+ * origin/<base> instead. Returns null when the branch already existed.
  */
-export async function addWorktree(repo: string, path: string, branch: string, base: string): Promise<void> {
+export async function addWorktree(repo: string, path: string, branch: string, base: string): Promise<SyncResult | null> {
   await tryGit(repo, 'fetch', '--quiet', 'origin', base);
-  const remoteRef = await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`);
-  const start = remoteRef ? `origin/${base}` : base;
-  if (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)) {
+  if (await revParse(repo, `refs/heads/${branch}`)) {
     await git(repo, 'worktree', 'add', path, branch);
-  } else {
-    await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, start);
+    return null;
+  }
+  const sync = await fastForward(repo, base);
+  const start = sync.kind === 'skipped' && (await revParse(repo, `refs/remotes/origin/${base}`)) ? `origin/${base}` : base;
+  await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, start);
+  return sync;
+}
+
+/**
+ * Fast-forwards the local <branch> to origin/<branch> (already fetched); never
+ * forces. Where the branch is checked out (usually the main checkout) this is
+ * `merge --ff-only`, which git refuses when it would overwrite local edits;
+ * elsewhere it is a compare-and-swap of the ref.
+ */
+export async function fastForward(repo: string, branch: string): Promise<SyncResult> {
+  const remote = await revParse(repo, `refs/remotes/origin/${branch}`);
+  if (!remote) return { kind: 'no-upstream' };
+  const local = await revParse(repo, `refs/heads/${branch}`);
+  if (!local) return { kind: 'skipped', reason: `there's no local ${branch} branch` };
+  if (local === remote) return { kind: 'current' };
+  if ((await tryGit(repo, 'merge-base', '--is-ancestor', local, remote)) === null) {
+    return { kind: 'skipped', reason: `local ${branch} has commits that aren't on origin` };
+  }
+  const at = await checkedOutAt(repo, branch);
+  const err = at
+    ? await gitError(at, 'merge', '--ff-only', '--quiet', remote)
+    : await gitError(repo, 'update-ref', `refs/heads/${branch}`, remote, local);
+  if (!err) return { kind: 'updated' };
+  return { kind: 'skipped', reason: at ? `git couldn't fast-forward it in ${at}: ${err}` : err };
+}
+
+/** The worktree (main checkout included) that has <branch> checked out, if any. */
+async function checkedOutAt(repo: string, branch: string): Promise<string | null> {
+  const out = (await tryGit(repo, 'worktree', 'list', '--porcelain')) ?? '';
+  for (const block of out.split('\n\n')) {
+    const lines = block.split('\n');
+    if (lines.includes(`branch refs/heads/${branch}`)) {
+      const wt = lines.find((l) => l.startsWith('worktree '));
+      if (wt) return wt.slice('worktree '.length);
+    }
+  }
+  return null;
+}
+
+async function revParse(repo: string, ref: string): Promise<string | null> {
+  return tryGit(repo, 'rev-parse', '--verify', '--quiet', ref);
+}
+
+/** Runs git; null on success, else the first line of what git said. */
+async function gitError(cwd: string, ...args: string[]): Promise<string | null> {
+  try {
+    await git(cwd, ...args);
+    return null;
+  } catch (e) {
+    const err = e as { stderr?: string; message?: string };
+    const text = (err.stderr || err.message || '').trim();
+    return text.split('\n')[0].replace(/^(fatal|error): /, '') || 'git failed';
   }
 }
 
@@ -167,22 +232,6 @@ export async function removeWorktree(repo: string, path: string, force = false):
 
 export async function deleteBranch(repo: string, branch: string): Promise<void> {
   await tryGit(repo, 'branch', '-D', branch);
-}
-
-export async function diffStat(worktree: string, base: string): Promise<{ added: number; removed: number } | null> {
-  const mergeBase =
-    (await tryGit(worktree, 'merge-base', 'HEAD', `origin/${base}`)) ?? (await tryGit(worktree, 'merge-base', 'HEAD', base));
-  if (!mergeBase) return null;
-  // Working tree vs merge base, so uncommitted work counts too.
-  const out = await tryGit(worktree, 'diff', '--numstat', mergeBase);
-  if (out === null) return null;
-  let added = 0, removed = 0;
-  for (const line of out.split('\n')) {
-    const [a, r] = line.split('\t');
-    if (a && a !== '-') added += Number(a);
-    if (r && r !== '-') removed += Number(r);
-  }
-  return { added, removed };
 }
 
 export async function cloneRepo(url: string, dest: string): Promise<void> {

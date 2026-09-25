@@ -13,6 +13,7 @@ import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
 import { ConfirmButton, DatapackName, Dots, StatusDot } from './common';
+import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import { TerminalPane } from './TerminalPane';
 
@@ -48,13 +49,15 @@ export function ProjectView({
   onNewSession: () => void;
   onError: (msg: string) => void;
 }) {
-  const [designOpen, setDesignOpen] = useState(false);
+  // One side panel at a time.
+  const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
+  const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => setDesignOpen(false), [session?.id]);
+  useEffect(() => setPanel(null), [session?.id]);
 
   const act = async (action: SessionAction) => {
     if (!session) return;
@@ -99,7 +102,7 @@ export function ProjectView({
           Project home
         </button>
         {session && (session.hasDesign || session.stage === 'design') && (
-          <button className={cx('btn small', designOpen && 'on')} onClick={() => setDesignOpen((o) => !o)}>
+          <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
             Design doc
           </button>
         )}
@@ -148,25 +151,31 @@ export function ProjectView({
             </button>
           </div>
         )}
-        {session && designOpen && (
-          <DesignPanel session={session} onClose={() => setDesignOpen(false)} onApprove={() => act('approve-design')} />
+        {session && panel === 'design' && (
+          <DesignPanel session={session} onClose={() => setPanel(null)} onApprove={() => act('approve-design')} />
         )}
+        {session && panel === 'changes' && <ChangesPanel session={session} onClose={() => setPanel(null)} />}
       </div>
 
       {session && (
         <footer className="foot">
           <span>branch {session.branch}</span>
           {session.diffStat && (
-            <span>
+            <button
+              className={cx('foot-btn', panel === 'changes' && 'on')}
+              onClick={() => toggle('changes')}
+              aria-expanded={panel === 'changes'}
+              title="Show every file changed on this branch"
+            >
               <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>{' '}
               vs {session.baseBranch}
-            </span>
+            </button>
           )}
           <span title={usageTitle(session.usage)}>
             tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
           </span>
-          <span>
-            datapack {dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
+          <span title="The project's Meko datapack">
+            Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
             {sharedCount > 0 ? ` · +${sharedCount} shared` : ''}
           </span>
           <span>

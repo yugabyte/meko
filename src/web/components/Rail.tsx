@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ProjectWithSessions } from '../../shared/types';
 import type { ThemePref } from '../theme';
-import { aggregateStatus, cx, formatTokens, isMac, liveSessions, totalTokens } from '../util';
+import { aggregateStatus, cx, formatTokens, isMac, liveSessions, repoFolder, totalTokens } from '../util';
 import { StatusDot } from './common';
 
 export function Rail({
@@ -74,10 +74,13 @@ export function Rail({
                 setDragId(null);
                 setOverId(null);
               }}
-              title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${formatTokens(totalTokens(p.usage))} tokens used`}
+              title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
             >
               {count > 0 ? <StatusDot status={aggregateStatus(p)} /> : <i className="dot idle" />}
-              <span className="proj-name">{p.name}</span>
+              <span className="proj-text">
+                <span className="proj-name">{p.name}</span>
+                <span className="proj-repo">{repoFolder(p.repoPath)}</span>
+              </span>
               <span className="n">{count}</span>
             </button>
           );

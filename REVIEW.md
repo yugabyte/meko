@@ -36,6 +36,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo.
+- [ ] The only change made in the user's main checkout is fast-forwarding the base branch when a
+      session starts (`merge --ff-only` or a compare-and-swap ref update), never a reset or force.
 - [ ] `/agentk review force` is only posted when the user asks.
 
 ## 4. Data and Meko

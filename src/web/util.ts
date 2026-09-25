@@ -31,6 +31,11 @@ export const STATUS_TEXT: Record<SessionStatus, string> = {
   archived: 'archived',
 };
 
+/** Last segment of a repo path: /home/me/code/api → api. */
+export function repoFolder(path: string): string {
+  return path.split('/').filter(Boolean).pop() ?? path;
+}
+
 export function relativeTime(ms: number | null | undefined, now = Date.now()): string {
   if (!ms) return '—';
   const s = Math.round((now - ms) / 1000);

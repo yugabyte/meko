@@ -10,6 +10,7 @@ import { Banners } from './Banners';
 import { CommandPalette } from './CommandPalette';
 import { NewProjectDialog } from './NewProjectDialog';
 import { NewSessionDialog } from './NewSessionDialog';
+import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
 import { ProjectView } from './ProjectView';
 import { Rail } from './Rail';
@@ -166,6 +167,26 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   if (!state) {
     return <div className="boot">{conn === 'closed' ? 'Reconnecting to the server…' : 'Loading your projects…'}</div>;
+  }
+
+  // A design doc opened in its own tab: just the doc, full page.
+  if (route.view === 'design') {
+    const s = currentProject?.sessions.find((x) => x.id === route.sessionId);
+    if (!s) return <div className="boot">That session no longer exists.</div>;
+    return (
+      <>
+        <DesignPanel
+          page
+          session={s}
+          onApprove={() => api.sessionAction(s.id, 'approve-design').catch((e) => showToast(errorMessage(e)))}
+        />
+        {toast && (
+          <div className="toast" role="status" onClick={() => setToast(null)}>
+            {toast}
+          </div>
+        )}
+      </>
+    );
   }
 
   return (

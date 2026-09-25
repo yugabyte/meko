@@ -3,11 +3,14 @@ import { useEffect, useState } from 'react';
 export type Route =
   | { view: 'root' }
   | { view: 'project'; projectId: string; sessionId: string | null }
-  | { view: 'home'; projectId: string };
+  | { view: 'home'; projectId: string }
+  /** A session's design doc on its own page (opened in a new tab). */
+  | { view: 'design'; projectId: string; sessionId: string };
 
 export function parseRoute(pathname: string): Route {
   const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent);
   if (parts[0] === 'p' && parts[1]) {
+    if (parts[2] === 's' && parts[3] && parts[4] === 'design') return { view: 'design', projectId: parts[1], sessionId: parts[3] };
     if (parts[2] === 's' && parts[3]) return { view: 'project', projectId: parts[1], sessionId: parts[3] };
     if (parts[2] === 'home') return { view: 'home', projectId: parts[1] };
     return { view: 'project', projectId: parts[1], sessionId: null };
@@ -22,6 +25,8 @@ export function routePath(r: Route): string {
       return '/';
     case 'home':
       return `/p/${e(r.projectId)}/home`;
+    case 'design':
+      return `/p/${e(r.projectId)}/s/${e(r.sessionId)}/design`;
     case 'project':
       return r.sessionId ? `/p/${e(r.projectId)}/s/${e(r.sessionId)}` : `/p/${e(r.projectId)}`;
   }

@@ -106,5 +106,9 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(home.activity.length).toBeGreaterThan(0);
     const unknown = await app.inject({ method: 'POST', url: `/api/sessions/${s.json().id}/actions/explode`, headers: { cookie } });
     expect(unknown.statusCode).toBe(400);
+    const changes = await app.inject({ url: `/api/sessions/${s.json().id}/changes`, headers: { cookie } });
+    expect(changes.statusCode).toBe(200);
+    expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0 });
+    expect((await app.inject({ url: `/api/sessions/${s.json().id}/changes` })).statusCode).toBe(401);
   });
 });

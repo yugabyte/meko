@@ -1,11 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CreateSessionRequest, DiscardCheck, Session, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { get, run, tx } from './db.js';
-import { addWorktree, diffStat, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean } from './git.js';
+import { changes, diffStat } from './changes.js';
+import { addWorktree, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult } from './git.js';
 import type { HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
@@ -25,6 +26,16 @@ const QUARTER_HOUR = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 /** How long stopping a session waits for its last turns to reach Meko. */
 const FINAL_CAPTURE_MS = 15000;
+
+/** The "created" event: where the branch started, and what happened to the local base. */
+function startedText(branch: string, base: string, sync: SyncResult | null): string {
+  switch (sync?.kind) {
+    case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to origin/${base})`;
+    case 'current': return `Started on ${branch} from ${base} (already up to date with origin)`;
+    case 'skipped': return `Started on ${branch} from origin/${base}; local ${base} wasn't updated: ${sync.reason}`;
+    default: return `Started on ${branch} from ${base}`;
+  }
+}
 
 const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms).unref())]);
 
@@ -182,15 +193,16 @@ export class SessionManager {
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
     });
     this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+    let sync: SyncResult | null;
     try {
-      await addWorktree(p.repo_path, worktree, branch, base);
+      sync = await addWorktree(p.repo_path, worktree, branch, base);
     } catch (e) {
       this.startup.delete(id);
       run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
       this.core.changed();
       throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
     }
-    this.event(id, 'created', `Started on ${branch} from ${base}`);
+    this.event(id, 'created', startedText(branch, base, sync));
 
     const row = this.row(id);
     const prompt = task ? this.prompt(row, stage === 'design' ? 'design' : 'code', { task }) : null;
@@ -555,6 +567,15 @@ export class SessionManager {
   }
 
   /** What Discard would throw away: uncommitted files and commits no remote has. */
+  /** Every file changed on the session's branch vs. its base, committed or not. */
+  async changes(id: string): Promise<SessionChanges> {
+    const row = this.row(id);
+    if (!existsSync(row.worktree_path)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
+    const c = await changes(row.worktree_path, row.base_branch);
+    if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
+    return c;
+  }
+
   async discardCheck(id: string): Promise<DiscardCheck> {
     const row = this.row(id);
     const p = projectRow(this.db, row.project_id);

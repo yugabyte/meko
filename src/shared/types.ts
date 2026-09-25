@@ -14,7 +14,7 @@ export type SessionStatus =
 export type StartupStep = 'worktree' | 'launch' | 'loading' | 'prompt';
 
 export const STARTUP_STEPS: { step: StartupStep; label: string }[] = [
-  { step: 'worktree', label: 'Creating the worktree' },
+  { step: 'worktree', label: 'Updating the base branch and creating the worktree' },
   { step: 'launch', label: 'Starting Claude Code' },
   { step: 'loading', label: 'Loading plugins, MCP servers and hooks' },
   { step: 'prompt', label: 'Sending your task' },
@@ -278,6 +278,37 @@ export interface DiscardCheck {
   unpushedCommits: number;
 }
 
+export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
+
+/** One file that differs between a session's worktree and where its branch left the base. */
+export interface ChangedFile {
+  path: string;
+  /** The previous path, for renames. */
+  oldPath: string | null;
+  kind: ChangeKind;
+  added: number;
+  removed: number;
+  binary: boolean;
+  /** Has changes that aren't committed yet (untracked files always do). */
+  uncommitted: boolean;
+  /** Unified diff for this file. Null for binary files and diffs too large to show. */
+  patch: string | null;
+  /** The patch was cut short at the per-file size cap. */
+  truncated: boolean;
+}
+
+/** Everything changed on a session's branch vs. its base: committed, uncommitted and untracked. */
+export interface SessionChanges {
+  /** What the changes are compared against, e.g. `origin/main`. */
+  base: string;
+  /** Sorted by path. */
+  files: ChangedFile[];
+  added: number;
+  removed: number;
+  /** Files whose patch was left out because the whole diff hit the size cap. */
+  omittedPatches: number;
+}
+
 export interface DesignDoc {
   markdown: string | null;
   updatedAt: number | null;
@@ -396,6 +427,7 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
 // GET    /api/sessions/:id/design              → DesignDoc
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
+// GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        Partial<Settings>→ Settings
 // GET    /api/update                           → UpdateStatus

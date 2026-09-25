@@ -7,7 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, DiscardCheck, LoginRequest, ServerEvent,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, DiscardCheck, LoginRequest, ServerEvent, SessionChanges,
   SessionAction, Settings, SetupRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import {
@@ -213,6 +213,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return core.sessions.action(req.params.id, action);
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     core.sessions.row(req.params.id);
     const r = get<{ markdown: string; updated_at: number }>(db, 'SELECT markdown, updated_at FROM designs WHERE session_id = ?', req.params.id);

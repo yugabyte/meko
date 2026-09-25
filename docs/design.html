@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.11 (implemented)</span>
+  <span class="label">Design · v0.12 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -273,7 +273,7 @@ flowchart LR
 
 <section id="app">
   <h2>The app</h2>
-  <p>The left rail holds projects, with the most urgent session state shown on each. The top tabs hold that project's sessions. The main pane is the live Claude terminal, and the footer shows where the session is working.</p>
+  <p>The left rail holds projects, each with its repo's folder name in small type under the project name and the most urgent session state shown on it. The top tabs hold that project's sessions. The main pane is the live Claude terminal, and the footer shows where the session is working: branch, diff size, tokens, the project's Meko datapack (<code>Meko:&lt;datapack&gt;</code>) and stage.</p>
   <div class="mockwrap">
     <div class="mock" role="img" aria-label="Mockup of the AgentK Local window with the project rail, session tabs and a live Claude terminal">
       <div class="chrome"><i></i><i></i><i></i><span class="url">https://devbox.corp.example:7777/p/billing-api/s/fix-retry-backoff</span></div>
@@ -312,7 +312,7 @@ flowchart LR
     <span class="d">  ✓ honours Retry-After seconds  ✓ falls back to backoff</span>
 
 <span class="a">✶</span> Writing edge case for HTTP-date Retry-After… <span class="d">(esc to interrupt)</span></div>
-          <div class="foot"><span>branch ak/fix-retry-backoff</span><span>+14 −3 vs main</span><span>datapack billing-api · +2 shared</span><span>opus · 38k ctx</span></div>
+          <div class="foot"><span>branch ak/fix-retry-backoff</span><span>+14 −3 vs main</span><span>Meko:billing-api · +2 shared</span><span>opus · 38k ctx</span></div>
         </div>
       </div>
     </div>
@@ -353,8 +353,10 @@ flowchart LR
   </div>
   <p>Picking a repo fills in the project name and suggests a new dedicated datapack with the same name. You can switch that to an existing datapack before creating the project.</p>
   <div class="grid2">
-    <div class="card"><h3>New session</h3><p>You give it a name and, optionally, a first prompt and a base branch (the default is the project's default branch). The server creates the worktree and branch, starts Claude inside it, and focuses the tab.</p></div>
-    <div class="card"><h3>Starting</h3><p>Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session starts, the terminal shows its steps (creating the worktree, starting Claude Code, loading, sending your task) with the current one animated and timed, plus the stage the session opens in. The header shows the current step too.</p></div>
+    <div class="card"><h3>New session</h3><p>You give it a name and, optionally, a first prompt and a base branch (the default is the project's default branch). The server fetches the base from <code>origin</code> and fast-forwards your local base branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside it, and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks, or local edits would be overwritten), the session starts from <code>origin/&lt;base&gt;</code> and the activity log says why.</p></div>
+    <div class="card"><h3>Changes</h3><p>Clicking the <code>+N −N vs &lt;base&gt;</code> numbers in the footer opens a side panel with every file changed on the branch since it left the base: committed, uncommitted and untracked (ignored files are left out). Each file has a kind (A, M, D, R, U), its line counts, an <em>uncommitted</em> tag when it has uncommitted edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB; past that only line counts are shown. The footer counts use the same comparison, so they always match.</p></div>
+    <div class="card"><h3>Side panels</h3><p>The design doc and the changes panel open on the right of the terminal, one at a time. Drag the panel's left edge (or focus it and use the arrow keys) to resize it; double-click the edge to switch between normal and widest. Each panel's width is remembered in the browser. The design doc also opens full page in a new tab (<code>/p/&lt;project&gt;/s/&lt;session&gt;/design</code>), where it can still be approved.</p></div>
+    <div class="card"><h3>Starting</h3><p>Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session starts, the terminal shows its steps (updating the base branch and creating the worktree, starting Claude Code, loading, sending your task) with the current one animated and timed, plus the stage the session opens in. The header shows the current step too.</p></div>
     <div class="card"><h3>Keyboard</h3><p><code>⌘1–9</code> switches projects, <code>⌃Tab</code> cycles sessions, and <code>⌘K</code> opens a palette to jump to any session, create one, or search the project's datapacks. Keys pass through to the terminal whenever it has focus.</p></div>
     <div class="card"><h3>Notifications</h3><p>A browser notification fires when any session moves to <em>needs you</em> or finishes a turn while its tab is hidden. You can mute it per project.</p></div>
   </div>
@@ -386,7 +388,7 @@ flowchart LR
 <section id="sessions">
   <h2>Projects, worktrees and sessions</h2>
   <div class="prose">
-    <p>A <b>project</b> is a git repository on the host, picked from your repos folder (<code>~/code</code>) or cloned into it at creation. The project only points at the repo. It never moves or modifies your main checkout. A <b>session</b> is one task. It has one worktree, one branch and one Claude conversation. Worktrees live outside the repo so they never show up in <code>git status</code>.</p>
+    <p>A <b>project</b> is a git repository on the host, picked from your repos folder (<code>~/code</code>) or cloned into it at creation. The project only points at the repo. The one change it makes there: when a session starts, it fast-forwards the local base branch to <code>origin</code>. That's a <code>merge --ff-only</code> where the branch is checked out (git refuses if it would overwrite local edits), or a ref update where it isn't. It never rewrites, resets or discards anything in your main checkout. A <b>session</b> is one task. It has one worktree, one branch and one Claude conversation. Worktrees live outside the repo so they never show up in <code>git status</code>.</p>
   </div>
 <pre class="code"><span class="c"># layout on the host</span>
 ~/.agent-k-local/
@@ -405,7 +407,7 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
   <div class="tablewrap"><table>
     <thead><tr><th>Action</th><th>What the server does</th></tr></thead>
     <tbody>
-      <tr><td>New session</td><td><code>git worktree add … -b ak/&lt;slug&gt; &lt;base&gt;</code>, then <code>tmux -L agentk new -d -s ak-&lt;proj&gt;-&lt;slug&gt; -c &lt;worktree&gt;</code> running <code>claude --session-id &lt;uuid&gt; --settings &lt;hooks&gt; -n "&lt;name&gt;" [prompt]</code> with the Meko env vars set.</td></tr>
+      <tr><td>New session</td><td><code>git fetch origin &lt;base&gt;</code>, fast-forward the local <code>&lt;base&gt;</code> to <code>origin/&lt;base&gt;</code> if safe, <code>git worktree add … -b ak/&lt;slug&gt; &lt;base&gt;</code> (or <code>origin/&lt;base&gt;</code> if the fast-forward was skipped), then <code>tmux -L agentk new -d -s ak-&lt;proj&gt;-&lt;slug&gt; -c &lt;worktree&gt;</code> running <code>claude --session-id &lt;uuid&gt; --settings &lt;hooks&gt; -n "&lt;name&gt;" [prompt]</code> with the Meko env vars set.</td></tr>
       <tr><td>Open tab</td><td>Spawns a pty on <code>tmux attach</code>, one per viewer. The terminal is resized to fit the browser.</td></tr>
       <tr><td>Close tab</td><td>Kills the pty only. tmux and Claude keep running.</td></tr>
       <tr><td>Claude exits</td><td>The pane dies and the status becomes <em>exited</em>. <b>Resume</b> relaunches <code>claude --resume &lt;uuid&gt;</code> in the same worktree.</td></tr>
@@ -472,7 +474,7 @@ stateDiagram-v2
     <thead><tr><th>Stage</th><th>Claude</th><th>AgentK Local</th><th>Moves on when</th></tr></thead>
     <tbody>
       <tr><td>1 · Design</td><td>Starts in plan mode (<code>--permission-mode plan</code>) with your task, reads the code, and writes a design.</td><td>Saves the design to the project's dedicated datapack and shows it in a side panel next to the terminal.</td><td>You click <b>Approve design</b>. Small tasks can skip this stage at creation.</td></tr>
-      <tr><td>2 · Code</td><td>Implements the design and runs the repo's tests and checks.</td><td>Shows the diff size against the base branch in the footer.</td><td>You click <b>Open PR</b>. The button is disabled while Claude is mid-turn.</td></tr>
+      <tr><td>2 · Code</td><td>Implements the design and runs the repo's tests and checks.</td><td>Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file.</td><td>You click <b>Open PR</b>. The button is disabled while Claude is mid-turn.</td></tr>
       <tr><td>3 · PR</td><td>Commits with the repo's own commit conventions, pushes the branch, and runs <code>gh pr create</code> with a summary taken from the design.</td><td>Records the PR number and URL and links them in the header.</td><td>Automatically, once the PR exists.</td></tr>
       <tr><td>4 · Review</td><td>When a review arrives, runs <code>/akr</code>: verifies each finding, fixes it, replies on every thread, votes, and pushes.</td><td>Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends <code>/akr</code> into the session.</td><td>You click <b>Merge</b>. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in.</td></tr>
       <tr><td>5 · Merge</td><td>Nothing.</td><td>Runs <code>gh pr merge</code> using the repo's merge method (or <code>gh stack</code> for a stacked PR) and deletes the remote branch.</td><td>Automatically, once GitHub reports the PR as merged.</td></tr>

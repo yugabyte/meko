@@ -14,6 +14,7 @@ import type {
   SearchResult,
   Session,
   SessionAction,
+  SessionChanges,
   Settings,
   SetupRequest,
   TotpEnrollResponse,
@@ -103,6 +104,7 @@ export const api = {
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
+  changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
 

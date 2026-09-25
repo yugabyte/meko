@@ -38,6 +38,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script. |
 | `src/server/hooks.ts` | Unix-socket receiver for Claude Code hook events. |
 | `src/server/tmux.ts`, `git.ts`, `github.ts` | Thin wrappers over the tmux, git and gh CLIs. |
+| `src/server/changes.ts` | What a session changed vs. its base (committed, uncommitted, untracked): footer diff size and the Changes panel's per-file patches, with size caps. |
 | `src/server/meko.ts` | Meko MCP client. |
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents) and per session/project/model/day totals. |
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping. |
@@ -45,6 +46,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback; host install and systemd units. |
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |
+| `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design doc (also full page at `/p/:id/s/:sid/design`) and the per-file diff of a session's changes (`src/web/diff.ts` parses the patches). |
 | `src/web/components/UsagePanel.tsx` | Project token usage: headline numbers, 14-day chart with table view, per-session and per-model tables. |
 | `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session. |
 | `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd templates, install and release scripts, CI and releases. |

@@ -130,6 +130,22 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.sessions.action(s.id, 'discard')).rejects.toThrow(/archived/);
   });
 
+  it('shows a session\'s changes until its worktree is gone', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Show changes', prompt: 'hi', skipDesign: true });
+    // The demo repo has no origin, so the base is used as is.
+    const created = get<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'created'", s.id);
+    expect(created?.text).toBe('Started on ak/show-changes from main');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    writeFileSync(join(s.worktreePath, 'notes.txt'), 'one\ntwo\n');
+    const c = await env.core.sessions.changes(s.id);
+    expect(c.files).toMatchObject([{ path: 'notes.txt', kind: 'untracked', added: 2, uncommitted: true }]);
+    await env.core.sessions.refreshDiff(s.id);
+    expect(env.core.sessions.get(s.id).diffStat).toEqual({ added: 2, removed: 0 });
+    await env.core.sessions.action(s.id, 'discard');
+    await expect(env.core.sessions.changes(s.id)).rejects.toThrow(/worktree is gone/);
+  });
+
   it('captures the design and moves to Code when it is approved', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'PLAN it' });

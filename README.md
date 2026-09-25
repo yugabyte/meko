@@ -6,9 +6,12 @@ A self-hosted workbench for [Claude Code](https://claude.com/claude-code). It ru
 your devserver, and you use it from a browser:
 
 - **Projects** in a left rail, each one a git repo picked from your repos folder (`~/code` by default).
+  New sessions start from the base branch after it's fast-forwarded to `origin`.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
   can still attach from iTerm: `tmux -L agentk attach -t ak-<project>-<session>`.
+- **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
+  (committed, uncommitted and untracked) with a diff per file.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge → Cleanup. You approve the
