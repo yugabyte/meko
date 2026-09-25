@@ -118,7 +118,19 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "BEDROCK_KEY=<aws access key id>        # inference gateway, bedrock provider\n")
 	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>\n")
 	fmt.Fprintf(&b, "QUAY_USER=<robot name>         # e.g. yugabyte+something\n")
-	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n\n")
+	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n")
+	// Worth a line of its own rather than a footnote: without it the stack comes up
+	// entirely green and remembers nothing, which reads as a bug rather than a
+	// missing credential. The refs are optional, so empty installs fine.
+	fmt.Fprintf(&b, "OPENAI_KEY=                    # no key, no memory extraction and no RAG\n")
+	// The extension point. values-byoc.yaml leaves the rag workers, langfuse and
+	// the provisioner off; an overlay passed after it is what turns any of them
+	// back on, and helm's last-wins ordering is the whole mechanism. Empty by
+	// default so the paste is unchanged for an operator who wants the base stack.
+	fmt.Fprintf(&b, "EXTRA_VALUES=                  # overlays applied after values-byoc.yaml, e.g.\n")
+	fmt.Fprintf(&b, "#   EXTRA_VALUES=\"-f %s/values-byoc-full.yaml\"\n", chart)
+	fmt.Fprintf(&b, "#   moves the inference gateway onto OpenAI and adds the rag workers;\n")
+	fmt.Fprintf(&b, "#   needs OPENAI_KEY\n\n")
 
 	fmt.Fprintf(&b, "# 1 — two credentials. The agent's API key (shown once by YBM; revocable\n")
 	fmt.Fprintf(&b, "#      there), and a pull secret: every image in this release is on private\n")
@@ -133,11 +145,13 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 
 	fmt.Fprintf(&b, "# 2 — install the stack and the reconcile-agent, from a meko checkout. Swap\n")
 	fmt.Fprintf(&b, "#      values-aws.yaml for values-gcp.yaml, and values-dev.yaml for\n")
-	fmt.Fprintf(&b, "#      values-prod.yaml, to match the cluster. values-byoc.yaml goes LAST:\n")
-	fmt.Fprintf(&b, "#      it is what makes this one self-contained namespace.\n")
+	fmt.Fprintf(&b, "#      values-prod.yaml, to match the cluster. values-byoc.yaml goes LAST\n")
+	fmt.Fprintf(&b, "#      except for EXTRA_VALUES: it is what makes this one self-contained\n")
+	fmt.Fprintf(&b, "#      namespace, and anything after it is deliberately overriding that.\n")
 	fmt.Fprintf(&b, "helm upgrade --install meko %s -n \"${NS}\" \\\n", chart)
 	fmt.Fprintf(&b, "  -f %s/values-aws.yaml -f %s/values-dev.yaml \\\n", chart, chart)
-	fmt.Fprintf(&b, "  -f %s/values-byoc.yaml \\\n", chart)
+	fmt.Fprintf(&b, "  -f %s/values-byoc.yaml ${EXTRA_VALUES} \\\n", chart)
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.openaiApiKey=\"${OPENAI_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string apiServer.image.tag=\"${API_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoMcpServer.image.tag=\"${MCP_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoUi.image.tag=\"${UI_TAG}\" \\\n")
@@ -156,8 +170,9 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs -f deploy/meko-reconcile-agent\n")
 	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# The agent is this api-server's only caller and is authoritative over it:\n")
-	fmt.Fprintf(&b, "# anything desired state stops declaring is collected. On an api-server with\n")
-	fmt.Fprintf(&b, "# Cognito ON, add the account's MCP token:\n")
+	fmt.Fprintf(&b, "# anything desired state stops declaring is collected. On an api-server with an\n")
+	fmt.Fprintf(&b, "# identity provider ON (Cognito or OIDC), add the account's MCP token, or every\n")
+	fmt.Fprintf(&b, "# call the agent makes 401s:\n")
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" create secret generic %s \\\n", mekoTokenSecretName)
 	fmt.Fprintf(&b, "#     --from-literal=meko-api-token=<token>\n")
 	return b.String()

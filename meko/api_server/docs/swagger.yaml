@@ -17,6 +17,34 @@ definitions:
       error:
         $ref: '#/definitions/handlers.APIError'
     type: object
+  handlers.AuthConfig:
+    properties:
+      login_url:
+        description: |-
+          LoginURL is where the sign-in button sends the browser, for a provider
+          whose flow is a redirect. Empty for cognito, whose sign-in is a form this
+          server posts to.
+        type: string
+      password_login:
+        description: |-
+          PasswordLogin and Signup are false for OIDC: the issuer owns its users, so
+          there is no password form and no signup page to route to.
+        type: boolean
+      provider:
+        description: |-
+          Provider is "cognito", "oidc", or "none" (dev auth, every request sharing
+          one account).
+        type: string
+      signup:
+        type: boolean
+      social_providers:
+        description: |-
+          SocialProviders are the Cognito-brokered buttons. Empty under OIDC, where
+          federation is the issuer's configuration and invisible from here.
+        items:
+          type: string
+        type: array
+    type: object
   handlers.artifactPutRequest:
     properties:
       content_base64:
@@ -975,6 +1003,26 @@ paths:
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       summary: Complete first-login set-new-password challenge
+      tags:
+      - auth
+  /auth/config:
+    get:
+      description: 'Which identity provider this deployment authenticates against,
+        and the sign-in affordances it offers. Unauthenticated: the SPA reads it before
+        anyone can sign in.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/handlers.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.AuthConfig'
+              type: object
+      summary: Identity provider configuration
       tags:
       - auth
   /auth/confirm-signup:

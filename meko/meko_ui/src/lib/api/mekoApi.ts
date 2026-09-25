@@ -63,6 +63,8 @@ export const DATAPACKS_LIST_UPDATED_EVENT = "meko:datapacks-list-updated";
 let authExpiredNotified = false;
 const AUTH_PUBLIC_ENDPOINTS = new Set([
   "/auth/me",
+  /** Which IdP this deployment runs; read before anyone can sign in. */
+  "/auth/config",
   "/auth/login",
   "/auth/signup",
   "/auth/confirm-signup",
@@ -727,6 +729,24 @@ export async function removeDatapackMemberShare(
     undefined,
     options,
   );
+}
+
+/** Raw GET /auth/config — snake_case as the server sends it. The sign-in page's
+ *  own module narrows it and supplies the fallback (features/auth/authConfig.ts). */
+export type AuthConfigResponse = {
+  provider?: string;
+  login_url?: string;
+  password_login?: boolean;
+  signup?: boolean;
+  social_providers?: string[];
+};
+
+/**
+ * GET /auth/config — unauthenticated, and the one call the SPA makes before it
+ * knows whether this deployment even has a password form.
+ */
+export async function getAuthConfig(options: { signal?: AbortSignal } = {}) {
+  return request<AuthConfigResponse>("/auth/config", "GET", undefined, options);
 }
 
 export async function signup(payload: SignupPayload) {

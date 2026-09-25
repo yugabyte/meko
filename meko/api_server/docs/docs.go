@@ -1021,6 +1021,38 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/config": {
+            "get": {
+                "description": "Which identity provider this deployment authenticates against, and the sign-in affordances it offers. Unauthenticated: the SPA reads it before anyone can sign in.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Identity provider configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/handlers.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.AuthConfig"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/auth/confirm-signup": {
             "post": {
                 "consumes": [
@@ -5784,6 +5816,33 @@ const docTemplate = `{
                 "data": {},
                 "error": {
                     "$ref": "#/definitions/handlers.APIError"
+                }
+            }
+        },
+        "handlers.AuthConfig": {
+            "type": "object",
+            "properties": {
+                "login_url": {
+                    "description": "LoginURL is where the sign-in button sends the browser, for a provider\nwhose flow is a redirect. Empty for cognito, whose sign-in is a form this\nserver posts to.",
+                    "type": "string"
+                },
+                "password_login": {
+                    "description": "PasswordLogin and Signup are false for OIDC: the issuer owns its users, so\nthere is no password form and no signup page to route to.",
+                    "type": "boolean"
+                },
+                "provider": {
+                    "description": "Provider is \"cognito\", \"oidc\", or \"none\" (dev auth, every request sharing\none account).",
+                    "type": "string"
+                },
+                "signup": {
+                    "type": "boolean"
+                },
+                "social_providers": {
+                    "description": "SocialProviders are the Cognito-brokered buttons. Empty under OIDC, where\nfederation is the issuer's configuration and invisible from here.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

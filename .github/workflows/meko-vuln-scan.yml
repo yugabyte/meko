@@ -111,10 +111,21 @@ jobs:
       # noise the Go OSV database would otherwise produce, so any finding
       # here corresponds to a real reachable risk. Exits 3 when it finds
       # one, which fails the job.
+      # Pinned, not @latest: govulncheck's own go directive moves ahead of the
+      # module's, and setup-go installs the toolchain go.mod asks for with
+      # GOTOOLCHAIN=local — so @latest refused to build ("requires go >= 1.26.0,
+      # running go 1.25.x") and this gate failed at install, before scanning
+      # anything, on every PR that touches api_server's go.mod. Bump it with the
+      # module's Go version.
+      #
+      # That toolchain is also what the scan measures the standard library
+      # against, so api_server's `go` directive has to stay on a PATCHED 1.25.x —
+      # an unpatched one fails this job on stdlib findings no dependency bump can
+      # clear.
       - name: govulncheck (callable vulns only)
         working-directory: meko/api_server
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
 
   # Single required check — the meko-vuln-scan equivalent of the AMP CI

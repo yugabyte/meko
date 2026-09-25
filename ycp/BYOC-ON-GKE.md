@@ -213,20 +213,37 @@ too. It refuses to delete a namespace it did not create.
 
 ## Things that will bite
 
-### The gateway needs a key or it does not start
+### The gateway needs a credential for whichever provider it is on
 
 `inference-gateway` builds its LangChain client while the app is being constructed, so a
-missing `OPENAI_API_KEY` is fatal rather than degrading: the process exits with
-`openai.OpenAIError: Missing credentials` and the component reports 0/1 forever. The MCP
-server is laxer about the same key — it starts and fails on the first embedding.
+missing credential is fatal rather than degrading. The MCP server is laxer about the same
+key — it starts and fails on the first embedding.
+
+`values-byoc.yaml` runs the gateway, on the **bedrock** provider, so the base install
+needs `dataPlaneSecrets.awsAccessKeyId` / `.awsSecretAccessKey`. Without them the chart
+renders no `inference-gateway-aws` Secret at all and the pod sits in
+`CreateContainerConfigError` — deliberately, because the alternative is a pod that goes
+Ready and fails every Bedrock call at runtime:
 
 ```bash
-kubectl --context $C -n $NS create secret generic meko-data-plane \
-  --from-literal=OPENAI_API_KEY=sk-… --dry-run=client -o yaml | kubectl --context $C apply -f -
-kubectl --context $C -n $NS rollout restart deploy/meko-inference-gateway
+helm upgrade --install meko $CHART -n $NS \
+  -f $CHART/values-gcp.yaml -f $CHART/values-dev.yaml -f $CHART/values-byoc.yaml \
+  --set dataPlaneSecrets.awsAccessKeyId=AKIA… --set dataPlaneSecrets.awsSecretAccessKey=… …
 ```
 
-Or leave it out and drop the component: `--set inferenceGateway.enabled=false`.
+`values-byoc-full.yaml` moves it onto **openai** and adds the rag text worker, so that
+one needs `dataPlaneSecrets.openaiApiKey` instead — and there the chart catches it at
+render time, failing the install with that reason rather than installing a pod that
+exits with `openai.OpenAIError: Missing credentials` and reports 0/1 forever:
+
+```bash
+helm upgrade --install meko $CHART -n $NS \
+  -f $CHART/values-gcp.yaml -f $CHART/values-dev.yaml \
+  -f $CHART/values-byoc.yaml -f $CHART/values-byoc-full.yaml \
+  --set dataPlaneSecrets.openaiApiKey=sk-… …
+```
+
+To run neither, drop the component: `--set inferenceGateway.enabled=false`.
 
 ### Healthy is not the same as working
 

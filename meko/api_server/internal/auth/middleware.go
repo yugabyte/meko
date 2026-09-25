@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -182,7 +183,7 @@ func WithPAT(p PATValidator) AuthOption {
 //	patID,  _ := c.Get(auth.ContextKeyPATID).(string)      // "" on JWT path
 //	scopes, _ := c.Get(auth.ContextKeyPATScopes).([]string) // ["*"] on JWT path
 func RequireAuth(
-	validator *JWTValidator,
+	validator TokenValidator,
 	accounts AccountLookup,
 	opts ...AuthOption,
 ) echo.MiddlewareFunc {
@@ -217,7 +218,7 @@ func RequireAuth(
 func authViaJWT(
 	c echo.Context,
 	tokenStr string,
-	validator *JWTValidator,
+	validator TokenValidator,
 	accounts AccountLookup,
 	next echo.HandlerFunc,
 ) error {
@@ -227,6 +228,13 @@ func authViaJWT(
 			"path", c.Path(),
 			"error", err,
 		)
+		// The token was never examined — the issuer is down, not the caller
+		// wrong. A 401 would send the SPA to a sign-in page that cannot
+		// complete either, so say what is actually true.
+		if errors.Is(err, ErrOIDCUnavailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable,
+				"identity provider unavailable")
+		}
 		return authError(c, "invalid or expired token")
 	}
 

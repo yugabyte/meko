@@ -27,6 +27,8 @@ values-prod.yaml       env preset — prod hosts/DB/Cognito/tags
 values-ycp.yaml       mode preset — YCP control plane (BYOC)
 values-byoc.yaml       mode preset — a self-contained data plane in ONE namespace:
                        its own YugabyteDB, and no Secrets to create by hand
+values-byoc-full.yaml  opt-in overlay — moves the inference gateway onto OpenAI and
+                       adds the rag text worker. AFTER values-byoc.yaml; needs an OpenAI key
 ```
 
 Compose a cloud preset + an env preset at install:
@@ -191,6 +193,51 @@ YCP's own register response prints that command with everything it can know alre
 filled in — the namespace, the URL it was reached on, and the stack's per-component
 image tags from the release it pins. Prefer it over retyping this.
 
+## Identity provider
+
+`apiServer.cognito.enabled` and `apiServer.oidc.enabled` select who authenticates
+people. Exactly one may be on; both fails the render rather than letting flag order
+decide. Neither leaves the api-server in dev mode, treating every request as one
+shared account — fine for a bring-up nobody else can reach, not for anything else.
+
+**Cognito** is the default and what the hosted deployments run. It is the user
+store as well as the IdP, so it serves signup, password reset, email verification
+and the Cognito-brokered Google/LinkedIn logins.
+
+**OIDC** is any issuer with a discovery document — Keycloak, Dex, Okta, Auth0,
+Google. Everything but the issuer and the client is discovered. It is the right
+answer for a customer cluster, where a Cognito pool in *our* AWS account is the
+opposite of BYOC:
+
+```yaml
+apiServer:
+  cognito: { enabled: false }
+  oidc:
+    enabled: true
+    issuerUrl: https://keycloak.example.com/realms/meko
+    clientId: meko
+    # Must match the issuer's registered URI byte-for-byte; it cannot be derived
+    # behind a TLS-terminating proxy, which is why it is configured.
+    redirectUrl: https://meko.example.com/api/v1/auth/oidc/callback
+dataPlaneSecrets:
+  oidcClientSecret: ""   # empty is a public client, relying on PKCE
+```
+
+The issuer owns its users, so an OIDC deployment serves **no** signup,
+password-reset, change-password or email-verification routes — those happen on the
+issuer's own pages. What it serves is `/auth/oidc/login`, `/auth/oidc/callback`,
+`/auth/logout` and the shared `/auth/me` surface. Meko PATs are unaffected: they
+are issued and validated by this server, whichever IdP is on.
+
+`values-byoc.yaml` runs the inference gateway on **bedrock** (which needs
+`dataPlaneSecrets.awsAccessKeyId` / `.awsSecretAccessKey`) and leaves the rag workers,
+langfuse and the provisioner off. Appending `-f charts/meko/values-byoc-full.yaml` —
+later `-f` wins, which is the whole mechanism — switches the gateway to **openai** and
+adds the rag text worker, so it needs `--set dataPlaneSecrets.openaiApiKey=sk-...`,
+without which the render fails rather than installing a gateway that exits at startup.
+`langfuse` wants ClickHouse, a Valkey release and object storage; `provisioner` renders
+ClusterRoles and a CRD, which is the opposite of one namespace. Neither is a flag away.
+
 The agent enrolls, converges desired state, and reports status over **outbound HTTPS
 only**. It is data-plane-only — `ycp` mode never renders it. Its image comes from Quay
 rather than the Meko ECR, so it needs no cross-account pull secret.
@@ -207,10 +254,13 @@ meko repo.
 desired state stops declaring is collected — including a datapack made by hand — so do
 not point one at an api-server people use directly.
 
-No api-server credential is needed against a BYOC api-server, which runs with Cognito
-off and authenticates nobody. With Cognito **on**, supply
-`reconcileAgent.secrets.existing.mekoApiToken` (key `meko-api-token`), which decides
-the account the agent's datapacks belong to.
+No api-server credential is needed against an api-server with no identity provider,
+which authenticates nobody — the default in a BYOC bring-up. With **either** provider
+on (`apiServer.cognito.enabled` or `apiServer.oidc.enabled`) every call is
+authenticated, so supply `reconcileAgent.secrets.existing.mekoApiToken` (key
+`meko-api-token`) — a meko PAT, which this server issues and validates whichever IdP
+is on. It also decides the account the agent's datapacks belong to. Without it the
+agent runs and every call to `/datapacks` and `/agents` 401s.
 
 ## Prerequisites you provide (not created by the chart)
 

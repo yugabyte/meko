@@ -180,6 +180,29 @@ apiServer:
   # api-server supports it).
   cognito:
     enabled: true
+  # Generic OpenID Connect, as an alternative to Cognito. Exactly one of the two
+  # may be enabled; both on fails the render rather than letting the flag order
+  # decide who can sign in.
+  #
+  # The issuer owns its users, so a deployment on OIDC serves NO signup,
+  # password-reset or email-verification routes — those live on the issuer's own
+  # pages. Everything but the issuer and client is discovered from
+  # /.well-known/openid-configuration.
+  oidc:
+    enabled: false
+    # e.g. https://keycloak.example.com/realms/meko
+    issuerUrl: ""
+    clientId: ""
+    # The callback registered with the issuer. NOT derived from the request: it
+    # must match byte-for-byte, and behind a TLS-terminating proxy the server
+    # cannot see its own public origin. Typically
+    # https://<host>/api/v1/auth/oidc/callback
+    redirectUrl: ""
+    # Comma-separated, beyond the mandatory openid. Empty means profile,email —
+    # what account provisioning reads.
+    scopes: ""
+    # Read from secrets.existing.oidc (key: oidc-client-secret), optional: empty
+    # is a public client, which relies on the PKCE the server always sends.
   # Optional LoadBalancer Service for the api-server (alternative to the Ingress).
   # In `ycp` (control-plane) mode this is the fleet console / agent-API entry
   # point — set lb.enabled=true and use an INTERNAL LB (annotations come from the
@@ -247,6 +270,7 @@ apiServer:
   secrets:
     existing:
       cognito: meko-api-server-cognito
+      oidc: meko-api-server-oidc
       db: meko-api-server-db
       s3: meko-api-server-s3
       llm: meko-api-server-llm
@@ -493,10 +517,10 @@ dataPlaneSecrets:
   # Shared between api_server and meko-mcp-server. Both must see the same value.
   mcpInternalSecret: ""
   # Bedrock credentials for inferenceGateway.secrets.existing.aws (keys
-  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). Rendered only when BOTH are set
-  # and the gateway is enabled. Needed only for INFERENCE_LLM_PROVIDER=bedrock;
-  # the openai provider reads OPENAI_API_KEY instead, which the gateway's
-  # Deployment does not wire today.
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). Rendered only when BOTH are set,
+  # the gateway is enabled and INFERENCE_LLM_PROVIDER is bedrock. Under the
+  # openai provider that same Secret carries OPENAI_API_KEY instead, from
+  # openaiApiKey above.
   awsAccessKeyId: ""
   awsSecretAccessKey: ""
   # Object storage for knowledge-base uploads → apiServer.secrets.existing.s3
@@ -513,6 +537,10 @@ dataPlaneSecrets:
   # nothing requires them to be the same principal.
   s3AccessKey: ""
   s3SecretKey: ""
+  # apiServer.secrets.existing.oidc (key `oidc-client-secret`), when the data
+  # plane authenticates against an OIDC issuer with a confidential client. Empty
+  # is a public client, which relies on the PKCE the server always sends.
+  oidcClientSecret: ""
 
 # ---------------------------------------------------------------------------
 # meko-ui
@@ -762,6 +790,16 @@ ragAgent:
     ENABLE_FINETUNING: "true"
   openai:
     enabled: false               # prod-with-openai overlay → OPENAI_API_KEY env
+  # The workers' database, for the Secret dataPlaneSecrets renders. Empty +
+  # yugabyte.enabled builds it from the bundled database; empty with no bundled
+  # database fails the render rather than shipping a worker that cannot reach one.
+  #
+  # Nothing here looks for a Secret you created yourself: with
+  # dataPlaneSecrets.enabled the chart renders rag-agent-secret whenever the
+  # component is on, so a hand-made one of the same name is either overwritten or
+  # collides on helm's ownership check. Supplying your own means leaving
+  # dataPlaneSecrets off — or pointing ragAgent.secrets.existing.rag at another name.
+  dbConnectionString: ""
   secrets:
     existing:
       rag: rag-agent-secret

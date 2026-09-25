@@ -1274,3 +1274,28 @@ func TestVerifyEmailChange_BadCode_DoesNotMarkVerified(t *testing.T) {
 		t.Error("email must not be marked verified when the code is rejected")
 	}
 }
+
+// A deployment with no password store — dev auth, and any OIDC install — used to
+// pass a nil CognitoProvider. UpdateProfile's Cognito name-sync is guarded on the
+// account's sub being non-empty, and DevAuth creates its account with
+// CognitoSub="dev-local", so the guard passed and the nil interface was called:
+// PATCH /auth/me/profile panicked in every BYOC data plane. NoUserStore is what
+// makes "no user store" a value rather than a nil.
+func TestUpdateProfile_NoUserStoreDoesNotPanic(t *testing.T) {
+	accounts := &mockAccountStore{
+		getByIDFn: func(_ context.Context, id string) (*models.Account, error) {
+			// Non-empty sub: this is what gets past the guard.
+			return &models.Account{ID: id, CognitoSub: "dev-local"}, nil
+		},
+	}
+	svc := service.NewAuthService(service.NoUserStore{}, accounts)
+
+	err := svc.UpdateProfile(context.Background(), "acct-1", service.UpdateProfileRequest{
+		FirstName: "Ada", LastName: "Lovelace",
+	})
+	// The local write is what matters; the IdP sync is best-effort and there is
+	// no IdP to sync to, so a nil error is the whole assertion.
+	if err != nil {
+		t.Fatalf("UpdateProfile with NoUserStore: %v", err)
+	}
+}

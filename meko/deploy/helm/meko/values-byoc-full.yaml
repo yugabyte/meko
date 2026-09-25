@@ -1,0 +1,73 @@
+# ============================================================================
+# BYOC opt-in — the components values-byoc.yaml leaves off, for the ones that can
+# actually run in one namespace.
+#
+# Pass it AFTER values-byoc.yaml, which is what lets it win:
+#   helm upgrade --install meko charts/meko -n <ns> \
+#     -f charts/meko/values-gcp.yaml -f charts/meko/values-dev.yaml \
+#     -f charts/meko/values-byoc.yaml -f charts/meko/values-byoc-full.yaml \
+#     --set dataPlaneSecrets.openaiApiKey=sk-... \
+#     --set-string apiServer.image.tag=$TAG ...
+#
+# Image coordinates are NOT here — values-byoc.yaml carries them for these
+# components whether or not they are on, so enabling one is a flag and not a flag
+# plus two image values. Their tags are per-release, like the rest of the stack's.
+#
+# Requires an OpenAI key. Both components below select the openai provider, because
+# bedrock means AWS credentials in the customer's namespace, which is the thing BYOC
+# exists to avoid. Without a key the gateway's render fails outright (it exits at
+# construction, so a running-but-broken pod would be worse) and the rag workers start
+# and fail at the point of use.
+#
+# Still off, and not a matter of flipping a flag:
+#   langfuse    — v3 wants ClickHouse, its own Valkey release (valkey.managed: false)
+#                 and object storage. Nothing here stands those up.
+#   provisioner — renders ClusterRoles and a CRD, and manages per-tenant namespaces.
+#                 Cluster-scoped objects break the one thing this preset promises:
+#                 a namespace an operator can grant, inspect and delete as a unit.
+# ============================================================================
+
+inferenceGateway:
+  enabled: true
+  config:
+    # llm.py branches on this; "openai" reads OPENAI_API_KEY from the environment,
+    # which dataPlaneSecrets puts in the Secret this component consumes as envFrom.
+    INFERENCE_LLM_PROVIDER: openai
+    # config.py's DEFAULT_OPENAI_MODEL. Named rather than left to the default so the
+    # env preset's bedrock model id cannot leak through into an openai client.
+    INFERENCE_LLM_MODEL: gpt-4o-mini
+    # Emptied for the same reason, and empty is meaningful: build_summary_llm falls
+    # back to the main model. The base default is a Bedrock mistral id, which an
+    # openai client would send to OpenAI verbatim and fail on.
+    INFERENCE_CONV_SUMMARY_MODEL: ""
+    # The MCP server beside it. A bare Service name resolves because singleNamespace
+    # puts both in the release namespace — which is also why this can be a values
+    # file at all, where an FQDN would need the namespace a values file cannot see.
+    INFERENCE_MCP_ENDPOINT: http://meko-mcp-server/mcp
+    # No browser origin to allow: nothing is exposed outside the namespace by this
+    # preset. Set it if you put an ingress in front.
+    INFERENCE_CORS_ORIGINS: ""
+
+ragAgent:
+  enabled: true
+  # Text only. The PDF worker is gated on this flag and requests nvidia.com/gpu,
+  # which no BYOC cluster is assumed to have; turn it on where there is a GPU pool.
+  gpu:
+    enabled: false
+  text:
+    # null, not {}: Helm MERGES maps, so an empty one leaves the base and env preset
+    # selectors (node_type=rag-worker, and on GKE a rag-worker nodepool) in place and
+    # the worker sits Pending on a cluster that has neither.
+    nodeSelector: null
+  openai:
+    # The BYOC stack has no Bedrock credentials, so indexes are OPENAI-provider ones
+    # and the workers need the key. The ref is optional — no key degrades to a
+    # failure at the point of use, matching the rest of the stack.
+    enabled: true
+  config:
+    # Langfuse is off in this preset, so there is nowhere to trace to. The env
+    # presets point these at a shared Langfuse ELB that a customer cluster cannot
+    # reach; empty is the honest value. The keys stay present because the workers
+    # read them by configMapKeyRef, which a missing key would block startup on.
+    TXT_LANGFUSE_HOST: ""
+    PDF_LANGFUSE_HOST: ""

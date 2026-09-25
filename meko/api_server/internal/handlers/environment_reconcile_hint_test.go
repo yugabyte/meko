@@ -48,8 +48,9 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		"--set-string inferenceGateway.image.tag=",
 		"--set dataPlaneSecrets.awsAccessKeyId=",
 		"--set dataPlaneSecrets.awsSecretAccessKey=",
-		// The footnote for the configuration that does need a token.
-		"Cognito ON",
+		// The footnote for the configurations that do need a token — either
+		// identity provider, not just Cognito.
+		"identity provider ON (Cognito or OIDC)",
 	} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint is missing %q:\n%s", want, hint)
@@ -70,5 +71,35 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 			continue
 		}
 		t.Errorf("placeholder outside the header and the Secret literals: %q", line)
+	}
+}
+
+// values-byoc.yaml leaves the rag workers, langfuse and the provisioner off, and an
+// overlay passed AFTER it is the only thing that turns one back on — helm's last-wins
+// ordering is the whole mechanism. The hint is where an operator is told that, so the slot has to be in
+// the pasted command and not just in the prose.
+func TestInstallHint_MekoCanEnableTheDisabledComponents(t *testing.T) {
+	hint := mekoHint(t)
+
+	for _, want := range []string{
+		// An editable header slot, empty so the base stack pastes unchanged.
+		"EXTRA_VALUES=",
+		// Named so the operator does not have to derive the overlay's existence.
+		"values-byoc-full.yaml",
+		// And expanded where it can win: after values-byoc.yaml, not before.
+		"-f meko/deploy/helm/meko/values-byoc.yaml ${EXTRA_VALUES}",
+		// The key the whole stack degrades silently without.
+		"OPENAI_KEY=",
+		`--set-string dataPlaneSecrets.openaiApiKey="${OPENAI_KEY}"`,
+	} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint is missing %q:\n%s", want, hint)
+		}
+	}
+
+	// The overlay must not be applied by default: enabling components an operator
+	// did not ask for is how a BYOC install grows pods it has no credentials for.
+	if strings.Contains(hint, "-f meko/deploy/helm/meko/values-byoc-full.yaml \\") {
+		t.Errorf("the full-stack overlay is applied unconditionally:\n%s", hint)
 	}
 }

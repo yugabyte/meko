@@ -29,12 +29,32 @@ type ServerConfig struct {
 	// DB serves the per-datapack data plane: datapacks.* (mem0,
 	// promoted_collection, knowledge_bases chunk tables) and
 	// dist_rag.* (sources, documents, vector_indexes).
-	DB                  *sql.DB
+	DB *sql.DB
+	// AuthProvider selects the identity provider: "cognito" (the default, and
+	// what every existing deployment runs) or "oidc" for any issuer serving a
+	// discovery document. Empty means cognito, so an untouched config keeps its
+	// behaviour; unset Cognito coordinates then fall through to dev auth exactly
+	// as before.
+	AuthProvider        string
 	CognitoRegion       string
 	CognitoPoolID       string
 	CognitoClientID     string
 	CognitoClientSecret string
 	CognitoDomain       string
+	// Generic OIDC. Only the issuer, the client and the redirect are configured;
+	// the authorization, token and JWKS endpoints are discovered.
+	//
+	// OIDCRedirectURL is NOT derived from the request: it must match the URI
+	// registered with the issuer byte-for-byte, and behind a TLS-terminating
+	// proxy this server cannot know its own public origin. Guessing it is how a
+	// deployment gets redirect_uri_mismatch on every login.
+	OIDCIssuerURL    string
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCRedirectURL  string
+	// OIDCScopes beyond the mandatory openid. Empty defaults to profile+email,
+	// which is what account provisioning reads.
+	OIDCScopes          []string
 	LangfuseHost        string
 	LangfuseAdminAPIKey string
 	// Optional Langfuse Postgres pool. Nil when unconfigured; dependent

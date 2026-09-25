@@ -552,7 +552,12 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		}
 	}
 
-	authEnabled := cfg.CognitoRegion != "" &&
+	// Which IdP this deployment authenticates against. Cognito is the default so
+	// an untouched config is unchanged; "oidc" needs only an issuer and a client.
+	// Neither configured means dev auth, unchanged from before either existed.
+	oidcEnabled := cfg.AuthProvider == authProviderOIDC
+	cognitoEnabled := cfg.AuthProvider != authProviderOIDC &&
+		cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&
 		cfg.CognitoClientID != ""
 
@@ -564,26 +569,54 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	// pat_scopes=["*"] so RequireScope is a no-op.
 	dpDirect := datapackGroup
 
-	if authEnabled {
+	switch {
+	case oidcEnabled:
+		if err := registerOIDCAuthRoutes(cfg, v1, &datapackGroup, &dpDirect, reg); err != nil {
+			return nil, nil, err
+		}
+		v1.GET("/auth/config", handlers.AuthConfigHandler(handlers.AuthConfig{
+			Provider: authProviderOIDC,
+			// Same-origin path rather than an absolute URL, because the SPA is
+			// served from this server — but it carries basePath, since under
+			// --base-path=/ycp the route really is at /ycp/api/v1/..., and the
+			// SPA assigns this value to window.location verbatim.
+			LoginURL: basePath + "/api/v1/auth/oidc/login",
+		}))
+	case cognitoEnabled:
 		authDeps, err := registerAuthRoutes(cfg, v1, &datapackGroup, &dpDirect, reg)
 		if err != nil {
 			return nil, nil, err
 		}
+		// The social buttons exist only with a hosted domain to broker through,
+		// which is the same condition their routes are registered under.
+		var social []string
 		if cfg.CognitoDomain != "" {
+			social = []string{"google", "linkedin"}
 			successCfg = &handlers.SuccessConfig{
 				CognitoClient: authDeps.cognitoClient,
 				AuthService:   authDeps.authService,
 				CognitoDomain: cfg.CognitoDomain,
 			}
 		}
-	} else {
-		slog.Warn("cognito config not set, auth disabled – using dev account for all requests")
+		v1.GET("/auth/config", handlers.AuthConfigHandler(handlers.AuthConfig{
+			Provider:        authProviderCognito,
+			PasswordLogin:   true,
+			Signup:          true,
+			SocialProviders: social,
+		}))
+	default:
+		slog.Warn("no identity provider configured, auth disabled – using dev account for all requests")
 		devAuth := auth.DevAuth(reg.accountRepo)
 		datapackGroup = v1.Group("", devAuth)
 		dpDirect = datapackGroup
 		// Register the minimal /auth surface the SPA needs so it can bootstrap
-		// (and complete onboarding) without Cognito. See registerNoAuthRoutes.
+		// (and complete onboarding) without an IdP. See registerNoAuthRoutes.
 		registerNoAuthRoutes(v1, devAuth, reg)
+		// "none" is a real answer, not an error: the SPA skips the sign-in page
+		// entirely rather than offering a form nothing is behind.
+		v1.GET("/auth/config", handlers.AuthConfigHandler(handlers.AuthConfig{
+			Provider: "none",
+		}))
 	}
 
 	root.GET("/success", handlers.SuccessHandler(successCfg))
@@ -682,6 +715,59 @@ func registerBillingRoutes(v1 *echo.Group, authed *echo.Group, reg *serviceRegis
 	slog.Info("billing routes registered")
 }
 
+// Identity providers this server can authenticate against. Cognito is the
+// default because it is what every existing deployment runs; "oidc" is any
+// issuer serving a discovery document.
+const (
+	authProviderCognito = "cognito"
+	authProviderOIDC    = "oidc"
+)
+
+// newPATAdapter converts the auth-package PAT interface to the service-package
+// call without leaking service types into auth (which would create a
+// service<->auth import cycle). Shared by every provider: a meko PAT is issued
+// by this server and validated against its own store, so which IdP authenticates
+// people has no bearing on it.
+func newPATAdapter(reg *serviceRegistry) auth.PATValidatorFunc {
+	return func(
+		ctx context.Context,
+		in auth.PATValidateInput,
+	) (*auth.PATValidateResult, error) {
+		resp, err := reg.mcpPATSvc.ValidatePAT(ctx, service.MCPPATValidateInput{
+			Plaintext:      in.Plaintext,
+			ActorIP:        in.ActorIP,
+			ActorUserAgent: in.ActorUserAgent,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &auth.PATValidateResult{
+			Valid:   resp.Valid,
+			TokenID: resp.TokenID,
+			UserID:  resp.UserID,
+			Scopes:  resp.Scopes,
+			Reason:  string(resp.Reason),
+		}, nil
+	}
+}
+
+// registerSessionRoutes wires the /auth/me surface every provider serves: who
+// am I, onboarding state, profile, usage. All of it is about the local account
+// the token resolved to, which is why it is shared rather than duplicated per
+// provider. The one place it reaches the IdP is PATCH /me/profile, which mirrors
+// the display name into the user store — a no-op under NoUserStore, where the
+// issuer owns the name.
+func registerSessionRoutes(
+	authGroup *echo.Group,
+	authH *handlers.AuthHandler,
+	requireAuth echo.MiddlewareFunc,
+) {
+	authGroup.GET("/me", authH.Me, requireAuth)
+	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
+	authGroup.PATCH("/me/profile", authH.UpdateProfile, requireAuth)
+	authGroup.GET("/me/usage", authH.GetUsage, requireAuth)
+}
+
 // authRouteDeps holds the initialized auth objects needed by the
 // success handler.
 type authRouteDeps struct {
@@ -738,30 +824,8 @@ func registerAuthRoutes(
 	// validator and 401 cleanly).
 	requireAuth := auth.RequireAuth(jwtValidator, reg.accountRepo)
 
-	// PAT-accepting middleware: only used by dpDirect below. The
-	// adapter converts the auth-package interface to the service-
-	// package call without leaking service types into auth (which
-	// would create a service<->auth import cycle).
-	patAdapter := auth.PATValidatorFunc(func(
-		ctx context.Context,
-		in auth.PATValidateInput,
-	) (*auth.PATValidateResult, error) {
-		resp, err := reg.mcpPATSvc.ValidatePAT(ctx, service.MCPPATValidateInput{
-			Plaintext:      in.Plaintext,
-			ActorIP:        in.ActorIP,
-			ActorUserAgent: in.ActorUserAgent,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &auth.PATValidateResult{
-			Valid:   resp.Valid,
-			TokenID: resp.TokenID,
-			UserID:  resp.UserID,
-			Scopes:  resp.Scopes,
-			Reason:  string(resp.Reason),
-		}, nil
-	})
+	// PAT-accepting middleware: only used by dpDirect below.
+	patAdapter := newPATAdapter(reg)
 	requireAuthWithPAT := auth.RequireAuth(
 		jwtValidator,
 		reg.accountRepo,
@@ -818,18 +882,13 @@ func registerAuthRoutes(
 	// is guaranteed present when the handler runs; Cognito then verifies
 	// the previous-password against the user resolved from that token.
 	authGroup.POST("/change-password", authH.ChangePassword, requireAuth)
-	authGroup.GET("/me", authH.Me, requireAuth)
-	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
-	authGroup.PATCH("/me/profile", authH.UpdateProfile, requireAuth)
+	registerSessionRoutes(authGroup, authH, requireAuth)
 	// Post-signup email collection/verification for federated (LinkedIn) users
 	// whose IdP sent no email (they carry a placeholder until they verify a
 	// real address). All require a signed-in access token.
 	authGroup.POST("/me/email/start", authH.StartEmailChange, requireAuth)
 	authGroup.POST("/me/email/resend", authH.ResendEmailChangeCode, requireAuth)
 	authGroup.POST("/me/email/verify", authH.VerifyEmailChange, requireAuth)
-	// Free-tier usage counters; see AuthHandler.GetUsage for shape.
-	authGroup.GET("/me/usage", authH.GetUsage, requireAuth)
-
 	*datapackGroup = v1.Group("", requireAuth)
 	*dpDirect = v1.Group("",
 		requireAuthWithPAT,
@@ -849,14 +908,18 @@ func registerAuthRoutes(
 // registerNoAuthRoutes wires the minimal /auth surface the SPA needs when
 // Cognito is disabled (auth off). The web UI bootstraps by probing
 // GET /auth/me; without it the SPA treats the session as expired and hard-gates
-// to the login screen. These routes are all backed by the DevAuth single-user
-// account and only read the account from context / the account repo / the usage
-// service — never Cognito — so a nil Cognito provider is safe here. The
-// Cognito-only routes (signup, login, forgot-password, social, change-password)
-// are intentionally absent: DevAuth authenticates every request, so there is
-// nothing to log into.
+// to the login screen. These routes read the DevAuth single-user account from
+// context / the account repo / the usage service, except PATCH /me/profile,
+// which syncs the display name to the user store — see the NoUserStore note
+// below for why that is not a nil. The Cognito-only routes (signup, login,
+// forgot-password, social, change-password) are intentionally absent: DevAuth
+// authenticates every request, so there is nothing to log into.
 func registerNoAuthRoutes(v1 *echo.Group, devAuth echo.MiddlewareFunc, reg *serviceRegistry) {
-	authSvc := service.NewAuthService(nil, reg.accountRepo)
+	// NoUserStore, not nil: DevAuth creates its account with a NON-EMPTY sub
+	// ("dev-local"), which gets past UpdateProfile's "no sub, nothing to sync"
+	// guard and called straight into a nil interface — PATCH /auth/me/profile
+	// panicked. A no-op store makes the sync fail with a reason instead.
+	authSvc := service.NewAuthService(service.NoUserStore{}, reg.accountRepo)
 	authH := handlers.NewAuthHandler(authSvc, reg.accountUsageSvc)
 
 	g := v1.Group("/auth", devAuth)

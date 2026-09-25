@@ -39,10 +39,14 @@ Usage: include "meko.ragAgent.env" (dict "root" $ "docType" "TEXT" "langfuseKey"
 {{- if $c.openai.enabled }}
 # prod-with-openai: appended so indexes with r_ai_provider='OPENAI' work
 # alongside AWS_BEDROCK indexes.
+# Optional, like every other OpenAI ref in this chart: dataPlaneSecrets renders the
+# key only when one was supplied, and a worker with no key should reach the log line
+# that says so rather than never starting.
 - name: OPENAI_API_KEY
   valueFrom:
     secretKeyRef:
       name: {{ $secret }}
       key: OPENAI_API_KEY
+      optional: true
 {{- end }}
 {{- end -}}

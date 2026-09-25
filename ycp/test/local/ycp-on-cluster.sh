@@ -33,10 +33,17 @@
 #   fails the install with the class it wanted and the ones it found.
 #     ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --storage-class standard-rwo
 #
+#   --full moves the inference gateway onto the openai provider and adds the rag text
+#   worker. It needs OPENAI_API_KEY — the chart refuses to render an openai gateway
+#   without a key, rather than installing a pod that exits at startup. Without --full
+#   the gateway still runs, on bedrock, which needs BEDROCK_KEY/BEDROCK_SECRET.
+#     OPENAI_API_KEY=sk-... ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --full
+#
 # Environment:
 #   AWS_PROFILE      profile with Meko ECR access (meko-dev here) — required.
 #   MEKO_CHART       the chart directory (default: this checkout's meko/deploy/helm/meko)
-#   OPENAI_API_KEY   written into the data-plane Secret when set
+#   OPENAI_API_KEY   the data-plane Secret, and every chart-rendered OpenAI Secret
+#   EXTRA_VALUES     extra `-f` overlays, applied after values-byoc.yaml (--full sugar)
 #
 set -euo pipefail
 
@@ -57,6 +64,11 @@ YCP_IMAGE="${YCP_IMAGE:-}"
 MEKO_API_TAG="${MEKO_API_TAG:-0.260912.0-59d52fac1}"
 MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.260912.0-59d52fac1}"
 MEKO_UI_TAG="${MEKO_UI_TAG:-0.260912.0-59d52fac1}"
+# Overlays applied AFTER values-byoc.yaml, which is what lets them win. Empty is the
+# base stack; --full appends values-byoc-full.yaml, which moves the gateway onto
+# openai and adds the rag workers. Free-form so a caller can pass a values file of
+# their own, which is the same mechanism the install hint prints.
+EXTRA_VALUES="${EXTRA_VALUES:-}"
 CLOUD="${CLOUD:-gcp}"          # which cloud preset: gcp | aws
 # Storage class for the control plane's bundled Postgres. Empty keeps the cloud
 # preset's (pd-ssd on GKE, gp2-csi on AWS); override for a cluster that has neither,
@@ -111,10 +123,14 @@ while [ $# -gt 0 ]; do
     --agent-only) STAGE=agent; shift ;;
     --all)        STAGE=all; shift ;;
     --agent-tag)  AGENT_TAG="$2"; shift 2 ;;
+    # values-byoc-full.yaml selects the openai provider, so this without
+    # OPENAI_API_KEY fails the render rather than installing something that exits
+    # at startup.
+    --full)       EXTRA_VALUES="$EXTRA_VALUES -f $MEKO_CHART/values-byoc-full.yaml"; shift ;;
     --ycp-image)  YCP_IMAGE="$2"; shift 2 ;;
     --admin-key)  ADMIN_KEY="$2"; shift 2 ;;
     --delete)   DELETE=1; shift ;;
-    -h|--help)  sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,46p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -414,8 +430,11 @@ k -n "$MEKO_NS" create secret generic meko-agent-api-key \
 YCP_URL="http://meko-api-server-service.$YCP_NS.svc.cluster.local.:80/api/v1"
 # values-byoc.yaml LAST: it is what makes this one self-contained namespace — the
 # stack plus its own YugabyteDB, and nothing outside it.
+# shellcheck disable=SC2086 # EXTRA_VALUES is a flag list, and must word-split.
 h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
+  $EXTRA_VALUES \
+  --set-string dataPlaneSecrets.openaiApiKey="${OPENAI_API_KEY:-}" \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \

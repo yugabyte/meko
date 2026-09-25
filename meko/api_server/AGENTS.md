@@ -63,8 +63,9 @@ Every net-new route MUST be registered under an auth-enforcing group/middleware
 — never add an unauthenticated public route. Enforcing *who can call it* is part
 of adding the endpoint, not a follow-up. Pick the tightest scope:
 
-- **User routes** — `authGroup` / `datapackGroup` behind `RequireAuth` (Cognito
-  JWT or a PAT). Datapack-scoped routes add `RequireDatapackOwnership`
+- **User routes** — `authGroup` / `datapackGroup` behind `RequireAuth` (an ID
+  token from whichever identity provider is on — Cognito or a generic OIDC
+  issuer, both behind `auth.TokenValidator` — or a PAT). Datapack-scoped routes add `RequireDatapackOwnership`
   (owner-only — use for any mutation) or `RequireDatapackAccess` (owner + shared
   — reads).
 - **Admin (meko_admin) routes** — the `/admin` group behind `RequireAdminSecret`

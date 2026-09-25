@@ -191,6 +191,7 @@ type AuthService struct {
 	accounts         AccountStore
 	provisioner      Provisioner
 	inviteBackfiller InviteBackfiller
+	issuerOwnsEmail  bool
 }
 
 // AuthServiceOption configures optional AuthService dependencies.
@@ -206,6 +207,20 @@ func WithProvisioner(p Provisioner) AuthServiceOption {
 // invites with the new user's ID after account creation.
 func WithInviteBackfiller(b InviteBackfiller) AuthServiceOption {
 	return func(s *AuthService) { s.inviteBackfiller = b }
+}
+
+// WithIssuerOwnedEmail accepts the email in a verified ID token as verified.
+//
+// For the OIDC path only, and it is the difference between the two providers
+// rather than a relaxation: an OIDC issuer IS the user store, the ID token was
+// verified against its JWKS before this runs, and there is no endpoint here to
+// finish verification with — /auth/me/email/* is Cognito's, registered only on
+// that path. Without this, an issuer that omits email_verified (Entra never
+// sends it) or reports it false (Keycloak, for any user it did not mail) leaves
+// every account at email_verified=false, which puts the SPA's blocking
+// onboarding modal in front of a flow that cannot complete.
+func WithIssuerOwnedEmail() AuthServiceOption {
+	return func(s *AuthService) { s.issuerOwnsEmail = true }
 }
 
 // NewAuthService creates a new AuthService.
@@ -803,11 +818,15 @@ func (s *AuthService) EnsureAccountFromIDToken(
 	}
 
 	acct, err := s.accounts.Create(ctx, repository.CreateAccountParams{
-		FirstName:     normalizeFederatedName(claims.GivenName),
-		LastName:      normalizeFederatedName(claims.FamilyName),
-		Email:         claims.Email,
-		CognitoSub:    claims.Sub,
-		EmailVerified: claims.emailIsVerified(),
+		FirstName:  normalizeFederatedName(claims.GivenName),
+		LastName:   normalizeFederatedName(claims.FamilyName),
+		Email:      claims.Email,
+		CognitoSub: claims.Sub,
+		// Under an issuer that owns its users, a real address in a verified ID
+		// token is as verified as it gets here — see WithIssuerOwnedEmail. The
+		// placeholder check still applies: a synthesized address is nobody's.
+		EmailVerified: claims.emailIsVerified() ||
+			(s.issuerOwnsEmail && claims.Email != "" && !isPlaceholderEmail(claims.Email)),
 	})
 	if err != nil {
 		slog.Error("JIT account creation failed",

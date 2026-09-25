@@ -66,10 +66,12 @@ spec:
                   name: {{ $c.secrets.existing.apiKey }}
                   key: dev-api-key-id
                   optional: true
-            # Optional, because a BYOC api-server runs with Cognito off and
-            # authenticates nobody — there is no token to give. With Cognito on it
-            # is required and the Secret below must exist: it names the account
-            # whose inventory this agent converges.
+            # Optional, because an api-server with no identity provider
+            # authenticates nobody — there is no token to give. With EITHER
+            # provider on (cognito or oidc) it is required and the Secret below
+            # must exist: it is a meko PAT, which this server issues and validates
+            # whichever IdP is on, and it names the account whose inventory this
+            # agent converges. Without it every call the agent makes 401s.
             - name: MEKO_API_TOKEN
               valueFrom:
                 secretKeyRef:

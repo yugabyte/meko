@@ -1,0 +1,225 @@
+# What the OIDC path and the byoc-full overlay render, and the four
+# misconfigurations they refuse at render time instead of in the cluster.
+#
+# Each refusal exists because the cluster's version of the same mistake is quiet:
+# two IdPs means flag order decides who can sign in, a missing redirect URL means
+# the issuer rejects every callback, an openai gateway with no key exits at
+# construction and reports 0/1 forever, and rag with no DSN starts and fails at
+# the point of use.
+#
+#   helm unittest charts/meko
+suite: oidc and the byoc-full overlay
+tests:
+  - it: wires the OIDC flags and env, and passes the client secret by env var only
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.cognito.enabled: false
+      apiServer.oidc.enabled: true
+      apiServer.oidc.issuerUrl: https://issuer.example/realms/meko
+      apiServer.oidc.clientId: meko
+      apiServer.oidc.redirectUrl: https://meko.example/api/v1/auth/oidc/callback
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--auth-provider=oidc"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--oidc-issuer-url=$(OIDC_ISSUER_URL)"
+      # NOT a flag: for a public client the Secret does not exist, the env var is
+      # undefined, and Kubernetes would leave the literal "$(OIDC_CLIENT_SECRET)"
+      # for the server to present as client authentication.
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--oidc-client-secret=$(OIDC_CLIENT_SECRET)"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: meko-api-server-oidc
+                key: oidc-client-secret
+                optional: true
+
+  - it: refuses two identity providers at once
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.cognito.enabled: true
+      apiServer.oidc.enabled: true
+      apiServer.oidc.issuerUrl: https://issuer.example/realms/meko
+      apiServer.oidc.clientId: meko
+      apiServer.oidc.redirectUrl: https://meko.example/api/v1/auth/oidc/callback
+    asserts:
+      - failedTemplate:
+          errorMessage: "apiServer.cognito.enabled and apiServer.oidc.enabled are both on: pick one identity provider. Two would mean the flag order decides who can sign in."
+
+  - it: refuses OIDC without the three values nothing can derive
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.oidc.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "apiServer.oidc.enabled needs apiServer.oidc.issuerUrl: every other endpoint is discovered from it."
+
+  - it: refuses OIDC without a redirect URL
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.oidc.enabled: true
+      apiServer.oidc.issuerUrl: https://issuer.example/realms/meko
+      apiServer.oidc.clientId: meko
+    asserts:
+      - failedTemplate:
+          errorMessage: "apiServer.oidc.enabled needs apiServer.oidc.redirectUrl: it must match the URI registered with the issuer byte-for-byte and cannot be derived behind a proxy."
+
+  - it: renders the OIDC client secret only for a confidential client
+    template: templates/dataplane-secrets.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      apiServer.oidc.enabled: true
+      apiServer.oidc.issuerUrl: https://issuer.example/realms/meko
+      apiServer.oidc.clientId: meko
+      apiServer.oidc.redirectUrl: https://meko.example/api/v1/auth/oidc/callback
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+    asserts:
+      - notMatchRegex:
+          path: metadata.name
+          pattern: ^meko-api-server-oidc$
+
+  - it: carries the Bedrock pair for the gateway values-byoc.yaml actually runs
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: inference-gateway-aws
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.awsAccessKeyId: AK
+      dataPlaneSecrets.awsSecretAccessKey: SK
+      # Set, and deliberately NOT rendered: this gateway is on bedrock, and a
+      # Secret that exists with the wrong key turns a pod that never starts into
+      # one that goes Ready and fails every call at runtime.
+      dataPlaneSecrets.openaiApiKey: sk-test
+    asserts:
+      - equal:
+          path: stringData.AWS_ACCESS_KEY_ID
+          value: AK
+      - isNull:
+          path: stringData.OPENAI_API_KEY
+
+  - it: swaps that Secret's key when the overlay moves the gateway to openai
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: inference-gateway-aws
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-full.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      ragAgent.text.image.tag: t
+      ragAgent.pdf.image.tag: t
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.openaiApiKey: sk-test
+    asserts:
+      - equal:
+          path: stringData.OPENAI_API_KEY
+          value: sk-test
+      - isNull:
+          path: stringData.AWS_ACCESS_KEY_ID
+
+  - it: builds the rag workers' DSN from the bundled database, password escaped
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: rag-agent-secret
+    release:
+      namespace: acme
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-full.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      ragAgent.text.image.tag: t
+      ragAgent.pdf.image.tag: t
+      dataPlaneSecrets.enabled: true
+      # An @ and a / in the password: interpolated raw they truncate the host and
+      # the database out of the DSN, and nothing fails until the first connection.
+      dataPlaneSecrets.dbPassword: p@ss/word
+      dataPlaneSecrets.openaiApiKey: sk-test
+    asserts:
+      - equal:
+          path: stringData.YUGABYTEDB_CONNECTION_STRING
+          value: postgresql://yugabyte:p%40ss%2Fword@yb-tservers.acme.svc.cluster.local.:5433/yugabyte
+
+  - it: refuses rag workers with no database to point them at
+    template: templates/dataplane-secrets.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      ragAgent.text.image.tag: t
+      ragAgent.pdf.image.tag: t
+      ragAgent.enabled: true
+      yugabyte.enabled: false
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.openaiApiKey: sk-test
+    asserts:
+      - failedTemplate:
+          errorMessage: "ragAgent.enabled with no database to point it at: set ragAgent.dbConnectionString, or enable the bundled database (yugabyte.enabled)."
+
+  - it: refuses an openai gateway with no key
+    template: templates/inference-gateway/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-full.yaml
+    set:
+      inferenceGateway.image.tag: t
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+    asserts:
+      - failedTemplate:
+          errorMessage: "inferenceGateway is enabled with INFERENCE_LLM_PROVIDER=openai but dataPlaneSecrets.openaiApiKey is empty: the gateway exits at startup without it. Set the key, or disable inferenceGateway."

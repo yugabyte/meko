@@ -84,6 +84,25 @@ func run() error {
 	cognitoClientSecret := flag.String("cognito-client-secret", envOrDefault("COGNITO_CLIENT_SECRET", ""), "Cognito App Client secret")
 	cognitoDomain := flag.String("cognito-domain", envOrDefault("COGNITO_DOMAIN", ""), "Cognito hosted UI domain (e.g. myapp.auth.us-east-2.amazoncognito.com)")
 
+	// Identity provider selection. Empty (or "cognito") keeps the Cognito path,
+	// so an existing deployment is unchanged; "oidc" authenticates against any
+	// issuer serving a discovery document and registers no password, signup or
+	// email-verification routes, because the issuer owns its users.
+	authProvider := flag.String("auth-provider", envOrDefault("AUTH_PROVIDER", ""),
+		`identity provider: "cognito" (default) or "oidc"`)
+	oidcIssuerURL := flag.String("oidc-issuer-url", envOrDefault("OIDC_ISSUER_URL", ""),
+		"OIDC issuer, e.g. https://keycloak.example.com/realms/meko — endpoints are discovered from it")
+	oidcClientID := flag.String("oidc-client-id", envOrDefault("OIDC_CLIENT_ID", ""), "OIDC client ID")
+	oidcClientSecret := flag.String("oidc-client-secret", envOrDefault("OIDC_CLIENT_SECRET", ""),
+		"OIDC client secret; empty for a public client, which then relies on PKCE")
+	// Not derived from the request on purpose: it has to match the issuer's
+	// registered redirect URI exactly, and behind a TLS-terminating proxy this
+	// server cannot see its own public origin.
+	oidcRedirectURL := flag.String("oidc-redirect-url", envOrDefault("OIDC_REDIRECT_URL", ""),
+		"the callback URL registered with the issuer, e.g. https://meko.example.com/api/v1/auth/oidc/callback")
+	oidcScopes := flag.String("oidc-scopes", envOrDefault("OIDC_SCOPES", ""),
+		"comma-separated scopes beyond openid; empty defaults to profile,email")
+
 	// Kubernetes namespace for MekoUserAccount CRDs
 	crdNamespace := flag.String("crd-namespace", "meko-tenants", "Kubernetes namespace for MekoUserAccount CRDs")
 
@@ -498,6 +517,12 @@ func run() error {
 		CognitoClientID:                    *cognitoClientID,
 		CognitoClientSecret:                *cognitoClientSecret,
 		CognitoDomain:                      *cognitoDomain,
+		AuthProvider:                       *authProvider,
+		OIDCIssuerURL:                      *oidcIssuerURL,
+		OIDCClientID:                       *oidcClientID,
+		OIDCClientSecret:                   *oidcClientSecret,
+		OIDCRedirectURL:                    *oidcRedirectURL,
+		OIDCScopes:                         splitCommaList(*oidcScopes),
 		CRDNamespace:                       *crdNamespace,
 		LangfuseHost:                       *langfuseHost,
 		LangfuseAdminAPIKey:                *langfuseAdminAPIKey,
@@ -586,6 +611,19 @@ func (o *imageOverrides) Set(v string) error {
 	}
 	*o = append(*o, imageOverride{component, image})
 	return nil
+}
+
+// splitCommaList turns a comma-separated flag into a trimmed slice, dropping
+// empties so a trailing comma or a blank value yields nil rather than a scope
+// the issuer would reject.
+func splitCommaList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envOrDefault(key, fallback string) string {

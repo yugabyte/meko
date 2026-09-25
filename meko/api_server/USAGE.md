@@ -20,6 +20,12 @@
 | `-cognito-client-id`| (empty)       | Cognito App Client ID            |
 | `-cognito-client-secret`| (empty)  | Cognito App Client secret        |
 | `-cognito-domain`       | (empty)  | Cognito Hosted UI domain (e.g. `myapp.auth.us-east-2.amazoncognito.com`) |
+| `-auth-provider`    | (empty)       | Identity provider: empty/`cognito`, or `oidc` |
+| `-oidc-issuer-url`  | (empty)       | OIDC issuer; every other endpoint is discovered from it |
+| `-oidc-client-id`   | (empty)       | OIDC client ID, and the audience ID tokens are verified against |
+| `-oidc-client-secret`| (empty)      | OIDC client secret; empty is a public client, which relies on PKCE |
+| `-oidc-redirect-url`| (empty)       | The callback registered with the issuer, matched byte-for-byte |
+| `-oidc-scopes`      | (empty)       | Extra scopes beyond `openid`; empty means `profile,email` |
 
 ### Example
 
@@ -247,7 +253,14 @@ curl http://localhost:25433/api/v1/health
 
 ### Authentication
 
-When Cognito flags are provided, all `/datapacks` endpoints require a valid JWT in the `Authorization` header. The `/auth` endpoints are always public.
+With an identity provider configured, all `/datapacks` endpoints require a valid JWT in the `Authorization` header (or a meko PAT, on the routes that accept one). The `/auth` sign-in endpoints are always public. With neither provider configured the server runs dev auth: every request is the same local account.
+
+Two providers, and they are mutually exclusive — `-auth-provider=oidc` selects the OIDC path, anything else keeps Cognito:
+
+- **Cognito** is also the *user store*: signup, email confirmation, password reset and change-password are served here, which is what the rest of this section documents.
+- **OIDC** is an issuer that owns its own users, so none of those routes exist — `/auth/signup` on an OIDC deployment 404s. What it serves is `GET /auth/oidc/login`, `GET /auth/oidc/callback`, `GET /auth/logout` and the shared `/auth/me` surface. Sign-in, signup and password reset all happen on the issuer's own pages.
+
+`GET /api/v1/auth/config` reports which one is live (`cognito`, `oidc` or `none`) and is unauthenticated, because the SPA reads it before anyone can sign in.
 
 #### `POST /api/v1/auth/signup` — Register a new user
 

@@ -29,12 +29,39 @@ byte-identically to the pre-mode chart.
 - "--system-db-password=$(SYSTEM_DB_PASSWORD)"
 - "--system-db-name=$(SYSTEM_DB_NAME)"
 - "--system-db-sslmode=$(SYSTEM_DB_SSL_MODE)"
+{{- if and $c.cognito.enabled $c.oidc.enabled }}
+{{- fail "apiServer.cognito.enabled and apiServer.oidc.enabled are both on: pick one identity provider. Two would mean the flag order decides who can sign in." }}
+{{- end }}
 {{- if $c.cognito.enabled }}
 - "--cognito-region=$(COGNITO_REGION)"
 - "--cognito-pool-id=$(COGNITO_POOL_ID)"
 - "--cognito-client-id=$(COGNITO_CLIENT_ID)"
 - "--cognito-client-secret=$(COGNITO_CLIENT_SECRET)"
 - "--cognito-domain=$(COGNITO_DOMAIN)"
+{{- end }}
+{{- if $c.oidc.enabled }}
+{{- if not $c.oidc.issuerUrl }}
+{{- fail "apiServer.oidc.enabled needs apiServer.oidc.issuerUrl: every other endpoint is discovered from it." }}
+{{- end }}
+{{- if not $c.oidc.clientId }}
+{{- fail "apiServer.oidc.enabled needs apiServer.oidc.clientId: it is the audience every ID token is verified against." }}
+{{- end }}
+{{- if not $c.oidc.redirectUrl }}
+{{- fail "apiServer.oidc.enabled needs apiServer.oidc.redirectUrl: it must match the URI registered with the issuer byte-for-byte and cannot be derived behind a proxy." }}
+{{- end }}
+- "--auth-provider=oidc"
+- "--oidc-issuer-url=$(OIDC_ISSUER_URL)"
+- "--oidc-client-id=$(OIDC_CLIENT_ID)"
+- "--oidc-redirect-url=$(OIDC_REDIRECT_URL)"
+- "--oidc-scopes=$(OIDC_SCOPES)"
+{{- /* The client secret is deliberately NOT a flag. Its env var is an optional
+       secretKeyRef, and for a public client the Secret does not exist — an
+       undefined name leaves Kubernetes substituting nothing, so the process
+       would receive the literal string "$(OIDC_CLIENT_SECRET)" and present it
+       to the token endpoint as client authentication, which Entra rejects
+       (AADSTS700025) and other issuers answer with invalid_client. The flag
+       already defaults from OIDC_CLIENT_SECRET, which is empty when unset —
+       the public-client-with-PKCE flow this chart documents. */}}
 {{- end }}
 - "--crd-namespace={{ $c.staticArgs.crdNamespace }}"
 {{- if $c.basePath }}
@@ -173,6 +200,21 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
   valueFrom: { secretKeyRef: { name: {{ $s.cognito }}, key: cognito-client-secret, optional: true } }
 - name: COGNITO_DOMAIN
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: COGNITO_DOMAIN } }
+{{- end }}
+{{- if $c.oidc.enabled }}
+- name: OIDC_ISSUER_URL
+  value: {{ $c.oidc.issuerUrl | quote }}
+- name: OIDC_CLIENT_ID
+  value: {{ $c.oidc.clientId | quote }}
+- name: OIDC_REDIRECT_URL
+  value: {{ $c.oidc.redirectUrl | quote }}
+- name: OIDC_SCOPES
+  value: {{ $c.oidc.scopes | quote }}
+{{- /* Optional, and read as an env var rather than passed as a flag: a public
+       client has no Secret to reference, and relies on the PKCE the server
+       sends unconditionally. See the args block above. */}}
+- name: OIDC_CLIENT_SECRET
+  valueFrom: { secretKeyRef: { name: {{ $s.oidc }}, key: oidc-client-secret, optional: true } }
 {{- end }}
 {{- if eq $mode "ycp" }}
 - name: MCP_INTERNAL_SECRET

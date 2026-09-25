@@ -34,6 +34,13 @@ const oauthStateCookieName = "oauth_state"
 // Login requires PKCE for public app clients (those without a secret).
 const oauthPKCECookieName = "oauth_pkce"
 
+// oauthNonceCookieName is the short-lived, HttpOnly cookie that carries the
+// OIDC nonce between the login handler (which sends it to the authorization
+// endpoint) and the callback handler (which requires the issuer to have echoed
+// it into the id_token). State and PKCE already cover the code flow; this binds
+// the TOKEN to the request, which is what the spec asks of an RP.
+const oauthNonceCookieName = "oidc_nonce"
+
 // oauthStartCookieMaxAge is how long the OAuth start cookies (state + PKCE
 // verifier) live. They only need to survive the redirect round-trip to the
 // provider. 15 minutes comfortably covers a user lingering on the consent
@@ -390,6 +397,33 @@ func setOAuthPKCECookie(c echo.Context, verifier string) {
 		Value:    verifier,
 		Path:     "/",
 		MaxAge:   oauthStartCookieMaxAge,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(c),
+	})
+}
+
+// setOIDCNonceCookie stores the nonce for the callback to compare the id_token
+// against. Same shape and lifetime as the state cookie it travels with.
+func setOIDCNonceCookie(c echo.Context, nonce string) {
+	c.SetCookie(&http.Cookie{
+		Name:     oauthNonceCookieName,
+		Value:    nonce,
+		Path:     "/",
+		MaxAge:   oauthStartCookieMaxAge,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(c),
+	})
+}
+
+// clearOIDCNonceCookie expires the nonce cookie once consumed.
+func clearOIDCNonceCookie(c echo.Context) {
+	c.SetCookie(&http.Cookie{
+		Name:     oauthNonceCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   isSecure(c),

@@ -1,5 +1,15 @@
 {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") }}
 {{- $c := .Values.inferenceGateway }}
+{{- /*
+  The gateway builds its LangChain client while the app is being constructed, so a
+  missing provider credential is fatal rather than degrading: the process exits with
+  `openai.OpenAIError: Missing credentials` and the component reports 0/1 forever.
+  Caught here only when dataPlaneSecrets owns the Secret — an install supplying its
+  own is none of this chart's business.
+*/}}
+{{- if and $.Values.dataPlaneSecrets.enabled (eq (lower (default "" $c.config.INFERENCE_LLM_PROVIDER)) "openai") (not $.Values.dataPlaneSecrets.openaiApiKey) }}
+{{- fail "inferenceGateway is enabled with INFERENCE_LLM_PROVIDER=openai but dataPlaneSecrets.openaiApiKey is empty: the gateway exits at startup without it. Set the key, or disable inferenceGateway." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

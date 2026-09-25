@@ -13,13 +13,13 @@
 #     --set-string apiServer.image.tag=$TAG
 #
 # No storage class to pass, on purpose. The bundled database's volumes are the ONLY
-# PVCs in a BYOC release — controlPlaneDb, ragAgent and langfuse are all off — so
-# there is nothing for them to be consistent WITH, and in a customer's cluster we
-# cannot know the class names anyway. Its default class is both the right answer and
-# the only one we can rely on being appropriate there. `global.storageClassName`
-# from the cloud preset governs nothing here: it cannot reach a subchart's values
-# (Helm resolves values before rendering), which is what acceptClusterDefault below
-# acknowledges rather than pretends away.
+# PVCs in a BYOC release — controlPlaneDb and langfuse are off, and the rag-agent
+# workers claim none — so there is nothing for them to be consistent WITH, and in a
+# customer's cluster we cannot know the class names anyway. Its default class is both
+# the right answer and the only one we can rely on being appropriate there.
+# `global.storageClassName` from the cloud preset governs nothing here: it cannot
+# reach a subchart's values (Helm resolves values before rendering), which is what
+# acceptClusterDefault below acknowledges rather than pretends away.
 #
 # The chart does still refuse to install when the cluster has NO default class,
 # because then the PVCs sit Pending forever and the StatefulSet never becomes ready
@@ -114,7 +114,8 @@ dataPlaneSecrets:
 # Set per component rather than through global.imageRegistry, so a caller who passes an
 # env preset for its other settings does not have to fight it over the registry. Quay
 # repositories are flat, so the ECR-style `meko/<name>` path is replaced rather than
-# re-hosted. Only these three: the rest of the stack is disabled below.
+# re-hosted. The components that stay off get theirs further down, so that enabling one
+# is a flag rather than a flag plus two image values.
 apiServer:
   image:
     registry: quay.io/yugabyte
@@ -137,7 +138,28 @@ apiServer:
   cognito:
     # No IdP in a BYOC bring-up. api_server then treats every request as its dev
     # account, which is fine for an environment nobody else can reach and NOT fine
-    # as a permanent answer — a real deployment wires an IdP here.
+    # as a permanent answer.
+    #
+    # The real answer for a customer cluster is OIDC, not Cognito: a Cognito pool
+    # is ours, in our AWS account, which is the opposite of BYOC. Point the stack
+    # at the customer's own issuer instead —
+    #
+    #   apiServer:
+    #     oidc:
+    #       enabled: true
+    #       issuerUrl: https://keycloak.customer.example/realms/meko
+    #       clientId: meko
+    #       redirectUrl: https://meko.customer.example/api/v1/auth/oidc/callback
+    #   dataPlaneSecrets:
+    #     oidcClientSecret: <from the issuer>   # omit for a public client
+    #
+    # — in a values file passed after this one. The issuer owns its users, so no
+    # signup or password-reset routes are served; sign-in happens on its pages.
+    #
+    # Turning an IdP on also makes the api-server authenticate the reconcile-agent,
+    # whose MEKO_API_TOKEN is optional precisely because this preset has none. Create
+    # reconcileAgent.secrets.existing.mekoApiToken (key meko-api-token) with a meko
+    # PAT in the same change, or the agent runs and every call it makes 401s.
     enabled: false
   ingress:
     # Reached by port-forward or whatever the operator puts in front. An Ingress
@@ -210,15 +232,26 @@ mekoUi:
     # reads it.
     enabled: false
 
-# Off until each has a BYOC story of its own:
-#   langfuse — v3 needs ClickHouse, Redis and object storage beside it;
-#   ragAgent — wants GPU nodes and an S3 bucket;
-#   provisioner — manages per-tenant namespaces, which is the opposite of one namespace.
-#
 # inferenceGateway is ON. What it still needs from the installer: an image tag,
 # the two endpoints blanked below, and — for the default bedrock provider —
 # dataPlaneSecrets.awsAccessKeyId / .awsSecretAccessKey, which render the
-# inference-gateway-aws Secret its Deployment mounts with envFrom.
+# inference-gateway-aws Secret its Deployment mounts with envFrom. `-f
+# values-byoc-full.yaml` after this file switches it to openai instead, and turns on
+# the rag workers.
+#
+# Off here:
+#   ragAgent    — enableable with that overlay. The text worker runs anywhere; the
+#                 PDF worker is gated on ragAgent.gpu.enabled and needs a GPU pool.
+#   langfuse    — NOT a flag away: v3 wants ClickHouse, a Valkey release of its own
+#                 (valkey.managed: false) and object storage beside it.
+#   provisioner — deliberately not: it renders ClusterRoles and a CRD, and manages
+#                 per-tenant namespaces, which is the opposite of one namespace.
+#
+# Image coordinates are carried here whether or not a component is on, so enabling
+# one is a flag and not a flag plus two image values: meko.image falls back to
+# global.imageRegistry, which the cloud preset points at ECR, and a BYOC cluster
+# holds no ECR credential. All four publish to Quay
+# (meko/jenkins/scripts/build-images-aws.sh).
 inferenceGateway:
   enabled: true
   image:
@@ -240,9 +273,17 @@ inferenceGateway:
     # Set either here only to point somewhere else.
     INFERENCE_MCP_ENDPOINT: ""
     INFERENCE_CORS_ORIGINS: ""
-ragAgent: { enabled: false }
-langfuse: { enabled: false }
-provisioner: { enabled: false }
+ragAgent:
+  enabled: false
+  text: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
+  pdf: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
+langfuse:
+  enabled: false
+  web: { image: { registry: quay.io/yugabyte, repository: meko-langfuse-web } }
+  worker: { image: { registry: quay.io/yugabyte, repository: meko-langfuse-worker } }
+provisioner:
+  enabled: false
+  image: { registry: quay.io/yugabyte, repository: meko-provisioner }
 
 # The refresher keeps the ECR pull Secret alive (tokens last ~12h) but needs AWS
 # credentials of its own. Off by default here; turn it on with

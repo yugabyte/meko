@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,6 +24,8 @@ import { safeReturnTo } from "@/features/auth/returnTo";
 import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
+import { useAuthConfig } from "@/features/auth/authConfig";
+import OidcSignInPage from "@/features/auth/pages/OidcSignInPage";
 import { GoogleIcon } from "@/components/icons/GoogleIcon";
 import { LinkedInIcon } from "@/components/icons/LinkedInIcon";
 
@@ -43,6 +45,11 @@ const OAUTH_ERROR_REASONS: Record<string, string> = {
   linkedin_no_code: "LinkedIn sign-in didn't complete. Please try again.",
   linkedin_exchange: "We couldn't finish signing you in with LinkedIn. Please try again.",
   linkedin_provision: "We couldn't finish setting up your account. Please try again.",
+  oidc_state: "Your sign-in session expired. Please try again.",
+  oidc_no_code: "Sign-in didn't complete. Please try again.",
+  oidc_exchange: "We couldn't finish signing you in. Please try again.",
+  oidc_unavailable: "The identity provider isn't reachable right now. Please try again shortly.",
+  oidc_provision: "We couldn't finish setting up your account. Please try again.",
   access_denied: "Sign-in was cancelled.",
 };
 
@@ -61,6 +68,9 @@ function confirmSignupResumePath(email: string): string {
 export default function SignInPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Which IdP this deployment runs. null while in flight — the page waits
+  // rather than flashing a password form a deployment may not have.
+  const authConfig = useAuthConfig();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -223,6 +233,27 @@ export default function SignInPage() {
       setResendLoading(false);
     }
   };
+
+  // Hold the page until the provider is known: rendering the Cognito form and
+  // then swapping it for a redirect button is worse than a beat of nothing.
+  if (!authConfig) {
+    return <AuthPageShell>{null}</AuthPageShell>;
+  }
+
+  // An OIDC deployment has no password form, no signup and no social buttons —
+  // the issuer owns all three. Everything below this line is the Cognito page,
+  // unchanged.
+  if (authConfig.provider === "oidc" && authConfig.loginUrl) {
+    return <OidcSignInPage loginUrl={authConfig.loginUrl} error={error} />;
+  }
+
+  // No IdP at all (a bring-up on dev auth): every request is already
+  // authenticated as the one dev account, so there is nothing to sign into.
+  // Showing the Cognito form would offer a password, a signup link and social
+  // buttons with nothing behind any of them.
+  if (authConfig.provider === "none") {
+    return <Navigate to={ROUTES.root} replace />;
+  }
 
   return (
     <AuthPageShell>
