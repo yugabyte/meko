@@ -110,7 +110,7 @@ export class MekoClient {
   }
 
   private async serviceConv(): Promise<string> {
-    this.serviceConversation ??= await this.ensureConversation('agent-k-local', null, 'agent-k-local-service', 'agent-k-local service');
+    this.serviceConversation ??= await this.ensureConversation('agent-k-local', null, 'agent-k-local-service', 'AgentK Local service');
     return this.serviceConversation;
   }
 

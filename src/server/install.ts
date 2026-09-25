@@ -194,7 +194,7 @@ export async function runInstall(args: string[]): Promise<void> {
     const cfg: Config = loadConfig(paths);
 
     // 1. Basics
-    say('agent-k-local setup');
+    say('AgentK Local setup');
     say('');
     const reposRoot = values['repos-root'] ?? (await ask('Folder that holds your git repos', cfg.repos.roots[0] ?? '~/code'));
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];

@@ -4,6 +4,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { ensureWorkspaceTrust } from './trust.js';
 import { userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, UpdateStatus } from '../shared/types.js';
+import { getOwner } from './auth.js';
 import { saveConfig, type Config } from './config.js';
 import { run, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
@@ -97,7 +98,8 @@ export class Core extends EventEmitter {
       meko: this.mekoStatus,
       update: this.updateStatus(),
       version: this.version,
-      username: this.username,
+      // The login name shown in the UI; the Unix account only as a fallback.
+      username: getOwner(this.db)?.username ?? this.username,
     };
   }
 
@@ -116,6 +118,7 @@ export class Core extends EventEmitter {
     await this.tmux.ensureServer();
     await this.checkMeko();
     await this.sessions.recover();
+    void this.sessions.refreshDiffStats().catch(() => undefined);
     run(this.db, 'DELETE FROM session_events WHERE at < ?', Date.now() - 30 * 24 * 3600 * 1000);
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());

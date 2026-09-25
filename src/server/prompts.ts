@@ -11,7 +11,7 @@ import { get, type Db } from './db.js';
 export type PromptName = 'design' | 'code' | 'pr' | 'review' | 'review-people' | 'continue' | 'continue-review';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
-  design: `You are in the Design stage of an agent-k-local task.
+  design: `You are in the Design stage of an AgentK Local task.
 
 Task: {{task}}
 

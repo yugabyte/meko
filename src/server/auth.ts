@@ -176,7 +176,7 @@ export function newTotpSecret(): string {
   return base32Encode(randomBytes(20));
 }
 
-export function otpauthUrl(secret: string, username: string, issuer = 'agent-k-local'): string {
+export function otpauthUrl(secret: string, username: string, issuer = 'AgentK Local'): string {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(username)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`;
 }
 

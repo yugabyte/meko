@@ -94,7 +94,7 @@ async function serve(): Promise<void> {
   await app.listen({ host: cfg.server.bind, port: cfg.server.port });
 
   const url = baseUrl(cfg, !!tls);
-  log.info(`agent-k-local ${v} listening on ${url}`);
+  log.info(`AgentK Local ${v} listening on ${url}`);
   if (tls) log.info(`TLS certificate SHA-256 fingerprint: ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
   if (!getOwner(db)) log.info(`first-time setup: ${url}/setup?token=${issueSetupToken(db)}`);
 
@@ -123,7 +123,7 @@ async function selftest(): Promise<void> {
   const pty = await import('node-pty');
   if (typeof pty.spawn !== 'function') throw new Error('node-pty failed to load');
   if (!findWebDir(here)) throw new Error('web assets are missing');
-  console.log(`agent-k-local ${version()} selftest ok`);
+  console.log(`AgentK Local ${version()} selftest ok`);
 }
 
 async function status(): Promise<void> {
@@ -131,7 +131,7 @@ async function status(): Promise<void> {
   const cfg = loadConfig(paths);
   const tls = await loadTls(paths, cfg).catch(() => null);
   const url = baseUrl(cfg, !!tls);
-  console.log(`agent-k-local ${version()}`);
+  console.log(`AgentK Local ${version()}`);
   console.log(`home:     ${paths.home}`);
   console.log(`database: ${dbPath(paths, cfg)}`);
   console.log(`url:      ${url}`);
@@ -160,7 +160,7 @@ async function status(): Promise<void> {
 }
 
 function help(): void {
-  console.log(`agent-k-local ${version()}
+  console.log(`AgentK Local ${version()}
 
 Usage: agent-k-local <command>
 

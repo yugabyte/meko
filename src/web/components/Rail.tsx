@@ -44,7 +44,7 @@ export function Rail({
     <nav className="rail" aria-label="Projects">
       <div className="brand">
         <img src="/logo.png" alt="" width={26} height={26} />
-        <span>agent-k-local</span>
+        <span>AgentK Local</span>
       </div>
       <div className="rail-list">
         {projects.map((p, i) => {

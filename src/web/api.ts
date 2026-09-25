@@ -46,7 +46,7 @@ async function request<T>(method: string, path: string, body?: unknown, opts: { 
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new ApiError(0, 'Can’t reach the agent-k-local server. Check that it is running.');
+    throw new ApiError(0, 'Can’t reach the AgentK Local server. Check that it is running.');
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();

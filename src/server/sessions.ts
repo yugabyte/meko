@@ -17,7 +17,7 @@ import {
   type SessionRow, type SessionRuntime,
 } from './store.js';
 import { tmuxName } from './tmux.js';
-import { TRUST_PROMPT_RE } from './trust.js';
+import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
 const QUARTER_HOUR = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -212,7 +212,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by agent-k-local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). Stages: Design → Code → PR → Review → Merge → Cleanup; the user approves the design, opening the PR, and merging from the agent-k-local UI.`,
+      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). Stages: Design → Code → PR → Review → Merge → Cleanup; the user approves the design, opening the PR, and merging from the AgentK Local UI.`,
     ];
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${projectAgentId(row.project_id)}" on Meko calls that write.`);
@@ -231,6 +231,15 @@ export class SessionManager {
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null }): Promise<void> {
     this.launching.add(row.id);
     try {
+      // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
+      const repo = projectRow(this.db, row.project_id)?.repo_path;
+      if (repo) {
+        try {
+          ensureWorkspaceTrust(repo);
+        } catch (e) {
+          this.core.log.warn(`could not mark ${repo} as trusted in Claude Code`, errMsg(e));
+        }
+      }
       const script = writeLauncher(this.core.paths, {
         sessionId: row.id,
         worktree: row.worktree_path,

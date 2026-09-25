@@ -30,8 +30,9 @@ export function isTrusted(dir: string, cfg: ClaudeJson): boolean {
 
 /**
  * Claude Code asks "Do you trust this folder?" the first time it runs in a
- * directory, unless that directory or a parent is trusted. Every session gets
- * a fresh worktree, so trust the worktrees root once instead of asking each time.
+ * directory, unless that directory or a parent is trusted. For a git worktree
+ * the decision is keyed by the main repository, so the server trusts each
+ * project's repo before launching a session (and the worktrees root as well).
  */
 export function ensureWorkspaceTrust(dir: string): 'already' | 'added' | 'no-config' {
   const file = claudeConfigPath();
