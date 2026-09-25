@@ -72,7 +72,9 @@ if [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ]; then
       ;;
   esac
 fi
-[ -n "$AK_USER_STATUSLINE" ] && printf '%s' "$input" | sh -c "$AK_USER_STATUSLINE"
+# Sessions launched before this script existed don't have AK_USER_STATUSLINE; use the saved user one.
+if [ -n "\${AK_USER_STATUSLINE+x}" ]; then cmd=$AK_USER_STATUSLINE; else cmd=$(cat "$(dirname "$0")/user-statusline" 2>/dev/null); fi
+[ -n "$cmd" ] && printf '%s' "$input" | sh -c "$cmd"
 exit 0
 `;
 
@@ -149,8 +151,10 @@ export function writeHookFiles(paths: Paths): void {
   const statusLine = statusLineScriptPath(paths);
   writeFileSync(statusLine, STATUSLINE_SCRIPT);
   chmodSync(statusLine, 0o755);
-  // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE).
+  // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE, or
+  // this file for sessions launched before the variable existed).
   const mine = userStatusLine(null);
+  writeFileSync(join(paths.run, 'user-statusline'), mine?.command ?? '');
   const cmd = { type: 'command', command: script, timeout: 5 };
   const all = [{ hooks: [cmd] }];
   const settings = {

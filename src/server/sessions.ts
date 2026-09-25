@@ -271,9 +271,9 @@ export class SessionManager {
     const dps = projectDatapacks(this.db, row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
     // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
-    const statusLine = userStatusLine(row.worktree_path)?.command;
+    // Set even when empty: empty means the user has none, unset means a session from before this.
     return {
-      ...(statusLine ? { AK_USER_STATUSLINE: statusLine } : {}),
+      AK_USER_STATUSLINE: userStatusLine(row.worktree_path)?.command ?? '',
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       AK_HOOK_SOCK: this.core.paths.hookSock,

@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { userStatusLine } from '../../src/server/claude.js';
+import { statusLineScriptPath, userStatusLine, writeHookFiles } from '../../src/server/claude.js';
+import { getPaths } from '../../src/server/paths.js';
 import { openDb } from '../../src/server/db.js';
 import { PlanLimitsStore, currentLimits, parseRateLimits } from '../../src/server/limits.js';
 
@@ -92,5 +94,29 @@ describe("the user's own status line", () => {
     write(join(wt, '.claude', 'settings.json'), { statusLine: { type: 'command', command: '/home/x/.agent-k-local/run/statusline.sh' } });
     write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: 'user-sl' } });
     expect(userStatusLine(wt)?.command).toBe('user-sl');
+  });
+});
+
+describe('the status line script', () => {
+  it("prints the session's status line, or the saved user one for older sessions", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akl-sls-'));
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      process.env.CLAUDE_CONFIG_DIR = join(dir, 'config');
+      mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
+      writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'printf user:; cat' } }));
+      const paths = getPaths(join(dir, 'ak'));
+      writeHookFiles(paths);
+      expect(readFileSync(join(paths.run, 'user-statusline'), 'utf8')).toBe('printf user:; cat');
+      const run = (env: Record<string, string>) =>
+        execFileSync('sh', ['-c', statusLineScriptPath(paths)], { input: '{"model":{}}', env: { PATH: process.env.PATH!, ...env } }).toString();
+      expect(run({ AK_USER_STATUSLINE: 'printf session:; cat' })).toBe('session:{"model":{}}');
+      expect(run({})).toBe('user:{"model":{}}');
+      expect(run({ AK_USER_STATUSLINE: '' })).toBe('');
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
