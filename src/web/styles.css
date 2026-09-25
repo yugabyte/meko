@@ -1241,6 +1241,20 @@ a.icon-btn {
   color: var(--muted);
   font-size: 12px;
 }
+/* The newest events stay in view; the rest scroll inside the box instead of stretching the page. */
+.act-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.act-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .act {
   display: grid;
   grid-template-columns: 70px minmax(0, 1fr);

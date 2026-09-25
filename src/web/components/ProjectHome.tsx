@@ -110,23 +110,27 @@ export function ProjectHomeView({
             <span className="label">Recent activity</span>
             {!home && !loadError && <p className="muted">Loading…</p>}
             {home && home.activity.length === 0 && <p className="muted">Nothing yet. Start a session to get going.</p>}
-            {home?.activity.slice(0, 40).map((a, i) => (
-              <div className="act" key={i}>
-                <time>{shortTime(a.at)}</time>
-                <span>
-                  {a.sessionId && a.sessionName ? (
-                    <button
-                      className="link-btn inline"
-                      onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: a.sessionId })}
-                    >
-                      {a.sessionName}
-                    </button>
-                  ) : null}
-                  {a.sessionName ? ': ' : ''}
-                  {a.text}
-                </span>
+            {home && home.activity.length > 0 && (
+              <div className="act-list" tabIndex={0} aria-label="Recent activity">
+                {home.activity.map((a, i) => (
+                  <div className="act" key={i}>
+                    <time>{shortTime(a.at)}</time>
+                    <span>
+                      {a.sessionId && a.sessionName ? (
+                        <button
+                          className="link-btn inline"
+                          onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: a.sessionId })}
+                        >
+                          {a.sessionName}
+                        </button>
+                      ) : null}
+                      {a.sessionName ? ': ' : ''}
+                      {a.text}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </section>
         </div>
         {home && <UsagePanel projectId={project.id} usage={home.usage} />}
