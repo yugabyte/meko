@@ -87,6 +87,17 @@ export function consumeSetupToken(db: Db, token: string): boolean {
   return ok;
 }
 
+/** True while an unexpired setup link exists. */
+export function setupTokenOutstanding(db: Db): boolean {
+  const raw = kvGet(db, 'setup_token');
+  if (!raw) return false;
+  try {
+    return Date.now() < (JSON.parse(raw) as { expiresAt: number }).expiresAt;
+  } catch {
+    return false;
+  }
+}
+
 export function setupPending(db: Db): boolean {
   return !getOwner(db);
 }

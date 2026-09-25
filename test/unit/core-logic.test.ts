@@ -135,3 +135,15 @@ describe('date-based versions', () => {
     expect(compareSemver('0.20260924.0', '0.0.0-dev')).toBeGreaterThan(0);
   });
 });
+
+describe('setup link lifetime', () => {
+  it('reports an outstanding link until it is used', async () => {
+    const { setupTokenOutstanding } = await import('../../src/server/auth.js');
+    const db = openDb(':memory:');
+    expect(setupTokenOutstanding(db)).toBe(false);
+    const t = issueSetupToken(db);
+    expect(setupTokenOutstanding(db)).toBe(true);
+    consumeSetupToken(db, t);
+    expect(setupTokenOutstanding(db)).toBe(false);
+  });
+});

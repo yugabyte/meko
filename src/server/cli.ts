@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getOwner, issueSetupToken } from './auth.js';
+import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
 import { loginShell, scrubClaudeMarkers } from './claude.js';
 import { dbPath, isLoopback, loadConfig, resolveMeko } from './config.js';
 import { Core } from './core.js';
@@ -96,7 +96,11 @@ async function serve(): Promise<void> {
   const url = baseUrl(cfg, !!tls);
   log.info(`AgentK Local ${v} listening on ${url}`);
   if (tls) log.info(`TLS certificate SHA-256 fingerprint: ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
-  if (!getOwner(db)) log.info(`first-time setup: ${url}/setup?token=${issueSetupToken(db)}`);
+  if (!getOwner(db)) {
+    // Don't replace a link the installer (or `setup-link`) already printed.
+    if (setupTokenOutstanding(db)) log.info('waiting for first-time setup: open the link the installer printed, or run `agent-k-local setup-link` for a new one');
+    else log.info(`first-time setup: ${url}/setup?token=${issueSetupToken(db)}`);
+  }
 
   updater.start();
   setTimeout(() => updater.markHealthy(), 30000).unref();
