@@ -135,8 +135,8 @@ is in effect. The one place the marker gates in-tree code is
 [`read_stream.c`](../vendor/postgres-v18/src/backend/storage/aio/read_stream.c),
 where `ASSUME_KERNEL_READAHEAD` is set to `0`: pages served over the network get
 no benefit from OS readahead, so the read-stream machinery does not assume it.
-The contrib index AMs `pgvector` and `rum` also branch on `YB_AMP_SMGR` (see their
-patches under [`compute/image/patches`](../image/patches)).
+The `pgvector` index AM also branches on `YB_AMP_SMGR`: see its
+`pgvector-pg18.patch` under [`compute/image/patches`](../image/patches).
 
 ### The `yb_amp` storage manager
 

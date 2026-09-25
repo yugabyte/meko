@@ -15,7 +15,6 @@
 # Every download is verified against its pin (scripts/safe_curl.sh).
 !scripts/safe_curl.sh
 !downloads_checksum.txt
-!docker-compose/run-tests.sh
 
 # Directories
 !.cargo/
@@ -33,7 +32,6 @@ controller/*
 !controller/migrations/
 # The Go yb_amp_local launcher lives here; the endpoint/controller images build it.
 !controller/local/
-!docker-compose/ext-src
 !proxy/
 !storage_scrubber/
 !storage_broker/

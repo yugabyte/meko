@@ -24,7 +24,6 @@
 #     pins and checks it when set; its default is "unpinned"), and the voyager
 #     installer then downloads its own dependencies. That image tracks a branch
 #     on purpose; it is not an amp build input.
-#   * compute/image/compute-node.Dockerfile, the legacy Neon image nothing builds.
 #   * integrity with a chain of its own: apt (signed repositories), the Rust
 #     toolchain rustup installs (its dist manifest), cargo install --locked.
 #

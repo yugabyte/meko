@@ -110,7 +110,6 @@ RUN set -e \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # protobuf-compiler (protoc)
-# Keep the version the same as in compute/image/compute-node.Dockerfile
 ENV PROTOC_VERSION=25.1
 RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
     --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
@@ -155,11 +154,9 @@ RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_
     && rm -rf /tmp/mold
 
 # Use the same version of libicu as the compute nodes so that clusters created
-# using initdb on the pageserver can be used by computes.
-#
-# TODO: at this time, compute-node.Dockerfile uses the debian bullseye libicu
-# package, which is 67.1. We're duplicating that knowledge here, and also,
-# technically, Debian has a few patches on top of 67.1 that we're not adding here.
+# using initdb on the pageserver can be used by computes. 67.1 is pinned because
+# existing compute collations were created with it: the compute's Postgres links
+# this static, unpatched ICU (`--with-icu` in the Makefile), not the base OS's.
 ENV ICU_VERSION=67.1
 ENV ICU_PREFIX=/usr/local/icu
 

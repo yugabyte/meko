@@ -1,16 +1,10 @@
 # This makefile assumes that 'pg_config' is in the path, or is passed in the
 # PG_CONFIG variable.
 #
-# This is used in two different ways:
-#
-# 1. The main makefile calls this, when you invoke the `make yb_amp-pg-ext-%`
-#    target. It passes PG_CONFIG pointing at the selected tree's %/bin/pg_config.
-#    This is a VPATH build; the current directory is build/pgxn-%, and
-#    the path to the Makefile is passed with the -f argument.
-#
-# 2. compute-node.Dockerfile invokes this to build the compute extensions
-#    for the specific Postgres version. It relies on pg_config already
-#    being in $(PATH).
+# The main makefile calls this when you invoke the `make yb-amp-pg-ext-%`
+# target. It passes PG_CONFIG pointing at the selected tree's %/bin/pg_config.
+# This is a VPATH build; the current directory is build/pgxn-%, and the path to
+# the Makefile is passed with the -f argument.
 
 srcdir = $(dir $(firstword $(MAKEFILE_LIST)))
 
