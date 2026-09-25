@@ -56,6 +56,8 @@ export class SessionManager {
   readonly planPending = new Set<string>();
   /** Sessions being launched right now; reconcile leaves them alone. */
   private launching = new Set<string>();
+  /** Sessions being created right now (row written, Claude not started yet); recovery leaves them alone. */
+  private creating = new Set<string>();
   /** Sessions we are deliberately stopping; their exit isn't an event. */
   private stopping = new Set<string>();
   /** Token totals per session, refreshed after each transcript read. */
@@ -199,34 +201,40 @@ export class SessionManager {
         randomBytes(24).toString('base64url'), stage, task || null, now, now);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
     });
-    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
-    const naming = this.nameConversation(this.row(id));
-    let sync: SyncResult | null;
+    // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
+    this.creating.add(id);
     try {
-      sync = await addWorktree(p.repo_path, worktree, branch, base);
-    } catch (e) {
-      this.startup.delete(id);
-      run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
-      this.core.changed();
-      throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
-    }
-    this.event(id, 'created', startedText(branch, base, sync));
+      this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+      const naming = this.nameConversation(this.row(id));
+      let sync: SyncResult | null;
+      try {
+        sync = await addWorktree(p.repo_path, worktree, branch, base);
+      } catch (e) {
+        this.startup.delete(id);
+        run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
+        this.core.changed();
+        throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
+      }
+      this.event(id, 'created', startedText(branch, base, sync));
 
-    const row = this.row(id);
-    const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
-    this.setStartup(id, 'launch');
-    await within(naming, NAME_CONVERSATION_MS);
-    try {
-      await this.launch(row, { resume: false, prompt });
-    } catch (e) {
-      this.startup.delete(id);
-      this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
-      throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
+      const row = this.row(id);
+      const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
+      this.setStartup(id, 'launch');
+      await within(naming, NAME_CONVERSATION_MS);
+      try {
+        await this.launch(row, { resume: false, prompt });
+      } catch (e) {
+        this.startup.delete(id);
+        this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
+        throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
+      }
+      this.setStartup(id, 'loading');
+      this.core.log.info(`session created: ${id}`);
+      this.core.changed();
+      return this.get(id);
+    } finally {
+      this.creating.delete(id);
     }
-    this.setStartup(id, 'loading');
-    this.core.log.info(`session created: ${id}`);
-    this.core.changed();
-    return this.get(id);
   }
 
   private async uniqueSlug(projectId: string, repo: string, prefix: string, base: string): Promise<string> {
@@ -499,7 +507,7 @@ export class SessionManager {
     await this.core.tmux.ensureServer();
     const panes = await this.core.tmux.panes();
     for (const row of sessionRows(this.db)) {
-      if (row.desired !== 'running' || !projectRow(this.db, row.project_id)) continue;
+      if (row.desired !== 'running' || this.creating.has(row.id) || !projectRow(this.db, row.project_id)) continue;
       const pane = panes.get(row.tmux_name);
       if (pane && !pane.dead) continue; // server restart; Claude kept running
       if (pane && pane.dead) {
@@ -519,7 +527,7 @@ export class SessionManager {
     }
     const panes = await this.core.tmux.panes();
     for (const row of sessionRows(this.db)) {
-      if (row.desired !== 'running' || this.launching.has(row.id) || this.stopping.has(row.id)) continue;
+      if (row.desired !== 'running' || this.creating.has(row.id) || this.launching.has(row.id) || this.stopping.has(row.id)) continue;
       const pane = panes.get(row.tmux_name);
       if (!pane) {
         await this.recoverOne(row).catch((e) => this.core.log.error(`recovery failed for ${row.id}`, e));

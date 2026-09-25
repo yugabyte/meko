@@ -589,7 +589,7 @@ sequenceDiagram
   SD->>S: start
   S->>S: open state.db
   S->>T: list sessions
-  loop each session with desired = running and no pane
+  loop each session with desired = running and no pane (not one still being created)
     S->>S: verify worktree, recreate from branch if missing
     S->>T: new-session in worktree
     alt session was mid-turn

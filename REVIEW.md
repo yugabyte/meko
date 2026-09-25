@@ -11,7 +11,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] Nothing makes tmux or Claude a child of the server process or its systemd unit.
 - [ ] Server restarts and updates leave running sessions untouched.
-- [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed.
+- [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
+      and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Auto-continue guards hold (once per 15 minutes; parked after two recoveries in an hour).
 - [ ] Status changes come from hook events or pane checks, not guesses. Deliberate stops (archive,
       cleanup) don't show up as "exited".

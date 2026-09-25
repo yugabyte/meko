@@ -62,8 +62,9 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
    Never start tmux or Claude as children of the server's unit or process group. Server restarts and
    updates must never stop a session.
 2. **Recovery is idempotent.** `recover()` and `reconcile()` may run at any time. A session with a live
-   pane is left alone; a missing pane is relaunched with `claude --resume`; auto-continue is guarded
-   (once per 15 minutes, parked after two in an hour).
+   pane is left alone, and so is one still being created or launched (it has no pane yet); a missing
+   pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes, parked
+   after two in an hour).
 3. **Everything behind login.** Every `/api/*` route except `auth/status|setup|login` requires the
    session cookie, and every WebSocket checks cookie and `Origin`. Hooks use the unix socket with a
    per-session token, never the network port.

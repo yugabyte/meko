@@ -113,6 +113,23 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
   });
 
+  it('reconcile leaves a session alone while it is still being created', async () => {
+    const p = await newProject();
+    // A slow create (git fetch, a busy index.lock, Meko) lets the 5-second reconcile run
+    // after the worktree exists but before Claude is launched. It must not "recover" the
+    // session, or Claude is launched twice with the same session id.
+    env.meko.ensureConversation = async () => {
+      await waitFor(() => env.core.sessions.get('demo-repo--race-me').startup?.step, (st) => st === 'launch', 10000, 'worktree');
+      await env.core.sessions.reconcile();
+      return 'conv-1';
+    };
+    const s = await env.core.sessions.create(p.id, { name: 'Race me', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const recovered = get<{ n: number }>(env.core.db, "SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'recovered'", s.id);
+    expect(recovered?.n).toBe(0);
+    expect(argvLog(env)).toHaveLength(1);
+  });
+
   it('archive keeps a worktree with uncommitted changes, and its branch', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Keep me', prompt: 'hi', skipDesign: true });
