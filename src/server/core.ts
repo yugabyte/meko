@@ -5,7 +5,7 @@ import { ensureWorkspaceTrust } from './trust.js';
 import { userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
-import { saveConfig, type Config } from './config.js';
+import { resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { run, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
@@ -44,7 +44,7 @@ export class Core extends EventEmitter {
   readonly projects: ProjectService;
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
-  mekoStatus: MekoStatus = { ok: true, error: null, checkedAt: null };
+  mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
   private timersOn: boolean;
@@ -58,6 +58,7 @@ export class Core extends EventEmitter {
     this.version = o.version;
     this.cfg = o.config;
     this.meko = o.meko;
+    this.mekoStatus = { ok: true, error: null, checkedAt: null, webUrl: resolveMekoWebUrl(o.config) };
     this.log = o.log ?? consoleLogger;
     this.tmux = o.tmux ?? new Tmux(o.config.tmux.socket, o.paths.tmuxConf);
     this.timersOn = o.timers ?? true;
@@ -80,6 +81,7 @@ export class Core extends EventEmitter {
     fn(next);
     saveConfig(this.paths, next);
     this.cfg = next;
+    this.mekoStatus = { ...this.mekoStatus, webUrl: resolveMekoWebUrl(next) };
     this.changed();
     return next;
   }
@@ -166,9 +168,9 @@ export class Core extends EventEmitter {
     const before = this.mekoStatus.ok;
     try {
       await this.meko.check();
-      this.mekoStatus = { ok: true, error: null, checkedAt: Date.now() };
+      this.mekoStatus = { ...this.mekoStatus, ok: true, error: null, checkedAt: Date.now() };
     } catch (e) {
-      this.mekoStatus = { ok: false, error: errMsg(e), checkedAt: Date.now() };
+      this.mekoStatus = { ...this.mekoStatus, ok: false, error: errMsg(e), checkedAt: Date.now() };
       if (before) this.log.warn('Meko unreachable', this.mekoStatus.error);
     }
     if (before !== this.mekoStatus.ok) this.changed();

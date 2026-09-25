@@ -191,6 +191,8 @@ export interface MekoStatus {
   ok: boolean;
   error: string | null;
   checkedAt: number | null;
+  /** Meko web app base URL, for links to datapacks. Null when unknown. */
+  webUrl: string | null;
 }
 
 export interface AppState {

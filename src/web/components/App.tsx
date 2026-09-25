@@ -188,6 +188,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         {currentProject && route.view === 'home' ? (
           <ProjectHomeView
             project={currentProject}
+            mekoWebUrl={state.meko.webUrl}
             onBack={() => goProject(currentProject)}
             onError={showToast}
           />
@@ -196,6 +197,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             project={currentProject}
             sessions={live}
             session={currentSession}
+            mekoWebUrl={state.meko.webUrl}
             onNewSession={() => setModal({ kind: 'new-session', projectId: currentProject.id })}
             onError={showToast}
           />

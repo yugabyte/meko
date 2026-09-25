@@ -44,6 +44,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const state = await app.inject({ url: '/api/state', headers: { cookie } });
     expect(state.statusCode).toBe(200);
     expect(state.json().version).toBe('0.0.0-test');
+    expect(state.json().meko.webUrl).toBe('https://cloud.mekodata.ai');
 
     const bad = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'nope' } });
     expect(bad.statusCode).toBe(401);

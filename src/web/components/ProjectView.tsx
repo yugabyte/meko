@@ -11,7 +11,7 @@ import { api, errorMessage } from '../api';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
-import { ConfirmButton, Dots, StatusDot } from './common';
+import { ConfirmButton, DatapackName, Dots, StatusDot } from './common';
 import { DesignPanel } from './DesignPanel';
 import { TerminalPane } from './TerminalPane';
 
@@ -36,12 +36,14 @@ export function ProjectView({
   project,
   sessions,
   session,
+  mekoWebUrl,
   onNewSession,
   onError,
 }: {
   project: ProjectWithSessions;
   sessions: Session[];
   session: Session | null;
+  mekoWebUrl: string | null;
   onNewSession: () => void;
   onError: (msg: string) => void;
 }) {
@@ -172,7 +174,7 @@ export function ProjectView({
             tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
           </span>
           <span>
-            datapack {dedicated?.name ?? '—'}
+            datapack {dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
             {sharedCount > 0 ? ` · +${sharedCount} shared` : ''}
           </span>
           <span>

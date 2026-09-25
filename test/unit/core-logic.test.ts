@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LoginLimiter, base32Decode, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
-import { DEFAULT_CONFIG, loadConfig, saveConfig } from '../../src/server/config.js';
+import { DEFAULT_CONFIG, loadConfig, mekoWebUrl, resolveMekoWebUrl, saveConfig } from '../../src/server/config.js';
 import { openDb, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, isLogin } from '../../src/server/github.js';
@@ -14,6 +14,7 @@ import { getPaths } from '../../src/server/paths.js';
 import { render } from '../../src/server/prompts.js';
 import { slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
+import { mekoDatapackUrl } from '../../src/web/util.js';
 
 describe('auth', () => {
   it('hashes and verifies passwords with scrypt', () => {
@@ -61,6 +62,25 @@ describe('config and db', () => {
     expect(back.repos.roots).toEqual(['~/src', '~/code']);
     expect(back.update.channel).toBe('prerelease');
     expect(back.server.port).toBe(7777);
+  });
+
+  it('finds the Meko web app for known MCP hosts only', () => {
+    expect(mekoWebUrl('https://mcp.mekodata.ai/mcp')).toBe('https://cloud.mekodata.ai');
+    expect(mekoWebUrl('https://MCP.mekodata.ai/mcp/')).toBe('https://cloud.mekodata.ai');
+    expect(mekoWebUrl('https://mcp.mekodev.com/mcp')).toBe('https://app.mekodev.com');
+    expect(mekoWebUrl('http://localhost:8000/mcp')).toBeNull();
+    expect(mekoWebUrl('not a url')).toBeNull();
+    expect(mekoWebUrl('http://localhost:8000/mcp', ' https://meko.example.com/ ')).toBe('https://meko.example.com');
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.meko.webUrl = 'https://meko.internal';
+    expect(resolveMekoWebUrl(cfg)).toBe('https://meko.internal');
+  });
+
+  it('links a datapack by id', () => {
+    expect(mekoDatapackUrl('https://cloud.mekodata.ai', 'eb5ba952-643a-4610-a662-a54a39c82a90')).toBe(
+      'https://cloud.mekodata.ai/datapacks/eb5ba952-643a-4610-a662-a54a39c82a90',
+    );
+    expect(mekoDatapackUrl(null, 'eb5ba952')).toBeNull();
   });
 
   it('migrates a fresh database', () => {

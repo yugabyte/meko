@@ -11,7 +11,7 @@ export interface Config {
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
   update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
-  meko: { url: string; apiKey: string };
+  meko: { url: string; apiKey: string; webUrl: string };
   state: { dbPath: string };
   tmux: { socket: string };
   claude: { command: string };
@@ -22,7 +22,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { url: 'https://mcp.mekodata.ai/mcp', apiKey: '' },
+  meko: { url: 'https://mcp.mekodata.ai/mcp', apiKey: '', webUrl: '' },
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },
@@ -93,6 +93,31 @@ export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
     url ||= fromClaude.MEKO_MCP_URL ?? '';
   }
   return { url: url || DEFAULT_CONFIG.meko.url, apiKey };
+}
+
+/** Meko Cloud web app for each known Meko MCP host. */
+const MEKO_WEB_BY_MCP_HOST: Record<string, string> = {
+  'mcp.mekodata.ai': 'https://cloud.mekodata.ai',
+  'mcp.mekodev.com': 'https://app.mekodev.com',
+};
+
+/**
+ * The Meko web app that goes with an MCP URL, or null when it can't be known
+ * (a local or self-hosted server). An explicit override always wins.
+ */
+export function mekoWebUrl(mcpUrl: string, override = ''): string | null {
+  if (override.trim()) return override.trim().replace(/\/+$/, '');
+  try {
+    return MEKO_WEB_BY_MCP_HOST[new URL(mcpUrl).hostname.toLowerCase()] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Meko web app URL: config first, then the environment, then derived from the MCP URL. */
+export function resolveMekoWebUrl(cfg: Config): string | null {
+  const override = cfg.meko.webUrl || process.env.MEKO_WEB_URL || readClaudeSettingsEnv().MEKO_WEB_URL || '';
+  return mekoWebUrl(resolveMeko(cfg).url, override);
 }
 
 export function readClaudeSettingsEnv(): Record<string, string> {

@@ -76,6 +76,11 @@ export function slugify(s: string): string {
     .slice(0, 60);
 }
 
+/** A datapack's page in the Meko web app, or null when the web app's address is unknown. */
+export function mekoDatapackUrl(webUrl: string | null, datapackId: string): string | null {
+  return webUrl ? `${webUrl}/datapacks/${encodeURIComponent(datapackId)}` : null;
+}
+
 export function isMac(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 }

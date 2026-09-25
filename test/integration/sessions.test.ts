@@ -39,7 +39,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     env.meko.check = async () => {
       throw new Error('boom');
     };
-    env.core.mekoStatus = { ok: false, error: 'boom', checkedAt: Date.now() };
+    env.core.mekoStatus = { ...env.core.mekoStatus, ok: false, error: 'boom', checkedAt: Date.now() };
     await expect(newProject()).rejects.toThrow(/Meko is unreachable/);
   });
 

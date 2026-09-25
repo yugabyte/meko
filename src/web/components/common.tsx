@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SessionStatus } from '../../shared/types';
-import { STATUS_TEXT, cx } from '../util';
+import { STATUS_TEXT, cx, mekoDatapackUrl } from '../util';
 
 export function StatusDot({ status, title }: { status: SessionStatus; title?: string }) {
   const cls =
@@ -111,6 +111,33 @@ export function ConfirmButton({
         Cancel
       </button>
     </span>
+  );
+}
+
+/** A datapack's name, linked to its Meko page when the Meko web app's address is known. */
+export function DatapackName({
+  id,
+  name,
+  mekoWebUrl,
+  className,
+}: {
+  id: string;
+  name: string;
+  mekoWebUrl: string | null;
+  className?: string;
+}) {
+  const href = mekoDatapackUrl(mekoWebUrl, id);
+  if (!href) {
+    return (
+      <span className={className} title={id}>
+        {name}
+      </span>
+    );
+  }
+  return (
+    <a className={cx('dp-link', className)} href={href} target="_blank" rel="noreferrer" title={`Open in Meko (${id})`}>
+      {name}
+    </a>
   );
 }
 

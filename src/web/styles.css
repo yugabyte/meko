@@ -1116,6 +1116,12 @@ textarea.input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dp-link {
+  text-decoration: none;
+}
+.dp-link:hover {
+  text-decoration: underline;
+}
 .num {
   font-variant-numeric: tabular-nums;
   color: var(--muted);

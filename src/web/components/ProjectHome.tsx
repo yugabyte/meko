@@ -10,7 +10,7 @@ import type {
 import { api, errorMessage } from '../api';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
-import { ConfirmButton, ErrorText, Field } from './common';
+import { ConfirmButton, DatapackName, ErrorText, Field } from './common';
 
 const SOURCE_LABEL: Record<SearchResult['source'], string> = {
   memory: 'memory',
@@ -20,10 +20,12 @@ const SOURCE_LABEL: Record<SearchResult['source'], string> = {
 
 export function ProjectHomeView({
   project,
+  mekoWebUrl,
   onBack,
   onError,
 }: {
   project: ProjectWithSessions;
+  mekoWebUrl: string | null;
   onBack: () => void;
   onError: (m: string) => void;
 }) {
@@ -65,9 +67,7 @@ export function ProjectHomeView({
             {(home?.datapacks ?? project.datapacks.map((d) => ({ ...d, memoryCount: null, knowledgeCount: null }))).map(
               (d) => (
                 <div className="dp" key={d.id}>
-                  <span className="mono dp-name" title={d.id}>
-                    {d.name}
-                  </span>
+                  <DatapackName className="mono dp-name" id={d.id} name={d.name} mekoWebUrl={mekoWebUrl} />
                   <span className={cx('tag', d.role === 'shared' && 'shared')}>{d.role}</span>
                   <span className="num">
                     {d.memoryCount != null ? `${fmt(d.memoryCount)} mem` : ''}
