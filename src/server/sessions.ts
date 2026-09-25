@@ -12,7 +12,7 @@ import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import { loadPrompt, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
-import { EDIT_TOOLS, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
+import { EDIT_TOOLS, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
@@ -273,7 +273,7 @@ export class SessionManager {
     // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
     // Set even when empty: empty means the user has none, unset means a session from before this.
     return {
-      AK_USER_STATUSLINE: userStatusLine(row.worktree_path)?.command ?? '',
+      AK_USER_STATUSLINE: userStatusLine(row.worktree_path, statusLineScriptPath(this.core.paths))?.command ?? '',
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       AK_HOOK_SOCK: this.core.paths.hookSock,

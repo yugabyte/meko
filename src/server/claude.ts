@@ -105,13 +105,13 @@ export function claudeUserDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 }
 
-function readStatusLine(file: string): StatusLineSetting | null {
+function readStatusLine(file: string, ours: string): StatusLineSetting | null {
   try {
     const sl = (JSON.parse(readFileSync(file, 'utf8')) as { statusLine?: unknown }).statusLine;
     if (!sl || typeof sl !== 'object') return null;
     const s = sl as StatusLineSetting;
-    // Never wrap our own script (for example, settings copied from a session).
-    return s.type === 'command' && typeof s.command === 'string' && s.command.trim() && !s.command.includes('statusline.sh')
+    // Never wrap our own script (for example, settings copied from a session): match its full path.
+    return s.type === 'command' && typeof s.command === 'string' && s.command.trim() && !s.command.includes(ours)
       ? s
       : null;
   } catch {
@@ -120,16 +120,16 @@ function readStatusLine(file: string): StatusLineSetting | null {
 }
 
 /**
- * The status line Claude Code would run without ours, since ours (passed with --settings)
- * replaces it: local project settings first, then project, then user settings.
+ * The status line Claude Code would run without ours (`ours`, the relay's path), since ours
+ * (passed with --settings) replaces it: local project settings first, then project, then user.
  */
-export function userStatusLine(worktree: string | null): StatusLineSetting | null {
+export function userStatusLine(worktree: string | null, ours: string): StatusLineSetting | null {
   const files = [
     ...(worktree ? [join(worktree, '.claude', 'settings.local.json'), join(worktree, '.claude', 'settings.json')] : []),
     join(claudeUserDir(), 'settings.json'),
   ];
   for (const f of files) {
-    const sl = readStatusLine(f);
+    const sl = readStatusLine(f, ours);
     if (sl) return sl;
   }
   return null;
@@ -153,7 +153,7 @@ export function writeHookFiles(paths: Paths): void {
   chmodSync(statusLine, 0o755);
   // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE, or
   // this file for sessions launched before the variable existed).
-  const mine = userStatusLine(null);
+  const mine = userStatusLine(null, statusLine);
   writeFileSync(join(paths.run, 'user-statusline'), mine?.command ?? '');
   const cmd = { type: 'command', command: script, timeout: 5 };
   const all = [{ hooks: [cmd] }];

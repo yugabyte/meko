@@ -9,6 +9,7 @@ import { openDb } from '../../src/server/db.js';
 import { PlanLimitsStore, currentLimits, parseRateLimits } from '../../src/server/limits.js';
 
 const NOW = 1_790_000_000_000;
+const OURS = '/home/x/.agent-k-local/run/statusline.sh';
 const input = (five: unknown, week: unknown) => ({ model: { id: 'x' }, rate_limits: { five_hour: five, seven_day: week } });
 
 describe('plan limits from the status line', () => {
@@ -75,14 +76,14 @@ describe("the user's own status line", () => {
     dir = mkdtempSync(join(tmpdir(), 'akl-sl-'));
     process.env.CLAUDE_CONFIG_DIR = join(dir, 'config');
     const wt = join(dir, 'wt');
-    expect(userStatusLine(wt)).toBeNull();
+    expect(userStatusLine(wt, OURS)).toBeNull();
     write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: 'user-sl', padding: 1 } });
-    expect(userStatusLine(wt)).toEqual({ type: 'command', command: 'user-sl', padding: 1 });
+    expect(userStatusLine(wt, OURS)).toEqual({ type: 'command', command: 'user-sl', padding: 1 });
     write(join(wt, '.claude', 'settings.json'), { statusLine: { type: 'command', command: 'project-sl' } });
-    expect(userStatusLine(wt)?.command).toBe('project-sl');
+    expect(userStatusLine(wt, OURS)?.command).toBe('project-sl');
     write(join(wt, '.claude', 'settings.local.json'), { statusLine: { type: 'command', command: 'local-sl' } });
-    expect(userStatusLine(wt)?.command).toBe('local-sl');
-    expect(userStatusLine(null)?.command).toBe('user-sl');
+    expect(userStatusLine(wt, OURS)?.command).toBe('local-sl');
+    expect(userStatusLine(null, OURS)?.command).toBe('user-sl');
   });
 
   it('skips broken files and never wraps its own script', () => {
@@ -91,9 +92,12 @@ describe("the user's own status line", () => {
     const wt = join(dir, 'wt');
     mkdirSync(join(wt, '.claude'), { recursive: true });
     writeFileSync(join(wt, '.claude', 'settings.local.json'), '{ not json');
-    write(join(wt, '.claude', 'settings.json'), { statusLine: { type: 'command', command: '/home/x/.agent-k-local/run/statusline.sh' } });
+    write(join(wt, '.claude', 'settings.json'), { statusLine: { type: 'command', command: `'${OURS}'` } });
     write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: 'user-sl' } });
-    expect(userStatusLine(wt)?.command).toBe('user-sl');
+    expect(userStatusLine(wt, OURS)?.command).toBe('user-sl');
+    // A user's own script with a similar name is theirs, not ours.
+    write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: "'/home/x/.claude/meko-statusline.sh'" } });
+    expect(userStatusLine(wt, OURS)?.command).toBe("'/home/x/.claude/meko-statusline.sh'");
   });
 });
 
