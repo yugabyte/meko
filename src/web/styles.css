@@ -576,33 +576,34 @@ textarea.input {
   flex: 1;
   min-height: 0;
 }
-.crumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 14px;
-  border-bottom: 1px solid var(--rule);
-  flex-wrap: wrap;
-  min-height: 46px;
-}
-.crumb-name {
-  font-weight: 600;
-}
-.status-text {
-  max-width: 420px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .stages-wrap {
   border-bottom: 1px solid var(--rule);
 }
-.stages {
+/* Stages and their gate on the left, the session's actions on the right; the actions wrap
+   below when an Archive confirmation needs the room. */
+.stages-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
   padding: 7px 14px;
+  min-height: 42px;
+}
+.stages {
+  flex: 1 1 520px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   font-size: 12px;
   overflow-x: auto;
+}
+.stage-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
 }
 .stg-item {
   display: flex;
@@ -2514,7 +2515,12 @@ a.icon-btn {
   }
 
   /* Session screen */
+  .stages-row {
+    padding: 0;
+    min-height: 0;
+  }
   .stages {
+    flex: 1 1 auto;
     padding: 6px 10px;
     overflow: visible;
     flex-wrap: wrap;

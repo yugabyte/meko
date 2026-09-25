@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   STAGES,
-  STARTUP_STEPS,
   STAGE_LABELS,
   type ProjectWithSessions,
   type Session,
@@ -144,49 +143,42 @@ export function ProjectView({
             </button>
           )}
         </TopBar>
-      ) : (
-        <header className="crumb">
-          <span className="muted">{project.name}</span>
-          {session && (
-            <>
-              <span className="muted">/</span>
-              <b className="crumb-name">{session.name}</b>
-              <StatusDot status={session.status} />
-              <span className="muted small status-text">
-                {STATUS_TEXT[session.status]}
-                {session.status === 'starting' && <Dots />}
-                {session.status === 'starting' && session.startup
-                  ? ` · ${STARTUP_STEPS.find((x) => x.step === session.startup!.step)?.label ?? ''}`
-                  : ''}
-                {session.status === 'working' && session.lastEventAt ? ` · ${duration(session.lastEventAt, now)}` : ''}
-                {session.statusDetail && session.status !== 'starting' ? ` · ${session.statusDetail}` : ''}
-              </span>
-            </>
-          )}
-          <span className="sp" />
-          {session?.prUrl && (
-            <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
-              PR #{session.prNumber}
-            </a>
-          )}
-          <button className="btn small" onClick={goHome}>
-            Project home
-          </button>
-          {canDesign && (
-            <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
-              Design doc
-            </button>
-          )}
-          {session?.status === 'exited' && (
-            <button className="btn small primary" onClick={() => act('resume')}>
-              Resume
-            </button>
-          )}
-          {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
-        </header>
-      )}
+      ) : null}
 
-      {session && <StageBar session={session} project={project} onAct={act} />}
+      {/* Desktop: one row with the stages and their gate, then the session's actions. On a phone the
+          top bar and the ⋯ sheet hold those actions, so the row only shows the stages. */}
+      {(session || !mobile) && (
+        <StageBar
+          session={session}
+          project={project}
+          onAct={act}
+          actions={
+            mobile ? null : (
+              <>
+                {session?.prUrl && (
+                  <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
+                    PR #{session.prNumber}
+                  </a>
+                )}
+                <button className="btn small" onClick={goHome}>
+                  Project home
+                </button>
+                {canDesign && (
+                  <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
+                    Design doc
+                  </button>
+                )}
+                {session?.status === 'exited' && (
+                  <button className="btn small primary" onClick={() => act('resume')}>
+                    Resume
+                  </button>
+                )}
+                {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
+              </>
+            )
+          }
+        />
+      )}
 
       <div className="tabs" role="tablist" ref={tabsRef}>
         {sessions.map((s) => (
@@ -196,7 +188,12 @@ export function ProjectView({
             aria-selected={s.id === session?.id}
             className={cx('tab', s.id === session?.id && 'sel')}
             onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
-            title={`${s.name} · ${STATUS_TEXT[s.status]} · ${STAGE_LABELS[s.stage]} · ${formatTokens(totalTokens(s.usage))} tokens`}
+            title={[
+              s.name,
+              STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
+              STAGE_LABELS[s.stage],
+              `${formatTokens(totalTokens(s.usage))} tokens`,
+            ].join(' · ')}
           >
             <StatusDot status={s.status} />
             <span className="tab-name">{s.name}</span>
@@ -278,11 +275,23 @@ function StageBar({
   session,
   project,
   onAct,
+  actions,
 }: {
-  session: Session;
+  session: Session | null;
   project: ProjectWithSessions;
   onAct: (a: SessionAction) => Promise<void>;
+  actions: ReactNode;
 }) {
+  if (!session) {
+    return (
+      <div className="stages-wrap">
+        <div className="stages-row">
+          <span className="sp" />
+          <div className="stage-actions">{actions}</div>
+        </div>
+      </div>
+    );
+  }
   const idx = session.stage === 'done' ? STAGES.length : STAGES.indexOf(session.stage);
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy;
@@ -363,22 +372,25 @@ function StageBar({
 
   return (
     <div className="stages-wrap">
-      <div className="stages" aria-label="Stages">
-        {STAGES.map((st, i) => (
-          <span key={st} className="stg-item">
-            {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
-            <span className={cx('stg', i < idx && 'done', i === idx && 'cur')} aria-current={i === idx ? 'step' : undefined}>
-              <span className="n">{i < idx ? '✓' : i + 1}</span>
-              <span className="stg-label">{STAGE_LABELS[st]}</span>
+      <div className="stages-row">
+        <div className="stages" aria-label="Stages">
+          {STAGES.map((st, i) => (
+            <span key={st} className="stg-item">
+              {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
+              <span className={cx('stg', i < idx && 'done', i === idx && 'cur')} aria-current={i === idx ? 'step' : undefined}>
+                <span className="n">{i < idx ? '✓' : i + 1}</span>
+                <span className="stg-label">{STAGE_LABELS[st]}</span>
+              </span>
             </span>
+          ))}
+          {/* The phone layout shows only the current stage's name, here. */}
+          <span className="stg-now">
+            <b>{STAGE_LABELS[session.stage]}</b>
+            {session.stage !== 'done' && <span className="muted"> {idx + 1} of {STAGES.length}</span>}
           </span>
-        ))}
-        {/* The phone layout shows only the current stage's name, here. */}
-        <span className="stg-now">
-          <b>{STAGE_LABELS[session.stage]}</b>
-          {session.stage !== 'done' && <span className="muted"> {idx + 1} of {STAGES.length}</span>}
-        </span>
-        <span className="stages-gate">{gate}</span>
+          <span className="stages-gate">{gate}</span>
+        </div>
+        {actions && <div className="stage-actions">{actions}</div>}
       </div>
       {session.stage === 'review' && !session.canMerge && session.mergeBlockers.length > 0 && (
         <div className="blockers">Merge is waiting on: {session.mergeBlockers.join(' · ')}</div>
