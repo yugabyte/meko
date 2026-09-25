@@ -1589,6 +1589,8 @@ a.icon-btn {
 }
 .diff-wrap {
   overflow-x: auto;
+  /* Comment cards size against the visible width, not the (often wider) table. */
+  container-type: inline-size;
 }
 .diff {
   border-collapse: collapse;
@@ -1765,7 +1767,7 @@ a.icon-btn {
   left: 10px;
   display: grid;
   gap: 6px;
-  max-width: 620px;
+  max-width: min(620px, calc(100cqw - 20px));
 }
 .cmt-outdated,
 .cmt-gone {
