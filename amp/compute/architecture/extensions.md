@@ -771,7 +771,21 @@ example.
   registering `ext_fixtures/postgis.json`, a cluster opting in, the pod carrying
   the registered layout (`share/extension`, the bundled `system/libgeos_c.so.1`,
   `share/proj/proj.db`), `CREATE EXTENSION` + `ST_Transform`, and deregistration
-  refused with 409 while the branch still uses it.
+  refused with 409 while the branch still uses it. Last comes the **documentdb
+  gateway**:
+  - an `engine:"documentdb"` cluster's endpoint runs the sidecar, Ready, and
+    reports `documentdb_address`;
+  - pymongo from upstream's pinned `functional-tests` image logs in through the
+    Service as `cloud_admin` over SCRAM-SHA-256;
+  - over the wire protocol it inserts, indexes, finds, updates, aggregates and
+    deletes, and SQL reads the same documents back;
+  - a wrong password is refused.
+- **DocumentDB functional-test gate** — `/ci amp_deploy_gke_documentdb` runs
+  upstream documentdb's own PR gate against the deployed gateway
+  ([`deploy/documentdb-functional/`](../../deploy/documentdb-functional/README.md)).
+  That is the ~10,500 allowlisted functional tests, taken from the release amp
+  ships, minus amp's reasoned exclusions. It passes only if every gated test
+  passes.
 
 ## Code anchors
 

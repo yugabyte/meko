@@ -47,6 +47,13 @@ name: Amp control-plane GKE (itest-dev)
 #     declares desired state through YCP and asserts the authoritative agent
 #     creates the tree, reports it READY, and GCs it on withdrawal.
 #     Directive/dispatch-only; NOT nightly.
+#   * `/ci amp_deploy_gke_documentdb` — a superset of `amp_deploy_gke_extensions`'s
+#     image build (it needs the documentdb extension image) that, after the smoke,
+#     runs upstream documentdb's own functional-test gate against the gateway
+#     (amp/deploy/documentdb-functional/run.sh): the allowlist upstream gates its
+#     PRs on, at the documentdb release amp ships, minus amp's reasoned
+#     exclusions, as SHARDS in-cluster pods through the endpoint's Service.
+#     Directive/dispatch-only (`documentdb_functional`); NOT nightly.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
 # QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
@@ -67,6 +74,10 @@ on:
         default: false
       push_ycp:
         description: 'Also build+push the YCP control-plane image and run the register + endpoint-inventory assertion'
+        type: boolean
+        default: false
+      documentdb_functional:
+        description: 'Also build+push the extension images and run upstream documentdb''s functional-test gate against the gateway'
         type: boolean
         default: false
       tls:
@@ -111,6 +122,7 @@ jobs:
       suites: ${{ steps.gate.outputs.decided }}
       ext: ${{ steps.gate_ext.outputs.decided }}
       ycp: ${{ steps.gate_ycp.outputs.decided }}
+      ddb: ${{ steps.gate_ddb.outputs.decided }}
     steps:
       # Needed only to make the local composite action below available.
       - uses: actions/checkout@v7
@@ -143,6 +155,15 @@ jobs:
           suites: '["amp_deploy_gke_ycp"]'
           unconditional-events: ''
 
+      # amp_deploy_gke_documentdb: the extension images (it needs documentdb's)
+      # plus upstream's functional-test gate after the smoke. Directive/dispatch
+      # only — a full gate run is too long for nightly.
+      - id: gate_ddb
+        uses: ./.github/actions/ci-directives
+        with:
+          suites: '["amp_deploy_gke_documentdb"]'
+          unconditional-events: ''
+
   images:
     name: Amp GKE — build + push images (Quay)
     needs: decide
@@ -153,7 +174,9 @@ jobs:
       (fromJSON(needs.decide.outputs.suites).amp_deploy_gke ||
        fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions ||
        fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp ||
+       fromJSON(needs.decide.outputs.ddb).amp_deploy_gke_documentdb ||
        github.event.inputs.push_extensions == 'true' ||
+       github.event.inputs.documentdb_functional == 'true' ||
        github.event.inputs.push_ycp == 'true') &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
@@ -294,7 +317,11 @@ jobs:
       # access to the amp-pg18-build repo (unlike amp-endpoint, that repo has never
       # been published, so grant it or the base rebuilds cold every run).
       - name: Extension images
-        if: fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true'
+        if: >-
+          fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions ||
+          fromJSON(needs.decide.outputs.ddb).amp_deploy_gke_documentdb ||
+          github.event.inputs.push_extensions == 'true' ||
+          github.event.inputs.documentdb_functional == 'true'
         # AMP_EXT_GH_TOKEN authenticates the private hexabridge source fetch;
         # build.sh passes it as the gh_token BuildKit secret (public extensions
         # ignore it). Empty on forks (no secrets) → hexabridge's fetch 404s and
@@ -309,7 +336,8 @@ jobs:
     name: Amp GKE — deploy to itest-dev + smoke test
     needs: [decide, images]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The functional-test gate adds up to its own TIMEOUT_MIN (100) on top.
+    timeout-minutes: ${{ (fromJSON(needs.decide.outputs.ddb).amp_deploy_gke_documentdb || github.event.inputs.documentdb_functional == 'true') && 160 || 45 }}
     concurrency:
       group: cp-gke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
@@ -326,6 +354,8 @@ jobs:
       # running the agent-driven reconcile smoke instead of the API-driven one.
       # '0' for a plain amp_deploy_gke.
       YCP: ${{ (fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp || github.event.inputs.push_ycp == 'true') && '1' || '0' }}
+      # '1' for amp_deploy_gke_documentdb (directive or manual documentdb_functional).
+      DDB: ${{ (fromJSON(needs.decide.outputs.ddb).amp_deploy_gke_documentdb || github.event.inputs.documentdb_functional == 'true') && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -441,6 +471,21 @@ jobs:
         env:
           SMOKE_EXTENSIONS: ${{ (fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true') && '1' || '0' }}
         run: NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/ycp-reconcile-smoke.sh
+
+      # amp_deploy_gke_documentdb: upstream documentdb's functional-test gate
+      # against this deployment's gateway. After the smoke, on the same
+      # controller; not in YCP mode, whose agent would GC the cluster it creates.
+      - name: DocumentDB functional-test gate (amp/deploy/documentdb-functional/run.sh)
+        if: env.DDB == '1' && env.YCP != '1'
+        run: NS="$NS" RESULTS_DIR="$RUNNER_TEMP/documentdb-functional" amp/deploy/documentdb-functional/run.sh
+
+      - name: Upload the DocumentDB functional-test results
+        if: always() && env.DDB == '1' && env.YCP != '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: documentdb-functional-results
+          path: ${{ runner.temp }}/documentdb-functional
+          if-no-files-found: ignore
 
       - name: Dump controller/endpoint state on failure
         if: failure()

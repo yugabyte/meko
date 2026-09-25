@@ -1,0 +1,47 @@
+# Upstream functional tests that are allowlisted upstream but fail on amp, and
+# why. amp_gate.py removes them from the allowlist before the gate runs; every
+# other allowlisted test must pass (README.md).
+#
+# One entry per test, by the allowlist's own node ID:
+#
+#   - id: compatibility/tests/core/.../test_x.py::test_y[param]
+#     reason: what differs on amp, and the issue that tracks it
+#
+# An entry is a known gap, not a waiver: it needs a reason a reviewer can check,
+# and it goes when the gap closes. An entry that no longer names an allowlisted
+# test fails the run.
+# https://github.com/yugabyte/meko/issues/1519 tracks every entry below: geospatial on
+# documentdb without postgis.
+exclusions:
+  - id: compatibility/tests/core/indexes/commands/listIndexes/test_listIndexes_index_types.py::test_listIndexes_index_type[2d]
+    reason: 2d/2dsphere indexes cannot be created without postgis's GIST support, so listIndexes cannot list one (#1519)
+  - id: compatibility/tests/core/indexes/commands/listIndexes/test_listIndexes_index_types.py::test_listIndexes_index_type[2dsphere]
+    reason: 2d/2dsphere indexes cannot be created without postgis's GIST support, so listIndexes cannot list one (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/geoIntersects/test_smoke_geoIntersects.py::test_smoke_geoIntersects
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/geoWithin/test_smoke_geoWithin.py::test_smoke_geoWithin
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/near/test_smoke_near.py::test_smoke_near
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/nearSphere/test_smoke_nearSphere.py::test_smoke_nearSphere
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/box/test_smoke_box.py::test_smoke_box
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/center/test_smoke_center.py::test_smoke_center
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/centerSphere/test_smoke_centerSphere.py::test_smoke_centerSphere
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/geometry/test_smoke_geometry.py::test_smoke_geometry
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/maxDistance/test_smoke_maxDistance.py::test_smoke_maxDistance
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/minDistance/test_smoke_minDistance.py::test_smoke_minDistance
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/query/geospatial/specifiers/polygon/test_smoke_polygon.py::test_smoke_polygon
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/stages/geoNear/test_smoke_geoNear.py::test_smoke_geoNear
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/stages/match/test_match_query_operators.py::test_match_query_operator_cases[query_geo_geointersects]
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)
+  - id: compatibility/tests/core/operator/stages/match/test_match_query_operators.py::test_match_query_operator_cases[query_geo_geowithin]
+    reason: geospatial needs postgis, which amp does not ship (GPL); documentdb-no-postgis.patch removes its geo GIST operator classes (#1519)

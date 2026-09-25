@@ -46,8 +46,15 @@
 # with the new mount, and its address survives the redeploy unchanged. Finally,
 # fork that branch and assert the fork inherits its parent's set (getBranch) and
 # a fresh endpoint on the fork mounts pgvector with no per-endpoint opt-in.
+# Last, the documentdb engine end to end: a cluster created with
+# engine:"documentdb" gets an endpoint whose pod runs the gateway sidecar, and
+# the API reports its documentdb_address, and compute_ctl has created the
+# extension in its own documentdb database. A MongoDB driver then logs in as the
+# default user with the createEndpoint password (SCRAM-SHA-256). It writes,
+# queries, aggregates and deletes over the wire protocol, and SQL reads back
+# the same documents. A wrong password is refused.
 # Requires the cluster's ImageVolume feature gate and images pushed by
-# deploy/extensions/build.sh.
+# deploy/extensions/build.sh, plus docker on this host for the client.
 #
 # Its cluster is torn down by the cascade delete it exercises, and cleanup()
 # uninstalls any stray endpoint Helm releases. The pool and user rows are NOT
@@ -67,6 +74,11 @@ set -uo pipefail
 
 NS="${NS:-amp-test}"
 PF_PORT="${PF_PORT:-18080}"
+# The documentdb check drives the gateway from this host through a port-forward,
+# using pymongo from upstream documentdb's own functional-test image, pinned by
+# digest as upstream pins it (documentdb-local/functional-tests/config/image.yml).
+GW_PF_PORT="${GW_PF_PORT:-18260}"
+DOCUMENTDB_CLIENT_IMAGE="${DOCUMENTDB_CLIENT_IMAGE:-ghcr.io/documentdb/functional-tests@sha256:79ed3d433bc2664655a31064a66eee3bef3cc2a8b4eabfaab3e3ef62d44ce3ba}"
 # Path to psql INSIDE the endpoint pod (PG v18 install; not needed on the host).
 PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
 KEEP="${KEEP:-0}"
@@ -146,6 +158,7 @@ post_id() {
 PF_PID=""
 cleanup() {
   [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null
+  [ -n "${GW_PF_PID:-}" ] && kill "$GW_PF_PID" 2>/dev/null
   if [ "$KEEP" != "1" ]; then
     # best-effort: drop any endpoint Helm releases this run may have left behind
     for r in $(helm -n "$NS" list -aq 2>/dev/null | grep '^yb-ep-'); do
@@ -777,6 +790,137 @@ SQL
   # Tear down the ext cluster (cascade retires all endpoints, drops branches).
   IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$EPROJ")
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster cascade deleted" || bad "ext cluster delete task=$st"
+
+  hdr "documentdb engine: the gateway serves the wire protocol and logs in the default user"
+
+  # engine:"documentdb" seeds documentdb + pgvector + pg_cron on the default
+  # branch, and an endpoint that mounts documentdb renders the gateway sidecar.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"docproj","engine":"documentdb"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "documentdb cluster created (engine:documentdb)" || bad "documentdb cluster task=$st"
+  DPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="docproj")|.id')
+  DDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$DPROJ" ] && [ -n "$DDEF" ] && ok "documentdb cluster materialized ($DPROJ / $DDEF)" || bad "documentdb cluster not materialized"
+
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
+  [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(documentdb) code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(documentdb) succeeded" || bad "create_endpoint(documentdb) task=$st"
+  DEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" | jq -r '.endpoints[0].id')
+  DPOD=$(wait_ready_pod "$DEP")
+  [ -n "$DPOD" ] && ok "documentdb endpoint pod Ready ($DPOD)" || bad "documentdb endpoint pod not Ready"
+
+  # wait_ready_pod reads only the first container. The gateway is a second
+  # one, and a pod whose sidecar never came up would pass that check.
+  gwready=""
+  for ((i=0; i<40; i++)); do
+    gwready=$(kubectl -n "$NS" get pod "$DPOD" -o jsonpath='{.status.containerStatuses[?(@.name=="documentdb-gateway")].ready}' 2>/dev/null)
+    [ "$gwready" = true ] && break
+    sleep 3
+  done
+  if [ "$gwready" = true ]; then
+    ok "documentdb-gateway sidecar Ready"
+  else
+    bad "documentdb-gateway sidecar not Ready (ready=$gwready)"
+    # This block deletes its cluster at the end, before the job's failure dump
+    # runs, so the evidence has to be printed here: the gateway retries until the
+    # schema exists, and compute_ctl's post_apply_config says why it does not.
+    echo "--- documentdb diagnostics ---"
+    kubectl -n "$NS" logs "$DPOD" -c documentdb-gateway --tail=20 2>&1 || true
+    kubectl -n "$NS" logs "$DPOD" -c endpoint 2>&1 | grep -E 'post_apply_config|documentdb' | tail -20 || true
+    echo "--- end documentdb diagnostics ---"
+  fi
+
+  # The API reports the gateway address where the Service publishes the
+  # gateway port, and only there (deploy.DocumentDBGatewayReachable).
+  daddr=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints/$DEP" | jq -r '.documentdb_address // ""')
+  want=$(want_endpoint_addr "$DEP")
+  if [ -n "$want" ]; then
+    [ "$daddr" = "${want%:*}:10260" ] && ok "documentdb_address = $daddr" || bad "documentdb_address=$daddr (want ${want%:*}:10260)"
+  else
+    ok "documentdb_address not checked: the Service is not a plain ClusterIP (got '$daddr')"
+  fi
+
+  # Nobody runs CREATE EXTENSION: compute_ctl creates a `documentdb` database
+  # and the extension in it whenever pg_documentdb is preloaded. The gateway
+  # being Ready above already implies it — it binds only once the schema exists.
+  out=$(kubectl -n "$NS" exec -i "$DPOD" -c endpoint -- \
+    "$PSQL_BIN" -h 127.0.0.1 -p 55433 -U cloud_admin -d documentdb -tA -v ON_ERROR_STOP=1 \
+    -c "SELECT 'EXT:'||extversion FROM pg_extension WHERE extname = 'documentdb'" 2>&1)
+  echo "$out" | grep -q '^EXT:0.116-0$' \
+    && ok "documentdb 0.116-0 created by compute_ctl in database documentdb" \
+    || bad "documentdb extension not in database documentdb (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  # The client reaches the gateway through the endpoint's Service.
+  kubectl -n "$NS" port-forward "svc/yb-ep-$DEP" "${GW_PF_PORT}:10260" >/tmp/smoke-gw-pf.log 2>&1 &
+  GW_PF_PID=$!
+  for ((i=0; i<30; i++)); do (exec 3<>"/dev/tcp/127.0.0.1/$GW_PF_PORT") 2>/dev/null && break; sleep 1; done
+
+  # The gateway self-signs its certificate, so a client cannot verify it yet
+  # (https://github.com/yugabyte/meko/issues/1509): TLS on, verification off.
+  gw_uri() {
+    printf 'mongodb://cloud_admin:%s@127.0.0.1:%s/?tls=true&tlsAllowInvalidCertificates=true&directConnection=true&authMechanism=SCRAM-SHA-256&serverSelectionTimeoutMS=30000' \
+      "$1" "$GW_PF_PORT"
+  }
+  # pymongo from the pinned client image; the Python arrives on stdin.
+  pymongo_run() {
+    docker run --rm -i --network host -e URI="$1" --entrypoint python3 "$DOCUMENTDB_CLIENT_IMAGE" - 2>&1
+  }
+
+  # Every step goes client -> gateway -> documentdb on the compute (over the
+  # pod's loopback) -> amp storage. The filter, sort, $inc and $group run in
+  # documentdb, not in the driver.
+  out=$(pymongo_run "$(gw_uri "$EP_PASSWORD")" <<'PY'
+import os, pymongo
+c = pymongo.MongoClient(os.environ["URI"])
+print("PING:%d" % c.admin.command("ping")["ok"])
+coll = c["amp_smoke"]["probe"]
+coll.drop()
+coll.insert_many([{"_id": i, "a": i, "tag": "t%d" % (i % 2)} for i in range(1, 6)])
+coll.create_index([("a", pymongo.ASCENDING)])
+print("FIND:%s" % ",".join(str(d["_id"]) for d in coll.find({"a": {"$gte": 3}}).sort("a", -1)))
+print("UPDATE:%d" % coll.update_one({"_id": 1}, {"$inc": {"a": 100}}).modified_count)
+agg = {d["_id"]: d["s"] for d in coll.aggregate([{"$group": {"_id": "$tag", "s": {"$sum": "$a"}}}])}
+print("AGG:t0=%d,t1=%d" % (agg["t0"], agg["t1"]))
+print("DELETE:%d" % coll.delete_one({"_id": 5}).deleted_count)
+print("COUNT:%d" % coll.count_documents({}))
+PY
+)
+  if echo "$out" | grep -q '^PING:1$' \
+     && echo "$out" | grep -q '^FIND:5,4,3$' \
+     && echo "$out" | grep -q '^UPDATE:1$' \
+     && echo "$out" | grep -q '^AGG:t0=6,t1=109$' \
+     && echo "$out" | grep -q '^DELETE:1$' \
+     && echo "$out" | grep -q '^COUNT:4$'; then
+    ok "wire protocol as cloud_admin: SCRAM login + insert/index/find/update/aggregate/delete"
+  else
+    bad "wire-protocol round trip (got: $(echo "$out" | tail -4 | tr '\n' ' '))"
+  fi
+
+  # The same documents, read back over SQL in the documentdb database after a
+  # CHECKPOINT: what the gateway wrote is what the compute stored.
+  out=$(kubectl -n "$NS" exec -i "$DPOD" -c endpoint -- \
+    "$PSQL_BIN" -h 127.0.0.1 -p 55433 -U cloud_admin -d documentdb -tA -v ON_ERROR_STOP=1 <<'SQL' 2>&1
+CHECKPOINT;
+SELECT 'ROWS:'||count(*) FROM documentdb_api.collection('amp_smoke', 'probe');
+SQL
+)
+  echo "$out" | grep -q '^ROWS:4$' && ok "SQL reads the 4 documents the gateway wrote" || bad "SQL row count (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  # And the login is real: a wrong password is refused.
+  out=$(pymongo_run "$(gw_uri wrong-password)" <<'PY'
+import os, pymongo
+from pymongo.errors import OperationFailure
+try:
+    pymongo.MongoClient(os.environ["URI"]).admin.command("ping")
+    print("AUTH:accepted")
+except OperationFailure as e:
+    print("AUTH:refused code=%s" % e.code)
+PY
+)
+  echo "$out" | grep -q '^AUTH:refused' && ok "wrong password refused ($(echo "$out" | grep '^AUTH:' | tail -1))" || bad "wrong password not refused (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  kill "$GW_PF_PID" 2>/dev/null; GW_PF_PID=""
+  IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$DPROJ")
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "documentdb cluster cascade deleted" || bad "documentdb cluster delete task=$st"
 fi
 
 printf '\n\033[1m================ RESULT: PASS=%d FAIL=%d ================\033[0m\n' "$PASS" "$FAIL"
