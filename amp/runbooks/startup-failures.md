@@ -52,6 +52,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 |---|---|---|
 | `yb_amp_local init` panics / serde error on the config TOML | init config schema mismatch | **A** |
 | SC: `Migration error: no schema has been selected to create in` | backing DB missing the schema | **B** |
+| PS/SK: `column "version" does not exist`, or a thin-lane write rejected on its key columns | `amp_storage` predates the `version` key column and the in-place edit of `0003` never re-ran | **B2** |
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | PS/SK/compute_ctl: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
@@ -118,7 +119,10 @@ database**. That database also holds `amp_storage`, so every branch on it goes t
 
 Do not stamp the version to 8 instead. `0002` and `0003` were edited in place after they
 shipped, so a long-lived database can carry an older form of them that no version number
-reveals.
+reveals. The latest such edit added a `version` key column to `pages`, `slru_pages`, `meta`,
+`pending_gc` and `wals` ([#1495](https://github.com/yugabyte/meko/pull/1495)): a database from
+before it reads as fully migrated, and the daemons fail their first query on the missing
+column. Same fix — a primary key cannot be altered in place.
 
 ## C. Safekeeper: "unexpected argument '--<flag>'"
 Build drift removes/renames flags. The safekeeper's whole config surface now lives in

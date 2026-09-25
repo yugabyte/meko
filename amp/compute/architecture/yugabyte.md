@@ -370,6 +370,12 @@ LIMIT 10;
 The pageserver's row-per-version page store; see
 [`pageserver.md`](pageserver.md) for the full design.
 
+`pages`, `slru_pages`, `meta`, `pending_gc` and `wals` carry a `version` key
+column right after `branch_id` (after the `(branch_id, bucket_id)` hash key on
+`pending_gc`). It is always 0 for now: it is reserved in the
+key, where it cannot be added later without rewriting the table, for an online
+PostgreSQL major-version upgrade that has yet to be designed.
+
 ### `amp_storage.pages`
 
 One row per `(block, LSN)`. Holds **relation pages only** — keys where
@@ -390,6 +396,7 @@ read anchor and the GC anchor seek; `is_image` is a value column (#1171).
 CREATE TABLE amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,             -- always 0 for now
     spcnode      OID      NOT NULL,    -- oids are unsigned 32-bit
     dbnode       OID      NOT NULL,
     relnode      OID      NOT NULL,
@@ -403,7 +410,7 @@ CREATE TABLE amp_storage.pages (
         bucket_id = ((relnode::bigint / 7) + (relnode::bigint / 13) + (blknum::bigint / 256)) % 6
     ),
     CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
-    PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, spcnode ASC, dbnode ASC,
                  relnode ASC, forknum ASC, blknum ASC, lsn DESC, will_init DESC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
@@ -481,6 +488,7 @@ ordered inside it.
 ```sql
 CREATE TABLE amp_storage.slru_pages (
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,             -- always 0 for now
     kind         SMALLINT NOT NULL,
     segno        OID      NOT NULL,    -- unsigned 32-bit, like every key field
     blknum       SMALLINT NOT NULL,    -- page index WITHIN its segment: 0..31
@@ -489,7 +497,7 @@ CREATE TABLE amp_storage.slru_pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     CONSTRAINT slru_pages_image_is_a_base CHECK (will_init OR NOT is_image),
-    PRIMARY KEY ((branch_id) HASH,
+    PRIMARY KEY ((branch_id) HASH, version ASC,
                  kind ASC, segno ASC, blknum ASC, lsn DESC, will_init DESC)
 );
 ```
@@ -511,10 +519,11 @@ contiguous.
 ```sql
 CREATE TABLE amp_storage.meta (
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,             -- always 0 for now
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC)
+    PRIMARY KEY ((branch_id) HASH, version ASC, key ASC, lsn DESC)
 );
 ```
 
@@ -686,13 +695,14 @@ to the compute only once its bytes are in this table.
 CREATE TABLE amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..5
     branch_id        uuid     NOT NULL,
+    version          SMALLINT NOT NULL,             -- always 0 for now
     segno            BIGINT   NOT NULL,
     chunk_offset     INTEGER  NOT NULL,  -- segment-relative, < 1 GiB
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,
     CONSTRAINT wals_bucket_id_in_range CHECK (bucket_id >= 0 AND bucket_id < 6),
-    PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, segno ASC, chunk_offset ASC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
 
@@ -768,12 +778,13 @@ CONFLICT` needed under `yb_enable_upsert_mode`.
 CREATE TABLE amp_storage.pending_gc (
     branch_id  uuid     NOT NULL,
     bucket_id  SMALLINT NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key), FNV-1a % GC_BUCKETS (3)
+    version    SMALLINT NOT NULL,             -- always 0 for now
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,  -- encoded 18-byte Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,  -- page_store::GcKind (0..=7; trim/shrink/drop × table, plus drop_db/drop_rel)
     relsize    OID,                -- shrink's truncation target; NULL for trim/drop
     PRIMARY KEY ((branch_id, bucket_id) HASH,
-                 due_lsn, key, gc_kind)
+                 version, due_lsn, key, gc_kind)
 ) SPLIT INTO 6 TABLETS;
 ```
 

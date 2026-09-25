@@ -46,6 +46,12 @@ const gcBuckets = 3
 
 const slruKinds = 3
 
+// defaultVersion is the `version` key column's value on every row of `pages`,
+// `slru_pages`, `meta`, `pending_gc` and `wals` — always 0 for now (DEFAULT_VERSION
+// in the pageserver and safekeeper). A hash-keyed spec binds it by equality
+// (tableSpec.versioned); the row-constructor ones walk it in their cursor.
+const defaultVersion = 0
+
 // maxBranchesPerTick caps the due-scan's result set. It is NOT what paces a tick
 // — the row budget is, and it almost always binds first: one large branch spends
 // the whole budget, so a tick that fetched this many branches routinely reaps
@@ -64,9 +70,10 @@ const maxBranchesPerTick = 100
 // if it is either:
 //
 //	(a) a row constructor starting at PK column 1, on an all-range key:
-//	    (bucket_id, branch_id, spcnode, ...) >= (...)
+//	    (bucket_id, branch_id, version, spcnode, ...) >= (...)
 //	(b) equality on every leading key column — hash or range — then ONE range
-//	    comparison on the next: branch_id = ... AND kind = ... AND segno >= ...
+//	    comparison on the next: branch_id = ... AND version = ... AND kind = ...
+//	    AND segno >= ...
 //
 // Anything else FILTERS and reads the branch's whole range: a constructor
 // starting mid-key, a constructor on a hash-keyed table, `ybctid > ...`, an
@@ -108,6 +115,10 @@ type tableSpec struct {
 	// only correct while a batch is the LOWEST remaining rows, which holds only
 	// while the ORDER BY starts with exactly cursorCols, in order.
 	orderTail string
+	// versioned pins `version = defaultVersion`: a hash-keyed table's `version`
+	// sits between the hash key and everything else, so nothing below it seeks
+	// until it is bound.
+	versioned bool
 	// fanOut splits the table into one step per value of a leading key column,
 	// bound by equality — the only way to cover a column that cannot be
 	// range-walked. Why each of the two tables needs it is on its entry in specs;
@@ -135,36 +146,38 @@ var specs = []tableSpec{
 	// PK ((branch_id) HASH). Exactly one row, so one batch drains it.
 	{table: "branch_state"},
 
-	// PK (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, blknum ASC,
-	//     lsn DESC, will_init DESC), all-range, so the cursor anchors at
-	// bucket_id and one pass covers all six buckets.
+	// PK (bucket_id, branch_id, version, spcnode, dbnode, relnode, forknum,
+	//     blknum ASC, lsn DESC, will_init DESC), all-range, so the cursor anchors
+	// at bucket_id and one pass covers all six buckets.
 	{table: "pages", rowConstructor: true,
-		cursorCols: []string{"bucket_id", "branch_id", "spcnode", "dbnode", "relnode", "forknum", "blknum"},
-		orderTail:  "lsn DESC, will_init DESC"},
+		cursorCols: []string{"bucket_id", "branch_id", "version", "spcnode", "dbnode", "relnode",
+			"forknum", "blknum"},
+		orderTail: "lsn DESC, will_init DESC"},
 
-	// PK (bucket_id, branch_id, segno, chunk_offset) — all-range, and the cursor
-	// covers the whole key, so no version tail below it.
+	// PK (bucket_id, branch_id, version, segno, chunk_offset) — all-range, and
+	// the cursor covers the whole key, so no `lsn` tail below it.
 	{table: "wals", rowConstructor: true,
-		cursorCols: []string{"bucket_id", "branch_id", "segno", "chunk_offset"}},
+		cursorCols: []string{"bucket_id", "branch_id", "version", "segno", "chunk_offset"}},
 
-	// PK ((branch_id, bucket_id) HASH, due_lsn, key, gc_kind). bucket_id is inside
-	// the hash key, so it can only be named, never walked. Rows sharing a due_lsn
-	// are bounded by the emitter's 500-key flush cap — the residual a batch
-	// boundary re-scans.
-	{table: "pending_gc", fanOut: fanOutSpec{"bucket_id", gcBuckets},
+	// PK ((branch_id, bucket_id) HASH, version, due_lsn, key, gc_kind). bucket_id
+	// is inside the hash key, so it can only be named, never walked. Rows sharing
+	// a due_lsn are bounded by the emitter's 500-key flush cap — the residual a
+	// batch boundary re-scans.
+	{table: "pending_gc", versioned: true, fanOut: fanOutSpec{"bucket_id", gcBuckets},
 		cursorCols: []string{"due_lsn"},
 		orderTail:  "key, gc_kind"},
 
-	// PK ((branch_id) HASH, kind, segno, blknum ASC, lsn DESC, will_init DESC).
-	// kind is fanned out because the cursor range-compares segno, which needs kind
-	// pinned above it. blknum stays out of the cursor: a (kind, segno) segment is
-	// ~32 contiguous blocks, so the residual is tens of rows.
-	{table: "slru_pages", fanOut: fanOutSpec{"kind", slruKinds},
+	// PK ((branch_id) HASH, version, kind, segno, blknum ASC, lsn DESC,
+	//     will_init DESC). kind is fanned out because the cursor range-compares
+	// segno, which needs kind pinned above it. blknum stays out of the cursor: a
+	// (kind, segno) segment is ~32 contiguous blocks, so the residual is tens of
+	// rows.
+	{table: "slru_pages", versioned: true, fanOut: fanOutSpec{"kind", slruKinds},
 		cursorCols: []string{"segno"},
 		orderTail:  "blknum, lsn DESC, will_init DESC"},
 
-	// PK ((branch_id) HASH, key ASC, lsn DESC).
-	{table: "meta",
+	// PK ((branch_id) HASH, version, key ASC, lsn DESC).
+	{table: "meta", versioned: true,
 		cursorCols: []string{"key"},
 		orderTail:  "lsn DESC"},
 
@@ -241,6 +254,9 @@ func (s tableSpec) selectSQL(withCursor bool) string {
 		proj += ", " + strings.Join(s.cursorCols, ", ")
 	}
 	where, next := "branch_id = $1::uuid", 2
+	if s.versioned {
+		where += fmt.Sprintf(" AND version = %d", defaultVersion)
+	}
 	if s.fanOut.count > 0 {
 		where += fmt.Sprintf(" AND %s = $2", s.fanOut.column)
 		next = 3

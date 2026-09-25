@@ -156,23 +156,23 @@ func seedStorage(t *testing.T, pool *db.Pool, branchID uuid.UUID, n int) {
 	ctx := t.Context()
 	for _, stmt := range []string{
 		`INSERT INTO amp_storage.pages
-		   (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, blknum, is_image, lsn, will_init, payload)
-		 SELECT ((0 / 7) + (0 / 13) + ((g * 256) / 256)) % 6, $1, 1663, 5, 0, 0, g * 256, true, 1000 + g, true, '\\x00'::bytea
+		   (bucket_id, branch_id, version, spcnode, dbnode, relnode, forknum, blknum, is_image, lsn, will_init, payload)
+		 SELECT ((0 / 7) + (0 / 13) + ((g * 256) / 256)) % 6, $1, 0, 1663, 5, 0, 0, g * 256, true, 1000 + g, true, '\\x00'::bytea
 		   FROM generate_series(0, $2::int - 1) g`,
-		`INSERT INTO amp_storage.wals (bucket_id, branch_id, segno, chunk_offset, chunk_size, data, last_modified_us)
-		 SELECT g % 6, $1, 1, g * 1024, 1024, '\\x00'::bytea, 0 FROM generate_series(0, $2::int - 1) g`,
-		`INSERT INTO amp_storage.pending_gc (branch_id, bucket_id, due_lsn, key, gc_kind)
-		 SELECT $1, g % 3, 1000 + g, decode(lpad(to_hex(g), 36, '0'), 'hex'), 0
+		`INSERT INTO amp_storage.wals (bucket_id, branch_id, version, segno, chunk_offset, chunk_size, data, last_modified_us)
+		 SELECT g % 6, $1, 0, 1, g * 1024, 1024, '\\x00'::bytea, 0 FROM generate_series(0, $2::int - 1) g`,
+		`INSERT INTO amp_storage.pending_gc (branch_id, bucket_id, version, due_lsn, key, gc_kind)
+		 SELECT $1, g % 3, 0, 1000 + g, decode(lpad(to_hex(g), 36, '0'), 'hex'), 0
 		   FROM generate_series(0, $2::int - 1) g`,
 		`INSERT INTO amp_storage.blobs
 		   (branch_id, namespace, key, chunk_idx, data, size_bytes, etag, last_modified_us)
 		 SELECT $1, 'pageserver'::amp_storage.blob_namespace, 'blob-' || g, 0, '\\x00'::bytea, 1, 'etag', 0
 		   FROM generate_series(0, $2::int - 1) g`,
-		`INSERT INTO amp_storage.slru_pages (branch_id, kind, segno, blknum, is_image, lsn, will_init, payload)
-		 SELECT $1, g % 3, g / 4, g, true, 1000 + g, true, '\\x00'::bytea
+		`INSERT INTO amp_storage.slru_pages (branch_id, version, kind, segno, blknum, is_image, lsn, will_init, payload)
+		 SELECT $1, 0, g % 3, g / 4, g, true, 1000 + g, true, '\\x00'::bytea
 		   FROM generate_series(0, $2::int - 1) g`,
-		`INSERT INTO amp_storage.meta (branch_id, key, lsn, payload)
-		 SELECT $1, decode(lpad(to_hex(g), 36, '0'), 'hex'), 1000 + g, '\\x00'::bytea
+		`INSERT INTO amp_storage.meta (branch_id, version, key, lsn, payload)
+		 SELECT $1, 0, decode(lpad(to_hex(g), 36, '0'), 'hex'), 1000 + g, '\\x00'::bytea
 		   FROM generate_series(0, $2::int - 1) g`,
 	} {
 		if _, err := pool.Exec(ctx, stmt, branchID, n); err != nil {
@@ -599,6 +599,13 @@ func TestSpecsMatchPrimaryKeys(t *testing.T) {
 			// below them. A row constructor pins nothing — branch_id rides inside
 			// the cursor like any other column.
 			pinned := hash
+			if spec.versioned {
+				if spec.rowConstructor || pk[pinned].name != "version" {
+					t.Fatalf("versioned pins `version`, but it is not the column below %s's "+
+						"hash key, or the spec walks a row constructor", spec.table)
+				}
+				pinned++
+			}
 			if spec.rowConstructor {
 				pinned = 0
 			} else if spec.fanOut.count > 0 {
@@ -614,13 +621,13 @@ func TestSpecsMatchPrimaryKeys(t *testing.T) {
 					t.Fatalf("fans out over %q, which is not in %s's primary key",
 						spec.fanOut.column, spec.table)
 				case at < hash: // inside the HASH key: already pinned
-				case at == hash:
+				case at == pinned:
 					pinned++
 				default:
 					t.Fatalf("fans out over %q at key position %d, but the first "+
 						"unpinned position is %d; a fanned-out column must be "+
 						"directly below the equality prefix or nothing seeks",
-						spec.fanOut.column, at, hash)
+						spec.fanOut.column, at, pinned)
 				}
 			}
 

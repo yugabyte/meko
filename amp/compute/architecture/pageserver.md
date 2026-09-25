@@ -140,8 +140,8 @@ effective config comes from `pageserver.toml`. See
 ### `amp_storage.pages`
 
 One row per (Key, LSN). The PK is **all-range**, led by a 6-way placement
-bucket, then the **(branch_id, spcnode, dbnode, relnode, forknum)**
-identity, then `(blknum, lsn DESC, will_init DESC)` so a per-block scan
+bucket, then the **(branch_id, version, spcnode, dbnode, relnode,
+forknum)** identity (`version` is always 0 for now), then `(blknum, lsn DESC, will_init DESC)` so a per-block scan
 walks rows in LSN-descending order; `will_init` is DESC so the stored
 order matches the chain-read `ORDER BY lsn DESC, will_init DESC` (base
 before non-base at a tie). `will_init` closes the key because it marks
@@ -153,6 +153,7 @@ WAL record) and stays a value column (#1171).
 CREATE TABLE amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,             -- always 0 for now
     spcnode      OID      NOT NULL,    -- oids are unsigned 32-bit
     dbnode       OID      NOT NULL,
     relnode      OID      NOT NULL,
@@ -166,7 +167,7 @@ CREATE TABLE amp_storage.pages (
         bucket_id = ((relnode::bigint / 7) + (relnode::bigint / 13) + (blknum::bigint / 256)) % 6
     ),
     CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
-    PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, spcnode ASC, dbnode ASC,
                  relnode ASC, forknum ASC, blknum ASC, lsn DESC, will_init DESC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
@@ -184,8 +185,8 @@ tablet count.
 It also makes coarse GC expressible. Under a hash key, "delete everything
 for this branch" — or for a database, or a relation — is not a range at
 all: the hash scatters those rows across the whole key space, so reclaiming
-them means scanning. Ordering the key `(bucket_id, branch_id, spcnode,
-dbnode, relnode, forknum, blknum, …)` makes each of those a bounded prefix
+them means scanning. Ordering the key `(bucket_id, branch_id, version,
+spcnode, dbnode, relnode, forknum, blknum, …)` makes each of those a bounded prefix
 range per bucket, so branch / db / relation drops become
 `PAGE_BUCKETS` range deletes.
 
@@ -244,8 +245,8 @@ the YSQL lane (thin-client writes bypass CHECKs).
 
 SLRU blocks (pg_xact, pg_multixact offsets/members). `kind` is 0=Clog,
 1=MultiXactMembers, 2=MultiXactOffsets (`slru_kind_to_i16`,
-`page_store.rs`). PK: `((branch_id) HASH, kind ASC, segno ASC,
-blknum ASC, lsn DESC, will_init DESC)` — a branch's whole SLRU space
+`page_store.rs`). PK: `((branch_id) HASH, version ASC, kind ASC,
+segno ASC, blknum ASC, lsn DESC, will_init DESC)` — a branch's whole SLRU space
 lives on one tablet, with each `(kind, segno)` segment a contiguous
 range inside it. Same base/delta chain semantics as `pages`, except
 that here the two flags coincide: only `NeonWalRecord::Postgres` carries
@@ -258,7 +259,7 @@ Everything that is neither a relation page nor an SLRU block: rel-size
 sentinels, directory listings, aux files (`yb_amp.signal`,
 `postgresql.auto.conf`, replication-slot state), two-phase-commit
 files, replication origins, SLRU segment-size sentinels. `key` is the
-18-byte BYTEA Key encoding; PK `((branch_id) HASH, key ASC, lsn DESC)`.
+18-byte BYTEA Key encoding; PK `((branch_id) HASH, version ASC, key ASC, lsn DESC)`.
 **Full-overwrite semantics**: a read returns the single latest row at
 LSN ≤ target — no chains, no walredo.
 

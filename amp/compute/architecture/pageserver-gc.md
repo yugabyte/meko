@@ -342,8 +342,8 @@ steps below. Every statement they issue is in `page_store/gc.rs`.
      entries are NOT swept — a `Removed` marker shadows an ancestor's `Exists`
      under copy-on-write, so only a `DROP DATABASE`, which removes the DbDir
      entry and shadows the whole range from readers, may delete those. The key layout is what makes that a
-     seek: `(branch_id, spcnode, dbnode)` is a `pages` key prefix under a bound
-     `bucket_id`, and a rel key encodes spcnode/dbnode ahead of relnode, so the
+     seek: `(branch_id, version, spcnode, dbnode)` is a `pages` key prefix under
+     a bound `bucket_id`, and a rel key encodes spcnode/dbnode ahead of relnode, so the
      database is one contiguous range per bucket and per `meta` prefix — six
      seeks plus two, against six *per fork* before. Sweeping `meta` by range
      rather than by list is also what clears the sparse-reldir tombstones

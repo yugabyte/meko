@@ -419,7 +419,7 @@ enum GcSweepBucket {
 }
 
 /// A `pages` resume position: the trailing key columns below the bound
-/// `(bucket_id, branch_id, spcnode, dbnode)` prefix.
+/// `(bucket_id, branch_id, version, spcnode, dbnode)` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GcSweepPageCursor {
     relnode: u32,
@@ -562,7 +562,7 @@ impl PageStore {
     /// Direct-RPC lane for [`PageStore::gc_enqueue_candidates`].
     ///
     /// `key_values` are in PRIMARY KEY order — `((branch_id, bucket_id)
-    /// HASH, due_lsn, key, gc_kind)`; `relsize` is the lone non-key column,
+    /// HASH, version, due_lsn, key, gc_kind)`; `relsize` is the lone non-key column,
     /// and it is nullable (set on shrink candidates only), so a `None` binds
     /// as `BindValue::Null` rather than being omitted.
     ///
@@ -598,6 +598,7 @@ impl PageStore {
                     vec![
                         BindValue::Bytes(branch_b.clone()),
                         BindValue::I16(gc_bucket_id(&row.key)),
+                        BindValue::I16(DEFAULT_VERSION),
                         BindValue::I64(row.due_lsn.0 as i64),
                         BindValue::Bytes(Bytes::from(key_to_bytes(&row.key))),
                         BindValue::I16(row.gc_kind.to_i16()),
@@ -668,7 +669,7 @@ impl PageStore {
                     s,
                     "(SELECT gc_kind, key, due_lsn, relsize \
                       FROM \"{}\".pending_gc \
-                      WHERE branch_id = $1 AND bucket_id = {bucket} \
+                      WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND bucket_id = {bucket} \
                         AND due_lsn > $4 AND due_lsn <= $2 \
                       ORDER BY due_lsn LIMIT $3)",
                     self.schema
@@ -759,7 +760,7 @@ impl PageStore {
         format!(
             "DELETE /*+ {DEQUEUE_BNL_HINT} */ \
              FROM \"{schema}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 \
+             WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND bucket_id = $2 \
                AND (key, gc_kind, due_lsn) IN ( \
                    SELECT * FROM unnest($3::bytea[], $4::smallint[], $5::bigint[]))",
             schema = self.schema
@@ -837,7 +838,7 @@ impl PageStore {
             CROSS JOIN LATERAL (
                 SELECT lsn
                 FROM "{schema}".pages
-                WHERE bucket_id=b.bucket AND branch_id=$1 AND spcnode=$2 AND dbnode=$3
+                WHERE bucket_id=b.bucket AND branch_id=$1 AND version = {DEFAULT_VERSION} AND spcnode=$2 AND dbnode=$3
                   AND relnode=$4 AND forknum=$5
                   AND blknum = b.blknum
                   AND lsn <= $7 AND will_init
@@ -880,7 +881,7 @@ impl PageStore {
                 CROSS JOIN LATERAL (
                     SELECT scan.ybctid AS tid, scan.blknum AS blknum, scan.lsn AS lsn
                     FROM "{schema}".pages AS scan
-                    WHERE scan.bucket_id=$9 AND scan.branch_id=$1 AND scan.spcnode=$2
+                    WHERE scan.bucket_id=$9 AND scan.branch_id=$1 AND scan.version = {DEFAULT_VERSION} AND scan.spcnode=$2
                       AND scan.dbnode=$3 AND scan.relnode=$4 AND scan.forknum=$5
                       AND scan.blknum = bound.blknum
                       AND scan.lsn >= bound.watermark
@@ -1231,7 +1232,7 @@ impl PageStore {
         }
         let sql = format!(
             "DELETE FROM \"{schema}\".meta \
-             WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3",
+             WHERE branch_id=$1 AND version = {DEFAULT_VERSION} AND key = ANY($2::bytea[]) AND lsn <= $3",
             schema = self.schema
         );
         self.delete_rows(&sql, &[&branch_id, &keys, &(due_lsn.0 as i64)])
@@ -1354,7 +1355,7 @@ impl PageStore {
     /// remaining rows in key order. `None` means the bucket holds nothing of
     /// this scope at `lsn <= due_lsn`.
     ///
-    /// The bound `(bucket_id, branch_id, spcnode, dbnode)` prefix — plus
+    /// The bound `(bucket_id, branch_id, version, spcnode, dbnode)` prefix — plus
     /// `relnode` for a relation scope — is what confines the scan; the row
     /// constructor, anchored at the key's first column, is what seeks past the
     /// rows already deleted. Anything else (a constructor starting mid-key,
@@ -1386,10 +1387,10 @@ impl PageStore {
         };
         let sql = format!(
             "SELECT ybctid, relnode, forknum, blknum FROM \"{schema}\".pages \
-             WHERE bucket_id=$1 AND branch_id=$2 AND spcnode=$3 AND dbnode=$4 \
-               AND lsn <= $5{rel_bound} \
-               AND (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, blknum) \
-                   >= ($1, $2, $3, $4, $6, $7, $8) \
+             WHERE bucket_id=$1 AND branch_id=$2 AND version={DEFAULT_VERSION} \
+               AND spcnode=$3 AND dbnode=$4 AND lsn <= $5{rel_bound} \
+               AND (bucket_id, branch_id, version, spcnode, dbnode, relnode, forknum, blknum) \
+                   >= ($1, $2, {DEFAULT_VERSION}, $3, $4, $6, $7, $8) \
              ORDER BY relnode, forknum, blknum, lsn DESC, will_init DESC \
              LIMIT $9",
             schema = self.schema
@@ -1452,7 +1453,7 @@ impl PageStore {
         let start = resume.map_or_else(|| key_to_bytes(&range.start), <[u8]>::to_vec);
         let sql = format!(
             "SELECT ybctid, key FROM \"{schema}\".meta \
-             WHERE branch_id=$1 AND key >= $2 AND key < $3 AND lsn <= $4 \
+             WHERE branch_id=$1 AND version = {DEFAULT_VERSION} AND key >= $2 AND key < $3 AND lsn <= $4 \
              ORDER BY key, lsn DESC \
              LIMIT $5",
             schema = self.schema
@@ -1526,7 +1527,7 @@ impl PageStore {
         self.write_gate("GC shrink of an amp_storage.pages fork");
         let sql = format!(
             "DELETE FROM \"{schema}\".pages \
-             WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+             WHERE bucket_id=$8 AND branch_id=$1 AND version = {DEFAULT_VERSION} AND spcnode=$2 AND dbnode=$3 \
                AND relnode=$4 AND forknum=$5 AND blknum >= $6 AND lsn <= $7",
             schema = self.schema
         );
@@ -1585,7 +1586,7 @@ impl PageStore {
             CROSS JOIN LATERAL (
                 SELECT lsn
                 FROM "{schema}".slru_pages
-                WHERE branch_id=$1 AND kind=$2 AND segno=$3
+                WHERE branch_id=$1 AND version = {DEFAULT_VERSION} AND kind=$2 AND segno=$3
                   AND blknum = b.blknum
                   AND lsn <= $5 AND will_init
                 ORDER BY lsn DESC LIMIT 1
@@ -1611,7 +1612,7 @@ impl PageStore {
                 CROSS JOIN LATERAL (
                     SELECT scan.ybctid AS tid, scan.blknum AS blknum, scan.lsn AS lsn
                     FROM "{schema}".slru_pages AS scan
-                    WHERE scan.branch_id=$1 AND scan.kind=$2 AND scan.segno=$3
+                    WHERE scan.branch_id=$1 AND scan.version = {DEFAULT_VERSION} AND scan.kind=$2 AND scan.segno=$3
                       AND scan.blknum = bound.blknum
                       AND scan.lsn >= bound.watermark
                       AND scan.lsn < bound.anchor
@@ -1753,7 +1754,7 @@ impl PageStore {
         let due = due_lsn.0 as i64;
         let pages_sql = format!(
             "DELETE FROM \"{schema}\".slru_pages \
-             WHERE branch_id=$1 AND kind=$2 AND segno=$3 AND lsn <= $4",
+             WHERE branch_id=$1 AND version = {DEFAULT_VERSION} AND kind=$2 AND segno=$3 AND lsn <= $4",
             schema = self.schema
         );
         let deleted = self
@@ -1780,7 +1781,7 @@ impl PageStore {
             CROSS JOIN LATERAL (
                 SELECT lsn
                 FROM "{schema}".meta
-                WHERE branch_id=$1 AND key = b.key AND lsn <= $3
+                WHERE branch_id=$1 AND version = {DEFAULT_VERSION} AND key = b.key AND lsn <= $3
                 ORDER BY lsn DESC LIMIT 1
             ) x"#,
             schema = self.schema
@@ -1805,7 +1806,7 @@ impl PageStore {
                 CROSS JOIN LATERAL (
                     SELECT scan.ybctid AS tid, scan.key AS key, scan.lsn AS lsn
                     FROM "{schema}".meta AS scan
-                    WHERE scan.branch_id=$1
+                    WHERE scan.branch_id=$1 AND scan.version = {DEFAULT_VERSION}
                       AND scan.key = bound.key
                       AND scan.lsn >= bound.watermark
                       AND scan.lsn < bound.anchor
@@ -4220,9 +4221,9 @@ mod tests {
         store
             .test_only_execute(&format!(
                 "INSERT INTO \"{schema}\".pages \
-                     (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, \
+                     (bucket_id, branch_id, version, spcnode, dbnode, relnode, forknum, \
                       blknum, is_image, lsn, will_init, payload) \
-                 SELECT {bucket}, '{branch}', {GC_SPC}, {GC_DB}, {rel}, {fork}, \
+                 SELECT {bucket}, '{branch}', {DEFAULT_VERSION}, {GC_SPC}, {GC_DB}, {rel}, {fork}, \
                         {blk}, i = 1, i, i = 1, '\\x00'::bytea \
                  FROM generate_series(1, {VERSIONS}) i \
                  ON CONFLICT DO NOTHING",
@@ -4234,8 +4235,8 @@ mod tests {
         store
             .test_only_execute(&format!(
                 "INSERT INTO \"{schema}\".slru_pages \
-                     (branch_id, kind, segno, blknum, is_image, lsn, will_init, payload) \
-                 SELECT '{branch}', {kind}, {segno}, {blk}, i = 1, i, i = 1, \
+                     (branch_id, version, kind, segno, blknum, is_image, lsn, will_init, payload) \
+                 SELECT '{branch}', {DEFAULT_VERSION}, {kind}, {segno}, {blk}, i = 1, i, i = 1, \
                         '\\x00'::bytea \
                  FROM generate_series(1, {VERSIONS}) i \
                  ON CONFLICT DO NOTHING",

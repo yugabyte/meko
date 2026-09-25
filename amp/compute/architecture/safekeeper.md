@@ -131,13 +131,14 @@ trimming survives a safekeeper restart taken while the pageserver is down.
 CREATE TABLE amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,
     branch_id        uuid     NOT NULL,
+    version          SMALLINT NOT NULL,             -- always 0 for now
     segno            BIGINT   NOT NULL,
     chunk_offset     INTEGER  NOT NULL,   -- byte offset of `data` within the segment
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,
     CONSTRAINT wals_bucket_id_in_range CHECK (bucket_id >= 0 AND bucket_id < 6),
-    PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, segno ASC, chunk_offset ASC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
 

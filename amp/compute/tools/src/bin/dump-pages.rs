@@ -61,7 +61,7 @@ struct Args {
 
 fn key_where(a: &Args) -> String {
     let mut w = format!(
-        "branch_id='{}' AND spcnode={} AND dbnode={} \
+        "branch_id='{}' AND version=0 AND spcnode={} AND dbnode={} \
          AND relnode={} AND forknum={}",
         a.branch, a.spc, a.db, a.rel, a.fork
     );

@@ -90,7 +90,9 @@ async fn main() -> Result<()> {
         .context("connecting to yb_storage")?;
 
     // WHERE — interpolating only clap-parsed ids (hex) and integers.
-    let mut w = format!("WHERE branch_id='{}'", args.branch);
+    // `version` is always 0 (DEFAULT_VERSION); pinned so the bounds below it
+    // stay a key prefix.
+    let mut w = format!("WHERE branch_id='{}' AND version=0", args.branch);
     if let Some(s) = args.segno {
         w += &format!(" AND segno = {s}");
     }

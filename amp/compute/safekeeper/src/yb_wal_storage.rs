@@ -146,6 +146,15 @@ const WALS_TABLE: &str = "amp_storage.wals";
 /// leader count even on a 3-node RF=3 cluster (2 per node).
 const WALS_BUCKETS: i16 = 6;
 
+/// The `version` key column of `wals`: always 0 for now (see migration
+/// `0003_compute_storage`).
+///
+/// The controller's branch reaper (`controller/internal/branchgc`) reclaims
+/// only `version = 0` from the hash-keyed `slru_pages`, `meta` and
+/// `pending_gc`. Before any other version is written, fix it to delete every
+/// version.
+const DEFAULT_VERSION: i16 = 0;
+
 /// `bucket_id IN (0,1,...,WALS_BUCKETS-1)` for interpolation into `wals`
 /// queries. Readers can't derive a chunk's bucket (assignment is
 /// per consumer batch at write time, placement-only), so every
@@ -782,7 +791,7 @@ impl YbWalStorage {
             let sql = bake_branch_id(
                 &format!(
                     "SELECT segno, chunk_offset::bigint + chunk_size AS end_off FROM {} \
-                     WHERE branch_id = $1 AND bucket_id = {bucket} \
+                     WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND bucket_id = {bucket} \
                      ORDER BY segno DESC, chunk_offset DESC \
                      LIMIT 1",
                     quote_relation(table)
@@ -822,7 +831,7 @@ impl YbWalStorage {
         let sql = bake_branch_id(
             &format!(
                 "SELECT min(segno) AS m FROM {} \
-                 WHERE branch_id = $1 AND {}",
+                 WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {}",
                 quote_relation(table),
                 bucket_in_list()
             ),
@@ -1243,7 +1252,7 @@ impl Storage for YbWalStorage {
             }
             let sql = bake_branch_id(
                 &format!(
-                    "DELETE FROM {} WHERE branch_id = $1 AND {} \
+                    "DELETE FROM {} WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {} \
                      AND segno >= $2 AND segno < $3",
                     quote_relation(&table),
                     bucket_in_list()
@@ -1336,7 +1345,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         // the highest covering offset across them.
         let sql = format!(
             "SELECT chunk_offset, data FROM {} \
-             WHERE branch_id = $1 AND {} AND segno = $2 AND chunk_offset <= $3 \
+             WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {} AND segno = $2 AND chunk_offset <= $3 \
              ORDER BY chunk_offset DESC LIMIT 1",
             quote_relation(self.table),
             bucket_in_list()
@@ -1408,9 +1417,9 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         let buckets = bucket_in_list();
         let sql = format!(
             "SELECT chunk_offset, data FROM {table} \
-             WHERE branch_id = $1 AND {buckets} AND segno = $2 \
+             WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {buckets} AND segno = $2 \
                AND chunk_offset >= (SELECT chunk_offset FROM {table} \
-                                    WHERE branch_id = $1 AND {buckets} AND segno = $2 \
+                                    WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {buckets} AND segno = $2 \
                                       AND chunk_offset <= $3 \
                                     ORDER BY chunk_offset DESC LIMIT 1) \
              ORDER BY chunk_offset ASC LIMIT $4"
@@ -1547,7 +1556,7 @@ fn decode_chunk_data(stored: &[u8], what: &str) -> Result<Vec<u8>> {
 fn truncate_stmts(table: &str) -> (String, String) {
     let buckets = bucket_in_list();
     let del = format!(
-        "DELETE FROM {table} WHERE branch_id = $1 AND {buckets} \
+        "DELETE FROM {table} WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {buckets} \
          AND segno >= $2 AND (segno > $2 OR chunk_offset >= $3)"
     );
     // The predicate reads only `chunk_size`, which is LOGICAL length, so it
@@ -1556,7 +1565,7 @@ fn truncate_stmts(table: &str) -> (String, String) {
     let sel = format!(
         "SELECT bucket_id, segno, chunk_offset, data \
          FROM {table} \
-         WHERE branch_id = $1 AND {buckets} \
+         WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND {buckets} \
            AND segno = $2 AND chunk_offset < $3 \
            AND chunk_offset + chunk_size > $3"
     );
@@ -1673,7 +1682,7 @@ async fn truncate_wals_above(
         // the case the guard exists for.
         let upd = format!(
             "UPDATE {table} SET data = $5, chunk_size = $6 \
-             WHERE branch_id = $1 AND bucket_id = $2 AND segno = $3 \
+             WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND bucket_id = $2 AND segno = $3 \
                AND chunk_offset = $4 \
                AND (data = $7 OR (data = $5 AND chunk_size = $6))"
         );
@@ -2088,6 +2097,7 @@ async fn flush_batch_thin(
                 vec![
                     BindValue::I16(first.bucket_id),
                     BindValue::Bytes(branch_b.clone()),
+                    BindValue::I16(DEFAULT_VERSION),
                     BindValue::I64(first.segno as i64),
                     BindValue::I32(first.chunk_offset),
                 ],
@@ -2581,6 +2591,7 @@ async fn fetch_chunks_thin(
             vec![
                 BindValue::I16(bucket),
                 BindValue::Bytes(branch_b.clone()),
+                BindValue::I16(DEFAULT_VERSION),
                 BindValue::I64(segno_i),
             ],
         )?)
@@ -3024,12 +3035,13 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS {q} (\
                bucket_id        SMALLINT NOT NULL,\
                branch_id        uuid     NOT NULL,\
+               version          SMALLINT NOT NULL,\
                segno            BIGINT   NOT NULL,\
                chunk_offset     INTEGER  NOT NULL,\
                chunk_size       INT      NOT NULL,\
                data             BYTEA    NOT NULL,\
                last_modified_us BIGINT   NOT NULL,\
-               PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
+               PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, segno ASC, chunk_offset ASC)\
              )"
         );
         recreate_scratch_table(client, table, &create_sql).await;
@@ -3047,9 +3059,9 @@ mod tests {
         client
             .execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, 0, $2, $3, $4, $5, 0)",
+                     VALUES (0, $1, {DEFAULT_VERSION}, $2, $3, $4, $5, 0)",
                     quote_relation(table)
                 ),
                 &[
@@ -3523,9 +3535,9 @@ mod tests {
         let branch_id = BranchId::generate();
         let readable = (split.0 - start.0) as usize;
         let ins = format!(
-            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+            "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, 0, 1, $2, $3, $4, 0)",
+             VALUES (0, $1, {DEFAULT_VERSION}, 1, $2, $3, $4, 0)",
             quote_relation(&table)
         );
         client
@@ -3849,9 +3861,9 @@ mod tests {
             };
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
                 &[
@@ -3904,9 +3916,9 @@ mod tests {
             client
                 .execute(
                     &format!(
-                        "INSERT INTO {q} (branch_id, bucket_id, segno, chunk_offset, \
-                           chunk_size, data, last_modified_us) \
-                         VALUES ($1, 0, $2, 0, 8, $3, 0)"
+                        "INSERT INTO {q} (bucket_id, branch_id, version, segno, chunk_offset, \
+                                          chunk_size, data, last_modified_us) \
+                         VALUES (0, $1, {DEFAULT_VERSION}, $2, 0, 8, $3, 0)"
                     ),
                     &[&branch_id, &segno, &b"12345678".to_vec()],
                 )
@@ -3974,9 +3986,9 @@ mod tests {
             let blob = vec![0x5au8; *size as usize];
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
                 &[&branch_id, &bucket, segno, offset, size, &enc(&blob), &0i64],
@@ -4175,9 +4187,9 @@ mod tests {
             let blob = vec![(i as u8) + 1; 8192];
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
                 &[
@@ -4318,11 +4330,11 @@ mod tests {
         const PER_SEG: i64 = 100;
         fpu.execute(
             &format!(
-                "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                  chunk_size, data, last_modified_us) \
-                 SELECT $1, (i % 6)::smallint, i / {PER_SEG}, (i % {PER_SEG}) * 8192, \
-                        8192, $2, 0 \
-                 FROM generate_series(0, {}) i",
+                 SELECT (i % 6)::smallint, $1, {DEFAULT_VERSION}, i / {PER_SEG}, \
+                         (i % {PER_SEG}) * 8192, 8192, $2, 0 \
+                  FROM generate_series(0, {}) i",
                 quote_relation(&table),
                 ROWS - 1
             ),
@@ -4411,9 +4423,9 @@ mod tests {
             let bucket = (i % 10) as i16;
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
                 &[
@@ -4530,9 +4542,9 @@ mod tests {
         let tail_new: Vec<u8> = vec![0xCC; 3072]; // the rewrite
 
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+            "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
@@ -4656,9 +4668,9 @@ mod tests {
         let seg: i64 = 0;
         let head_bytes: Vec<u8> = vec![0xAA; 1024];
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+            "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, 0)",
             quote_relation(&table)
         );
         let head_slice = head_bytes.as_slice();
@@ -4754,9 +4766,9 @@ mod tests {
         new[1024..].fill(0xCD); // rewritten tail
 
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+            "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
@@ -4857,9 +4869,9 @@ mod tests {
         new[1024..].fill(0xCD); // rewritten tail
 
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+            "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
@@ -5166,9 +5178,9 @@ mod tests {
             (5, 1, 0, 512),     // ancient decoy
         ];
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+            "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($2, $1, {DEFAULT_VERSION}, $3, $4, $5, $6, 0)",
             quote_relation(&table)
         );
         for (bucket, segno, off, size) in rows {
@@ -5420,13 +5432,14 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS {q} (\
                bucket_id        SMALLINT NOT NULL,\
                branch_id        uuid     NOT NULL,\
+               version          SMALLINT NOT NULL,\
                segno            BIGINT   NOT NULL,\
                chunk_offset     INTEGER  NOT NULL,\
                chunk_size       INT      NOT NULL,\
                data             BYTEA    NOT NULL,\
                last_modified_us BIGINT   NOT NULL,\
-               PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
-             ) SPLIT AT VALUES ((0, '{branch_id}', 1, 2000))"
+               PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, segno ASC, chunk_offset ASC)\
+             ) SPLIT AT VALUES ((0, '{branch_id}', 0, 1, 2000))"
         );
         recreate_scratch_table(&client, &table, &create_sql).await;
 
@@ -5448,9 +5461,9 @@ mod tests {
             client
                 .execute(
                     &format!(
-                        "INSERT INTO {q} (branch_id, bucket_id, segno, chunk_offset, \
-                           chunk_size, data, last_modified_us) \
-                         VALUES ($1, 0, 1, $2, 1000, $3, 0)"
+                        "INSERT INTO {q} (bucket_id, branch_id, version, segno, chunk_offset, \
+                                          chunk_size, data, last_modified_us) \
+                         VALUES (0, $1, {DEFAULT_VERSION}, 1, $2, 1000, $3, 0)"
                     ),
                     &[&branch_id, &offset, &stored.as_ref()],
                 )

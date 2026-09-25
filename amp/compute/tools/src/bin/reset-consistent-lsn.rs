@@ -251,10 +251,12 @@ impl WalSource for WalReader<'_> {
         // `bucket_id` leads `wals`' all-range key, so this IN-list is what YSQL
         // turns into per-bucket index probes instead of a scan; this decoder
         // walk issues one such lookup per chunk. Keep the list in step with
-        // WALS_BUCKETS — a short list would silently miss chunks.
+        // WALS_BUCKETS — a short list would silently miss chunks. `version` is
+        // always 0 (DEFAULT_VERSION), pinned like every statement on `wals` so
+        // the bounds below it form a key prefix.
         let sql = "SELECT chunk_offset, data FROM amp_storage.wals \
                    WHERE branch_id = $1 AND bucket_id IN (0,1,2,3,4,5) \
-                     AND segno = $2 AND chunk_offset <= $3 \
+                     AND version = 0 AND segno = $2 AND chunk_offset <= $3 \
                    ORDER BY chunk_offset DESC LIMIT 1";
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch, &segno, &off];
         // A missing row ends the WAL; a failed query is a failed read and stays

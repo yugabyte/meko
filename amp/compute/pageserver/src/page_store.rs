@@ -13,6 +13,7 @@
 //! CREATE TABLE amp_storage.pages (
 //!     bucket_id   SMALLINT NOT NULL,
 //!     branch_id   uuid     NOT NULL,
+//!     version     SMALLINT NOT NULL,   -- always 0 for now (DEFAULT_VERSION)
 //!     spcnode     OID      NOT NULL,
 //!     dbnode      OID      NOT NULL,
 //!     relnode     OID      NOT NULL,
@@ -23,8 +24,8 @@
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
 //!     CHECK (will_init OR NOT is_image),
-//!     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
-//!                  relnode ASC, forknum ASC, blknum ASC,
+//!     PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, spcnode ASC,
+//!                  dbnode ASC, relnode ASC, forknum ASC, blknum ASC,
 //!                  lsn DESC, will_init DESC)
 //! ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 //! ```
@@ -438,6 +439,15 @@ pub struct BranchStateRow {
 
 pub const DEFAULT_SCHEMA: &str = "amp_storage";
 
+/// The `version` key column of `pages`, `slru_pages`, `meta`, `pending_gc` and
+/// `wals`: always 0 for now (see migration `0003_compute_storage`).
+///
+/// The controller's branch reaper (`controller/internal/branchgc`) reclaims
+/// only `version = 0` from the hash-keyed `slru_pages`, `meta` and
+/// `pending_gc`. Before any other version is written, fix it to delete every
+/// version.
+pub const DEFAULT_VERSION: i16 = 0;
+
 #[derive(Debug, Clone)]
 pub struct PageStoreConfig {
     pub yb: YbConnConfig,
@@ -781,7 +791,7 @@ impl RowCells for yb_thin_client::Row {
     }
 }
 
-/// The bound key prefix selecting ONE page's chain in `pages`: all seven
+/// The bound key prefix selecting ONE page's chain in `pages`: all eight
 /// leading key columns, so the rows it spans are exactly that page's versions
 /// and the read is a single clustered seek on one tablet. Callers append the
 /// `lsn` bound, targets and limit that decide how much of the chain they want.
@@ -804,6 +814,7 @@ fn page_chain_read(
         vec![
             BindValue::I16(page_bucket_id(rel, blk)),
             BindValue::Bytes(branch.clone()),
+            BindValue::I16(DEFAULT_VERSION),
             BindValue::U32(sp),
             BindValue::U32(db),
             BindValue::U32(rel),
@@ -814,8 +825,8 @@ fn page_chain_read(
 }
 
 /// The shared prefix of every thin `slru_pages` read: `branch` is the
-/// whole hash key; kind/segno are range columns, bound as equality scan
-/// conds. Callers append their own `blknum`/`lsn` conds and targets.
+/// whole hash key; version/kind/segno are range columns, bound as equality
+/// scan conds. Callers append their own `blknum`/`lsn` conds and targets.
 fn slru_segment_read(
     slru: &yb_thin_client::TableHandle,
     branch: &bytes::Bytes,
@@ -825,6 +836,7 @@ fn slru_segment_read(
     use yb_thin_client::{BindValue, CondOp, RangeRead};
     Ok(
         RangeRead::new(slru, vec![BindValue::Bytes(branch.clone())])?
+            .cond(slru, "version", CondOp::Eq, BindValue::I16(DEFAULT_VERSION))?
             .cond(slru, "kind", CondOp::Eq, BindValue::I16(kind_i))?
             .cond(slru, "segno", CondOp::Eq, BindValue::U32(segno))?,
     )
@@ -1315,7 +1327,7 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
         "WITH blocks AS ( \
              SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
              FROM \"{schema}\".pages \
-             WHERE bucket_id=$13 AND branch_id=$1 \
+             WHERE bucket_id=$13 AND branch_id=$1 AND version = {DEFAULT_VERSION} \
                AND (spcnode, dbnode, relnode, forknum, blknum) >= ($2, $3, $4, $5, $6) \
                AND (spcnode, dbnode, relnode, forknum, blknum) <  ($7, $8, $9, $10, $11) \
                AND lsn <= $12 \
@@ -1327,14 +1339,14 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".pages p \
-             WHERE p.bucket_id=$13 AND p.branch_id=$1 \
+             WHERE p.bucket_id=$13 AND p.branch_id=$1 AND p.version = {DEFAULT_VERSION} \
                AND p.spcnode = b.spcnode AND p.dbnode = b.dbnode \
                AND p.relnode = b.relnode AND p.forknum = b.forknum \
                AND p.blknum = b.blknum \
                AND p.lsn <= $12 \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.bucket_id=$13 AND a.branch_id=$1 \
+                     WHERE a.bucket_id=$13 AND a.branch_id=$1 AND a.version = {DEFAULT_VERSION} \
                        AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
                        AND a.relnode = b.relnode AND a.forknum = b.forknum \
                        AND a.blknum = b.blknum \
@@ -1691,6 +1703,7 @@ impl PageStore {
                     vec![
                         BindValue::I16(page_bucket_id(rel, blk)),
                         BindValue::Bytes(branch_b.clone()),
+                        BindValue::I16(DEFAULT_VERSION),
                         BindValue::U32(sp),
                         BindValue::U32(db),
                         BindValue::U32(rel),
@@ -2266,6 +2279,7 @@ impl PageStore {
                     slru,
                     vec![
                         BindValue::Bytes(branch_b.clone()),
+                        BindValue::I16(DEFAULT_VERSION),
                         BindValue::I16(slru_kind_to_i16(row.kind)),
                         BindValue::U32(row.segno),
                         BindValue::I16(slru_blknum(row.blknum)?),
@@ -2319,8 +2333,8 @@ impl PageStore {
     }
     /// Direct-RPC lane for [`PageStore::put_meta`].
     ///
-    /// `key_values` are in PRIMARY KEY order — `((branch_id) HASH, key
-    /// ASC, lsn DESC)` — not declaration order; `payload` is the lone
+    /// `key_values` are in PRIMARY KEY order — `((branch_id) HASH, version
+    /// ASC, key ASC, lsn DESC)` — not declaration order; `payload` is the lone
     /// non-key column. Meta's hash key is `branch_id` alone, so unlike
     /// `pages`/`slru_pages` there is no bucket column to compute here.
     ///
@@ -2361,6 +2375,7 @@ impl PageStore {
                     meta,
                     vec![
                         BindValue::Bytes(branch_b.clone()),
+                        BindValue::I16(DEFAULT_VERSION),
                         BindValue::Bytes(row.key.clone()),
                         BindValue::I64(row.lsn.0 as i64),
                     ],
@@ -2416,6 +2431,7 @@ impl PageStore {
         let meta = &p.meta;
         // `branch_id` is the whole hash key; `key` is an equality cond.
         let read = RangeRead::new(meta, vec![BindValue::Bytes(branch_id.to_bytes())])?
+            .cond(meta, "version", CondOp::Eq, BindValue::I16(DEFAULT_VERSION))?
             .cond(
                 meta,
                 "key",
@@ -2482,14 +2498,14 @@ impl PageStore {
         let sql = format!(
             "WITH keys AS ( \
                  SELECT DISTINCT key FROM \"{schema}\".meta \
-                 WHERE branch_id=$1 \
+                 WHERE branch_id=$1 AND version = {DEFAULT_VERSION} \
                    AND key >= $2 AND key < $3 AND lsn <= $4 \
              ) \
              SELECT k.key, latest.lsn, latest.payload \
              FROM keys k \
              CROSS JOIN LATERAL ( \
                  SELECT lsn, payload FROM \"{schema}\".meta \
-                 WHERE branch_id=$1 \
+                 WHERE branch_id=$1 AND version = {DEFAULT_VERSION} \
                    AND key = k.key AND lsn <= $4 \
                  ORDER BY lsn DESC LIMIT 1 \
              ) latest",

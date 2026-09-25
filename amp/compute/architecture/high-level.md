@@ -199,7 +199,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Metadata blobs (relsizes, dir listings, aux files, …) | YB `amp_storage.meta` | latest row ≤ LSN wins |
 | Per-branch pageserver state (LSNs, ancestry) | YB `amp_storage.branch_state` | one row per branch, written under the endpoint's write lease |
 | Safekeeper control file | YB `amp_storage.branch_state` | one row per branch, typed columns |
-| Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, segno, chunk_offset)` all-range, pre-split into 6 |
+| Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, version, segno, chunk_offset)` all-range, pre-split into 6 |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` |
 | Control-plane resource model | YB `amp_registry` schema | users, pools, clusters, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |

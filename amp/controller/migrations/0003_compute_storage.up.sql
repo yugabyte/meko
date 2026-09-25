@@ -19,6 +19,11 @@
 -- bytes, `amp_registry.branches` keys on. One representation end to end: a
 -- malformed or differently-spelled id fails at the statement instead of quietly
 -- matching zero rows.
+--
+-- `version` follows `branch_id` in the key of `pages`, `slru_pages`, `meta` and
+-- `wals`, and the `(branch_id, bucket_id)` hash key of `pending_gc`. It is always 0 for now: it is reserved in the key,
+-- where it cannot be added later without rewriting the table, for an online
+-- PostgreSQL major-version upgrade that has yet to be designed.
 
 CREATE SCHEMA IF NOT EXISTS amp_storage;
 
@@ -117,6 +122,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
 CREATE TABLE IF NOT EXISTS amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,
     -- OID, not BIGINT: these are PostgreSQL oids, unsigned 32-bit, and the
     -- three of them sit in every version row's DocDB key. OID has no
     -- arithmetic operators, hence the `::bigint` casts in the CHECK below.
@@ -146,7 +152,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
     -- `build_page_row` holds this by construction. YSQL lane only, so
     -- like `bucket_id` above it documents the contract, not enforces it.
     CONSTRAINT pages_image_is_a_base CHECK (will_init OR NOT is_image),
-    PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, spcnode ASC, dbnode ASC,
                  relnode ASC, forknum ASC, blknum ASC, lsn DESC, will_init DESC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 
@@ -162,6 +168,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
 -- first on ties (matching `pages`).
 CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,
     kind         SMALLINT NOT NULL,
     -- OID: an SLRU segment number is unsigned 32-bit, like every other key field.
     -- `blknum` is SMALLINT because it is the page's index WITHIN its
@@ -175,7 +182,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     CONSTRAINT slru_pages_image_is_a_base CHECK (will_init OR NOT is_image),
-    PRIMARY KEY ((branch_id) HASH,
+    PRIMARY KEY ((branch_id) HASH, version ASC,
                  kind ASC, segno ASC, blknum ASC, lsn DESC, will_init DESC)
 );
 
@@ -190,10 +197,11 @@ CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
 -- column makes `scan_meta_range` contiguous.
 CREATE TABLE IF NOT EXISTS amp_storage.meta (
     branch_id    uuid     NOT NULL,
+    version      SMALLINT NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC)
+    PRIMARY KEY ((branch_id) HASH, version ASC, key ASC, lsn DESC)
 );
 
 -- =====================================================================
@@ -293,6 +301,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
 CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     branch_id  uuid     NOT NULL,
     bucket_id  SMALLINT NOT NULL,   -- FROZEN: FNV-1a(key) % 3 (page_store::gc_bucket_id)
+    version    SMALLINT NOT NULL,
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_rel 5=drop_slru 6=drop_meta 7=drop_db
@@ -301,7 +310,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     -- unsigned 32-bit; it is only ever compared against `pages.blknum`,
     -- never used in arithmetic, and oid has the comparison operators.
     relsize    OID,
-    PRIMARY KEY ((branch_id, bucket_id) HASH, due_lsn, key, gc_kind)
+    PRIMARY KEY ((branch_id, bucket_id) HASH, version, due_lsn, key, gc_kind)
 ) SPLIT INTO 6 TABLETS;
 
 -- =====================================================================
@@ -330,6 +339,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
 CREATE TABLE IF NOT EXISTS amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,
     branch_id        uuid     NOT NULL,
+    version          SMALLINT NOT NULL,
     segno            BIGINT   NOT NULL,
     -- INTEGER, not BIGINT: a segment-relative byte offset, and PostgreSQL
     -- caps a WAL segment at 1 GiB, below 2^31. In the key of every chunk
@@ -350,7 +360,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.wals (
     -- the same bytes. `bucket_id` is placement only — it carries no
     -- identity (retries replay the same stamped batch, keeping its
     -- original bucket).
-    PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, version ASC, segno ASC, chunk_offset ASC)
 ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 
 -- =====================================================================
