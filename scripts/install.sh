@@ -17,8 +17,20 @@ repo=${AK_REPO:-yugabyte/agent-k-local}
 ak_home=${AK_HOME:-$HOME/.agent-k-local}
 version=""
 
-say() { printf 'agent-k-local: %s\n' "$*" >&2; }
-die() { say "$*"; exit 1; }
+# Output: color and marks only on a terminal, never with NO_COLOR.
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+  b=$(printf '\033[1m'); d=$(printf '\033[2m'); g=$(printf '\033[32m'); y=$(printf '\033[33m'); r=$(printf '\033[31m'); n=$(printf '\033[0m')
+else
+  b=''; d=''; g=''; y=''; r=''; n=''
+fi
+case "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" in
+  *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ok_mark='✓'; warn_mark='!'; fail_mark='✗' ;;
+  *) ok_mark='ok'; warn_mark='!!'; fail_mark='xx' ;;
+esac
+say() { printf '%s\n' "$*" >&2; }
+ok() { printf '  %s%s%s %-14s%s%s%s\n' "$g" "$ok_mark" "$n" "$1" "$d" "${2:-}" "$n" >&2; }
+warn() { printf '  %s%s%s %-14s%s\n' "$y" "$warn_mark" "$n" "$1" "${2:-}" >&2; }
+die() { printf '\n  %s%s%s %s\n' "$r" "$fail_mark" "$n" "$*" >&2; exit 1; }
 
 # ---- arguments ----
 forward=""
@@ -57,6 +69,12 @@ fi
 have_gh=false
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then have_gh=true; fi
 
+say ""
+say "${b}AgentK Local installer${n}"
+say ""
+say "${b}Download${n}"
+ok "Prerequisites" "tmux $1.$2, git, claude$($have_gh && printf ', gh')"
+
 # ---- resolve version ----
 if [ -z "$version" ]; then
   if $have_gh; then
@@ -72,7 +90,6 @@ if [ -z "$version" ]; then
 fi
 tag="v$version"
 tarball="agent-k-local-$version-linux-$arch.tar.gz"
-say "installing $version ($arch) into $ak_home"
 
 # ---- download + verify ----
 tmp=$(mktemp -d)
@@ -93,6 +110,7 @@ fi
 
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256sum -c - >/dev/null) ||
   die "checksum verification failed for $tarball"
+ok "Release" "$version (linux-$arch), checksum verified"
 
 # ---- unpack into app/<version> ----
 mkdir -p "$ak_home/app"
@@ -118,13 +136,16 @@ rm -f "$ak_home/update-pending.json"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$ak_home/app/current/bin/agent-k-local" "$HOME/.local/bin/agent-k-local"
+short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
+ok "Installed" "$short_home/app/$version"
 case ":$PATH:" in
-  *":$HOME/.local/bin:"*) ;;
-  *) say "add ~/.local/bin to your PATH to run 'agent-k-local' directly" ;;
+  *":$HOME/.local/bin:"*) ok "Command" "agent-k-local (in ~/.local/bin)" ;;
+  *) warn "Command" "add ~/.local/bin to your PATH to run 'agent-k-local' directly" ;;
 esac
 
-say "installed $version; running setup"
 export AK_HOME="$ak_home"
+# Tells `agent-k-local install` the heading is already printed.
+export AK_INSTALLER=1
 # When piped into sh, stdin is the script itself: give the setup prompts the terminal.
 if [ -r /dev/tty ] && [ -t 2 ]; then
   eval "exec \"\$ak_home/app/current/bin/agent-k-local\" install $forward" </dev/tty

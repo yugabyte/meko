@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
@@ -8,7 +8,8 @@ import { loginShell, scrubClaudeMarkers } from './claude.js';
 import { dbPath, isLoopback, loadConfig, resolveMeko } from './config.js';
 import { Core } from './core.js';
 import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
-import { consoleLogger, errMsg } from './log.js';
+import { errMsg, fileLogger } from './log.js';
+import { probeLocal } from './health.js';
 import { MekoClient } from './meko.js';
 import { getPaths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
@@ -52,7 +53,7 @@ async function serve(): Promise<void> {
   const cfg = loadConfig(paths);
   const v = version();
   const db = openDb(dbPath(paths, cfg));
-  const log = consoleLogger;
+  const log = fileLogger(join(paths.logs, 'server.log'));
   let core: Core | null = null;
   const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
   core = new Core({ paths, config: cfg, db, version: v, meko, tmux: new Tmux(cfg.tmux.socket, paths.tmuxConf), log });
@@ -121,6 +122,40 @@ async function setupLink(): Promise<void> {
   db.close();
 }
 
+/** Prints the server log; -f keeps following it, -n sets how many lines to show first. */
+async function logs(args: string[]): Promise<void> {
+  const file = join(getPaths().logs, 'server.log');
+  const follow = args.includes('-f') || args.includes('--follow');
+  const ni = args.findIndex((a) => a === '-n' || a === '--lines');
+  const n = ni >= 0 ? Math.max(1, Number(args[ni + 1]) || 50) : 50;
+  if (!existsSync(file)) {
+    console.error(`No log yet at ${file}. Is the server running? (agent-k-local status)`);
+    process.exitCode = 1;
+    return;
+  }
+  const text = readFileSync(file, 'utf8');
+  process.stdout.write(text.split('\n').slice(-n - 1).join('\n'));
+  if (!follow) return;
+  let pos = statSync(file).size;
+  setInterval(() => {
+    let size: number;
+    try {
+      size = statSync(file).size;
+    } catch {
+      return;
+    }
+    if (size < pos) pos = 0; // rotated
+    if (size === pos) return;
+    const fd = openSync(file, 'r');
+    const buf = Buffer.alloc(size - pos);
+    readSync(fd, buf, 0, buf.length, pos);
+    closeSync(fd);
+    pos = size;
+    process.stdout.write(buf.toString('utf8'));
+  }, 500);
+  await new Promise(() => {});
+}
+
 async function selftest(): Promise<void> {
   const { DatabaseSync } = await import('node:sqlite');
   new DatabaseSync(':memory:').prepare('SELECT 1').get();
@@ -155,12 +190,9 @@ async function status(): Promise<void> {
   }
   const panes = await new Tmux(cfg.tmux.socket, paths.tmuxConf).panes();
   console.log(`tmux sessions: ${panes.size} (${[...panes.values()].filter((p) => !p.dead).length} running)`);
-  try {
-    const r = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(3000) });
-    console.log(`server:   ${r.ok ? 'responding' : `HTTP ${r.status}`}`);
-  } catch {
-    console.log('server:   not responding (a self-signed certificate also prevents this check)');
-  }
+  const probe = await probeLocal(cfg);
+  console.log(`server:   ${probe.ok ? `responding (version ${probe.version})` : `not responding (${probe.error})`}`);
+  console.log(`logs:     ${join(paths.logs, 'server.log')}`);
 }
 
 function help(): void {
@@ -173,6 +205,7 @@ Usage: agent-k-local <command>
   uninstall     Stop and remove the systemd user units (--purge also deletes ~/.agent-k-local)
   setup-link    Print a one-time link to create (or reset) your login
   status        Show services, URL, certificate fingerprint and sessions
+  logs [-f]     Print the server log (-f to follow, -n <lines>)
   selftest      Check that the runtime and bundled modules load
   version       Print the version`);
 }
@@ -186,6 +219,7 @@ async function main(): Promise<void> {
     case 'setup-link': return setupLink();
     case 'selftest': return selftest();
     case 'status': return status();
+    case 'logs': return logs(args);
     case 'version':
     case '--version':
     case '-v':

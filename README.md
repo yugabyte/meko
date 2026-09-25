@@ -50,9 +50,17 @@ The repo is internal for now, so the installer is fetched with `gh`:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
-It installs to `~/.agent-k-local`, sets up two systemd user units (the web server, and the tmux
-server that owns your sessions), and prints a one-time setup link. Lost your password? Run
-`agent-k-local setup-link` on the host.
+It asks for your repos folder, listen address and port, checks Meko, installs to
+`~/.agent-k-local`, starts two systemd user units (the web server, and the tmux server that owns
+your sessions), waits until the server answers, and prints a one-time setup link with the
+certificate fingerprint to check in your browser.
+
+| Command | What it does |
+|---|---|
+| `agent-k-local status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
+| `agent-k-local logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
+| `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
+| `tmux -L agentk attach -t ak-<project>-<session>` | Attach to a session from any terminal |
 
 ## Develop
 

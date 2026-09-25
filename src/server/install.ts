@@ -11,6 +11,9 @@ import { openDb } from './db.js';
 import { checkMeko } from './meko.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
 import { writeTmuxConf } from './tmux.js';
+import { style, ui } from './tty.js';
+import { waitForServer } from './health.js';
+import { loadTls } from './tls.js';
 
 const SERVER_UNIT = 'agent-k-local.service';
 const TMUX_UNIT = 'agent-k-local-tmux.service';
@@ -19,7 +22,6 @@ const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs'
 class InstallError extends Error {}
 
 const say = (msg = '') => process.stdout.write(msg + '\n');
-const warn = (msg: string) => process.stderr.write(`warning: ${msg}\n`);
 
 function sh(cmd: string, args: string[], opts: { quiet?: boolean } = {}): string {
   return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', opts.quiet ? 'ignore' : 'pipe'] }).trim();
@@ -48,7 +50,7 @@ function makePrompter(interactive: boolean): { ask: Prompter; close: () => void 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return {
     ask: async (q, def) => {
-      const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
+      const a = (await rl.question(ui.prompt(q, def))).trim();
       return a || def;
     },
     close: () => rl.close(),
@@ -123,16 +125,14 @@ function userUnitDir(): string {
   return join(base, 'systemd', 'user');
 }
 
-function installServices(paths: Paths): void {
+/** Installs and (re)starts both user units. Returns false when skipped. */
+function installServices(paths: Paths): boolean {
   const tmux = which('tmux');
   if (!tmux) throw new InstallError('tmux was not found on PATH.');
   if (!which('systemctl')) throw new InstallError('systemctl was not found; rerun with --no-service to skip the service setup.');
   if (!existsSync(join(paths.app, 'current', 'bin', 'agent-k-local'))) {
-    warn(
-      `${tildify(join(paths.app, 'current'))} does not exist (running from a source checkout?). ` +
-        'Skipping the services; install a release with scripts/install.sh to run agent-k-local as a service.',
-    );
-    return;
+    ui.warn('Services', 'skipped: not a release install (running from a source checkout?)');
+    return false;
   }
   const dir = userUnitDir();
   mkdirSync(dir, { recursive: true });
@@ -147,20 +147,27 @@ function installServices(paths: Paths): void {
   sh('systemctl', ['--user', 'enable', SERVER_UNIT]);
   // Restart (not just start) the server so a reinstall or upgrade runs the new version.
   sh('systemctl', ['--user', 'restart', SERVER_UNIT]);
-  say(`Services installed: ${TMUX_UNIT}, ${SERVER_UNIT}`);
+  for (const unit of [TMUX_UNIT, SERVER_UNIT]) {
+    const st = trySh('systemctl', ['--user', 'is-active', unit]);
+    const state = st.ok ? st.out : 'not running';
+    if (state === 'active') ui.ok(unit, 'running');
+    else ui.warn(unit, `${state}. Check: systemctl --user status ${unit}`);
+  }
 
   const user = userInfo().username;
   const linger = trySh('loginctl', ['show-user', user, '-p', 'Linger', '--value']);
-  if (linger.ok && linger.out === 'yes') return;
+  if (linger.ok && linger.out === 'yes') {
+    ui.ok('Starts at boot', 'lingering is on for your account');
+    return true;
+  }
   const en = trySh('loginctl', ['enable-linger', user]);
   if (en.ok) {
-    say('Enabled lingering, so agent-k-local starts at boot without a login.');
+    ui.ok('Starts at boot', 'lingering enabled for your account');
   } else {
-    warn(
-      `could not enable lingering (${en.err || 'permission denied'}). Without it, agent-k-local only runs while you are ` +
-        `logged in. Ask an admin to run: sudo loginctl enable-linger ${user}`,
-    );
+    ui.warn('Starts at boot', `no: couldn't enable lingering (${en.err || 'permission denied'}).`);
+    ui.note(`Without it, AgentK Local only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`);
   }
+  return true;
 }
 
 function publicHost(): string {
@@ -194,17 +201,21 @@ export async function runInstall(args: string[]): Promise<void> {
     const cfg: Config = loadConfig(paths);
 
     // 1. Basics
-    say('AgentK Local setup');
-    say('');
-    const reposRoot = values['repos-root'] ?? (await ask('Folder that holds your git repos', cfg.repos.roots[0] ?? '~/code'));
+    if (!process.env.AK_INSTALLER) ui.title('AgentK Local setup');
+    ui.section('Setup');
+    if (interactive && process.stdin.isTTY) ui.note('Press Enter to keep the value in brackets.');
+    const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];
     if (fresh) cfg.repos.cloneInto = reposRoot;
-    if (!existsSync(expandHome(reposRoot))) warn(`${reposRoot} does not exist yet.`);
-    cfg.server.bind = values.bind ?? (await ask('Address to listen on (0.0.0.0 = all interfaces)', cfg.server.bind));
+    cfg.server.bind = values.bind ?? (await ask('Listen address', cfg.server.bind));
     const portStr = values.port ?? (await ask('Port', String(cfg.server.port)));
     const port = Number(portStr);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new InstallError(`invalid port: ${portStr}`);
     cfg.server.port = port;
+    if (!(interactive && process.stdin.isTTY)) {
+      ui.row('Repos folder', reposRoot);
+      ui.row('Listen on', `${cfg.server.bind}:${cfg.server.port}`);
+    }
 
     // 2. Meko (required)
     let meko = resolveMeko(cfg);
@@ -213,17 +224,18 @@ export async function runInstall(args: string[]): Promise<void> {
       meko = { ...meko, apiKey: values['meko-key'] };
       storeKey = true;
     } else if (!meko.apiKey) {
-      const k = await ask('Meko API key (mko_...)', '');
+      const k = await ask('Meko API key', '');
       if (!k) throw new InstallError('A Meko API key is required. Pass --meko-key or set MEKO_API_KEY.');
       meko = { ...meko, apiKey: k };
       storeKey = true;
     }
-    say(`Checking Meko at ${meko.url} ...`);
+
+    ui.section('Checks');
     const check = await checkMeko(meko.url, meko.apiKey);
-    if (!check.ok) throw new InstallError(`Meko check failed: ${check.error}`);
+    if (!check.ok) throw new InstallError(`Meko check failed (${meko.url}): ${check.error}`);
     const fromEnv = process.env.MEKO_API_KEY === meko.apiKey || readClaudeSettingsEnv().MEKO_API_KEY === meko.apiKey;
     if (storeKey && !fromEnv) cfg.meko.apiKey = meko.apiKey;
-    say('Meko: OK');
+    ui.ok('Meko', `${meko.url.replace(/^https?:\/\//, '')}${fromEnv ? ' (key from Claude Code settings)' : ''}`);
 
     // 3. Meko Claude Code plugin
     const plugin = mekoPluginEnabled();
@@ -234,56 +246,78 @@ export async function runInstall(args: string[]): Promise<void> {
           '  claude plugin install meko-agent-skills --scope user',
       );
     }
-    say('Meko plugin: OK');
+    ui.ok('Meko plugin', 'meko-agent-skills enabled');
+    if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
+    else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
 
     // 4. Keep SQLite off network filesystems
     let db = dbPath(paths, cfg);
     mkdirSync(dirname(db), { recursive: true });
     if (isNetworkFs(dirname(db))) {
       const moved = localDbLocation();
-      warn(`${tildify(dirname(db))} is on a network filesystem (${fsType(dirname(db))}); SQLite locking is unreliable there.`);
-      say(`State database will live on local disk at ${moved}`);
+      ui.warn('Database', `${tildify(moved)} (moved off ${fsType(dirname(db))}: SQLite locking is unreliable on network filesystems)`);
       cfg.state.dbPath = moved;
       db = moved;
+    } else {
+      ui.ok('Database', tildify(db));
     }
 
     saveConfig(paths, cfg);
-    say(`Config written to ${tildify(paths.config)}`);
+    ui.ok('Config', tildify(paths.config));
+    // Create the certificate now (the server reuses it) so its fingerprint can be shown below.
+    const tls = await loadTls(paths, cfg);
+    if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
 
     // 5. tmux config
     writeTmuxConf(paths);
 
     // 6. Services
+    ui.section('Services');
+    let running = false;
     if (values['no-service']) {
-      say('Skipping service setup (--no-service). Run `agent-k-local serve` to start the server.');
-    } else {
-      installServices(paths);
+      ui.warn('Services', 'skipped (--no-service). Start the server with: agent-k-local serve');
+    } else if (installServices(paths)) {
+      const probe = await waitForServer(cfg);
+      if (probe.ok) {
+        ui.ok('Server', `answering on port ${cfg.server.port} (version ${probe.version})`);
+        running = true;
+      } else {
+        ui.warn('Server', `not answering yet (${probe.error}). See: agent-k-local logs`);
+      }
     }
 
-    // 7. Setup link
+    // 7. Setup link and next steps
     const handle = openDb(db);
     try {
       const scheme = isLoopback(cfg.server.bind) ? 'http' : 'https';
       const host = isLoopback(cfg.server.bind) ? '127.0.0.1' : publicHost();
       const base = `${scheme}://${host}:${cfg.server.port}`;
-      say('');
+      ui.blank();
       if (getOwner(handle)) {
-        say(`agent-k-local is ready: ${base}/`);
+        ui.text(style.bold(running ? 'Done. AgentK Local is running:' : 'Done. AgentK Local will be at:'));
+        ui.blank();
+        ui.text(`    ${style.cyan(`${base}/`)}`);
       } else {
-        const token = issueSetupToken(handle);
-        say('Open this link to create your login (it works once):');
-        say(`  ${base}/setup?token=${token}`);
-        say('Run `agent-k-local setup-link` for a new link if this one expires.');
+        ui.text(style.bold('Done. Open this link to create your login (it works once):'));
+        ui.blank();
+        ui.text(`    ${style.cyan(`${base}/setup?token=${issueSetupToken(handle)}`)}`);
       }
-      if (scheme === 'https' && !cfg.tls.cert) {
-        say('The server uses a self-signed certificate; `agent-k-local status` shows its fingerprint.');
+      ui.blank();
+      if (tls?.selfSigned) {
+        ui.row('Certificate', 'self-signed, so your browser warns once. Check the SHA-256 fingerprint:');
+        ui.row('', tls.fingerprint);
       }
+      ui.row('New link', 'agent-k-local setup-link');
+      ui.row('Status', 'agent-k-local status');
+      ui.row('Logs', 'agent-k-local logs -f');
+      ui.blank();
     } finally {
       handle.close();
     }
   } catch (e) {
     if (e instanceof InstallError) {
-      process.stderr.write(`\nInstall failed: ${e.message}\n`);
+      process.stderr.write('\n');
+      ui.fail('Install failed', e.message);
       process.exitCode = 1;
       return;
     }

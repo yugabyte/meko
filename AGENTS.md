@@ -43,6 +43,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping. |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback; host install and systemd units. |
+| `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/UsagePanel.tsx` | Project token usage: headline numbers, 14-day chart with table view, per-session and per-model tables. |
 | `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session. |
 | `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd templates, install and release scripts, CI and releases. |
