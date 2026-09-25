@@ -22,6 +22,10 @@ import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
 const QUARTER_HOUR = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
+/** How long stopping a session waits for its last turns to reach Meko. */
+const FINAL_CAPTURE_MS = 15000;
+
+const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms).unref())]);
 
 export class SessionManager {
   private busy = new Set<string>();
@@ -347,6 +351,7 @@ export class SessionManager {
         if (p.tool_name === 'ExitPlanMode') {
           const plan = typeof p.tool_input?.plan === 'string' ? p.tool_input.plan : '';
           if (plan) await this.core.lifecycle.saveDesign(id, plan);
+          void this.captureTranscript(id);
           this.planPending.add(id);
           this.setStatus(id, 'needs_input', 'Design ready for your approval');
           this.notifyUser(id, 'Design ready', 'Review and approve the design.');
@@ -383,6 +388,7 @@ export class SessionManager {
         break;
       }
       case 'Stop': {
+        void this.captureTranscript(id);
         if (this.planPending.has(id)) break;
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'idle');
@@ -406,7 +412,11 @@ export class SessionManager {
 
   /** Boot-time recovery: bring back every session that should be running. */
   async recover(): Promise<void> {
-    for (const r of sessionRows(this.db)) if (r.desired === 'running') this.ingestUsage(r.id);
+    for (const r of sessionRows(this.db)) {
+      if (r.desired !== 'running') continue;
+      this.ingestUsage(r.id);
+      void this.captureTranscript(r.id); // catches up on turns from before this server version
+    }
     await this.core.tmux.ensureServer();
     const panes = await this.core.tmux.panes();
     for (const row of sessionRows(this.db)) {
@@ -561,6 +571,7 @@ export class SessionManager {
     try {
       this.ingestUsage(row.id);
       run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = ? WHERE id = ?`, Date.now(), row.id);
+      await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
       await this.core.tmux.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
       let worktreeRemoved = false;
@@ -596,6 +607,7 @@ export class SessionManager {
       if (row.desired === 'running') {
         this.stopping.add(row.id);
         run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = ? WHERE id = ?`, Date.now(), row.id);
+        await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
         await this.core.tmux.kill(row.tmux_name);
         this.stopping.delete(row.id);
       }
@@ -621,6 +633,15 @@ export class SessionManager {
       await this.refreshDiff(r.id).catch(() => undefined);
       this.ingestUsage(r.id);
     }
+  }
+
+  // ---- Meko conversation ----
+
+  /** Sends the session's new turns to its Meko conversation. Never throws. */
+  captureTranscript(id: string): Promise<void> {
+    const r = sessionRow(this.db, id);
+    if (!r) return Promise.resolve();
+    return this.core.capture.capture(id, sessionTranscript(r, transcriptPathFor));
   }
 
   // ---- token usage ----

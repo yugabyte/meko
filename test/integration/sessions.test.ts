@@ -10,6 +10,11 @@ function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[
   return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
 }
 
+function captureLog(env: TestEnv): { args: string[]; input: { transcript_path: string }; env: Record<string, string> }[] {
+  const f = join(env.fakeDir, 'capture.jsonl');
+  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+}
+
 describe('projects and sessions (real tmux + git, fake claude)', () => {
   let env: TestEnv;
   beforeEach(async () => {
@@ -68,7 +73,17 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(home.usage.bySession[0]).toMatchObject({ sessionId: s.id, archived: false });
     expect(home.usage.byModel[0].model).toBe('claude-fake-1');
 
+    // Each turn's end sends the transcript to the session's Meko conversation.
+    const captures = await waitFor(() => captureLog(env), (c) => c.length >= 2, 10000, 'transcript captures');
+    expect(captures[0]).toMatchObject({
+      args: ['checkpoint'],
+      input: { transcript_path: join(env.fakeDir, `${s.claudeSessionId}.jsonl`) },
+      env: { MEKO_MCP_URL: 'https://mcp.mekodata.ai/mcp', MEKO_API_KEY: 'test-key' },
+    });
+    const capturedBeforeArchive = captureLog(env).length;
+
     await env.core.sessions.action(s.id, 'archive');
+    expect(captureLog(env).length).toBeGreaterThan(capturedBeforeArchive); // final capture before Claude is stopped
     const panes = await env.core.tmux.panes();
     expect(panes.has(s.tmuxName)).toBe(false);
     expect(existsSync(s.worktreePath)).toBe(false);
@@ -191,7 +206,10 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Keep running', prompt: 'hi', skipDesign: true });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
     const launches = argvLog(env).length;
+    await waitFor(() => captureLog(env).length, (n) => n >= 1, 10000, 'turn capture');
+    const captured = captureLog(env).length;
     await env.core.sessions.recover();
     expect(argvLog(env).length).toBe(launches);
+    await waitFor(() => captureLog(env).length, (n) => n > captured, 10000, 'catch-up capture on boot');
   });
 });

@@ -12,6 +12,7 @@ import { getPaths } from '../src/server/paths.js';
 import { Tmux } from '../src/server/tmux.js';
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
+export const FAKE_CAPTURE = fileURLToPath(new URL('./fixtures/fake-capture.mjs', import.meta.url));
 
 export function gitRepo(dir: string): string {
   const g = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
@@ -76,9 +77,10 @@ export async function makeEnv(opts: { start?: boolean } = {}): Promise<TestEnv> 
   cfg.repos.cloneInto = join(home, 'code');
   cfg.tmux.socket = socket;
   cfg.claude.command = FAKE_CLAUDE;
+  cfg.meko.apiKey = 'test-key';
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
-  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, tmux: new Tmux(socket, paths.tmuxConf), log: silentLogger, timers: false });
+  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: FAKE_CAPTURE, tmux: new Tmux(socket, paths.tmuxConf), log: silentLogger, timers: false });
   if (opts.start !== false) await core.start();
   return {
     home, repo, core, meko, fakeDir, socket,

@@ -5,7 +5,8 @@ import { ensureWorkspaceTrust } from './trust.js';
 import { userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
-import { resolveMekoWebUrl, saveConfig, type Config } from './config.js';
+import { TranscriptCapture } from './capture.js';
+import { resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { run, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
@@ -29,6 +30,8 @@ export interface CoreOptions {
   log?: Logger;
   /** Timers for reconcile, GitHub polling and Meko checks. Tests turn these off. */
   timers?: boolean;
+  /** The Meko plugin's capture script (see findMekoCaptureScript); null turns transcript capture off. */
+  mekoCaptureScript?: string | null;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -39,6 +42,7 @@ export class Core extends EventEmitter {
   readonly version: string;
   readonly username: string;
   readonly meko: MekoClient;
+  readonly capture: TranscriptCapture;
   readonly tmux: Tmux;
   readonly log: Logger;
   readonly projects: ProjectService;
@@ -60,6 +64,10 @@ export class Core extends EventEmitter {
     this.meko = o.meko;
     this.mekoStatus = { ok: true, error: null, checkedAt: null, webUrl: resolveMekoWebUrl(o.config) };
     this.log = o.log ?? consoleLogger;
+    this.capture = new TranscriptCapture(o.mekoCaptureScript ?? null, () => {
+      const m = resolveMeko(this.cfg);
+      return { MEKO_MCP_URL: m.url, MEKO_API_KEY: m.apiKey };
+    }, this.log);
     this.tmux = o.tmux ?? new Tmux(o.config.tmux.socket, o.paths.tmuxConf);
     this.timersOn = o.timers ?? true;
     this.username = safeUsername();

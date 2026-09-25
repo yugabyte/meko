@@ -4,6 +4,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
+import { findMekoCaptureScript } from './capture.js';
 import { loginShell, scrubClaudeMarkers } from './claude.js';
 import { dbPath, isLoopback, loadConfig, resolveMeko } from './config.js';
 import { Core } from './core.js';
@@ -56,7 +57,9 @@ async function serve(): Promise<void> {
   const log = fileLogger(join(paths.logs, 'server.log'));
   let core: Core | null = null;
   const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
-  core = new Core({ paths, config: cfg, db, version: v, meko, tmux: new Tmux(cfg.tmux.socket, paths.tmuxConf), log });
+  const mekoCaptureScript = findMekoCaptureScript();
+  if (!mekoCaptureScript) log.warn('the meko-agent-skills plugin was not found; session transcripts will not be captured to Meko');
+  core = new Core({ paths, config: cfg, db, version: v, meko, mekoCaptureScript, tmux: new Tmux(cfg.tmux.socket, paths.tmuxConf), log });
 
   let app: Awaited<ReturnType<typeof buildServer>> | null = null;
   let shuttingDown = false;

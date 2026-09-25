@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
+import { mekoPluginInstalls } from './capture.js';
 import { dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, saveConfig, type Config } from './config.js';
 import { openDb } from './db.js';
 import { checkMeko } from './meko.js';
@@ -63,15 +64,8 @@ function makePrompter(interactive: boolean): { ask: Prompter; close: () => void 
 /** True when the meko-agent-skills plugin is installed and enabled for Claude Code. */
 export function mekoPluginEnabled(claudeDir: string = join(homedir(), '.claude')): { installed: boolean; enabled: boolean } {
   const isMeko = (k: string) => k.startsWith('meko-agent-skills@');
-  let installed = false;
+  const installed = (mekoPluginInstalls(claudeDir)?.length ?? 0) > 0;
   let enabled = false;
-  try {
-    const j = JSON.parse(readFileSync(join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf8'));
-    const plugins = j && typeof j.plugins === 'object' ? j.plugins : j;
-    installed = Object.keys(plugins ?? {}).some(isMeko);
-  } catch {
-    // no plugin registry
-  }
   try {
     const s = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf8'));
     const ep = (s?.enabledPlugins ?? {}) as Record<string, unknown>;
