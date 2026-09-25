@@ -2,7 +2,7 @@ import { useEffect, useReducer } from 'react';
 import type { Session, StartupStep } from '../../shared/types';
 import { STAGE_LABELS, STARTUP_STEPS } from '../../shared/types';
 import { cx } from '../util';
-import { Dots } from './common';
+import { Check, Dots } from './common';
 
 const STAGE_HINT: Partial<Record<Session['stage'], string>> = {
   design: 'Claude reads the code and writes a design for you to approve before anything changes.',
@@ -44,7 +44,7 @@ export function StartupPanel({ session }: { session: Session }) {
           return (
             <li key={s.step} className={cx('startup-step', state)}>
               <span className="startup-mark" aria-hidden="true">
-                {state === 'done' ? '✓' : state === 'current' ? '' : ''}
+                {state === 'done' && <Check size={10} />}
               </span>
               <span className="startup-label">
                 {s.label}

@@ -11,7 +11,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
-import { ConfirmButton, DatapackName, Dots, StatusDot } from './common';
+import { Check, ConfirmButton, DatapackName, Dots, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
@@ -378,7 +378,7 @@ function StageBar({
             <span key={st} className="stg-item">
               {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
               <span className={cx('stg', i < idx && 'done', i === idx && 'cur')} aria-current={i === idx ? 'step' : undefined}>
-                <span className="n">{i < idx ? '✓' : i + 1}</span>
+                <span className="n">{i < idx ? <Check size={10} /> : i + 1}</span>
                 <span className="stg-label">{STAGE_LABELS[st]}</span>
               </span>
             </span>

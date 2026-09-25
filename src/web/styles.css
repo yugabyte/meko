@@ -2152,6 +2152,11 @@ a.icon-btn {
   font-size: 11px;
   border: 2px solid var(--rule);
 }
+/* Ticks are SVG; block display keeps the glyph box from nudging them off-centre. */
+.startup-mark .check,
+.stg .n .check {
+  display: block;
+}
 .startup-step.done .startup-mark {
   background: var(--ok);
   border-color: var(--ok);

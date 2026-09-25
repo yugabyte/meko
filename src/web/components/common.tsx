@@ -164,3 +164,12 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 export function Dots() {
   return <span className="dots" aria-hidden="true" />;
 }
+
+/** A tick drawn as a path, so it sits exactly in the middle of its circle whatever the font. */
+export function Check({ size = 10 }: { size?: number }) {
+  return (
+    <svg className="check" width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 6.3 5 8.7l4.5-5.1" />
+    </svg>
+  );
+}
