@@ -611,8 +611,8 @@ PSQL=("$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d postgres -
 # compute (the local-deploy analogue of pg_regress.sh for core Postgres, #608),
 # instead of the hand-written smoke below. The suite ships in the extension's
 # SOURCE tree — which the FROM-scratch ImageVolume deliberately does not carry —
-# so re-fetch the source the same way extension.Dockerfile does (URL + sha256 +
-# optional gh_token/prep/patch from the manifest). The already-built ImageVolume
+# so re-fetch the source the same way extension.Dockerfile does (URL verified
+# against downloads_checksum.txt, optional gh_token/prep/patch from the manifest). The already-built ImageVolume
 # is what the compute loads; the fetched tree only supplies sql/expected.
 if [[ "$REGRESS" == 1 ]]; then
     # Pull the row's regress config + the fetch inputs, as shell assignments.
@@ -628,7 +628,6 @@ for e in m.get("extensions", []):
         emit("REG_SCRIPT", r.get("script"))
         emit("REG_DIR", r.get("dir"))
         emit("EXT_URL", e.get("url"))
-        emit("EXT_SHA256", e.get("sha256"))
         emit("EXT_PATCH", e.get("patch"))
         emit("EXT_PREP", e.get("prep"))
         break
@@ -639,7 +638,9 @@ PY
     [[ -n "$REG_DRIVER" ]] || { echo "$EXT_NAME has no regress: block in $MANIFEST; nothing to run with --regress" >&2; exit 2; }
 
     # Re-fetch + unpack the source into a run-scoped dir (cleaned by finish()).
+    # CHECKSUM is what a manifest `prep` fetches through, as in the image build.
     SRC_DIR="$(mktemp -d)"
+    SAFE_CURL="$REPO/scripts/safe_curl.sh"
     fetch_source() {
         local tgz; tgz="$(mktemp)"
         local auth=()
@@ -648,12 +649,18 @@ PY
         # sources (pgvector, pg_cron) fetch with no header.
         [[ -n "${AMP_EXT_GH_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $AMP_EXT_GH_TOKEN")
         echo ">>> fetching source: $EXT_URL"
-        curl -fsSL "${auth[@]}" "$EXT_URL" -o "$tgz"
-        echo "$EXT_SHA256  $tgz" | sha256sum -c -
+        # As in extension.Dockerfile: safe_curl.sh fetches anonymously, so an
+        # authenticated fetch is its own curl, verified after the fact.
+        if (( ${#auth[@]} )); then
+            curl -fsSL "${auth[@]}" "$EXT_URL" -o "$tgz"
+            sh "$SAFE_CURL" verify "$EXT_URL" "$tgz"
+        else
+            sh "$SAFE_CURL" fetch "$EXT_URL" "$tgz"
+        fi
         tar -xzf "$tgz" --strip-components=1 -C "$SRC_DIR"
         rm -f "$tgz"
         ( cd "$SRC_DIR"
-          [[ -n "$EXT_PREP" ]] && sh -eu -c "$EXT_PREP"
+          [[ -n "$EXT_PREP" ]] && SAFE_CURL="$SAFE_CURL" sh -eu -c "$EXT_PREP"
           [[ -n "$EXT_PATCH" ]] && patch --batch --fuzz=0 -p1 < "$REPO/compute/image/patches/$EXT_PATCH"
           true )
     }

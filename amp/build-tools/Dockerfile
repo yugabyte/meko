@@ -65,6 +65,11 @@ RUN useradd -ms /bin/bash nonroot -b /home
 # Use strict mode for bash to catch errors early.
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
+# Every file this image downloads is verified against its pin in
+# downloads_checksum.txt by scripts/safe_curl.sh. Both are bind-mounted into the
+# RUN that downloads, so neither lands in the image, and the build context is
+# only those two files (Dockerfile.dockerignore beside this file).
+
 # /bin/sh in the debian image treats '\n' literally, but bash's built-in echo
 # needs '-e', which the SHELL above gives us.
 RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
@@ -72,7 +77,7 @@ RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
     echo -e "--retry-connrefused\n--connect-timeout 15\n--retry 5\n--max-time 300\n" > /root/.curlrc
 
 # System deps: the PostgreSQL build dependencies plus the general build tooling
-# (git/cmake for the mold build, unzip for protoc, wget for the ICU source).
+# (cmake for the mold build, unzip for protoc, plus git and wget).
 RUN set -e \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -107,7 +112,10 @@ RUN set -e \
 # protobuf-compiler (protoc)
 # Keep the version the same as in compute/image/compute-node.Dockerfile
 ENV PROTOC_VERSION=25.1
-RUN curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-$(uname -m | sed 's/aarch64/aarch_64/g').zip" -o "protoc.zip" \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    sh /safe_curl/scripts/safe_curl.sh fetch \
+        "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-$(uname -m | sed 's/aarch64/aarch_64/g').zip" protoc.zip \
     && unzip -q protoc.zip -d protoc \
     && mv protoc/bin/protoc /usr/local/bin/protoc \
     && mv protoc/include/google /usr/local/include/google \
@@ -116,7 +124,13 @@ RUN curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v$
 # LLVM. Install the apt key into a keyring (apt-key is deprecated/removed on
 # recent debian) and reference it with signed-by=.
 ENV LLVM_VERSION=20
-RUN curl -fsSL 'https://apt.llvm.org/llvm-snapshot.gpg.key' | gpg --dearmor -o /usr/share/keyrings/llvm.gpg \
+#
+# The key is pinned like any other download: it is what every LLVM package is
+# verified against, so a swapped key would make apt trust whatever it signed.
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    sh /safe_curl/scripts/safe_curl.sh fetch 'https://apt.llvm.org/llvm-snapshot.gpg.key' /tmp/llvm.key \
+    && gpg --dearmor -o /usr/share/keyrings/llvm.gpg < /tmp/llvm.key \
     && echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/${DEBIAN_VERSION}/ llvm-toolchain-${DEBIAN_VERSION}-${LLVM_VERSION} main" > /etc/apt/sources.list.d/llvm.stable.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends clang-${LLVM_VERSION} llvm-${LLVM_VERSION} \
@@ -124,10 +138,17 @@ RUN curl -fsSL 'https://apt.llvm.org/llvm-snapshot.gpg.key' | gpg --dearmor -o /
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Mold: A Modern Linker. Built with clang++ (installed above), so it must follow
-# the LLVM step.
+# the LLVM step. From the release's source tarball rather than a clone of the
+# tag: a tag can be moved, and the tarball's checksum is pinned.
 ENV MOLD_VERSION=v2.37.1
-RUN set -e \
-    && git clone -b "${MOLD_VERSION}" --depth 1 https://github.com/rui314/mold.git /tmp/mold \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -e \
+    && sh /safe_curl/scripts/safe_curl.sh fetch \
+        "https://github.com/rui314/mold/archive/refs/tags/${MOLD_VERSION}.tar.gz" /tmp/mold.tar.gz \
+    && mkdir /tmp/mold \
+    && tar -xzf /tmp/mold.tar.gz -C /tmp/mold --strip-components=1 \
+    && rm /tmp/mold.tar.gz \
     && cmake -S /tmp/mold -B /tmp/mold/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ \
     && cmake --build /tmp/mold/build -j "$(nproc)" \
     && cmake --install /tmp/mold/build \
@@ -143,8 +164,10 @@ ENV ICU_VERSION=67.1
 ENV ICU_PREFIX=/usr/local/icu
 
 # Download and build static ICU.
-RUN wget -O "/tmp/libicu-${ICU_VERSION}.tgz" https://github.com/unicode-org/icu/releases/download/release-${ICU_VERSION//./-}/icu4c-${ICU_VERSION//./_}-src.tgz && \
-    echo "94a80cd6f251a53bd2a997f6f1b5ac6653fe791dfab66e1eb0227740fb86d5dc /tmp/libicu-${ICU_VERSION}.tgz" | sha256sum --check && \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    sh /safe_curl/scripts/safe_curl.sh fetch \
+        "https://github.com/unicode-org/icu/releases/download/release-${ICU_VERSION//./-}/icu4c-${ICU_VERSION//./_}-src.tgz" "/tmp/libicu-${ICU_VERSION}.tgz" && \
     mkdir /tmp/icu && \
     pushd /tmp/icu && \
     tar -xzf /tmp/libicu-${ICU_VERSION}.tgz && \
@@ -169,7 +192,14 @@ ENV RUSTUP_HOME="/home/nonroot/.rustup"
 ENV PATH="/home/nonroot/.cargo/bin:${PATH}"
 ARG CARGO_AUDITABLE_VERSION=0.7.0
 ARG CARGO_CHEF_VERSION=0.1.71
-RUN curl -sSO https://static.rust-lang.org/rustup/dist/$(uname -m)-unknown-linux-gnu/rustup-init && whoami && \
+# A versioned rustup-init, not the floating rustup/dist one: only a URL that
+# always serves the same bytes can be pinned. This is only the installer; the
+# toolchain it installs is verified by rustup against the dist manifest.
+ARG RUSTUP_VERSION=1.29.1
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    sh /safe_curl/scripts/safe_curl.sh fetch \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(uname -m)-unknown-linux-gnu/rustup-init" rustup-init && whoami && \
 	chmod +x rustup-init && \
 	./rustup-init -y --default-toolchain ${RUSTC_VERSION} && \
 	rm rustup-init && \

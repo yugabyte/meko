@@ -34,9 +34,17 @@ RUN set -e \
 # containers over a mounted daemon socket. Just the static client binary (no
 # daemon, no apt repo). The Kubernetes deployer uses client-go instead and needs
 # neither this nor the socket, so this is specific to the Docker runtime.
+#
+# ADD fetches it because this slim base has no curl. ADD does not verify it,
+# so the RUN below checks it against downloads_checksum.txt before unpacking
+# anything; the manifest and its checker are bind-mounted, not copied in.
 ARG DOCKER_CLI_VERSION=26.1.3
 ADD https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz /tmp/docker.tgz
-RUN set -e \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -e \
+    && sh /safe_curl/scripts/safe_curl.sh verify \
+        "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" /tmp/docker.tgz \
     && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && chmod +x /usr/local/bin/docker \
@@ -51,9 +59,14 @@ COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/ /opt/yb-amp-amp/
 # provisioner shells out to `helm upgrade --install` (it is not a client-go
 # deployer). In-cluster, helm uses the pod's service account, so no kubeconfig is
 # needed — just RBAC on that service account to manage the endpoint's objects.
+# Fetched and verified the same way as the Docker CLI above.
 ARG HELM_VERSION=3.18.6
 ADD https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz /tmp/helm.tgz
-RUN set -e \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -e \
+    && sh /safe_curl/scripts/safe_curl.sh verify \
+        "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" /tmp/helm.tgz \
     && tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm \
     && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
     && chmod +x /usr/local/bin/helm \

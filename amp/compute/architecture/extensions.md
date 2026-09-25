@@ -108,10 +108,13 @@ extension is tagged and released on its own cadence.
   image is never shipped to a pod.
 - **[`extension.Dockerfile`](../../deploy/extensions/extension.Dockerfile)** —
   the **generic** recipe for pure-C / PGXS extensions. Build args:
-  `NAME`, `VERSION`, `URL`, `SHA256`, `PATCH` (a file under
+  `NAME`, `VERSION`, `URL`, `PATCH` (a file under
   [`compute/image/patches/`](../image/patches/)), `PREP` (a shell snippet run in
-  the source dir before the patch — e.g. fetch an extra per-version SQL file),
-  and `TRUSTED`. It fetches + checksum-verifies the tarball, patches, builds,
+  the source dir before the patch — e.g. fetch an extra per-version SQL file,
+  through `sh "$SAFE_CURL" fetch <url> <dest>`), and `TRUSTED`. It fetches the
+  tarball and verifies it against its pin in
+  [`downloads_checksum.txt`](../../downloads_checksum.txt) (its header states
+  the rules), patches, builds,
   `make install DESTDIR=/stage`, and repackages just `share/postgresql/extension`
   + `lib/postgresql` into a `FROM scratch` image. The fetch takes an optional
   `gh_token` **BuildKit secret** (`--mount=type=secret,id=gh_token,required=false`):
@@ -123,10 +126,12 @@ extension is tagged and released on its own cadence.
   referenced from the manifest's `dockerfile:` field instead of this generic one —
   the common path stays small.
 - **[`extensions.yaml`](../../deploy/extensions/extensions.yaml)** — the build
-  **manifest**: one row per extension (version, URL, checksums, patch, preload,
-  prep, optional dedicated dockerfile, and a `regress:` block naming the upstream
+  **manifest**: one row per extension (version, URL, patch, preload, prep,
+  optional dedicated dockerfile, and a `regress:` block naming the upstream
   suite — required, see "Adding a new extension"). The single source of
-  truth for versions and checksums; keep it in lockstep with the
+  truth for versions; the checksum of each URL is in `downloads_checksum.txt`,
+  and `test-build.sh` fails a row whose URL is not pinned there. Keep it in
+  lockstep with the
   controller catalog (below).
 - **[`build.sh`](../../deploy/extensions/build.sh)** — builds the base once, then
   each extension, and optionally `--push`es them. `--push` publishes the base too
@@ -564,7 +569,9 @@ audit / recreate.
    documentdb gateway has its own, `amp-documentdb-gateway`).
 2. Add a row to
    [`deploy/extensions/extensions.yaml`](../../deploy/extensions/extensions.yaml)
-   (version, URL, sha256, optional patch/prep/preload/dedicated dockerfile) and
+   (version, URL, optional patch/prep/preload/dedicated dockerfile), pin its URL
+   with `scripts/safe_curl.sh add <url>` (which appends the line to
+   `downloads_checksum.txt`; check it is the file you meant), and
    `deploy/extensions/build.sh --push <name>`. If the source is private, export
    `AMP_EXT_GH_TOKEN` first (build.sh forwards it as the `gh_token` secret). If
    the `.so` links a new system library, add its `-dev` package to

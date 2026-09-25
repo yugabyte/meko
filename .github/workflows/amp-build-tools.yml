@@ -5,7 +5,9 @@ name: Amp build-tools base
 # against. See amp/build-tools/Dockerfile and amp/deploy/build-tools/build.sh.
 #
 # The base has no COPY from the repo, needs no private submodule, and pulls every
-# input from public sources (FROM debian), so building it needs no pull auth. The
+# input from public sources (FROM debian), so building it needs no pull auth.
+# Each download is verified against amp/downloads_checksum.txt, which is
+# bind-mounted in along with amp/scripts/safe_curl.sh, so those two are inputs. The
 # published repo is PRIVATE, though, so the QUAY_AMP_TOKEN secret is needed to
 # push it here -- and consumer builds elsewhere `docker login` to pull it.
 #
@@ -34,6 +36,8 @@ on:
     # via the `changes` filter below.
     paths:
       - 'amp/build-tools/**'
+      - 'amp/downloads_checksum.txt'
+      - 'amp/scripts/safe_curl.sh'
       - 'amp/deploy/build-tools/**'
       - 'amp/Dockerfile'
       - 'amp/deploy/endpoint/Dockerfile'
@@ -66,8 +70,9 @@ jobs:
       base: ${{ steps.filter.outputs.base }}
     steps:
       - uses: actions/checkout@v7
-      # Only the base Dockerfile + its context determine the built image, so only
-      # those gate the heavy build. A pin bump (consumers/build.sh/workflow) does
+      # Only the base Dockerfile + its context (build-tools/ and the two checksum
+      # files its Dockerfile.dockerignore admits) determine the built image, so
+      # only those gate the heavy build. A pin bump (consumers/build.sh/workflow) does
       # NOT rebuild the base -- it leaves base=false, so `test` runs instead.
       - uses: dorny/paths-filter@v4
         id: filter
@@ -75,6 +80,8 @@ jobs:
           filters: |
             base:
               - 'amp/build-tools/**'
+              - 'amp/downloads_checksum.txt'
+              - 'amp/scripts/safe_curl.sh'
 
   test:
     name: Amp build-tools -- flow tests

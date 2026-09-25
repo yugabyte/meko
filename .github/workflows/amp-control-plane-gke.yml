@@ -227,7 +227,7 @@ jobs:
       - name: DocumentDB gateway image
         run: |
           GW="$QUAY_NS/amp-documentdb-gateway"
-          docker buildx build --push -f amp/deploy/documentdb-gateway/Dockerfile amp/deploy/documentdb-gateway \
+          docker buildx build --push -f amp/deploy/documentdb-gateway/Dockerfile amp \
             -t "$GW:${{ steps.tag.outputs.tag }}" \
             --cache-from type=registry,ref="$GW:buildcache" \
             --cache-to   type=registry,ref="$GW:buildcache",mode=max

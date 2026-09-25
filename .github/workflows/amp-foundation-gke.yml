@@ -295,9 +295,11 @@ jobs:
       # values replaced, which FOUNDATION_SPEC then points at. Doing it here
       # rather than with deployer flags keeps the YAML the only input.
       #
-      # The release bucket is public, so the download is a plain curl — no
-      # credentials, and nothing in the deployer has to know where charts
-      # come from.
+      # The release bucket is public, so the download needs no credentials,
+      # and nothing in the deployer has to know where charts come from. It is
+      # verified against amp/downloads_checksum.txt like every other download,
+      # and a chart with no pin there fails here: pin it first, with
+      # `amp/scripts/safe_curl.sh add <url>` (the error prints the URL).
       - name: Build a spec for this chart
         if: inputs.chart_version != ''
         env:
@@ -307,11 +309,17 @@ jobs:
           LINE=$(echo "$CHART_VERSION" | cut -d- -f1 | cut -d. -f1-3)
           URL="https://releases.yugabyte.com/$CHART_VERSION/helm/yugaware-${LINE}.tgz"
           echo "fetching $URL"
+          # A chart that is not pinned fails before anything is downloaded
+          # from it, with the one-line fix.
+          sh amp/scripts/safe_curl.sh lookup "$URL" >/dev/null || {
+            echo "::error::$URL is not pinned in amp/downloads_checksum.txt — run amp/scripts/safe_curl.sh add '$URL' and commit the line"
+            exit 1
+          }
           # LIST is denied on the bucket, so a build that does not exist
-          # answers 403 rather than 404 — --fail turns either into a named
-          # failure here instead of helm choking on an XML error document.
-          curl -fsSL -o /tmp/yugaware.tgz "$URL" || {
-            echo "::error::$URL is not fetchable (403 here usually means the build does not exist)"
+          # answers 403 rather than 404 — curl's --fail turns either into a
+          # named failure here instead of helm choking on an XML error document.
+          sh amp/scripts/safe_curl.sh fetch "$URL" /tmp/yugaware.tgz || {
+            echo "::error::$URL did not fetch or did not match its pin (403 here usually means the build does not exist)"
             exit 1
           }
 

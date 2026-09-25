@@ -47,12 +47,15 @@ RUN apt-get update \
 #              See the block below for where it comes from and why.
 #
 # pcre2 comes from apt above: bookworm's 10.42 satisfies the 10.40 pin.
+#
+# Every download here is verified against its pin in downloads_checksum.txt
+# (scripts/safe_curl.sh), bind-mounted into the RUN that fetches it.
 ARG LIBBSON_VERSION=1.28.0
-ARG LIBBSON_SHA256=fc8ef2d081d9388b9016d74826f4a229d213a2813708d26063d771ab12e457cb
-RUN set -eux; \
-    curl -fsSL -o /tmp/bson.tar.gz \
-      "https://github.com/mongodb/mongo-c-driver/archive/refs/tags/${LIBBSON_VERSION}.tar.gz"; \
-    echo "${LIBBSON_SHA256}  /tmp/bson.tar.gz" | sha256sum -c -; \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -eux; \
+    sh /safe_curl/scripts/safe_curl.sh fetch \
+      "https://github.com/mongodb/mongo-c-driver/archive/refs/tags/${LIBBSON_VERSION}.tar.gz" /tmp/bson.tar.gz; \
     mkdir -p /tmp/bson && tar xzf /tmp/bson.tar.gz -C /tmp/bson --strip-components=1; \
     cmake -S /tmp/bson -B /tmp/bson/build \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -65,7 +68,7 @@ RUN set -eux; \
 # applied/2.0u3-1, fetched upstream from the git-ubuntu import at
 # git.launchpad.net/ubuntu/+source/intelrdfpmath). Built rather than
 # apt-installed because bookworm's libintelrdfpmath-dev is 2.0u2. It is taken as
-# the source package rather than that git tag so both halves are sha256-pinned;
+# the source package rather than that git tag so both halves are checksum-pinned;
 # orig + debian/patches/series reproduces the applied/2.0u3-1 tree byte for byte.
 #
 # The URLs are Launchpad's +sourcefiles, not archive.ubuntu.com: the archive pool
@@ -77,14 +80,12 @@ RUN set -eux; \
 # compiles against; these are the flags its own install script passes.
 ARG BID_VERSION=2.0u3
 ARG BID_DEBIAN_REVISION=1
-ARG BID_ORIG_SHA256=13f6924b2ed71df9b137a7df98706a0dcc3b43c283a0e32f8b6eadca4305136a
-ARG BID_DEBIAN_SHA256=289a777dd489ffd933a813c1053677f06ffeea2418d862c11e20b638e07ae9c3
-RUN set -eux; \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -eux; \
     src="https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/intelrdfpmath/${BID_VERSION}-${BID_DEBIAN_REVISION}"; \
-    curl -fsSL -o /tmp/bid.orig.tar.gz "${src}/intelrdfpmath_${BID_VERSION}.orig.tar.gz"; \
-    curl -fsSL -o /tmp/bid.debian.tar.xz "${src}/intelrdfpmath_${BID_VERSION}-${BID_DEBIAN_REVISION}.debian.tar.xz"; \
-    echo "${BID_ORIG_SHA256}  /tmp/bid.orig.tar.gz" | sha256sum -c -; \
-    echo "${BID_DEBIAN_SHA256}  /tmp/bid.debian.tar.xz" | sha256sum -c -; \
+    sh /safe_curl/scripts/safe_curl.sh fetch "${src}/intelrdfpmath_${BID_VERSION}.orig.tar.gz" /tmp/bid.orig.tar.gz; \
+    sh /safe_curl/scripts/safe_curl.sh fetch "${src}/intelrdfpmath_${BID_VERSION}-${BID_DEBIAN_REVISION}.debian.tar.xz" /tmp/bid.debian.tar.xz; \
     mkdir -p /tmp/bid; \
     tar xzf /tmp/bid.orig.tar.gz -C /tmp/bid; \
     tar xJf /tmp/bid.debian.tar.xz -C /tmp/bid; \

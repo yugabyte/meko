@@ -30,6 +30,12 @@ name: Amp CI
 #                plus the Guaranteed-QoS guardrail. Renders/validates without a
 #                cluster. The endpoint supervisor is a Rust crate, so its tests
 #                run in the compute job with the rest of the workspace.
+#   checksums  — scripts/safe_curl.sh's own tests (fetch/verify/add failing
+#                closed, against a stubbed curl) and deploy/extensions/
+#                test-build.sh's static tier: the manifest is valid, every
+#                extension URL and prep download is pinned, and no prep calls
+#                curl or wget itself. Runs when the pins, the checker, the
+#                thin-client fetch or the extension manifest change.
 #
 # Unit-test results are published as PR checks (dorny/test-reporter) from
 # the JUnit XML that nextest/gotestsum emit, so failures show up as a
@@ -76,6 +82,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       ui: ${{ steps.filter.outputs.ui }}
       deploy: ${{ steps.filter.outputs.deploy }}
+      checksums: ${{ steps.filter.outputs.checksums }}
       # the controller migrations or their Go runner changed — run the up/down
       # round-trip test against YugabyteDB.
       migrations: ${{ steps.filter.outputs.migrations }}
@@ -139,6 +146,11 @@ jobs:
               - 'amp/postgres.mk'
               - 'amp/build.sh'
               - 'amp/scripts/build.py'
+              # The shim these jobs link is fetched and verified by these: a
+              # broken verify, or a wrong pin for the shim, fails every build.
+              - 'amp/scripts/fetch-yb-thin-client.sh'
+              - 'amp/scripts/safe_curl.sh'
+              - 'amp/downloads_checksum.txt'
               # The YugabyteDB pin these jobs start. Without it a bump that edits
               # only versions.txt would skip the jobs that test it.
               - 'amp/versions.txt'
@@ -158,6 +170,13 @@ jobs:
               - '.github/workflows/amp-pr-build.yml'
             deploy:
               - 'amp/deploy/**'
+              - '.github/workflows/amp-pr-build.yml'
+            checksums:
+              - 'amp/downloads_checksum.txt'
+              - 'amp/scripts/safe_curl.sh'
+              - 'amp/scripts/test_safe_curl.sh'
+              - 'amp/scripts/fetch-yb-thin-client.sh'
+              - 'amp/deploy/extensions/**'
               - '.github/workflows/amp-pr-build.yml'
             migrations:
               - 'amp/controller/migrations/**'
@@ -687,6 +706,30 @@ jobs:
         run: helm unittest deploy/helm/yb-amp-ingress
 
 
+  # Every download amp's builds make is verified against downloads_checksum.txt,
+  # and these are the checks that keep that true without a build: the checker's
+  # fail-closed paths, and the extension manifest's guards. Seconds, no docker.
+  checksums:
+    name: Amp Deploy — download checksums & extension manifest
+    needs: amp_changes
+    if: needs.amp_changes.outputs.checksums == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: amp
+    steps:
+      - uses: actions/checkout@v7
+      - name: safe_curl.sh tests
+        run: bash scripts/test_safe_curl.sh
+      # Static tier only (no --docker): shellcheck, the manifest's shape, and
+      # every extension URL / prep download pinned. shellcheck is preinstalled
+      # on ubuntu runners; PyYAML is not guaranteed.
+      - name: extension manifest (test-build.sh)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user pyyaml
+          bash deploy/extensions/test-build.sh
+
   # The controller's live-database Go tests, on a real YugabyteDB (0002/0003 use
   # YB-specific HASH / SPLIT DDL, so plain Postgres can't run them):
   #   * each migration up/down/up in turn — the per-migration re-up catches a
@@ -812,6 +855,7 @@ jobs:
       - mcp
       - ui
       - deploy
+      - checksums
       - migrations
     runs-on: ubuntu-latest
     timeout-minutes: 5

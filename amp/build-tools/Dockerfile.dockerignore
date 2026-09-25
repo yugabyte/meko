@@ -1,0 +1,6 @@
+# The build context is amp/, for the two files the image's downloads are
+# verified with; everything else stays out, as it did when the context was
+# this directory alone.
+*
+!downloads_checksum.txt
+!scripts/safe_curl.sh

@@ -28,8 +28,10 @@
 //!    at `/opt/yb_thin_client/lib`) and by anyone pointing at a locally built
 //!    shim on purpose.
 //! 2. Otherwise the repo's gitignored `.shim-cache/`, keyed by the pinned
-//!    version + commit + arch: reused untouched when already populated,
-//!    otherwise fetched once by `scripts/fetch-yb-thin-client.sh`. This is the
+//!    version + commit + arch: reused untouched when already populated and
+//!    its `.verified` stamp matches the tarball's pin in
+//!    `downloads_checksum.txt` (the script writes it only after verifying the
+//!    tarball), otherwise fetched once by `scripts/fetch-yb-thin-client.sh`. This is the
 //!    default, so an ordinary `cargo build` needs no setup at all.
 //!
 //! What is deliberately *gone* is the old silent fallback chain: `YB_BUILD_ROOT`,
@@ -113,6 +115,30 @@ fn find_shim_dir(entry: &Path) -> Option<PathBuf> {
     walk(entry, 0)
 }
 
+/// The pinned sha256 of the shim tarball, from `downloads_checksum.txt` — the line
+/// whose URL ends in `/<tarball>`. `None` when there is none, which the fetch
+/// script then reports with the line to add.
+fn pinned_checksum(root: &Path, tarball: &str) -> Option<String> {
+    let manifest = std::fs::read_to_string(root.join("downloads_checksum.txt")).ok()?;
+    let suffix = format!("/{tarball}");
+    manifest.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let (sum, url) = (fields.next()?, fields.next()?);
+        (!sum.starts_with('#') && url.ends_with(&suffix)).then(|| sum.to_string())
+    })
+}
+
+/// Whether a cache entry was extracted from a tarball that matched `pin`: the
+/// fetch script writes `<entry>/.verified` only after verifying the tarball. An
+/// entry without it (extracted before the check existed, or by hand) is not
+/// trusted, and the fetch script rebuilds it from a verified tarball.
+fn verified_for(entry: &Path, pin: Option<&str>) -> bool {
+    match (std::fs::read_to_string(entry.join(".verified")), pin) {
+        (Ok(stamp), Some(pin)) => stamp.trim() == pin,
+        _ => false,
+    }
+}
+
 /// Populate the cache by running the fetch script (one download, then cached
 /// for every later build). Only called on a miss.
 fn fetch(root: &Path) {
@@ -191,10 +217,19 @@ fn main() {
         // 2. Default: the pinned shim in the repo cache. Cache-first — an
         //    already-extracted shim is reused with no download and no
         //    re-extraction, so only the first build after a pin bump goes out
-        //    to the network.
+        //    to the network. Only an entry stamped as extracted from a tarball
+        //    that matched its pin, though: anything else goes through the
+        //    fetch script, which verifies before it extracts.
         None => {
-            let entry = cache_entry(&root, pinned, commit, &tarball_arch());
-            match find_shim_dir(&entry) {
+            // Only this branch reads the pin. The image builds set the override
+            // and exclude the manifest from their copy of the tree, and a
+            // missing rerun-if-changed file would rerun this script every time.
+            println!("cargo:rerun-if-changed=../../../downloads_checksum.txt");
+            let arch = tarball_arch();
+            let entry = cache_entry(&root, pinned, commit, &arch);
+            let tarball = format!("yb_thin_client-{pinned}-{commit}-release-linux-{arch}.tar.gz");
+            let pin = pinned_checksum(&root, &tarball);
+            match find_shim_dir(&entry).filter(|_| verified_for(&entry, pin.as_deref())) {
                 Some(d) => d,
                 None => {
                     fetch(&root);

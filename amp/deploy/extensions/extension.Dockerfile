@@ -21,7 +21,7 @@
 #     --build-arg PG_BASE=amp-pg18-build:local \
 #     --build-arg NAME=pgvector --build-arg VERSION=0.8.2 \
 #     --build-arg URL=https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.2.tar.gz \
-#     --build-arg SHA256=<sha> --build-arg PATCH=pgvector-pg18.patch --build-arg TRUSTED=true \
+#     --build-arg PATCH=pgvector-pg18.patch --build-arg TRUSTED=true \
 #     -f deploy/extensions/extension.Dockerfile .
 
 ARG PG_BASE=amp-pg18-build:local
@@ -34,18 +34,19 @@ COPY --chown=nonroot compute/image/patches /patches
 
 # NAME     - display/package name (informational; drives the image tag).
 # VERSION  - upstream version being built.
-# URL      - source tarball URL (fetched + checksum-verified).
-# SHA256   - expected sha256 of the tarball.
+# URL      - source tarball URL, verified against its pin in
+#            downloads_checksum.txt (scripts/safe_curl.sh).
 # PATCH    - filename under compute/image/patches/ to apply (-p1), or empty.
 # PREP     - shell snippet run inside the extracted source dir before the patch
-#            (e.g. fetch an extra per-version SQL file). Empty = skip.
+#            (e.g. fetch an extra per-version SQL file). Empty = skip. It
+#            fetches with `sh "$SAFE_CURL" fetch <url> <dest>`, so what it
+#            downloads is pinned in the same manifest.
 # TRUSTED  - "true" appends `trusted = true` to every shipped *.control that
 #            lacks it, so the extension can be created by a non-superuser
 #            (matches the legacy image's behaviour for common extensions).
 ARG NAME
 ARG VERSION
 ARG URL
-ARG SHA256
 ARG PATCH=""
 ARG PREP=""
 ARG TRUSTED=""
@@ -63,21 +64,29 @@ ARG MAKE_TARGETS=""
 # build.sh passes it as a BuildKit secret so the token never lands in a layer.
 # required=false keeps public extensions (pgvector, pg_cron) building with no
 # secret mounted. The checksum is still verified, so a bad/missing token fails
-# closed (404 body -> sha mismatch) rather than shipping garbage.
+# closed (a 404 fails the fetch, and anything else fails the checksum) rather
+# than shipping garbage.
 # mode=0444: this stage runs as the base image's `nonroot` user, but a secret
 # mount defaults to root-owned 0400 — unreadable here, which silently drops the
 # auth header and 404s the private fetch. World-readable is safe: the mount is an
 # ephemeral tmpfs scoped to this RUN, never written to a layer.
+# The checksum manifest and its checker are bind-mounted, not copied, so the
+# build stage carries neither.
 RUN --mount=type=secret,id=gh_token,required=false,mode=0444 \
+    --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
     set -eux; \
+    SAFE_CURL=/safe_curl/scripts/safe_curl.sh; export SAFE_CURL; \
     stage=/home/nonroot/build/stage; \
     out=/home/nonroot/build/out; \
-    auth=""; \
     if [ -s /run/secrets/gh_token ]; then \
-        auth="Authorization: Bearer $(cat /run/secrets/gh_token)"; \
+        # safe_curl.sh fetches anonymously, so an authenticated fetch is its
+        # own curl, verified after the fact.
+        curl -fsSL -H "Authorization: Bearer $(cat /run/secrets/gh_token)" "$URL" -o src.tgz; \
+        sh "$SAFE_CURL" verify "$URL" src.tgz; \
+    else \
+        sh "$SAFE_CURL" fetch "$URL" src.tgz; \
     fi; \
-    curl -fsSL ${auth:+-H "$auth"} "$URL" -o src.tgz; \
-    echo "${SHA256}  src.tgz" | sha256sum -c -; \
     mkdir src; \
     tar -xzf src.tgz --strip-components=1 -C src; \
     cd src; \

@@ -7,10 +7,14 @@
 #
 # Built from the SAME documentdb release the extension image is built from — the
 # gateway and the SQL surface it drives are versioned together upstream, so a
-# mismatch is not a supported combination. Keep VERSION/SHA256 in step with the
-# documentdb row in deploy/extensions/extensions.yaml.
+# mismatch is not a supported combination. Keep DOCUMENTDB_VERSION in step with
+# the documentdb row in deploy/extensions/extensions.yaml; both fetch the same
+# tarball, pinned once in downloads_checksum.txt.
 #
-#   docker build -t <repo>/amp-documentdb-gateway:<tag> deploy/documentdb-gateway
+# The context is amp/, for that manifest and scripts/safe_curl.sh, and
+# Dockerfile.dockerignore beside this file admits nothing else:
+#
+#   docker build -t <repo>/amp-documentdb-gateway:<tag> -f deploy/documentdb-gateway/Dockerfile .
 #
 # Runtime configuration is environment-first (a JSON config file is optional):
 #   DOCUMENTDB_LISTEN_ADDR       host:port or :port for the wire-protocol listener
@@ -30,16 +34,17 @@ FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS build
 WORKDIR /src
 
 # Pinned to the extension's release. A checksum mismatch fails the build rather
-# than shipping an unverified tree.
+# than shipping an unverified tree; the manifest and its checker are
+# bind-mounted, not copied in.
 ARG DOCUMENTDB_VERSION=0.116-0
-ARG DOCUMENTDB_SHA256=09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d
-RUN set -eux; \
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl pkg-config libssl-dev; \
     rm -rf /var/lib/apt/lists/*; \
-    curl -fsSL -o src.tgz \
-      "https://github.com/documentdb/documentdb/archive/refs/tags/v${DOCUMENTDB_VERSION}.tar.gz"; \
-    echo "${DOCUMENTDB_SHA256}  src.tgz" | sha256sum -c -; \
+    sh /safe_curl/scripts/safe_curl.sh fetch \
+      "https://github.com/documentdb/documentdb/archive/refs/tags/v${DOCUMENTDB_VERSION}.tar.gz" src.tgz; \
     mkdir -p documentdb; \
     tar -xzf src.tgz --strip-components=1 -C documentdb; \
     rm src.tgz

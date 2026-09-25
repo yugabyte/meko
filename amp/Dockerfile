@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 ### Creates a storage Docker image with postgres, pageserver and safekeeper binaries.
 ### The image itself is mainly used as a container for the binaries and for starting e2e tests with custom parameters.
 ### By default, the binaries inside the image have some mock parameters and can start, but are not intended to be used
@@ -63,7 +64,10 @@ RUN set -e \
 FROM $REPOSITORY/$IMAGE:$TAG AS plan
 WORKDIR /home/nonroot
 
-COPY --chown=nonroot . .
+# The download-checksum manifest and its checker are in the context only for the
+# yb-thin-client stage. Excluded here, a pin edit (a chart, an extension) does not
+# invalidate this layer and rebuild everything after it.
+COPY --chown=nonroot --exclude=downloads_checksum.txt --exclude=scripts/safe_curl.sh . .
 
 RUN set -e \
     && cargo chef prepare --recipe-path recipe.json
@@ -75,6 +79,8 @@ RUN set -e \
 FROM $REPOSITORY/$IMAGE:$TAG AS yb-thin-client
 WORKDIR /home/nonroot
 COPY --chown=nonroot scripts/fetch-yb-thin-client.sh scripts/fetch-yb-thin-client.sh
+COPY --chown=nonroot scripts/safe_curl.sh scripts/safe_curl.sh
+COPY --chown=nonroot downloads_checksum.txt downloads_checksum.txt
 COPY --chown=nonroot compute/libs/yb_thin_client/shim/VERSION compute/libs/yb_thin_client/shim/VERSION
 COPY --chown=nonroot compute/libs/yb_thin_client/shim/COMMIT compute/libs/yb_thin_client/shim/COMMIT
 # Stage under $HOME (the build-tools image runs as nonroot, which can't write
@@ -110,7 +116,10 @@ RUN set -e \
 # Perform the main build. We reuse the Postgres build artifacts from the intermediate 'pg-build'
 # layer, and the cargo dependencies built in the previous step.
 COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install-release/ pg_install-release
-COPY --chown=nonroot . .
+# The download-checksum manifest and its checker are in the context only for the
+# yb-thin-client stage. Excluded here, a pin edit (a chart, an extension) does not
+# invalidate this layer and rebuild everything after it.
+COPY --chown=nonroot --exclude=downloads_checksum.txt --exclude=scripts/safe_curl.sh . .
 COPY --chown=nonroot --from=plan     /home/nonroot/Cargo.lock               Cargo.lock
 
 # Use the Postgres copied from `pg-build`; do not build another one.
@@ -160,7 +169,13 @@ RUN  set -e \
 FROM $BASE_IMAGE_SHA
 WORKDIR /data
 
-RUN set -e \
+# A versioned awscli, not the floating awscli-exe-linux-<arch>.zip: only a URL
+# that always serves the same bytes can be pinned in downloads_checksum.txt.
+# The manifest and its checker are bind-mounted, so neither lands in the image.
+ARG AWSCLI_VERSION=2.37.1
+RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
+    --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    set -e \
     && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
     && apt update \
     && apt install -y \
@@ -171,13 +186,9 @@ RUN set -e \
         unzip \
         curl \
     && ARCH=$(uname -m) \
-    && if [ "$ARCH" = "x86_64" ]; then \
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; \
-    elif [ "$ARCH" = "aarch64" ]; then \
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"; \
-    else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi \
+    && case "$ARCH" in x86_64|aarch64) ;; *) echo "Unsupported architecture: $ARCH"; exit 1 ;; esac \
+    && sh /safe_curl/scripts/safe_curl.sh fetch \
+        "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}-${AWSCLI_VERSION}.zip" awscliv2.zip \
     && unzip awscliv2.zip \
     && ./aws/install \
     && rm -rf aws awscliv2.zip \

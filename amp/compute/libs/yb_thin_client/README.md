@@ -118,8 +118,11 @@ The exact build is pinned so the linked shim always matches the vendored ABI:
    missing the `.so` is a hard error, not a fall-through — you asked for *that*
    shim.
 2. **Otherwise the pinned shim in the repo's gitignored `.shim-cache/`**, keyed
-   by version + commit + arch. Already populated ⇒ reused untouched; a miss runs
-   `scripts/fetch-yb-thin-client.sh` (plain `curl`, no credentials) exactly once.
+   by version + commit + arch. Already populated, with a `.verified` stamp that
+   matches the tarball's pin in `downloads_checksum.txt` ⇒ reused untouched; a
+   miss, or an entry without that stamp, runs
+   `scripts/fetch-yb-thin-client.sh` (plain `curl`, no credentials, verified
+   against its pin in `downloads_checksum.txt`) exactly once.
    So a plain `cargo build` needs no setup.
 
 Nothing else is consulted. The old chain also tried `YB_BUILD_ROOT`,

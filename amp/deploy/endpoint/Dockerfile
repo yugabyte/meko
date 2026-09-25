@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # yb-amp single-container endpoint image.
 #
 # Ships, in one image, every process that makes up a yb-amp endpoint:
@@ -54,6 +55,8 @@ RUN set -e \
 FROM $REPOSITORY/$IMAGE:$TAG AS yb-thin-client
 WORKDIR /home/nonroot
 COPY --chown=nonroot scripts/fetch-yb-thin-client.sh scripts/fetch-yb-thin-client.sh
+COPY --chown=nonroot scripts/safe_curl.sh scripts/safe_curl.sh
+COPY --chown=nonroot downloads_checksum.txt downloads_checksum.txt
 COPY --chown=nonroot compute/libs/yb_thin_client/shim/VERSION compute/libs/yb_thin_client/shim/VERSION
 COPY --chown=nonroot compute/libs/yb_thin_client/shim/COMMIT compute/libs/yb_thin_client/shim/COMMIT
 # Stage under $HOME (the build-tools image runs as nonroot, which can't write
@@ -72,7 +75,10 @@ ARG BUILD_TAG
 
 # Reuse the Postgres build artifacts from the pg-build stage.
 COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install-release/ pg_install-release
-COPY --chown=nonroot . .
+# The download-checksum manifest and its checker are in the context only for the
+# yb-thin-client stage. Excluded here, a pin edit (a chart, an extension) does not
+# invalidate this layer and rebuild everything after it.
+COPY --chown=nonroot --exclude=downloads_checksum.txt --exclude=scripts/safe_curl.sh . .
 
 # The storage binaries link the yb_thin_client shim; stage it and point
 # build.rs at it (no stub fallback). Runtime resolution is handled in the

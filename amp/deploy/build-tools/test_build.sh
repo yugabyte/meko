@@ -54,11 +54,13 @@ run_build() {
 
 echo "build-tools publish flow (build.sh):"
 
-# Default invocation: build the pinned ref from the build-tools/ context, no push.
+# Default invocation: build the pinned ref from the amp/ context, no push. The
+# context is the directory holding build-tools/ (a backreference), which
+# Dockerfile.dockerignore narrows to the checksum manifest and its checker.
 run_build
 if [ "$RUN_RC" -eq 0 ]; then pass "default: exit 0"; else fail "default: exit $RUN_RC"; fi
-if grep -Eq "^build -t ${WANT_REGISTRY}/${WANT_IMAGE}:${WANT_TAG} -f .*/build-tools/Dockerfile .*/build-tools$" "$RUN_LOG"; then
-  pass "default: builds ${WANT_REGISTRY}/${WANT_IMAGE}:${WANT_TAG} from the build-tools context"
+if grep -Eq "^build -t ${WANT_REGISTRY}/${WANT_IMAGE}:${WANT_TAG} -f (.*)/build-tools/Dockerfile \1$" "$RUN_LOG"; then
+  pass "default: builds ${WANT_REGISTRY}/${WANT_IMAGE}:${WANT_TAG} from the amp/ context"
 else
   fail "default: build command wrong -> $(cat "$RUN_LOG")"
 fi

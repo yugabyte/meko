@@ -70,6 +70,11 @@ Confirm the diff didn't leave these stale (see the `commit` skill):
   they inspect changed.
 - Operational `runbooks/*.md` when a failure mode or its fix changed.
 - On Rust changes, `cargo clippy` is clean (`-D warnings`).
+- A new or bumped download (a Dockerfile `curl`/`wget`/`ADD`, a fetch script,
+  a workflow step) goes through `scripts/safe_curl.sh` and pins its URL in
+  [`downloads_checksum.txt`](downloads_checksum.txt), whose header has the
+  rules. An inline `sha256sum -c` or a floating URL ("latest", an unversioned
+  dist path) is a finding.
 
 ## 4. Hygiene — amp-specific
 

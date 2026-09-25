@@ -8,7 +8,9 @@
 # required, and its CI step has to be added by hand. See
 # compute/architecture/extensions.md, "Adding a new extension". build.sh reads this file,
 # builds the ABI-anchor base once, then each extension, and (optionally) pushes
-# them. Keep this the single source of truth for versions + checksums.
+# them. Keep this the single source of truth for versions. Checksums are not
+# here: every `url` (and anything a `prep` fetches) is pinned in
+# downloads_checksum.txt, and a URL with no pin there fails the build.
 
 # Container registry the built images are tagged/pushed under. Extension images
 # are <registry>/amp-ext-<name>:<version>; the base is <registry>/amp-pg18-build.
@@ -53,7 +55,6 @@ extensions:
     # pre-18 vacuum_delay_point() with no args); 0.8.2 is the current release.
     version: "0.8.2"
     url: https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.2.tar.gz
-    sha256: 69f4019389af05dc1c9548deb8628e62878e6e207c03907f2b8af2016472cdaa
     # Carried from the legacy compute image and refreshed for 0.8.2: adds the
     # YB_AMP_SMGR unlogged-build hooks (no data loss on HNSW/IVFFlat index build)
     # and ships the per-version vector--0.7.4.sql upgrade path.
@@ -66,9 +67,9 @@ extensions:
     preload: false
     # Runs in the extracted source dir before the patch: the patch's Makefile
     # references sql/vector--0.7.4.sql, which upstream ships only in the 0.7.4 tag.
+    # $SAFE_CURL is scripts/safe_curl.sh, set by whatever runs the prep.
     prep: >-
-      curl -fsSL https://github.com/pgvector/pgvector/raw/refs/tags/v0.7.4/sql/vector.sql -o ./sql/vector--0.7.4.sql &&
-      echo "10218d05dc02299562252a9484775178b14a1d8edb92a2d1672ef488530f7778  ./sql/vector--0.7.4.sql" | sha256sum -c -
+      sh "$SAFE_CURL" fetch https://github.com/pgvector/pgvector/raw/refs/tags/v0.7.4/sql/vector.sql ./sql/vector--0.7.4.sql
     # Empty => build with the generic extension.Dockerfile. Set to a path
     # (relative to repo root) for a complex extension needing its own recipe.
     dockerfile: ""
@@ -85,7 +86,6 @@ extensions:
     # generic extension.Dockerfile builds it with no patch/prep.
     version: "1.6.7"
     url: https://github.com/citusdata/pg_cron/archive/refs/tags/v1.6.7.tar.gz
-    sha256: d950bc29155f31017567e23a31d268ff672e98276c0e9d062512fb7870351f03
     patch: ""
     # The extension's lead .control basename (CREATE EXTENSION pg_cron).
     control: pg_cron
@@ -109,11 +109,10 @@ extensions:
     # tarball endpoint with an auth header — build.sh mounts $AMP_EXT_GH_TOKEN as
     # the gh_token BuildKit secret (see extension.Dockerfile). Pin to a commit
     # (no upstream release yet); the /tarball/<sha> archive is byte-stable for a
-    # given commit, so the sha256 below is reproducible. This commit is the first
+    # given commit, so its pinned checksum is reproducible. This commit is the first
     # that ships the upstream regression suite (scripts/regression.sh + test/pg/).
     version: "0.1"
     url: https://api.github.com/repos/HexaCluster/hexabridge-ybamp/tarball/4f1bb16db442d8b3fe66246bc9c1f0ad79ed949a
-    sha256: 0bcb960953db2d139535d1a4deb7e66264015bfd82937a4c6d11dd5433f7b499
     patch: ""
     # SQL name == package name: CREATE EXTENSION hexabridge.
     control: hexabridge
@@ -142,7 +141,6 @@ extensions:
     # it (the patch below only trims a regress test, not the build).
     version: "1.8.0"
     url: https://github.com/apache/age/archive/refs/tags/PG18/v1.8.0-rc0.tar.gz
-    sha256: c9036f9fb6fe545aa20e333743c661810966288cda9922ac89f4d82d9ee6e99b
     # Drops scan's EUC_KR (non-UTF8 server encoding) sub-test: amp compute forces
     # the C.UTF-8 locale, so its CREATE DATABASE ... ENCODING EUC_KR is rejected
     # and would abort scan.sql before it cleans up. Regress-only; no build effect.
@@ -169,7 +167,6 @@ extensions:
     # PG18 ABI base with no back-porting.
     version: "0.116-0"
     url: https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
-    sha256: 09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d
     # Drops postgis from `requires` AND gates the postgis-dependent geospatial
     # GIST op classes out of the install SQL (the `requires` line alone is not
     # enough — see compute/architecture/extensions.md), and points the build at

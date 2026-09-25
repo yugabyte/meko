@@ -6,7 +6,10 @@
 #   (cheap, default) static checks — always run, no docker, seconds:
 #     * shellcheck + `bash -n` on build.sh and this script
 #     * parse extensions.yaml (python + PyYAML) and validate every entry has the
-#       required fields (name/version/url/sha256) and a sane shape
+#       required fields (name/version/url) and a sane shape
+#     * every URL a row fetches (its `url`, and any https URL in its `prep`) is
+#       pinned in downloads_checksum.txt, which `scripts/safe_curl.sh check`
+#       validates
 #
 #   (heavy, opt-in) --docker — actually build an extension image via build.sh
 #     (cold, compiles the ABI-anchor PG18 base — many minutes) and assert the
@@ -23,6 +26,8 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 manifest="$here/extensions.yaml"
+amp_root="$(cd "$here/../.." && pwd)"
+checksums="$amp_root/downloads_checksum.txt"
 
 do_docker=false
 name="pgvector"
@@ -43,23 +48,32 @@ bash -n "$0"
 
 if command -v shellcheck >/dev/null 2>&1; then
   echo ">> static: shellcheck"
-  shellcheck "$here/build.sh" "$0"
+  shellcheck "$here/build.sh" "$0" "$amp_root/scripts/safe_curl.sh"
 else
   echo ">> static: shellcheck not installed, skipping"
 fi
 
+echo ">> static: validate $checksums"
+sh "$amp_root/scripts/safe_curl.sh" check
+
 echo ">> static: validate $manifest"
-python3 - "$manifest" <<'PY'
+python3 - "$manifest" "$checksums" <<'PY'
 import re, sys, yaml
 with open(sys.argv[1]) as f:
     m = yaml.safe_load(f)
+pinned = set()
+with open(sys.argv[2]) as f:
+    for line in f:
+        fields = line.split()
+        if len(fields) == 2 and not fields[0].startswith("#"):
+            pinned.add(fields[1])
 assert isinstance(m, dict), "manifest must be a mapping"
 for key in ("registry", "base_image"):
     assert m.get(key), f"manifest missing top-level {key!r}"
 exts = m.get("extensions") or []
 assert exts, "manifest has no extensions"
 seen = set()
-sha_re = re.compile(r"^[0-9a-f]{64}$")
+url_re = re.compile(r"https?://[^\s'\"]+")
 lib_re = re.compile(r"^[A-Za-z0-9_+-]+$")
 guc_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 shell_meta_re = re.compile(r"[;&|<>$`(){}\[\]!*?~]")
@@ -68,10 +82,19 @@ for e in exts:
     assert name, f"extension entry missing name: {e!r}"
     assert name not in seen, f"duplicate extension {name!r}"
     seen.add(name)
-    for key in ("version", "url", "sha256"):
+    for key in ("version", "url"):
         assert e.get(key), f"{name}: missing required {key!r}"
-    assert sha_re.match(str(e["sha256"])), f"{name}: sha256 is not 64 hex chars"
-    assert str(e["url"]).startswith(("http://", "https://")), f"{name}: url must be http(s)"
+    # Checksums moved to downloads_checksum.txt; a leftover one here would be a
+    # second pin that nothing checks.
+    assert "sha256" not in e, f"{name}: sha256 belongs in downloads_checksum.txt, not here"
+    assert str(e["url"]).startswith("https://"), f"{name}: url must be https"
+    assert e["url"] in pinned, f"{name}: {e['url']} is not pinned in downloads_checksum.txt"
+    # A prep that downloads has to go through $SAFE_CURL, and what it fetches has
+    # to be pinned too — otherwise the build would fail only when it runs.
+    prep = str(e.get("prep") or "")
+    assert not re.search(r"\b(curl|wget)\b", prep), f"{name}: prep must fetch with `sh \"$SAFE_CURL\" fetch`, not curl/wget"
+    for u in url_re.findall(prep):
+        assert u in pinned, f"{name}: prep fetches {u}, which is not pinned in downloads_checksum.txt"
     # patch, if named, must exist under compute/image/patches/
     patch = e.get("patch")
     if patch:

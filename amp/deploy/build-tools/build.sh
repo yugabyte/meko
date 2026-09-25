@@ -52,10 +52,13 @@ done
 ref="${registry}/${image}:${tag}"
 
 # The slimmed build-tools Dockerfile has no COPY from the build context (it
-# downloads every input), so the context is just the build-tools dir -- keeping
-# it tiny and independent of the (huge) amp/ working tree.
+# downloads every input). The context is amp/ only so its downloads can be
+# verified against downloads_checksum.txt: build-tools/Dockerfile.dockerignore
+# admits that file and scripts/safe_curl.sh and nothing else, keeping the
+# context tiny and independent of the (huge) amp/ working tree. That per-
+# Dockerfile ignore file is a BuildKit feature, hence DOCKER_BUILDKIT=1.
 echo ">> building ${ref}"
-docker build -t "$ref" -f "$repo_root/build-tools/Dockerfile" "$repo_root/build-tools"
+DOCKER_BUILDKIT=1 docker build -t "$ref" -f "$repo_root/build-tools/Dockerfile" "$repo_root"
 
 if $push; then
   echo ">> pushing ${ref}"

@@ -12,6 +12,9 @@
 !rust-toolchain.toml
 !scripts/ninstall.sh
 !scripts/fetch-yb-thin-client.sh
+# Every download is verified against its pin (scripts/safe_curl.sh).
+!scripts/safe_curl.sh
+!downloads_checksum.txt
 !docker-compose/run-tests.sh
 
 # Directories

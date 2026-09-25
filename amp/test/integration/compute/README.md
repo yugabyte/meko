@@ -269,8 +269,11 @@ upstream regression suite — the extension analogue of what `pg_regress.sh` doe
 for core PostgreSQL. The suite ships in the extension's source tree, which the
 `FROM scratch` ImageVolume deliberately omits, so the driver re-fetches the
 source the same way [`extension.Dockerfile`](../../../deploy/extensions/extension.Dockerfile)
-does (URL + sha256 + optional `AMP_EXT_GH_TOKEN` / `prep` / `patch` from the
-manifest) and runs its suite against the compute that mounts the built tree.
+does, and runs its suite against the compute that mounts the built tree. The
+URL is verified against its pin in
+[`downloads_checksum.txt`](../../../downloads_checksum.txt), `AMP_EXT_GH_TOKEN`
+authenticates a private source, and `prep` runs with `$SAFE_CURL` set, so what it
+fetches is verified too. `patch` then applies from the manifest.
 
 Which suite is per the manifest row's `regress:` block:
 
