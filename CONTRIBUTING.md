@@ -1,4 +1,4 @@
-# Contributing to agent-k-local
+# Contributing to AgentK Local
 
 ## Development setup
 

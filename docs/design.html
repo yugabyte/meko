@@ -1,4 +1,4 @@
-<title>agent-k-local design</title>
+<title>AgentK Local design</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -196,8 +196,8 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.8 (implemented)</span>
-  <h1>agent-k-local</h1>
+  <span class="label">Design · v0.9 (implemented)</span>
+  <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
 </header>
@@ -218,7 +218,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Datapack names</td><td>New dedicated datapacks default to <code>adlc/proj/&lt;repo&gt;/&lt;project_name&gt;</code>.</td></tr>
       <tr><td>Runtime</td><td>Node 22 (bundled in releases). State uses the built-in <code>node:sqlite</code>; node-pty is the only native module.</td></tr>
       <tr><td>Network</td><td>Reachable directly on the corp network over HTTPS, behind a login.</td></tr>
-      <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by agent-k-local are shown.</td></tr>
+      <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by AgentK Local are shown.</td></tr>
       <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
       <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge → Cleanup, with three human gates. More ADLC stages plug in later.</td></tr>
       <tr><td>Host OS</td><td>Linux devservers only for now. macOS is deferred.</td></tr>
@@ -240,7 +240,7 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver, headless"]
-    S["agent-k-local server<br/>HTTPS :7777"]
+    S["AgentK Local server<br/>HTTPS :7777"]
     H["hook.sock<br/>unix socket"]
     T["tmux server<br/>own systemd unit"]
     C1["claude in worktree A"]
@@ -273,11 +273,11 @@ flowchart LR
   <h2>The app</h2>
   <p>The left rail holds projects, with the most urgent session state shown on each. The top tabs hold that project's sessions. The main pane is the live Claude terminal, and the footer shows where the session is working.</p>
   <div class="mockwrap">
-    <div class="mock" role="img" aria-label="Mockup of the agent-k-local window with the project rail, session tabs and a live Claude terminal">
+    <div class="mock" role="img" aria-label="Mockup of the AgentK Local window with the project rail, session tabs and a live Claude terminal">
       <div class="chrome"><i></i><i></i><i></i><span class="url">https://devbox.corp.example:7777/p/billing-api/s/fix-retry-backoff</span></div>
       <div class="app">
         <div class="rail">
-          <div class="brand">agent-k-local</div>
+          <div class="brand">AgentK Local</div>
           <div class="proj sel"><span class="dot needs"></span><span>billing-api</span><span class="n">3</span></div>
           <div class="proj"><span class="dot working"></span><span>docs-site</span><span class="n">1</span></div>
           <div class="proj"><span class="dot recovered"></span><span>agent-k-local</span><span class="n">2</span></div>
@@ -465,7 +465,7 @@ stateDiagram-v2
 </pre>
   </div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Stage</th><th>Claude</th><th>agent-k-local</th><th>Moves on when</th></tr></thead>
+    <thead><tr><th>Stage</th><th>Claude</th><th>AgentK Local</th><th>Moves on when</th></tr></thead>
     <tbody>
       <tr><td>1 · Design</td><td>Starts in plan mode (<code>--permission-mode plan</code>) with your task, reads the code, and writes a design.</td><td>Saves the design to the project's dedicated datapack and shows it in a side panel next to the terminal.</td><td>You click <b>Approve design</b>. Small tasks can skip this stage at creation.</td></tr>
       <tr><td>2 · Code</td><td>Implements the design and runs the repo's tests and checks.</td><td>Shows the diff size against the base branch in the footer.</td><td>You click <b>Open PR</b>. The button is disabled while Claude is mid-turn.</td></tr>
@@ -497,15 +497,15 @@ stateDiagram-v2
   <p>A short <code>--append-system-prompt</code> also lists the attached datapacks by name and purpose, so Claude knows to pass the right <code>datapack_id</code> when it searches them.</p>
   <div class="callout">
     <span class="label">No Meko plugin change needed</span>
-    <p>The Meko hooks already take <code>MEKO_AGENT_ID</code> over the folder name, and they read the datapack pin from <code>~/.claude/meko-capture/pin-&lt;agent id&gt;.json</code>. agent-k-local sets <code>MEKO_AGENT_ID=claude_code:&lt;project&gt;</code> for every session and writes that pin when the project is created. So every worktree of a project shares one memory bucket, and capture goes into the dedicated datapack. <code>MEKO_DATAPACK_ID</code> is set too, for when the hooks learn to read it.</p>
+    <p>The Meko hooks already take <code>MEKO_AGENT_ID</code> over the folder name, and they read the datapack pin from <code>~/.claude/meko-capture/pin-&lt;agent id&gt;.json</code>. AgentK Local sets <code>MEKO_AGENT_ID=claude_code:&lt;project&gt;</code> for every session and writes that pin when the project is created. So every worktree of a project shares one memory bucket, and capture goes into the dedicated datapack. <code>MEKO_DATAPACK_ID</code> is set too, for when the hooks learn to read it.</p>
   </div>
   <div class="callout">
     <span class="label">Folder trust</span>
-    <p>Claude Code asks "Do you trust this folder?" the first time it runs somewhere new, and fires no hooks until that's answered. Every session is a new worktree, so at startup the server marks the worktrees root as trusted in <code>~/.claude.json</code>, unless a parent folder already is. If the prompt still appears, the session shows <em>needs you</em> with an explanation.</p>
+    <p>Claude Code asks "Do you trust this folder?" the first time it runs somewhere new, and fires no hooks until that's answered. For a worktree, Claude keys that decision by the main repository, so before launching a session the server marks the project's repo as trusted in <code>~/.claude.json</code> (unless it or a parent folder already is). If the prompt still appears, the session shows <em>needs you</em> with an explanation.</p>
   </div>
   <div class="callout">
     <span class="label">Meko is required</span>
-    <p>agent-k-local doesn't run without Meko. Datapacks are how a project keeps track of its work, so there is no mode without them.</p>
+    <p>AgentK Local doesn't run without Meko. Datapacks are how a project keeps track of its work, so there is no mode without them.</p>
     <ul>
       <li><b>At install:</b> the installer needs a Meko API key. It reuses <code>MEKO_API_KEY</code> from <code>~/.claude/settings.json</code> if one is there, and asks for one otherwise. It also checks that the <code>meko-agent-skills</code> plugin is installed at a version that honours the env vars above. The install stops if the key doesn't work or the plugin is missing.</li>
       <li><b>At project creation:</b> a dedicated datapack is mandatory. <b>Create project</b> stays disabled until one is chosen or created.</li>

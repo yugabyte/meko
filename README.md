@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/AgentK.png" width="120" alt="AgentK logo"></p>
 
-# agent-k-local
+# AgentK Local
 
 A self-hosted workbench for [Claude Code](https://claude.com/claude-code). It runs headless on
 your devserver, and you use it from a browser:
@@ -19,6 +19,19 @@ your devserver, and you use it from a browser:
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
 - **Updates itself** from GitHub Releases without interrupting running sessions.
+
+![AgentK Local: a session in the Code stage, with the live Claude Code terminal](docs/screenshots/workbench.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/design-review.png" alt="Design stage: Claude's plan shown next to the terminal, with Approve design"><br><sub><b>Design review.</b> Claude's plan, rendered next to the terminal, waiting for your approval.</sub></td>
+    <td width="50%"><img src="docs/screenshots/new-project.png" alt="New project dialog listing the repos under ~/code"><br><sub><b>New project.</b> Pick a repo from your repos folder; a dedicated Meko datapack is created with it.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/project-home.png" alt="Project home with datapacks, recent activity and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity and project settings.</sub></td>
+    <td width="50%"><img src="docs/screenshots/workbench-dark.png" alt="The workbench in the dark theme"><br><sub><b>Dark theme.</b> Follows your system, or pick one.</sub></td>
+  </tr>
+</table>
 
 Design: [`docs/design.html`](docs/design.html).
 
