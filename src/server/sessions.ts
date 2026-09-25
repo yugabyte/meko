@@ -16,7 +16,7 @@ import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
 } from './store.js';
-import { tmuxName } from './tmux.js';
+import { sleep, tmuxName } from './tmux.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
 const QUARTER_HOUR = 15 * 60 * 1000;
@@ -456,7 +456,13 @@ export class SessionManager {
   }
 
   private async resume(row: SessionRow): Promise<void> {
-    const pane = (await this.core.tmux.panes()).get(row.tmux_name);
+    // Claude's SessionEnd hook fires just before its process ends, so give a pane
+    // that is still shutting down a moment before calling it "already running".
+    let pane = (await this.core.tmux.panes()).get(row.tmux_name);
+    for (let i = 0; pane && !pane.dead && row.status === 'exited' && i < 30; i++) {
+      await sleep(100);
+      pane = (await this.core.tmux.panes()).get(row.tmux_name);
+    }
     if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
     const p = projectRow(this.db, row.project_id);
     if (p) await restoreWorktree(p.repo_path, row.worktree_path, row.branch, row.base_branch);

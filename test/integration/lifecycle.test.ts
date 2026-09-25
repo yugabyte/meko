@@ -62,7 +62,8 @@ describe('lifecycle: PR → AgentK review → merge → cleanup', () => {
     gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
     gh.status = status({ comments: [{ id: 'c1', author: { login: 'yb-agentk-dev' }, body: 'AgentK has started reviewing this PR.', createdAt: new Date().toISOString() }] });
     await env.core.sessions.action(s.id, 'open-pr');
-    expect(get().stage).toBe('pr');
+    // Under load the stub's short turn may already have ended and moved the session on.
+    expect(['pr', 'review']).toContain(get().stage);
     await waitFor(get, (x) => x.stage === 'review', 10000, 'review stage');
     expect(get().prNumber).toBe(7);
     expect(get().reviewState).toBe('in_review');
