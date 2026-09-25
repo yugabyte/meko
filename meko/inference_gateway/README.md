@@ -162,7 +162,7 @@ deep-links.
 | `--mcp-endpoint` | `INFERENCE_MCP_ENDPOINT` | `https://mcp.mekodata.ai/mcp` | |
 | `--aws-region` | `AWS_REGION` | `us-east-1` | bedrock only |
 | `--port` | `INFERENCE_PORT` | `8088` | |
-| `--cors-origin` (repeatable) | `INFERENCE_CORS_ORIGINS` (comma-sep) | `https://app.mekodev.com`, `https://cloud.mekodata.ai`, `http://localhost:5173` | |
+| `--cors-origin` (repeatable) | `INFERENCE_CORS_ORIGINS` (comma-sep) | none | The UI calls the gateway same-origin at `/inference/`, so it needs no entry; set this only for a cross-origin caller. |
 | `--agent-id` | `INFERENCE_AGENT_ID` | `agent` | Hard-coded by the meko MCP convention. |
 | `--max-history` | `INFERENCE_MAX_HISTORY` | `10` | per-session sliding window (messages, not turns) |
 | `--memory-top-k` | `INFERENCE_MEMORY_TOP_K` | `5` | passed to `memory_search` |

@@ -229,12 +229,15 @@ inferenceGateway:
     # (kustomize/inference-gateway/overlays/dev).
     MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH: "true"
     MEKO_AGENTIC_CHAT: "true"
-    # Blanked deliberately, NOT inherited. The env preset points both at hosted
-    # dev (mcp.mekodev.com / app.mekodev.com), which a customer's cluster can
-    # neither reach nor should be told to trust. They depend on where this
-    # release actually runs, so the installer supplies them:
-    #   --set inferenceGateway.config.INFERENCE_MCP_ENDPOINT=http://meko-mcp-server.<ns>.svc.cluster.local/mcp
-    #   --set inferenceGateway.config.INFERENCE_CORS_ORIGINS=<the UI's origin>
+    # Blanked deliberately, NOT inherited, so the ConfigMap fills them. The env
+    # preset points CORS at hosted dev (app.mekodev.com), which a customer's
+    # cluster should not be told to trust. Filled with:
+    #   INFERENCE_MCP_ENDPOINT — this release's meko-mcp-server,
+    #     http://meko-mcp-server.<ns>.svc.cluster.local/mcp
+    #   INFERENCE_CORS_ORIGINS — https://<mekoUi.ingress.host> when the UI has an
+    #     Ingress; otherwise empty, meaning no cross-origin callers. The UI does
+    #     not need one: it reaches the gateway same-origin through its nginx.
+    # Set either here only to point somewhere else.
     INFERENCE_MCP_ENDPOINT: ""
     INFERENCE_CORS_ORIGINS: ""
 ragAgent: { enabled: false }

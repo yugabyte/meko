@@ -61,18 +61,12 @@ own feature; anything flagged !! stops a pod from starting at all.
   !! No Bedrock credentials, and the inference gateway is enabled on bedrock: its
      Secret is mounted with envFrom, so the pod never starts. Set them, or disable it.
 {{- end }}
-{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (not .Values.inferenceGateway.config.INFERENCE_MCP_ENDPOINT) }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (not .Values.inferenceGateway.config.INFERENCE_MCP_ENDPOINT) (ne (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") }}
 
-  ! The inference gateway has no MCP endpoint. It starts and answers /healthz,
-    then every chat turn fails to reach the MCP server. Set
+  ! The inference gateway has no MCP endpoint, and meko-mcp-server is not part of
+    this release to fill it from. It starts and answers /healthz, then every chat
+    turn fails to reach the MCP server. Set
     inferenceGateway.config.INFERENCE_MCP_ENDPOINT.
-{{- end }}
-{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (not .Values.inferenceGateway.config.INFERENCE_CORS_ORIGINS) }}
-
-  ! The inference gateway has no CORS origins. Empty does NOT mean "none" — the
-    gateway falls back to its compiled defaults, which trust the HOSTED origins
-    (app.mekodev.com, cloud.mekodata.ai) inside your cluster. Set
-    inferenceGateway.config.INFERENCE_CORS_ORIGINS to this deployment's UI origin.
 {{- end }}
 {{- else -}}
 Secrets: this release holds NO secret material — it only references pre-created

@@ -85,7 +85,10 @@ mekoMcpServer:
 inferenceGateway:
   image: { tag: "0.0.3-20260512" }
   config:
-    INFERENCE_MCP_ENDPOINT: "https://mcp.mekodev.com/mcp"
+    # Empty: the ConfigMap fills in this release's in-cluster meko-mcp-server,
+    # matching the dev overlay since MEKO-711
+    # (https://github.com/yugabyte/meko-devops/pull/118).
+    INFERENCE_MCP_ENDPOINT: ""
     INFERENCE_CORS_ORIGINS: "https://app.mekodev.com"
 
 ragAgent:

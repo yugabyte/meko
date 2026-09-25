@@ -1,0 +1,96 @@
+# The two inference-gateway values the ConfigMap fills when left empty:
+#
+#   1. INFERENCE_MCP_ENDPOINT — this release's meko-mcp-server, in-cluster.
+#      Empty used to reach the gateway as-is, and every chat turn failed to reach
+#      MCP with /healthz green.
+#   2. INFERENCE_CORS_ORIGINS — the UI's Ingress origin when it has one, else
+#      empty. Empty is safe only with a gateway whose default is no origins.
+#
+#   helm unittest charts/meko
+suite: inference gateway config fills
+templates:
+  - templates/inference-gateway/configmap.yaml
+tests:
+  - it: fills the MCP endpoint with this release's meko-mcp-server under BYOC
+    release:
+      namespace: acme
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      inferenceGateway.image.tag: t
+    asserts:
+      - equal:
+          path: data.INFERENCE_MCP_ENDPOINT
+          value: http://meko-mcp-server.acme.svc.cluster.local/mcp
+
+  - it: leaves CORS empty under BYOC, where the UI has no Ingress
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      inferenceGateway.image.tag: t
+    asserts:
+      - equal:
+          path: data.INFERENCE_CORS_ORIGINS
+          value: ""
+
+  - it: fills CORS with the UI's Ingress origin when it has one
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      inferenceGateway.image.tag: t
+      mekoUi.ingress.enabled: true
+      mekoUi.ingress.host: meko.acme.example
+    asserts:
+      - equal:
+          path: data.INFERENCE_CORS_ORIGINS
+          value: https://meko.acme.example
+
+  - it: uses the MCP server's own namespace in a multi-namespace install
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      inferenceGateway.image.tag: t
+    asserts:
+      - equal:
+          path: data.INFERENCE_MCP_ENDPOINT
+          value: http://meko-mcp-server.meko-mcp.svc.cluster.local/mcp
+      - equal:
+          path: data.INFERENCE_CORS_ORIGINS
+          value: https://app.mekodev.com
+
+  - it: keeps explicit values
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      inferenceGateway.image.tag: t
+      inferenceGateway.config.INFERENCE_MCP_ENDPOINT: https://mcp.example/mcp
+      inferenceGateway.config.INFERENCE_CORS_ORIGINS: http://localhost:8080
+    asserts:
+      - equal:
+          path: data.INFERENCE_MCP_ENDPOINT
+          value: https://mcp.example/mcp
+      - equal:
+          path: data.INFERENCE_CORS_ORIGINS
+          value: http://localhost:8080
+
+  - it: leaves the MCP endpoint empty when there is no MCP server to fill it from
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      inferenceGateway.image.tag: t
+      mekoMcpServer.enabled: false
+    asserts:
+      - equal:
+          path: data.INFERENCE_MCP_ENDPOINT
+          value: ""

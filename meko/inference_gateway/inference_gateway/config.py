@@ -24,17 +24,14 @@ DEFAULT_MCP_ENDPOINT = "https://mcp.mekodata.ai/mcp"
 DEFAULT_PORT = 8088
 DEFAULT_AWS_REGION = "us-east-1"
 
-# CORS — production origins plus the common localhost dev ports. Override
-# entirely with `--cors-origin ...` flags or `INFERENCE_CORS_ORIGINS=` env
-# (comma-separated). Drop the localhost entries once we ship.
-#  - 5173 → Vite default (npm run dev:client)
-#  - 3010 → Meko's Express dev server (npm run dev — proxies /api/v1)
-DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
-    "https://app.mekodev.com",
-    "https://cloud.mekodata.ai",
-    # "http://localhost:5173",
-    # "http://localhost:3010",
-)
+# CORS — empty: no cross-origin callers unless configured. The Meko UI calls the
+# gateway same-origin at /inference/ (its nginx in-cluster, its Express server in
+# dev), so it needs no entry here. This used to list the hosted origins, which
+# meant every deployment that left INFERENCE_CORS_ORIGINS unset — every BYOC data
+# plane — trusted app.mekodev.com and cloud.mekodata.ai. Hosted sets it explicitly.
+# Override with `--cors-origin ...` flags or `INFERENCE_CORS_ORIGINS=` env
+# (comma-separated).
+DEFAULT_CORS_ORIGINS: tuple[str, ...] = ()
 
 # Per the SessionStart hook from the meko MCP server: always use "agent".
 DEFAULT_AGENT_ID = "WorkbenchLM"

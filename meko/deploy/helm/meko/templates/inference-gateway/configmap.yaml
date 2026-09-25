@@ -9,7 +9,38 @@ metadata:
     app.kubernetes.io/name: inference-gateway
     app.kubernetes.io/part-of: meko
 data:
+  {{- /* INFERENCE_MCP_ENDPOINT, when the values leave it empty, is this release's
+         own meko-mcp-server by its in-cluster address — the same fill the MCP
+         server's ConfigMap gives MEKO_BASE_URL, and the address the hosted
+         overlays moved to in MEKO-711
+         (https://github.com/yugabyte/meko-devops/pull/118). A values file cannot
+         spell it: the namespace is the release's under singleNamespace.
+         Plain http and no trailing dot — the exact spelling of that overlay, so
+         hosted and chart installs render the same URL. Unlike DB_HOST and
+         MEKO_BASE_URL, this skips the ndots:5 dot; the MCP server accepts either
+         Host form, so the only cost is a few search-list lookups the node
+         resolver caches. */}}
+  {{- $mcpEndpoint := "" }}
+  {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true" }}
+  {{- $mcpEndpoint = printf "http://meko-mcp-server.%s.svc.cluster.local/mcp" (include "meko.ns" (dict "root" $ "ns" $.Values.mekoMcpServer.namespace)) }}
+  {{- end }}
+  {{- /* INFERENCE_CORS_ORIGINS, when empty, is the UI's public origin if the chart
+         knows it (its Ingress), and otherwise stays empty — which the gateway now
+         reads as "no cross-origin callers", not as the hosted origins. The UI
+         never needs it either way: it calls the gateway same-origin through its
+         own nginx at /inference/. */}}
+  {{- $corsOrigins := "" }}
+  {{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") $.Values.mekoUi.ingress.enabled $.Values.mekoUi.ingress.host }}
+  {{- $corsOrigins = printf "https://%s" $.Values.mekoUi.ingress.host }}
+  {{- end }}
   {{- range $k, $v := $c.config }}
-  {{ $k }}: {{ $v | quote }}
+  {{- $val := $v }}
+  {{- if and (eq $k "INFERENCE_MCP_ENDPOINT") (not $v) }}
+  {{- $val = $mcpEndpoint }}
+  {{- end }}
+  {{- if and (eq $k "INFERENCE_CORS_ORIGINS") (not $v) }}
+  {{- $val = $corsOrigins }}
+  {{- end }}
+  {{ $k }}: {{ $val | quote }}
   {{- end }}
 {{- end }}

@@ -702,6 +702,8 @@ inferenceGateway:
     INFERENCE_PORT: "8088"
     INFERENCE_LOG_LEVEL: INFO
     AWS_REGION: us-east-2
+    # Empty means "fill from this release" (templates/inference-gateway/configmap.yaml):
+    # the in-cluster meko-mcp-server, and the UI's Ingress origin if it has one.
     INFERENCE_MCP_ENDPOINT: ""
     INFERENCE_CORS_ORIGINS: ""
     INFERENCE_CONV_SUMMARY_MODEL: mistral.ministral-3-3b-instruct
