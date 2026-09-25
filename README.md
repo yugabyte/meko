@@ -11,7 +11,8 @@ your devserver, and you use it from a browser:
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
   can still attach from iTerm: `tmux -L agentk attach -t ak-<project>-<session>`.
 - **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
-  (committed, uncommitted and untracked) with a diff per file.
+  (committed, uncommitted and untracked) with a diff per file. Jump between files with the
+  **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge → Cleanup. Complex designs are
@@ -36,6 +37,10 @@ your devserver, and you use it from a browser:
   <tr>
     <td width="50%"><img src="docs/screenshots/project-home.png" alt="Project home with datapacks, activity, token usage and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity, token usage by day, session and model, and settings.</sub></td>
     <td width="50%"><img src="docs/screenshots/workbench-dark.png" alt="The workbench in the dark theme"><br><sub><b>Dark theme.</b> Follows your system, or pick one.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/changes-comments.png" alt="Changes panel with a draft review comment and a new comment on a range of lines"><br><sub><b>Review comments.</b> Comment on lines of the diff, then send them all to Claude at once.</sub></td>
+    <td width="50%"></td>
   </tr>
 </table>
 

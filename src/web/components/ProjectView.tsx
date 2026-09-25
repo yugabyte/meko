@@ -74,6 +74,7 @@ export function ProjectView({
     }
   };
 
+  const pending = session ? session.comments.drafts + session.comments.queued : 0;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
 
@@ -174,6 +175,7 @@ export function ProjectView({
             >
               <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>{' '}
               vs {session.baseBranch}
+              {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>
           )}
           <span title={usageTitle(session.usage)}>

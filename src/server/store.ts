@@ -1,3 +1,4 @@
+import { commentCounts } from './comments.js';
 import { all, get, type Db } from './db.js';
 import type {
   StartupState,
@@ -145,6 +146,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     hasDesign: !!design,
     designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
+    comments: commentCounts(db, r.id),
     usage: rt.usage,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,

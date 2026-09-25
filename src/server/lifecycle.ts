@@ -171,6 +171,8 @@ export class Lifecycle {
         await this.pollReview(this.sessions.row(id)).catch((e) => this.warn(id, 'PR status failed', e));
       }
     }
+    // Review comments go after anything above that already gave Claude its next turn.
+    await this.core.comments.deliver(id).catch((e) => this.warn(id, 'Sending review comments', e));
   }
 
   // ---- polling ----
@@ -188,6 +190,8 @@ export class Lifecycle {
           if (now - (this.lastPoll.get(row.id) ?? 0) < REVIEW_POLL_MS) continue;
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         }
+        // Comments queued before a restart, or while Claude was waiting on the user.
+        await this.core.comments.deliver(row.id).catch((e) => this.warn(row.id, 'Sending review comments', e));
       }
     } finally {
       this.polling = false;

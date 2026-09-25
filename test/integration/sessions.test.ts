@@ -296,4 +296,54 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(argvLog(env).length).toBe(launches);
     await waitFor(() => captureLog(env).length, (n) => n > captured, 10000, 'catch-up capture on boot');
   });
+
+  it('sends review comments to Claude now when idle, or when its turn ends', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Review me', prompt: 'hi', skipDesign: true });
+    const get = () => env.core.sessions.get(s.id);
+    const state = () => env.core.comments.list(s.id).map((c) => c.state);
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'first turn');
+    const at = { path: 'src/a.ts', side: 'new', line: 3, endLine: 4, excerpt: 'const a = 1;\nconst b = 2;' };
+
+    // Idle: pasted straight away, as one prompt grouped by file.
+    const first = env.core.comments.add(s.id, { ...at, body: 'Use one declaration.' });
+    expect(get().comments).toEqual({ drafts: 1, queued: 0 });
+    expect(await env.core.comments.send(s.id)).toEqual({ sent: 1, queued: 0 });
+    expect(state()).toEqual(['sent']);
+    expect(() => env.core.comments.edit(s.id, first.id, 'changed')).toThrow(/already sent/);
+    await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('Use one declaration.'), 10000, 'comment prompt');
+    const prompt = transcriptText(s.claudeSessionId).trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.type === 'user').at(-1).text.replace(/\s+/g, ' ');
+    expect(prompt).toMatch(/left 1 comment\. Address each one/);
+    expect(prompt).toContain('## src/a.ts Lines 3–4: ``` const a = 1; const b = 2; ``` Use one declaration.');
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'comment turn');
+
+    // Mid-turn: queued, then sent when the Stop hook ends the turn.
+    writeFileSync(join(env.fakeDir, 'turn-ms'), '1500');
+    await env.core.sessions.submit(s.id, 'a long turn');
+    env.core.comments.add(s.id, { ...at, body: 'Second thought.' });
+    expect(await env.core.comments.send(s.id)).toEqual({ sent: 0, queued: 1 });
+    expect(get().comments).toEqual({ drafts: 0, queued: 1 });
+    await waitFor(state, (st) => st.every((x) => x === 'sent'), 10000, 'queued comment sent at turn end');
+    await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('Second thought.'), 10000, 'queued prompt');
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'second comment turn');
+    writeFileSync(join(env.fakeDir, 'turn-ms'), '200');
+
+    // Never pasted into a permission prompt; goes out once Claude is back at its prompt (as after a restart).
+    env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
+    const third = env.core.comments.add(s.id, { ...at, body: 'Third.' });
+    expect(env.core.comments.edit(s.id, third.id, '  Third, edited.  ').body).toBe('Third, edited.');
+    expect(await env.core.comments.send(s.id)).toEqual({ sent: 0, queued: 1 });
+    env.core.sessions.setStatus(s.id, 'recovered');
+    expect(await env.core.comments.deliver(s.id)).toBe(1);
+    expect(await env.core.comments.deliver(s.id)).toBe(0);
+    await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('Third, edited.'), 10000, 'third prompt');
+
+    // Drafts can be deleted; nothing to send is an error, and archived sessions take no comments.
+    const extra = env.core.comments.add(s.id, { ...at, body: 'Never mind.' });
+    env.core.comments.remove(s.id, extra.id);
+    await expect(env.core.comments.send(s.id)).rejects.toThrow(/no draft comments/);
+    await env.core.sessions.action(s.id, 'archive');
+    expect(() => env.core.comments.add(s.id, { ...at, body: 'Late.' })).toThrow(/archived/);
+    expect(env.core.comments.list(s.id)).toHaveLength(3);
+  });
 });

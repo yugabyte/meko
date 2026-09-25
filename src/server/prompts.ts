@@ -6,10 +6,11 @@ import { get, type Db } from './db.js';
  * Instructions sent to Claude at each lifecycle step. A repo can override any
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
  * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
- * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}.
+ * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}; `comments` also gets {{count}} and
+ * {{comments}}.
  */
 export type PromptName =
-  | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'continue' | 'continue-review';
+  | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'continue' | 'continue-review' | 'comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   design: `You are in the Design stage of an AgentK Local task.
@@ -60,6 +61,10 @@ Don't comment \`/agentk review\` after pushing. Requesting another round is the 
   continue: `The host restarted while you were in the middle of a turn, and this session was resumed. Before continuing, check \`git status\`, \`git log -3\` and the last commands you ran, so you don't repeat steps that already finished. Then continue where you left off.`,
 
   'continue-review': `The host restarted while you were in the middle of a turn, and this session was resumed. Before continuing, check \`git status\`, \`git log -3\`, whether your last push landed, and the current replies and reactions on PR #{{pr}} (\`gh api repos/{{repo}}/pulls/{{pr}}/comments --paginate\`), so you don't repeat finished steps or post duplicate replies. Then continue where you left off.`,
+
+  comments: `The user reviewed your changes in AgentK Local and left {{count}}. Address each one: verify it against the code, make the change or say why you disagree, and run the repo's checks. If this branch has an open PR, commit and push the fixes. Finish with a short list: each comment and what you did.
+
+{{comments}}`,
 };
 
 export function loadPrompt(db: Db, name: PromptName, worktree: string | null): string {

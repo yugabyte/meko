@@ -7,8 +7,8 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, DiscardCheck, LoginRequest, ServerEvent, SessionChanges,
-  SessionAction, Settings, SetupRequest, UpdateProjectRequest,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, DiscardCheck, LoginRequest, ReviewComment, SendCommentsResult, ServerEvent,
+  SessionChanges, SessionAction, Settings, SetupRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, changePassword, consumeSetupToken, createAuthSession, deleteAuthSession,
@@ -214,6 +214,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
+  app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/comments/send', async (req): Promise<SendCommentsResult> => core.comments.send(req.params.id));
+  app.patch<{ Params: { id: string; cid: string }; Body: { body?: unknown } }>('/api/sessions/:id/comments/:cid',
+    async (req): Promise<ReviewComment> => core.comments.edit(req.params.id, req.params.cid, req.body?.body));
+  app.delete<{ Params: { id: string; cid: string } }>('/api/sessions/:id/comments/:cid', async (req, reply) => {
+    core.comments.remove(req.params.id, req.params.cid);
+    return reply.code(204).send();
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     core.sessions.row(req.params.id);
     const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number }>(

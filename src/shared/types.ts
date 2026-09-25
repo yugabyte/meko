@@ -161,6 +161,8 @@ export interface Session {
   designUpdatedAt: number | null;
   /** Lines added/removed vs. the base branch, refreshed periodically. */
   diffStat: { added: number; removed: number } | null;
+  /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
+  comments: { drafts: number; queued: number };
   usage: TokenUsage;
   /** Set while status is `starting`. */
   startup: StartupState | null;
@@ -311,6 +313,46 @@ export interface SessionChanges {
   omittedPatches: number;
 }
 
+export type CommentSide = 'old' | 'new';
+export type CommentState = 'draft' | 'queued' | 'sent';
+
+/**
+ * A review comment on lines of a session's diff. `new` points at added or unchanged lines by
+ * their number in the worktree, `old` at removed lines by their number in the base. The
+ * excerpt is the text of the lines when the comment was written, so the comment can follow
+ * them when they move and Claude can find them after they change.
+ */
+export interface ReviewComment {
+  id: string;
+  path: string;
+  side: CommentSide;
+  line: number;
+  /** Last line of the range; equal to `line` for a single line. */
+  endLine: number;
+  excerpt: string;
+  body: string;
+  state: CommentState;
+  createdAt: number;
+  updatedAt: number;
+  sentAt: number | null;
+}
+
+export interface NewComment {
+  path: string;
+  side: CommentSide;
+  line: number;
+  endLine: number;
+  excerpt: string;
+  body: string;
+}
+
+export interface SendCommentsResult {
+  /** Pasted into Claude now. */
+  sent: number;
+  /** Waiting for Claude to finish its turn. */
+  queued: number;
+}
+
 /**
  * A session's design: markdown for simple designs, or a published Artifact (its HTML,
  * shown in a sandboxed frame, and its claude.ai link) for complex ones.
@@ -436,6 +478,11 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/design              → DesignDoc
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
+// GET    /api/sessions/:id/comments            → ReviewComment[]
+// POST   /api/sessions/:id/comments NewComment → ReviewComment
+// PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)
+// DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
+// POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        Partial<Settings>→ Settings
 // GET    /api/update                           → UpdateStatus

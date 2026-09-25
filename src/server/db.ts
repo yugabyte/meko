@@ -154,6 +154,24 @@ const MIGRATIONS: string[] = [
   ALTER TABLE designs ADD COLUMN html TEXT;
   ALTER TABLE designs ADD COLUMN artifact_url TEXT;
   `,
+  // 5: review comments on a session's diff, sent to Claude in batches.
+  `
+  CREATE TABLE review_comments (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('old', 'new')),
+    line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    excerpt TEXT NOT NULL,
+    body TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'queued', 'sent')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sent_at INTEGER
+  );
+  CREATE INDEX review_comments_session ON review_comments(session_id, state);
+  `,
 ];
 
 export function openDb(path: string): Db {

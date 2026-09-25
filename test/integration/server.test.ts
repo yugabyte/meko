@@ -114,6 +114,28 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(changes.statusCode).toBe(200);
     expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0 });
     expect((await app.inject({ url: `/api/sessions/${s.json().id}/changes` })).statusCode).toBe(401);
+
+    // Review comments: create, edit and delete drafts; everything behind login.
+    const url = `/api/sessions/${s.json().id}/comments`;
+    const draft = { path: 'a.ts', side: 'new', line: 1, endLine: 1, excerpt: 'x', body: 'Why?' };
+    expect((await app.inject({ method: 'POST', url, payload: draft })).statusCode).toBe(401);
+    expect((await app.inject({ url })).statusCode).toBe(401);
+    const bad = await app.inject({ method: 'POST', url, headers: { cookie }, payload: { ...draft, body: ' ' } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toMatch(/Write something/);
+    const made = await app.inject({ method: 'POST', url, headers: { cookie }, payload: draft });
+    expect(made.statusCode).toBe(200);
+    expect(made.json()).toMatchObject({ path: 'a.ts', body: 'Why?', state: 'draft' });
+    const cid = made.json().id;
+    const edited = await app.inject({ method: 'PATCH', url: `${url}/${cid}`, headers: { cookie }, payload: { body: 'Why this?' } });
+    expect(edited.json().body).toBe('Why this?');
+    expect((await app.inject({ url, headers: { cookie } })).json()).toHaveLength(1);
+    const state = (await app.inject({ url: '/api/state', headers: { cookie } })).json();
+    expect(state.projects[0].sessions[0].comments).toEqual({ drafts: 1, queued: 0 });
+    expect((await app.inject({ method: 'DELETE', url: `${url}/${cid}`, headers: { cookie } })).statusCode).toBe(204);
+    expect((await app.inject({ method: 'DELETE', url: `${url}/${cid}`, headers: { cookie } })).statusCode).toBe(404);
+    const nothing = await app.inject({ method: 'POST', url: `${url}/send`, headers: { cookie } });
+    expect(nothing.statusCode).toBe(409);
   });
 });
 

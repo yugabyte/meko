@@ -6,6 +6,7 @@ import { userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
+import { CommentService } from './comments.js';
 import { resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { run, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
@@ -48,6 +49,7 @@ export class Core extends EventEmitter {
   readonly projects: ProjectService;
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
+  readonly comments: CommentService;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -78,6 +80,7 @@ export class Core extends EventEmitter {
     this.projects = new ProjectService(this);
     this.sessions = new SessionManager(this);
     this.lifecycle = new Lifecycle(this);
+    this.comments = new CommentService(this);
   }
 
   get config(): Config {

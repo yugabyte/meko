@@ -36,7 +36,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 3. Lifecycle and GitHub
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
-- [ ] Prompts are only typed into a session when Claude is idle; otherwise they're queued.
+- [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is
+      idle, never into a permission or question prompt; otherwise they're queued.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo.
