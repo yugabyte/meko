@@ -171,6 +171,15 @@ export class MekoClient {
     return out;
   }
 
+  async renameConversation(conversationId: string, agentId: string, datapackId: string | null, title: string): Promise<void> {
+    await this.call('conversation_update', {
+      conversation_id: conversationId,
+      agent_id: agentId,
+      datapack_id: datapackId,
+      title,
+    });
+  }
+
   async addMemory(text: string, datapackId: string, agentId: string, conversationId: string, metadata?: Json): Promise<void> {
     await this.call('memory_add', {
       text,

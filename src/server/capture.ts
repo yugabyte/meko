@@ -1,10 +1,36 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { errMsg, type Logger } from './log.js';
 
 const MEKO_PLUGIN_PREFIX = 'meko-agent-skills@';
+
+/** Where the Meko plugin keeps its watermarks and datapack pins. */
+export function mekoCaptureDir(): string {
+  return process.env.MEKO_WATERMARK_DIR || join(homedir(), '.claude', 'meko-capture');
+}
+
+export interface CapturedConversation {
+  conversationId: string;
+  agentId: string;
+  datapackId: string | null;
+}
+
+/** The Meko conversation the plugin created for a transcript, from its watermark. */
+export function capturedConversation(transcriptPath: string): CapturedConversation | null {
+  try {
+    const w = JSON.parse(readFileSync(join(mekoCaptureDir(), `${basename(transcriptPath, '.jsonl')}.watermark.json`), 'utf8'));
+    if (typeof w?.conversation_id !== 'string' || !w.conversation_id) return null;
+    return {
+      conversationId: w.conversation_id,
+      agentId: typeof w.agent_id === 'string' ? w.agent_id : '',
+      datapackId: typeof w.datapack_id === 'string' && w.datapack_id ? w.datapack_id : null,
+    };
+  } catch {
+    return null; // no watermark yet
+  }
+}
 
 /** Install paths of the meko-agent-skills plugin from Claude Code's plugin registry. */
 export function mekoPluginInstalls(claudeDir: string = join(homedir(), '.claude')): string[] | null {

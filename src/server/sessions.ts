@@ -11,6 +11,7 @@ import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import { loadPrompt, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
+import { capturedConversation } from './capture.js';
 import { transcriptPathFor, writeLauncher } from './claude.js';
 import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
@@ -41,6 +42,8 @@ export class SessionManager {
   private usage = new Map<string, TokenUsage>();
   private usageLoaded = false;
   private usageReadAt = new Map<string, number>();
+  /** The Meko conversation title last set per session, as `<conversation id>\n<title>`. */
+  private conversationTitles = new Map<string, string>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
 
@@ -637,11 +640,28 @@ export class SessionManager {
 
   // ---- Meko conversation ----
 
-  /** Sends the session's new turns to its Meko conversation. Never throws. */
-  captureTranscript(id: string): Promise<void> {
+  /** Sends the session's new turns to its Meko conversation and names it after the session. Never throws. */
+  async captureTranscript(id: string): Promise<void> {
     const r = sessionRow(this.db, id);
-    if (!r) return Promise.resolve();
-    return this.core.capture.capture(id, sessionTranscript(r, transcriptPathFor));
+    if (!r || !this.core.capture.enabled) return;
+    const transcript = sessionTranscript(r, transcriptPathFor);
+    await this.core.capture.capture(id, transcript);
+    await this.titleConversation(r, transcript);
+  }
+
+  /** The plugin titles every conversation "Claude Code session (auto-captured)"; use the session's name instead. */
+  private async titleConversation(r: SessionRow, transcript: string): Promise<void> {
+    const conv = capturedConversation(transcript);
+    if (!conv) return;
+    const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
+    const key = `${conv.conversationId}\n${title}`;
+    if (this.conversationTitles.get(r.id) === key) return;
+    try {
+      await this.core.meko.renameConversation(conv.conversationId, conv.agentId || projectAgentId(r.project_id), conv.datapackId, title);
+      this.conversationTitles.set(r.id, key);
+    } catch (e) {
+      this.core.log.warn(`naming the Meko conversation for ${r.id} failed`, errMsg(e));
+    }
   }
 
   // ---- token usage ----

@@ -82,6 +82,10 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     });
     const capturedBeforeArchive = captureLog(env).length;
 
+    // The plugin's generic conversation title is replaced with the session's name, once.
+    const renames = env.meko.calls.filter((c) => c.name === 'renameConversation');
+    expect(renames.map((c) => c.args)).toEqual([[s.claudeSessionId.replace(/-/g, ''), 'claude_code:fake', 'dp-fake', 'Fix the thing (Demo)']]);
+
     await env.core.sessions.action(s.id, 'archive');
     expect(captureLog(env).length).toBeGreaterThan(capturedBeforeArchive); // final capture before Claude is stopped
     const panes = await env.core.tmux.panes();

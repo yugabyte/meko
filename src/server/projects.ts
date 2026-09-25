@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type {
   ActivityItem, AttachDatapackRequest, CreateProjectRequest, Project, ProjectHome, ReposResponse, SearchResult,
   UpdateProjectRequest,
 } from '../shared/types.js';
+import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { cloneRepo, defaultBranch, isMainRepo, listBranches, repoNameFromUrl, scanRepos } from './git.js';
@@ -228,7 +228,7 @@ export class ProjectService {
    * capture hooks (which honour MEKO_AGENT_ID) write into it.
    */
   writePin(projectId: string, dp: { id: string; name: string }): void {
-    const dir = process.env.MEKO_WATERMARK_DIR || join(homedir(), '.claude', 'meko-capture');
+    const dir = mekoCaptureDir();
     mkdirSync(dir, { recursive: true });
     const file = join(dir, `pin-${pinSlug(projectAgentId(projectId))}.json`);
     const tmp = `${file}.tmp`;
