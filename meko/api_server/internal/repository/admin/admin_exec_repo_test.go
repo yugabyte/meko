@@ -93,27 +93,50 @@ func TestCountDatapacksByWeek_GroupsByWeek(t *testing.T) {
 	}
 }
 
-// CountIndexedDocsByTypeAll returns one row per document type, joining
-// dist_rag.documents for the file type; runs against the data plane.
-func TestCountIndexedDocsByTypeAll_GroupsByType(t *testing.T) {
+// CountIndexedDocsBreakdownAll returns one row per document type (joining
+// dist_rag.documents for the file type) and, from that single scan, the summed
+// document and chunk totals the knowledge panel's tiles need.
+func TestCountIndexedDocsBreakdownAll_SumsAndGroupsByType(t *testing.T) {
 	db, mock, done := mockDB(t)
 	defer done()
 	repo := NewAdminRepo(nil, db, nil)
 
 	mock.ExpectQuery(`LEFT JOIN dist_rag\.documents d`).
 		WithArgs("sch", "idx").
-		WillReturnRows(sqlmock.NewRows([]string{"document_type", "count"}).
-			AddRow("application/pdf", int64(5)).
-			AddRow("text/markdown", int64(3)))
+		WillReturnRows(sqlmock.NewRows([]string{"document_type", "doc_count", "chunk_count"}).
+			AddRow("application/pdf", int64(5), int64(50)).
+			AddRow("text/markdown", int64(3), int64(12)))
 
-	out, err := repo.CountIndexedDocsByTypeAll("sch", "idx", nil, nil)
+	out, err := repo.CountIndexedDocsBreakdownAll("sch", "idx", nil, nil)
 	if err != nil {
-		t.Fatalf("CountIndexedDocsByTypeAll: %v", err)
+		t.Fatalf("CountIndexedDocsBreakdownAll: %v", err)
 	}
-	if len(out) != 2 || out[0].DocumentType != "application/pdf" || out[0].Count != 5 {
-		t.Errorf("out = %+v, want [{application/pdf 5} {text/markdown 3}]", out)
+	if out.Documents != 8 || out.Chunks != 62 {
+		t.Errorf("totals = (%d docs, %d chunks), want (8, 62)", out.Documents, out.Chunks)
+	}
+	if len(out.ByType) != 2 || out.ByType[0].DocumentType != "application/pdf" || out.ByType[0].Count != 5 {
+		t.Errorf("byType = %+v, want [{application/pdf 5} {text/markdown 3}]", out.ByType)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// CountIndexedDocsBreakdownBySourceIDs short-circuits to a zero value (no query)
+// when the user owns no rag sources — the common case for a fresh user.
+func TestCountIndexedDocsBreakdownBySourceIDs_EmptySourcesNoQuery(t *testing.T) {
+	db, mock, done := mockDB(t)
+	defer done()
+	repo := NewAdminRepo(nil, db, nil)
+
+	out, err := repo.CountIndexedDocsBreakdownBySourceIDs("sch", "idx", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CountIndexedDocsBreakdownBySourceIDs: %v", err)
+	}
+	if out.Documents != 0 || out.Chunks != 0 || len(out.ByType) != 0 {
+		t.Errorf("out = %+v, want zero value", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unexpected query ran: %v", err)
 	}
 }

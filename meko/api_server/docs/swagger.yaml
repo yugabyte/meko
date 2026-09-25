@@ -515,6 +515,214 @@ paths:
       summary: Admin dashboard metrics (overall or per-user)
       tags:
       - admin
+  /admin/metrics/conversations:
+    get:
+      parameters:
+      - description: User UUID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Range start (inclusive), YYYY-MM-DD
+        in: query
+        name: start
+        type: string
+      - description: Range end (inclusive), YYYY-MM-DD
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Per-user metrics: conversations (admin)'
+      tags:
+      - admin
+  /admin/metrics/knowledge:
+    get:
+      parameters:
+      - description: User UUID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Range start (inclusive), YYYY-MM-DD
+        in: query
+        name: start
+        type: string
+      - description: Range end (inclusive), YYYY-MM-DD
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Per-user metrics: knowledge (admin)'
+      tags:
+      - admin
+  /admin/metrics/memories:
+    get:
+      parameters:
+      - description: User UUID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Range start (inclusive), YYYY-MM-DD
+        in: query
+        name: start
+        type: string
+      - description: Range end (inclusive), YYYY-MM-DD
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Per-user metrics: memories (admin)'
+      tags:
+      - admin
+  /admin/metrics/overview:
+    get:
+      parameters:
+      - description: User UUID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Range start (inclusive), YYYY-MM-DD
+        in: query
+        name: start
+        type: string
+      - description: Range end (inclusive), YYYY-MM-DD
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Per-user metrics: overview (admin)'
+      tags:
+      - admin
+  /admin/metrics/searches:
+    get:
+      parameters:
+      - description: User UUID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Range start (inclusive), YYYY-MM-DD
+        in: query
+        name: start
+        type: string
+      - description: Range end (inclusive), YYYY-MM-DD
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Per-user metrics: searches (admin)'
+      tags:
+      - admin
+  /admin/metrics/tokens:
+    get:
+      parameters:
+      - description: User UUID
+        in: query
+        name: user_id
+        required: true
+        type: string
+      - description: Range start (inclusive), YYYY-MM-DD
+        in: query
+        name: start
+        type: string
+      - description: Range end (inclusive), YYYY-MM-DD
+        in: query
+        name: end
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Per-user metrics: token burn (admin)'
+      tags:
+      - admin
   /admin/token-savings:
     get:
       description: Legacy combined executive rollup (users, datapacks, conversations,

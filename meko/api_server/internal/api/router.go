@@ -435,6 +435,15 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc, reg.adminDataPlaneSvc, reg.adminFeedbackSvc)
 	adminGroup.GET("/users", adminH.Users)
 	adminGroup.GET("/metrics", adminH.Metrics)
+	// Per-user metrics tab, split into six parallel-fetched panels (same reason
+	// as the executive split below) so a heavy user's slow KB/Langfuse query never
+	// blocks the fast tiles or times out the whole tab.
+	adminGroup.GET("/metrics/overview", adminH.MetricsOverview)
+	adminGroup.GET("/metrics/memories", adminH.MetricsMemories)
+	adminGroup.GET("/metrics/conversations", adminH.MetricsConversations)
+	adminGroup.GET("/metrics/tokens", adminH.MetricsTokens)
+	adminGroup.GET("/metrics/searches", adminH.MetricsSearches)
+	adminGroup.GET("/metrics/knowledge", adminH.MetricsKnowledge)
 	// Executive dashboard, split into four parallel-fetched panels so the page
 	// never waits on the slowest (KB pipeline / Langfuse) query.
 	adminGroup.GET("/executive/growth", adminH.ExecGrowth)

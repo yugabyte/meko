@@ -160,26 +160,23 @@ func (s *AdminMetricsService) Engagement(ctx context.Context, start, end *time.T
 }
 
 // Knowledge: indexed KB documents + chunks and the by-file-type breakdown in
-// range. All best-effort (data plane).
+// range. Best-effort (data plane). The tiles and the chart come from one
+// pipeline scan (CountIndexedDocsBreakdownAll) rather than two, which is what
+// keeps this panel from timing out for a heavy deployment.
 func (s *AdminMetricsService) Knowledge(_ context.Context, start, end *time.Time) (ExecKnowledge, error) {
 	out := ExecKnowledge{KBDocumentsByType: []ExecDocTypeCount{}}
 	endExclusive := endExclusiveBound(end)
 
-	if kb, kbErr := s.repo.CountCompletedDocsAndChunksAll(
+	kb, err := s.repo.CountIndexedDocsBreakdownAll(
 		service.DatapackIndexSchema, service.DatapackIndexName, start, endExclusive,
-	); kbErr != nil {
-		slog.Error("exec knowledge: kb counts", "error", kbErr)
-	} else {
-		out.KBDocuments, out.KBChunks = kb.Documents, kb.Chunks
+	)
+	if err != nil {
+		slog.Error("exec knowledge: kb breakdown", "error", err)
+		return out, nil
 	}
-	if byType, tErr := s.repo.CountIndexedDocsByTypeAll(
-		service.DatapackIndexSchema, service.DatapackIndexName, start, endExclusive,
-	); tErr != nil {
-		slog.Error("exec knowledge: kb docs by type", "error", tErr)
-	} else {
-		for _, t := range byType {
-			out.KBDocumentsByType = append(out.KBDocumentsByType, ExecDocTypeCount{Type: t.DocumentType, Count: t.Count})
-		}
+	out.KBDocuments, out.KBChunks = kb.Documents, kb.Chunks
+	for _, t := range kb.ByType {
+		out.KBDocumentsByType = append(out.KBDocumentsByType, ExecDocTypeCount{Type: t.DocumentType, Count: t.Count})
 	}
 	return out, nil
 }

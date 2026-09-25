@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"meko/api_server/internal/repository"
 	adminrepo "meko/api_server/internal/repository/admin"
 	"meko/api_server/internal/service"
 )
@@ -301,4 +302,222 @@ func (s *AdminMetricsService) perUser(ctx context.Context, userID string, start,
 
 	s.populateLangfuse(&m, []string{userID}, start, end)
 	return m, nil
+}
+
+// The per-user metrics tab fetches the six panels below in parallel (mirroring
+// the executive dashboard split) so one slow query — the KB pipeline scan or a
+// Langfuse aggregate — no longer blocks the fast control-plane tiles or times
+// out the whole tab for a heavy user. Every count is scoped to the user and
+// windowed to [start, end] (raw inclusive dates; each method makes its own
+// exclusive upper bound); nil bounds mean all-time.
+
+// UserOverview is GET /admin/metrics/overview: the user's tier, owned datapacks
+// (all-time) and shares made in range. Control plane, fast; required.
+type UserOverview struct {
+	Scope           string `json:"scope"`
+	Tier            string `json:"tier"`
+	Datapacks       int64  `json:"datapacks"`
+	SharedDatapacks int64  `json:"shared_datapacks"`
+}
+
+// UserMemories is GET /admin/metrics/memories: the user's private and promoted
+// (collective) memories in range. Data plane; best-effort.
+type UserMemories struct {
+	PrivateMemories    int64 `json:"private_memories"`
+	CollectiveMemories int64 `json:"collective_memories"`
+}
+
+// UserConversations is GET /admin/metrics/conversations: the user's conversation
+// total and by-agent breakdown in range. Langfuse; best-effort.
+type UserConversations struct {
+	Conversations        int64                              `json:"conversations"`
+	ConversationsByAgent []adminrepo.AgentConversationCount `json:"conversations_by_agent"`
+	LangfuseEnabled      bool                               `json:"langfuse_enabled"`
+}
+
+// UserTokens is GET /admin/metrics/tokens: the user's token burn in range.
+// Langfuse; best-effort.
+type UserTokens struct {
+	TokenBurn       int64 `json:"token_burn"`
+	LangfuseEnabled bool  `json:"langfuse_enabled"`
+}
+
+// UserKnowledge is GET /admin/metrics/knowledge: the user's indexed KB documents
+// + chunks and the by-file-type breakdown in range. Data plane; best-effort.
+type UserKnowledge struct {
+	KBDocuments       int64              `json:"kb_documents"`
+	KBChunks          int64              `json:"kb_chunks"`
+	KBDocumentsByType []ExecDocTypeCount `json:"kb_documents_by_type"`
+}
+
+// EnsureUserExists returns ErrUserNotFound when userID is not a user of this
+// deployment. The per-user handlers call this (via userScope) before any panel
+// runs, so a foreign/unknown id never reaches the shared Langfuse DB (MG-138).
+func (s *AdminMetricsService) EnsureUserExists(ctx context.Context, userID string) error {
+	_, err := s.repo.GetUserType(ctx, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	return err
+}
+
+// UserOverview: tier + owned datapacks (all-time) + shares (in range). An unknown
+// user id is ErrUserNotFound so the handler returns 404.
+func (s *AdminMetricsService) UserOverview(ctx context.Context, userID string, start, end *time.Time) (UserOverview, error) {
+	out := UserOverview{Scope: userID}
+	endExclusive := endExclusiveBound(end)
+
+	userType, err := s.repo.GetUserType(ctx, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, ErrUserNotFound
+	}
+	if err != nil {
+		return out, err
+	}
+	out.Tier = tierFor(userType)
+
+	dpCount, err := s.repo.CountDatapacksByOwner(userID)
+	if err != nil {
+		return out, err
+	}
+	out.Datapacks = dpCount
+
+	shared, err := s.repo.CountAcceptedSharesByOwner(ctx, userID, start, endExclusive)
+	if err != nil {
+		return out, err
+	}
+	out.SharedDatapacks = shared
+	return out, nil
+}
+
+// UserMemories: private + collective memory counts scoped by user id.
+func (s *AdminMetricsService) UserMemories(ctx context.Context, userID string, start, end *time.Time) (UserMemories, error) {
+	out := UserMemories{}
+	endExclusive := endExclusiveBound(end)
+
+	if n, err := s.repo.CountPrivateMemoriesByUser(ctx, userID, start, endExclusive); err != nil {
+		slog.Error("user metrics: private memories", "user_id", userID, "error", err)
+	} else {
+		out.PrivateMemories = n
+	}
+	if n, err := s.repo.CountPromotedByUser(ctx, userID, start, endExclusive); err != nil {
+		slog.Error("user metrics: collective memories", "user_id", userID, "error", err)
+	} else {
+		out.CollectiveMemories = n
+	}
+	return out, nil
+}
+
+// UserConversations: conversation total + by-agent breakdown (Langfuse), scoped
+// to the single user.
+func (s *AdminMetricsService) UserConversations(_ context.Context, userID string, start, end *time.Time) (UserConversations, error) {
+	out := UserConversations{ConversationsByAgent: []adminrepo.AgentConversationCount{}}
+	if !s.repo.LangfuseConfigured() {
+		return out, nil
+	}
+	out.LangfuseEnabled = true
+	endExclusive := endExclusiveBound(end)
+	ids := []string{userID}
+
+	if n, err := s.repo.TotalConversations(ids, start, endExclusive); err != nil {
+		slog.Warn("user metrics: conversations", "user_id", userID, "error", err)
+	} else {
+		out.Conversations = n
+	}
+	if rows, err := s.repo.ConversationsByAgent(ids, start, endExclusive); err != nil {
+		slog.Warn("user metrics: conversations by agent", "user_id", userID, "error", err)
+	} else {
+		out.ConversationsByAgent = rows
+	}
+	return out, nil
+}
+
+// UserTokens: token burn (Langfuse), scoped to the single user.
+func (s *AdminMetricsService) UserTokens(_ context.Context, userID string, start, end *time.Time) (UserTokens, error) {
+	out := UserTokens{}
+	if !s.repo.LangfuseConfigured() {
+		return out, nil
+	}
+	out.LangfuseEnabled = true
+	endExclusive := endExclusiveBound(end)
+
+	if n, err := s.repo.TokenBurn([]string{userID}, start, endExclusive); err != nil {
+		slog.Warn("user metrics: token burn", "user_id", userID, "error", err)
+	} else {
+		out.TokenBurn = n
+	}
+	return out, nil
+}
+
+// UserSearches is GET /admin/metrics/searches: the user's knowledge-base, memory
+// and context search counts from the meko_system.free_tier_usage counters.
+// knowledgebase_search and memory_search are the same counters Meko UI's usage
+// tab surfaces (account_usage_service.go); context_search has no Meko UI tile but
+// is tracked in the same table, so it's exposed here for admins. context_search
+// is a distinct unit — its internal memory/KB lookups bypass the
+// memory_search/knowledgebase_search quotas, so the three do not double-count.
+type UserSearches struct {
+	KBSearches      int64 `json:"kb_searches"`
+	MemorySearches  int64 `json:"memory_searches"`
+	ContextSearches int64 `json:"context_searches"`
+}
+
+// UserSearches: KB + memory + context search counts, windowed to [start, end].
+// All best-effort (a read failure logs + leaves zero rather than failing the tab).
+func (s *AdminMetricsService) UserSearches(_ context.Context, userID string, start, end *time.Time) (UserSearches, error) {
+	out := UserSearches{}
+	endExclusive := endExclusiveBound(end)
+
+	if n, err := s.searchCount(userID, repository.MetricKnowledgebaseSearch, start, endExclusive); err != nil {
+		slog.Error("user metrics: kb searches", "user_id", userID, "error", err)
+	} else {
+		out.KBSearches = n
+	}
+	if n, err := s.searchCount(userID, repository.MetricMemorySearch, start, endExclusive); err != nil {
+		slog.Error("user metrics: memory searches", "user_id", userID, "error", err)
+	} else {
+		out.MemorySearches = n
+	}
+	if n, err := s.searchCount(userID, repository.MetricContextSearch, start, endExclusive); err != nil {
+		slog.Error("user metrics: context searches", "user_id", userID, "error", err)
+	} else {
+		out.ContextSearches = n
+	}
+	return out, nil
+}
+
+// searchCount windows retrieval counts by date from the append-only
+// free_tier_audit_log, but reads the exact free_tier_usage summary for the
+// all-time (unbounded) case — the audit log's best-effort writes can undercount.
+// Same summary-vs-log split as token savings.
+func (s *AdminMetricsService) searchCount(userID, metric string, start, endExclusive *time.Time) (int64, error) {
+	if start == nil && endExclusive == nil {
+		return s.repo.FreeTierSummaryCount(userID, metric)
+	}
+	return s.repo.CountAuditEventsInRange(userID, metric, start, endExclusive)
+}
+
+// UserKnowledge: indexed KB docs + chunks and the by-type breakdown, scoped to
+// the user's rag sources. One pipeline scan (see CountIndexedDocsBreakdown*).
+func (s *AdminMetricsService) UserKnowledge(_ context.Context, userID string, start, end *time.Time) (UserKnowledge, error) {
+	out := UserKnowledge{KBDocumentsByType: []ExecDocTypeCount{}}
+	endExclusive := endExclusiveBound(end)
+
+	sourceIDs, err := s.repo.GetSourceIDsByOwner(userID)
+	if err != nil {
+		slog.Error("user metrics: kb source ids", "user_id", userID, "error", err)
+		return out, nil
+	}
+	kb, err := s.repo.CountIndexedDocsBreakdownBySourceIDs(
+		service.DatapackIndexSchema, service.DatapackIndexName, sourceIDs, start, endExclusive,
+	)
+	if err != nil {
+		slog.Error("user metrics: kb breakdown", "user_id", userID, "error", err)
+		return out, nil
+	}
+	out.KBDocuments, out.KBChunks = kb.Documents, kb.Chunks
+	for _, t := range kb.ByType {
+		out.KBDocumentsByType = append(out.KBDocumentsByType, ExecDocTypeCount{Type: t.DocumentType, Count: t.Count})
+	}
+	return out, nil
 }

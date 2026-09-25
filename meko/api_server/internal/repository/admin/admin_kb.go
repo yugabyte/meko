@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -89,13 +90,27 @@ type KBDocTypeCount struct {
 	Count        int64
 }
 
-// indexedDocsByTypeSQL collapses the pipeline to the latest run per document,
-// keeps COMPLETED-only, joins dist_rag.documents for the file type, and groups.
-// The %s is the optional pipeline_created_at range predicate.
-func indexedDocsByTypeSQL(rangePred string) string {
+// AdminKBBreakdown is the knowledge panel's one-scan result: COMPLETED-document
+// and chunk totals plus the per-file-type document counts. Documents/Chunks are
+// the row sums, so the panel gets its tiles and its by-type chart from a single
+// pipeline scan instead of two.
+type AdminKBBreakdown struct {
+	Documents int64
+	Chunks    int64
+	ByType    []KBDocTypeCount
+}
+
+// indexedDocsBreakdownSQL collapses the pipeline to the latest run per document,
+// keeps COMPLETED-only, joins dist_rag.documents for the file type, and returns
+// one row per type with its document count and chunk sum. Summing the rows gives
+// the same doc/chunk totals the two separate count queries produced, so the
+// knowledge panel scans the (large) pipeline table once, not twice. %s is the
+// optional extra predicate (source-id filter and/or pipeline_created_at range).
+func indexedDocsBreakdownSQL(extraPredicate string) string {
 	return fmt.Sprintf(`WITH latest_per_document AS (
 	   SELECT DISTINCT ON (document_id)
 	          document_id,
+	          chunks_processed,
 	          COALESCE(pipeline_status::text, document_status::text) AS status
 	   FROM   dist_rag.vector_index_pipeline_details
 	   WHERE  schema_name = $1 AND index_name = $2%s
@@ -104,39 +119,73 @@ func indexedDocsByTypeSQL(rangePred string) string {
 	             pipeline_id DESC
 	 ),
 	 completed_documents AS (
-	   SELECT document_id FROM latest_per_document WHERE status = 'COMPLETED'
+	   SELECT document_id, chunks_processed
+	   FROM   latest_per_document
+	   WHERE  status = 'COMPLETED'
 	 )
 	 SELECT COALESCE(NULLIF(d.document_type, ''), 'unknown') AS document_type,
-	        COUNT(*)::bigint
+	        COUNT(*)::bigint,
+	        COALESCE(SUM(cd.chunks_processed), 0)::bigint
 	 FROM   completed_documents cd
 	 LEFT JOIN dist_rag.documents d ON d.document_id = cd.document_id
 	 GROUP  BY 1
-	 ORDER  BY 2 DESC`, rangePred)
+	 ORDER  BY 2 DESC`, extraPredicate)
 }
 
-// CountIndexedDocsByTypeAll returns the COMPLETED-document count grouped by file
-// type across every datapack, optionally windowed by pipeline_created_at. One
-// row per distinct document type (no bucketing).
-func (r *AdminRepo) CountIndexedDocsByTypeAll(
-	schema, indexName string, start, endExclusive *time.Time,
-) ([]KBDocTypeCount, error) {
-	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 3)
-	args := append([]any{schema, indexName}, rangeArgs...)
-	rows, err := r.dataDB.Query(indexedDocsByTypeSQL(pred), args...)
-	if err != nil {
-		return nil, fmt.Errorf("kb docs by type (all): %w", err)
-	}
-	defer rows.Close()
-
-	out := []KBDocTypeCount{}
+// scanKBBreakdown reads the per-type rows into the doc/chunk totals and the
+// by-type slice (one row per distinct type, no bucketing).
+func scanKBBreakdown(rows *sql.Rows) (AdminKBBreakdown, error) {
+	out := AdminKBBreakdown{ByType: []KBDocTypeCount{}}
 	for rows.Next() {
-		var c KBDocTypeCount
-		if err := rows.Scan(&c.DocumentType, &c.Count); err != nil {
-			return nil, fmt.Errorf("scan kb docs by type: %w", err)
+		var t KBDocTypeCount
+		var chunks int64
+		if err := rows.Scan(&t.DocumentType, &t.Count, &chunks); err != nil {
+			return out, fmt.Errorf("scan kb breakdown: %w", err)
 		}
-		out = append(out, c)
+		out.Documents += t.Count
+		out.Chunks += chunks
+		out.ByType = append(out.ByType, t)
 	}
 	return out, rows.Err()
+}
+
+// CountIndexedDocsBreakdownAll returns the global COMPLETED-document + chunk
+// totals and the by-file-type document counts across every datapack, optionally
+// windowed by pipeline_created_at. One scan of the pipeline table (see
+// indexedDocsBreakdownSQL).
+func (r *AdminRepo) CountIndexedDocsBreakdownAll(
+	schema, indexName string, start, endExclusive *time.Time,
+) (AdminKBBreakdown, error) {
+	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 3)
+	args := append([]any{schema, indexName}, rangeArgs...)
+	rows, err := r.dataDB.Query(indexedDocsBreakdownSQL(pred), args...)
+	if err != nil {
+		return AdminKBBreakdown{}, fmt.Errorf("kb breakdown (all): %w", err)
+	}
+	defer rows.Close()
+	return scanKBBreakdown(rows)
+}
+
+// CountIndexedDocsBreakdownBySourceIDs is CountIndexedDocsBreakdownAll scoped to
+// a user's rag source ids (per-user knowledge metric). An empty slice returns
+// the zero value without a query.
+func (r *AdminRepo) CountIndexedDocsBreakdownBySourceIDs(
+	schema, indexName string, sourceIDs []string, start, endExclusive *time.Time,
+) (AdminKBBreakdown, error) {
+	if len(sourceIDs) == 0 {
+		return AdminKBBreakdown{ByType: []KBDocTypeCount{}}, nil
+	}
+	// source_id occupies $3; range params (if any) start at $4.
+	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 4)
+	args := append([]any{schema, indexName, pq.Array(sourceIDs)}, rangeArgs...)
+	rows, err := r.dataDB.Query(
+		indexedDocsBreakdownSQL(" AND source_id = ANY($3::uuid[])"+pred), args...,
+	)
+	if err != nil {
+		return AdminKBBreakdown{}, fmt.Errorf("kb breakdown (by source ids): %w", err)
+	}
+	defer rows.Close()
+	return scanKBBreakdown(rows)
 }
 
 // GetSourceIDsByOwner returns rag_source_ids across every datapack owned

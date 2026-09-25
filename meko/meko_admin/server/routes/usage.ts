@@ -59,6 +59,41 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+// Forward user_id + the shared start/end range to api_server.
+function userScopeQuery(req: Request): Record<string, string> {
+  const query: Record<string, string> = {
+    user_id: typeof req.query.user_id === "string" ? req.query.user_id : "",
+  };
+  if (typeof req.query.start === "string") query.start = req.query.start;
+  if (typeof req.query.end === "string") query.end = req.query.end;
+  return query;
+}
+
+/** GET /api/admin/usage/overview|memories|conversations|tokens|searches|knowledge —
+ *  the per-user metrics tab, split into panels the client fetches in parallel so a
+ *  heavy user's slow KB/Langfuse query never blocks the fast tiles. Each forwards
+ *  user_id + range to the matching api_server /metrics/<panel> route. */
+for (const panel of [
+  "overview",
+  "memories",
+  "conversations",
+  "tokens",
+  "searches",
+  "knowledge",
+] as const) {
+  router.get(`/${panel}`, async (req, res, next) => {
+    try {
+      const data = await apiServerGet<Record<string, unknown>>(
+        `/metrics/${panel}`,
+        userScopeQuery(req),
+      );
+      res.json(data);
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+
 /** GET /api/admin/usage/executive/:panel — executive dashboard, split into four
  *  panels (growth, engagement, knowledge, savings) the client fetches in
  *  parallel. Each forwards the start/end range to the matching api_server route. */
@@ -96,9 +131,7 @@ router.patch("/users/:id/tier", async (req, res, next) => {
     // it cannot attribute must not happen at all -- the email is empty only when
     // Cognito was unreachable during verification.
     if (!actor.email) {
-      res
-        .status(503)
-        .json({ error: "Cannot attribute this change right now. Retry in a moment." });
+      res.status(503).json({ error: "Cannot attribute this change right now. Retry in a moment." });
       return;
     }
     const data = await apiServerSend<{ id: string; tier: string }>(

@@ -115,6 +115,189 @@ func (h *AdminHandler) Metrics(c echo.Context) error {
 	return ok(c, http.StatusOK, metrics)
 }
 
+// userScope parses + validates the shared user_id + start/end params for the
+// per-user metric panels. It returns a non-nil httpErr (via writeAndFail, so the
+// caller's `if httpErr != nil { return httpErr }` actually stops — apiError's own
+// result is nil on a successful write, MEKO-656/MEKO-690) when anything is wrong,
+// having already written the response.
+//
+// It also confirms the user exists in THIS deployment before any panel runs:
+// the Langfuse panels query a Langfuse DB shared across deployments, so an
+// unchecked id would leak other deployments' conversation/token totals (MG-138).
+// Gating here means every per-user route is scoped, not just the ones that
+// happen to call GetUserType themselves.
+func (h *AdminHandler) userScope(c echo.Context) (userID string, start, end *time.Time, httpErr error) {
+	userID = strings.TrimSpace(c.QueryParam("user_id"))
+	if userID == "" || userID == "all" {
+		return "", nil, nil, writeAndFail(c, http.StatusBadRequest, "INVALID_PARAM", "user_id is required")
+	}
+	start, end, err := execDateRange(c)
+	if err != nil {
+		return "", nil, nil, writeAndFail(c, http.StatusBadRequest, "INVALID_PARAM", "start/end must be YYYY-MM-DD")
+	}
+	if err := h.svc.EnsureUserExists(c.Request().Context(), userID); err != nil {
+		if errors.Is(err, adminsvc.ErrUserNotFound) {
+			return "", nil, nil, writeAndFail(c, http.StatusNotFound, "NOT_FOUND", "user not found")
+		}
+		return "", nil, nil, writeAndFail(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return userID, start, end, nil
+}
+
+// MetricsOverview handles GET /api/v1/admin/metrics/overview — a user's tier,
+// owned datapacks (all-time) and shares made in range.
+//
+//	@Summary	Per-user metrics: overview (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		user_id	query		string	true	"User UUID"
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	404	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/metrics/overview [get]
+func (h *AdminHandler) MetricsOverview(c echo.Context) error {
+	userID, start, end, httpErr := h.userScope(c)
+	if httpErr != nil {
+		return httpErr
+	}
+	out, err := h.svc.UserOverview(c.Request().Context(), userID, start, end)
+	if errors.Is(err, adminsvc.ErrUserNotFound) {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "user not found")
+	}
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// MetricsMemories handles GET /api/v1/admin/metrics/memories — a user's private
+// and collective memory counts in range.
+//
+//	@Summary	Per-user metrics: memories (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		user_id	query		string	true	"User UUID"
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/metrics/memories [get]
+func (h *AdminHandler) MetricsMemories(c echo.Context) error {
+	userID, start, end, httpErr := h.userScope(c)
+	if httpErr != nil {
+		return httpErr
+	}
+	out, err := h.svc.UserMemories(c.Request().Context(), userID, start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// MetricsConversations handles GET /api/v1/admin/metrics/conversations — a user's
+// conversation total + by-agent breakdown in range (Langfuse).
+//
+//	@Summary	Per-user metrics: conversations (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		user_id	query		string	true	"User UUID"
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/metrics/conversations [get]
+func (h *AdminHandler) MetricsConversations(c echo.Context) error {
+	userID, start, end, httpErr := h.userScope(c)
+	if httpErr != nil {
+		return httpErr
+	}
+	out, err := h.svc.UserConversations(c.Request().Context(), userID, start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// MetricsTokens handles GET /api/v1/admin/metrics/tokens — a user's token burn in
+// range (Langfuse).
+//
+//	@Summary	Per-user metrics: token burn (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		user_id	query		string	true	"User UUID"
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/metrics/tokens [get]
+func (h *AdminHandler) MetricsTokens(c echo.Context) error {
+	userID, start, end, httpErr := h.userScope(c)
+	if httpErr != nil {
+		return httpErr
+	}
+	out, err := h.svc.UserTokens(c.Request().Context(), userID, start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// MetricsSearches handles GET /api/v1/admin/metrics/searches — a user's
+// knowledge-base and memory search counts in range.
+//
+//	@Summary	Per-user metrics: searches (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		user_id	query		string	true	"User UUID"
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/metrics/searches [get]
+func (h *AdminHandler) MetricsSearches(c echo.Context) error {
+	userID, start, end, httpErr := h.userScope(c)
+	if httpErr != nil {
+		return httpErr
+	}
+	out, err := h.svc.UserSearches(c.Request().Context(), userID, start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
+// MetricsKnowledge handles GET /api/v1/admin/metrics/knowledge — a user's indexed
+// KB documents + chunks and the by-file-type breakdown in range.
+//
+//	@Summary	Per-user metrics: knowledge (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		user_id	query		string	true	"User UUID"
+//	@Param		start	query		string	false	"Range start (inclusive), YYYY-MM-DD"
+//	@Param		end		query		string	false	"Range end (inclusive), YYYY-MM-DD"
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/metrics/knowledge [get]
+func (h *AdminHandler) MetricsKnowledge(c echo.Context) error {
+	userID, start, end, httpErr := h.userScope(c)
+	if httpErr != nil {
+		return httpErr
+	}
+	out, err := h.svc.UserKnowledge(c.Request().Context(), userID, start, end)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, out)
+}
+
 // execDateRange parses the shared start/end query params used by every
 // executive endpoint. Blank params are nil (all-time); a malformed value is an
 // error the caller maps to 400.
@@ -334,20 +517,24 @@ const (
 // filtered by created_at date range, newest first.
 //
 // Query params:
+//
 //   - from (YYYY-MM-DD, optional): inclusive lower bound on created_at.
+//
 //   - to   (YYYY-MM-DD, optional): inclusive upper bound. The handler
 //     normalises this to end-of-day (start of the following UTC day) so
 //     the SQL stays a pure < comparison against the timestamp column.
+//
 //   - limit (int, default 50, cap 100).
+//
 //   - offset (int, default 0).
 //
-//	@Summary	List product feedback (admin)
-//	@Tags		admin
-//	@Produce	json
-//	@Success	200	{object}	APIResponse
-//	@Failure	400	{object}	APIResponse
-//	@Failure	500	{object}	APIResponse
-//	@Router		/admin/feedback [get]
+//     @Summary	List product feedback (admin)
+//     @Tags		admin
+//     @Produce	json
+//     @Success	200	{object}	APIResponse
+//     @Failure	400	{object}	APIResponse
+//     @Failure	500	{object}	APIResponse
+//     @Router		/admin/feedback [get]
 func (h *AdminHandler) Feedback(c echo.Context) error {
 	start, err := parseDateParam(c.QueryParam("from"))
 	if err != nil {

@@ -12,6 +12,15 @@ import (
 // not refund quota.
 const MetricDatapackCreation = "datapack_creation"
 
+// Retrieval-tool metric_names, matching the tool names meko-mcp-server passes to
+// its free-tier-quota gate. Centralized here so api_server reads them by name
+// rather than repeating the string literals across services.
+const (
+	MetricKnowledgebaseSearch = "knowledgebase_search"
+	MetricMemorySearch        = "memory_search"
+	MetricContextSearch       = "context_search"
+)
+
 // FreeTierUsageRepo wraps the `meko_system.free_tier_usage` counter
 // table. Most metrics are atomically incremented by meko-mcp-server's
 // free-tier-quota gate (see meko-mcp-server PR #151); api_server

@@ -130,8 +130,8 @@ func (s *AccountUsageService) GetUsage(userID string) (AccountUsage, error) {
 			metric string
 			set    func(int64)
 		}{
-			{"memory_search", func(n int64) { usage.NumMemorySearches = n }},
-			{"knowledgebase_search", func(n int64) { usage.NumKBSearches = n }},
+			{repository.MetricMemorySearch, func(n int64) { usage.NumMemorySearches = n }},
+			{repository.MetricKnowledgebaseSearch, func(n int64) { usage.NumKBSearches = n }},
 			{"memory_add", func(n int64) { usage.NumMemoryAdds = n }},
 		} {
 			n, e := s.freeTierRepo.RequestCount(userID, m.metric)

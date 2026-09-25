@@ -10,10 +10,22 @@ import {
   Cpu,
   MessageSquare,
   Flame,
+  FileSearch,
+  BrainCog,
+  ScanSearch,
 } from "lucide-react";
-import { fetchAdminUsers, fetchUsageMetrics } from "@/lib/adminApi";
+import {
+  fetchAdminUsers,
+  fetchUserOverview,
+  fetchUserMemories,
+  fetchUserConversations,
+  fetchUserTokens,
+  fetchUserSearches,
+  fetchUserKnowledge,
+} from "@/lib/adminApi";
 import { MetricCard } from "@/features/dashboard/components/MetricCard";
 import { ConversationsByAgentChart } from "@/features/dashboard/components/ConversationsByAgentChart";
+import { KbDocsByTypeChart } from "@/features/exec/components/KbDocsByTypeChart";
 import { UserScopeSelect } from "@/features/dashboard/components/UserScopeSelect";
 import { SingleDatePicker } from "@/features/dashboard/components/SingleDatePicker";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -45,15 +57,60 @@ export function MetricsPage() {
     }
   }, [scope, usersQuery.data]);
 
-  const usage = useQuery({
-    queryKey: ["admin-usage", scope, start, end],
-    queryFn: () => fetchUsageMetrics(scope, start, end),
+  // Independent panels, each on its own query key so the slow ones
+  // (KB pipeline scan, Langfuse aggregates) no longer block the fast tiles or
+  // time out the whole tab for a heavy user. The scope + range drive every key,
+  // so a change refetches them all in parallel; each tile binds to its own
+  // panel's loading state.
+  const overview = useQuery({
+    queryKey: ["admin-user-overview", scope, start, end],
+    queryFn: () => fetchUserOverview(scope, start, end),
+    staleTime: 60_000,
+    enabled: !!scope,
+  });
+  const memories = useQuery({
+    queryKey: ["admin-user-memories", scope, start, end],
+    queryFn: () => fetchUserMemories(scope, start, end),
+    staleTime: 60_000,
+    enabled: !!scope,
+  });
+  const conversations = useQuery({
+    queryKey: ["admin-user-conversations", scope, start, end],
+    queryFn: () => fetchUserConversations(scope, start, end),
+    staleTime: 60_000,
+    enabled: !!scope,
+  });
+  const tokens = useQuery({
+    queryKey: ["admin-user-tokens", scope, start, end],
+    queryFn: () => fetchUserTokens(scope, start, end),
+    staleTime: 60_000,
+    enabled: !!scope,
+  });
+  const searches = useQuery({
+    queryKey: ["admin-user-searches", scope, start, end],
+    queryFn: () => fetchUserSearches(scope, start, end),
+    staleTime: 60_000,
+    enabled: !!scope,
+  });
+  const knowledge = useQuery({
+    queryKey: ["admin-user-knowledge", scope, start, end],
+    queryFn: () => fetchUserKnowledge(scope, start, end),
     staleTime: 60_000,
     enabled: !!scope,
   });
 
-  const u = usage.data;
-  const loading = usage.isLoading || (!scope && usersQuery.isLoading);
+  const o = overview.data;
+  const mem = memories.data;
+  const conv = conversations.data;
+  const tok = tokens.data;
+  const srch = searches.data;
+  const k = knowledge.data;
+  // While the user list is still loading (before a scope is auto-selected) every
+  // panel shows a skeleton; after that each follows its own fetch.
+  const scopeLoading = !scope && usersQuery.isLoading;
+  const anyError = [overview, memories, conversations, tokens, searches, knowledge].some(
+    (q) => q.isError,
+  );
 
   return (
     <div className="flex flex-col gap-4 p-6 overflow-auto">
@@ -87,10 +144,10 @@ export function MetricsPage() {
         </div>
       </div>
 
-      {usage.isError && (
+      {anyError && (
         <Alert variant="destructive">
           <AlertDescription>
-            Failed to load usage metrics. Ensure api_server is running and ADMIN_API_KEY matches on
+            Some metrics failed to load. Ensure api_server is running and ADMIN_API_KEY matches on
             both sides.
           </AlertDescription>
         </Alert>
@@ -106,58 +163,82 @@ export function MetricsPage() {
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <MetricCard
               title="Datapacks"
-              value={u?.datapacks}
+              value={o?.datapacks}
               icon={Layers}
               description="All-time · owned by user"
-              isLoading={loading}
+              isLoading={overview.isLoading || scopeLoading}
               accentClassName="text-orange-400"
             />
             <MetricCard
               title="Shares"
-              value={u?.shared_datapacks}
+              value={o?.shared_datapacks}
               icon={Share2}
               description="Shares by user in range"
-              isLoading={loading}
+              isLoading={overview.isLoading || scopeLoading}
               accentClassName="text-violet-400"
             />
             <MetricCard
               title="Private Memories"
-              value={u?.private_memories}
+              value={mem?.private_memories}
               icon={Brain}
               description=""
-              isLoading={loading}
+              isLoading={memories.isLoading || scopeLoading}
               accentClassName="text-emerald-400"
             />
             <MetricCard
               title="Collective Memories"
-              value={u?.collective_memories}
+              value={mem?.collective_memories}
               icon={Sparkles}
               description="Promoted learnings"
-              isLoading={loading}
+              isLoading={memories.isLoading || scopeLoading}
               accentClassName="text-pink-400"
             />
             <MetricCard
               title="Conversations"
-              value={u?.langfuse_enabled ? u?.conversations : undefined}
+              value={conv?.langfuse_enabled ? conv?.conversations : undefined}
               icon={MessageSquare}
               description="Chat sessions"
-              isLoading={loading}
+              isLoading={conversations.isLoading || scopeLoading}
               accentClassName="text-cyan-400"
             />
             <MetricCard
               title="Token Burn"
-              value={u?.langfuse_enabled ? u?.token_burn : undefined}
+              value={tok?.langfuse_enabled ? tok?.token_burn : undefined}
               icon={Flame}
               description="Total tokens"
-              isLoading={loading}
+              isLoading={tokens.isLoading || scopeLoading}
               accentClassName="text-amber-400"
+            />
+            <MetricCard
+              title="KB Searches"
+              value={srch?.kb_searches}
+              icon={FileSearch}
+              description="Knowledge-base lookups in range"
+              isLoading={searches.isLoading || scopeLoading}
+              accentClassName="text-sky-400"
+            />
+            <MetricCard
+              title="Memory Searches"
+              value={srch?.memory_searches}
+              icon={BrainCog}
+              description="Memory lookups in range"
+              isLoading={searches.isLoading || scopeLoading}
+              accentClassName="text-rose-400"
+            />
+            <MetricCard
+              title="Context Searches"
+              value={srch?.context_searches}
+              icon={ScanSearch}
+              description="Contextual retrievals in range"
+              isLoading={searches.isLoading || scopeLoading}
+              accentClassName="text-indigo-400"
             />
           </div>
 
           <ConversationsByAgentChart
-            data={u?.conversations_by_agent}
-            enabled={u?.langfuse_enabled}
-            isLoading={loading}
+            data={conv?.conversations_by_agent}
+            enabled={conv?.langfuse_enabled}
+            isLoading={conversations.isLoading || scopeLoading}
           />
         </TabsContent>
 
@@ -165,21 +246,26 @@ export function MetricsPage() {
           <div className="grid grid-cols-2 gap-4">
             <MetricCard
               title="KB Documents Processed"
-              value={u?.kb_documents}
+              value={k?.kb_documents}
               icon={FileText}
               description="Completed RAG documents"
-              isLoading={loading}
+              isLoading={knowledge.isLoading || scopeLoading}
               accentClassName="text-sky-400"
             />
             <MetricCard
               title="Total Chunks Processed"
-              value={u?.kb_chunks}
+              value={k?.kb_chunks}
               icon={Cpu}
               description="Chunks persisted to vector store"
-              isLoading={loading}
+              isLoading={knowledge.isLoading || scopeLoading}
               accentClassName="text-teal-400"
             />
           </div>
+
+          <KbDocsByTypeChart
+            data={k?.kb_documents_by_type}
+            isLoading={knowledge.isLoading || scopeLoading}
+          />
         </TabsContent>
       </Tabs>
     </div>

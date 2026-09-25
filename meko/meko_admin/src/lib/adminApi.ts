@@ -86,23 +86,52 @@ export type AdminUser = {
   created_at: string;
 };
 
-export type UsageMetrics = {
-  scope: string; // "all" or a user id
-  total_users: number;
-  free_users: number;
-  pro_users: number;
-  tier: Tier | null; // per-user only
+// The per-user metrics tab is split into six panels the page fetches in
+// parallel (mirroring the executive dashboard) so a heavy user's slow KB/Langfuse
+// query never blocks the fast tiles or times out the whole tab. Every count is
+// scoped to the user and windowed to the selected range.
+
+/** Overview panel: tier, owned datapacks (all-time) and shares in range. */
+export type UserOverview = {
+  scope: string;
+  tier: Tier;
   datapacks: number;
   shared_datapacks: number;
-  kb_documents: number;
-  kb_chunks: number;
+};
+
+/** Memories panel: private + collective memory counts in range. */
+export type UserMemories = {
   private_memories: number;
   collective_memories: number;
-  // Langfuse-derived (Phase 2); zero/empty when langfuse_enabled is false.
+};
+
+/** Conversations panel: total + by-agent breakdown in range (Langfuse). */
+export type UserConversations = {
   conversations: number;
-  conversations_by_agent: { agent: string; conversations: number }[];
+  conversations_by_agent: AgentConversationCount[];
+  langfuse_enabled: boolean;
+};
+
+/** Tokens panel: token burn in range (Langfuse). */
+export type UserTokens = {
   token_burn: number;
   langfuse_enabled: boolean;
+};
+
+/** Searches panel: KB + memory + context search counts in range (free-tier
+ *  counters). context_search is a distinct unit and does not double-count into
+ *  the other two. */
+export type UserSearches = {
+  kb_searches: number;
+  memory_searches: number;
+  context_searches: number;
+};
+
+/** Knowledge panel: indexed KB docs + chunks and the by-file-type breakdown. */
+export type UserKnowledge = {
+  kb_documents: number;
+  kb_chunks: number;
+  kb_documents_by_type: ExecDocTypeCount[];
 };
 
 /** List users for the dashboard scope dropdown. */
@@ -111,19 +140,31 @@ export async function fetchAdminUsers(): Promise<AdminUser[]> {
   return data.users;
 }
 
-/** Usage metrics overall ("all") or for a single user, optionally windowed by a
- *  date range (YYYY-MM-DD, inclusive). */
-export async function fetchUsageMetrics(
+async function fetchUserPanel<T>(
+  panel: string,
   userId: string,
   start?: string,
   end?: string,
-): Promise<UsageMetrics> {
+): Promise<T> {
   const params: Record<string, string> = { user_id: userId };
   if (start) params.start = start;
   if (end) params.end = end;
-  const { data } = await http.get<UsageMetrics>("/usage", { params });
+  const { data } = await http.get<T>(`/usage/${panel}`, { params });
   return data;
 }
+
+export const fetchUserOverview = (userId: string, start?: string, end?: string) =>
+  fetchUserPanel<UserOverview>("overview", userId, start, end);
+export const fetchUserMemories = (userId: string, start?: string, end?: string) =>
+  fetchUserPanel<UserMemories>("memories", userId, start, end);
+export const fetchUserConversations = (userId: string, start?: string, end?: string) =>
+  fetchUserPanel<UserConversations>("conversations", userId, start, end);
+export const fetchUserTokens = (userId: string, start?: string, end?: string) =>
+  fetchUserPanel<UserTokens>("tokens", userId, start, end);
+export const fetchUserSearches = (userId: string, start?: string, end?: string) =>
+  fetchUserPanel<UserSearches>("searches", userId, start, end);
+export const fetchUserKnowledge = (userId: string, start?: string, end?: string) =>
+  fetchUserPanel<UserKnowledge>("knowledge", userId, start, end);
 
 /* ---- data plane (YBA universe, proxied from api_server) ---- */
 
@@ -238,10 +279,9 @@ export async function updateUserTier(
   userId: string,
   tier: string,
 ): Promise<{ id: string; tier: string }> {
-  const { data } = await http.patch<{ id: string; tier: string }>(
-    `/usage/users/${userId}/tier`,
-    { tier },
-  );
+  const { data } = await http.patch<{ id: string; tier: string }>(`/usage/users/${userId}/tier`, {
+    tier,
+  });
   return data;
 }
 
