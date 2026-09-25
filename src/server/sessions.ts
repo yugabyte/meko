@@ -12,7 +12,6 @@ import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import { loadPrompt, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
-import { capturedConversation } from './capture.js';
 import { transcriptPathFor, writeLauncher } from './claude.js';
 import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
@@ -26,6 +25,8 @@ const QUARTER_HOUR = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 /** How long stopping a session waits for its last turns to reach Meko. */
 const FINAL_CAPTURE_MS = 15000;
+/** How long a new session waits for its Meko conversation to be created before Claude starts anyway. */
+const NAME_CONVERSATION_MS = 5000;
 
 /** The "created" event: where the branch started, and what happened to the local base. */
 function startedText(branch: string, base: string, sync: SyncResult | null): string {
@@ -53,8 +54,6 @@ export class SessionManager {
   private usage = new Map<string, TokenUsage>();
   private usageLoaded = false;
   private usageReadAt = new Map<string, number>();
-  /** The Meko conversation title last set per session, as `<conversation id>\n<title>`. */
-  private conversationTitles = new Map<string, string>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
 
@@ -193,6 +192,7 @@ export class SessionManager {
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
     });
     this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+    const naming = this.nameConversation(this.row(id));
     let sync: SyncResult | null;
     try {
       sync = await addWorktree(p.repo_path, worktree, branch, base);
@@ -207,6 +207,7 @@ export class SessionManager {
     const row = this.row(id);
     const prompt = task ? this.prompt(row, stage === 'design' ? 'design' : 'code', { task }) : null;
     this.setStartup(id, 'launch');
+    await within(naming, NAME_CONVERSATION_MS);
     try {
       await this.launch(row, { resume: false, prompt });
     } catch (e) {
@@ -661,25 +662,27 @@ export class SessionManager {
 
   // ---- Meko conversation ----
 
-  /** Sends the session's new turns to its Meko conversation and names it after the session. Never throws. */
-  async captureTranscript(id: string): Promise<void> {
+  /** Sends the session's new turns to its Meko conversation. Never throws. */
+  captureTranscript(id: string): Promise<void> {
     const r = sessionRow(this.db, id);
-    if (!r || !this.core.capture.enabled) return;
-    const transcript = sessionTranscript(r, transcriptPathFor);
-    await this.core.capture.capture(id, transcript);
-    await this.titleConversation(r, transcript);
+    if (!r) return Promise.resolve();
+    return this.core.capture.capture(id, sessionTranscript(r, transcriptPathFor));
   }
 
-  /** The plugin titles every conversation "Claude Code session (auto-captured)"; use the session's name instead. */
-  private async titleConversation(r: SessionRow, transcript: string): Promise<void> {
-    const conv = capturedConversation(transcript);
-    if (!conv) return;
+  /**
+   * Creates the session's Meko conversation, titled after the session, before
+   * Claude starts. Meko lists a conversation under the title of its first
+   * conversation_create and ignores later creates and conversation_update, so
+   * this has to come before the plugin's SessionStart hook, which titles every
+   * conversation "Claude Code session (auto-captured)". Both key it by the
+   * Claude session id, so the hook's create lands on this conversation. Never throws.
+   */
+  private async nameConversation(r: SessionRow): Promise<void> {
+    const dp = dedicatedDatapack(this.db, r.project_id);
+    if (!dp || !this.core.capture.enabled) return;
     const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
-    const key = `${conv.conversationId}\n${title}`;
-    if (this.conversationTitles.get(r.id) === key) return;
     try {
-      await this.core.meko.renameConversation(conv.conversationId, conv.agentId || projectAgentId(r.project_id), conv.datapackId, title);
-      this.conversationTitles.set(r.id, key);
+      await this.core.meko.ensureConversation(projectAgentId(r.project_id), dp.id, r.claude_session_id, title);
     } catch (e) {
       this.core.log.warn(`naming the Meko conversation for ${r.id} failed`, errMsg(e));
     }

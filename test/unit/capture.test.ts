@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TranscriptCapture, capturedConversation, findMekoCaptureScript, mekoPluginInstalls } from '../../src/server/capture.js';
+import { TranscriptCapture, findMekoCaptureScript, mekoPluginInstalls } from '../../src/server/capture.js';
 import { silentLogger } from '../../src/server/log.js';
 import { FAKE_CAPTURE } from '../helpers.js';
 
@@ -89,21 +89,5 @@ describe('TranscriptCapture', () => {
     const c = new TranscriptCapture(bad, () => ({}), { ...silentLogger, warn: (m) => warnings.push(m) });
     await expect(c.capture('s1', transcript)).resolves.toBeUndefined();
     expect(warnings).toEqual([expect.stringMatching(/capture failed for s1/)]);
-  });
-});
-
-describe('capturedConversation', () => {
-  afterEach(() => {
-    delete process.env.MEKO_WATERMARK_DIR;
-  });
-
-  it("reads the conversation from the plugin's watermark for a transcript", () => {
-    const dir = mkdtempSync(join(tmpdir(), 'akl-capture-'));
-    process.env.MEKO_WATERMARK_DIR = dir;
-    expect(capturedConversation(join(dir, 'abc.jsonl'))).toBeNull();
-    writeFileSync(join(dir, 'abc.watermark.json'), JSON.stringify({ conversation_id: 'c1', agent_id: 'claude_code:x', datapack_id: null }));
-    expect(capturedConversation('/somewhere/abc.jsonl')).toEqual({ conversationId: 'c1', agentId: 'claude_code:x', datapackId: null });
-    writeFileSync(join(dir, 'abc.watermark.json'), JSON.stringify({ conversation_id: '', last_line_number: 0 }));
-    expect(capturedConversation('/somewhere/abc.jsonl')).toBeNull();
   });
 });

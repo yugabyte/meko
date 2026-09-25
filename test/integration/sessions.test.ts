@@ -82,9 +82,9 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     });
     const capturedBeforeArchive = captureLog(env).length;
 
-    // The plugin's generic conversation title is replaced with the session's name, once.
-    const renames = env.meko.calls.filter((c) => c.name === 'renameConversation');
-    expect(renames.map((c) => c.args)).toEqual([[s.claudeSessionId.replace(/-/g, ''), 'claude_code:fake', 'dp-fake', 'Fix the thing (Demo)']]);
+    // The session's Meko conversation was created once, titled after the session, keyed by its Claude session id.
+    const named = env.meko.calls.filter((c) => c.name === 'ensureConversation' && c.args[2] === s.claudeSessionId);
+    expect(named.map((c) => c.args)).toEqual([['claude_code:demo-repo', 'dp-agent-k-local-test-demo', s.claudeSessionId, 'Fix the thing (Demo)']]);
 
     await env.core.sessions.action(s.id, 'archive');
     expect(captureLog(env).length).toBeGreaterThan(capturedBeforeArchive); // final capture before Claude is stopped
@@ -95,6 +95,22 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(branches).toContain('ak/fix-the-thing'); // archive keeps the branch
     expect(env.core.state().projects[0].sessions).toHaveLength(0);
     expect(env.core.state().projects[0].usage.messages).toBe(2); // archived sessions still count
+  });
+
+  it("creates the session's Meko conversation before Claude starts, and launches even if that fails", async () => {
+    const p = await newProject();
+    const launchedBefore: number[] = [];
+    env.meko.ensureConversation = async (...args: unknown[]) => {
+      if (args[3] === 'Name me (Demo)') launchedBefore.push(argvLog(env).length);
+      if (args[3] === 'Unnamed (Demo)') throw new Error('Meko is down');
+      return 'conv-1';
+    };
+    const s = await env.core.sessions.create(p.id, { name: 'Name me', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    expect(launchedBefore).toEqual([0]);
+
+    const u = await env.core.sessions.create(p.id, { name: 'Unnamed', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
   });
 
   it('archive keeps a worktree with uncommitted changes, and its branch', async () => {
