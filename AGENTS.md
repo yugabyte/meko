@@ -50,7 +50,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
 | `src/web/components/UsagePanel.tsx` | Project token usage: headline numbers, 14-day chart with table view, per-session and per-model tables. |
-| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session. |
+| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session and copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`). |
 | `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd templates, install and release scripts, CI and releases. |
 | `test/` | Unit tests, and integration tests against real tmux and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 

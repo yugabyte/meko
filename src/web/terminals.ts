@@ -6,6 +6,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { TermClientMessage, TermServerMessage } from '../shared/types';
 import { wsUrl } from './api';
+import { copyText, decodeOsc52 } from './clipboard';
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
 export type TermConn = 'connecting' | 'open' | 'closed' | 'ended';
 
@@ -45,6 +48,9 @@ class SessionTerminal {
   private lastSize = { cols: 0, rows: 0 };
   conn: TermConn = 'connecting';
   message: string | null = null;
+  /** A short-lived note after copying ("Copied", or why it failed). */
+  notice: string | null = null;
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
 
   constructor(readonly sessionId: string) {
@@ -59,6 +65,9 @@ class SessionTerminal {
       scrollback: 10000,
       theme: THEME,
       macOptionIsMeta: true,
+      // tmux has the mouse, so a plain drag selects in tmux (copied through OSC 52 below);
+      // Shift-drag, or Option-drag on a Mac, selects in the browser instead.
+      macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
     this.term.loadAddon(
@@ -69,10 +78,23 @@ class SessionTerminal {
     this.term.open(this.el);
     this.term.onData((data) => this.send({ type: 'input', data }));
     this.term.onBinary((data) => this.send({ type: 'input', data }));
+    // tmux sends a mouse selection as OSC 52 (set-clipboard on); put it on the browser clipboard.
+    this.term.parser.registerOscHandler(52, (data) => {
+      const text = decodeOsc52(data);
+      if (text) void this.copy(text);
+      return true;
+    });
     // Let the app's own shortcuts through; everything else goes to the terminal.
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
-      const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? e.metaKey : e.ctrlKey;
+      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+      // With text selected, ⌘C (Ctrl+C or Ctrl+Shift+C elsewhere) copies it instead of interrupting Claude.
+      if (mod && (e.key === 'c' || e.key === 'C') && this.term.hasSelection()) {
+        e.preventDefault();
+        void this.copy(this.term.getSelection());
+        if (!IS_MAC) this.term.clearSelection();
+        return false;
+      }
       if (mod && (e.key === 'k' || e.key === 'K')) return false;
       if (mod && /^[1-9]$/.test(e.key)) return false;
       if (e.ctrlKey && e.key === 'Tab') return false;
@@ -84,6 +106,19 @@ class SessionTerminal {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  private async copy(text: string) {
+    const ok = await copyText(text);
+    this.notice = ok
+      ? 'Copied'
+      : `Couldn’t copy: the browser blocked the clipboard. Select with ${IS_MAC ? 'Option' : 'Shift'}-drag and press ${IS_MAC ? '⌘C' : 'Ctrl+C'}.`;
+    this.listeners.forEach((l) => l());
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => {
+      this.notice = null;
+      this.listeners.forEach((l) => l());
+    }, ok ? 1500 : 6000);
   }
 
   private setConn(c: TermConn, message: string | null = null) {
@@ -178,6 +213,7 @@ class SessionTerminal {
   dispose() {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.resizeObs?.disconnect();
     this.ws?.close();
     this.term.dispose();

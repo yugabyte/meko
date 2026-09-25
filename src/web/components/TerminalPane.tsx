@@ -38,6 +38,11 @@ export function TerminalPane({ session }: { session: Session }) {
       <div className="term-host" ref={hostRef} />
       {status === 'starting' && <StartupPanel session={session} />}
       {overlay && <div className="term-overlay">{overlay}</div>}
+      {term.notice && (
+        <div className="term-toast" role="status">
+          {term.notice}
+        </div>
+      )}
       {status === 'exited' && (
         <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
       )}

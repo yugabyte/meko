@@ -766,6 +766,21 @@ textarea.input {
 .xterm-host .xterm {
   height: 100%;
 }
+.term-toast {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+  max-width: min(420px, calc(100% - 28px));
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  pointer-events: none;
+}
 .term-overlay {
   position: absolute;
   left: 50%;
