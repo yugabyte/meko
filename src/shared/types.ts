@@ -157,6 +157,8 @@ export interface Session {
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   hasDesign: boolean;
+  /** When the design was last written or republished; null before there is one. */
+  designUpdatedAt: number | null;
   /** Lines added/removed vs. the base branch, refreshed periodically. */
   diffStat: { added: number; removed: number } | null;
   usage: TokenUsage;
@@ -309,8 +311,14 @@ export interface SessionChanges {
   omittedPatches: number;
 }
 
+/**
+ * A session's design: markdown for simple designs, or a published Artifact (its HTML,
+ * shown in a sandboxed frame, and its claude.ai link) for complex ones.
+ */
 export interface DesignDoc {
   markdown: string | null;
+  html: string | null;
+  artifactUrl: string | null;
   updatedAt: number | null;
 }
 

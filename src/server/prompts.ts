@@ -6,16 +6,32 @@ import { get, type Db } from './db.js';
  * Instructions sent to Claude at each lifecycle step. A repo can override any
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
  * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
- * {{prUrl}}, {{repo}}, {{reviewer}}.
+ * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}.
  */
-export type PromptName = 'design' | 'code' | 'pr' | 'review' | 'review-people' | 'continue' | 'continue-review';
+export type PromptName =
+  | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'continue' | 'continue-review';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   design: `You are in the Design stage of an AgentK Local task.
 
 Task: {{task}}
 
+Read the relevant code, then design the change: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change anything in the repo yet: no file edits, commits, or commands that modify files. AgentK Local blocks edits in the repo until the user approves the design.
+
+Put the design in exactly one place:
+- If the design is complex (several components, a data flow, UI, or a state machine) and you have the Artifact tool, publish it as an Artifact, with diagrams where they help. Don't also write a markdown copy.
+- Otherwise, write it as markdown to {{designFile}}.
+
+Then stop and say the design is ready. The user reviews and approves it in AgentK Local. If they send feedback, revise the same Artifact (republish the same file) or the same markdown file.`,
+
+  // For sessions created before designs moved out of plan mode.
+  'design-plan': `You are in the Design stage of an AgentK Local task.
+
+Task: {{task}}
+
 Read the relevant code, then write a design: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change any code yet. When the design is ready, present it with ExitPlanMode so it can be approved.`,
+
+  approved: `The design is approved. Implement it on the current branch ({{branch}}). Follow the repo's conventions (CLAUDE.md, contributing docs), add or update tests, and run the repo's tests and checks before you finish. Don't open a pull request yet.`,
 
   code: `Task: {{task}}
 

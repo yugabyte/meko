@@ -15,6 +15,8 @@ export interface Paths {
   /** Installed app versions: app/<version>/, app/current -> <version>. */
   app: string;
   worktrees: string;
+  /** Per-session design files written during the Design stage: designs/<session>/design.md. */
+  designs: string;
   /** Per-session launcher scripts and the Claude hooks settings file. */
   run: string;
   hookSock: string;
@@ -35,6 +37,7 @@ export function getPaths(home: string = akHome()): Paths {
     certs: join(home, 'certs'),
     app: join(home, 'app'),
     worktrees: join(home, 'worktrees'),
+    designs: join(home, 'designs'),
     run: join(home, 'run'),
     hookSock: hookSockPath(home),
     tmuxConf: join(home, 'tmux.conf'),

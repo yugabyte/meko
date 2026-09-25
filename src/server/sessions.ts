@@ -1,18 +1,18 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import type { CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { get, run, tx } from './db.js';
 import { changes, diffStat } from './changes.js';
 import { addWorktree, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult } from './git.js';
-import type { HookPayload } from './hooks.js';
+import type { GuardDecision, HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import { loadPrompt, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
-import { transcriptPathFor, writeLauncher } from './claude.js';
+import { EDIT_TOOLS, transcriptPathFor, writeLauncher } from './claude.js';
 import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
@@ -35,6 +35,14 @@ function startedText(branch: string, base: string, sync: SyncResult | null): str
     case 'current': return `Started on ${branch} from ${base} (already up to date with origin)`;
     case 'skipped': return `Started on ${branch} from origin/${base}; local ${base} wasn't updated: ${sync.reason}`;
     default: return `Started on ${branch} from ${base}`;
+  }
+}
+
+function realpath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
   }
 }
 
@@ -185,8 +193,8 @@ export class SessionManager {
     // The row goes in first so the tab (and its "Starting…" view) shows up right away.
     tx(this.db, () => {
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path,
-                      tmux_name, hook_token, desired, status, stage, initial_prompt, created_at, last_event_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?)`,
+                      tmux_name, hook_token, desired, status, stage, initial_prompt, created_at, last_event_at, plan_mode)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, 0)`,
         id, projectId, slug, name, randomUUID(), branch, base, worktree, tmuxName(projectId, slug),
         randomBytes(24).toString('base64url'), stage, task || null, now, now);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
@@ -205,7 +213,7 @@ export class SessionManager {
     this.event(id, 'created', startedText(branch, base, sync));
 
     const row = this.row(id);
-    const prompt = task ? this.prompt(row, stage === 'design' ? 'design' : 'code', { task }) : null;
+    const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
     this.setStartup(id, 'launch');
     await within(naming, NAME_CONVERSATION_MS);
     try {
@@ -232,6 +240,17 @@ export class SessionManager {
     }
   }
 
+  /** Where Claude writes a markdown design during the Design stage (outside the repo). */
+  designFile(row: SessionRow): string {
+    return join(this.core.paths.designs, row.id, 'design.md');
+  }
+
+  /** The prompt a session's task starts with, for the stage it's in. */
+  firstPrompt(row: SessionRow): PromptName {
+    if (row.stage !== 'design') return 'code';
+    return row.plan_mode ? 'design-plan' : 'design';
+  }
+
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
     const p = projectRow(this.db, row.project_id);
     const settings = p ? parseSettings(p.settings_json) : null;
@@ -243,6 +262,7 @@ export class SessionManager {
       prUrl: row.pr_url,
       reviewer: settings?.reviewerLogin ?? 'the reviewer',
       repo: '{owner}/{repo}',
+      designFile: this.designFile(row),
       ...extra,
     });
   }
@@ -254,6 +274,7 @@ export class SessionManager {
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       AK_HOOK_SOCK: this.core.paths.hookSock,
+      AK_DESIGN_FILE: this.designFile(row),
       MEKO_AGENT_ID: projectAgentId(row.project_id),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
@@ -288,6 +309,8 @@ export class SessionManager {
       // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
       const repo = projectRow(this.db, row.project_id)?.repo_path;
       if (repo) await this.trustRepo(repo);
+      const designDir = join(this.core.paths.designs, row.id);
+      mkdirSync(designDir, { recursive: true });
       const script = writeLauncher(this.core.paths, {
         sessionId: row.id,
         worktree: row.worktree_path,
@@ -295,7 +318,8 @@ export class SessionManager {
         claudeSessionId: row.claude_session_id,
         resume: opts.resume,
         name: row.name,
-        planMode: row.stage === 'design',
+        planMode: row.stage === 'design' && !!row.plan_mode,
+        addDirs: [designDir],
         appendSystemPrompt: this.systemPrompt(row),
         prompt: opts.prompt,
         env: this.env(row),
@@ -334,6 +358,31 @@ export class SessionManager {
 
   // ---- hooks ----
 
+  /**
+   * Design-stage guard, asked before every file edit: nothing in the repo (worktree or main
+   * checkout) changes until the design is approved. Returns Claude Code's deny decision, or
+   * null to let the edit go ahead.
+   */
+  guard(token: string, p: HookPayload): GuardDecision {
+    const row = this.byToken(token);
+    if (!row || row.stage !== 'design' || row.plan_mode || !EDIT_TOOLS.includes(p.tool_name ?? '')) return null;
+    const raw = p.tool_input?.file_path ?? p.tool_input?.notebook_path;
+    if (typeof raw !== 'string' || !raw) return null;
+    const file = resolve(p.cwd || row.worktree_path, raw);
+    const repo = projectRow(this.db, row.project_id)?.repo_path;
+    const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d)]);
+    if (!roots.some((d) => file === d || file.startsWith(d + sep))) return null;
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          `This session is in the Design stage: AgentK Local blocks changes to the repo until the user approves the design. ` +
+          `Publish the design as an Artifact, or write it to ${this.designFile(row)}.`,
+      },
+    };
+  }
+
   async onHook(token: string, p: HookPayload): Promise<void> {
     const row = this.byToken(token);
     if (!row || row.desired !== 'running') return;
@@ -366,11 +415,10 @@ export class SessionManager {
       case 'PreToolUse': {
         if (p.tool_name === 'ExitPlanMode') {
           const plan = typeof p.tool_input?.plan === 'string' ? p.tool_input.plan : '';
-          if (plan) await this.core.lifecycle.saveDesign(id, plan);
+          if (plan) await this.core.lifecycle.saveDesign(id, { markdown: plan });
           void this.captureTranscript(id);
           this.planPending.add(id);
-          this.setStatus(id, 'needs_input', 'Design ready for your approval');
-          this.notifyUser(id, 'Design ready', 'Review and approve the design.');
+          this.core.lifecycle.designReady(id);
         }
         break;
       }
@@ -380,6 +428,7 @@ export class SessionManager {
           const resp = JSON.stringify(p.tool_response ?? '').toLowerCase();
           if (row.stage === 'design' && !/reject|denied|keep planning/.test(resp)) this.core.lifecycle.designApproved(id, 'you');
         }
+        if (p.tool_name === 'Artifact' && row.stage === 'design' && !row.plan_mode) await this.core.lifecycle.captureArtifact(id, p);
         if (row.status !== 'working') this.setStatus(id, 'working');
         // Keep usage live during long turns without reading the transcript on every tool call.
         if (Date.now() - (this.usageReadAt.get(id) ?? 0) > 10_000) this.ingestUsage(id);
@@ -407,7 +456,12 @@ export class SessionManager {
         void this.captureTranscript(id);
         if (this.planPending.has(id)) break;
         this.update(id, { interrupted: 0 });
-        this.setStatus(id, 'idle');
+        // A Design turn that wrote or republished the design leaves it waiting for approval.
+        if (row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)))) {
+          this.core.lifecycle.designReady(id);
+        } else {
+          this.setStatus(id, 'idle');
+        }
         this.refreshDiff(id).catch(() => undefined);
         this.ingestUsage(id);
         await this.core.lifecycle.onTurnEnd(id);
@@ -500,7 +554,7 @@ export class SessionManager {
     const resume = this.transcriptExists(row);
 
     let prompt: string | null = null;
-    if (!resume) prompt = row.initial_prompt ? this.prompt(row, row.stage === 'design' ? 'design' : 'code') : null;
+    if (!resume) prompt = row.initial_prompt ? this.prompt(row, this.firstPrompt(row)) : null;
     else if (cont) prompt = this.prompt(row, row.stage === 'review' ? 'continue-review' : 'continue');
 
     this.busy.delete(row.id);
@@ -558,7 +612,7 @@ export class SessionManager {
     const p = projectRow(this.db, row.project_id);
     if (p) await restoreWorktree(p.repo_path, row.worktree_path, row.branch, row.base_branch);
     const resume = this.transcriptExists(row);
-    const firstPrompt = resume ? null : row.initial_prompt ? this.prompt(row, row.stage === 'design' ? 'design' : 'code') : null;
+    const firstPrompt = resume ? null : row.initial_prompt ? this.prompt(row, this.firstPrompt(row)) : null;
     this.setStatus(row.id, 'starting', 'Resuming');
     this.startup.delete(row.id);
     this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });

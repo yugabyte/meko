@@ -18,11 +18,20 @@ export interface HookPayload {
   [k: string]: unknown;
 }
 
+/** What a guard hook prints for Claude Code; null lets the tool call go ahead. */
+export type GuardDecision = Record<string, unknown> | null;
+
 /**
  * Receives Claude Code hook events on a unix socket (mode 0600). Hooks never
  * touch the network port. Each request carries the session's hook token.
+ * `/hook` events are answered at once and handled afterwards; `/guard` requests
+ * wait for the decision, which is returned as JSON (204 when there is none).
  */
-export function startHookServer(sockPath: string, onEvent: (token: string, payload: HookPayload) => void): Promise<Server> {
+export function startHookServer(
+  sockPath: string,
+  onEvent: (token: string, payload: HookPayload) => void,
+  onGuard: (token: string, payload: HookPayload) => GuardDecision = () => null,
+): Promise<Server> {
   const dir = dirname(sockPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const st = lstatSync(dir);
@@ -32,7 +41,7 @@ export function startHookServer(sockPath: string, onEvent: (token: string, paylo
   if (st.mode & 0o077) chmodSync(dir, 0o700);
   rmSync(sockPath, { force: true });
   const server = createServer((req, res) => {
-    if (req.method !== 'POST' || req.url !== '/hook') {
+    if (req.method !== 'POST' || (req.url !== '/hook' && req.url !== '/guard')) {
       res.writeHead(404).end();
       return;
     }
@@ -44,6 +53,17 @@ export function startHookServer(sockPath: string, onEvent: (token: string, paylo
       if (body.length > 4 * 1024 * 1024) req.destroy();
     });
     req.on('end', () => {
+      if (req.url === '/guard') {
+        let decision: GuardDecision = null;
+        try {
+          if (token) decision = onGuard(token, JSON.parse(body) as HookPayload);
+        } catch {
+          /* malformed payload: no decision */
+        }
+        if (decision) res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(decision));
+        else res.writeHead(204).end();
+        return;
+      }
       res.writeHead(204).end();
       if (!token) return;
       try {

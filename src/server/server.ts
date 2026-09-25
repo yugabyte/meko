@@ -216,8 +216,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     core.sessions.row(req.params.id);
-    const r = get<{ markdown: string; updated_at: number }>(db, 'SELECT markdown, updated_at FROM designs WHERE session_id = ?', req.params.id);
-    return { markdown: r?.markdown ?? null, updatedAt: r?.updated_at ?? null };
+    const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number }>(
+      db, 'SELECT markdown, html, artifact_url, updated_at FROM designs WHERE session_id = ?', req.params.id);
+    return { markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null };
   });
 
   // ---- settings ----

@@ -147,6 +147,13 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (session_id, path)
   );
   `,
+  // 4: designs without plan mode. Sessions created before this keep plan mode for Design;
+  // a design can be a published Artifact (its HTML and claude.ai link) instead of markdown.
+  `
+  ALTER TABLE sessions ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE designs ADD COLUMN html TEXT;
+  ALTER TABLE designs ADD COLUMN artifact_url TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

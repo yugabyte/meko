@@ -28,6 +28,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
       per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
+- [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
+      `allow-same-origin`, and the frame's content policy still blocks network requests.
+- [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
+      (no answer means allow) so a slow or restarting server never blocks Claude.
 
 ## 3. Lifecycle and GitHub
 

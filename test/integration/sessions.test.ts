@@ -162,16 +162,64 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.sessions.changes(s.id)).rejects.toThrow(/worktree is gone/);
   });
 
-  it('captures the design and moves to Code when it is approved', async () => {
+  const designRow = (id: string) =>
+    get<{ markdown: string; html: string | null; artifact_url: string | null }>(env.core.db, 'SELECT markdown, html, artifact_url FROM designs WHERE session_id = ?', id);
+  const transcriptText = (claudeSessionId: string) => readFileSync(join(env.fakeDir, `${claudeSessionId}.jsonl`), 'utf8');
+
+  it('designs outside plan mode, guards the repo, and moves to Code when the design is approved', async () => {
     const p = await newProject();
-    const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'PLAN it' });
+    const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'DESIGN_MD it' });
     expect(s.stage).toBe('design');
-    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design');
-    expect(argvLog(env)[0].args).toEqual(expect.arrayContaining(['--permission-mode', 'plan']));
+    const designDir = join(env.core.paths.designs, s.id);
+    const first = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args;
+    expect(first).not.toContain('--permission-mode');
+    expect(first).toEqual(expect.arrayContaining(['--add-dir', designDir]));
+    expect(first.at(-1)).toContain(join(designDir, 'design.md')); // the prompt says where the design goes
+
+    const ready = await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design');
+    expect(ready.statusDetail).toBe('Design ready for your approval');
+    expect(ready.designUpdatedAt).toBeGreaterThan(0);
+    expect(designRow(s.id)).toEqual({ markdown: '# Design\n\nDo the thing.\n', html: null, artifact_url: null });
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-design-me.md'), 5000, 'design saved to Meko');
+
+    // While designing, edits inside the repo are denied and edits elsewhere go ahead.
+    await env.core.sessions.submit(s.id, 'EDIT_REPO');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'guarded turn');
+    const guard = readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(JSON.parse(guard[0].out).hookSpecificOutput).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: expect.stringMatching(/Design stage/) });
+    expect(guard[1].out).toBe('');
+    expect(env.core.sessions.get(s.id).status).toBe('idle'); // a turn that didn't touch the design isn't "ready" again
+
     await env.core.sessions.action(s.id, 'approve-design');
     expect(env.core.sessions.get(s.id).stage).toBe('code');
+    await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('The design is approved'), 10000, 'approval prompt');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'turn end after approval');
-    expect(env.meko.calls.some((c) => c.name === 'putArtifact')).toBe(true);
+
+    // Past Design, the guard lets edits through.
+    await env.core.sessions.submit(s.id, 'EDIT_REPO');
+    await waitFor(() => readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').length, (n) => n === 4, 10000, 'second guard check');
+    const after = readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(after[2].out).toBe('');
+  });
+
+  it('keeps a published Artifact as the design', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Big design', prompt: 'DESIGN_ARTIFACT please' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design');
+    const d = designRow(s.id)!;
+    expect(d.markdown).toBe('');
+    expect(d.html).toContain('<h1>Design</h1>');
+    expect(d.artifact_url).toBe('https://claude.ai/code/artifact/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b');
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-big-design.html'), 5000, 'artifact saved to Meko');
+    expect(env.meko.calls.some((c) => c.name === 'putArtifact' && c.args[0] === 'design-big-design.md')).toBe(false);
+    await expect(env.core.sessions.action(s.id, 'approve-design')).resolves.toMatchObject({ stage: 'code' });
+  });
+
+  it('refuses to approve a design that does not exist yet', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'No design', prompt: 'just think' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toThrow(/hasn't written a design/);
   });
 
   it('reports startup steps while a session starts', async () => {

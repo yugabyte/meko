@@ -14,8 +14,9 @@ your devserver, and you use it from a browser:
   (committed, uncommitted and untracked) with a diff per file.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
-- **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge → Cleanup. You approve the
-  design, opening the PR and merging. The server waits for reviews and CI and hands AgentK
+- **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge → Cleanup. Complex designs are
+  published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
+  markdown. You approve the design, opening the PR and merging. The server waits for reviews and CI and hands AgentK
   findings to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included.

@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.12 (implemented)</span>
+  <span class="label">Design · v0.13 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -355,6 +355,7 @@ flowchart LR
   <div class="grid2">
     <div class="card"><h3>New session</h3><p>You give it a name and, optionally, a first prompt and a base branch (the default is the project's default branch). The server fetches the base from <code>origin</code> and fast-forwards your local base branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside it, and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks, or local edits would be overwritten), the session starts from <code>origin/&lt;base&gt;</code> and the activity log says why.</p></div>
     <div class="card"><h3>Changes</h3><p>Clicking the <code>+N −N vs &lt;base&gt;</code> numbers in the footer opens a side panel with every file changed on the branch since it left the base: committed, uncommitted and untracked (ignored files are left out). Each file has a kind (A, M, D, R, U), its line counts, an <em>uncommitted</em> tag when it has uncommitted edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB; past that only line counts are shown. The footer counts use the same comparison, so they always match.</p></div>
+    <div class="card"><h3>Design panel</h3><p>During Design the panel opens as soon as the design exists and again whenever it's revised, at about 60% of the work area. An Artifact design is shown in a sandboxed frame (scripts allowed, no same-origin access, and a content policy that blocks network requests and limits scripts, styles and fonts to what Artifacts use), so the page can't read the login cookie or call the API. <b>Open on claude.ai</b> links to the published Artifact. A markdown design is rendered as sanitized HTML.</p></div>
     <div class="card"><h3>Side panels</h3><p>The design doc and the changes panel open on the right of the terminal, one at a time. Drag the panel's left edge (or focus it and use the arrow keys) to resize it; double-click the edge to switch between normal and widest. Each panel's width is remembered in the browser. The design doc also opens full page in a new tab (<code>/p/&lt;project&gt;/s/&lt;session&gt;/design</code>), where it can still be approved.</p></div>
     <div class="card"><h3>Starting</h3><p>Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session starts, the terminal shows its steps (updating the base branch and creating the worktree, starting Claude Code, loading, sending your task) with the current one animated and timed, plus the stage the session opens in. The header shows the current step too.</p></div>
     <div class="card"><h3>Keyboard</h3><p><code>⌘1–9</code> switches projects, <code>⌃Tab</code> cycles sessions, and <code>⌘K</code> opens a palette to jump to any session, create one, or search the project's datapacks. Keys pass through to the terminal whenever it has focus.</p></div>
@@ -398,6 +399,7 @@ flowchart LR
   certs/                   <span class="c"># self-signed pair, or symlinks to your own</span>
   app/0.4.1/  app/current → 0.4.1
   worktrees/&lt;project&gt;/&lt;session&gt;/   <span class="c"># git worktree, branch ak/&lt;session&gt;</span>
+  designs/&lt;session&gt;/design.md      <span class="c"># markdown design written during Design (Artifact designs live on claude.ai)</span>
 
 <span class="c"># config.toml (excerpt)</span>
 [repos]
@@ -433,7 +435,10 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
   status TEXT,                    <span class="c">-- working | needs_input | idle | exited | recovered</span>
   stage TEXT,                     <span class="c">-- design | code | pr | review | merge | cleanup | done</span>
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
+  plan_mode INTEGER,               <span class="c">-- 1: designs in Claude's plan mode (sessions from before v0.13)</span>
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
+<span class="k">CREATE TABLE</span> designs (         <span class="c">-- one per session: markdown, or an Artifact's page + claude.ai link</span>
+  session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT, updated_at INTEGER);
 <span class="k">CREATE TABLE</span> session_stages (  <span class="c">-- stage history: who moved it, and when</span>
   session_id TEXT, stage TEXT, entered_at INTEGER, left_at INTEGER, moved_by TEXT);
 <span class="k">CREATE TABLE</span> session_events (  <span class="c">-- every hook call; feeds badges + project activity</span>
@@ -473,7 +478,7 @@ stateDiagram-v2
   <div class="tablewrap"><table>
     <thead><tr><th>Stage</th><th>Claude</th><th>AgentK Local</th><th>Moves on when</th></tr></thead>
     <tbody>
-      <tr><td>1 · Design</td><td>Starts in plan mode (<code>--permission-mode plan</code>) with your task, reads the code, and writes a design.</td><td>Saves the design to the project's dedicated datapack and shows it in a side panel next to the terminal.</td><td>You click <b>Approve design</b>. Small tasks can skip this stage at creation.</td></tr>
+      <tr><td>1 · Design</td><td>Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to <code>~/.agent-k-local/designs/&lt;session&gt;/design.md</code>. It doesn't touch the repo.</td><td>Blocks file edits inside the worktree and main checkout (a <code>PreToolUse</code> guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's <code>PostToolUse</code> hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack, marks the session <em>Design ready</em>, and opens the design panel by itself.</td><td>You click <b>Approve design</b>, and the server sends the Code prompt ("The design is approved…"). Small tasks can skip this stage at creation. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog.</td></tr>
       <tr><td>2 · Code</td><td>Implements the design and runs the repo's tests and checks.</td><td>Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file.</td><td>You click <b>Open PR</b>. The button is disabled while Claude is mid-turn.</td></tr>
       <tr><td>3 · PR</td><td>Commits with the repo's own commit conventions, pushes the branch, and runs <code>gh pr create</code> with a summary taken from the design.</td><td>Records the PR number and URL and links them in the header.</td><td>Automatically, once the PR exists.</td></tr>
       <tr><td>4 · Review</td><td>When a review arrives, runs <code>/akr</code>: verifies each finding, fixes it, replies on every thread, votes, and pushes.</td><td>Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends <code>/akr</code> into the session.</td><td>You click <b>Merge</b>. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in.</td></tr>
@@ -543,7 +548,7 @@ stateDiagram-v2
     <div class="card"><h3>First run</h3><p>The installer prints a one-time setup link: <code>https://host:7777/setup?token=…</code>. You open it, choose a username and password, and can optionally enrol TOTP. The token stops working after it is used.</p></div>
     <div class="card"><h3>Sessions</h3><p>Passwords are hashed with scrypt. After login you get an <code>HttpOnly</code>, <code>Secure</code>, <code>SameSite=Strict</code> cookie that lasts 14 days, renewed as you use the app. Every WebSocket upgrade checks both the cookie and the <code>Origin</code> header.</p></div>
     <div class="card"><h3>TLS is mandatory</h3><p>Any address other than localhost requires HTTPS. You can point it at your own certificate from the corp CA, or let it generate a self-signed pair and show the fingerprint so you can trust it once on your laptop.</p></div>
-    <div class="card"><h3>Guard rails</h3><p>Failed logins are rate-limited, with a lockout after repeated failures. There is an audit log of logins and new sessions. Hooks use the local unix socket with a per-session token, never the network port.</p></div>
+    <div class="card"><h3>Guard rails</h3><p>Failed logins are rate-limited, with a lockout after repeated failures. There is an audit log of logins and new sessions. Hooks use the local unix socket with a per-session token, never the network port. The Design-stage edit guard asks the server over the same socket; if it gets no answer it lets the edit go ahead, so Claude is never stuck.</p></div>
   </div>
   <p style="color:var(--muted)">Later: passkeys (WebAuthn), and single sign-on with Google Workspace or another OIDC provider.</p>
 </section>

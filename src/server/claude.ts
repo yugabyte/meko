@@ -39,6 +39,28 @@ curl -s -o /dev/null --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
 exit 0
 `;
 
+/**
+ * Guard hook for file edits: asks the server whether the edit may go ahead and prints
+ * its decision (Claude Code reads it from stdout). During Design the server denies edits
+ * inside the repo. If the server can't be reached, it prints nothing and the edit goes
+ * ahead: the guard must never leave Claude stuck.
+ */
+const GUARD_SCRIPT = `#!/bin/sh
+# Written by agent-k-local. Asks the server whether a file edit may go ahead.
+[ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -sf --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
+  -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+  --data-binary @- http://localhost/guard 2>/dev/null
+exit 0
+`;
+
+/** File-editing tools the Design-stage guard checks. */
+export const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+
+export function guardScriptPath(paths: Paths): string {
+  return join(paths.run, 'guard.sh');
+}
+
 export function hookScriptPath(paths: Paths): string {
   return join(paths.run, 'hook.sh');
 }
@@ -53,14 +75,26 @@ export function writeHookFiles(paths: Paths): void {
   const script = hookScriptPath(paths);
   writeFileSync(script, HOOK_SCRIPT);
   chmodSync(script, 0o755);
+  const guard = guardScriptPath(paths);
+  writeFileSync(guard, GUARD_SCRIPT);
+  chmodSync(guard, 0o755);
   const cmd = { type: 'command', command: script, timeout: 5 };
   const all = [{ hooks: [cmd] }];
   const settings = {
+    // The design file lives outside the repo; writing it, and publishing the design as an
+    // Artifact (private by default), shouldn't stop for a permission prompt.
+    permissions: {
+      allow: [`Write(/${paths.designs}/**)`, `Edit(/${paths.designs}/**)`, 'Artifact'],
+    },
     hooks: {
       SessionStart: all,
       UserPromptSubmit: all,
-      // PreToolUse only for ExitPlanMode: that's where the design text is.
-      PreToolUse: [{ matcher: 'ExitPlanMode', hooks: [cmd] }],
+      PreToolUse: [
+        // ExitPlanMode carries the design text for sessions that still design in plan mode.
+        { matcher: 'ExitPlanMode', hooks: [cmd] },
+        // File edits are checked by the Design-stage guard.
+        { matcher: EDIT_TOOLS.join('|'), hooks: [{ type: 'command', command: guard, timeout: 5 }] },
+      ],
       // PostToolUse on every tool marks the session busy again after a permission prompt.
       PostToolUse: [{ matcher: '*', hooks: [cmd] }],
       PermissionRequest: [{ matcher: '*', hooks: [cmd] }],
@@ -81,6 +115,8 @@ export interface LaunchSpec {
   resume: boolean;
   name: string;
   planMode: boolean;
+  /** Extra directories Claude may work in (the session's design folder). */
+  addDirs: string[];
   appendSystemPrompt: string;
   prompt: string | null;
   env: Record<string, string>;
@@ -100,6 +136,7 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
     args.push('--session-id', spec.claudeSessionId, '--name', spec.name);
   }
   if (spec.planMode) args.push('--permission-mode', 'plan');
+  for (const d of spec.addDirs) args.push('--add-dir', d);
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
   if (spec.prompt) args.push(spec.prompt);
 

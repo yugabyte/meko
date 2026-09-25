@@ -58,6 +58,11 @@ export function ProjectView({
     return () => clearInterval(t);
   }, []);
   useEffect(() => setPanel(null), [session?.id]);
+  // During Design, show the design as soon as it's written, and again whenever it's revised.
+  const designAt = session?.stage === 'design' ? session.designUpdatedAt : null;
+  useEffect(() => {
+    if (designAt) setPanel('design');
+  }, [session?.id, designAt]);
 
   const act = async (action: SessionAction) => {
     if (!session) return;

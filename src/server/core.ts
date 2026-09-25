@@ -130,9 +130,13 @@ export class Core extends EventEmitter {
     } catch (e) {
       this.log.warn('could not update Claude Code folder trust', errMsg(e));
     }
-    this.hookServer = await startHookServer(this.paths.hookSock, (token, payload) => {
-      this.sessions.onHook(token, payload).catch((e) => this.log.error('hook handling failed', e));
-    });
+    this.hookServer = await startHookServer(
+      this.paths.hookSock,
+      (token, payload) => {
+        this.sessions.onHook(token, payload).catch((e) => this.log.error('hook handling failed', e));
+      },
+      (token, payload) => this.sessions.guard(token, payload),
+    );
     await this.tmux.ensureServer();
     await this.checkMeko();
     await this.sessions.recover();

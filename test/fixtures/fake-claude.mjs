@@ -19,25 +19,32 @@ const transcript = join(dir, `${sessionId}.jsonl`);
 appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value.
-const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt']);
+const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
   if (valued.has(args[i])) i++;
   else if (!args[i].startsWith('--')) prompt = args[i];
 }
 
+// Like Claude Code: a group's matcher is a regex on the tool name ('*' or none matches all).
+const matches = (matcher, tool) => !matcher || matcher === '*' || !tool || new RegExp(`^(?:${matcher})$`).test(tool);
+
+/** Runs the hooks for an event; returns what they printed (a PreToolUse decision, if any). */
 function hook(event, extra = {}) {
   const groups = settings.hooks?.[event] ?? [];
+  let out = '';
   for (const g of groups) {
+    if (!matches(g.matcher, extra.tool_name)) continue;
     for (const h of g.hooks) {
       const payload = JSON.stringify({ hook_event_name: event, session_id: sessionId, transcript_path: transcript, cwd: process.cwd(), ...extra });
       try {
-        execFileSync(h.command, { input: payload, stdio: ['pipe', 'ignore', 'ignore'] });
+        out += execFileSync(h.command, { input: payload, stdio: ['pipe', 'pipe', 'ignore'] }).toString();
       } catch {
         /* hooks never fail the session */
       }
     }
   }
+  return out;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,6 +60,24 @@ async function turn(text) {
     /* default */
   }
   await sleep(ms);
+  if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
+  if (text.includes('DESIGN_ARTIFACT')) {
+    // Like publishing with the Artifact tool: the page is a local file, the result has its link.
+    const page = join(dir, `design-${sessionId}.html`);
+    writeFileSync(page, '<!doctype html><html><head><title>Design</title></head><body><h1>Design</h1></body></html>');
+    hook('PostToolUse', {
+      tool_name: 'Artifact',
+      tool_input: { file_path: page, icon: 'doc' },
+      tool_response: 'Published https://claude.ai/code/artifact/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b (private).',
+    });
+  }
+  if (text.includes('EDIT_REPO')) {
+    // Asks the edit guard about a file in the repo and one outside it, and records the answers.
+    for (const file of [join(process.cwd(), 'src.ts'), join(dir, 'scratch.txt')]) {
+      const out = hook('PreToolUse', { tool_name: 'Write', tool_input: { file_path: file, content: 'x' } });
+      appendFileSync(join(dir, 'guard.jsonl'), JSON.stringify({ file, out }) + '\n');
+    }
+  }
   if (text.includes('PLAN')) {
     planWaiting = true;
     hook('PreToolUse', { tool_name: 'ExitPlanMode', tool_input: { plan: '# Design\n\nDo the thing.' } });

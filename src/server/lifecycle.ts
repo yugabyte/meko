@@ -1,9 +1,11 @@
 import type { Core } from './core.js';
-import { run } from './db.js';
+import { get, run } from './db.js';
+import { artifactUrlIn, isArtifactPublish, readArtifactHtml, readDesignFile } from './design.js';
 import { git, tryGit } from './git.js';
 import * as github from './github.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
+import type { HookPayload } from './hooks.js';
 import { HttpError } from './projects.js';
 import { dedicatedDatapack, parseSettings, projectRow, sessionRow, sessionRows, type SessionRow } from './store.js';
 
@@ -23,6 +25,8 @@ export class Lifecycle {
   private queuedReview = new Map<string, 'review' | 'review-people'>();
   private polling = false;
   private warned = new Map<string, number>();
+  /** Sessions whose design changed during the current turn. */
+  private designChanged = new Set<string>();
 
   constructor(private core: Core) {}
 
@@ -47,30 +51,87 @@ export class Lifecycle {
 
   // ---- design ----
 
-  async saveDesign(id: string, markdown: string): Promise<void> {
-    const now = Date.now();
-    run(this.db, `INSERT INTO designs(session_id, markdown, updated_at) VALUES (?, ?, ?)
-                  ON CONFLICT(session_id) DO UPDATE SET markdown = excluded.markdown, updated_at = excluded.updated_at`, id, markdown, now);
-    this.sessions.event(id, 'design', 'Design ready for approval');
+  /**
+   * Stores the parts of a session's design that changed (markdown, and for an Artifact its
+   * HTML and claude.ai link), and saves them to the project's dedicated datapack.
+   */
+  async saveDesign(id: string, d: { markdown?: string; html?: string; artifactUrl?: string }): Promise<void> {
+    const prev = get<{ markdown: string; html: string | null; artifact_url: string | null }>(
+      this.db, 'SELECT markdown, html, artifact_url FROM designs WHERE session_id = ?', id);
+    const markdown = d.markdown ?? prev?.markdown ?? '';
+    const html = d.html ?? prev?.html ?? null;
+    const url = d.artifactUrl ?? prev?.artifact_url ?? null;
+    run(this.db, `INSERT INTO designs(session_id, markdown, html, artifact_url, updated_at) VALUES (?, ?, ?, ?, ?)
+                  ON CONFLICT(session_id) DO UPDATE SET markdown = excluded.markdown, html = excluded.html,
+                    artifact_url = excluded.artifact_url, updated_at = excluded.updated_at`, id, markdown, html, url, Date.now());
     this.core.changed();
     const row = sessionRow(this.db, id);
     const dp = row && dedicatedDatapack(this.db, row.project_id);
-    if (row && dp) {
-      this.core.projects.ensureConversation(row.project_id)
-        .then((conv) => this.core.meko.putArtifact(`design-${row.slug}.md`, markdown, 'text/markdown', dp.id, projectAgentId(row.project_id), conv))
-        .catch((e) => this.core.log.warn(`saving design to Meko failed for ${id}`, errMsg(e)));
+    if (!row || !dp) return;
+    const files: [string, string, string][] = [];
+    if (d.markdown !== undefined) files.push([`design-${row.slug}.md`, d.markdown, 'text/markdown']);
+    if (d.html !== undefined) files.push([`design-${row.slug}.html`, d.html, 'text/html']);
+    if (!files.length) return;
+    this.core.projects.ensureConversation(row.project_id)
+      .then((conv) => Promise.all(files.map(([name, text, type]) =>
+        this.core.meko.putArtifact(name, text, type, dp.id, projectAgentId(row.project_id), conv))))
+      .catch((e) => this.core.log.warn(`saving design to Meko failed for ${id}`, errMsg(e)));
+  }
+
+  /** After an Artifact tool call during Design: keeps the published page and its link as the design. */
+  async captureArtifact(id: string, p: HookPayload): Promise<void> {
+    const input = p.tool_input ?? {};
+    if (!isArtifactPublish(input)) return;
+    const url = artifactUrlIn(JSON.stringify(p.tool_response ?? ''));
+    const html = readArtifactHtml(input.file_path, p.cwd);
+    if (!url && html === null) return;
+    await this.saveDesign(id, { ...(url ? { artifactUrl: url } : {}), ...(html !== null ? { html } : {}) });
+    this.designChanged.add(id);
+  }
+
+  /**
+   * At the end of a Design turn: picks up the markdown design file if Claude wrote or
+   * changed it. True when the design changed during this turn (file or Artifact).
+   */
+  async collectDesign(row: SessionRow): Promise<boolean> {
+    const md = readDesignFile(this.sessions.designFile(row));
+    if (md !== null) {
+      const prev = get<{ markdown: string }>(this.db, 'SELECT markdown FROM designs WHERE session_id = ?', row.id);
+      if (prev?.markdown !== md) {
+        const url = artifactUrlIn(md);
+        await this.saveDesign(row.id, { markdown: md, ...(url ? { artifactUrl: url } : {}) });
+        this.designChanged.add(row.id);
+      }
     }
+    return this.designChanged.delete(row.id);
+  }
+
+  /** The design is waiting for the user: say so in the activity log, the header and a notification. */
+  designReady(id: string): void {
+    this.sessions.event(id, 'design', 'Design ready for approval');
+    this.sessions.setStatus(id, 'needs_input', 'Design ready for your approval');
+    this.sessions.notifyUser(id, 'Design ready', 'Review and approve the design.');
   }
 
   async approveDesign(row: SessionRow): Promise<void> {
     if (row.stage !== 'design') throw new HttpError(409, 'This session is past the Design stage.');
-    if (!this.sessions.planPending.has(row.id)) {
-      throw new HttpError(409, "Claude hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
+    if (row.plan_mode) {
+      if (!this.sessions.planPending.has(row.id)) {
+        throw new HttpError(409, "Claude hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
+      }
+      // Claude's plan dialog has "Yes" selected by default.
+      await this.core.tmux.sendKeys(row.tmux_name, 'Enter');
+      this.sessions.planPending.delete(row.id);
+      this.designApproved(row.id, 'you');
+      return;
     }
-    // Claude's plan dialog has "Yes" selected by default.
-    await this.core.tmux.sendKeys(row.tmux_name, 'Enter');
-    this.sessions.planPending.delete(row.id);
+    if (!get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
+      throw new HttpError(409, "Claude hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
+    }
+    if (row.status === 'working' || row.status === 'starting') throw new HttpError(409, 'Claude is still working. Wait for the turn to finish.');
+    if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
     this.designApproved(row.id, 'you');
+    await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'approved'));
   }
 
   designApproved(id: string, by: 'you' | 'auto'): void {

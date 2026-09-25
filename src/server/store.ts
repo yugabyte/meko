@@ -55,6 +55,8 @@ export interface SessionRow {
   archived_at: number | null;
   recovered_at: number | null;
   interrupted: number;
+  /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
+  plan_mode: number;
 }
 
 export function parseSettings(json: string): ProjectSettings {
@@ -119,7 +121,7 @@ export interface SessionRuntime {
 }
 
 export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
-  const hasDesign = !!get(db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', r.id);
+  const design = get<{ updated_at: number }>(db, 'SELECT updated_at FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
     projectId: r.project_id,
@@ -140,7 +142,8 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
     busy: rt.busy,
-    hasDesign,
+    hasDesign: !!design,
+    designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
     usage: rt.usage,
     startup: r.status === 'starting' ? rt.startup : null,
