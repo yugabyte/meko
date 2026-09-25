@@ -64,6 +64,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetInt("sched.parallel", -1); got != 1 {
 		t.Errorf("sched.parallel = %d, want 1", got)
 	}
+	if got := cfg.GetInt("sched.cluster_slots.capacity", -1); got != sched.DefaultClusterSlots {
+		t.Errorf("sched.cluster_slots.capacity = %d, want %d", got, sched.DefaultClusterSlots)
+	}
 	if got := cfg.GetInt("sched.per_env_parallelism", -1); got != sched.DefaultPerEnvParallelism {
 		t.Errorf("sched.per_env_parallelism = %d, want %d", got, sched.DefaultPerEnvParallelism)
 	}
@@ -1979,6 +1982,52 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if got := cfg.GetBool("perf.bench.discard_first", false); got != perf.DefaultBenchDiscardFirst {
 		t.Errorf("perf.bench.discard_first = %v, want %v", got, perf.DefaultBenchDiscardFirst)
+	}
+	if got := cfg.GetFloat("perf.bench.fixed_rate_fraction", -1); got != perf.DefaultBenchFixedRateFraction {
+		t.Errorf("perf.bench.fixed_rate_fraction = %v, want %v", got, perf.DefaultBenchFixedRateFraction)
+	}
+	for key, want := range map[string]float64{
+		"perf.gate.max_band_pct":     perf.DefaultGateMaxBandPct,
+		"perf.live_arm.max_band_pct": perf.DefaultGateMaxBandPct,
+	} {
+		if got := cfg.GetFloat(key, -1); got != want {
+			t.Errorf("%s = %v, want %v", key, got, want)
+		}
+	}
+	if cfg.GetBool("perf.baseline.aa", true) {
+		t.Error("perf.baseline.aa must default false")
+	}
+	if !cfg.GetBool("perf.isolation.enabled", false) {
+		t.Error("perf.isolation.enabled must default true")
+	}
+	if cfg.GetBool("apps.ybk8s.guaranteed_qos", true) {
+		t.Error("apps.ybk8s.guaranteed_qos must default false")
+	}
+	for key, want := range map[string]string{
+		"perf.isolation.tserver_cpu":                  perf.DefaultIsolationTServerCPU,
+		"perf.isolation.tserver_memory":               perf.DefaultIsolationTServerMemory,
+		"perf.isolation.master_cpu":                   perf.DefaultIsolationMasterCPU,
+		"perf.isolation.master_memory":                perf.DefaultIsolationMasterMemory,
+		"perf.isolation.client_cpu":                   perf.DefaultIsolationClientCPU,
+		"perf.isolation.client_memory":                perf.DefaultIsolationClientMemory,
+		"perf.pgbench_uncached.shared_buffers":        perf.DefaultPgbenchUncachedSharedBuffers,
+		"perf.pgbench_uncached.file_cache_size_limit": perf.DefaultPgbenchUncachedFileCache,
+	} {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for key, want := range map[string]int{
+		"perf.pgbench_uncached.scale":   perf.DefaultPgbenchUncachedScale,
+		"perf.pgbench_uncached.clients": perf.DefaultPgbenchClients,
+		"perf.pgbench_uncached.jobs":    perf.DefaultPgbenchJobs,
+	} {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	if got := cfg.GetDuration("perf.ops_latency.poll_interval", -1); got != perf.DefaultOpsPollInterval {
+		t.Errorf("perf.ops_latency.poll_interval = %s, want %s", got, perf.DefaultOpsPollInterval)
 	}
 	benchDurs := map[string]time.Duration{
 		"perf.bench.warmup":               perf.DefaultBenchWarmup,

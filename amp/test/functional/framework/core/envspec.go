@@ -78,6 +78,10 @@ type EnvSpec struct {
 	Sharing Sharing
 	Shape   Shape
 	Weight  int // lease units; 0 → shape default
+	// ClusterSlots is how many self-provisioned stacks the test stands up on the
+	// run's k8s cluster. The scheduler holds that many cluster-wide slots, shared
+	// with every other run on the cluster, before the body starts. 0 takes none.
+	ClusterSlots int
 	// FaultsSharedInfra marks a test that faults the control plane or the
 	// YugabyteDB under it. Sharing: Exclusive does not cover this — under
 	// sharedk8s it buys a cluster, not a control plane. The scheduler runs such a

@@ -57,7 +57,7 @@ func (s *scriptExec) recorded() []string {
 // available scripts "command -v sysbench" as found.
 func available() *scriptExec {
 	s := &scriptExec{}
-	s.on("command -v sysbench", exec.Result{ExitCode: 0, Stdout: "/usr/bin/sysbench\n"})
+	s.on("command -v sysbench", exec.Result{ExitCode: 0, Stdout: "probe-rc=0\n"})
 	return s
 }
 
@@ -144,7 +144,7 @@ func TestRunCommandConstruction(t *testing.T) {
 
 func TestMissingBinaryDetection(t *testing.T) {
 	ex := &scriptExec{}
-	ex.on("command -v sysbench", exec.Result{ExitCode: 1, Stderr: "not found"})
+	ex.on("command -v sysbench", exec.Result{ExitCode: 0, Stdout: "probe-rc=1\n"})
 
 	if err := sysbench.Prepare(context.Background(), ex, sysbench.PrepareOptions{}); err == nil {
 		t.Fatal("want an error when sysbench is missing")

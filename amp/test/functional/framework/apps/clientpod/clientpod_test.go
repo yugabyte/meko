@@ -230,6 +230,22 @@ func TestPodManifestRendersImagePullSecrets(t *testing.T) {
 	}
 }
 
+func TestPodManifestGuaranteedAndPinned(t *testing.T) {
+	m := podManifest(Spec{Name: "p", Image: "img", CPU: "2", Memory: "4Gi",
+		NodeSelector: map[string]string{"cloud.google.com/gke-nodepool": "default-big"}})
+	y := "  nodeSelector:\n    \"cloud.google.com/gke-nodepool\": \"default-big\"\n"
+	if !strings.Contains(m, y) {
+		t.Errorf("manifest missing the node selector:\n%s", m)
+	}
+	res := "      resources:\n        requests:\n          cpu: \"2\"\n          memory: \"4Gi\"\n        limits:\n          cpu: \"2\"\n          memory: \"4Gi\"\n"
+	if !strings.Contains(m, res) {
+		t.Errorf("limits must equal requests:\n%s", m)
+	}
+	if strings.Contains(podManifest(Spec{Name: "p", Image: "img"}), "resources:") {
+		t.Error("no CPU/Memory set, manifest should omit resources")
+	}
+}
+
 // TestK8sExecBindsToStartedPod: after Start, Exec runs commands INSIDE the pod
 // (kubectl exec pod/<name>), the wiring the combined-stress workloads use.
 func TestK8sExecBindsToStartedPod(t *testing.T) {

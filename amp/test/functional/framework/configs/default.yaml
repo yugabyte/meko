@@ -21,6 +21,14 @@ owner: "ampqa"
 sched:
   # Total environments that may exist at once across the whole run.
   capacity: 8
+  # cluster_slots caps the stacks self-provisioning tests (EnvSpec.ClusterSlots:
+  # a benchmark with its live arm takes 6) stand up on the run's k8s cluster,
+  # across EVERY run pointed at it, via the ConfigMap default/ampqa-cluster-slots.
+  # A test waits for its slots before its body and its timeout start. Only runs
+  # naming a cluster (apps.ybk8s.kubecontext/kubeconfig, env.ampstack.context,
+  # env.sharedk8s.context) take part. 0 turns the cap off.
+  cluster_slots:
+    capacity: 12
   # Worker-pool size (default for --parallel; an explicit flag wins).
   parallel: 1
   # SHARED tests packed onto one shared env (default for --per-env-parallelism).
@@ -974,6 +982,9 @@ apps:
     master_memory: "1Gi"
     tserver_cpu: "0.5"
     tserver_memory: "2Gi"
+    # Limits equal to requests (Guaranteed QoS). Off: the chart's own limits
+    # stand and the pods burst into whatever their neighbours leave.
+    guaranteed_qos: false
     # reach: tailnet (default, only mode) resolves tserver pod IPs (a ClusterIP is
     # not routable from the coordinator).
     reach: "tailnet"
@@ -2172,6 +2183,9 @@ perf:
     floor_pct: 5.0
     # min_runs is the history floor below which a datapoint is no_signal.
     min_runs: 5
+    # A band wider than this means one run cannot resolve anything short of a
+    # collapse, so the datapoint is reported "noisy" and left to the trend.
+    max_band_pct: 50.0
   # baseline.live runs the SAME workload on a second set of stacks deployed
   # from a prior amp release, CONCURRENTLY with the run's own, and gates
   # current-vs-that under identical cluster conditions (thresholds:
@@ -2189,15 +2203,21 @@ perf:
     # it reports is this harness measuring its own noise. Run 9cadd192 reported
     # lifecycle.delete_fork_branch +118.2% that way.
     allow_same_image: false
-  # live_arm turns the two arms' per-datapoint deltas into one verdict.
+    # aa runs the arm on the image under test on purpose, never fails on the
+    # live verdict, and stores its deltas under the A/A load signature. Those
+    # deltas are the arm-to-arm noise model every A/B run reads its bands from.
+    aa: false
+  # live_arm turns the two arms' per-datapoint deltas into one verdict. Where
+  # perf.gate.min_runs A/A runs exist (perf.baseline.aa) a datapoint's allowance
+  # is its A/A band, |median| + mad_k x MAD of the A/A deltas. Otherwise it is
+  # the flat throughput_drop_pct / latency_rise_pct below, which
+  # use_history_band may widen to the portal's cross-run dispersion. With pairs
+  # (provision i or iteration i of each arm) a violation also needs a sign test:
+  # enough pairs worse for one-sided p <= 0.125, which for three pairs is all three.
   live_arm:
-    # use_history_band raises a datapoint's allowance to its own trailing
-    # dispersion from the portal, max(perf.gate.mad_k x MAD%, perf.gate.floor_pct).
-    # It only ever widens: a metric whose series is steady keeps the flat
-    # throughput_drop_pct / latency_rise_pct below. The band is CROSS-RUN
-    # dispersion standing in for arm-to-arm dispersion, which nothing measures
-    # yet; see the note on liveArmPolicy.
     use_history_band: true
+    # An allowance past this is reported "noisy" and not failed on.
+    max_band_pct: 50.0
     # A datapoint this many times past its allowance fails on its own.
     gross_factor: 2.0
     # Otherwise it takes this many datapoints past their allowance in one run.
@@ -2229,6 +2249,20 @@ perf:
   # Timeouts.
   ready_timeout: "5m"
   health_timeout: "5m"
+  # isolation is the resource shape of a benchmark stack (tpcc, pgbench,
+  # sysbench, pgbench_uncached, latency_topology, and the lifecycle/microbench
+  # arms): tservers, masters and the client pod pinned to arm_node_selector with
+  # limits equal to requests. Unisolated, a 0.5-CPU tserver burst into whatever
+  # its neighbours left: iterations on one stack agreed to 1% while stacks
+  # spread 20%. Off marks the load signature "-shared", a separate series.
+  isolation:
+    enabled: true
+    tserver_cpu: "2"
+    tserver_memory: "4Gi"
+    master_cpu: "1"
+    master_memory: "2Gi"
+    client_cpu: "2"
+    client_memory: "4Gi"
   # bench is the multi-iteration benchmark HARNESS shared by every perf workload
   # (perf/tpcc, perf/pgbench). A workload is prepared ONCE (schema + initial
   # load), then driven for a discarded warmup + N measured iterations; the kept
@@ -2239,7 +2273,9 @@ perf:
   # any per-workload duration knob).
   bench:
     # iterations is the number of MEASURED runs (excludes the warmup below).
-    iterations: 3
+    # Iterations on one stack agree to ~1%, so a stack buys more than an
+    # iteration does: see perf.provisions.
+    iterations: 2
     # warmup is one discarded run before the measured iterations (0 → skip). It
     # absorbs cold-cache / JIT / compaction warmup so the measured runs are steady.
     warmup: "30s"
@@ -2249,7 +2285,11 @@ perf:
     cooldown: "0s"
     # discard_first drops the first MEASURED iteration from the aggregate (still
     # recorded) — a second line of defence against a not-fully-warm first run.
-    discard_first: true
+    discard_first: false
+    # fixed_rate_fraction runs one more measured window at this fraction of the
+    # saturated median tps, the lowest any concurrent arm proposed. Latency is
+    # gated there: at saturation it is queueing delay. 0 skips it.
+    fixed_rate_fraction: 0.6
     # sample_interval requests periodic in-run progress (for the time series);
     # a workload whose tool cannot report progress leaves the series empty.
     sample_interval: "1s"
@@ -2312,6 +2352,15 @@ perf:
     # dev command. The perf/pgbench TEST times its measured iterations by
     # perf.bench.measurement_duration instead (the harness owns run length).
     duration: "90s"
+  # pgbench_uncached is perf/pgbench with shared_buffers and the LFC capped far
+  # under the dataset (scale 50 is ~750 MiB), so the steady state reads through
+  # the pageserver. It reports pgbench_uncached.lfc_hit_pct as proof the cap bit.
+  pgbench_uncached:
+    scale: 50
+    clients: 8
+    jobs: 2
+    shared_buffers: "128MB"
+    file_cache_size_limit: "128MB"
   # sysbench is the perf/sysbench load shape: sysbench's bundled oltp_* lua
   # workloads over the pgsql driver. sysbench is a distro package — the test
   # apt-installs it into the (Debian/Ubuntu-family) client pod at deploy, no
@@ -2421,7 +2470,11 @@ perf:
     # create is the exception: it splits cold from warm by node, so each of
     # those two keys carries only the repeats that landed in its bucket, and on
     # a one-node stack cold has a single sample.
-    repeats: 5
+    repeats: 10
+    # poll_interval is the fixed cadence tasks are polled at, so an operation's
+    # end-to-end time is resolved to it. The client's default backoff (250ms
+    # doubling to 2s) read a 1.6s operation as up to 3.75s.
+    poll_interval: "100ms"
     # seed_rows is the parent dataset a fork is timed against, sized so
     # copy-on-write behaviour is visible rather than assumed. batch_rows is one
     # INSERT ... SELECT of that load; payload_bytes is the per-row filler.

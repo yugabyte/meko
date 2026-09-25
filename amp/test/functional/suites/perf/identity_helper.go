@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os/exec"
 	"strings"
 	"time"
@@ -34,6 +35,9 @@ type Identity struct {
 	Commit             string // framework rev, best-effort ("" when unavailable)
 	LoadSignature      string // deterministic hash of the load config (see LoadFields)
 	LoadShape          string // hash of the load SHAPE only (see LoadShapeSignature)
+	// AALoadSignature is the signature this load carries on an A/A run, where
+	// the arm-to-arm noise model lives.
+	AALoadSignature string
 }
 
 // LoadFields is the load configuration that MUST be identical for two results to
@@ -58,6 +62,10 @@ type LoadFields struct {
 	Cycles int `json:"cycles,omitempty"`
 	// Bumped when a harness change alters what the numbers mean, breaking the series.
 	Harness string `json:"harness,omitempty"`
+	// FixedRatePct is the fixed-rate run's target as a percent of saturated tps.
+	FixedRatePct int `json:"fixed_rate_pct,omitempty"`
+	// AA marks an A/A run: both arms on one image, so its deltas are noise.
+	AA bool `json:"aa,omitempty"`
 }
 
 // LoadSignature is a deterministic short hash of the load config. Encoding a
@@ -73,7 +81,31 @@ func LoadSignature(f LoadFields) string {
 // "3" = the provisions run CONCURRENTLY, so every number includes co-stack
 // contention; not comparable with sequential-provision history.
 // "4" = a live-baseline arm doubles the concurrent stacks by default.
-const benchHarnessRev = "4"
+// "5" = stacks pinned and Guaranteed QoS, two iterations, latency from the
+// fixed-rate run.
+const benchHarnessRev = "5"
+
+func benchHarness(cfg perfConfig) string { return benchHarnessRev + cfg.isolationSuffix() }
+
+// isolationSuffix marks a harness rev whose stacks ran unisolated, a separate series.
+func (c perfConfig) isolationSuffix() string {
+	if !c.Isolation.Enabled {
+		return "-shared"
+	}
+	return ""
+}
+
+// forLiveArm is the identity a live-arm run stores under: the A/A signature on
+// an A/A run, so its numbers and deltas never join the A/B series. Tests with
+// no live arm keep their own signature on an A/A run.
+func (id Identity) forLiveArm(c *core.Config) Identity {
+	if liveBaselineFromConfig(c).AA {
+		id.LoadSignature = id.AALoadSignature
+	}
+	return id
+}
+
+func fixedRatePct(bc BenchConfig) int { return int(math.Round(bc.FixedRateFraction * 100)) }
 
 // LoadShapeSignature hashes the load SHAPE only: the same fields minus the
 // harness cadence (iterations, warmup, measurement duration). Two runs with the
@@ -84,7 +116,7 @@ const benchHarnessRev = "4"
 // clients, jobs, RF, warehouses, tables, script, rows, cycles) still has to be
 // identical.
 func LoadShapeSignature(f LoadFields) string {
-	f.Iterations, f.WarmupMS, f.MeasurementMS = 0, 0, 0
+	f.Iterations, f.WarmupMS, f.MeasurementMS, f.FixedRatePct = 0, 0, 0, 0
 	return LoadSignature(f)
 }
 
@@ -99,7 +131,8 @@ func loadFieldsTPCC(bc BenchConfig, cfg perfConfig) LoadFields {
 		MeasurementMS: bc.MeasurementDuration.Milliseconds(),
 		RF:            cfg.RF,
 		Warehouses:    cfg.Warehouses,
-		Harness:       benchHarnessRev,
+		Harness:       benchHarness(cfg),
+		FixedRatePct:  fixedRatePct(bc),
 	}
 }
 
@@ -114,7 +147,8 @@ func loadFieldsPgbench(bc BenchConfig, cfg perfConfig, params pgbenchParams) Loa
 		Clients:       params.Clients,
 		Jobs:          params.Jobs,
 		RF:            cfg.RF,
-		Harness:       benchHarnessRev,
+		Harness:       benchHarness(cfg),
+		FixedRatePct:  fixedRatePct(bc),
 	}
 }
 
@@ -139,8 +173,11 @@ func buildIdentity(variant string, ybCfg ybk8s.Config, ampCtrl, ampEndpoint, com
 // measures through, and both signatures of the load it drives.
 func identityFromConfig(c *core.Config, variant, commit string, load LoadFields) Identity {
 	amp := ampstack.FromConfig(c)
-	return buildIdentity(variant, ybk8s.FromConfig(c), amp.ControllerImage, amp.EndpointImage, commit,
+	id := buildIdentity(variant, ybk8s.FromConfig(c), amp.ControllerImage, amp.EndpointImage, commit,
 		LoadSignature(load), LoadShapeSignature(load))
+	load.AA = true
+	id.AALoadSignature = LoadSignature(load)
+	return id
 }
 
 // ybImageRef is the resolved "registry:tag" YB image, or "" when neither is set.

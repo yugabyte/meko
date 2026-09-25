@@ -2,7 +2,6 @@ package perf
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,28 +40,6 @@ func TestPickBaselineTag(t *testing.T) {
 
 func benchOf(tps, p95 float64) BenchResult {
 	return BenchResult{TPS: aggregate([]float64{tps}), LatencyP95: aggregate([]float64{p95})}
-}
-
-func TestLiveBaselineGate(t *testing.T) {
-	thr := float64Thresholds{DropPct: 20, RisePct: 35}
-
-	if table, err := liveBaselineGate(benchOf(95, 110), benchOf(100, 100), thr, "0.1-x"); err != nil {
-		t.Fatalf("a 5%% drop and a 10%% rise inside the thresholds failed: %v\n%s", err, table)
-	}
-	_, err := liveBaselineGate(benchOf(70, 100), benchOf(100, 100), thr, "0.1-x")
-	if err == nil || !strings.Contains(err.Error(), "tps") {
-		t.Fatalf("a 30%% tps drop past the 20%% threshold must regress: %v", err)
-	}
-	_, err = liveBaselineGate(benchOf(100, 150), benchOf(100, 100), thr, "0.1-x")
-	if err == nil || !strings.Contains(err.Error(), "latency_p95") {
-		t.Fatalf("a 50%% p95 rise past the 35%% threshold must regress: %v", err)
-	}
-	if _, err := liveBaselineGate(benchOf(200, 50), benchOf(100, 100), thr, "0.1-x"); err != nil {
-		t.Fatalf("an improvement must not regress: %v", err)
-	}
-	if _, err := liveBaselineGate(benchOf(0, 0), benchOf(100, 100), thr, "0.1-x"); err != nil {
-		t.Fatalf("metrics the workload did not produce must be skipped: %v", err)
-	}
 }
 
 func TestLocalGateItems(t *testing.T) {

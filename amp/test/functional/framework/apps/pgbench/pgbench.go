@@ -147,11 +147,11 @@ func quietTrace(cmd string) string {
 // an error naming the artifact-deploy route, rather than a bare "not found"
 // exec failure downstream.
 func checkAvailable(ctx context.Context, ex exec.RemoteExecutor) error {
-	res, err := ex.Run(ctx, "command -v pgbench")
+	ok, err := exec.HasCommand(ctx, ex, "pgbench")
 	if err != nil {
 		return fmt.Errorf("check pgbench availability: %w", err)
 	}
-	if res.ExitCode != 0 {
+	if !ok {
 		return fmt.Errorf("%s", missingBinaryHint)
 	}
 	return nil

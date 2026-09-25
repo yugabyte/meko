@@ -16,7 +16,7 @@ import (
 // "ysql_bench: client 5 receiving", with the `-P` progress lines lost off the end.
 func TestBothInitAndRunSuppressTheTrace(t *testing.T) {
 	ex := (&scriptExec{}).
-		on("command -v pgbench", exec.Result{Stdout: "/usr/bin/pgbench\n"}).
+		on("command -v pgbench", exec.Result{Stdout: "probe-rc=0\n"}).
 		on("pgbench", exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"})
 	conn := pg.ConnInfo{Host: "h", Port: 5433, User: "u", Password: "p", Database: "d"}
 

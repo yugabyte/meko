@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"regexp"
 	"strconv"
 
@@ -69,7 +70,7 @@ func init() {
 		Name:        testNameSysbench,
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe, ClusterSlots: benchClusterSlots},
 		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Run sysbench (pgsql driver, bundled oltp_* lua workloads) through an amp compute endpoint backed by a co-located YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
@@ -194,6 +195,9 @@ func (w *sysbenchWorkload) RunOnce(ctx context.Context, ex exec.RemoteExecutor, 
 		Duration:       p.Duration,
 		ReportInterval: p.SampleInterval,
 	}
+	if p.Rate > 0 {
+		opts.ExtraArgs = append(opts.ExtraArgs, fmt.Sprintf("--rate=%d", max(int(math.Round(p.Rate)), 1)))
+	}
 	res, err := sysbench.Run(ctx, ex, opts)
 	s := Sample{
 		TPS:          res.TPS,
@@ -227,9 +231,8 @@ func parseSysbenchProgress(raw string) []SamplePoint {
 	return series
 }
 
-// sysbenchDatapoints turns the aggregate into the tier's datapoints: the GATED
-// medians (tps higher-is-better; latencies lower-is-better) and the
-// informational .cv noise signal per metric.
+// sysbenchDatapoints turns the aggregate into the tier's datapoints: saturated
+// tps and the fixed-rate latencies gated, saturated latencies reported.
 func sysbenchDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 	return splitDatapoints(sysbenchMetricSpecs(res))
 }
@@ -238,14 +241,14 @@ func sysbenchDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 // accessors the shape gates need (sysbench --report-interval carries tps and
 // latency; its progress lines report no percentile, so p95 gets no FromPoint).
 func sysbenchMetricSpecs(res BenchResult) []metricSpec {
-	return []metricSpec{
+	return append([]metricSpec{
 		{Name: "sysbench.tps", Unit: "tps", Dir: core.HigherIsBetter, Stats: res.TPS,
 			FromSample: sampleTPS, FromPoint: pointTPS},
 		{Name: "sysbench.latency_avg", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg,
-			FromSample: sampleLatencyAvg, FromPoint: pointLatency},
+			FromSample: sampleLatencyAvg, FromPoint: pointLatency, Info: true},
 		{Name: "sysbench.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95,
-			FromSample: sampleLatencyP95},
-	}
+			FromSample: sampleLatencyP95, Info: true},
+	}, fixedRateSpecs("sysbench", "latency_avg", res)...)
 }
 
 // loadFieldsSysbench is the perf/sysbench load: the shared bench cadence plus
@@ -261,6 +264,7 @@ func loadFieldsSysbench(bc BenchConfig, cfg perfConfig, params sysbenchParams) L
 		Tables:        params.Tables,
 		Script:        params.Script,
 		RF:            cfg.RF,
-		Harness:       benchHarnessRev,
+		Harness:       benchHarness(cfg),
+		FixedRatePct:  fixedRatePct(bc),
 	}
 }

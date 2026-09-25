@@ -141,11 +141,11 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 // an error naming the install route, rather than a bare "not found" exec
 // failure downstream.
 func checkAvailable(ctx context.Context, ex exec.RemoteExecutor) error {
-	res, err := ex.Run(ctx, "command -v sysbench")
+	ok, err := exec.HasCommand(ctx, ex, "sysbench")
 	if err != nil {
 		return fmt.Errorf("check sysbench availability: %w", err)
 	}
-	if res.ExitCode != 0 {
+	if !ok {
 		return fmt.Errorf("%s", missingBinaryHint)
 	}
 	return nil

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,7 +39,7 @@ func init() {
 		Name:        testNameTPCC,
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe, ClusterSlots: benchClusterSlots},
 		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Run BenchBase TPC-C at a fixed scale through an amp compute endpoint backed by a co-located RF3 YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
@@ -193,6 +195,9 @@ func (w *tpccWorkload) RunOnce(ctx context.Context, ex exec.RemoteExecutor, p Ru
 	spec.Load = benchbase.Ptr(false)
 	spec.Execute = benchbase.Ptr(true)
 	spec.Duration = p.Duration
+	if p.Rate > 0 {
+		spec.Rate = strconv.Itoa(max(int(math.Round(p.Rate)), 1))
+	}
 	res, err := benchbase.Run(ctx, ex, spec)
 	s := benchbaseSample(res)
 	if err != nil {
@@ -215,9 +220,8 @@ func benchbaseSample(res benchbase.Result) Sample {
 	}
 }
 
-// tpccDatapoints turns the aggregate into the tier's datapoints: the GATED
-// medians (throughput higher-is-better; p95/p99/median latency lower-is-better)
-// and the informational .cv noise signal per metric.
+// tpccDatapoints turns the aggregate into the tier's datapoints: saturated
+// throughput and the fixed-rate latencies gated, saturated latencies reported.
 func tpccDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 	return splitDatapoints(tpccMetricSpecs(res))
 }
@@ -226,12 +230,12 @@ func tpccDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 // the shape gates need. BenchBase reports no periodic progress, so no FromPoint
 // is set and the intra-run decay shape is skipped for TPC-C.
 func tpccMetricSpecs(res BenchResult) []metricSpec {
-	return []metricSpec{
+	return append([]metricSpec{
 		{Name: "tpcc.throughput", Unit: "req/s", Dir: core.HigherIsBetter, Stats: res.TPS, FromSample: sampleTPS},
-		{Name: "tpcc.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95, FromSample: sampleLatencyP95},
-		{Name: "tpcc.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99, FromSample: sampleLatencyP99},
-		{Name: "tpcc.latency_median", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg, FromSample: sampleLatencyAvg},
-	}
+		{Name: "tpcc.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95, FromSample: sampleLatencyP95, Info: true},
+		{Name: "tpcc.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99, FromSample: sampleLatencyP99, Info: true},
+		{Name: "tpcc.latency_median", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg, FromSample: sampleLatencyAvg, Info: true},
+	}, fixedRateSpecs("tpcc", "latency_median", res)...)
 }
 
 // gateOutcome is the pure result of the baseline gate: the datapoints (with

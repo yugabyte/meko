@@ -201,6 +201,7 @@ available), distinct from a genuine all-pass.`,
 				},
 				Capacity:          cfg.GetInt("sched.capacity", sched.DefaultCapacity),
 				PerEnvParallelism: perEnv,
+				ClusterSlots:      sched.ClusterSlotsFromConfig(cfg, log.Printf),
 			}
 
 			// Provider selection. --env-provider forces one; otherwise auto picks by

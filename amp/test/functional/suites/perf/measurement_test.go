@@ -1,0 +1,399 @@
+package perf
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+)
+
+func TestSignTestK(t *testing.T) {
+	for n, want := range map[int]int{1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 5, 10: 8} {
+		if got := signTestK(n); got != want {
+			t.Errorf("signTestK(%d) = %d, want %d", n, got, want)
+		}
+	}
+}
+
+func pairedGate(t *testing.T, pairs []float64, pol liveArmPolicy) (string, error) {
+	t.Helper()
+	cur := []core.Datapoint{{Name: "x.tps", Value: 70, Unit: "tps", Direction: core.HigherIsBetter}}
+	base := []core.Datapoint{{Name: "x.tps", Value: 100, Unit: "tps", Direction: core.HigherIsBetter}}
+	pol.Pairs = map[string][]float64{"x.tps": pairs}
+	table, _, err := liveArmGate(cur, base, nil, nil, pol, "0.1")
+	return table, err
+}
+
+func TestLiveArmGatePairsNeedSignAgreement(t *testing.T) {
+	pol := strictPolicy(float64Thresholds{DropPct: 20, RisePct: 35})
+	if _, err := pairedGate(t, []float64{30, 28, 35}, pol); err == nil {
+		t.Error("three pairs all 28-35% worse must fail")
+	}
+	table, err := pairedGate(t, []float64{60, 30, -5}, pol)
+	if err != nil {
+		t.Errorf("a median of 30%% carried by two of three pairs is split, not a regression: %v", err)
+	}
+	if !strings.Contains(table, "2/3") || !strings.Contains(table, "split") {
+		t.Errorf("the table must show the pair count and the split verdict:\n%s", table)
+	}
+}
+
+func TestLiveArmGateUsesMedianPairDelta(t *testing.T) {
+	pol := strictPolicy(float64Thresholds{DropPct: 20, RisePct: 35})
+	// The aggregates say -30%, the pairs say 5-10%: the pairs are the measurement.
+	if _, err := pairedGate(t, []float64{5, 10, 8}, pol); err != nil {
+		t.Errorf("median pair delta 8%% is inside 20%%: %v", err)
+	}
+}
+
+func TestLiveArmGateAABandReplacesFlatThreshold(t *testing.T) {
+	pol := strictPolicy(float64Thresholds{DropPct: 20, RisePct: 35})
+	pol.AABands = map[string]float64{"x.tps": 6}
+	if _, err := pairedGate(t, []float64{9, 10, 11}, pol); err == nil {
+		t.Error("10% worse against a 6% A/A band must fail even though the flat threshold is 20%")
+	}
+}
+
+func TestLiveArmGateNoisyIsNotFailed(t *testing.T) {
+	pol := strictPolicy(float64Thresholds{DropPct: 20, RisePct: 35})
+	pol.AABands = map[string]float64{"x.tps": 70}
+	pol.MaxBandPct = 50
+	table, err := pairedGate(t, []float64{80, 90, 95}, pol)
+	if err != nil {
+		t.Errorf("an allowance past max_band_pct is reported, not failed: %v", err)
+	}
+	if !strings.Contains(table, "noisy") {
+		t.Errorf("want a noisy verdict:\n%s", table)
+	}
+}
+
+func TestPhasePairs(t *testing.T) {
+	cur := []phaseResult{
+		{Name: "load", Group: "load", MS: 110, Iter: 1},
+		{Name: "load", Group: "load", MS: 120, Iter: 2},
+		{Name: "ins_1", Group: "ins", MS: 50},
+		{Name: "ins_2", Group: "ins", MS: 60},
+	}
+	base := []phaseResult{
+		{Name: "load", Group: "load", MS: 100, Iter: 2},
+		{Name: "load", Group: "load", MS: 100, Iter: 1},
+		{Name: "ins_1", Group: "ins", MS: 50},
+	}
+	got := phasePairs(cur, base, "p.")
+	if l := got["p.load"]; len(l) != 2 || l[0] != 10 || l[1] != 20 {
+		t.Errorf("load pairs = %v, want [10 20] paired by iteration", l)
+	}
+	if l := got["p.ins"]; len(l) != 1 || l[0] != 0 {
+		t.Errorf("ins pairs = %v, want [0]: ins_2 has no baseline twin", l)
+	}
+}
+
+func TestProvisionPairs(t *testing.T) {
+	spec := benchWorkloadSpec{datapoints: pgbenchDatapoints}
+	bench := func(tps float64) BenchResult { return BenchResult{TPS: aggregate([]float64{tps})} }
+	got := provisionPairs(spec, []BenchResult{bench(90), bench(100)}, []BenchResult{bench(100), bench(80)})
+	if l := got["pgbench.tps"]; len(l) != 2 || l[0] != 10 || l[1] != -25 {
+		t.Errorf("pairs = %v, want [10 -25]", l)
+	}
+}
+
+func TestRateBarrierTakesLowestPositive(t *testing.T) {
+	b := newRateBarrier(3)
+	b.arrive(300)
+	b.arrive(0)
+	b.arrive(0) // a second arrival from a finished barrier is ignored
+	b.arrive(250)
+	got, err := b.wait(context.Background())
+	if err != nil || got != 300 {
+		t.Errorf("wait = %v, %v; want 300 (the third arrival closed it)", got, err)
+	}
+	b = newRateBarrier(2)
+	b.arrive(400)
+	b.arrive(250)
+	if got, _ := b.wait(context.Background()); got != 250 {
+		t.Errorf("want the lowest proposal 250, got %v", got)
+	}
+}
+
+type rateWorkload struct {
+	tps   float64
+	rates []float64
+}
+
+func (w *rateWorkload) Name() string                                       { return "rate" }
+func (w *rateWorkload) Prepare(context.Context, exec.RemoteExecutor) error { return nil }
+func (w *rateWorkload) RunOnce(_ context.Context, _ exec.RemoteExecutor, p RunParams) (Sample, error) {
+	w.rates = append(w.rates, p.Rate)
+	if p.Rate > 0 {
+		return Sample{TPS: p.Rate, LatencyAvgMS: 5, LatencyP95MS: 9}, nil
+	}
+	return Sample{TPS: w.tps, LatencyAvgMS: 20, LatencyP95MS: 40}, nil
+}
+
+func TestRunBenchmarkFixedRate(t *testing.T) {
+	w := &rateWorkload{tps: 1000}
+	bc := BenchConfig{Iterations: 2, FixedRateFraction: 0.6, MeasurementDuration: time.Second}
+	res, err := RunBenchmark(context.Background(), nil, w, bc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.rates) != 3 || w.rates[0] != 0 || w.rates[2] != 600 {
+		t.Fatalf("rates = %v, want two unthrottled runs then one at 600", w.rates)
+	}
+	if res.FixedTarget != 600 || res.FixedP95.Median != 9 {
+		t.Errorf("fixed target %v p95 %v, want 600 and 9", res.FixedTarget, res.FixedP95.Median)
+	}
+
+	w = &rateWorkload{tps: 1000}
+	bc.RateGate = func(context.Context, float64) (float64, error) { return 450, nil }
+	if _, err := RunBenchmark(context.Background(), nil, w, bc); err != nil {
+		t.Fatal(err)
+	}
+	if w.rates[2] != 450 {
+		t.Errorf("the agreed rate must win over the arm's own proposal, ran at %v", w.rates[2])
+	}
+
+	w = &rateWorkload{tps: 1000}
+	bc.FixedRateFraction = 0
+	if _, err := RunBenchmark(context.Background(), nil, w, bc); err != nil || len(w.rates) != 2 {
+		t.Errorf("fraction 0 skips the fixed-rate run: rates %v err %v", w.rates, err)
+	}
+}
+
+func TestBenchDatapointsGateThroughputAndFixedRateLatency(t *testing.T) {
+	res := BenchResult{
+		TPS: aggregate([]float64{900, 1000, 1100}), LatencyAvg: aggregate([]float64{9}),
+		FixedTarget: 540, FixedTPS: aggregate([]float64{540}), FixedAvg: aggregate([]float64{4}),
+		FixedP95: aggregate([]float64{7}), FixedP99: aggregate([]float64{11}),
+	}
+	gated, info := sysbenchDatapoints(res)
+	names := func(dps []core.Datapoint) string {
+		var out []string
+		for _, dp := range dps {
+			out = append(out, dp.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := names(gated); got != "sysbench.tps,sysbench.fixed_rate.latency_avg,sysbench.fixed_rate.latency_p95,sysbench.fixed_rate.latency_p99" {
+		t.Errorf("gated = %s", got)
+	}
+	if !strings.Contains(names(info), "sysbench.latency_avg") || !strings.Contains(names(info), "sysbench.fixed_rate.tps") {
+		t.Errorf("saturated latency and the achieved rate are reported, not gated: %s", names(info))
+	}
+	if gated[0].N != 3 || len(gated[0].Samples) != 3 {
+		t.Errorf("tps must carry its n and samples: %+v", gated[0])
+	}
+	if gated[0].SpreadPct != 0 {
+		t.Error("the cross-provision spread must not reach the history gate's spread veto")
+	}
+	if gated[1].MinDelta != benchLatencyFloorMS {
+		t.Errorf("a benchmark latency floors at %vms, got %v", benchLatencyFloorMS, gated[1].MinDelta)
+	}
+}
+
+func TestLocalGateItemsNoisyBand(t *testing.T) {
+	pg := portalGateConfig{MADK: 3, FloorPct: 5, MinRuns: 3, MaxBandPct: 50}
+	gated := []core.Datapoint{{Name: "lifecycle.load", Value: 200, Direction: core.LowerIsBetter}}
+	items := []portalGateItem{{Name: "lifecycle.load", Value: 200, Prev: portalGatePrev{N: 10, Median: 100, MAD: 25}}}
+	if got := localGateItems(gated, items, pg)[0].Verdict; got != verdictNoisy {
+		t.Errorf("+100%% against a 75%% band: verdict %q, want %s", got, verdictNoisy)
+	}
+	if r, _, _ := gateCounts(localGateItems(gated, items, pg)); r != 0 {
+		t.Error("a noisy datapoint must not count as regressed")
+	}
+}
+
+func TestAALoadSignatureIsSeparate(t *testing.T) {
+	c := core.NewConfig()
+	id := identityFromConfig(c, "", "abc", LoadFields{Scale: 10, Harness: benchHarnessRev})
+	if id.AALoadSignature == "" || id.AALoadSignature == id.LoadSignature {
+		t.Fatalf("an A/B run must know the A/A signature and not share it: %+v", id)
+	}
+	aaCfg := c.Derive(map[string]string{"perf.baseline.aa": "bool:true"})
+	aa := identityFromConfig(aaCfg, "", "abc", LoadFields{Scale: 10, Harness: benchHarnessRev})
+	if aa.LoadSignature != id.LoadSignature {
+		t.Error("a test with no live arm keeps its own signature on an A/A run")
+	}
+	if aa.forLiveArm(aaCfg).LoadSignature != id.AALoadSignature {
+		t.Error("a live-arm run on an A/A run must store under the A/A signature")
+	}
+	if id.forLiveArm(c).LoadSignature != id.LoadSignature {
+		t.Error("an A/B run keeps its signature")
+	}
+}
+
+func TestIsolateBacking(t *testing.T) {
+	cfg := perfFromConfig(core.NewConfig())
+	y := cfg.isolateBacking(ybk8s.Config{TServerCPU: "0.5"})
+	if !y.GuaranteedQoS || y.TServerCPU != DefaultIsolationTServerCPU || y.NodeSelector != DefaultArmNodeSelector {
+		t.Errorf("isolated backing = %+v", y)
+	}
+	if got := cfg.isolateBacking(ybk8s.Config{NodeSelector: "a=b"}).NodeSelector; got != "a=b" {
+		t.Errorf("a selector the run set must win, got %q", got)
+	}
+	if got := cfg.isolateEndpoints(ampstack.Config{}).EndpointNodeSelector; got != DefaultArmNodeSelector {
+		t.Errorf("endpoints must be pinned too, got %q", got)
+	}
+	cfg.Isolation.Enabled = false
+	if y := cfg.isolateBacking(ybk8s.Config{TServerCPU: "0.5"}); y.GuaranteedQoS || y.TServerCPU != "0.5" {
+		t.Errorf("isolation off keeps the configured shape: %+v", y)
+	}
+	if sh := cfg.clientShape(); sh.CPU != "" || len(sh.NodeSelector) != 1 {
+		t.Errorf("isolation off still pins the client but leaves it unbounded: %+v", sh)
+	}
+}
+
+func TestParsePgbenchPercentiles(t *testing.T) {
+	p95, p99, err := parsePgbenchPercentiles("12345 45678\n")
+	if err != nil || p95 != 12.345 || p99 != 45.678 {
+		t.Errorf("got %v %v %v", p95, p99, err)
+	}
+	if _, _, err := parsePgbenchPercentiles(""); err == nil {
+		t.Error("empty output must be an error")
+	}
+	if !strings.Contains(pgbenchLogPercentilesCmd("/tmp/x"), "rm -f '/tmp/x'.*") {
+		t.Error("the per-transaction logs must be removed after reading")
+	}
+}
+
+func TestParseLFCCounters(t *testing.T) {
+	h, m, err := parseLFCCounters("CREATE EXTENSION\n900 100\n")
+	if err != nil || h != 900 || m != 100 {
+		t.Errorf("got %v %v %v", h, m, err)
+	}
+	if _, _, err := parseLFCCounters("oops"); err == nil {
+		t.Error("garbage must be an error")
+	}
+}
+
+func TestIsolationSuffixSeparatesSeries(t *testing.T) {
+	cfg := perfFromConfig(core.NewConfig())
+	if cfg.isolationSuffix() != "" || benchHarness(cfg) != benchHarnessRev {
+		t.Errorf("isolated runs carry the bare rev, got %q", benchHarness(cfg))
+	}
+	cfg.Isolation.Enabled = false
+	if cfg.isolationSuffix() != "-shared" || benchHarness(cfg) != benchHarnessRev+"-shared" {
+		t.Errorf("unisolated runs are a separate series, got %q", benchHarness(cfg))
+	}
+}
+
+func TestRunBenchmarkFixedRateFailureKeepsSaturated(t *testing.T) {
+	w := &rateWorkload{tps: 1000}
+	bc := BenchConfig{Iterations: 2, FixedRateFraction: 0.6, MeasurementDuration: time.Second,
+		RateGate: func(context.Context, float64) (float64, error) { return 0, context.Canceled }}
+	res, err := RunBenchmark(context.Background(), nil, w, bc)
+	if err != nil {
+		t.Fatalf("a failed fixed-rate window must not fail the benchmark: %v", err)
+	}
+	if res.FixedErr == nil || res.Fixed != nil || res.TPS.Median != 1000 {
+		t.Errorf("want the saturated result with FixedErr set and no Fixed: %+v", res)
+	}
+	if specs := fixedRateSpecs("x", "latency_avg", res); specs != nil {
+		t.Errorf("no fixed-rate datapoints without a fixed-rate run: %+v", specs)
+	}
+}
+
+func TestFixedRateSpecsNamesAndZeros(t *testing.T) {
+	res := BenchResult{FixedTarget: 100, FixedTPS: aggregate([]float64{100}), FixedAvg: aggregate([]float64{0}),
+		FixedP95: aggregate([]float64{7})}
+	var names []string
+	for _, m := range fixedRateSpecs("tpcc", "latency_median", res) {
+		names = append(names, m.Name)
+	}
+	if got := strings.Join(names, ","); got != "tpcc.fixed_rate.tps,tpcc.fixed_rate.latency_p95" {
+		t.Errorf("specs = %s: an unreported (zero) centre latency is left out, TPC-C's is its median", got)
+	}
+	res.FixedAvg = aggregate([]float64{3})
+	if specs := fixedRateSpecs("tpcc", "latency_median", res); specs[1].Name != "tpcc.fixed_rate.latency_median" {
+		t.Errorf("TPC-C's fixed-rate centre must match tpcc.latency_median, got %s", specs[1].Name)
+	}
+}
+
+func TestLiveArmGateSingleViolationFailsBench(t *testing.T) {
+	pol := liveArmPolicy{Thr: float64Thresholds{DropPct: 20, RisePct: 35}, MinViolations: 2, GrossFactor: 2}
+	if _, err := pairedGate(t, []float64{30, 29, 31}, pol); err != nil {
+		t.Fatalf("under the quorum a lone 30%% drop only warns: %v", err)
+	}
+	pol.MinViolations = 1
+	if _, err := pairedGate(t, []float64{30, 29, 31}, pol); err == nil {
+		t.Error("with the bench quorum of 1 a lone 30% throughput drop on every pair must fail")
+	}
+}
+
+func TestOpsDatapointsGateEndToEndOnly(t *testing.T) {
+	var results []phaseResult
+	for _, g := range []string{"cluster_create", "cluster_create_api", "cluster_create_task", "seed", "transport_floor"} {
+		results = append(results, phaseResult{Name: g, Group: g, MS: 100}, phaseResult{Name: g, Group: g, MS: 120})
+	}
+	gated, info := opsDatapoints(results)
+	var g, i []string
+	for _, dp := range gated {
+		g = append(g, dp.Name)
+	}
+	for _, dp := range info {
+		i = append(i, dp.Name)
+	}
+	if got := strings.Join(g, ","); got != "ops.cluster_create" {
+		t.Errorf("gated = %s, want only the end-to-end time", got)
+	}
+	for _, want := range []string{"ops.cluster_create_api", "ops.cluster_create_task", "ops.seed", "ops.transport_floor", "ops.cluster_create.cv"} {
+		if !strings.Contains(strings.Join(i, ","), want) {
+			t.Errorf("%s must be reported as info, info = %v", want, i)
+		}
+	}
+}
+
+func TestLFCHitPct(t *testing.T) {
+	if got, ok := lfcHitPct(100, 50, 190, 60); !ok || got != 90 {
+		t.Errorf("90 hits 10 misses = %v %v, want 90", got, ok)
+	}
+	if _, ok := lfcHitPct(100, 50, 100, 50); ok {
+		t.Error("a run that never touched the cache has no ratio")
+	}
+	if _, ok := lfcHitPct(100, 50, 10, 5); ok {
+		t.Error("counters that went backwards (a restart) are no ratio")
+	}
+}
+
+func TestPgbenchUncachedCapsAndSpecs(t *testing.T) {
+	p := pgbenchUncachedParamsFromConfig(core.NewConfig())
+	s := p.pgSettings()
+	if s["shared_buffers"] != DefaultPgbenchUncachedSharedBuffers || s["yb_amp.file_cache_size_limit"] != DefaultPgbenchUncachedFileCache || len(s) != 2 {
+		t.Errorf("pg settings = %v", s)
+	}
+	res := BenchResult{TPS: aggregate([]float64{500}), CacheHit: aggregate([]float64{12})}
+	var names []string
+	for _, m := range pgbenchUncachedSpecs(res) {
+		names = append(names, m.Name)
+	}
+	joined := strings.Join(names, ",")
+	if !strings.Contains(joined, "pgbench_uncached.tps") || strings.Contains(joined, "pgbench.") || !strings.Contains(joined, "pgbench_uncached.lfc_hit_pct") {
+		t.Errorf("specs = %s", joined)
+	}
+	res.CacheHit = aggregate([]float64{0})
+	for _, m := range pgbenchUncachedSpecs(res) {
+		if m.Name == "pgbench_uncached.lfc_hit_pct" {
+			t.Error("an unread hit ratio must not be reported as 0%")
+		}
+	}
+}
+
+func TestCompareSettings(t *testing.T) {
+	want := map[string]string{"shared_buffers": "128MB", "yb_amp.file_cache_size_limit": "128MB"}
+	names := []string{"shared_buffers", "yb_amp.file_cache_size_limit"}
+	if err := compareSettings(names, want, "CREATE EXTENSION\n128MB 128MB\n"); err != nil {
+		t.Errorf("matching settings: %v", err)
+	}
+	err := compareSettings(names, want, "2048MB 128MB\n")
+	if err == nil || !strings.Contains(err.Error(), "shared_buffers = 2048MB") {
+		t.Errorf("a cap that did not apply must fail and say which: %v", err)
+	}
+	if compareSettings(names, want, "128MB\n") == nil {
+		t.Error("a short answer must fail")
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/baseline"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -58,7 +59,39 @@ const (
 	// machine measured delete_half at 5200ms against 2538ms for the identical
 	// image elsewhere (run 84ad29eb). Override with perf.arm_node_selector.
 	DefaultArmNodeSelector = "cloud.google.com/gke-nodepool=default-big"
+
+	// Benchmark stacks run Guaranteed QoS at these sizes. With a 0.5-CPU
+	// request and the chart's 2-CPU limit, a tserver measured whatever its
+	// neighbours left it: iterations on one stack agreed to 1% while stacks
+	// spread 20%.
+	DefaultIsolationTServerCPU    = "2"
+	DefaultIsolationTServerMemory = "4Gi"
+	DefaultIsolationMasterCPU     = "1"
+	DefaultIsolationMasterMemory  = "2Gi"
+	DefaultIsolationClientCPU     = "2"
+	DefaultIsolationClientMemory  = "4Gi"
 )
+
+// Stacks a test stands up at the default config, for EnvSpec.ClusterSlots:
+// perf.provisions (3) for the run and as many for the live arm, or one stack
+// per arm.
+const (
+	benchClusterSlots = 2 * DefaultProvisions
+	armClusterSlots   = 2
+	// Each lifecycle arm runs perf.lifecycle.iterations tenants at once, each
+	// with a parent and a fork endpoint of 2 CPU beside its backing.
+	lifecycleClusterSlots = 4
+)
+
+type isolation struct {
+	Enabled       bool
+	TServerCPU    string
+	TServerMemory string
+	MasterCPU     string
+	MasterMemory  string
+	ClientCPU     string
+	ClientMemory  string
+}
 
 // perfConfig is the resolved perf.* configuration.
 type perfConfig struct {
@@ -82,6 +115,7 @@ type perfConfig struct {
 	// ArmNodeSelector pins both arms' tservers and endpoint computes to one
 	// machine type, so their delta is the build. Empty disables the pin.
 	ArmNodeSelector string
+	Isolation       isolation
 	// Benchmark is the BenchBase workload the perf/tpcc test runs
 	// (apps.benchbase.benchmark: tpcc | tpch | ycsb | smallbank | …); default
 	// tpcc. Lets a different BenchBase benchmark run config-only, no code change.
@@ -113,9 +147,19 @@ func perfFromConfig(c *core.Config) perfConfig {
 			UseHistoryBand: c.GetBool("perf.live_arm.use_history_band", true),
 			GrossFactor:    c.GetFloat("perf.live_arm.gross_factor", DefaultLiveArmGrossFactor),
 			MinViolations:  c.GetInt("perf.live_arm.min_violations", DefaultLiveArmMinViolations),
+			MaxBandPct:     c.GetFloat("perf.live_arm.max_band_pct", DefaultGateMaxBandPct),
 		},
 		ArmNodeSelector: c.GetString("perf.arm_node_selector", DefaultArmNodeSelector),
-		Benchmark:       c.GetString("apps.benchbase.benchmark", "tpcc"),
+		Isolation: isolation{
+			Enabled:       c.GetBool("perf.isolation.enabled", true),
+			TServerCPU:    c.GetString("perf.isolation.tserver_cpu", DefaultIsolationTServerCPU),
+			TServerMemory: c.GetString("perf.isolation.tserver_memory", DefaultIsolationTServerMemory),
+			MasterCPU:     c.GetString("perf.isolation.master_cpu", DefaultIsolationMasterCPU),
+			MasterMemory:  c.GetString("perf.isolation.master_memory", DefaultIsolationMasterMemory),
+			ClientCPU:     c.GetString("perf.isolation.client_cpu", DefaultIsolationClientCPU),
+			ClientMemory:  c.GetString("perf.isolation.client_memory", DefaultIsolationClientMemory),
+		},
+		Benchmark: c.GetString("apps.benchbase.benchmark", "tpcc"),
 	}
 }
 
@@ -124,6 +168,36 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// isolateBacking applies the benchmark stack shape to a backing: pinned to the
+// arm node pool and Guaranteed QoS. A selector the run already set wins.
+func (c perfConfig) isolateBacking(y ybk8s.Config) ybk8s.Config {
+	if c.ArmNodeSelector != "" && y.NodeSelector == "" {
+		y.NodeSelector = c.ArmNodeSelector
+	}
+	if !c.Isolation.Enabled {
+		return y
+	}
+	y.TServerCPU, y.TServerMemory = c.Isolation.TServerCPU, c.Isolation.TServerMemory
+	y.MasterCPU, y.MasterMemory = c.Isolation.MasterCPU, c.Isolation.MasterMemory
+	y.GuaranteedQoS = true
+	return y
+}
+
+func (c perfConfig) isolateEndpoints(a ampstack.Config) ampstack.Config {
+	if c.ArmNodeSelector != "" && a.EndpointNodeSelector == "" {
+		a.EndpointNodeSelector = c.ArmNodeSelector
+	}
+	return a
+}
+
+func (c perfConfig) clientShape() clientShape {
+	sh := clientShape{NodeSelector: ybk8s.ParseNodeSelector(c.ArmNodeSelector)}
+	if c.Isolation.Enabled {
+		sh.CPU, sh.Memory = c.Isolation.ClientCPU, c.Isolation.ClientMemory
+	}
+	return sh
 }
 
 // thresholds is the perfConfig's regression tolerance in the baseline gate's shape.

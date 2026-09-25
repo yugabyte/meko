@@ -152,6 +152,9 @@ type Config struct {
 	MasterMemory  string
 	TServerCPU    string
 	TServerMemory string
+	// GuaranteedQoS sets every master/tserver limit equal to its request, so the
+	// pods cannot burst into (or be squeezed by) their neighbours' CPU.
+	GuaranteedQoS bool
 
 	Reach       ReachMode
 	HelmRelease string // "" → "<namespace>"
@@ -244,6 +247,7 @@ func FromConfig(get Getter) Config {
 		MasterMemory:        get.GetString("apps.ybk8s.master_memory", DefaultMasterMemory),
 		TServerCPU:          get.GetString("apps.ybk8s.tserver_cpu", DefaultTServerCPU),
 		TServerMemory:       get.GetString("apps.ybk8s.tserver_memory", DefaultTServerMemory),
+		GuaranteedQoS:       get.GetBool("apps.ybk8s.guaranteed_qos", false),
 		Reach:               ReachMode(get.GetString("apps.ybk8s.reach", string(DefaultReach))),
 		HelmRelease:         get.GetString("apps.ybk8s.helm_release", ""),
 		HelmTimeout:         get.GetDuration("apps.ybk8s.helm_timeout", DefaultHelmTimeout),
@@ -814,6 +818,12 @@ func (d *Deployer) helmSets() map[string]string {
 		"resource.master.requests.memory":  d.cfg.MasterMemory,
 		"resource.tserver.requests.cpu":    d.cfg.TServerCPU,
 		"resource.tserver.requests.memory": d.cfg.TServerMemory,
+	}
+	if d.cfg.GuaranteedQoS {
+		sets["resource.master.limits.cpu"] = d.cfg.MasterCPU
+		sets["resource.master.limits.memory"] = d.cfg.MasterMemory
+		sets["resource.tserver.limits.cpu"] = d.cfg.TServerCPU
+		sets["resource.tserver.limits.memory"] = d.cfg.TServerMemory
 	}
 	// Point the chart at the in-namespace pull secret only when one is configured
 	// (the chart's Image.pullSecretName — verified in the yugabyte chart).

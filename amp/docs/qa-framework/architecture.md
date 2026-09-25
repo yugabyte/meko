@@ -955,7 +955,7 @@ results` + `auto_runs / jobs`, generalized for branch/build comparison:
 | `step` | id, result_id→test_result, ordinal, name, status, started/ended, properties(jsonb) | timeline span (live progress) |
 | `attachment` | id, result_id/step_id, name, kind (log/core/config/artifact), files_ref, size, compression | pointer to a blob in the files service |
 | `metric_ref` | id, result_id, key, vm_series_selector | pointer to a Victoria Metrics series |
-| `perf_result` | id, result_id, benchmark, metric_name, value, unit, baseline_value, delta_pct, is_regression | perf tab source; baseline resolved per branch |
+| `perf_results` | perf_id, result_id→results, time, data(jsonb: name, value, unit, direction, n, samples, spread_pct, baseline, identity{load_signature, …}) | perf tab source; the gate's history window is resolved per test, datapoint, load signature, YB train and cluster |
 | `env_lease` *(optional)* | id, result_id, shape, weight, acquired/released | resource accounting / debugging |
 | `test_catalog` | id=hash(branch,suite,name), branch, suite, name, category, data(jsonb: doc, tags, options) | tests available **per branch** (ingested by the framework's `--collect`), so the UI knows what exists on each branch even before a run |
 | `persistent_env` | id, name, case_id→test_case, branch, commit_sha, created_at, status (live/torn_down), lease_weight, data(jsonb: controller_url, namespace, connection, workload ref) | the **environment registry** for long-running Mode 2: detached envs a later `check` invocation attaches to |
@@ -1134,13 +1134,18 @@ tab's whole reason to exist.
 (tpcc/pgbench/sysbench) provisions a **fresh backing + control plane +
 endpoint `perf.provisions` times** (default 3) and repeats the whole benchmark
 per provision — a warmup plus N iterations each — because iterations inside one
-stack agree to ~1% while stack-to-stack spread runs 20%+. The gated headline is
-the **median across provisions** (TPS and latency p50/p95/p99), with the
-cross-provision **MAD** emitted as `<metric>.mad` (the run's own resolution)
-and the CV as a variance guard. The verdict comes from the **report portal's
-gate** (`POST /perf/gate`) when the run streams to one: the rolling median of
-the last N comparable stored runs (same load signature + YugabyteDB train,
-latest run per build) with a spread-aware band of max(3·MAD, 5% floor). That
+stack agree to ~1% while stack-to-stack spread ran 20%+ before the stacks were
+pinned and sized Guaranteed (`perf.isolation`). The gated headline is the
+**median across provisions** of saturated throughput and of latency on one
+fixed-rate window at `perf.bench.fixed_rate_fraction` of it; saturated latency
+is reported, not gated. The verdict is the **live arm**: as many stacks on the
+previous release run beside the run's own, and the gate is the median of the
+per-pair deltas with a sign test on the pairs, allowed the A/A band where A/A
+runs have built one and reported `noisy` past `perf.live_arm.max_band_pct`.
+Without a live arm the **report portal's gate** (`POST /perf/gate`) decides:
+the rolling median of the last N comparable stored builds (same load signature,
+YugabyteDB train and cluster, main runs of released images, one median per
+build) with a spread-aware band of max(3·MAD, 5% floor). That
 band is a percentage, so a datapoint whose measurement is quantized (an error
 window ended by a client retry moves in whole statement timeouts) declares the
 smallest change it can resolve, `core.Datapoint.MinDelta`, and the portal and

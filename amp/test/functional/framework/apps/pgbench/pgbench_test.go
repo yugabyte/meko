@@ -57,7 +57,7 @@ func (s *scriptExec) recorded() []string {
 // available scripts "command -v pgbench" as found.
 func available() *scriptExec {
 	s := &scriptExec{}
-	s.on("command -v pgbench", exec.Result{ExitCode: 0, Stdout: "/usr/bin/pgbench\n"})
+	s.on("command -v pgbench", exec.Result{ExitCode: 0, Stdout: "probe-rc=0\n"})
 	return s
 }
 
@@ -110,7 +110,7 @@ func TestRunCommandConstruction(t *testing.T) {
 
 func TestMissingBinaryDetection(t *testing.T) {
 	ex := &scriptExec{}
-	ex.on("command -v pgbench", exec.Result{ExitCode: 1, Stderr: "not found"})
+	ex.on("command -v pgbench", exec.Result{ExitCode: 0, Stdout: "probe-rc=1\n"})
 
 	if err := pgbench.Init(context.Background(), ex, pgbench.InitOptions{}); err == nil {
 		t.Fatal("want an error when pgbench is missing")

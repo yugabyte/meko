@@ -18,11 +18,17 @@ const (
 	testNameOpsLatency = "perf/ops_latency"
 	opsPrefix          = "ops."
 	opsTable           = "ops_seed"
-	opsHarnessRev      = "1"
+	// "2" = tasks polled at a fixed perf.ops_latency.poll_interval instead of
+	// the client's 250ms..2s backoff, which rounded a 1.6s op up to 3.75s.
+	opsHarnessRev = "2"
+	// Every *_api call read 440-490ms whatever the operation: that is the path
+	// to the controller, so it is measured on its own and reported beside them.
+	opsFloorProbes = 5
 )
 
 const (
-	DefaultOpsRepeats      = 5
+	DefaultOpsRepeats      = 10
+	DefaultOpsPollInterval = 100 * time.Millisecond
 	DefaultOpsSeedRows     = 1000000
 	DefaultOpsBatchRows    = 200000
 	DefaultOpsPayloadBytes = 64
@@ -41,6 +47,7 @@ type opsParams struct {
 	EndpointMem  string
 	ResizeCPU    string
 	ResizeMem    string
+	PollInterval time.Duration
 }
 
 func opsParamsFromConfig(c *core.Config) opsParams {
@@ -53,6 +60,7 @@ func opsParamsFromConfig(c *core.Config) opsParams {
 		EndpointMem:  c.GetString("perf.ops_latency.endpoint_memory", DefaultOpsEndpointMem),
 		ResizeCPU:    c.GetString("perf.ops_latency.resize_cpu", DefaultOpsResizeCPU),
 		ResizeMem:    c.GetString("perf.ops_latency.resize_memory", DefaultOpsResizeMem),
+		PollInterval: c.GetDuration("perf.ops_latency.poll_interval", DefaultOpsPollInterval),
 	}
 }
 
@@ -82,10 +90,13 @@ func runOpsLatency(t *core.T) error {
 	}
 	params := opsParamsFromConfig(t.Options)
 	logf := t.Masker().Logf(log.Printf)
-	cl, err := env.AmpController(t.Context)
+	shared, err := env.AmpController(t.Context)
 	if err != nil {
 		return err
 	}
+	pc := *shared
+	pc.PollInitial, pc.PollMax = params.PollInterval, params.PollInterval
+	cl := &pc
 	var kube *k8s.Kubectl
 	if ke, ok := t.Env.(interface{ AmpKube() *k8s.Kubectl }); ok {
 		kube = ke.AmpKube()
@@ -102,6 +113,7 @@ func runOpsLatency(t *core.T) error {
 			t: t, cl: cl, env: env, kube: kube, poolID: env.AmpPoolID(),
 			params: params, iter: i, logf: logf, warmNodes: warm,
 		}
+		r.probeFloor()
 		err := r.run()
 		phases = append(phases, r.phases...)
 		nodes = append(nodes, r.nodes...)
@@ -189,6 +201,19 @@ func (r *opsRun) run() error {
 		}
 	}
 	return nil
+}
+
+// probeFloor times a read that does no work, so the *_api numbers can be read
+// against what any call costs from here.
+func (r *opsRun) probeFloor() {
+	for range opsFloorProbes {
+		start := time.Now()
+		if _, err := r.cl.GetStoragePool(r.t.Context, r.poolID); err != nil {
+			r.logf("ops_latency: transport floor probe: %v", err)
+			return
+		}
+		r.record("transport_floor", msSince(start))
+	}
 }
 
 func (r *opsRun) cleanup() {
@@ -520,7 +545,7 @@ func opsDatapoints(results []phaseResult) (gated, info []core.Datapoint) {
 		st := aggregate(vals)
 		dp := core.Datapoint{Name: opsPrefix + g, Value: st.Median, Unit: "ms",
 			Direction: core.LowerIsBetter, SpreadPct: spreadPct(st)}
-		if strings.HasSuffix(g, "_task") || g == "seed" {
+		if strings.HasSuffix(g, "_task") || strings.HasSuffix(g, "_api") || g == "seed" || g == "transport_floor" {
 			info = append(info, dp)
 			continue
 		}
@@ -533,7 +558,7 @@ func opsDatapoints(results []phaseResult) (gated, info []core.Datapoint) {
 
 func loadFieldsOps(p opsParams) LoadFields {
 	return LoadFields{
-		Script:     fmt.Sprintf("ops_latency@%s/%s>%s/%s/b%d", p.EndpointCPU, p.EndpointMem, p.ResizeCPU, p.ResizeMem, p.BatchRows),
+		Script:     fmt.Sprintf("ops_latency@%s/%s>%s/%s/b%d/poll%s", p.EndpointCPU, p.EndpointMem, p.ResizeCPU, p.ResizeMem, p.BatchRows, p.PollInterval),
 		Iterations: p.Repeats,
 		Rows:       p.SeedRows,
 		Scale:      p.PayloadBytes,

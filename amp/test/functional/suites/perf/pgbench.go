@@ -11,12 +11,11 @@
 // the bare `pgbench` name apps/pgbench shells — no reimplementation of the driver.
 //
 // It runs pgbench.Init (-i -s scale) then pgbench.Run (-c -j -T) over the pod
-// executor, emits tps + average latency as gated core.Datapoints, and gates them
-// against the stored baseline exactly like perf/tpcc (reusing gatePerf/baseline).
-// Teardown is guaranteed (LIFO stack on its own deadline). Gated behind
-// a k8s cluster + a chart version, same as perf/tpcc. The pgbench
-// load shape lives under perf.pgbench.* (scale/clients/jobs/duration); the
-// backing + gate knobs are shared under perf.*. Registered by init.
+// executor through the shared bench harness (runBenchProvisioned): tps gated at
+// saturation, latency gated on the fixed-rate run. Teardown is guaranteed (LIFO
+// stack on its own deadline). The pgbench load shape lives under perf.pgbench.*
+// (scale/clients/jobs; duration is the setup-only preset's); the backing + gate
+// knobs are shared under perf.*. Registered by init.
 //
 // StandUpPgbenchClient is the same glue reused as a SETUP-ONLY preset (see the
 // presets suite): it stands the backing + client pod + pgbench up, loads the
@@ -52,9 +51,14 @@ const pgbenchArtifactName = "pgbench"
 // `pgbench` name apps/pgbench shells resolves to it.
 const pgbenchShimPath = "/usr/local/bin/pgbench"
 
+// ysqlshShimPath is the same wrapper for the tarball's ysqlsh, which the
+// uncached variant reads the endpoint's cache counters with.
+const ysqlshShimPath = "/usr/local/bin/ampqa-ysqlsh"
+
 // ysqlBenchRelPath / pgLibRelPath are the tarball-relative locations of YB's
 // pgbench fork and the postgres client libs it links (libpq).
 const (
+	ysqlshRelPath    = "postgres/bin/ysqlsh"
 	ysqlBenchRelPath = "postgres/bin/ysql_bench"
 	pgLibRelPath     = "postgres/lib"
 )
@@ -91,7 +95,7 @@ func init() {
 		Name:        testNamePgbench,
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe, ClusterSlots: benchClusterSlots},
 		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Run pgbench (YB's ysql_bench fork) through an amp compute endpoint backed by a co-located YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
@@ -211,19 +215,62 @@ func (w *pgbenchWorkload) Prepare(ctx context.Context, ex exec.RemoteExecutor) e
 	return nil
 }
 
-// RunOnce drives one timed pgbench run. pgbench has no percentile output, so the
-// Sample carries tps + average latency only; -P progress feeds Series.
+// RunOnce drives one timed pgbench run; -P progress feeds Series. pgbench prints
+// no percentile, so it also writes the per-transaction log (-l) and the
+// percentiles are read off that in the pod.
 func (w *pgbenchWorkload) RunOnce(ctx context.Context, ex exec.RemoteExecutor, p RunParams) (Sample, error) {
-	opts := pgbench.RunOptions{Conn: w.conn, Clients: w.clients, Jobs: w.jobs, Duration: p.Duration}
+	logPrefix := fmt.Sprintf("/tmp/ampqa-pgbench-%d", time.Now().UnixNano())
+	opts := pgbench.RunOptions{Conn: w.conn, Clients: w.clients, Jobs: w.jobs, Duration: p.Duration,
+		ExtraArgs: []string{"-l", "--log-prefix=" + logPrefix}}
 	if secs := int(p.SampleInterval.Round(time.Second) / time.Second); secs > 0 {
-		opts.ExtraArgs = []string{"-P", strconv.Itoa(secs)}
+		opts.ExtraArgs = append(opts.ExtraArgs, "-P", strconv.Itoa(secs))
+	}
+	if p.Rate > 0 {
+		opts.ExtraArgs = append(opts.ExtraArgs, "-R", strconv.FormatFloat(p.Rate, 'f', 1, 64))
 	}
 	res, err := pgbench.Run(ctx, ex, opts)
 	s := Sample{TPS: res.TPS, LatencyAvgMS: res.LatencyAvgMs, Series: parsePgbenchProgress(res.Raw), Raw: res.Raw}
+	p95, p99, perr := pgbenchLogPercentiles(ctx, ex, logPrefix)
 	if err != nil {
 		return s, fmt.Errorf("pgbench run: %w", err)
 	}
+	if perr != nil {
+		return s, perr
+	}
+	s.LatencyP95MS, s.LatencyP99MS = p95, p99
 	return s, nil
+}
+
+// pgbenchLogPercentilesCmd prints "<p95> <p99>" in microseconds over column 3
+// (the transaction latency) of every per-thread log under prefix, then removes
+// them. It runs in the pod so the log never crosses the exec stream.
+func pgbenchLogPercentilesCmd(prefix string) string {
+	q := shellQuote(prefix)
+	return fmt.Sprintf(`cat %[1]s.* 2>/dev/null | awk '{print $3}' | sort -n | awk '{v[NR]=$1} END {if (NR==0) exit 1; i95=int(NR*0.95); if (i95<1) i95=1; i99=int(NR*0.99); if (i99<1) i99=1; print v[i95], v[i99]}'; rc=$?; rm -f %[1]s.*; exit $rc`, q)
+}
+
+func pgbenchLogPercentiles(ctx context.Context, ex exec.RemoteExecutor, prefix string) (p95, p99 float64, err error) {
+	res, err := ex.Run(ctx, pgbenchLogPercentilesCmd(prefix))
+	if err != nil {
+		return 0, 0, fmt.Errorf("pgbench latency log: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return 0, 0, fmt.Errorf("pgbench latency log under %s is empty or missing (exit %d): %s", prefix, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return parsePgbenchPercentiles(res.Stdout)
+}
+
+func parsePgbenchPercentiles(out string) (p95, p99 float64, err error) {
+	f := strings.Fields(out)
+	if len(f) != 2 {
+		return 0, 0, fmt.Errorf("pgbench latency log: want \"<p95> <p99>\", got %q", strings.TrimSpace(out))
+	}
+	us95, err1 := strconv.ParseFloat(f[0], 64)
+	us99, err2 := strconv.ParseFloat(f[1], 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, fmt.Errorf("pgbench latency log: unparsable %q", strings.TrimSpace(out))
+	}
+	return us95 / 1000, us99 / 1000, nil
 }
 
 // pgbenchProgressRe matches pgbench's `-P` progress lines, e.g.
@@ -243,9 +290,8 @@ func parsePgbenchProgress(raw string) []SamplePoint {
 	return series
 }
 
-// pgbenchDatapoints turns the aggregate into the tier's datapoints: the GATED
-// medians (tps higher-is-better; average latency lower-is-better) and the
-// informational .cv noise signal per metric.
+// pgbenchDatapoints turns the aggregate into the tier's datapoints: saturated
+// tps and the fixed-rate latencies gated, saturated latencies reported.
 func pgbenchDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 	return splitDatapoints(pgbenchMetricSpecs(res))
 }
@@ -253,12 +299,16 @@ func pgbenchDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 // pgbenchMetricSpecs is the metric set perf/pgbench reports, with the accessors
 // the shape gates need (pgbench's -P progress carries tps and latency).
 func pgbenchMetricSpecs(res BenchResult) []metricSpec {
-	return []metricSpec{
+	return append([]metricSpec{
 		{Name: "pgbench.tps", Unit: "tps", Dir: core.HigherIsBetter, Stats: res.TPS,
 			FromSample: sampleTPS, FromPoint: pointTPS},
 		{Name: "pgbench.latency_avg", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg,
-			FromSample: sampleLatencyAvg, FromPoint: pointLatency},
-	}
+			FromSample: sampleLatencyAvg, FromPoint: pointLatency, Info: true},
+		{Name: "pgbench.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95,
+			FromSample: sampleLatencyP95, Info: true},
+		{Name: "pgbench.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99,
+			FromSample: sampleLatencyP99, Info: true},
+	}, fixedRateSpecs("pgbench", "latency_avg", res)...)
 }
 
 // --- shared pgbench glue (test + preset) ---
@@ -292,30 +342,31 @@ func deliverPgbench(ctx context.Context, dep pgbenchDeployer, podExec exec.Remot
 		return "", fmt.Errorf("deploy pgbench (yb tarball) into client pod: %w", err)
 	}
 	installRoot := path.Join(remoteDir, spec.Version)
-	res, err := podExec.Run(ctx, installShimCmd(installRoot))
-	if err != nil {
-		return "", fmt.Errorf("install pgbench shim: %w", err)
-	}
-	if res.ExitCode != 0 {
-		return "", fmt.Errorf("install pgbench shim exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	for _, sh := range []struct{ bin, path string }{{ysqlBenchRelPath, pgbenchShimPath}, {ysqlshRelPath, ysqlshShimPath}} {
+		res, err := podExec.Run(ctx, installWrapperCmd(installRoot, sh.bin, sh.path))
+		if err != nil {
+			return "", fmt.Errorf("install %s shim: %w", sh.path, err)
+		}
+		if res.ExitCode != 0 {
+			return "", fmt.Errorf("install %s shim exited %d: %s", sh.path, res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
 	}
 	return installRoot, nil
 }
 
-// pgbenchShimScript is the /usr/local/bin/pgbench wrapper body: it execs the YB
-// tarball's ysql_bench with the tarball's postgres/lib on LD_LIBRARY_PATH (libpq
-// et al.), forwarding all arguments. installRoot is the tarball's extracted dir.
-func pgbenchShimScript(installRoot string) string {
+// wrapperScript is a client-PATH wrapper body: it execs a YB tarball binary with
+// the tarball's postgres/lib on LD_LIBRARY_PATH (libpq et al.), forwarding all
+// arguments. installRoot is the tarball's extracted dir.
+func wrapperScript(installRoot, bin string) string {
 	return fmt.Sprintf("#!/bin/sh\nexport LD_LIBRARY_PATH=%s:${LD_LIBRARY_PATH}\nexec %s \"$@\"\n",
-		path.Join(installRoot, pgLibRelPath), path.Join(installRoot, ysqlBenchRelPath))
+		path.Join(installRoot, pgLibRelPath), path.Join(installRoot, bin))
 }
 
-// installShimCmd is the remote command that writes pgbenchShimScript to
-// pgbenchShimPath (on the client PATH) and makes it executable.
-func installShimCmd(installRoot string) string {
+// installWrapperCmd writes wrapperScript(bin) to shim and makes it executable.
+func installWrapperCmd(installRoot, bin, shim string) string {
 	return fmt.Sprintf("mkdir -p %s && printf '%%s' %s > %s && chmod +x %s",
-		shellQuote(path.Dir(pgbenchShimPath)),
-		shellQuote(pgbenchShimScript(installRoot)),
-		shellQuote(pgbenchShimPath),
-		shellQuote(pgbenchShimPath))
+		shellQuote(path.Dir(shim)),
+		shellQuote(wrapperScript(installRoot, bin)),
+		shellQuote(shim),
+		shellQuote(shim))
 }

@@ -87,6 +87,8 @@ func runOneVariant(ctx context.Context, v resolvedVariant, prov variantProvision
 		return variantResult{Identity: v.Identity}, err
 	}
 
+	// Variants pick no common rate, so a fixed-rate pass would hand each its own load.
+	bc.FixedRateFraction = 0
 	res, err := RunBenchmark(ctx, ex, mk(conn), bc)
 	if sink != nil {
 		attachBenchSamples(sink, res, "compare-"+sanitizeLabel(v.Label))

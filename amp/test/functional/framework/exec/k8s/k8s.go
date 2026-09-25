@@ -239,6 +239,38 @@ func (k *Kubectl) Apply(ctx context.Context, manifest string) error {
 	return err
 }
 
+// GetJSON returns a resource as JSON. A missing resource is an error whose text
+// carries kubectl's NotFound, which IsNotFound recognises.
+func (k *Kubectl) GetJSON(ctx context.Context, kind, name string) (string, error) {
+	res, err := k.exec(ctx, nil, "get", kind, name, "-o", "json")
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout, nil
+}
+
+func (k *Kubectl) Create(ctx context.Context, manifest string) error {
+	_, err := k.exec(ctx, strings.NewReader(manifest), "create", "-f", "-")
+	return err
+}
+
+// Replace replaces an object. A manifest carrying metadata.resourceVersion is
+// refused with a Conflict when the object changed since that version was read,
+// which is what makes a read-modify-replace safe between processes.
+func (k *Kubectl) Replace(ctx context.Context, manifest string) error {
+	_, err := k.exec(ctx, strings.NewReader(manifest), "replace", "-f", "-")
+	return err
+}
+
+// IsNotFound / IsConflict / IsAlreadyExists classify a kubectl error by its message.
+func IsNotFound(err error) bool { return err != nil && strings.Contains(err.Error(), "NotFound") }
+func IsConflict(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "Conflict") || strings.Contains(err.Error(), "the object has been modified"))
+}
+func IsAlreadyExists(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "AlreadyExists")
+}
+
 // Delete deletes a resource, tolerating absence.
 func (k *Kubectl) Delete(ctx context.Context, kind, name string) error {
 	_, err := k.exec(ctx, nil, "delete", kind, name, "--ignore-not-found")

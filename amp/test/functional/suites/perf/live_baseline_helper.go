@@ -22,6 +22,9 @@ type liveBaselineConfig struct {
 	// under test. That is an A/A run: the two arms differ in nothing, so every
 	// delta it reports is this harness measuring its own noise.
 	AllowSameImage bool
+	// AA pins the baseline arm to the image under test: the run measures the
+	// harness's own arm-to-arm noise, which the A/B gate then uses as its band.
+	AA bool
 }
 
 func liveBaselineFromConfig(c *core.Config) liveBaselineConfig {
@@ -29,6 +32,7 @@ func liveBaselineFromConfig(c *core.Config) liveBaselineConfig {
 		Enabled:        c.GetBool("perf.baseline.live", true),
 		ImageVersion:   strings.TrimSpace(c.GetString("perf.baseline.image_version", "")),
 		AllowSameImage: c.GetBool("perf.baseline.allow_same_image", false),
+		AA:             c.GetBool("perf.baseline.aa", false),
 	}
 }
 
@@ -39,6 +43,9 @@ type portalBuild struct {
 
 // Pinned perf.baseline.image_version, else the release before the current tag, else (custom/unknown tag) the newest release; "" = none resolvable.
 func resolveBaselineTag(ctx context.Context, lb liveBaselineConfig, portalURL, currentTag string) (string, error) {
+	if lb.AA {
+		return currentTag, nil
+	}
 	if lb.ImageVersion != "" {
 		return lb.ImageVersion, nil
 	}
@@ -113,46 +120,7 @@ func baselineOverrides(tag string) map[string]string {
 	}
 }
 
-// Asserts current vs the baseline arm (throughput_drop_pct / latency_rise_pct); returns the live-baseline.txt table.
-func liveBaselineGate(current, base BenchResult, thr float64Thresholds, baselineTag string) (string, error) {
-	var b strings.Builder
-	var violations []string
-	fmt.Fprintf(&b, "live baseline: this run vs release %s (same workload, concurrent stacks)\n", baselineTag)
-	fmt.Fprintf(&b, "%-14s %14s %14s %9s %11s\n", "metric", "current", "baseline", "delta%", "allowed%")
-	for _, m := range comparisonMetrics() {
-		cur, ref := m.stats(current).Median, m.stats(base).Median
-		if cur == 0 || ref == 0 {
-			continue
-		}
-		d, _ := regressionPct(ref, cur, m.dir)
-		allowed := thr.RisePct
-		if m.dir == core.HigherIsBetter {
-			allowed = thr.DropPct
-		}
-		fmt.Fprintf(&b, "%-14s %14.3f %14.3f %+8.1f%% %10.1f%%\n", m.name, cur, ref, d, allowed)
-		if allowed > 0 && d > allowed {
-			violations = append(violations, fmt.Sprintf("%s %+.1f%% vs the live %s baseline (allowed %.1f%%: current %.4g, baseline %.4g %s)",
-				m.name, d, baselineTag, allowed, cur, ref, m.unit))
-		}
-	}
-	if len(violations) > 0 {
-		return b.String(), fmt.Errorf("perf regression vs the live baseline: %s", strings.Join(violations, "; "))
-	}
-	return b.String(), nil
-}
-
 type float64Thresholds struct {
 	DropPct float64
 	RisePct float64
-}
-
-// The baseline arm's medians, .baseline-suffixed, ungated.
-func baselineDatapoints(spec benchWorkloadSpec, base BenchResult) []core.Datapoint {
-	gated, _ := spec.datapoints(base)
-	out := make([]core.Datapoint, len(gated))
-	for i, dp := range gated {
-		dp.Name += ".baseline"
-		out[i] = dp
-	}
-	return out
 }

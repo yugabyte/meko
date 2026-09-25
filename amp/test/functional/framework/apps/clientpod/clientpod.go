@@ -32,6 +32,12 @@ type Spec struct {
 	// Secrets the kubelet uses to pull a private Image (e.g. an amp/quay
 	// workload image). Empty → the image is public.
 	ImagePullSecrets []string
+	// NodeSelector pins the pod (K8s shape only).
+	NodeSelector map[string]string
+	// CPU / Memory become both the request and the limit, so the pod is
+	// Guaranteed QoS. Empty leaves the container unbounded.
+	CPU    string
+	Memory string
 }
 
 // ClientPod is the uniform lifecycle both shapes implement.
@@ -167,8 +173,26 @@ func podManifest(spec Spec) string {
 			fmt.Fprintf(&b, "    - name: %s\n", s)
 		}
 	}
+	if len(spec.NodeSelector) > 0 {
+		b.WriteString("  nodeSelector:\n")
+		for _, k := range sortedKeys(spec.NodeSelector) {
+			fmt.Fprintf(&b, "    %q: %q\n", k, spec.NodeSelector[k])
+		}
+	}
 	b.WriteString("  containers:\n")
 	fmt.Fprintf(&b, "    - name: %s\n      image: %s\n", spec.Name, spec.Image)
+	if spec.CPU != "" || spec.Memory != "" {
+		b.WriteString("      resources:\n")
+		for _, section := range []string{"requests", "limits"} {
+			fmt.Fprintf(&b, "        %s:\n", section)
+			if spec.CPU != "" {
+				fmt.Fprintf(&b, "          cpu: %q\n", spec.CPU)
+			}
+			if spec.Memory != "" {
+				fmt.Fprintf(&b, "          memory: %q\n", spec.Memory)
+			}
+		}
+	}
 	if len(spec.Command) > 0 {
 		b.WriteString("      command:\n")
 		for _, c := range spec.Command {

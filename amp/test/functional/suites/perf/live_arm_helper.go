@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,7 @@ import (
 // provisionedHarness marks the load signature of an arm-provisioned run: the
 // numbers move from the env's standing stack to a self-provisioned one, which
 // is a different measurement, so the series must not continue the old one.
-const provisionedHarness = "provisioned"
+const provisionedHarness = "provisioned-qos"
 
 // resolveLiveArmTag decides whether this run gets a live baseline arm and which
 // release it compares against. "" disables the arm, with the reason logged —
@@ -43,7 +44,7 @@ func resolveLiveArmTag(t *core.T, logf func(string, ...any)) string {
 	case err != nil:
 		logf("perf: WARN live baseline unavailable (%v) — gating on history instead", err)
 		return ""
-	case tag != "" && tag == currentAmpTag(t.Options) && lb.AllowSameImage:
+	case tag != "" && tag == currentAmpTag(t.Options) && (lb.AllowSameImage || lb.AA):
 		logf("perf: A/A run — both arms on %s, so every delta reported is harness noise", tag)
 		return tag
 	case tag == "" || tag == currentAmpTag(t.Options):
@@ -125,7 +126,7 @@ func (a *liveArm) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (
 // endpointClient carves the arm's perf endpoint into the pool provisioning
 // already created and connects to it.
 func (a *liveArm) endpointClient(ctx context.Context) (*pg.Client, error) {
-	ep, err := createPerfEndpointInPool(ctx, a.cl, a.poolID, a.sfx)
+	ep, err := createPerfEndpointInPool(ctx, a.cl, a.poolID, a.sfx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -159,10 +160,7 @@ func provisionLiveArm(ctx context.Context, t *core.T, cfg perfConfig, amp ampsta
 	}()
 	sink := attachSink{t: t, logf: logf}
 
-	ybBacking := clampBackingRF(ybk8s.FromConfig(t.Options), cfg.RF)
-	if cfg.ArmNodeSelector != "" && ybBacking.NodeSelector == "" {
-		ybBacking.NodeSelector = cfg.ArmNodeSelector
-	}
+	ybBacking := cfg.isolateBacking(clampBackingRF(ybk8s.FromConfig(t.Options), cfg.RF))
 	info, kube, err := deployYBBackingCfg(ctx, t, ybBacking, sfx, td, logf)
 	if err != nil {
 		return nil, err
@@ -172,9 +170,7 @@ func provisionLiveArm(ctx context.Context, t *core.T, cfg perfConfig, amp ampsta
 	}
 
 	ybCfg := ybk8s.FromConfig(t.Options)
-	if cfg.ArmNodeSelector != "" && amp.EndpointNodeSelector == "" {
-		amp.EndpointNodeSelector = cfg.ArmNodeSelector
-	}
+	amp = cfg.isolateEndpoints(amp)
 	scfg := ampStackConfig(amp, ybCfg, info, sfx)
 	app := ampstack.New(scfg).WithLogf(logf)
 	if ybCfg.Kubeconfig != "" {
@@ -242,39 +238,43 @@ func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, 
 
 // liveArmPolicy turns per-datapoint deltas into one verdict.
 //
-// Thr is the flat allowance. Bands raises it per datapoint, never lowers it, to
-// that metric's trailing dispersion from the portal (perf.gate.mad_k x MAD).
+// The allowance per datapoint comes from the best noise estimate available.
+// AABands is the arm-to-arm dispersion measured on A/A runs (both arms on one
+// image), which is the statistic this comparison needs. Without one, Thr is the
+// flat allowance and Bands (the portal's cross-run dispersion) may raise it.
+// A/A run 9cadd192 reported lifecycle.delete_fork_branch +118.2% on an
+// identical image, so neither the flat 35% nor a history band is trusted where
+// an A/A band exists.
 //
-// That band is CROSS-RUN dispersion, and the two arms exist to strip cross-run
-// variance out, so using it here is a compromise and not the right statistic.
-// The right one is arm-to-arm dispersion, which nothing measures yet. It is used
-// because the arms turn out not to share weather: A/A run 9cadd192, both arms on
-// one image, reported lifecycle.delete_fork_branch +118.2%, and the A/B beside it
-// +124.3%. The band is the only per-metric noise estimate available today, so it
-// stands in until enough A/A runs exist to replace it.
+// An allowance past MaxBandPct means the metric is too noisy to judge on one
+// run: it is reported as "noisy" and left to the trend.
 //
-// It widens more than it looks: on the fbf0de9f replay, 5 of 10 lifecycle
-// datapoints land above the flat 35%, lifecycle.load among them at 83.4% because
-// its window still holds pre-pinning runs. Expect that to tighten as pinned runs
-// age into the window, and read the band as a ceiling on our own confidence
-// rather than as a property of the build.
+// Pairs are the per-pair deltas of this run (provision i of each arm, or
+// iteration i of each arm), which run side by side. With pairs the delta is
+// their median and a violation must also carry a sign test: at least
+// signTestK(n) pairs worse, which is one-sided p <= 0.125. Without pairs the
+// cruder spread and best-draw checks in liveArmSuspect stand in.
 //
-// GrossFactor and MinViolations decide when a violation is worth failing on. Ten
-// datapoints per test across six nightly perf tests means even a 2% per-datapoint
-// false alarm rate reds the board most nights, so a lone moderate outlier is not
-// enough: either one datapoint is GrossFactor past its allowance, or
-// MinViolations of them agree. Both scale with the band, so a wide band raises
-// the gross bar too: on a metric whose own noise is 80%, no single run can
-// distinguish a regression below that, and only persistence across runs can.
+// GrossFactor and MinViolations decide when a violation is worth failing on.
+// Ten datapoints per test across six nightly perf tests means even a 2%
+// per-datapoint false alarm rate reds the board most nights, so a lone moderate
+// outlier is not enough: either one datapoint is GrossFactor past its
+// allowance, or MinViolations of them agree.
 type liveArmPolicy struct {
 	Thr            float64Thresholds
 	Bands          map[string]float64
+	AABands        map[string]float64
 	UseHistoryBand bool
+	MaxBandPct     float64
 	GrossFactor    float64
 	MinViolations  int
+	Pairs          map[string][]float64
 }
 
 func (p liveArmPolicy) allowanceFor(dp core.Datapoint) float64 {
+	if band, ok := p.AABands[dp.Name]; ok {
+		return band
+	}
 	allowed := p.Thr.RisePct
 	if dp.Direction == core.HigherIsBetter {
 		allowed = p.Thr.DropPct
@@ -287,54 +287,115 @@ func (p liveArmPolicy) allowanceFor(dp core.Datapoint) float64 {
 	return allowed
 }
 
+// signTestK is the fewest of n pairs that must be worse for a one-sided sign
+// test at p <= 0.125, capped at n (two pairs can only ever agree).
+func signTestK(n int) int {
+	for k := 0; k <= n; k++ {
+		if binomTail(n, k) <= 0.125 {
+			return max(k, 1)
+		}
+	}
+	return n
+}
+
+// binomTail is P(X >= k) for X ~ Binomial(n, 1/2).
+func binomTail(n, k int) float64 {
+	var sum, c float64 = 0, 1
+	for i := 0; i <= n; i++ {
+		if i > 0 {
+			c = c * float64(n-i+1) / float64(i)
+		}
+		if i >= k {
+			sum += c
+		}
+	}
+	return sum / math.Pow(2, float64(n))
+}
+
+// armDelta is the gate's delta for dp: the median per-pair delta when pairs
+// exist, else the delta between the two arms' aggregates.
+func armDelta(dp, ref core.Datapoint, pairs []float64) (float64, bool) {
+	if len(pairs) >= 2 {
+		return median(pairs), true
+	}
+	return regressionPct(ref.Value, dp.Value, dp.Direction)
+}
+
+func worseCount(pairs []float64) int {
+	n := 0
+	for _, d := range pairs {
+		if d > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 // liveArmGate compares the two arms' gated datapoints by name: delta in the
 // worse direction, allowed by policy. Datapoints only one arm produced are
 // skipped — they have no counterpart to accuse. curBest/baseBest carry each
-// name's best iteration: endpoint pods land on whatever node type the
-// autoscaler has (observed run 55349d45: highcpu-8 and standard-8 mixed within
-// one arm), so a median-only verdict gates the node lottery; a real regression
-// also slows the best draw. nil maps skip that check (single-sample suites).
-// Returns the attachable table and the verdict.
-// The second return is the violations that were reported but did not fail, so a
-// caller can surface them: with the live arm up nothing else asserts, and a
-// regression under the quorum would otherwise leave no trace outside the
-// attached table.
+// name's best iteration for suites without pairs: endpoint pods landed on
+// whatever node type the autoscaler had (run 55349d45: highcpu-8 and standard-8
+// mixed within one arm), and a real regression also slows the best draw. nil
+// maps skip that check.
+// Returns the attachable table, the violations that were reported but did not
+// fail (with the live arm up nothing else asserts, so the caller surfaces
+// them), the per-datapoint deltas, and the verdict.
 func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]float64, pol liveArmPolicy, tag string) (string, []string, error) {
+	table, moderate, _, err := liveArmGateDeltas(current, base, curBest, baseBest, pol, tag)
+	return table, moderate, err
+}
+
+func liveArmGateDeltas(current, base []core.Datapoint, curBest, baseBest map[string]float64, pol liveArmPolicy, tag string) (string, []string, map[string]float64, error) {
 	ref := map[string]core.Datapoint{}
 	for _, dp := range base {
 		ref[dp.Name] = dp
 	}
+	deltas := map[string]float64{}
 	var b strings.Builder
 	var gross, moderate []string
 	fmt.Fprintf(&b, "live baseline: this run vs release %s (same workload, concurrent stacks)\n", tag)
-	fmt.Fprintf(&b, "%-40s %14s %14s %9s %11s %9s %8s\n", "datapoint", "current", "baseline", "delta%", "allowed%", "spread%", "verdict")
+	fmt.Fprintf(&b, "%-40s %14s %14s %9s %11s %9s %7s %8s\n", "datapoint", "current", "baseline", "delta%", "allowed%", "spread%", "worse", "verdict")
 	for _, dp := range current {
 		rdp, ok := ref[dp.Name]
 		if !ok || dp.Value == 0 || rdp.Value == 0 {
 			continue
 		}
-		d, ok := regressionPct(rdp.Value, dp.Value, dp.Direction)
+		pairs := pol.Pairs[dp.Name]
+		d, ok := armDelta(dp, rdp, pairs)
 		if !ok {
 			continue
 		}
+		deltas[dp.Name] = d
 		allowed := pol.allowanceFor(dp)
 		verdict := "ok"
 		switch {
 		case allowed <= 0 || d <= allowed:
+		case pol.MaxBandPct > 0 && allowed > pol.MaxBandPct:
+			verdict = "noisy"
 		// A percentage gate needs signal: one-shot ms-scale ops through two
 		// port-forwards jitter by tens of ms, so a violation must also clear an
 		// absolute floor. Ordered after the allowance so "floor" marks only the
 		// rows the floor actually suppressed.
 		case math.Abs(dp.Value-rdp.Value) < noiseFloorOf(dp):
 			verdict = "floor"
+		case len(pairs) >= 2 && worseCount(pairs) < signTestK(len(pairs)):
+			verdict = "split"
 		default:
-			verdict = liveArmSuspect(dp, d, allowed, curBest, baseBest)
+			verdict = "suspect"
+			if len(pairs) < 2 {
+				verdict = liveArmSuspect(dp, d, allowed, curBest, baseBest)
+			}
 			if verdict == "suspect" && pol.GrossFactor > 0 && d > allowed*pol.GrossFactor {
 				verdict = "gross"
 			}
 		}
-		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%% %8.1f%% %8s\n",
-			dp.Name, dp.Value, rdp.Value, d, allowed, dp.SpreadPct, verdict)
+		worse := "-"
+		if len(pairs) >= 2 {
+			worse = fmt.Sprintf("%d/%d", worseCount(pairs), len(pairs))
+		}
+		fmt.Fprintf(&b, "%-40s %14.3f %14.3f %+8.1f%% %10.1f%% %8.1f%% %7s %8s\n",
+			dp.Name, dp.Value, rdp.Value, d, allowed, dp.SpreadPct, worse, verdict)
 		if verdict != "gross" && verdict != "suspect" {
 			continue
 		}
@@ -347,16 +408,99 @@ func liveArmGate(current, base []core.Datapoint, curBest, baseBest map[string]fl
 		}
 	}
 	if len(gross) > 0 {
-		return b.String(), moderate, fmt.Errorf("perf regression vs the live baseline: %s", strings.Join(gross, "; "))
+		return b.String(), moderate, deltas, fmt.Errorf("perf regression vs the live baseline: %s", strings.Join(gross, "; "))
 	}
 	if len(moderate) >= max(pol.MinViolations, 1) {
-		return b.String(), nil, fmt.Errorf("perf regression vs the live baseline, %d datapoints past their allowance: %s",
+		return b.String(), nil, deltas, fmt.Errorf("perf regression vs the live baseline, %d datapoints past their allowance: %s",
 			len(moderate), strings.Join(moderate, "; "))
 	}
 	for _, m := range moderate {
 		fmt.Fprintf(&b, "below the %d-datapoint quorum, reported but not failed: %s\n", max(pol.MinViolations, 1), m)
 	}
-	return b.String(), moderate, nil
+	return b.String(), moderate, deltas, nil
+}
+
+// liveGate runs the live-arm verdict for one test and returns the datapoints it
+// adds to the report: the baseline arm's values and the per-datapoint deltas.
+// An A/A run reports and never fails: its deltas are the noise being measured.
+// liveGateOpts overrides the policy per caller. MinViolations 0 keeps
+// perf.live_arm.min_violations; NoHistoryBand keeps the flat thresholds when no
+// A/A band exists instead of widening them to the history band.
+type liveGateOpts struct {
+	MinViolations int
+	NoHistoryBand bool
+}
+
+func liveGate(t *core.T, s *core.StepHandle, testName string, id Identity, gated, baseGated []core.Datapoint,
+	curBest, baseBest map[string]float64, pairs map[string][]float64, tag string, opts liveGateOpts, logf func(string, ...any)) ([]core.Datapoint, error) {
+	cfg := perfFromConfig(t.Options)
+	pg := portalGateFromConfig(t.Options)
+	pol := cfg.LiveArm
+	pol.Pairs = pairs
+	if opts.MinViolations > 0 {
+		pol.MinViolations = opts.MinViolations
+	}
+	if opts.NoHistoryBand {
+		pol.UseHistoryBand = false
+	}
+	pol.Bands = historyBands(t, pg, testName, gated, id, logf)
+	pol.AABands = aaBands(t, pg, testName, gated, id, logf)
+	s.Set("live_arm_bands", len(pol.Bands))
+	s.Set("live_arm_aa_bands", len(pol.AABands))
+	table, suspects, deltas, err := liveArmGateDeltas(gated, baseGated, curBest, baseBest, pol, tag)
+	if len(suspects) > 0 {
+		s.Set("live_arm_suspects", strings.Join(suspects, "; "))
+	}
+	t.AttachBytes(liveBaselineArtifact, "log", []byte(table))
+	logf("perf: live baseline gate for %s vs %s: %s", testName, tag, verdictWord(err))
+	if err != nil && liveBaselineFromConfig(t.Options).AA {
+		logf("perf: A/A run, not failing on harness noise: %v", err)
+		s.Set("aa_would_fail", err.Error())
+		err = nil
+	}
+	return append(liveArmDatapoints(baseGated), armDeltaDatapoints(deltas)...), err
+}
+
+// phasePairs pairs the two arms' phase timings by (name, iteration) and returns
+// each gated group's per-pair deltas under prefix+group.
+func phasePairs(cur, base []phaseResult, prefix string) map[string][]float64 {
+	type key struct {
+		name string
+		iter int
+	}
+	ref := map[key]float64{}
+	for _, r := range base {
+		ref[key{r.Name, r.Iter}] = r.MS
+	}
+	out := map[string][]float64{}
+	for _, r := range cur {
+		b, ok := ref[key{r.Name, r.Iter}]
+		if !ok {
+			continue
+		}
+		if d, ok := regressionPct(b, r.MS, core.LowerIsBetter); ok {
+			out[prefix+r.Group] = append(out[prefix+r.Group], d)
+		}
+	}
+	return out
+}
+
+// armDeltaSuffix names the informational datapoint carrying a datapoint's
+// arm-to-arm delta. The portal never gates a _delta_pct name, and on an A/A
+// run this series is the noise model aaBands reads back.
+const armDeltaSuffix = ".arm_delta_pct"
+
+func armDeltaDatapoints(deltas map[string]float64) []core.Datapoint {
+	names := make([]string, 0, len(deltas))
+	for n := range deltas {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]core.Datapoint, 0, len(names))
+	for _, n := range names {
+		out = append(out, core.Datapoint{Name: n + armDeltaSuffix, Value: deltas[n], Unit: "%", Direction: core.LowerIsBetter})
+	}
+	return out
 }
 
 func noiseFloorOf(dp core.Datapoint) float64 {

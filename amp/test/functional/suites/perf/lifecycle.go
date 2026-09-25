@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -76,7 +75,7 @@ func init() {
 		Name:       testNameLifecycle,
 		Suite:      "perf",
 		Category:   core.Perf,
-		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack},
+		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, ClusterSlots: lifecycleClusterSlots},
 		Tags:       []string{"perf"},
 		OwningTeam: core.TeamControlPlane,
 		Description: "Time the data lifecycle on a loaded tenant: create the tenant, fork a near-empty branch, load millions of rows plus an index, fork the loaded branch, " +
@@ -148,8 +147,8 @@ func runLifecycle(t *core.T) error {
 func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf func(string, ...any)) error {
 	cfg := perfFromConfig(t.Options)
 	load := loadFieldsLifecycle(params)
-	load.Harness += "+" + provisionedHarness
-	id := identityFromConfig(t.Options, "", frameworkCommit(), load)
+	load.Harness += "+" + provisionedHarness + cfg.isolationSuffix()
+	id := identityFromConfig(t.Options, "", frameworkCommit(), load).forLiveArm(t.Options)
 	t.SetPerfIdentity(id.core())
 
 	cur, base, baseErr, err := provisionLiveArms(t, cfg, tag, logf)
@@ -316,7 +315,7 @@ func (r *lifecycleRun) setIteration(s *core.StepHandle) {
 }
 
 func (r *lifecycleRun) record(name string, ms float64) {
-	r.results = append(r.results, phaseResult{Name: name, Group: name, MS: ms})
+	r.results = append(r.results, phaseResult{Name: name, Group: name, MS: ms, Iter: r.pairIter})
 	arm := ""
 	if r.baseline != "" {
 		arm = "[baseline] "
@@ -358,12 +357,16 @@ func (r *lifecycleRun) standUpTenant(kube *k8s.Kubectl, td *teardownStack) error
 		s.Set("cluster", ten.ClusterID)
 		s.Set("endpoint", ten.Endpoint.ID)
 		s.Set("endpoint_size", r.params.EndpointCPU+" / "+r.params.EndpointMem)
-		if kube != nil && r.iter <= 1 && r.baseline == "" {
+		if kube != nil && r.iter <= 1 {
 			// The env's own sampler watches only ITS standing endpoint, not this
 			// tenant's; sample the first iteration's tenant (one sampler, so the
 			// "[endpoint]" keys stay single) and mark collection so the env drain
-			// does not emit a second set.
-			if startEndpointSampler(r.t.Context, r.t, ampEndpoint{Kube: kube, EndpointID: ten.Endpoint.ID}, td, r.logf) != nil {
+			// does not emit a second set. The baseline arm's twin tenant is
+			// sampled too and reported nowhere, so the pair carries the same load.
+			ep := ampEndpoint{Kube: kube, EndpointID: ten.Endpoint.ID}
+			if r.baseline != "" {
+				loadOnlySamplers(r.t.Context, r.t, nil, &ep, td, r.logf)
+			} else if startEndpointSampler(r.t.Context, r.t, ep, td, r.logf) != nil {
 				r.t.MarkServerMetricsCollected()
 			}
 		}
@@ -643,18 +646,11 @@ func gateLifecycle(t *core.T, p lifecycleParams, id Identity, results []phaseRes
 		}
 		if baselineUp {
 			baseGated, _, _ := lifecycleDatapoints(baseResults, nil, p)
-			pol := cfg.LiveArm
-			pol.Bands = historyBands(t, portalGateFromConfig(t.Options), testNameLifecycle, gated, id, logf)
-			s.Set("live_arm_bands", len(pol.Bands))
-			tableTxt, suspects, gerr := liveArmGate(gated, baseGated,
-				lifecycleBestValues(results), lifecycleBestValues(baseResults), pol, tag)
+			extra, gerr := liveGate(t, s, testNameLifecycle, id, gated, baseGated,
+				lifecycleBestValues(results), lifecycleBestValues(baseResults),
+				trackedPairs(phasePairs(results, baseResults, lifecyclePrefix)), tag, liveGateOpts{}, logf)
 			lbErr = gerr
-			if len(suspects) > 0 {
-				s.Set("live_arm_suspects", strings.Join(suspects, "; "))
-			}
-			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
-			info = append(info, liveArmDatapoints(baseGated)...)
-			logf("perf: live baseline gate for %s vs %s: %s", testNameLifecycle, tag, verdictWord(gerr))
+			info = append(info, extra...)
 		}
 		gateErr := emitAndGateHistory(t, cfg, scaleVersion(t), testNameLifecycle, gated, info, id, !baselineUp, logf)
 		return errors.Join(ratioErr, lbErr, gateErr)
@@ -669,6 +665,16 @@ var trackedPhases = []string{
 	"fork_small", "fork_loaded", "load",
 	"fork_count_cold", "fork_count_warm", "fork_insert",
 	"delete_half", "count_after_delete", "drop_table", "delete_fork_branch",
+}
+
+func trackedPairs(pairs map[string][]float64) map[string][]float64 {
+	out := map[string][]float64{}
+	for _, g := range trackedPhases {
+		if p, ok := pairs[lifecyclePrefix+g]; ok {
+			out[lifecyclePrefix+g] = p
+		}
+	}
+	return out
 }
 
 // lifecycleBestValues is each tracked phase's best iteration, keyed like the

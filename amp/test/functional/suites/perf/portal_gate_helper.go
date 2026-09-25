@@ -20,16 +20,24 @@ const (
 	DefaultGateMADK     = 3.0
 	DefaultGateFloorPct = 5.0
 	DefaultGateMinRuns  = 5
-	portalGateTimeout   = 30 * time.Second
-	portalGateArtifact  = "perf-portal-gate.json"
+	// A band this wide means one run cannot resolve anything short of a
+	// collapse: lifecycle's cold fork count runs a 46% band, delete_fork_branch 73%.
+	DefaultGateMaxBandPct = 50.0
+	portalGateTimeout     = 30 * time.Second
+	portalGateArtifact    = "perf-portal-gate.json"
 )
 
 type portalGateConfig struct {
-	URL      string
-	Window   int
-	MADK     float64
-	FloorPct float64
-	MinRuns  int
+	URL        string
+	Window     int
+	MADK       float64
+	FloorPct   float64
+	MinRuns    int
+	MaxBandPct float64
+	// RunID lets the portal compare against runs on the same cluster only. It is
+	// set on runs the portal created (report.portal.run_id); elsewhere the window
+	// spans every cluster.
+	RunID string
 }
 
 func portalGateFromConfig(c *core.Config) portalGateConfig {
@@ -39,6 +47,9 @@ func portalGateFromConfig(c *core.Config) portalGateConfig {
 		MADK:     c.GetFloat("perf.gate.mad_k", DefaultGateMADK),
 		FloorPct: c.GetFloat("perf.gate.floor_pct", DefaultGateFloorPct),
 		MinRuns:  c.GetInt("perf.gate.min_runs", DefaultGateMinRuns),
+
+		MaxBandPct: c.GetFloat("perf.gate.max_band_pct", DefaultGateMaxBandPct),
+		RunID:      c.GetString("report.portal.run_id", ""),
 	}
 }
 
@@ -79,10 +90,14 @@ func portalGateCall(ctx context.Context, pg portalGateConfig, testName, ybVersio
 			"direction": string(dp.Direction), "load_signature": id.LoadSignature,
 		})
 	}
-	body, err := json.Marshal(map[string]any{
+	gateReq := map[string]any{
 		"test": testName, "yb_version": ybVersion,
 		"window": pg.Window, "mad_k": pg.MADK, "datapoints": dps,
-	})
+	}
+	if pg.RunID != "" {
+		gateReq["run_id"] = pg.RunID
+	}
+	body, err := json.Marshal(gateReq)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -140,6 +155,34 @@ func historyBands(t *core.T, pg portalGateConfig, testName string, gated []core.
 	return bands
 }
 
+// aaBands is each datapoint's arm-to-arm allowance from A/A history: the A/A
+// runs' own deltas for it, |median| + mad_k x MAD, floored at floor_pct. It is
+// empty on an A/A run itself and wherever fewer than min_runs A/A runs exist.
+func aaBands(t *core.T, pg portalGateConfig, testName string, gated []core.Datapoint, id Identity, logf func(string, ...any)) map[string]float64 {
+	if pg.URL == "" || id.AALoadSignature == "" || id.AALoadSignature == id.LoadSignature {
+		return nil
+	}
+	probe := make([]core.Datapoint, len(gated))
+	for i, dp := range gated {
+		probe[i] = core.Datapoint{Name: dp.Name + armDeltaSuffix, Unit: "%", Direction: core.LowerIsBetter}
+	}
+	aa := id
+	aa.LoadSignature = id.AALoadSignature
+	out, _, err := portalGateCall(t.Context, pg, testName, ybVersionOf(t), probe, aa)
+	if err != nil {
+		logf("perf: WARN A/A bands unavailable (%v)", err)
+		return nil
+	}
+	bands := map[string]float64{}
+	for _, it := range out.Items {
+		if it.Prev.N < pg.MinRuns {
+			continue
+		}
+		bands[strings.TrimSuffix(it.Name, armDeltaSuffix)] = math.Max(math.Abs(it.Prev.Median)+pg.MADK*it.Prev.MAD, pg.FloorPct)
+	}
+	return bands
+}
+
 // Recomputes delta/band/verdict from the portal's data, ignoring its verdicts: band = max(mad_k x MAD%, floor%), delta signed in the worse direction.
 func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGateConfig) []portalGateItem {
 	dirByName := map[string]core.Direction{}
@@ -167,6 +210,8 @@ func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGat
 		out[i].Threshold = band
 		out[i].ThresholdFrom = "framework"
 		switch {
+		case d > band && pg.MaxBandPct > 0 && band > pg.MaxBandPct:
+			out[i].Verdict = verdictNoisy
 		case d > band && math.Abs(it.Value-it.Prev.Median) < floorByName[it.Name]:
 			out[i].Verdict = verdictBelowFloor
 		case d > band && d <= spreadByName[it.Name]:
@@ -190,6 +235,10 @@ func localGateItems(gated []core.Datapoint, items []portalGateItem, pg portalGat
 const verdictSpreadVetoed = "spread_vetoed"
 
 const verdictBelowFloor = "below_min_delta"
+
+// verdictNoisy marks a datapoint whose history band is past max_band_pct: the
+// trend owns it, a single run does not.
+const verdictNoisy = "noisy"
 
 func gateCounts(items []portalGateItem) (regressed, improved, noSignal int) {
 	for _, it := range items {
@@ -232,9 +281,9 @@ func portalGateSummary(testName string, out *portalGateResponse) string {
 	if out.Regressed > 0 {
 		verdict = "fail"
 	}
-	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history, %d inside their own run spread, %d below what the measurement resolves (window %d, train %s)",
+	return fmt.Sprintf("perf: history gate %s for %s — %d/%d regressed, %d improved, %d without enough history, %d inside their own run spread, %d below what the measurement resolves, %d too noisy to gate (window %d, train %s)",
 		verdict, testName, out.Regressed, out.Total, out.Improved, out.NoSignal,
-		countVerdict(out.Items, verdictSpreadVetoed), countVerdict(out.Items, verdictBelowFloor), out.Window, orNone(out.YBTrain))
+		countVerdict(out.Items, verdictSpreadVetoed), countVerdict(out.Items, verdictBelowFloor), countVerdict(out.Items, verdictNoisy), out.Window, orNone(out.YBTrain))
 }
 
 func countVerdict(items []portalGateItem, verdict string) int {

@@ -838,3 +838,19 @@ func TestHelmSetsCarriesNodeSelector(t *testing.T) {
 		t.Error("no selector configured must set nothing")
 	}
 }
+
+func TestHelmSetsGuaranteedQoS(t *testing.T) {
+	d := &Deployer{cfg: Config{GuaranteedQoS: true, MasterCPU: "1", MasterMemory: "2Gi", TServerCPU: "2", TServerMemory: "4Gi"}}
+	sets := d.helmSets()
+	for k, want := range map[string]string{
+		"resource.master.limits.cpu": "1", "resource.master.limits.memory": "2Gi",
+		"resource.tserver.limits.cpu": "2", "resource.tserver.limits.memory": "4Gi",
+	} {
+		if sets[k] != want {
+			t.Errorf("%s = %q, want %q", k, sets[k], want)
+		}
+	}
+	if _, ok := (&Deployer{cfg: Config{TServerCPU: "2"}}).helmSets()["resource.tserver.limits.cpu"]; ok {
+		t.Error("without GuaranteedQoS the chart's own limits must stand")
+	}
+}

@@ -23,6 +23,9 @@ type Options struct {
 	core.RunOptions
 	Capacity          int // total lease units (concurrent environments)
 	PerEnvParallelism int // co-tenant tests per SHARED environment
+	// ClusterSlots, when set, caps EnvSpec.ClusterSlots across every run on
+	// the cluster; nil leaves them uncapped.
+	ClusterSlots *ClusterSlots
 }
 
 // shapeDefaultWeight is the lease weight a shape costs when a test does not set
@@ -261,6 +264,15 @@ func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	}
 	// If Acquire failed it was ctx cancellation; RunOne then surfaces the dead
 	// context as an env_failed during provisioning — no separate path needed.
+	if n := test.Env.ClusterSlots; n > 0 && s.opts.ClusterSlots != nil && ctx.Err() == nil {
+		release, err := s.opts.ClusterSlots.Acquire(ctx, test.Name, n)
+		if err == nil {
+			defer release()
+		} else if ctx.Err() == nil {
+			// A store the run cannot reach must not stop the run; it only loses the cap.
+			s.opts.ClusterSlots.logf("sched: %s runs without cluster slots: %v", test.Name, err)
+		}
+	}
 	if s.acquireSlot(ctx) {
 		defer s.releaseSlot()
 	}

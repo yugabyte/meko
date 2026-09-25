@@ -13,14 +13,10 @@
 //
 // WHERE it measures: the amp COMPUTE ENDPOINT the env provider hands the test
 // (the pgEndpointEnv capability — sharedk8s and
-// universe envs all serve it), NOT a tserver. The rest of the perf tier
-// self-provisions a co-located YB-in-k8s backing and connects to its tserver
-// YSQL port, so amp is not in the request path there and an amp-layer
-// regression is structurally invisible. This test therefore takes a
-// functional-style environment and applies perf-style measurement and gating to
-// it: no client pod, no benchmark driver, no self-provisioned backing — the
-// timing, the datapoints and the baseline gate are the same plumbing every other
-// perf test uses. Registered by init.
+// universe envs all serve it), NOT a tserver: no client pod and no benchmark
+// driver, each phase is one statement timed from the test process. The
+// datapoints and the gates are the same plumbing every other perf test uses.
+// Registered by init.
 package perf
 
 import (
@@ -110,7 +106,7 @@ func init() {
 		Name:       testNameMicrobench,
 		Suite:      "perf",
 		Category:   core.Perf,
-		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.SingleContainer},
+		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.SingleContainer, ClusterSlots: armClusterSlots},
 		Tags:       []string{"perf"},
 		OwningTeam: core.TeamCompute,
 		Description: "Time labelled DDL/bulk-DML phases (create, cold 200k insert, truncate + re-insert cycles, count, PK lookup, update, delete, drop) " +
@@ -198,8 +194,8 @@ func runMicrobench(t *core.T) error {
 // has no baseline twin.
 func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams, tag string, logf func(string, ...any)) error {
 	load := loadFieldsMicrobench(params)
-	load.Harness = provisionedHarness
-	id := identityFromConfig(t.Options, "", frameworkCommit(), load)
+	load.Harness = provisionedHarness + cfg.isolationSuffix()
+	id := identityFromConfig(t.Options, "", frameworkCommit(), load).forLiveArm(t.Options)
 	t.SetPerfIdentity(id.core())
 
 	cur, base, armErr, err := provisionLiveArms(t, cfg, tag, logf)
@@ -287,18 +283,11 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 		baselineUp := len(baseResults) > 0
 		if baselineUp {
 			baseGated, _, _ := microbenchDatapoints(baseResults, params)
-			pol := cfg.LiveArm
-			pol.Bands = historyBands(t, portalGateFromConfig(t.Options), testNameMicrobench, gated, id, logf)
-			s.Set("live_arm_bands", len(pol.Bands))
-			tableTxt, suspects, gerr := liveArmGate(gated, baseGated,
-				microbenchBestValues(results), microbenchBestValues(baseResults), pol, tag)
+			extra, gerr := liveGate(t, s, testNameMicrobench, id, gated, baseGated,
+				microbenchBestValues(results), microbenchBestValues(baseResults),
+				phasePairs(results, baseResults, microbenchDatapointPrefix), tag, liveGateOpts{}, logf)
 			lbErr = gerr
-			if len(suspects) > 0 {
-				s.Set("live_arm_suspects", strings.Join(suspects, "; "))
-			}
-			t.AttachBytes(liveBaselineArtifact, "log", []byte(tableTxt))
-			info = append(info, liveArmDatapoints(baseGated)...)
-			logf("perf: live baseline gate for %s vs %s: %s", testNameMicrobench, tag, verdictWord(gerr))
+			info = append(info, extra...)
 		}
 		gateErr := emitAndGateHistory(t, cfg, microbenchVersion(t), testNameMicrobench, gated, info, id, !baselineUp, logf)
 		return errors.Join(ratioErr, lbErr, gateErr)
@@ -311,6 +300,9 @@ type phaseResult struct {
 	Name  string
 	Group string
 	MS    float64
+	// Iter is the iteration that produced it (0 when the test runs once); the
+	// live arm pairs the arms' timings on (Name, Iter).
+	Iter int
 }
 
 // phase is one labelled statement to time.

@@ -29,6 +29,11 @@ type Datapoint struct {
 	// this: the run could not measure the difference it is being blamed for.
 	SpreadPct float64
 	MinDelta  float64
+	// N is how many samples Value was reduced from and Samples those values, so
+	// the portal can show the spread. For a benchmark they are per provision, or
+	// per iteration when perf.provisions is 1.
+	N       int
+	Samples []float64
 }
 
 // BaselineComparison is a Datapoint's comparison against its baseline value:

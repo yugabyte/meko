@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -17,17 +18,25 @@ import (
 // harness aggregates the kept iterations with robust statistics (median as the
 // headline, plus mean/stddev/CV/min/max) and hands back the per-iteration
 // samples with the aggregate. The caller emits datapoints from the MEDIAN and
-// gates the baseline on it, and emits each metric's coefficient of variation
-// (.cv) as an informational signal so a noisy run is visible in the report.
+// gates on it.
+//
+// After the saturated iterations a FIXED-RATE run drives the same workload at a
+// fraction of the measured throughput. Latency at saturation is queueing delay
+// and moves with every throughput wobble, so latency is gated there, and only
+// throughput at saturation.
 
 // Bench defaults (perf.bench.*). Kept modest so a benchmark stays cheap while
 // still producing a stable multi-iteration signal.
 const (
-	DefaultBenchIterations          = 3
+	// Iterations on one stack agree to ~1%; the spread is stack to stack, so a
+	// third iteration bought nothing a provision would not buy better.
+	DefaultBenchIterations          = 2
 	DefaultBenchWarmup              = 30 * time.Second
 	DefaultBenchMeasurementDuration = 60 * time.Second
 	DefaultBenchCooldown            = 0 * time.Second
-	DefaultBenchDiscardFirst        = true
+	DefaultBenchDiscardFirst        = false
+	DefaultBenchFixedRateFraction   = 0.6
+	benchLatencyFloorMS             = 1.0
 	DefaultBenchSampleInterval      = 1 * time.Second
 	DefaultBenchMinIterations       = 1
 )
@@ -39,6 +48,8 @@ const (
 type RunParams struct {
 	Duration       time.Duration
 	SampleInterval time.Duration
+	// Rate is the target transactions per second; 0 runs unthrottled.
+	Rate float64
 }
 
 // SamplePoint is one periodic progress reading within a single run.
@@ -55,8 +66,10 @@ type Sample struct {
 	LatencyAvgMS float64
 	LatencyP95MS float64
 	LatencyP99MS float64
-	Series       []SamplePoint
-	Raw          string
+	// CacheHitPct is the endpoint's LFC hit ratio over the run, 0 when unread.
+	CacheHitPct float64
+	Series      []SamplePoint
+	Raw         string
 }
 
 // Workload is a benchmark the harness drives: prepared once, then run for one
@@ -90,9 +103,15 @@ type BenchConfig struct {
 	// stops (perf.bench.load_only). They are mutually exclusive.
 	SkipLoad bool
 	LoadOnly bool
+	// FixedRateFraction is the fixed-rate run's target as a fraction of the
+	// saturated median tps; 0 skips the run.
+	FixedRateFraction float64
 	// StartGate blocks after the load phase until every concurrent arm is loaded,
 	// so the measured windows overlap; nil = start immediately.
 	StartGate func(context.Context) error
+	// RateGate turns this arm's proposed fixed rate into the one every arm runs
+	// at, so a slower arm is not handed an easier load; nil keeps the proposal.
+	RateGate func(ctx context.Context, proposed float64) (float64, error)
 }
 
 // benchConfigFromConfig reads perf.bench.* into a BenchConfig.
@@ -105,6 +124,7 @@ func benchConfigFromConfig(c *core.Config) BenchConfig {
 		DiscardFirst:        c.GetBool("perf.bench.discard_first", DefaultBenchDiscardFirst),
 		SampleInterval:      c.GetDuration("perf.bench.sample_interval", DefaultBenchSampleInterval),
 		MinIterations:       c.GetInt("perf.bench.min_iterations", DefaultBenchMinIterations),
+		FixedRateFraction:   c.GetFloat("perf.bench.fixed_rate_fraction", DefaultBenchFixedRateFraction),
 		SkipLoad:            c.GetBool("perf.bench.skip_load", false),
 		LoadOnly:            c.GetBool("perf.bench.load_only", false),
 	}
@@ -152,6 +172,16 @@ type BenchResult struct {
 	LatencyAvg BenchStats
 	LatencyP95 BenchStats
 	LatencyP99 BenchStats
+	CacheHit   BenchStats
+	// Fixed is the fixed-rate run at FixedTarget tps; nil when it was skipped.
+	// FixedErr is why it failed; the saturated result stands without it.
+	Fixed       *Sample
+	FixedErr    error
+	FixedTarget float64
+	FixedTPS    BenchStats
+	FixedAvg    BenchStats
+	FixedP95    BenchStats
+	FixedP99    BenchStats
 }
 
 // RunBenchmark prepares w once, runs a discarded warmup (when configured) and
@@ -220,7 +250,77 @@ func RunBenchmark(ctx context.Context, ex exec.RemoteExecutor, w Workload, bc Be
 	res.LatencyAvg = aggregate(field(res.Kept, func(s Sample) float64 { return s.LatencyAvgMS }))
 	res.LatencyP95 = aggregate(field(res.Kept, func(s Sample) float64 { return s.LatencyP95MS }))
 	res.LatencyP99 = aggregate(field(res.Kept, func(s Sample) float64 { return s.LatencyP99MS }))
+	res.CacheHit = aggregate(field(res.Kept, func(s Sample) float64 { return s.CacheHitPct }))
+	if err := runFixedRate(ctx, ex, w, bc, &res); err != nil {
+		res.Fixed, res.FixedTarget, res.FixedErr = nil, 0, err
+	}
 	return res, nil
+}
+
+func runFixedRate(ctx context.Context, ex exec.RemoteExecutor, w Workload, bc BenchConfig, res *BenchResult) error {
+	if bc.FixedRateFraction <= 0 {
+		return nil
+	}
+	target := res.TPS.Median * bc.FixedRateFraction
+	if bc.RateGate != nil {
+		t, err := bc.RateGate(ctx, target)
+		if err != nil {
+			return fmt.Errorf("agree fixed rate: %w", err)
+		}
+		target = t
+	}
+	if target <= 0 {
+		return nil
+	}
+	s, err := w.RunOnce(ctx, ex, RunParams{Duration: bc.MeasurementDuration, SampleInterval: bc.SampleInterval, Rate: target})
+	res.Fixed, res.FixedTarget = &s, target
+	if err != nil {
+		return fmt.Errorf("fixed-rate run at %.1f tps: %w", target, err)
+	}
+	res.FixedTPS = aggregate([]float64{s.TPS})
+	res.FixedAvg = aggregate([]float64{s.LatencyAvgMS})
+	res.FixedP95 = aggregate([]float64{s.LatencyP95MS})
+	res.FixedP99 = aggregate([]float64{s.LatencyP99MS})
+	return nil
+}
+
+// rateBarrier collects every arm's proposed fixed rate and hands each the
+// lowest positive one. An arm that dies arrives with 0 (deferred), so nobody
+// waits on it.
+type rateBarrier struct {
+	mu   sync.Mutex
+	left int
+	min  float64
+	done chan struct{}
+}
+
+func newRateBarrier(n int) *rateBarrier {
+	return &rateBarrier{left: n, done: make(chan struct{})}
+}
+
+func (b *rateBarrier) arrive(v float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.left == 0 {
+		return
+	}
+	if v > 0 && (b.min == 0 || v < b.min) {
+		b.min = v
+	}
+	if b.left--; b.left == 0 {
+		close(b.done)
+	}
+}
+
+func (b *rateBarrier) wait(ctx context.Context) (float64, error) {
+	select {
+	case <-b.done:
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.min, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
 }
 
 // field clusters one metric out of each sample into a fresh slice.
@@ -343,6 +443,7 @@ type metricSpec struct {
 	// (e.g. a driver that reports no periodic progress).
 	FromSample func(Sample) float64
 	FromPoint  func(SamplePoint) float64
+	Info       bool
 }
 
 // splitDatapoints turns the metric specs into the GATED headline datapoints,
@@ -352,9 +453,50 @@ type metricSpec struct {
 // parameters nobody reads.
 func splitDatapoints(specs []metricSpec) (gated, info []core.Datapoint) {
 	for _, m := range specs {
-		gated = append(gated, core.Datapoint{Name: m.Name, Value: m.Stats.Median, Unit: m.Unit, Direction: m.Dir})
+		if m.Stats.Median == 0 && len(m.Stats.Values) == 0 {
+			continue
+		}
+		// No SpreadPct: across provisions it is the stack-to-stack spread, which
+		// the history band already carries, and the history gate would veto
+		// every regression inside it a second time.
+		dp := core.Datapoint{Name: m.Name, Value: m.Stats.Median, Unit: m.Unit, Direction: m.Dir,
+			N: len(m.Stats.Values), Samples: m.Stats.Values}
+		if m.Unit == "ms" {
+			// The live arm's 250ms default floor is for one-shot operations through
+			// port-forwards; a benchmark latency is an aggregate over thousands.
+			dp.MinDelta = benchLatencyFloorMS
+		}
+		if m.Info {
+			info = append(info, dp)
+		} else {
+			gated = append(gated, dp)
+		}
 	}
 	return gated, info
+}
+
+// fixedRateSpecs is the fixed-rate run's metric set under prefix: the
+// latencies gated, the achieved rate reported. centre names the driver's primary
+// latency (TPC-C's is its median, the rest an average). A latency the driver
+// did not report (zero) is left out.
+func fixedRateSpecs(prefix, centre string, res BenchResult) []metricSpec {
+	if res.FixedTarget <= 0 {
+		return nil
+	}
+	p := prefix + ".fixed_rate."
+	specs := []metricSpec{
+		{Name: p + "tps", Unit: "tps", Dir: core.HigherIsBetter, Stats: res.FixedTPS, Info: true},
+	}
+	for _, m := range []metricSpec{
+		{Name: p + centre, Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedAvg},
+		{Name: p + "latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedP95},
+		{Name: p + "latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedP99},
+	} {
+		if m.Stats.Median > 0 {
+			specs = append(specs, m)
+		}
+	}
+	return specs
 }
 
 // Over the provision medians, so CV/min/max are the stack-to-stack spread.
@@ -369,10 +511,22 @@ func aggregateProvisions(rs []BenchResult) BenchResult {
 		}
 		return aggregate(vals)
 	}
-	return BenchResult{
+	out := BenchResult{
 		TPS:        pick(func(r BenchResult) BenchStats { return r.TPS }),
 		LatencyAvg: pick(func(r BenchResult) BenchStats { return r.LatencyAvg }),
 		LatencyP95: pick(func(r BenchResult) BenchStats { return r.LatencyP95 }),
 		LatencyP99: pick(func(r BenchResult) BenchStats { return r.LatencyP99 }),
+		CacheHit:   pick(func(r BenchResult) BenchStats { return r.CacheHit }),
+		FixedTPS:   pick(func(r BenchResult) BenchStats { return r.FixedTPS }),
+		FixedAvg:   pick(func(r BenchResult) BenchStats { return r.FixedAvg }),
+		FixedP95:   pick(func(r BenchResult) BenchStats { return r.FixedP95 }),
+		FixedP99:   pick(func(r BenchResult) BenchStats { return r.FixedP99 }),
 	}
+	for _, r := range rs {
+		if r.FixedTarget > 0 {
+			out.FixedTarget = r.FixedTarget
+			break
+		}
+	}
+	return out
 }

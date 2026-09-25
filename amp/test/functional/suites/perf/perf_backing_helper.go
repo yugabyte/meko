@@ -88,15 +88,35 @@ func deployYBBackingCfg(ctx context.Context, t *core.T, k8sCfg ybk8s.Config, suf
 // td, and returns a RemoteExecutor bound to it (over which a workload driver or
 // an artifact deploy runs commands inside the pod).
 func startPerfClientPod(ctx context.Context, kube *k8s.Kubectl, sink apps.ArtifactSink, td *teardownStack, name, image, pullSecret string) (exec.RemoteExecutor, error) {
+	return startShapedClientPod(ctx, kube, sink, td, name, image, pullSecret, clientShape{})
+}
+
+const shapedClientReadyTimeout = 10 * time.Minute
+
+// clientShape pins and sizes a benchmark client pod; the zero value is the
+// unpinned, unbounded pod.
+type clientShape struct {
+	NodeSelector map[string]string
+	CPU, Memory  string
+}
+
+func startShapedClientPod(ctx context.Context, kube *k8s.Kubectl, sink apps.ArtifactSink, td *teardownStack, name, image, pullSecret string, sh clientShape) (exec.RemoteExecutor, error) {
 	spec := clientpod.Spec{
-		Name:    name,
-		Image:   image,
-		Command: []string{"sh", "-c", "sleep infinity"},
+		Name:         name,
+		Image:        image,
+		Command:      []string{"sh", "-c", "sleep infinity"},
+		NodeSelector: sh.NodeSelector,
+		CPU:          sh.CPU,
+		Memory:       sh.Memory,
 	}
 	if pullSecret != "" {
 		spec.ImagePullSecrets = []string{pullSecret}
 	}
 	cp := clientpod.NewK8s(kube)
+	if sh.CPU != "" || len(sh.NodeSelector) > 0 {
+		// A pinned, Guaranteed pod may wait for its pool to add a node.
+		cp.ReadyTimeout = shapedClientReadyTimeout
+	}
 	if err := cp.Start(ctx, spec); err != nil {
 		return nil, core.EnvFail("start client pod: %w", err)
 	}
@@ -259,6 +279,35 @@ func startMetricsSampler(ctx context.Context, t *core.T, kube *k8s.Kubectl, td *
 // Every heavy perf run now measures through that endpoint, so its pod is as
 // much a part of the request path as the backing tservers are. Best-effort in
 // every direction, exactly like startMetricsSampler.
+// loadOnlySamplers runs the same samplers on a live arm's baseline stacks and
+// reports nothing. The sampler execs into every tserver and endpoint pod and
+// scrapes their metrics every sample_interval, which costs CPU on the pods
+// under test: sampling only the current arm made an A/A run (run 1d9f5d5d,
+// both arms on one image) read the current arm 10.7% slower on 3 of 3 pairs.
+func loadOnlySamplers(ctx context.Context, t *core.T, kube *k8s.Kubectl, ep *ampEndpoint, td *teardownStack, logf func(string, ...any)) {
+	cfg := metrics.FromConfig(t.Options)
+	if !cfg.Enabled {
+		return
+	}
+	var ss []*metrics.Sampler
+	if kube != nil {
+		ss = append(ss, metrics.New(kube, cfg).WithLogf(logf))
+	}
+	if ep != nil && ep.Kube != nil {
+		ss = append(ss, metrics.NewEndpoint(ep.Kube, cfg, ep.podSelector()).WithLogf(logf))
+	}
+	for _, s := range ss {
+		if err := s.Start(ctx); err != nil {
+			logf("perf: baseline-arm sampler not started (best-effort): %v", err)
+			continue
+		}
+		td.push("stop baseline-arm sampler", func(context.Context) error {
+			s.Stop()
+			return nil
+		})
+	}
+}
+
 func startEndpointSampler(ctx context.Context, t *core.T, ep ampEndpoint, td *teardownStack, logf func(string, ...any)) *metrics.Sampler {
 	cfg := metrics.FromConfig(t.Options)
 	if !cfg.Enabled || ep.Kube == nil {

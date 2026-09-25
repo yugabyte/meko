@@ -131,13 +131,26 @@ tests need (a single run would demand every cloud credential at once):
   namespaces, `stress.backing_node_partition.multi_region_topology`): one
   region's tserver cut off while the surviving quorum is tens of milliseconds
   apart.
-- **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
-  each gated against a LIVE baseline by default (`perf.baseline.live`): a second
-  set of stacks on the prior release runs the same workload concurrently, and
-  the verdict is current-vs-that under identical conditions. The portal-history
-  comparison stays informational (its band/verdict are framework-side,
-  `perf.gate.*`). Version/image comparison + bisect + history/trend remain. All
-  three also sample the backing's own numbers while the benchmark runs
+- **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench`, `sysbench` and
+  `pgbench_uncached`, each gated against a LIVE baseline by default
+  (`perf.baseline.live`): a second set of stacks on the prior release runs the
+  same workload concurrently, and the verdict is the median of the per-pair
+  deltas (provision i against provision i), with a sign test on the pairs.
+  Throughput is gated at saturation and latency on one fixed-rate window at
+  `perf.bench.fixed_rate_fraction` of the lowest arm's throughput. Every stack
+  is pinned to `perf.arm_node_selector`, and its tservers, masters and client
+  pod run with limits equal to requests (`perf.isolation.*`); the endpoint is
+  Guaranteed already, by the product chart. A datapoint's allowance is its A/A
+  band where `perf.baseline.aa` runs have built one. A band past
+  `perf.live_arm.max_band_pct` (live verdict) or `perf.gate.max_band_pct`
+  (history gate) is reported `noisy` and never failed on. A benchmark fails on
+  one datapoint past its allowance; the lifecycle and microbench arms need
+  `perf.live_arm.min_violations`. A benchmark with its live arm holds 6 of the
+  cluster's `sched.cluster_slots.capacity` (12) stack slots, so at most two run
+  at once across every run on the cluster; the rest wait before their body. The
+  portal-history comparison stays informational (its band/verdict are
+  framework-side, `perf.gate.*`). Version/image comparison + bisect +
+  history/trend remain. All four also sample the backing's own numbers while the benchmark runs
   (`apps/metrics`: per-pod CPU/memory plus the `apps.metrics.collect` prometheus
   set) and report them as series metrics under human keys — `[yb tserver] Write
   latency`, not a raw prometheus name. `microbench` samples the amp compute
@@ -164,11 +177,27 @@ tests need (a single run would demand every cloud credential at once):
   configured round trips apart (multi-AZ, multi-region, the endpoint remote
   from its universe), every round trip verified with ping first.
 
+What one run can resolve, measured on the portal before the stacks were
+isolated (40 runs per series, 50 or so live-arm pairs; 80% power, one-sided 5%):
+
+| datapoint | run-to-run CV | arm ratio sd | smallest regression one run detects |
+|---|---|---|---|
+| `pgbench.tps` | 13% | 15% | ~36% |
+| `tpcc.throughput` | 16% | 48% | ~120% |
+| `lifecycle.fork_loaded` | 23% | 34% | ~85% |
+| `idle.rss_mib_sum` | 0.6% | n/a | ~2% |
+
+Isolation, pairing and the A/A band exist to shrink the middle column.
+Re-measure it from the `.arm_delta_pct` series before trusting a green run to
+mean less than the last column.
+
 Example (one env at a time):
 
 ```
 ampqa run --tag stress -c gke.yaml -o stress.combined.enabled=bool:true
 ampqa run --tag perf   -c gke.yaml -o perf.enabled=bool:true
+# A/A: both arms on the image under test, builds the noise model
+ampqa run --tag perf   -c gke.yaml -o perf.baseline.aa=bool:true
 ```
 
 `--tag stress` selects the whole tier. `load_sustain` needs no config beyond a

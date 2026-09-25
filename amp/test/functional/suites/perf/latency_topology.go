@@ -40,7 +40,7 @@ import (
 const (
 	testNameLatencyTopology = "perf/latency_topology"
 	latencyTopologyPrefix   = "latency_topology."
-	latencyTopologyHarness  = "1"
+	latencyTopologyHarness  = "2"
 	// latencyBaselineName is the unshaped run every topology is a ratio of.
 	latencyBaselineName = "baseline"
 	// A ratio carries the unshaped baseline's own run-to-run swing, so a change
@@ -110,7 +110,7 @@ func init() {
 		Name:        testNameLatencyTopology,
 		Suite:       "perf",
 		Category:    core.Perf,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe, ClusterSlots: 1},
 		Tags:        []string{"perf"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Provision the perf tier's RF3 YB-in-k8s backing, amp control plane, compute endpoint and benchmark client once, benchmark unshaped, then re-benchmark the same loaded dataset under each perf.latency_topology.topologies entry: tc netem delay injected into every tserver's and the endpoint's own network namespace so the sites are the configured round trips apart (multi-AZ, multi-region, the endpoint remote from its universe), each round trip verified with ping before the run counts. sysbench by default, pgbench by perf.latency_topology.workload. Gates every topology's tps and latency against portal history and reports each as a ratio of the unshaped run.",
@@ -192,6 +192,9 @@ func runLatencyTopology(t *core.T) (err error) {
 		}
 	}
 	bc := benchConfigFromConfig(t.Options)
+	// Its figures are ratios against the unshaped run on the same stack; a
+	// fixed-rate pass per topology would add minutes and no new ratio.
+	bc.FixedRateFraction = 0
 	if bc.SkipLoad || bc.LoadOnly {
 		return errors.New("perf.bench.skip_load and load_only do not apply: this test loads once and measures every topology on that dataset")
 	}
@@ -251,12 +254,12 @@ func runLatencyTopology(t *core.T) (err error) {
 func (r *latencyRun) identity() Identity {
 	load := r.wl.load
 	// The site matrix is part of what the numbers mean, so it keys the history.
-	load.Harness = latencyTopologyHarness + "-" + netshape.Signature(r.params.Topologies)
+	load.Harness = latencyTopologyHarness + r.cfg.isolationSuffix() + "-" + netshape.Signature(r.params.Topologies)
 	return identityFromConfig(r.t.Options, r.params.Workload, frameworkCommit(), load)
 }
 
 func (r *latencyRun) provisionBacking(ctx context.Context, _ *core.StepHandle) error {
-	info, kube, err := deployYBBacking(ctx, r.t, r.cfg.RF, r.sfx, r.td, r.logf)
+	info, kube, err := deployYBBackingCfg(ctx, r.t, r.cfg.isolateBacking(clampBackingRF(ybk8s.FromConfig(r.t.Options), r.cfg.RF)), r.sfx, r.td, r.logf)
 	if err != nil {
 		return err
 	}
@@ -273,7 +276,7 @@ func (r *latencyRun) waitReady(ctx context.Context, _ *core.StepHandle) error {
 }
 
 func (r *latencyRun) provisionEndpoint(ctx context.Context, _ *core.StepHandle) error {
-	ep, err := provisionAmpEndpoint(ctx, r.t, ampstack.FromConfig(r.t.Options), ybk8s.FromConfig(r.t.Options), r.info, r.sfx, r.sink, r.td, r.logf)
+	ep, err := provisionAmpEndpoint(ctx, r.t, r.cfg.isolateEndpoints(ampstack.FromConfig(r.t.Options)), ybk8s.FromConfig(r.t.Options), r.info, r.sfx, r.sink, r.td, r.logf)
 	if err != nil {
 		return err
 	}
@@ -283,7 +286,7 @@ func (r *latencyRun) provisionEndpoint(ctx context.Context, _ *core.StepHandle) 
 }
 
 func (r *latencyRun) deployClientPod(ctx context.Context, _ *core.StepHandle) error {
-	podExec, err := startPerfClientPod(ctx, r.kube, r.sink, r.td, "ampqa-lattopo-"+r.sfx, r.cfg.ClientImage, r.cfg.ClientPullSecret)
+	podExec, err := startShapedClientPod(ctx, r.kube, r.sink, r.td, "ampqa-lattopo-"+r.sfx, r.cfg.ClientImage, r.cfg.ClientPullSecret, r.cfg.clientShape())
 	if err != nil {
 		return err
 	}

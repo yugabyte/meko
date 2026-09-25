@@ -16,7 +16,8 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
-// Within-stack iterations agree to ~1%; stack-to-stack spread is 20%+.
+// Within-stack iterations agree to ~1%; stack-to-stack spread was 20%+ before
+// the stacks were pinned and sized Guaranteed (perf.isolation).
 
 type benchWorkloadSpec struct {
 	testName     string
@@ -33,9 +34,11 @@ type benchWorkloadSpec struct {
 	// reaches it — the multi-region tests derive one config for both. nil reads
 	// the run's own options.
 	ampOptions *core.Config
-	mkWorkload workloadFactory
-	specs      func(BenchResult) []metricSpec
-	datapoints func(BenchResult) (gated, info []core.Datapoint)
+	// endpointPgSettings are extra Postgres settings for the measured endpoint.
+	endpointPgSettings map[string]string
+	mkWorkload         workloadFactory
+	specs              func(BenchResult) []metricSpec
+	datapoints         func(BenchResult) (gated, info []core.Datapoint)
 }
 
 func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc BenchConfig, id Identity) error {
@@ -43,6 +46,7 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 	hcfg := historyConfigFromConfig(t.Options)
 	version := chartVersion(t.Options)
 	logf := t.Masker().Logf(log.Printf)
+	id = id.forLiveArm(t.Options)
 	t.SetPerfIdentity(id.core())
 
 	// Live baseline: the same workload on concurrent stacks from a prior release; best-effort — unresolvable falls back to the history gate.
@@ -64,6 +68,7 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 	// slower-provisioning arm benchmarks alone at the tail and scores contention-
 	// free numbers the other arm never saw.
 	barrier := newStartBarrier(arms)
+	rate := newRateBarrier(arms)
 	provResults := make([]BenchResult, provisions)
 	provErrs := make([]error, provisions)
 	baseResults := make([]BenchResult, provisions)
@@ -73,7 +78,7 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			provResults[i-1], provErrs[i-1] = runOneProvision(t, spec, cfg, bc, provisionArm{n: i, of: provisions, barrier: barrier}, logf)
+			provResults[i-1], provErrs[i-1] = runOneProvision(t, spec, cfg, bc, provisionArm{n: i, of: provisions, barrier: barrier, rate: rate}, logf)
 		}(i)
 		if baselineTag == "" {
 			continue
@@ -81,7 +86,7 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			baseResults[i-1], baseErrs[i-1] = runOneProvision(t, spec, cfg, bc, provisionArm{n: i, of: provisions, baseline: baselineTag, amp: &baseAmp, barrier: barrier}, logf)
+			baseResults[i-1], baseErrs[i-1] = runOneProvision(t, spec, cfg, bc, provisionArm{n: i, of: provisions, baseline: baselineTag, amp: &baseAmp, barrier: barrier, rate: rate}, logf)
 		}(i)
 	}
 	wg.Wait()
@@ -102,24 +107,50 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 		}
 	}
 
-	return t.Step("gate_perf", func(*core.StepHandle) error {
+	return t.Step("gate_perf", func(s *core.StepHandle) error {
 		agg := aggregateProvisions(provResults)
 		gated, info := spec.datapoints(agg)
 		var lbErr error
 		if baselineUp {
 			baseAgg := aggregateProvisions(baseResults)
-			table, gerr := liveBaselineGate(agg, baseAgg,
-				float64Thresholds{DropPct: cfg.ThroughputDropPct, RisePct: cfg.LatencyRisePct}, baselineTag)
+			baseGated, _ := spec.datapoints(baseAgg)
+			// A benchmark gates 2-4 datapoints, so the quorum the ten-datapoint
+			// suites need would let a lone throughput drop pass.
+			extra, gerr := liveGate(t, s, spec.testName, id, gated, baseGated, nil, nil,
+				provisionPairs(spec, provResults, baseResults), baselineTag, liveGateOpts{MinViolations: 1, NoHistoryBand: true}, logf)
 			lbErr = gerr
-			t.AttachBytes(liveBaselineArtifact, "log", []byte(table))
-			info = append(info, baselineDatapoints(spec, baseAgg)...)
-			logf("perf: live baseline gate for %s vs %s: %s", spec.testName, baselineTag, verdictWord(gerr))
+			info = append(info, extra...)
 		}
 		// With a live verdict the history comparison is informational only.
 		histErr := emitAndGateHistory(t, cfg, version, spec.testName, gated, info, id, !baselineUp, logf)
 		emitHistoryTrend(t, hcfg, spec.testName, version, agg, id, logf)
 		return errors.Join(append([]error{lbErr, histErr}, shapeErrs...)...)
 	})
+}
+
+// provisionPairs pairs provision i of the run with provision i of the baseline
+// arm, which ran beside it, and returns each gated datapoint's per-pair deltas.
+func provisionPairs(spec benchWorkloadSpec, cur, base []BenchResult) map[string][]float64 {
+	out := map[string][]float64{}
+	for i := range cur {
+		if i >= len(base) {
+			break
+		}
+		cg, _ := spec.datapoints(cur[i])
+		bg, _ := spec.datapoints(base[i])
+		ref := map[string]core.Datapoint{}
+		for _, dp := range bg {
+			ref[dp.Name] = dp
+		}
+		for _, dp := range cg {
+			if r, ok := ref[dp.Name]; ok {
+				if d, ok := regressionPct(r.Value, dp.Value, dp.Direction); ok && dp.Value > 0 {
+					out[dp.Name] = append(out[dp.Name], d)
+				}
+			}
+		}
+	}
+	return out
 }
 
 func verdictWord(err error) string {
@@ -135,6 +166,7 @@ type provisionArm struct {
 	baseline string
 	amp      *ampstack.Config
 	barrier  *startBarrier
+	rate     *rateBarrier
 }
 
 // startBarrier releases every arm's benchmark only when ALL arms have arrived —
@@ -230,6 +262,19 @@ func runOneProvision(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc Bench
 			return arm.barrier.wait(ctx)
 		}
 	}
+	var rateOnce sync.Once
+	proposeRate := func(v float64) {
+		if arm.rate != nil {
+			rateOnce.Do(func() { arm.rate.arrive(v) })
+		}
+	}
+	defer proposeRate(0)
+	if arm.rate != nil {
+		r.bc.RateGate = func(ctx context.Context, v float64) (float64, error) {
+			proposeRate(v)
+			return arm.rate.wait(ctx)
+		}
+	}
 
 	phases := []struct {
 		name string
@@ -262,7 +307,7 @@ func (r *benchProvision) provisionBacking(ctx context.Context) error {
 	if r.spec.backing != nil {
 		return r.spec.backing(ctx, r)
 	}
-	info, kube, err := deployYBBacking(ctx, r.t, r.cfg.RF, r.sfx, r.td, r.logf)
+	info, kube, err := deployYBBackingCfg(ctx, r.t, r.cfg.isolateBacking(clampBackingRF(ybk8s.FromConfig(r.t.Options), r.cfg.RF)), r.sfx, r.td, r.logf)
 	if err != nil {
 		return err
 	}
@@ -282,6 +327,8 @@ func (r *benchProvision) waitReady(ctx context.Context) error {
 	}
 	if r.amp == nil {
 		r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
+	} else {
+		loadOnlySamplers(ctx, r.t, r.kube, nil, r.td, r.logf)
 	}
 	return nil
 }
@@ -295,13 +342,14 @@ func (r *benchProvision) provisionEndpoint(ctx context.Context) error {
 	if r.amp != nil {
 		amp = *r.amp
 	}
+	amp = r.cfg.isolateEndpoints(amp)
 	ybCfg := ybk8s.FromConfig(r.t.Options)
 	var ep ampEndpoint
 	var err error
 	if r.ampBacking != nil {
-		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, *r.ampBacking, r.sfx, r.sink, r.td, r.logf)
+		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, *r.ampBacking, r.sfx, r.spec.endpointPgSettings, r.sink, r.td, r.logf)
 	} else {
-		ep, err = provisionAmpEndpoint(ctx, r.t, amp, ybCfg, r.info, r.sfx, r.sink, r.td, r.logf)
+		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, ampBacking(r.info), r.sfx, r.spec.endpointPgSettings, r.sink, r.td, r.logf)
 	}
 	if err != nil {
 		return err
@@ -313,12 +361,14 @@ func (r *benchProvision) provisionEndpoint(ctx context.Context) error {
 	}
 	if r.amp == nil {
 		r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
+	} else {
+		loadOnlySamplers(ctx, r.t, nil, &ep, r.td, r.logf)
 	}
 	return nil
 }
 
 func (r *benchProvision) deployClientPod(ctx context.Context) error {
-	podExec, err := startPerfClientPod(ctx, r.kube, r.sink, r.td, r.spec.podPrefix+"-"+r.sfx, r.cfg.ClientImage, r.cfg.ClientPullSecret)
+	podExec, err := startShapedClientPod(ctx, r.kube, r.sink, r.td, r.spec.podPrefix+"-"+r.sfx, r.cfg.ClientImage, r.cfg.ClientPullSecret, r.cfg.clientShape())
 	if err != nil {
 		return err
 	}
@@ -332,6 +382,9 @@ func (r *benchProvision) deployClientPod(ctx context.Context) error {
 func (r *benchProvision) runBenchmark(ctx context.Context) error {
 	wl := r.spec.mkWorkload(r.endpoint.Conn)
 	res, err := RunBenchmark(ctx, r.podExec, wl, r.bc)
+	if res.FixedErr != nil {
+		r.logf("perf: WARN %s fixed-rate window failed, gating the saturated run only: %v", orNone(r.tag), res.FixedErr)
+	}
 	prefix := r.spec.attachPrefix
 	if r.tag != "" {
 		prefix += "-" + r.tag
