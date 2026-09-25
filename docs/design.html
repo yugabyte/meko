@@ -100,7 +100,7 @@ pre.mermaid{margin:0;background:transparent}
   .dot.working{animation:pulse 1.8s ease-in-out infinite}
   @keyframes pulse{50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--ok) 8%,transparent)}}
 }
-.mainpane{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+.mainpane{display:grid;grid-template-rows:auto auto auto 1fr auto;min-width:0}
 .crumb{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--rule)}
 .crumb b{font-weight:600}
 .crumb .sp{flex:1}
@@ -112,6 +112,15 @@ pre.mermaid{margin:0;background:transparent}
 .term{background:var(--term);color:var(--term-ink);font-family:var(--mono);font-size:12px;line-height:1.6;padding:14px 16px;white-space:pre;overflow:hidden}
 .term .d{color:var(--term-dim)} .term .a{color:var(--term-accent)} .term .g{color:var(--term-ok)} .term .w{color:var(--term-warn)}
 .foot{display:flex;flex-wrap:wrap;gap:4px 18px;padding:7px 14px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface)}
+.stages{display:flex;align-items:center;padding:8px 14px;border-bottom:1px solid var(--rule);font-size:12px;gap:0}
+.stg{display:flex;align-items:center;gap:6px;color:var(--muted);padding:0 4px;white-space:nowrap}
+.stg .n{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--rule);display:grid;place-items:center;font-size:10px;font-variant-numeric:tabular-nums}
+.stg.done .n{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.stg.cur{color:var(--ink);font-weight:600}
+.stg.cur .n{border-color:var(--accent);color:var(--accent);border-width:2px}
+.stg-sep{flex:1;height:1px;background:var(--rule);min-width:8px;margin:0 4px}
+.gate{margin-left:14px;background:var(--accent);color:var(--surface);border-radius:6px;padding:3px 10px;font-weight:600;white-space:nowrap}
+.stchip{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:0 6px;border-radius:999px;background:color-mix(in srgb,currentColor 14%,transparent)}
 .legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:.88rem;color:var(--muted)}
 .legend span{display:inline-flex;align-items:center;gap:8px}
 
@@ -174,6 +183,7 @@ pre.mermaid{margin:0;background:transparent}
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#app">The app</a></li>
     <li><a href="#sessions">Projects &amp; sessions</a></li>
+    <li><a href="#lifecycle">Task lifecycle</a></li>
     <li><a href="#datapacks">Datapacks</a></li>
     <li><a href="#login">Login &amp; security</a></li>
     <li><a href="#recovery">Crash recovery</a></li>
@@ -186,10 +196,10 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.5</span>
+  <span class="label">Design · v0.6</span>
   <h1>agent-k-local</h1>
-  <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each project records its work in Meko datapacks.</p>
-  <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local · Apache-2.0</span></div>
+  <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
+  <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
 </header>
 
 <section id="decisions">
@@ -207,9 +217,11 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Meko wiring</td><td>Sessions get <code>MEKO_DATAPACK_ID</code> and <code>MEKO_AGENT_ID</code> env vars. This needs a small change to the Meko plugin hooks.</td></tr>
       <tr><td>Network</td><td>Reachable directly on the corp network over HTTPS, behind a login.</td></tr>
       <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by agent-k-local are shown.</td></tr>
-      <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>.</td></tr>
+      <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
+      <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge → Cleanup, with three human gates. More ADLC stages plug in later.</td></tr>
+      <tr><td>Host OS</td><td>Linux devservers only for now. macOS is deferred.</td></tr>
       <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI, release-please for versions, tarball releases, and an update check built into the server.</td></tr>
-      <tr><td>Repo &amp; license</td><td>Public at <code>github.com/yugabyte/agent-k-local</code>, Apache-2.0.</td></tr>
+      <tr><td>Repo &amp; license</td><td>Internal at <code>github.com/yugabyte/agent-k-local</code> for now, to be made public later. Apache-2.0.</td></tr>
       <tr><td>Sharing</td><td>Everyone installs their own copy. One owner per install, with no shared instances.</td></tr>
       <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon. A native Mac wrapper is deferred.</td></tr>
     </tbody>
@@ -274,11 +286,12 @@ flowchart LR
           <div class="me"><span>signed in · you</span><span>v0.4.1</span></div>
         </div>
         <div class="mainpane">
-          <div class="crumb"><span style="color:var(--muted)">billing-api</span><span style="color:var(--muted)">/</span><b>fix retry backoff</b><span class="dot working"></span><span style="color:var(--muted);font-size:12px">working · 4m</span><span class="sp"></span><span class="btn">Project home</span><span class="btn">Archive</span></div>
+          <div class="crumb"><span style="color:var(--muted)">billing-api</span><span style="color:var(--muted)">/</span><b>fix retry backoff</b><span class="dot working"></span><span style="color:var(--muted);font-size:12px">working · 4m</span><span class="sp"></span><span class="btn">Project home</span><span class="btn">Design doc</span></div>
+          <div class="stages"><span class="stg done"><span class="n">✓</span>Design</span><span class="stg-sep"></span><span class="stg cur"><span class="n">2</span>Code</span><span class="stg-sep"></span><span class="stg"><span class="n">3</span>PR</span><span class="stg-sep"></span><span class="stg"><span class="n">4</span>Review</span><span class="stg-sep"></span><span class="stg"><span class="n">5</span>Merge</span><span class="stg-sep"></span><span class="stg"><span class="n">6</span>Cleanup</span><span class="gate">Open PR</span></div>
           <div class="tabs">
-            <div class="tab sel"><span class="dot working"></span>fix retry backoff</div>
-            <div class="tab"><span class="dot needs"></span>review PR #412</div>
-            <div class="tab"><span class="dot idle"></span>flaky test hunt</div>
+            <div class="tab sel"><span class="dot working"></span>fix retry backoff <span class="stchip">code</span></div>
+            <div class="tab"><span class="dot needs"></span>rate limit headers <span class="stchip">review</span></div>
+            <div class="tab"><span class="dot idle"></span>ledger export <span class="stchip">design</span></div>
             <div class="tab new">+ New session</div>
           </div>
 <div class="term"><span class="d">╭──────────────────────────────────────────────────────────────╮</span>
@@ -356,9 +369,9 @@ flowchart LR
         <div class="box">
           <span class="label">Recent activity</span>
           <div class="act"><time>10:42</time><span>fix retry backoff: tests passing, 1 edge case left</span></div>
-          <div class="act"><time>10:15</time><span>review PR #412: waiting on a permission prompt</span></div>
+          <div class="act"><time>10:15</time><span>rate limit headers: AgentK review in, 3 findings being addressed</span></div>
           <div class="act"><time>Yesterday</time><span>Memory: "idempotency keys expire after 24h"</span></div>
-          <div class="act"><time>Yesterday</time><span>flaky test hunt: archived, branch kept</span></div>
+          <div class="act"><time>Yesterday</time><span>flaky test hunt: PR #409 merged, worktree and branch cleaned up</span></div>
         </div>
       </div>
     </div>
@@ -410,7 +423,11 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
   claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
   desired TEXT CHECK (desired IN ('running','archived')),   <span class="c">-- what recovery restores</span>
   status TEXT,                    <span class="c">-- working | needs_input | idle | exited | recovered</span>
+  stage TEXT,                     <span class="c">-- design | code | pr | review | merge | cleanup | done</span>
+  pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
+<span class="k">CREATE TABLE</span> session_stages (  <span class="c">-- stage history: who moved it, and when</span>
+  session_id TEXT, stage TEXT, entered_at INTEGER, left_at INTEGER, moved_by TEXT);
 <span class="k">CREATE TABLE</span> session_events (  <span class="c">-- every hook call; feeds badges + project activity</span>
   id INTEGER PRIMARY KEY, session_id TEXT, kind TEXT, payload_json TEXT, at INTEGER);
 <span class="k">CREATE TABLE</span> owner (id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT, pw_scrypt TEXT, totp_secret TEXT);
@@ -423,6 +440,45 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
     <div class="card"><h3>Not on NFS</h3><p>SQLite locking is unreliable on network filesystems. The installer checks the filesystem type of <code>~/.agent-k-local</code>. If it's NFS, the installer puts <code>state.db</code> on local disk (<code>$XDG_STATE_HOME</code>, then <code>/var/tmp/$USER</code>) and records the path in <code>config.toml</code>.</p></div>
   </div>
   <p><code>config.toml</code> keeps only what's needed before the database opens: the port, TLS paths, repo roots, the update channel and the database path. Everything the UI changes lives in <code>state.db</code>.</p>
+</section>
+
+<section id="lifecycle">
+  <h2>Task lifecycle</h2>
+  <div class="prose">
+    <p>Every session is a task that moves through stages, from design to a merged PR with the branch cleaned up. This first pipeline covers six stages of the development lifecycle. The pipeline is defined as data, so later stages such as test, deploy and monitor can be added without reworking sessions.</p>
+    <p>There are three <b>gates</b> that only you can pass: approving the design, opening the PR, and merging. Everything between the gates runs on its own.</p>
+  </div>
+  <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  [*] --> Design
+  Design --> Code : you approve the design
+  Code --> PR : you click Open PR
+  PR --> Review : PR is open
+  Review --> Review : findings fixed, new round requested
+  Review --> Merge : you click Merge
+  Merge --> Cleanup : PR merged
+  Cleanup --> [*]
+</pre>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Stage</th><th>Claude</th><th>agent-k-local</th><th>Moves on when</th></tr></thead>
+    <tbody>
+      <tr><td>1 · Design</td><td>Starts in plan mode (<code>--permission-mode plan</code>) with your task, reads the code, and writes a design.</td><td>Saves the design to the project's dedicated datapack and shows it in a side panel next to the terminal.</td><td>You click <b>Approve design</b>. Small tasks can skip this stage at creation.</td></tr>
+      <tr><td>2 · Code</td><td>Implements the design and runs the repo's tests and checks.</td><td>Shows the diff size against the base branch in the footer.</td><td>You click <b>Open PR</b>. The button is disabled while Claude is mid-turn.</td></tr>
+      <tr><td>3 · PR</td><td>Commits with the repo's own commit conventions, pushes the branch, and runs <code>gh pr create</code> with a summary taken from the design.</td><td>Records the PR number and URL and links them in the header.</td><td>Automatically, once the PR exists.</td></tr>
+      <tr><td>4 · Review</td><td>When a review arrives, runs <code>/akr</code>: verifies each finding, fixes it, replies on every thread, votes, and pushes.</td><td>Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends <code>/akr</code> into the session.</td><td>You click <b>Merge</b>. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in.</td></tr>
+      <tr><td>5 · Merge</td><td>Nothing.</td><td>Runs <code>gh pr merge</code> using the repo's merge method (or <code>gh stack</code> for a stacked PR) and deletes the remote branch.</td><td>Automatically, once GitHub reports the PR as merged.</td></tr>
+      <tr><td>6 · Cleanup</td><td>Writes a short summary of what shipped, with the PR link, to the dedicated datapack.</td><td>Ends the tmux session, removes the worktree, deletes the local branch, runs <code>git fetch --prune</code> in your main checkout, and archives the session.</td><td>Done. The session record and its history stay.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="grid2">
+    <div class="card"><h3>AgentK in the loop</h3><p>AgentK doesn't re-review on push, so after fixes the header offers <b>Request another round</b>, which posts <code>/agentk review</code>. If AgentK declines a PR (for example, because it's too large), the refusal is shown with a <b>Force review</b> button. Forcing is always your call.</p></div>
+    <div class="card"><h3>Repos AgentK doesn't watch</h3><p>Each project has a reviewer setting: <em>AgentK</em> or <em>People only</em>. It's detected from recent PRs in the repo. With people only, the Review stage waits for CI and the required approvals.</p></div>
+    <div class="card"><h3>Stage prompts</h3><p>Each stage's instructions to Claude come from a template. The defaults live in <code>state.db</code>, and a repo can override one with <code>.agent-k/stages/&lt;stage&gt;.md</code>. This lets a team change how designs are written or PRs described without changing agent-k-local.</p></div>
+    <div class="card"><h3>Branch names</h3><p>The branch prefix is a project setting, <code>ak/</code> by default, because some orgs enforce a branch-name prefix with rulesets.</p></div>
+  </div>
 </section>
 
 <section id="datapacks">
@@ -504,13 +560,22 @@ sequenceDiagram
   loop each session with desired = running and no pane
     S->>S: verify worktree, recreate from branch if missing
     S->>T: new-session in worktree
-    T->>C: claude --resume session-id
+    alt session was mid-turn
+      T->>C: claude --resume session-id "continue prompt"
+    else idle or waiting on you
+      T->>C: claude --resume session-id
+    end
     C-->>S: SessionStart hook
     S->>S: mark as recovered
   end
 </pre>
   </div>
-  <p>A turn that was in progress when the host died is lost, but the conversation up to that point comes back. By default recovery does <b>not</b> send a "continue" prompt, because repeating half-done tool calls can have side effects. A per-project setting can turn automatic continue on.</p>
+  <p>A turn that was in progress when the host died is lost, but the conversation up to that point comes back. <b>Auto-continue is on by default</b>, with guards:</p>
+  <div class="grid2">
+    <div class="card"><h3>Only sessions that were working</h3><p>The session's status is written to <code>state.db</code> on every hook event, with full sync. A session whose last status was <em>working</em> is resumed with a continue prompt. Sessions that were idle or waiting on you come back exactly as they were.</p></div>
+    <div class="card"><h3>Check before continuing</h3><p>The prompt says the host restarted mid-turn. It asks Claude to check the worktree and the last commands (and, in the Review stage, the PR threads) before continuing, so finished steps aren't repeated and replies aren't posted twice.</p></div>
+    <div class="card"><h3>No crash loops</h3><p>A session is auto-continued at most once every 15 minutes. After two recoveries in an hour, it's parked as <em>needs you</em> instead. Each project can turn auto-continue off.</p></div>
+  </div>
 </section>
 
 <section id="releases">
@@ -518,7 +583,7 @@ sequenceDiagram
   <div class="grid2">
     <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
     <div class="card"><span class="label">On merge to main</span><h3>release-please</h3><p>release-please keeps a release PR open with the next version and the changelog, both derived from Conventional Commits. Merging it creates the tag.</p></div>
-    <div class="card"><span class="label">On tag</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code>, <code>linux-arm64</code> and <code>darwin-arm64</code>. Each bundles the Node runtime, prebuilt node-pty and better-sqlite3, and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
+    <div class="card"><span class="label">On tag</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node runtime, prebuilt node-pty and better-sqlite3, and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>.</p></div>
   </div>
   <div class="callout">
     <span class="label">glibc</span>
@@ -531,7 +596,7 @@ curl -fsSL https://github.com/&lt;owner&gt;/agent-k-local/releases/latest/downlo
 <span class="c">#  1. checks for tmux ≥ 2.7, git, claude, and the meko-agent-skills plugin</span>
 <span class="c">#     verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks)</span>
 <span class="c">#  2. unpacks to ~/.agent-k-local/app/&lt;ver&gt;, points app/current at it</span>
-<span class="c">#  3. installs both systemd user units (launchd agents on macOS), enables linger if allowed</span>
+<span class="c">#  3. installs both systemd user units and enables linger if allowed</span>
 <span class="c">#  4. asks for your repos folder (default ~/code) and writes config.toml</span>
 <span class="c">#  5. prints the one-time setup link</span></pre>
   <div class="prose">
@@ -568,19 +633,21 @@ curl -fsSL https://github.com/&lt;owner&gt;/agent-k-local/releases/latest/downlo
   <div class="ms">
     <div><h3><span class="mono">M0</span>Repo</h3><p>Git repo, the commit skill without agent attribution, CLAUDE.md, a license, the CI skeleton, and publishing to GitHub.</p></div>
     <div><h3><span class="mono">M1</span>Core</h3><p>The server with login and TLS, a Meko connection check, the New project repo picker with a mandatory dedicated datapack, worktree-backed sessions in tmux launched with the Meko env vars, and the browser terminal, rail and tabs. The Meko plugin PR for <code>MEKO_DATAPACK_ID</code> and <code>MEKO_AGENT_ID</code> ships alongside.</p></div>
-    <div><h3><span class="mono">M2</span>Status and durability</h3><p>Hooks drive the badges and notifications. The two systemd units, recovery on boot, resume for exited sessions, and the "Meko unreachable" banner.</p></div>
-    <div><h3><span class="mono">M3</span>Shared datapacks</h3><p>Attaching shared datapacks, <code>MEKO_DATAPACK_IDS</code> and the system-prompt listing, and the project home page with activity and search.</p></div>
-    <div><h3><span class="mono">M4</span>Ship it</h3><p>The release pipeline, <code>install.sh</code>, the update loop with rollback, and the first public release.</p></div>
-    <div><h3><span class="mono">M5</span>Polish</h3><p>The command palette, a diff view per session, merging or opening a PR from a session, passkeys, and a native Mac wrapper if the browser gets annoying.</p></div>
+    <div><h3><span class="mono">M2</span>Status and durability</h3><p>Hooks drive the badges and notifications. The two systemd units, recovery on boot with guarded auto-continue, resume for exited sessions, and the "Meko unreachable" banner.</p></div>
+    <div><h3><span class="mono">M3</span>Task lifecycle</h3><p>Stages and gates, the design panel, opening the PR, the AgentK review loop with <code>/akr</code>, merge, and cleanup of worktrees and branches.</p></div>
+    <div><h3><span class="mono">M4</span>Shared datapacks</h3><p>Attaching shared datapacks, <code>MEKO_DATAPACK_IDS</code> and the system-prompt listing, and the project home page with activity and search.</p></div>
+    <div><h3><span class="mono">M5</span>Ship it</h3><p>The release pipeline, <code>install.sh</code>, the update loop with rollback, and making the repo public.</p></div>
+    <div><h3><span class="mono">M6</span>Polish and next stages</h3><p>The command palette, a diff view per session, passkeys, more lifecycle stages (test, deploy, monitor), and macOS support.</p></div>
   </div>
 </section>
 
 <section id="questions">
   <h2>Open questions</h2>
   <ol class="q">
-    <li><b>macOS as a host.</b> Should the server also run locally on a Mac, or are Linux devservers enough for now?</li>
-    <li><b>Session end.</b> When a task is done, should the app offer "merge to main" or "open PR", or just archive and leave the branch?</li>
-    <li><b>Auto-continue after a crash.</b> Leave it off by default, as proposed?</li>
+    <li><b>Where approved designs live.</b> Only in the datapack, or also committed to the repo (for example <code>docs/designs/</code>) as part of the PR?</li>
+    <li><b>Automatic gates.</b> Should a project be allowed to make <b>Merge</b> automatic once AgentK has no open findings and CI is green?</li>
+    <li><b>Stacked PRs.</b> Should a session be able to produce a stack with <code>gh stack</code> instead of a single PR?</li>
+    <li><b>Merge method.</b> Always follow the repo's default, or let each project choose squash, rebase or merge?</li>
   </ol>
 </section>
 </main>
