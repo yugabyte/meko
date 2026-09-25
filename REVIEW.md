@@ -60,6 +60,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Both light and dark themes work; state is shown with shape as well as color.
 - [ ] Copy is plain and specific; errors say how to fix the problem.
 - [ ] The product is called **AgentK Local** in visible text.
+- [ ] The change works on a phone: see [src/web/REVIEW.md](src/web/REVIEW.md) for the phone and touch checks.
 
 ## 6. Tests, docs, release
 

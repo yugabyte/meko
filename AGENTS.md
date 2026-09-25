@@ -50,7 +50,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
 | `src/web/components/UsagePanel.tsx` | Project token usage: headline numbers, 14-day chart with table view, per-session and per-model tables. |
-| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session and copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`). |
+| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`), and handles touch scrolling, the key bar's input and releasing hidden phone terminals. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
+| `src/web/hooks/useMedia.ts`, `components/TopBar.tsx`, `SessionSheet.tsx`, `TermKeys.tsx` | The phone layout: breakpoint hooks and `--app-h` (follows the on-screen keyboard), the app bar, the ⋯ session sheet, and the terminal key bar and compose box. `src/web/keys.ts` holds the key sequences, bracketed paste and wheel reports they send. |
 | `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd templates, install and release scripts, CI and releases. |
 | `test/` | Unit tests, and integration tests against real tmux and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 
@@ -95,7 +96,7 @@ Docs are part of the change. Update them **in the same commit** as the code:
 |---|---|
 | Behavior, architecture, lifecycle, security or data model | `docs/design.html` (and bump its version label) |
 | Features, requirements, install steps | `README.md` |
-| Anything visible in the UI | `docs/screenshots/*.png` (retake them from a demo instance with neutral paths and names) |
+| Anything visible in the UI | `docs/screenshots/*.png` (retake them from a demo instance with neutral paths and names), including `mobile.png` for the phone layout |
 | Dev setup, checks, release process | `CONTRIBUTING.md` |
 | Module layout, invariants, commands, conventions | `AGENTS.md` |
 | What reviewers should check | `REVIEW.md` |

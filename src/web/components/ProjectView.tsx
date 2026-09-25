@@ -1,21 +1,23 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   STAGES,
   STARTUP_STEPS,
   STAGE_LABELS,
-  type DiscardCheck,
   type ProjectWithSessions,
   type Session,
   type SessionAction,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
 import { ConfirmButton, DatapackName, Dots, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
+import { EndSessionButton, SessionSheet } from './SessionSheet';
 import { TerminalPane } from './TerminalPane';
+import { TopBar } from './TopBar';
 
 const REVIEW_TEXT: Record<Session['reviewState'], string> = {
   none: 'no PR',
@@ -40,6 +42,7 @@ export function ProjectView({
   session,
   mekoWebUrl,
   onNewSession,
+  onMenu,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -47,17 +50,26 @@ export function ProjectView({
   session: Session | null;
   mekoWebUrl: string | null;
   onNewSession: () => void;
+  /** Opens the projects drawer (phone layout). */
+  onMenu: () => void;
   onError: (msg: string) => void;
 }) {
+  const mobile = useIsMobile();
   // One side panel at a time.
   const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
   const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
+  const [sheet, setSheet] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => setPanel(null), [session?.id]);
+  useEffect(() => {
+    setPanel(null);
+    setSheet(false);
+    tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [session?.id]);
   // During Design, show the design as soon as it's written, and again whenever it's revised.
   const designAt = session?.stage === 'design' ? session.designUpdatedAt : null;
   useEffect(() => {
@@ -77,52 +89,106 @@ export function ProjectView({
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
+  const canDesign = !!session && (session.hasDesign || session.stage === 'design');
+  const goHome = () => navigate({ view: 'home', projectId: project.id });
+
+  const branchText = session && <span>branch {session.branch}</span>;
+  const tokensText = session && (
+    <span title={usageTitle(session.usage)}>
+      tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
+    </span>
+  );
+  const mekoText = (
+    <span title="The project's Meko datapack">
+      Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
+      {sharedCount > 0 ? ` · +${sharedCount} shared` : ''}
+    </span>
+  );
+  const stageText = session && (
+    <span>
+      {STAGE_LABELS[session.stage].toLowerCase()}
+      {session.prNumber ? ` · ${REVIEW_TEXT[session.reviewState]} · ${CI_TEXT[session.ciState]}` : ''}
+    </span>
+  );
 
   return (
     <div className="project-view">
-      <header className="crumb">
-        <span className="muted">{project.name}</span>
-        {session && (
-          <>
-            <span className="muted">/</span>
-            <b className="crumb-name">{session.name}</b>
-            <StatusDot status={session.status} />
-            <span className="muted small status-text">
-              {STATUS_TEXT[session.status]}
-              {session.status === 'starting' && <Dots />}
-              {session.status === 'starting' && session.startup
-                ? ` · ${STARTUP_STEPS.find((x) => x.step === session.startup!.step)?.label ?? ''}`
-                : ''}
-              {session.status === 'working' && session.lastEventAt ? ` · ${duration(session.lastEventAt, now)}` : ''}
-              {session.statusDetail && session.status !== 'starting' ? ` · ${session.statusDetail}` : ''}
+      {mobile ? (
+        <TopBar onMenu={onMenu} sub={session ? project.name : undefined} title={session?.name ?? project.name}>
+          {session && (
+            <span className="topbar-status">
+              <StatusDot status={session.status} />
+              <span className="muted small">
+                {STATUS_TEXT[session.status]}
+                {session.status === 'starting' && <Dots />}
+                {session.status === 'working' && session.lastEventAt ? ` ${duration(session.lastEventAt, now)}` : ''}
+              </span>
             </span>
-          </>
-        )}
-        <span className="sp" />
-        {session?.prUrl && (
-          <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
-            PR #{session.prNumber}
-          </a>
-        )}
-        <button className="btn small" onClick={() => navigate({ view: 'home', projectId: project.id })}>
-          Project home
-        </button>
-        {session && (session.hasDesign || session.stage === 'design') && (
-          <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
-            Design doc
+          )}
+          {session?.status === 'exited' && (
+            <button className="btn small primary" onClick={() => act('resume')}>
+              Resume
+            </button>
+          )}
+          {session ? (
+            <button className="icon-btn topbar-more" onClick={() => setSheet(true)} aria-label="Session actions" aria-haspopup="dialog">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.8" />
+                <circle cx="12" cy="12" r="1.8" />
+                <circle cx="19" cy="12" r="1.8" />
+              </svg>
+            </button>
+          ) : (
+            <button className="btn small" onClick={goHome}>
+              Project home
+            </button>
+          )}
+        </TopBar>
+      ) : (
+        <header className="crumb">
+          <span className="muted">{project.name}</span>
+          {session && (
+            <>
+              <span className="muted">/</span>
+              <b className="crumb-name">{session.name}</b>
+              <StatusDot status={session.status} />
+              <span className="muted small status-text">
+                {STATUS_TEXT[session.status]}
+                {session.status === 'starting' && <Dots />}
+                {session.status === 'starting' && session.startup
+                  ? ` · ${STARTUP_STEPS.find((x) => x.step === session.startup!.step)?.label ?? ''}`
+                  : ''}
+                {session.status === 'working' && session.lastEventAt ? ` · ${duration(session.lastEventAt, now)}` : ''}
+                {session.statusDetail && session.status !== 'starting' ? ` · ${session.statusDetail}` : ''}
+              </span>
+            </>
+          )}
+          <span className="sp" />
+          {session?.prUrl && (
+            <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
+              PR #{session.prNumber}
+            </a>
+          )}
+          <button className="btn small" onClick={goHome}>
+            Project home
           </button>
-        )}
-        {session?.status === 'exited' && (
-          <button className="btn small primary" onClick={() => act('resume')}>
-            Resume
-          </button>
-        )}
-        {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
-      </header>
+          {canDesign && (
+            <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
+              Design doc
+            </button>
+          )}
+          {session?.status === 'exited' && (
+            <button className="btn small primary" onClick={() => act('resume')}>
+              Resume
+            </button>
+          )}
+          {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
+        </header>
+      )}
 
       {session && <StageBar session={session} project={project} onAct={act} />}
 
-      <div className="tabs" role="tablist">
+      <div className="tabs" role="tablist" ref={tabsRef}>
         {sessions.map((s) => (
           <button
             key={s.id}
@@ -165,7 +231,7 @@ export function ProjectView({
 
       {session && (
         <footer className="foot">
-          <span>branch {session.branch}</span>
+          {!mobile && branchText}
           {session.diffStat && (
             <button
               className={cx('foot-btn', panel === 'changes' && 'on')}
@@ -178,97 +244,33 @@ export function ProjectView({
               {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>
           )}
-          <span title={usageTitle(session.usage)}>
-            tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
-          </span>
-          <span title="The project's Meko datapack">
-            Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
-            {sharedCount > 0 ? ` · +${sharedCount} shared` : ''}
-          </span>
-          <span>
-            {STAGE_LABELS[session.stage].toLowerCase()}
-            {session.prNumber ? ` · ${REVIEW_TEXT[session.reviewState]} · ${CI_TEXT[session.ciState]}` : ''}
-          </span>
+          {!mobile && tokensText}
+          {!mobile && mekoText}
+          {stageText}
         </footer>
       )}
+
+      {session && sheet && (
+        <SessionSheet
+          session={session}
+          canDesign={canDesign}
+          pendingComments={pending}
+          info={
+            <>
+              {branchText}
+              {tokensText}
+              {mekoText}
+              {stageText}
+            </>
+          }
+          onDesign={() => setPanel('design')}
+          onChanges={() => setPanel('changes')}
+          onHome={goHome}
+          onAct={act}
+          onClose={() => setSheet(false)}
+        />
+      )}
     </div>
-  );
-}
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-/** Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost. */
-function EndSessionButton({ session, onAct }: { session: Session; onAct: (a: SessionAction) => Promise<void> }) {
-  const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
-  const [check, setCheck] = useState<DiscardCheck | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const run = async (action: SessionAction) => {
-    setBusy(true);
-    try {
-      await onAct(action);
-    } finally {
-      setBusy(false);
-      setStep('closed');
-    }
-  };
-
-  const askDiscard = async () => {
-    setStep('checking');
-    try {
-      setCheck(await api.discardCheck(session.id));
-    } catch {
-      setCheck(null);
-    }
-    setStep('discard');
-  };
-
-  if (step === 'closed') {
-    return (
-      <button className="btn small" onClick={() => setStep('choose')}>
-        Archive
-      </button>
-    );
-  }
-  const cancel = (
-    <button className="btn ghost" disabled={busy} onClick={() => setStep('closed')}>
-      Cancel
-    </button>
-  );
-  if (step !== 'discard') {
-    return (
-      <span className="confirm-inline">
-        <span className="confirm-prompt">End this session?</span>
-        <button className="btn primary" disabled={busy || step === 'checking'} onClick={() => run('archive')}>
-          Archive (keep branch)
-        </button>
-        <button className="btn danger" disabled={busy || step === 'checking'} onClick={askDiscard}>
-          {step === 'checking' ? 'Checking…' : 'Discard…'}
-        </button>
-        {cancel}
-      </span>
-    );
-  }
-  const warnings: string[] = [];
-  if (!check) warnings.push('Could not check for unsaved work.');
-  else {
-    if (check.uncommittedFiles) warnings.push(`${plural(check.uncommittedFiles, 'uncommitted file')} will be lost.`);
-    if (check.unpushedCommits) warnings.push(`${plural(check.unpushedCommits, 'commit')} never pushed will be lost.`);
-  }
-  if (session.prNumber) warnings.push(`PR #${session.prNumber} and the remote branch stay on GitHub.`);
-  return (
-    <span className="confirm-inline">
-      <span className="confirm-prompt">Delete the worktree and branch {session.branch}?</span>
-      {warnings.map((w) => (
-        <span key={w} className="confirm-warn">
-          {w}
-        </span>
-      ))}
-      <button className="btn danger" disabled={busy} onClick={() => run('discard')}>
-        Discard
-      </button>
-      {cancel}
-    </span>
   );
 }
 
@@ -367,10 +369,15 @@ function StageBar({
             {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
             <span className={cx('stg', i < idx && 'done', i === idx && 'cur')} aria-current={i === idx ? 'step' : undefined}>
               <span className="n">{i < idx ? '✓' : i + 1}</span>
-              {STAGE_LABELS[st]}
+              <span className="stg-label">{STAGE_LABELS[st]}</span>
             </span>
           </span>
         ))}
+        {/* The phone layout shows only the current stage's name, here. */}
+        <span className="stg-now">
+          <b>{STAGE_LABELS[session.stage]}</b>
+          {session.stage !== 'done' && <span className="muted"> {idx + 1} of {STAGES.length}</span>}
+        </span>
         <span className="stages-gate">{gate}</span>
       </div>
       {session.stage === 'review' && !session.canMerge && session.mergeBlockers.length > 0 && (

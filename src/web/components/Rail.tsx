@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ProjectWithSessions } from '../../shared/types';
+import { useIsMobile, useTouch } from '../hooks/useMedia';
 import type { ThemePref } from '../theme';
 import { aggregateStatus, cx, formatTokens, isMac, liveSessions, repoFolder, totalTokens } from '../util';
 import { StatusDot } from './common';
@@ -16,6 +17,8 @@ export function Rail({
   onSettings,
   onLogout,
   onReorder,
+  onPalette,
+  open,
 }: {
   projects: ProjectWithSessions[];
   currentId: string | null;
@@ -28,7 +31,12 @@ export function Rail({
   onSettings: () => void;
   onLogout: () => void;
   onReorder: (ids: string[]) => void;
+  onPalette: () => void;
+  /** Phone layout: the rail is a drawer, shown while open. */
+  open: boolean;
 }) {
+  const mobile = useIsMobile();
+  const touch = useTouch();
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const mod = isMac() ? '⌘' : 'Ctrl+';
@@ -41,7 +49,7 @@ export function Rail({
   };
 
   return (
-    <nav className="rail" aria-label="Projects">
+    <nav className={cx('rail', open && 'open')} aria-label="Projects" inert={mobile && !open}>
       <div className="brand">
         <img src="/logo.png" alt="" width={26} height={26} />
         <span>AgentK Local</span>
@@ -54,7 +62,7 @@ export function Rail({
               key={p.id}
               className={cx('proj', p.id === currentId && 'sel', overId === p.id && dragId !== p.id && 'drop-target')}
               onClick={() => onSelect(p)}
-              draggable
+              draggable={!touch}
               onDragStart={(e) => {
                 setDragId(p.id);
                 e.dataTransfer.effectAllowed = 'move';
@@ -88,6 +96,11 @@ export function Rail({
         <button className="rail-add" onClick={onNewProject}>
           + New project
         </button>
+        {mobile && (
+          <button className="rail-add" onClick={onPalette}>
+            Search and commands
+          </button>
+        )}
       </div>
       <div className="rail-foot">
         <div className="rail-actions">

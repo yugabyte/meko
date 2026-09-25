@@ -7,6 +7,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { TermClientMessage, TermServerMessage } from '../shared/types';
 import { wsUrl } from './api';
 import { copyText, decodeOsc52 } from './clipboard';
+import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
+import { clampFont, keySequence, pasteText, wheelReport, type BarKey } from './keys';
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -36,6 +38,24 @@ const THEME = {
   brightWhite: '#F2F5F3',
 };
 
+const FONT_KEY = 'ak-term-font';
+/** Phones get a smaller font so Claude Code has about 48 columns instead of 38. */
+const defaultFont = () => (matches(MOBILE_QUERY) ? 11 : 13);
+
+function storedFont(): number | null {
+  try {
+    const v = Number(localStorage.getItem(FONT_KEY));
+    return v ? clampFont(v) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Finger travel, in rows, per mouse-wheel step (tmux scrolls 5 lines per step). */
+const SWIPE_ROWS = 2.5;
+/** Pause between a compose paste and the Enter that submits it, as the server does for prompts. */
+const SUBMIT_DELAY = 300;
+
 class SessionTerminal {
   readonly term: Terminal;
   readonly el: HTMLDivElement;
@@ -46,6 +66,12 @@ class SessionTerminal {
   private disposed = false;
   private resizeObs: ResizeObserver | null = null;
   private lastSize = { cols: 0, rows: 0 };
+  private refitFrame = 0;
+  /** Disconnected on purpose while the page is hidden; reconnects when it's shown again. */
+  private paused = false;
+  private touch: { x: number; y: number; travel: number } | null = null;
+  /** On touch screens, whether focusing the terminal opens the on-screen keyboard. */
+  typing = false;
   conn: TermConn = 'connecting';
   message: string | null = null;
   /** A short-lived note after copying ("Copied", or why it failed). */
@@ -58,7 +84,7 @@ class SessionTerminal {
     this.el.className = 'xterm-host';
     this.term = new Terminal({
       fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontSize: storedFont() ?? defaultFont(),
       lineHeight: 1.15,
       cursorBlink: true,
       allowProposedApi: true,
@@ -76,6 +102,12 @@ class SessionTerminal {
       }),
     );
     this.term.open(this.el);
+    this.setTyping(false);
+    // Capture, so a swipe is ours before xterm sees it.
+    this.el.addEventListener('touchstart', this.touchStart, { capture: true, passive: true });
+    this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
+    this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: true });
+    this.el.addEventListener('touchcancel', this.touchEnd, { capture: true, passive: true });
     this.term.onData((data) => this.send({ type: 'input', data }));
     this.term.onBinary((data) => this.send({ type: 'input', data }));
     // tmux sends a mouse selection as OSC 52 (set-clipboard on); put it on the browser clipboard.
@@ -161,6 +193,7 @@ class SessionTerminal {
       if (this.ws === ws) this.ws = null;
       if (this.disposed) return;
       if (this.conn !== 'ended') this.setConn('closed');
+      if (this.paused) return;
       const delay = Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
       this.timer = setTimeout(() => this.connect(), delay);
     };
@@ -170,19 +203,109 @@ class SessionTerminal {
   /** Reconnect immediately (used after Resume). */
   reconnect() {
     if (this.timer) clearTimeout(this.timer);
+    this.paused = false;
     this.attempt = 0;
     this.ws?.close();
     if (!this.ws) this.connect();
   }
 
+  /** Drops the connection until resume(), so this viewer stops holding the tmux window at its size. */
+  pause() {
+    if (this.paused || this.disposed) return;
+    this.paused = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.ws?.close();
+  }
+
+  resume() {
+    if (!this.paused || this.disposed) return;
+    this.paused = false;
+    this.attempt = 0;
+    if (!this.ws) this.connect();
+  }
+
+  /** Presses a key from the key bar. */
+  sendKey(key: BarKey) {
+    this.send({ type: 'input', data: keySequence(key, this.term.modes.applicationCursorKeysMode) });
+  }
+
+  /** Types text from the compose box and submits it with Enter. */
+  submit(text: string) {
+    this.send({ type: 'input', data: pasteText(text, this.term.modes.bracketedPasteMode) });
+    setTimeout(() => this.send({ type: 'input', data: '\r' }), SUBMIT_DELAY);
+  }
+
+  /**
+   * On touch screens, focusing the terminal only opens the keyboard in typing mode, so taps and
+   * swipes don't keep bringing it up. Everywhere else the terminal always takes typing.
+   */
+  setTyping(on: boolean) {
+    this.typing = on;
+    const ta = this.term.textarea;
+    if (!ta) return;
+    const wasFocused = document.activeElement === ta;
+    if (!on && matches(TOUCH_QUERY)) ta.setAttribute('inputmode', 'none');
+    else ta.removeAttribute('inputmode');
+    // A focused field only picks up a new inputmode when it's focused again.
+    if (on) {
+      ta.blur();
+      this.term.focus();
+    } else if (wasFocused) ta.blur();
+    this.listeners.forEach((l) => l());
+  }
+
+  setFontSize(size: number) {
+    if (this.term.options.fontSize === size) return;
+    this.term.options.fontSize = size;
+    this.refit();
+  }
+
+  private touchStart = (e: TouchEvent) => {
+    const t = e.touches[0];
+    this.touch = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY, travel: 0 } : null;
+  };
+
+  private touchMove = (e: TouchEvent) => {
+    const t = e.touches[0];
+    if (!this.touch || e.touches.length !== 1 || !t) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.touch.travel += t.clientY - this.touch.y;
+    this.touch.y = t.clientY;
+    const step = Math.max(8, (this.el.clientHeight / Math.max(1, this.term.rows)) * SWIPE_ROWS);
+    while (Math.abs(this.touch.travel) >= step) {
+      // A finger moving down pulls older lines into view, like a wheel turned up.
+      const up = this.touch.travel > 0;
+      this.touch.travel += up ? -step : step;
+      this.wheel(up);
+    }
+  };
+
+  private touchEnd = () => {
+    this.touch = null;
+  };
+
+  private wheel(up: boolean) {
+    const { cols, rows } = this.term;
+    if (this.term.modes.mouseTrackingMode === 'none' || !this.touch) {
+      this.term.scrollLines(up ? -3 : 3);
+      return;
+    }
+    const r = this.el.getBoundingClientRect();
+    const col = ((this.touch.x - r.left) / Math.max(1, r.width)) * cols + 0.5;
+    const row = ((this.touch.y - r.top) / Math.max(1, r.height)) * rows + 0.5;
+    this.send({ type: 'input', data: wheelReport(up, col, row, cols, rows) });
+  }
+
   attach(container: HTMLElement) {
     if (this.el.parentElement !== container) container.appendChild(this.el);
     this.resizeObs?.disconnect();
-    this.resizeObs = new ResizeObserver(() => this.refit());
+    this.resizeObs = new ResizeObserver(() => this.scheduleRefit());
     this.resizeObs.observe(container);
     requestAnimationFrame(() => {
       this.refit();
-      this.term.focus();
+      if (!matches(TOUCH_QUERY) || this.typing) this.term.focus();
     });
   }
 
@@ -190,6 +313,16 @@ class SessionTerminal {
     this.resizeObs?.disconnect();
     this.resizeObs = null;
     this.el.remove();
+  }
+
+  /** Refits at most once a frame; the on-screen keyboard resizes the page in many small steps. */
+  private scheduleRefit() {
+    if (!this.refitFrame) {
+      this.refitFrame = requestAnimationFrame(() => {
+        this.refitFrame = 0;
+        this.refit();
+      });
+    }
   }
 
   refit() {
@@ -214,6 +347,7 @@ class SessionTerminal {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    if (this.refitFrame) cancelAnimationFrame(this.refitFrame);
     this.resizeObs?.disconnect();
     this.ws?.close();
     this.term.dispose();
@@ -248,6 +382,42 @@ export function pruneTerminals(liveIds: Set<string>) {
 
 export function disposeAllTerminals() {
   for (const id of [...cache.keys()]) disposeTerminal(id);
+}
+
+export function terminalFontSize(): number {
+  return storedFont() ?? defaultFont();
+}
+
+/** Sets the font of every terminal, remembered in this browser. */
+export function setTerminalFontSize(size: number) {
+  const v = clampFont(size);
+  try {
+    localStorage.setItem(FONT_KEY, String(v));
+  } catch {
+    /* storage blocked: the size just isn't remembered */
+  }
+  for (const t of cache.values()) t.setFontSize(v);
+}
+
+/**
+ * tmux draws a window at the size of its smallest viewer, so a phone left attached narrows the same
+ * session on a desktop. On phones, let go of the terminals once the page has been hidden a while.
+ */
+const HIDDEN_RELEASE_MS = 30_000;
+let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (hiddenTimer) clearTimeout(hiddenTimer);
+    hiddenTimer = null;
+    if (document.hidden) {
+      if (!matches(MOBILE_QUERY)) return;
+      hiddenTimer = setTimeout(() => {
+        for (const t of cache.values()) t.pause();
+      }, HIDDEN_RELEASE_MS);
+    } else {
+      for (const t of cache.values()) t.resume();
+    }
+  });
 }
 
 export type { SessionTerminal };

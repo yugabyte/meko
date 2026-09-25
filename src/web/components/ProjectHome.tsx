@@ -8,9 +8,11 @@ import type {
   SearchResult,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
 import { ConfirmButton, DatapackName, ErrorText, Field } from './common';
+import { TopBar } from './TopBar';
 
 const SOURCE_LABEL: Record<SearchResult['source'], string> = {
   memory: 'memory',
@@ -21,14 +23,18 @@ const SOURCE_LABEL: Record<SearchResult['source'], string> = {
 export function ProjectHomeView({
   project,
   mekoWebUrl,
+  onMenu,
   onBack,
   onError,
 }: {
   project: ProjectWithSessions;
   mekoWebUrl: string | null;
+  /** Opens the projects drawer (phone layout). */
+  onMenu: () => void;
   onBack: () => void;
   onError: (m: string) => void;
 }) {
+  const mobile = useIsMobile();
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -49,10 +55,19 @@ export function ProjectHomeView({
 
   return (
     <div className="home-view">
+      {mobile && (
+        <TopBar onMenu={onMenu} sub={project.name} title="Project home">
+          <button className="btn small" onClick={onBack}>
+            Sessions
+          </button>
+        </TopBar>
+      )}
       <header className="home-hd">
-        <button className="link-btn" onClick={onBack}>
-          ← Sessions
-        </button>
+        {!mobile && (
+          <button className="link-btn" onClick={onBack}>
+            ← Sessions
+          </button>
+        )}
         <h1>{project.name}</h1>
         <span className="mono muted small">
           {project.repoPath} · {project.defaultBranch}

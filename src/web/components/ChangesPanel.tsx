@@ -4,6 +4,7 @@ import type {
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { anchorComment, parsePatch, sideLine, type DiffLine } from '../diff';
+import { useTouch } from '../hooks/useMedia';
 import { cx } from '../util';
 import { SidePanel } from './SidePanel';
 
@@ -42,6 +43,7 @@ interface Placed {
 const isTyping = (t: EventTarget) => t instanceof HTMLElement && !!t.closest('input, textarea, select, [contenteditable="true"]');
 
 export function ChangesPanel({ session, onClose }: { session: Session; onClose: () => void }) {
+  const touch = useTouch();
   const [data, setData] = useState<SessionChanges | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -184,8 +186,10 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
     const n = sideLine(l, side);
     if (n === null) return;
+    // Touch has no shift-click: tapping another line while a new comment is still empty extends it.
+    const extend = shift || (touch && !!editor && !editor.id && !draftText.current.trim() && pick?.line !== n);
     let from = n, to = n;
-    if (shift && pick && pick.path === path && pick.side === side) {
+    if (extend && pick && pick.path === path && pick.side === side) {
       from = Math.min(pick.line, n);
       to = Math.max(pick.line, n);
     } else {
@@ -301,8 +305,9 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         <button className="btn small" disabled={loading} onClick={() => setTick((t) => t + 1)}>
           {loading ? 'Loading…' : 'Refresh'}
         </button>
-        <button className="icon-btn" onClick={onClose} aria-label="Close changes">
-          ×
+        <button className="icon-btn panel-close" onClick={onClose} aria-label="Close changes">
+          <span className="desktop-only">×</span>
+          <span className="mobile-only">← Back</span>
         </button>
       </div>
       {(note || queued > 0) && (
@@ -348,10 +353,16 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                 </li>
               ))}
             </ul>
-            <p className="muted small chg-hint">
-              Click <b>+</b> beside a line to comment on it; shift-click another line to cover a range. Press <kbd>[</kbd> or{' '}
-              <kbd>]</kbd> for the previous or next file.
-            </p>
+            {touch ? (
+              <p className="muted small chg-hint">
+                Tap <b>+</b> beside a line to comment on it. Before you type, tap <b>+</b> on another line to cover a range.
+              </p>
+            ) : (
+              <p className="muted small chg-hint">
+                Click <b>+</b> beside a line to comment on it; shift-click another line to cover a range. Press <kbd>[</kbd> or{' '}
+                <kbd>]</kbd> for the previous or next file.
+              </p>
+            )}
             {files.map((f, n) => (
               <section
                 key={f.path}
@@ -652,7 +663,7 @@ function CommentEditor({
       />
       {err && <p className="error-text small">{err}</p>}
       <div className="cmt-acts">
-        <span className="muted small">Ctrl+Enter to save</span>
+        <span className="muted small hide-touch">Ctrl+Enter to save</span>
         <button className="btn small" onClick={onCancel}>
           Cancel
         </button>

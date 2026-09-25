@@ -93,8 +93,9 @@ export function DesignPanel({
           </a>
         )}
         {onClose && (
-          <button className="icon-btn" onClick={onClose} aria-label="Close design">
-            ×
+          <button className="icon-btn panel-close" onClick={onClose} aria-label="Close design">
+            <span className="desktop-only">×</span>
+            <span className="mobile-only">← Back</span>
           </button>
         )}
       </div>

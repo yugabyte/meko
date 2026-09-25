@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppState, AuthStatus, ProjectWithSessions } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useEvents, type NotifyEvent } from '../hooks/useEvents';
+import { useIsMobile } from '../hooks/useMedia';
 import { navigate, useRoute } from '../router';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
@@ -15,6 +16,7 @@ import { ProjectHomeView } from './ProjectHome';
 import { ProjectView } from './ProjectView';
 import { Rail } from './Rail';
 import { SettingsDialog } from './SettingsDialog';
+import { TopBar } from './TopBar';
 
 type Modal =
   | { kind: 'none' }
@@ -22,6 +24,8 @@ type Modal =
   | { kind: 'new-session'; projectId: string }
   | { kind: 'settings' }
   | { kind: 'palette' };
+
+const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
 function sortedProjects(state: AppState | null): ProjectWithSessions[] {
   if (!state) return [];
@@ -33,6 +37,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const [theme, cycleTheme] = useTheme();
   const [modal, setModal] = useState<Modal>({ kind: 'none' });
   const [toast, setToast] = useState<string | null>(null);
+  const mobile = useIsMobile();
+  const [drawer, setDrawer] = useState(false);
   const focusRef = useRef<{ projectId: string | null; sessionId: string | null }>({ projectId: null, sessionId: null });
 
   const onNotify = useCallback((n: NotifyEvent) => {
@@ -108,8 +114,38 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     const s = liveSessions(p).sort(
       (a, b) => (b.lastEventAt ?? b.createdAt) - (a.lastEventAt ?? a.createdAt),
     )[0];
-    navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null });
+    // From the drawer, replace its history entry so Back doesn't reopen it.
+    navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);
+
+  // The phone layout's projects drawer gets its own history entry, so the Back gesture closes it.
+  const openDrawer = () => {
+    if (!isDrawerEntry()) history.pushState({ akDrawer: true }, '', location.href);
+    setDrawer(true);
+  };
+  const closeDrawer = useCallback(() => {
+    setDrawer(false);
+    if (isDrawerEntry()) history.back();
+  }, []);
+  useEffect(() => {
+    const pop = () => setDrawer(isDrawerEntry());
+    window.addEventListener('popstate', pop);
+    return () => window.removeEventListener('popstate', pop);
+  }, []);
+  useEffect(() => {
+    if (!mobile && drawer) closeDrawer();
+  }, [mobile, drawer, closeDrawer]);
+  useEffect(() => {
+    if (!drawer) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeDrawer();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawer, closeDrawer]);
+  /** Runs a drawer action with the drawer closed. */
+  const fromDrawer = (f: () => void) => () => {
+    closeDrawer();
+    f();
+  };
 
   // Global shortcuts.
   useEffect(() => {
@@ -191,6 +227,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   return (
     <div className="app">
+      {mobile && drawer && <div className="rail-scrim" onClick={closeDrawer} aria-hidden="true" />}
       <Rail
         projects={projects}
         currentId={currentProject?.id ?? null}
@@ -198,11 +235,16 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         version={state.version}
         theme={theme}
         onCycleTheme={cycleTheme}
-        onSelect={goProject}
-        onNewProject={() => setModal({ kind: 'new-project' })}
-        onSettings={() => setModal({ kind: 'settings' })}
-        onLogout={logout}
+        onSelect={(p) => {
+          goProject(p);
+          closeDrawer();
+        }}
+        onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
+        onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
+        onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
+        onLogout={fromDrawer(logout)}
         onReorder={reorder}
+        open={drawer}
       />
       <div className="main">
         <Banners state={state} conn={conn} onError={showToast} />
@@ -210,6 +252,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           <ProjectHomeView
             project={currentProject}
             mekoWebUrl={state.meko.webUrl}
+            onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
             onError={showToast}
           />
@@ -220,19 +263,23 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             session={currentSession}
             mekoWebUrl={state.meko.webUrl}
             onNewSession={() => setModal({ kind: 'new-session', projectId: currentProject.id })}
+            onMenu={openDrawer}
             onError={showToast}
           />
         ) : (
-          <div className="empty-main">
-            <img src="/logo.png" alt="" width={96} height={96} />
-            <h2>No projects yet</h2>
-            <p className="muted">
-              A project is one of your git repos. Each task you start in it gets its own worktree and Claude session.
-            </p>
-            <button className="btn primary" onClick={() => setModal({ kind: 'new-project' })}>
-              New project
-            </button>
-          </div>
+          <>
+            {mobile && <TopBar onMenu={openDrawer} title="AgentK Local" />}
+            <div className="empty-main">
+              <img src="/logo.png" alt="" width={96} height={96} />
+              <h2>No projects yet</h2>
+              <p className="muted">
+                A project is one of your git repos. Each task you start in it gets its own worktree and Claude session.
+              </p>
+              <button className="btn primary" onClick={() => setModal({ kind: 'new-project' })}>
+                New project
+              </button>
+            </div>
+          </>
         )}
       </div>
 

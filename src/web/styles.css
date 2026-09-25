@@ -301,7 +301,7 @@ textarea.input {
 }
 .fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: 12px;
 }
 .check {
@@ -655,6 +655,9 @@ textarea.input {
 .stg-sep.done {
   background: var(--ok);
 }
+.stg-now {
+  display: none;
+}
 .stages-gate {
   margin-left: 14px;
   flex: none;
@@ -749,9 +752,16 @@ textarea.input {
   position: relative;
   background: var(--term);
 }
+.term-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .term-wrap {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   position: relative;
   padding: 8px 4px 4px 10px;
 }
@@ -780,6 +790,10 @@ textarea.input {
   box-shadow: var(--shadow);
   font-size: 12px;
   pointer-events: none;
+}
+/* xterm's stylesheet paints the viewport black under the last partial row; match the theme. */
+.xterm-host .xterm .xterm-viewport {
+  background-color: #101412;
 }
 .term-overlay {
   position: absolute;
@@ -1220,7 +1234,7 @@ a.icon-btn {
 }
 .home-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 16px;
 }
 .box {
@@ -1310,7 +1324,7 @@ a.icon-btn {
 }
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 12px;
 }
 .checks {
@@ -1411,38 +1425,11 @@ a.icon-btn {
 }
 
 @media (max-width: 760px) {
-  .app {
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
-  .brand span,
-  .proj-text,
-  .proj .n,
-  .me,
-  .rail-add {
-    display: none;
-  }
-  .proj {
-    grid-template-columns: 1fr;
-    justify-items: center;
-  }
-  .rail-actions {
-    flex-direction: column;
-    align-items: center;
-  }
   .repo {
     grid-template-columns: 18px minmax(0, 1fr) 90px;
   }
   .repo .rm,
   .repo .br {
-    display: none;
-  }
-  .side-panel {
-    position: absolute;
-    inset: 0;
-    width: auto !important;
-    max-width: none;
-  }
-  .panel-resizer {
     display: none;
   }
 }
@@ -2005,7 +1992,7 @@ a.icon-btn {
 }
 .usage-tables {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: 16px;
   margin-top: 8px;
 }
@@ -2167,4 +2154,560 @@ a.icon-btn {
 }
 .startup-elapsed {
   margin: 0;
+}
+
+/* ---------- Phone layout and touch ----------
+   The phone layout is everything under max-width: 760px (MOBILE_QUERY in hooks/useMedia.ts).
+   Touch sizing keys off pointer: coarse and hover: none, so tablets on the desktop layout get it too.
+   See src/web/AGENTS.md before changing the UI. */
+.mobile-only {
+  display: none;
+}
+.btn.danger-outline {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--rule));
+}
+
+/* App bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 50px;
+  padding: 4px 8px 4px 2px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  flex: none;
+}
+.topbar-menu {
+  color: var(--ink);
+}
+.topbar-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.topbar-title b {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex: none;
+}
+.topbar-more {
+  color: var(--ink);
+}
+
+/* Bottom sheet */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(10, 14, 12, 0.45);
+  display: flex;
+  align-items: flex-end;
+}
+.sheet {
+  width: 100%;
+  max-height: calc(var(--app-h, 100dvh) - 40px);
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: 14px 14px 0 0;
+  box-shadow: var(--shadow);
+  padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sheet-grab {
+  width: 36px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--rule);
+  align-self: center;
+}
+.sheet-items {
+  display: flex;
+  flex-direction: column;
+}
+.sheet-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: none;
+  color: var(--ink);
+  font-size: 15px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.sheet-item:last-child {
+  border-bottom: 0;
+}
+.sheet-item.primary {
+  color: var(--accent);
+  font-weight: 600;
+}
+.sheet-item-hint {
+  color: var(--muted);
+}
+.sheet-item-note {
+  font-size: 12px;
+  margin-left: 4px;
+}
+.sheet-item-note .add {
+  color: var(--ok);
+}
+.sheet-item-note .del {
+  color: var(--bad);
+}
+.sheet-end .confirm-inline {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.sheet-end .confirm-inline .btn {
+  justify-content: center;
+  padding: 10px 12px;
+}
+.sheet-font {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 15px;
+}
+.sheet-font .seg button {
+  font-family: var(--mono);
+  font-size: 14px;
+  min-width: 44px;
+  min-height: 40px;
+}
+.sheet-font .seg button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sheet-font-size {
+  display: inline-grid;
+  place-items: center;
+  min-width: 48px;
+  font-size: 13px;
+  color: var(--muted);
+  border-inline: 1px solid var(--rule);
+}
+.sheet-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sunk);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--foot-ink);
+  overflow-wrap: anywhere;
+}
+
+/* Terminal key bar and compose box (touch screens). The bar sits on the terminal, which is always dark. */
+.term-keys {
+  flex: none;
+  background: var(--surface);
+}
+.keybar {
+  display: flex;
+  gap: 3px;
+  padding: 5px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--term);
+  border-top: 1px solid #1f2622;
+}
+/* Keys share the width so the whole bar fits a phone; it scrolls sideways only if it can't. */
+.key {
+  flex: 1 0 auto;
+  min-width: 28px;
+  height: 36px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: #232a26;
+  color: #d5ddd8;
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.key:active:not(:disabled) {
+  background: #33403a;
+}
+.key.on {
+  background: #2e3b55;
+  color: #afc6ff;
+}
+.key:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--rule);
+}
+.compose-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 132px;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  border-radius: 18px;
+  padding: 7px 14px;
+  background: var(--bg);
+  line-height: 1.4;
+}
+.compose-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.compose-send {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.compose-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (pointer: coarse) {
+  .btn.small {
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+  .icon-btn {
+    min-width: 40px;
+    min-height: 40px;
+    display: inline-grid;
+    place-items: center;
+  }
+  a.icon-btn {
+    display: inline-grid;
+  }
+  .gate {
+    min-height: 34px;
+    padding: 6px 14px;
+    font-size: 13px;
+  }
+  .tab {
+    padding: 10px 12px;
+  }
+  .proj,
+  .rail-add {
+    padding: 10px 8px;
+  }
+  .chg-row,
+  .chg-file-hd {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .seg button {
+    padding: 8px 12px;
+  }
+  /* Swipes scroll the terminal (terminals.ts), not the page. */
+  .term-host {
+    touch-action: none;
+  }
+}
+@media (hover: none) {
+  .hide-touch {
+    display: none;
+  }
+  .cmt-add {
+    opacity: 1;
+    width: 22px;
+    height: 22px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 760px) {
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+  .desktop-only {
+    display: none !important;
+  }
+  .mobile-only {
+    display: revert;
+  }
+
+  /* Shell: one column, the rail becomes a drawer. --app-h follows the on-screen keyboard. */
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    height: var(--app-h, 100dvh);
+  }
+  .main {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  .rail {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 45;
+    width: min(300px, 84vw);
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 8px calc(12px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+  }
+  .rail.open {
+    transform: none;
+    visibility: visible;
+    box-shadow: var(--shadow);
+    transition: transform 0.2s ease;
+  }
+  .rail-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: rgba(10, 14, 12, 0.45);
+  }
+
+  /* Session screen */
+  .stages {
+    padding: 6px 10px;
+    overflow: visible;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .stg-item {
+    flex: none;
+  }
+  .stg {
+    padding: 0 1px;
+  }
+  .stg-label {
+    display: none;
+  }
+  .stg .n {
+    width: 16px;
+    height: 16px;
+    font-size: 9px;
+  }
+  .stg-sep {
+    flex: none;
+    width: 5px;
+    min-width: 5px;
+    margin: 0 1px;
+  }
+  .stg-now {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    margin-left: 10px;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stages-gate {
+    margin-left: auto;
+  }
+  .gate-group {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .blockers {
+    padding: 0 10px 6px;
+  }
+  .tabs {
+    padding: 4px 6px 0;
+  }
+  .tab {
+    max-width: 220px;
+  }
+  .term-wrap {
+    padding: 4px 2px 2px 6px;
+  }
+  .term-host {
+    inset: 4px 2px 2px 6px;
+  }
+  .foot {
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .foot > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Panels take the whole work area. */
+  .side-panel {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    width: auto !important;
+    max-width: none;
+  }
+  .panel-resizer {
+    display: none;
+  }
+  .design-hd {
+    position: relative;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+  .panel-close {
+    order: -1;
+    color: var(--accent);
+    font-size: 14px;
+    padding: 4px 8px;
+  }
+  .design-body {
+    padding: 12px 14px 32px;
+  }
+  .changes-body {
+    padding: 10px 8px 32px;
+  }
+  .files-menu {
+    position: static;
+  }
+  .files-pop {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+  }
+  .design-page {
+    height: var(--app-h, 100dvh);
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .design-page .design-body {
+    padding: 14px 14px 40px;
+  }
+
+  /* Dialogs become sheets from the bottom; the palette stays at the top, above the keyboard. */
+  .overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .overlay.top {
+    align-items: flex-start;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 0;
+  }
+  .dialog,
+  .dialog.wide {
+    width: 100%;
+    max-height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top, 0px) - 8px);
+    border-radius: 14px 14px 0 0;
+    border-bottom: 0;
+  }
+  .dialog-hd,
+  .dialog-body {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .dialog-ft {
+    flex-wrap: wrap;
+    padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .pal-list {
+    max-height: 55dvh;
+  }
+  .kv {
+    grid-template-columns: 100px minmax(0, 1fr);
+  }
+  /* 16px or larger, or iOS zooms in on focus. */
+  .input,
+  .pal-input,
+  .files-filter,
+  .cmt-input,
+  .compose-input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Project home */
+  .home-hd {
+    padding: 10px 12px;
+    gap: 4px 12px;
+  }
+  .home-hd h1 {
+    font-size: 1.3rem;
+  }
+  .home-scroll {
+    padding: 12px 12px 32px;
+  }
+  .dp {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .dp-name {
+    grid-column: 1 / -1;
+  }
+  .dp .tag {
+    justify-self: start;
+  }
+  .auth-card {
+    padding: 22px;
+  }
+
+  /* Toasts drop in under the app bar, clear of the compose box and keyboard. */
+  .toast {
+    top: calc(56px + env(safe-area-inset-top, 0px));
+    bottom: auto;
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  .rail,
+  .rail.open {
+    transition: none;
+  }
 }

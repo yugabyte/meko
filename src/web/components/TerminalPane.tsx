@@ -1,7 +1,9 @@
 import { useEffect, useReducer, useRef } from 'react';
 import type { Session } from '../../shared/types';
+import { useTouch } from '../hooks/useMedia';
 import { getTerminal } from '../terminals';
 import { StartupPanel } from './StartupPanel';
+import { TermKeys } from './TermKeys';
 
 export function TerminalPane({ session }: { session: Session }) {
   const { id: sessionId, status } = session;
@@ -9,6 +11,7 @@ export function TerminalPane({ session }: { session: Session }) {
   const [, rerender] = useReducer((x: number) => x + 1, 0);
   const term = getTerminal(sessionId);
   const prevStatus = useRef(status);
+  const touch = useTouch();
 
   useEffect(() => {
     const host = hostRef.current;
@@ -34,18 +37,22 @@ export function TerminalPane({ session }: { session: Session }) {
   else if (term.conn === 'ended' && status !== 'exited') overlay = term.message ?? 'The terminal closed.';
 
   return (
-    <div className="term-wrap" onClick={() => term.focus()}>
-      <div className="term-host" ref={hostRef} />
-      {status === 'starting' && <StartupPanel session={session} />}
-      {overlay && <div className="term-overlay">{overlay}</div>}
-      {term.notice && (
-        <div className="term-toast" role="status">
-          {term.notice}
-        </div>
-      )}
-      {status === 'exited' && (
-        <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
-      )}
+    <div className="term-col">
+      {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key). */}
+      <div className="term-wrap" onClick={() => (!touch || term.typing) && term.focus()}>
+        <div className="term-host" ref={hostRef} />
+        {status === 'starting' && <StartupPanel session={session} />}
+        {overlay && <div className="term-overlay">{overlay}</div>}
+        {term.notice && (
+          <div className="term-toast" role="status">
+            {term.notice}
+          </div>
+        )}
+        {status === 'exited' && (
+          <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
+        )}
+      </div>
+      {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} />}
     </div>
   );
 }

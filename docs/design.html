@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.14 (implemented)</span>
+  <span class="label">Design · v0.15 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -361,6 +361,7 @@ flowchart LR
     <div class="card"><h3>Starting</h3><p>Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session starts, the terminal shows its steps (updating the base branch and creating the worktree, starting Claude Code, loading, sending your task) with the current one animated and timed, plus the stage the session opens in. The header shows the current step too.</p></div>
     <div class="card"><h3>Keyboard</h3><p><code>⌘1–9</code> switches projects, <code>⌃Tab</code> cycles sessions, and <code>⌘K</code> opens a palette to jump to any session, create one, or search the project's datapacks. Keys pass through to the terminal whenever it has focus. To copy from the terminal, drag across the text: tmux selects it and sends it as OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) selects in the browser instead, and then <code>Ctrl+C</code> (<code>⌘C</code>) copies rather than interrupting Claude. Clipboard access needs HTTPS or localhost.</p></div>
     <div class="card"><h3>Notifications</h3><p>A browser notification fires when any session moves to <em>needs you</em> or finishes a turn while its tab is hidden. You can mute it per project.</p></div>
+    <div class="card"><h3>On a phone</h3><p>At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top app bar (the Back gesture closes it, and it holds <b>Search and commands</b> in place of <code>⌘K</code>). The session header and footer details move into a ⋯ sheet, and the stage bar fits on one line with its gate button. Dialogs open as bottom sheets. The app follows the visible viewport, so the on-screen keyboard shrinks it instead of covering the prompt. On touch screens the terminal gets a key bar (Esc, Tab, Shift+Tab, arrows, Ctrl+C, Enter) and a compose box whose text goes in as one bracketed paste, then Enter. Swiping scrolls tmux's history through mouse-wheel reports. Tapping the terminal only brings up the keyboard in typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns), adjustable in the ⋯ sheet and remembered per browser.</p></div>
   </div>
   <h3>Project home</h3>
   <div class="mockwrap">
@@ -412,7 +413,7 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
     <thead><tr><th>Action</th><th>What the server does</th></tr></thead>
     <tbody>
       <tr><td>New session</td><td><code>git fetch origin &lt;base&gt;</code>, fast-forward the local <code>&lt;base&gt;</code> to <code>origin/&lt;base&gt;</code> if safe, <code>git worktree add … -b ak/&lt;slug&gt; &lt;base&gt;</code> (or <code>origin/&lt;base&gt;</code> if the fast-forward was skipped), then <code>tmux -L agentk new -d -s ak-&lt;proj&gt;-&lt;slug&gt; -c &lt;worktree&gt;</code> running <code>claude --session-id &lt;uuid&gt; --settings &lt;hooks&gt; -n "&lt;name&gt;" [prompt]</code> with the Meko env vars set.</td></tr>
-      <tr><td>Open tab</td><td>Spawns a pty on <code>tmux attach</code>, one per viewer. The terminal is resized to fit the browser.</td></tr>
+      <tr><td>Open tab</td><td>Spawns a pty on <code>tmux attach</code>, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and reconnects when shown again.</td></tr>
       <tr><td>Close tab</td><td>Kills the pty only. tmux and Claude keep running.</td></tr>
       <tr><td>Claude exits</td><td>The pane dies and the status becomes <em>exited</em>. <b>Resume</b> relaunches <code>claude --resume &lt;uuid&gt;</code> in the same worktree.</td></tr>
       <tr><td>Archive</td><td>Kills the tmux session. The worktree is removed if it is clean, and the branch is always kept. The record stays, so the session can be restored later.</td></tr>
