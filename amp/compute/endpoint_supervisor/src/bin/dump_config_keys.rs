@@ -44,8 +44,6 @@ const EXTRA_KEYS: &[(Daemon, &str, &str, &str)] = &[
     // The recent-WAL cache; `None` derives it from scale_factor.
     (Daemon::Safekeeper, "wal_cache_size_mib", "integer", "512"),
     (Daemon::Safekeeper, "max_delta_for_fanout", "integer", "64"),
-    // Durability off for throwaway perf runs; never for anything real.
-    (Daemon::Pageserver, "no_sync", "boolean", "true"),
     (
         Daemon::Pageserver,
         "validate_wal_contiguity",

@@ -8,5 +8,4 @@ listen_grpc_addr = "127.0.0.1:30500"
 pg_auth_type = "Trust"
 http_auth_type = "Trust"
 grpc_auth_type = "Trust"
-no_sync = true
 branch_id = "9a57cdca-fd66-3c91-ab83-654f21378725"

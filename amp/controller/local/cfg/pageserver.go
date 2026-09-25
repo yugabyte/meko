@@ -18,7 +18,7 @@ import (
 // a full pageserver_api::config::ConfigToml; the daemon fills every other
 // field from its own defaults.
 type PageserverParams struct {
-	// Conf is the init-time template (listen addrs, auth types, no_sync,
+	// Conf is the init-time template (listen addrs, auth types,
 	// yb_storage_conn, and any passthrough Other keys).
 	Conf config.YbAmpLocalInitPageserverConf
 
@@ -111,9 +111,6 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 	}
 	if c.ListenGRPCAddr != nil {
 		m["listen_grpc_addr"] = *c.ListenGRPCAddr
-	}
-	if c.NoSync {
-		m["no_sync"] = true
 	}
 	for k, v := range c.Other {
 		m[k] = v

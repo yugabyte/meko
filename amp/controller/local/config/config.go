@@ -58,7 +58,6 @@ type PageServerConf struct {
 	PgAuthType      AuthType `toml:"pg_auth_type"`
 	HTTPAuthType    AuthType `toml:"http_auth_type"`
 	GRPCAuthType    AuthType `toml:"grpc_auth_type"`
-	NoSync          bool     `toml:"no_sync"`
 	// BranchID is the single branch this pageserver serves, read from the
 	// `branch_id` key of its pageserver.toml. Nil until assigned.
 	BranchID *BranchID `toml:"branch_id,omitempty"`
@@ -115,8 +114,6 @@ type YbAmpLocalInitPageserverConf struct {
 	PgAuthType      AuthType
 	HTTPAuthType    AuthType
 	GRPCAuthType    AuthType
-	// NoSync is skipped on the wire when false (Rust skip_serializing_if).
-	NoSync bool
 	// YbStorageConn is written verbatim as `yb_storage_conn = <value>`.
 	YbStorageConn *string
 	// Other holds any additional pageserver.toml keys (the serde flatten).
@@ -138,9 +135,6 @@ func (c YbAmpLocalInitPageserverConf) MarshalTOML() ([]byte, error) {
 	}
 	if c.ListenGRPCAddr != nil {
 		m["listen_grpc_addr"] = *c.ListenGRPCAddr
-	}
-	if c.NoSync {
-		m["no_sync"] = true
 	}
 	if c.YbStorageConn != nil {
 		m["yb_storage_conn"] = *c.YbStorageConn
@@ -184,8 +178,6 @@ func (c *YbAmpLocalInitPageserverConf) UnmarshalTOML(data []byte) error {
 		case "grpc_auth_type":
 			s, _ := v.(string)
 			c.GRPCAuthType = AuthType(s)
-		case "no_sync":
-			c.NoSync, _ = v.(bool)
 		case "yb_storage_conn":
 			s, _ := v.(string)
 			c.YbStorageConn = &s

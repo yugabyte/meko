@@ -86,7 +86,6 @@ func goldPageserverParams() PageserverParams {
 			PgAuthType:     config.AuthTrust,
 			HTTPAuthType:   config.AuthTrust,
 			GRPCAuthType:   config.AuthTrust,
-			NoSync:         true,
 			YbStorageConn:  &yb,
 		},
 		PgDistribDir:     goldPgDistribDir,

@@ -240,8 +240,6 @@ pub struct ConfigToml {
     pub image_compression: ImageCompressionAlgorithm,
     pub ephemeral_bytes_per_memory_kb: usize,
     pub l0_flush: Option<crate::models::L0FlushConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub no_sync: Option<bool>,
     pub page_service_pipelining: PageServicePipeliningConfig,
     pub get_vectored_concurrent_io: GetVectoredConcurrentIo,
     pub enable_read_path_debugging: Option<bool>,
@@ -908,7 +906,6 @@ impl Default for ConfigToml {
             ephemeral_bytes_per_memory_kb: (DEFAULT_EPHEMERAL_BYTES_PER_MEMORY_KB),
             l0_flush: None,
             tenant_config: BranchConfigToml::default(),
-            no_sync: None,
             page_service_pipelining: PageServicePipeliningConfig::Pipelined(
                 PageServicePipeliningConfigPipelined {
                     max_batch_size: NonZeroUsize::new(32).unwrap(),

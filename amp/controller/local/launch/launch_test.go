@@ -26,7 +26,6 @@ func envWithTemplates() *config.LocalEnv {
 			PgAuthType:     config.AuthTrust,
 			HTTPAuthType:   config.AuthTrust,
 			GRPCAuthType:   config.AuthTrust,
-			NoSync:         true,
 			YbStorageConn:  ptrStr("{ host = 'h' }"),
 		}},
 		SafekeeperTemplates: []config.SafekeeperConf{{
@@ -130,9 +129,6 @@ func TestPageserverInitConfPreservesTemplateYbStorageConn(t *testing.T) {
 	}
 	if initConf.YbStorageConn == nil || *initConf.YbStorageConn != "{ host = 'h' }" {
 		t.Errorf("yb_storage_conn = %v", initConf.YbStorageConn)
-	}
-	if !initConf.NoSync {
-		t.Error("no_sync should be preserved")
 	}
 }
 

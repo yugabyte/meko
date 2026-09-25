@@ -237,7 +237,6 @@ type pageserverConfigTomlSubset struct {
 	PgAuthType      AuthType  `toml:"pg_auth_type"`
 	HTTPAuthType    AuthType  `toml:"http_auth_type"`
 	GRPCAuthType    AuthType  `toml:"grpc_auth_type"`
-	NoSync          bool      `toml:"no_sync"`
 	BranchID        *BranchID `toml:"branch_id"`
 }
 
@@ -282,7 +281,6 @@ func DiscoverPageservers(endpointsPath string) ([]PageServerConf, error) {
 			PgAuthType:      configToml.PgAuthType,
 			HTTPAuthType:    configToml.HTTPAuthType,
 			GRPCAuthType:    configToml.GRPCAuthType,
-			NoSync:          configToml.NoSync,
 			BranchID:        configToml.BranchID,
 			DataDir:         dataDir,
 		})

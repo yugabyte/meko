@@ -63,9 +63,6 @@ func TestInitRoundTrip(t *testing.T) {
 	if pt.ListenGRPCAddr == nil || *pt.ListenGRPCAddr != "127.0.0.1:20500" { // base + 500
 		t.Errorf("ps template listen_grpc_addr = %v, want 127.0.0.1:20500", pt.ListenGRPCAddr)
 	}
-	if !pt.NoSync {
-		t.Error("ps template no_sync should be true")
-	}
 	if pt.YbStorageConn == nil {
 		t.Error("ps template yb_storage_conn should be set")
 	}

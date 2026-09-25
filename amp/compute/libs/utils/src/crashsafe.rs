@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::fd::AsFd;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -205,27 +204,6 @@ pub fn overwrite(
         .open(final_path_parent)?;
 
     final_parent_dirfd.sync_all()?;
-    Ok(())
-}
-
-/// Syncs the filesystem for the given file descriptor.
-#[cfg_attr(target_os = "macos", allow(unused_variables))]
-pub fn syncfs(fd: impl AsFd) -> anyhow::Result<()> {
-    // Linux guarantees durability for syncfs.
-    // POSIX doesn't have syncfs, and further does not actually guarantee durability of sync().
-    #[cfg(target_os = "linux")]
-    {
-        use anyhow::Context;
-        nix::unistd::syncfs(fd).context("syncfs")?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // macOS is not a production platform for Neon, don't even bother.
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        compile_error!("Unsupported OS");
-    }
     Ok(())
 }
 

@@ -38,7 +38,6 @@
     "log_format": "string",
     "max_get_vectored_keys": "integer",
     "max_vectored_read_bytes": "integer",
-    "no_sync": "boolean",
     "ondemand_download_behavior_treat_error_as_warn": "boolean",
     "page_cache_size": "integer",
     "page_service_pipelining.batching": "string",

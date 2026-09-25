@@ -150,6 +150,8 @@ async fn purge_stale_tenant_dirs(
     .expect("read branches dir task panicked")
     {
         Ok(d) => d,
+        // A fresh volume: attach creates the dir below, and there is nothing to purge.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) => {
             warn!("Failed to read branches dir while purging stale entries: {e}");
             return;

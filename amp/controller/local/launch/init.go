@@ -141,7 +141,7 @@ func Init(ctx context.Context, args InitArgs) error {
 	controlPlaneAPI := fmt.Sprintf("http://127.0.0.1:%d/upcall/v1/", cplanePort)
 
 	// Single-pageserver path (--num-pageservers>1 is out of scope). The
-	// template carries the shared yb_storage_conn inline table + no_sync.
+	// template carries the shared yb_storage_conn inline table.
 	grpcAddr := fmt.Sprintf("127.0.0.1:%d", psGrpc)
 	inlineCopyP := inline
 	psTemplate := config.YbAmpLocalInitPageserverConf{
@@ -151,7 +151,6 @@ func Init(ctx context.Context, args InitArgs) error {
 		PgAuthType:     config.AuthTrust,
 		HTTPAuthType:   config.AuthTrust,
 		GRPCAuthType:   config.AuthTrust,
-		NoSync:         true,
 		YbStorageConn:  &inlineCopyP,
 	}
 

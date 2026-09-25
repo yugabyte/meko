@@ -180,9 +180,6 @@ pub struct PageServerConf {
     /// Setting this to zero disables limits on total ephemeral layer size.
     pub ephemeral_bytes_per_memory_kb: usize,
 
-    /// Optionally disable disk syncs (unsafe!)
-    pub no_sync: bool,
-
     pub page_service_pipelining: pageserver_api::config::PageServicePipeliningConfig,
 
     pub get_vectored_concurrent_io: pageserver_api::config::GetVectoredConcurrentIo,
@@ -363,7 +360,6 @@ impl PageServerConf {
             ephemeral_bytes_per_memory_kb,
             l0_flush: _,
             tenant_config,
-            no_sync,
             page_service_pipelining,
             get_vectored_concurrent_io,
             enable_read_path_debugging,
@@ -465,7 +461,6 @@ impl PageServerConf {
             }),
             control_plane_api_token: control_plane_api_token.map(SecretString::from),
             default_tenant_conf: tenant_config,
-            no_sync: no_sync.unwrap_or(false),
             enable_read_path_debugging: enable_read_path_debugging.unwrap_or(false),
             validate_wal_contiguity: validate_wal_contiguity.unwrap_or(false),
             ssl_ca_certs: match ssl_ca_file {

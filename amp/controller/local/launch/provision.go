@@ -69,7 +69,6 @@ func allocatePageserverConf(env *config.LocalEnv, endpointID string) (config.Pag
 		PgAuthType:     template.PgAuthType,
 		HTTPAuthType:   template.HTTPAuthType,
 		GRPCAuthType:   template.GRPCAuthType,
-		NoSync:         template.NoSync,
 		DataDir:        env.PageserverDataDir(endpointID),
 	}
 	if template.ListenHTTPSAddr != nil {
@@ -106,7 +105,6 @@ func pageserverInitConfFor(env *config.LocalEnv, allocated *config.PageServerCon
 		PgAuthType:      allocated.PgAuthType,
 		HTTPAuthType:    allocated.HTTPAuthType,
 		GRPCAuthType:    allocated.GRPCAuthType,
-		NoSync:          allocated.NoSync,
 		YbStorageConn:   template.YbStorageConn,
 		Other:           template.Other,
 	}

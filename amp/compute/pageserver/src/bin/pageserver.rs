@@ -31,7 +31,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::*;
 use tracing_utils::OtelGuard;
 use utils::auth::{JwtAuth, SwappableJwtAuth};
-use utils::crashsafe::syncfs;
 use utils::logging::TracingErrorLayerEnablement;
 use utils::metrics_collector::{METRICS_COLLECTION_INTERVAL, METRICS_COLLECTOR};
 use utils::{failpoint_support, logging, project_build_tag, project_git_version, tcp_listener};
@@ -183,46 +182,6 @@ fn main() -> anyhow::Result<()> {
         walredo_pool_size = conf.walredo_pool_size.get(),
         "starting with scale-derived sizing"
     );
-
-    // The tenants directory contains all the pageserver local disk state.
-    // Create if not exists and make sure all the contents are durable before proceeding.
-    // Ensuring durability eliminates a whole bug class where we come up after an unclean shutdown.
-    // After unclea shutdown, we don't know if all the filesystem content we can read via syscalls is actually durable or not.
-    // Examples for that: OOM kill, systemd killing us during shutdown, self abort due to unrecoverable IO error.
-    let branches_path = conf.branches_path();
-    {
-        let open = || {
-            nix::dir::Dir::open(
-                branches_path.as_std_path(),
-                nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_RDONLY,
-                nix::sys::stat::Mode::empty(),
-            )
-        };
-        let dirfd = match open() {
-            Ok(dirfd) => dirfd,
-            Err(e) => match e {
-                nix::errno::Errno::ENOENT => {
-                    utils::crashsafe::create_dir_all(&branches_path).with_context(|| {
-                        format!("Failed to create branches root dir at '{branches_path}'")
-                    })?;
-                    open().context("open branches dir after creating it")?
-                }
-                e => anyhow::bail!(e),
-            },
-        };
-
-        if conf.no_sync {
-            info!("Skipping syncfs on startup");
-        } else {
-            let started = Instant::now();
-            syncfs(dirfd)?;
-            let elapsed = started.elapsed();
-            info!(
-                elapsed_ms = elapsed.as_millis(),
-                "made tenant directory contents durable"
-            );
-        }
-    }
 
     // Basic initialization of things that don't change after startup
     tracing::info!("Initializing virtual_file...");
