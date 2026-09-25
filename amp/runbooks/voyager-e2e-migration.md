@@ -55,7 +55,7 @@ docker build -t yb-amp/voyager:dev -f deploy/voyager/Dockerfile .
 ```
 
 Build the endpoint image from the AMP repository root. The Quay base
-`quay.io/yugabyte/amp-build-tools:v1` is private — `docker login quay.io`
+`quay.io/yugabyte/amp-build-tools:v2` is private — `docker login quay.io`
 
 ```bash
 docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .

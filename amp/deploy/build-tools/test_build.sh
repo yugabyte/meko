@@ -23,7 +23,7 @@ workflow="$repo_root/.github/workflows/amp-build-tools.yml"
 # Expected pin -- the single source of truth this whole suite checks everything against.
 WANT_REGISTRY="quay.io/yugabyte"
 WANT_IMAGE="amp-build-tools"
-WANT_TAG="v1"
+WANT_TAG="v2"
 
 rc=0
 pass() { echo "  ✓ $1"; }

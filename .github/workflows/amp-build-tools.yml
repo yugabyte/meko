@@ -28,7 +28,7 @@ on:
       tag:
         description: 'Immutable tag to publish (bump to the next vN when the base changes)'
         type: string
-        default: v1
+        default: v2
   pull_request:
     branches: [main]
     # Broad enough that editing any consumer's pin re-runs `test` (catching a

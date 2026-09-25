@@ -12,7 +12,7 @@
 #   --push         also `docker push` the built image
 #   --registry REG registry namespace (default: quay.io/yugabyte)
 #   --image NAME   image name (default: amp-build-tools)
-#   --tag TAG      tag to build/push (default: v1)
+#   --tag TAG      tag to build/push (default: v2)
 #
 # The tag is a hand-bumped, IMMUTABLE pin. When you change build-tools/Dockerfile:
 # publish the next vN with this script (or the amp-build-tools.yml workflow), then
@@ -36,7 +36,7 @@ repo_root="$(cd "$here/../.." && pwd)"
 push=false
 registry="quay.io/yugabyte"
 image="amp-build-tools"
-tag="v1"
+tag="v2"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --push) push=true; shift ;;

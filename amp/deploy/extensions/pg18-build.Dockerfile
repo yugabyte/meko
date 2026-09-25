@@ -16,7 +16,7 @@
 
 ARG REPOSITORY=quay.io/yugabyte
 ARG IMAGE=amp-build-tools
-ARG TAG=v1
+ARG TAG=v2
 
 FROM $REPOSITORY/$IMAGE:$TAG
 WORKDIR /home/nonroot

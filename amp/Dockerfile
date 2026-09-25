@@ -5,7 +5,7 @@
 ### inside this image in the real deployments.
 ARG REPOSITORY=quay.io/yugabyte
 ARG IMAGE=amp-build-tools
-ARG TAG=v1
+ARG TAG=v2
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
 
