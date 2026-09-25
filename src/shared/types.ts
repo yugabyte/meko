@@ -40,6 +40,47 @@ export type ReviewerMode = 'agentk' | 'people';
 
 export type MergeMethod = 'repo-default' | 'squash' | 'merge' | 'rebase';
 
+/**
+ * Token counts from Claude Code transcripts (main conversation and subagents).
+ * `input` is uncached prompt tokens; cache reads and writes are counted separately.
+ */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Model responses counted. */
+  messages: number;
+}
+
+export interface ModelUsage {
+  model: string;
+  usage: TokenUsage;
+}
+
+export interface SessionUsage {
+  sessionId: string;
+  name: string;
+  stage: Stage;
+  archived: boolean;
+  usage: TokenUsage;
+}
+
+export interface DailyUsage {
+  /** YYYY-MM-DD in the server's time zone. */
+  day: string;
+  usage: TokenUsage;
+}
+
+export interface ProjectUsage {
+  total: TokenUsage;
+  byModel: ModelUsage[];
+  /** Every session with usage, archived ones included, largest first. */
+  bySession: SessionUsage[];
+  /** The last 14 days, oldest first, zero-filled. */
+  daily: DailyUsage[];
+}
+
 export interface ProjectSettings {
   /** Send a continue prompt to sessions that were mid-turn when the host went down. */
   autoContinue: boolean;
@@ -96,6 +137,7 @@ export interface Session {
   hasDesign: boolean;
   /** Lines added/removed vs. the base branch, refreshed periodically. */
   diffStat: { added: number; removed: number } | null;
+  usage: TokenUsage;
   lastEventAt: number | null;
   createdAt: number;
   archivedAt: number | null;
@@ -104,6 +146,8 @@ export interface Session {
 
 export interface ProjectWithSessions extends Project {
   sessions: Session[];
+  /** Token usage across all the project's sessions, archived ones included. */
+  usage: TokenUsage;
 }
 
 export interface UpdateStatus {
@@ -173,6 +217,7 @@ export interface ProjectHome {
   project: Project;
   datapacks: DatapackWithCounts[];
   activity: ActivityItem[];
+  usage: ProjectUsage;
 }
 
 export interface SearchResult {

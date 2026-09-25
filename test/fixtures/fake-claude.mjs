@@ -58,7 +58,17 @@ async function turn(text) {
     hook('PreToolUse', { tool_name: 'ExitPlanMode', tool_input: { plan: '# Design\n\nDo the thing.' } });
     return; // waits for approval (Enter)
   }
+  respond();
   hook('Stop', {});
+}
+
+// Like Claude Code: one response is written as several lines sharing a message id.
+let responses = 0;
+function respond() {
+  const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
+  const usage = { input_tokens: 3, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 };
+  const entry = JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', usage } }) + '\n';
+  writeFileSync(transcript, entry + entry, { flag: 'a' });
 }
 
 // Claude's TUI enables bracketed paste at startup; tmux only wraps pastes when it's on.
@@ -94,6 +104,7 @@ process.stdin.on('data', async (chunk) => {
     if (planWaiting && line === '') {
       planWaiting = false;
       hook('PostToolUse', { tool_name: 'ExitPlanMode', tool_response: 'User has approved your plan.' });
+      respond();
       hook('Stop', {});
       continue;
     }

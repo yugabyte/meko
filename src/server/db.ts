@@ -125,6 +125,28 @@ const MIGRATIONS: string[] = [
   `,
   // 2: remember that Claude died mid-turn (its SessionEnd hook can fire as tmux dies).
   `ALTER TABLE sessions ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0;`,
+  // 3: token usage, one row per model response, read incrementally from transcripts.
+  `
+  CREATE TABLE usage_messages (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    agent TEXT,
+    model TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    input INTEGER NOT NULL,
+    output INTEGER NOT NULL,
+    cache_read INTEGER NOT NULL,
+    cache_write INTEGER NOT NULL,
+    PRIMARY KEY (session_id, message_id)
+  );
+  CREATE INDEX usage_messages_at ON usage_messages(at);
+  CREATE TABLE usage_files (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    PRIMARY KEY (session_id, path)
+  );
+  `,
 ];
 
 export function openDb(path: string): Db {

@@ -14,6 +14,8 @@ your devserver, and you use it from a browser:
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge → Cleanup. You approve the
   design, opening the PR and merging. The server waits for reviews and CI and hands AgentK
   findings to Claude.
+- **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
+  subagents included.
 - **Meko datapacks** give every project a memory: one dedicated datapack plus any number of
   shared ones.
 - **Survives restarts:** after a host reboot, every open session is brought back with
@@ -28,7 +30,7 @@ your devserver, and you use it from a browser:
     <td width="50%"><img src="docs/screenshots/new-project.png" alt="New project dialog listing the repos under ~/code"><br><sub><b>New project.</b> Pick a repo from your repos folder; a dedicated Meko datapack is created with it.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/project-home.png" alt="Project home with datapacks, recent activity and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity and project settings.</sub></td>
+    <td width="50%"><img src="docs/screenshots/project-home.png" alt="Project home with datapacks, activity, token usage and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity, token usage by day, session and model, and settings.</sub></td>
     <td width="50%"><img src="docs/screenshots/workbench-dark.png" alt="The workbench in the dark theme"><br><sub><b>Dark theme.</b> Follows your system, or pick one.</sub></td>
   </tr>
 </table>

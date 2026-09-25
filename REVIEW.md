@@ -44,6 +44,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Every project still has exactly one dedicated datapack; sessions get `MEKO_AGENT_ID` and the pin.
 - [ ] Meko failures degrade gracefully (banner, logged warning) and never kill running sessions.
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub.
+- [ ] Token usage stays incremental (byte offsets) and deduplicated by message id; subagent
+      transcripts are included; archived sessions still count toward their project.
 
 ## 5. UI
 

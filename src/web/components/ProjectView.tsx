@@ -9,7 +9,7 @@ import {
 import { api, errorMessage } from '../api';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, duration } from '../util';
+import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
 import { ConfirmButton, StatusDot } from './common';
 import { DesignPanel } from './DesignPanel';
 import { TerminalPane } from './TerminalPane';
@@ -122,7 +122,7 @@ export function ProjectView({
             aria-selected={s.id === session?.id}
             className={cx('tab', s.id === session?.id && 'sel')}
             onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
-            title={`${s.name} · ${STATUS_TEXT[s.status]} · ${STAGE_LABELS[s.stage]}`}
+            title={`${s.name} · ${STATUS_TEXT[s.status]} · ${STAGE_LABELS[s.stage]} · ${formatTokens(totalTokens(s.usage))} tokens`}
           >
             <StatusDot status={s.status} />
             <span className="tab-name">{s.name}</span>
@@ -163,6 +163,9 @@ export function ProjectView({
               vs {session.baseBranch}
             </span>
           )}
+          <span title={usageTitle(session.usage)}>
+            tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
+          </span>
           <span>
             datapack {dedicated?.name ?? '—'}
             {sharedCount > 0 ? ` · +${sharedCount} shared` : ''}

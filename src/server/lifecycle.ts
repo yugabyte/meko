@@ -300,8 +300,11 @@ export class Lifecycle {
       try {
         const conv = await this.core.projects.ensureConversation(row.project_id);
         const body = st.body.trim().slice(0, 4000);
+        this.sessions.ingestUsage(row.id);
+        const u = this.sessions.runtime(row.id).usage;
+        const tokens = `Token usage: ${u.output} output, ${u.input} input, ${u.cacheWrite} cache write, ${u.cacheRead} cache read tokens over ${u.messages} responses.`;
         await this.core.meko.addMemory(
-          `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}.${body ? `\n\n${body}` : ''}`,
+          `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}. ${tokens}${body ? `\n\n${body}` : ''}`,
           dp.id, projectAgentId(row.project_id), conv,
           { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },
         );

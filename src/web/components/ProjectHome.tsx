@@ -1,3 +1,4 @@
+import { UsagePanel } from './UsagePanel';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
   MekoDatapack,
@@ -128,6 +129,7 @@ export function ProjectHomeView({
             ))}
           </section>
         </div>
+        {home && <UsagePanel projectId={project.id} usage={home.usage} />}
         <ProjectSettingsForm project={project} onError={onError} />
       </div>
     </div>

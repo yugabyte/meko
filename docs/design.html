@@ -185,6 +185,7 @@ pre.mermaid{margin:0;background:transparent}
     <li><a href="#sessions">Projects &amp; sessions</a></li>
     <li><a href="#lifecycle">Task lifecycle</a></li>
     <li><a href="#datapacks">Datapacks</a></li>
+    <li><a href="#usage">Token usage</a></li>
     <li><a href="#login">Login &amp; security</a></li>
     <li><a href="#recovery">Crash recovery</a></li>
     <li><a href="#releases">Releases &amp; updates</a></li>
@@ -196,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.9 (implemented)</span>
+  <span class="label">Design · v0.10 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -220,6 +221,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Network</td><td>Reachable directly on the corp network over HTTPS, behind a login.</td></tr>
       <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by AgentK Local are shown.</td></tr>
       <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
+      <tr><td>Token usage</td><td>Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents.</td></tr>
       <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge → Cleanup, with three human gates. More ADLC stages plug in later.</td></tr>
       <tr><td>Host OS</td><td>Linux devservers only for now. macOS is deferred.</td></tr>
       <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI and releases, date-based versions (<code>0.YYYYMMDD.N</code>), tarball releases, and an update check built into the server.</td></tr>
@@ -501,7 +503,7 @@ stateDiagram-v2
   </div>
   <div class="callout">
     <span class="label">Folder trust</span>
-    <p>Claude Code asks "Do you trust this folder?" the first time it runs somewhere new, and fires no hooks until that's answered. For a worktree, Claude keys that decision by the main repository, so before launching a session the server marks the project's repo as trusted in <code>~/.claude.json</code> (unless it or a parent folder already is). If the prompt still appears, the session shows <em>needs you</em> with an explanation.</p>
+    <p>Claude Code asks "Do you trust this folder?" the first time it runs somewhere new, and fires no hooks until that's answered. For a worktree, Claude keys that decision by the main repository, so the server marks the project's repo as trusted in <code>~/.claude.json</code> when the project is created, and checks again before each launch (other Claude processes can overwrite a fresh entry when they start, so it re-checks after a moment). If the prompt still appears, the session shows <em>needs you</em> with an explanation.</p>
   </div>
   <div class="callout">
     <span class="label">Meko is required</span>
@@ -512,6 +514,19 @@ stateDiagram-v2
       <li><b>At session start:</b> every session gets the Meko environment. The server refuses to start a session for a project whose dedicated datapack it can't resolve.</li>
       <li><b>If Meko goes down:</b> running sessions keep going, and the rail shows a "Meko unreachable" banner. The Meko hooks capture from the transcript on disk, so they catch up once the service is back. New projects can't be created until then.</li>
     </ul>
+  </div>
+</section>
+
+<section id="usage">
+  <h2>Token usage</h2>
+  <div class="prose">
+    <p>Claude Code writes every model response to the session transcript with its token counts. The server reads new lines from each session's transcript, and from any subagent transcripts under <code>&lt;session&gt;/subagents/</code>, after every turn (on the <code>Stop</code> hook), when a session ends or is archived, and once a minute. It remembers the byte offset it reached, so each line is read once.</p>
+    <p>One response spans several transcript lines with the same message id, so usage is stored once per message: <code>usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write)</code>. Totals per session, project, model and day are sums over that table, and archived sessions keep counting toward their project.</p>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3>Where it shows</h3><p>The session footer and tab tooltip show the session's total and output tokens. The rail tooltip shows the project total. The project home has a <b>Token usage</b> section: headline numbers, a 14-day chart with a table view, and breakdowns by session and by model.</p></div>
+    <div class="card"><h3>What's counted</h3><p>Four numbers, kept separate: uncached input, cache writes, cache reads and output. Cache reads dominate long sessions, so the headline total is shown next to output. Only tokens are tracked; dollar estimates aren't, since most people use a subscription.</p></div>
+    <div class="card"><h3>In Meko</h3><p>When a task is cleaned up, its token totals are included in the "shipped" summary written to the project's dedicated datapack.</p></div>
   </div>
 </section>
 

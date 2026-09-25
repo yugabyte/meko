@@ -17,6 +17,7 @@ import { SessionManager } from './sessions.js';
 import { Lifecycle } from './lifecycle.js';
 import { projectRows, toProject } from './store.js';
 import { Tmux, writeTmuxConf } from './tmux.js';
+import { ZERO_USAGE, usageByProject } from './usage.js';
 
 export interface CoreOptions {
   paths: Paths;
@@ -94,7 +95,14 @@ export class Core extends EventEmitter {
 
   state(): AppState {
     return {
-      projects: projectRows(this.db).map((r) => ({ ...toProject(this.db, r), sessions: this.sessions.listForProject(r.id) })),
+      projects: (() => {
+        const usage = usageByProject(this.db);
+        return projectRows(this.db).map((r) => ({
+          ...toProject(this.db, r),
+          sessions: this.sessions.listForProject(r.id),
+          usage: usage.get(r.id) ?? { ...ZERO_USAGE },
+        }));
+      })(),
       meko: this.mekoStatus,
       update: this.updateStatus(),
       version: this.version,

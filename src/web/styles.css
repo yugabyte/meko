@@ -9,6 +9,8 @@
   --accent: #2b55c0;
   --accent-ink: #ffffff;
   --accent-soft: #e4eafa;
+  /* Chart marks: validated per theme (lightness band, 3:1 vs surface). */
+  --chart-bar: #2b55c0;
   --ok: #23845a;
   --warn: #b86e00;
   --warn-soft: #fff1da;
@@ -36,6 +38,7 @@
     --accent: #86a4ff;
     --accent-ink: #0d1530;
     --accent-soft: #1e2a4a;
+    --chart-bar: #6f8ff0;
     --ok: #5cc592;
     --warn: #e9a64a;
     --warn-soft: #3a2c14;
@@ -58,6 +61,7 @@
   --accent: #86a4ff;
   --accent-ink: #0d1530;
   --accent-soft: #1e2a4a;
+  --chart-bar: #6f8ff0;
   --ok: #5cc592;
   --warn: #e9a64a;
   --warn-soft: #3a2c14;
@@ -1288,4 +1292,204 @@ textarea.input {
     inset: 0;
     width: auto;
   }
+}
+
+/* ---------- Token usage ---------- */
+.usage-box {
+  margin-top: 16px;
+}
+.usage-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.usage-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  padding: 4px 0 8px;
+}
+.usage-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-num {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.usage-num.strong {
+  font-weight: 600;
+}
+.usage-lbl {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.usage-chart-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--muted);
+}
+.chart {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: 160px auto;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+.chart-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  transform: translateY(-0.5em);
+  height: calc(100% + 1em);
+  margin-bottom: -1em;
+}
+.chart-plot {
+  position: relative;
+  border-bottom: 1px solid var(--rule);
+}
+.chart-grid {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.chart-grid span {
+  border-top: 1px dashed var(--rule);
+  height: 0;
+}
+.chart-grid span:last-child {
+  border-top: 0;
+}
+.chart-bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px; /* surface gap between adjacent bars */
+}
+.chart-col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  outline: none;
+  cursor: default;
+}
+.chart-col:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 4px;
+}
+.chart-bar {
+  width: min(70%, 28px);
+  min-height: 0;
+  background: var(--chart-bar);
+  border-radius: 4px 4px 0 0;
+  transition: opacity 0.1s;
+}
+.chart-col.hover .chart-bar {
+  opacity: 0.8;
+}
+.chart-x {
+  grid-column: 2;
+  display: flex;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.chart-x span {
+  flex: 1;
+  text-align: center;
+}
+.chart-tip {
+  position: absolute;
+  top: 4px;
+  transform: translateX(12px);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 8px 10px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 2;
+  min-width: 180px;
+}
+.chart-tip.flip {
+  transform: translateX(calc(-100% - 12px));
+}
+.chart-tip-hd {
+  color: var(--muted);
+}
+.chart-tip-total {
+  font-weight: 600;
+  margin: 2px 0 6px;
+}
+.chart-tip dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  margin: 0;
+}
+.chart-tip dt {
+  color: var(--muted);
+}
+.chart-tip dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.usage-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.usage-table th {
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.usage-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.usage-table tr:last-child td {
+  border-bottom: 0;
+}
+.usage-table .num {
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

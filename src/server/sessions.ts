@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CreateSessionRequest, Session, SessionAction, SessionStatus, Stage } from '../shared/types.js';
+import type { CreateSessionRequest, Session, SessionAction, SessionStatus, Stage, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { get, run, tx } from './db.js';
@@ -17,6 +17,7 @@ import {
   type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName } from './tmux.js';
+import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
 const QUARTER_HOUR = 15 * 60 * 1000;
@@ -32,6 +33,10 @@ export class SessionManager {
   private launching = new Set<string>();
   /** Sessions we are deliberately stopping; their exit isn't an event. */
   private stopping = new Set<string>();
+  /** Token totals per session, refreshed after each transcript read. */
+  private usage = new Map<string, TokenUsage>();
+  private usageLoaded = false;
+  private usageReadAt = new Map<string, number>();
 
   constructor(private core: Core) {}
 
@@ -44,6 +49,7 @@ export class SessionManager {
   runtime(id: string): SessionRuntime {
     const m = this.mergeInfo.get(id);
     return {
+      usage: this.usage.get(id) ?? { ...ZERO_USAGE },
       busy: this.busy.has(id),
       diffStat: this.diffs.get(id) ?? null,
       canMerge: m?.canMerge ?? false,
@@ -52,6 +58,7 @@ export class SessionManager {
   }
 
   listForProject(projectId: string): Session[] {
+    this.loadUsage();
     return sessionRows(this.db, projectId)
       .filter((r) => r.desired === 'running')
       .map((r) => toSession(this.db, r, this.runtime(r.id)));
@@ -233,13 +240,7 @@ export class SessionManager {
     try {
       // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
       const repo = projectRow(this.db, row.project_id)?.repo_path;
-      if (repo) {
-        try {
-          ensureWorkspaceTrust(repo);
-        } catch (e) {
-          this.core.log.warn(`could not mark ${repo} as trusted in Claude Code`, errMsg(e));
-        }
-      }
+      if (repo) await this.trustRepo(repo);
       const script = writeLauncher(this.core.paths, {
         sessionId: row.id,
         worktree: row.worktree_path,
@@ -258,6 +259,22 @@ export class SessionManager {
       else await this.core.tmux.newSession(row.tmux_name, row.worktree_path, command);
     } finally {
       this.launching.delete(row.id);
+    }
+  }
+
+  /**
+   * Makes sure Claude Code trusts the repo. Other Claude processes rewrite
+   * ~/.claude.json with their own copy when they start, which can drop a
+   * fresh entry, so a new entry is checked again after a moment.
+   */
+  async trustRepo(repo: string): Promise<void> {
+    try {
+      for (let i = 0; i < 3; i++) {
+        if (ensureWorkspaceTrust(repo) !== 'added') return;
+        await sleep(400);
+      }
+    } catch (e) {
+      this.core.log.warn(`could not mark ${repo} as trusted in Claude Code`, errMsg(e));
     }
   }
 
@@ -307,6 +324,8 @@ export class SessionManager {
           if (row.stage === 'design' && !/reject|denied|keep planning/.test(resp)) this.core.lifecycle.designApproved(id, 'you');
         }
         if (row.status !== 'working') this.setStatus(id, 'working');
+        // Keep usage live during long turns without reading the transcript on every tool call.
+        if (Date.now() - (this.usageReadAt.get(id) ?? 0) > 10_000) this.ingestUsage(id);
         break;
       }
       case 'PermissionRequest': {
@@ -330,10 +349,12 @@ export class SessionManager {
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'idle');
         this.refreshDiff(id).catch(() => undefined);
+        this.ingestUsage(id);
         await this.core.lifecycle.onTurnEnd(id);
         break;
       }
       case 'SessionEnd':
+        this.ingestUsage(id);
         if (this.stopping.has(id)) break;
         if (row.status === 'working') this.update(id, { interrupted: 1 });
         this.setStatus(id, 'exited', p.reason ? `Claude exited (${p.reason})` : 'Claude exited');
@@ -346,6 +367,7 @@ export class SessionManager {
 
   /** Boot-time recovery: bring back every session that should be running. */
   async recover(): Promise<void> {
+    for (const r of sessionRows(this.db)) if (r.desired === 'running') this.ingestUsage(r.id);
     await this.core.tmux.ensureServer();
     const panes = await this.core.tmux.panes();
     for (const row of sessionRows(this.db)) {
@@ -377,6 +399,8 @@ export class SessionManager {
         // Claude fires no hooks until the folder-trust dialog is answered.
         const screen = await this.core.tmux.capture(row.tmux_name).catch(() => '');
         if (TRUST_PROMPT_RE.test(screen)) {
+          const repo = projectRow(this.db, row.project_id)?.repo_path;
+          if (repo) await this.trustRepo(repo); // so the next session skips it
           this.setStatus(row.id, 'needs_input', 'Claude is asking whether you trust this folder. Answer in the terminal.');
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         }
@@ -476,6 +500,7 @@ export class SessionManager {
   async archive(row: SessionRow, opts: { keepBranch: boolean; stage?: Stage }): Promise<{ worktreeRemoved: boolean }> {
     this.stopping.add(row.id);
     try {
+      this.ingestUsage(row.id);
       run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = ? WHERE id = ?`, Date.now(), row.id);
       await this.core.tmux.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
@@ -527,7 +552,34 @@ export class SessionManager {
 
   async refreshDiffStats(): Promise<void> {
     for (const r of sessionRows(this.db)) {
-      if (r.desired === 'running') await this.refreshDiff(r.id).catch(() => undefined);
+      if (r.desired !== 'running') continue;
+      await this.refreshDiff(r.id).catch(() => undefined);
+      this.ingestUsage(r.id);
     }
+  }
+
+  // ---- token usage ----
+
+  /** Reads any new transcript lines for a session and updates its token totals. */
+  ingestUsage(id: string): void {
+    this.loadUsage();
+    const r = sessionRow(this.db, id);
+    if (!r) return;
+    this.usageReadAt.set(id, Date.now());
+    try {
+      if (!ingestSessionUsage(this.db, id, sessionTranscript(r, transcriptPathFor))) return;
+    } catch (e) {
+      this.core.log.warn(`reading token usage for ${id} failed`, errMsg(e));
+      return;
+    }
+    const fresh = usageBySession(this.db).get(id);
+    if (fresh) this.usage.set(id, fresh);
+    this.core.changed();
+  }
+
+  private loadUsage(): void {
+    if (this.usageLoaded) return;
+    this.usageLoaded = true;
+    this.usage = usageBySession(this.db);
   }
 }

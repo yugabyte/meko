@@ -59,6 +59,14 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await env.core.sessions.submit(s.id, 'second turn');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
 
+    // Token usage is read from the transcript on each Stop (duplicated lines count once).
+    const usage = await waitFor(() => env.core.sessions.get(s.id).usage, (u) => u.messages === 2, 10000, 'usage');
+    expect(usage).toEqual({ input: 6, output: 100, cacheRead: 2000, cacheWrite: 400, messages: 2 });
+    expect(env.core.state().projects[0].usage.output).toBe(100);
+    const home = await env.core.projects.home(p.id);
+    expect(home.usage.bySession[0]).toMatchObject({ sessionId: s.id, archived: false });
+    expect(home.usage.byModel[0].model).toBe('claude-fake-1');
+
     await env.core.sessions.action(s.id, 'archive');
     const panes = await env.core.tmux.panes();
     expect(panes.has(s.tmuxName)).toBe(false);
@@ -66,6 +74,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const branches = execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' });
     expect(branches).toContain('ak/fix-the-thing'); // archive keeps the branch
     expect(env.core.state().projects[0].sessions).toHaveLength(0);
+    expect(env.core.state().projects[0].usage.messages).toBe(2); // archived sessions still count
   });
 
   it('captures the design and moves to Code when it is approved', async () => {

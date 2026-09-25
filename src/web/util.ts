@@ -1,4 +1,4 @@
-import type { ProjectWithSessions, Session, SessionStatus } from '../shared/types';
+import type { ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<SessionStatus, number> = {
@@ -86,4 +86,22 @@ export function modKey(e: KeyboardEvent): boolean {
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
+}
+
+export function totalTokens(u: TokenUsage): number {
+  return u.input + u.output + u.cacheRead + u.cacheWrite;
+}
+
+/** 950 → "950", 12_300 → "12.3k", 4_560_000 → "4.56M". */
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  const [div, unit] = n >= 1e9 ? [1e9, 'B'] : n >= 1e6 ? [1e6, 'M'] : [1e3, 'k'];
+  const v = n / div;
+  return `${v >= 100 ? Math.round(v) : v >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(2).replace(/\.?0+$/, '')}${unit}`;
+}
+
+/** One-line breakdown for tooltips. */
+export function usageTitle(u: TokenUsage): string {
+  const f = (n: number) => n.toLocaleString();
+  return `Tokens: ${f(totalTokens(u))} total · ${f(u.output)} output · ${f(u.input)} input · ${f(u.cacheWrite)} cache write · ${f(u.cacheRead)} cache read · ${u.messages} responses`;
 }

@@ -13,6 +13,7 @@ import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
 import { expandHome } from './paths.js';
 import { repoRoots } from './config.js';
+import { projectUsage } from './usage.js';
 import {
   DEFAULT_SETTINGS, dedicatedDatapack, projectDatapacks, projectRow, projectRows, slugify, toProject, type ProjectRow,
 } from './store.js';
@@ -109,6 +110,8 @@ export class ProjectService {
       run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
     });
     this.writePin(id, dp);
+    // Trust the repo in Claude Code now, before any session of it starts.
+    await this.core.sessions.trustRepo(repoPath);
     this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
     this.core.log.info(`project created: ${id} (${repoPath}) datapack ${dp.name}`);
     this.core.changed();
@@ -192,7 +195,7 @@ export class ProjectService {
        WHERE e.project_id = ? AND e.text IS NOT NULL ORDER BY e.at DESC LIMIT 50`,
       id,
     ).map<ActivityItem>((r) => ({ at: r.at, sessionId: r.session_id, sessionName: r.name, kind: r.kind, text: r.text ?? '' }));
-    return { project, datapacks, activity };
+    return { project, datapacks, activity, usage: projectUsage(this.db, id) };
   }
 
   async search(id: string, query: string): Promise<SearchResult[]> {
