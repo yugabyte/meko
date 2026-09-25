@@ -6,9 +6,7 @@ export function StatusDot({ status, title }: { status: SessionStatus; title?: st
   const cls =
     status === 'needs_input'
       ? 'needs'
-      : status === 'starting'
-        ? 'working'
-        : status === 'archived'
+      : status === 'archived'
           ? 'idle'
           : status;
   return <i className={cx('dot', cls)} title={title ?? STATUS_TEXT[status]} aria-label={STATUS_TEXT[status]} />;
@@ -133,4 +131,9 @@ export function Field({ label, children, hint }: { label: string; children: Reac
       {hint && <span className="hint">{hint}</span>}
     </label>
   );
+}
+
+/** Animated ". .. ..." for things in progress (static "…" with reduced motion). */
+export function Dots() {
+  return <span className="dots" aria-hidden="true" />;
 }

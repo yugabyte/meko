@@ -1,8 +1,10 @@
 import { useEffect, useReducer, useRef } from 'react';
-import type { SessionStatus } from '../../shared/types';
+import type { Session } from '../../shared/types';
 import { getTerminal } from '../terminals';
+import { StartupPanel } from './StartupPanel';
 
-export function TerminalPane({ sessionId, status }: { sessionId: string; status: SessionStatus }) {
+export function TerminalPane({ session }: { session: Session }) {
+  const { id: sessionId, status } = session;
   const hostRef = useRef<HTMLDivElement>(null);
   const [, rerender] = useReducer((x: number) => x + 1, 0);
   const term = getTerminal(sessionId);
@@ -26,13 +28,15 @@ export function TerminalPane({ sessionId, status }: { sessionId: string; status:
   }, [status, term]);
 
   let overlay: string | null = null;
-  if (term.conn === 'connecting' && status !== 'exited') overlay = 'Connecting to the session…';
+  if (status === 'starting') overlay = null; // the startup panel covers this
+  else if (term.conn === 'connecting' && status !== 'exited') overlay = 'Connecting to the session…';
   else if (term.conn === 'closed') overlay = 'Connection lost. Reconnecting…';
   else if (term.conn === 'ended' && status !== 'exited') overlay = term.message ?? 'The terminal closed.';
 
   return (
     <div className="term-wrap" onClick={() => term.focus()}>
       <div className="term-host" ref={hostRef} />
+      {status === 'starting' && <StartupPanel session={session} />}
       {overlay && <div className="term-overlay">{overlay}</div>}
       {status === 'exited' && (
         <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>

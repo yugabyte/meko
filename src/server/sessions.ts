@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CreateSessionRequest, Session, SessionAction, SessionStatus, Stage, TokenUsage } from '../shared/types.js';
+import type { CreateSessionRequest, Session, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { get, run, tx } from './db.js';
@@ -37,6 +37,25 @@ export class SessionManager {
   private usage = new Map<string, TokenUsage>();
   private usageLoaded = false;
   private usageReadAt = new Map<string, number>();
+  /** Startup progress, for the "Starting…" view. */
+  private startup = new Map<string, StartupState>();
+
+  setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
+    const prev = this.startup.get(id);
+    const now = Date.now();
+    this.startup.set(id, {
+      step,
+      stepSince: now,
+      startedAt: prev?.startedAt ?? now,
+      resumed: opts.resumed ?? prev?.resumed ?? false,
+      hasPrompt: opts.hasPrompt ?? prev?.hasPrompt ?? false,
+    });
+    this.core.changed();
+  }
+
+  clearStartup(id: string): void {
+    if (this.startup.delete(id)) this.core.changed();
+  }
 
   constructor(private core: Core) {}
 
@@ -50,6 +69,7 @@ export class SessionManager {
     const m = this.mergeInfo.get(id);
     return {
       usage: this.usage.get(id) ?? { ...ZERO_USAGE },
+      startup: this.startup.get(id) ?? null,
       busy: this.busy.has(id),
       diffStat: this.diffs.get(id) ?? null,
       canMerge: m?.canMerge ?? false,
@@ -143,14 +163,9 @@ export class SessionManager {
     const slug = await this.uniqueSlug(projectId, p.repo_path, settings.branchPrefix, slugify(name));
     const branch = `${settings.branchPrefix}${slug}`;
     const worktree = join(this.core.paths.worktrees, projectId, slug);
-    try {
-      await addWorktree(p.repo_path, worktree, branch, base);
-    } catch (e) {
-      throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
-    }
-
     const id = `${projectId}--${slug}`;
     const now = Date.now();
+    // The row goes in first so the tab (and its "Starting…" view) shows up right away.
     tx(this.db, () => {
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path,
                       tmux_name, hook_token, desired, status, stage, initial_prompt, created_at, last_event_at)
@@ -159,16 +174,28 @@ export class SessionManager {
         randomBytes(24).toString('base64url'), stage, task || null, now, now);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
     });
+    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+    try {
+      await addWorktree(p.repo_path, worktree, branch, base);
+    } catch (e) {
+      this.startup.delete(id);
+      run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
+      this.core.changed();
+      throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
+    }
     this.event(id, 'created', `Started on ${branch} from ${base}`);
 
     const row = this.row(id);
     const prompt = task ? this.prompt(row, stage === 'design' ? 'design' : 'code', { task }) : null;
+    this.setStartup(id, 'launch');
     try {
       await this.launch(row, { resume: false, prompt });
     } catch (e) {
+      this.startup.delete(id);
       this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
       throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
     }
+    this.setStartup(id, 'loading');
     this.core.log.info(`session created: ${id}`);
     this.core.changed();
     return this.get(id);
@@ -299,10 +326,19 @@ export class SessionManager {
       case 'SessionStart': {
         if (p.transcript_path) run(this.db, 'UPDATE sessions SET transcript_path = ? WHERE id = ?', p.transcript_path, id);
         const trustPrompt = row.status === 'needs_input' && /trust this folder/.test(row.status_detail ?? '');
-        if (row.status === 'starting' || row.status === 'exited' || trustPrompt) this.setStatus(id, 'idle');
+        const st = this.startup.get(id);
+        if ((row.status === 'starting' || trustPrompt) && st?.hasPrompt && !st.resumed) {
+          // Claude is up; it submits the first prompt next (UserPromptSubmit ends startup).
+          if (trustPrompt) this.setStatus(id, 'starting');
+          this.setStartup(id, 'prompt');
+        } else if (row.status === 'starting' || row.status === 'exited' || trustPrompt) {
+          this.clearStartup(id);
+          this.setStatus(id, 'idle');
+        }
         break;
       }
       case 'UserPromptSubmit':
+        this.clearStartup(id);
         this.planPending.delete(id);
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'working');
@@ -329,6 +365,8 @@ export class SessionManager {
         break;
       }
       case 'PermissionRequest': {
+        // The plan dialog is also a permission request; keep the clearer wording.
+        if (p.tool_name === 'ExitPlanMode') break;
         const detail = p.tool_name ? `Permission needed for ${p.tool_name}` : 'Permission needed';
         if (row.status !== 'needs_input') this.notifyUser(id, 'Needs you', detail);
         this.setStatus(id, 'needs_input', detail);
@@ -355,6 +393,7 @@ export class SessionManager {
       }
       case 'SessionEnd':
         this.ingestUsage(id);
+        this.clearStartup(id);
         if (this.stopping.has(id)) break;
         if (row.status === 'working') this.update(id, { interrupted: 1 });
         this.setStatus(id, 'exited', p.reason ? `Claude exited (${p.reason})` : 'Claude exited');
@@ -405,6 +444,7 @@ export class SessionManager {
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         }
       } else if (pane.dead && row.status !== 'exited') {
+        this.startup.delete(row.id);
         if (row.status === 'working') this.update(row.id, { interrupted: 1 });
         this.planPending.delete(row.id);
         this.busy.delete(row.id);
@@ -491,8 +531,12 @@ export class SessionManager {
     const p = projectRow(this.db, row.project_id);
     if (p) await restoreWorktree(p.repo_path, row.worktree_path, row.branch, row.base_branch);
     const resume = this.transcriptExists(row);
-    await this.launch(row, { resume, prompt: resume ? null : row.initial_prompt ? this.prompt(row, row.stage === 'design' ? 'design' : 'code') : null });
+    const firstPrompt = resume ? null : row.initial_prompt ? this.prompt(row, row.stage === 'design' ? 'design' : 'code') : null;
     this.setStatus(row.id, 'starting', 'Resuming');
+    this.startup.delete(row.id);
+    this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });
+    await this.launch(row, { resume, prompt: firstPrompt });
+    this.setStartup(row.id, 'loading');
     this.event(row.id, 'resumed', 'Resumed');
   }
 

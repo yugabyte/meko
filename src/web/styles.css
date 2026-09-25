@@ -1493,3 +1493,131 @@ textarea.input {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* ---------- Starting ---------- */
+.dots::after {
+  content: '…';
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dots::after {
+    content: '';
+    animation: dots 1.2s steps(1, end) infinite;
+  }
+  @keyframes dots {
+    0% { content: ''; }
+    25% { content: '.'; }
+    50% { content: '..'; }
+    75% { content: '...'; }
+  }
+}
+.dot.starting {
+  border: 2px solid var(--accent);
+  background: transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dot.starting {
+    animation: starting-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes starting-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+    50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent); }
+  }
+}
+.startup {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(460px, calc(100% - 32px));
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: var(--body);
+  z-index: 3;
+}
+.startup-title {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 600;
+}
+.startup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.startup-step {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.startup-mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  border: 2px solid var(--rule);
+}
+.startup-step.done .startup-mark {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--surface);
+}
+.startup-step.current .startup-mark {
+  border-color: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .startup-step.current .startup-mark {
+    animation: starting-pulse 1.4s ease-in-out infinite;
+  }
+}
+.startup-step.todo {
+  color: var(--muted);
+}
+.startup-step.current .startup-label {
+  font-weight: 600;
+}
+.startup-time,
+.startup-elapsed {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.startup-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.startup-stage {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.startup-stage .stchip {
+  color: var(--ink);
+  flex: none;
+}
+.startup-elapsed {
+  margin: 0;
+}

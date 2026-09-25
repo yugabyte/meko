@@ -51,6 +51,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(existsSync(s.worktreePath)).toBe(true);
 
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn to finish');
+    expect(env.core.sessions.get(s.id).startup).toBeNull();
     const first = argvLog(env)[0];
     expect(first.args).toContain('--session-id');
     expect(first.args.at(-1)).toContain('do it');
@@ -87,6 +88,22 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(env.core.sessions.get(s.id).stage).toBe('code');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'turn end after approval');
     expect(env.meko.calls.some((c) => c.name === 'putArtifact')).toBe(true);
+  });
+
+  it('reports startup steps while a session starts', async () => {
+    const p = await newProject();
+    const steps: string[] = [];
+    const onChange = () => {
+      const s = env.core.state().projects[0]?.sessions[0];
+      if (s?.startup && steps.at(-1) !== s.startup.step) steps.push(s.startup.step);
+    };
+    env.core.on('change', onChange);
+    const s = await env.core.sessions.create(p.id, { name: 'Startup steps', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    env.core.off('change', onChange);
+    expect(steps.slice(0, 3)).toEqual(['worktree', 'launch', 'loading']);
+    expect(steps).toContain('prompt');
+    expect(env.core.sessions.get(s.id).startup).toBeNull();
   });
 
   it('marks exited sessions and resumes them with --resume', async () => {

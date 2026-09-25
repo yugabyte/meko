@@ -1,5 +1,6 @@
 import { all, get, type Db } from './db.js';
 import type {
+  StartupState,
   TokenUsage,
   CiState, DatapackRef, Project, ProjectSettings, ReviewState, Session, SessionStatus, Stage,
 } from '../shared/types.js';
@@ -110,6 +111,7 @@ export function dedicatedDatapack(db: Db, projectId: string): DatapackRef | null
 
 export interface SessionRuntime {
   usage: TokenUsage;
+  startup: StartupState | null;
   busy: boolean;
   diffStat: { added: number; removed: number } | null;
   canMerge: boolean;
@@ -141,6 +143,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     hasDesign,
     diffStat: rt.diffStat,
     usage: rt.usage,
+    startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     createdAt: r.created_at,
     archivedAt: r.archived_at,

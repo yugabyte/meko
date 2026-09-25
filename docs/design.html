@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.10 (implemented)</span>
+  <span class="label">Design · v0.11 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>24 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -354,6 +354,7 @@ flowchart LR
   <p>Picking a repo fills in the project name and suggests a new dedicated datapack with the same name. You can switch that to an existing datapack before creating the project.</p>
   <div class="grid2">
     <div class="card"><h3>New session</h3><p>You give it a name and, optionally, a first prompt and a base branch (the default is the project's default branch). The server creates the worktree and branch, starts Claude inside it, and focuses the tab.</p></div>
+    <div class="card"><h3>Starting</h3><p>Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session starts, the terminal shows its steps (creating the worktree, starting Claude Code, loading, sending your task) with the current one animated and timed, plus the stage the session opens in. The header shows the current step too.</p></div>
     <div class="card"><h3>Keyboard</h3><p><code>⌘1–9</code> switches projects, <code>⌃Tab</code> cycles sessions, and <code>⌘K</code> opens a palette to jump to any session, create one, or search the project's datapacks. Keys pass through to the terminal whenever it has focus.</p></div>
     <div class="card"><h3>Notifications</h3><p>A browser notification fires when any session moves to <em>needs you</em> or finishes a turn while its tab is hidden. You can mute it per project.</p></div>
   </div>

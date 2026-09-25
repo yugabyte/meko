@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   STAGES,
+  STARTUP_STEPS,
   STAGE_LABELS,
   type ProjectWithSessions,
   type Session,
@@ -10,7 +11,7 @@ import { api, errorMessage } from '../api';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
-import { ConfirmButton, StatusDot } from './common';
+import { ConfirmButton, Dots, StatusDot } from './common';
 import { DesignPanel } from './DesignPanel';
 import { TerminalPane } from './TerminalPane';
 
@@ -76,8 +77,12 @@ export function ProjectView({
             <StatusDot status={session.status} />
             <span className="muted small status-text">
               {STATUS_TEXT[session.status]}
+              {session.status === 'starting' && <Dots />}
+              {session.status === 'starting' && session.startup
+                ? ` · ${STARTUP_STEPS.find((x) => x.step === session.startup!.step)?.label ?? ''}`
+                : ''}
               {session.status === 'working' && session.lastEventAt ? ` · ${duration(session.lastEventAt, now)}` : ''}
-              {session.statusDetail ? ` · ${session.statusDetail}` : ''}
+              {session.statusDetail && session.status !== 'starting' ? ` · ${session.statusDetail}` : ''}
             </span>
           </>
         )}
@@ -136,7 +141,7 @@ export function ProjectView({
 
       <div className="workarea">
         {session ? (
-          <TerminalPane key={session.id} sessionId={session.id} status={session.status} />
+          <TerminalPane key={session.id} session={session} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>

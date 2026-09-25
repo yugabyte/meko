@@ -10,6 +10,28 @@ export type SessionStatus =
   | 'recovered'
   | 'archived';
 
+/** What a starting session is doing right now. */
+export type StartupStep = 'worktree' | 'launch' | 'loading' | 'prompt';
+
+export const STARTUP_STEPS: { step: StartupStep; label: string }[] = [
+  { step: 'worktree', label: 'Creating the worktree' },
+  { step: 'launch', label: 'Starting Claude Code' },
+  { step: 'loading', label: 'Loading plugins, MCP servers and hooks' },
+  { step: 'prompt', label: 'Sending your task' },
+];
+
+export interface StartupState {
+  step: StartupStep;
+  /** When this step began (ms). */
+  stepSince: number;
+  /** When startup began (ms). */
+  startedAt: number;
+  /** Resuming an existing conversation (no worktree step). */
+  resumed: boolean;
+  /** A first prompt will be sent once Claude is up. */
+  hasPrompt: boolean;
+}
+
 export type Stage = 'design' | 'code' | 'pr' | 'review' | 'merge' | 'cleanup' | 'done';
 
 /** The stages shown in the stage bar, in order. `done` is terminal and not shown. */
@@ -138,6 +160,8 @@ export interface Session {
   /** Lines added/removed vs. the base branch, refreshed periodically. */
   diffStat: { added: number; removed: number } | null;
   usage: TokenUsage;
+  /** Set while status is `starting`. */
+  startup: StartupState | null;
   lastEventAt: number | null;
   createdAt: number;
   archivedAt: number | null;
