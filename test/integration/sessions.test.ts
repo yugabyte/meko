@@ -425,3 +425,26 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(env.core.comments.list(s.id)).toHaveLength(3);
   });
 });
+
+describe('with Meko transcript capture off', () => {
+  let env: TestEnv;
+  beforeEach(async () => {
+    env = await makeEnv({ capture: false });
+  });
+  afterEach(async () => {
+    await env.cleanup();
+  });
+
+  it('sends no transcripts and keeps the Meko plugin timer from sending any', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Quiet', prompt: 'do it', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    await env.core.sessions.submit(s.id, 'second turn');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
+    await env.core.sessions.action(s.id, 'archive');
+    expect(captureLog(env)).toEqual([]);
+    expect(env.meko.calls.filter((c) => c.name === 'ensureConversation' && c.args[2] === s.claudeSessionId)).toEqual([]);
+    // 2147483 s is the longest interval Node's setInterval honours; the plugin's timer never fires.
+    expect(argvLog(env)[0].env.MEKO_CHECKPOINT_INTERVAL).toBe('2147483');
+  });
+});

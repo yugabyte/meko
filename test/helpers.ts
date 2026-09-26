@@ -61,7 +61,7 @@ export interface TestEnv {
 
 let seq = 0;
 
-export async function makeEnv(opts: { start?: boolean } = {}): Promise<TestEnv> {
+export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {}): Promise<TestEnv> {
   const home = mkdtempSync(join(tmpdir(), 'akl-test-'));
   const repo = gitRepo(join(home, 'code', 'demo-repo'));
   const fakeDir = join(home, 'fake-claude');
@@ -80,7 +80,7 @@ export async function makeEnv(opts: { start?: boolean } = {}): Promise<TestEnv> 
   cfg.meko.apiKey = 'test-key';
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
-  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: FAKE_CAPTURE, tmux: new Tmux(socket, paths.tmuxConf), log: silentLogger, timers: false });
+  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE, tmux: new Tmux(socket, paths.tmuxConf), log: silentLogger, timers: false });
   if (opts.start !== false) await core.start();
   return {
     home, repo, core, meko, fakeDir, socket,

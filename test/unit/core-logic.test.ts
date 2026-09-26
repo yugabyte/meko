@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -63,6 +63,16 @@ describe('config and db', () => {
     expect(back.repos.roots).toEqual(['~/src', '~/code']);
     expect(back.update.channel).toBe('prerelease');
     expect(back.server.port).toBe(7777);
+  });
+
+  it('keeps Meko transcript capture off unless config.toml turns it on', () => {
+    expect(DEFAULT_CONFIG.meko.captureTranscripts).toBe(false);
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.meko.captureTranscripts = true;
+    saveConfig(paths, cfg);
+    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = true');
+    expect(loadConfig(paths).meko.captureTranscripts).toBe(true);
   });
 
   it('finds the Meko web app for known MCP hosts only', () => {

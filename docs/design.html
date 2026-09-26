@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.18 (implemented)</span>
+  <span class="label">Design · v0.19 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>25 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -408,7 +408,10 @@ flowchart LR
 [repos]
 roots = ["~/code"]        <span class="c"># folders the New project dialog lists</span>
 depth = 1                 <span class="c"># 1 = only direct children</span>
-clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repos</span></pre>
+clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repos</span>
+
+[meko]
+capture_transcripts = false  <span class="c"># send session transcripts to Meko conversations (off for now)</span></pre>
   <div class="tablewrap"><table>
     <thead><tr><th>Action</th><th>What the server does</th></tr></thead>
     <tbody>
@@ -517,6 +520,10 @@ stateDiagram-v2
     <p>The Meko hooks already take <code>MEKO_AGENT_ID</code> over the folder name, and they read the datapack pin from <code>~/.claude/meko-capture/pin-&lt;agent id&gt;.json</code>. AgentK Local sets <code>MEKO_AGENT_ID=claude_code:&lt;project&gt;</code> for every session and writes that pin when the project is created. So every worktree of a project shares one memory bucket, and capture goes into the dedicated datapack. <code>MEKO_DATAPACK_ID</code> is set too, for when the hooks learn to read it.</p>
   </div>
   <div class="callout">
+    <span class="label">Transcript capture is off for now</span>
+    <p>Sending every session's transcript overloaded Meko, so <code>[meko] capture_transcripts</code> in <code>config.toml</code> defaults to <code>false</code> (a restart applies a change). While it's off, the server doesn't run the plugin's <code>capture.js checkpoint</code> after each turn, at startup or when a session stops, and doesn't create a named conversation per session. Sessions also get <code>MEKO_CHECKPOINT_INTERVAL=2147483</code>, so the plugin's checkpoint timer, which its SessionStart hook starts for a resumed session, never fires in practice: that's the longest interval Node's <code>setInterval</code> honours, and a larger one would fire every millisecond. The plugin's own SessionStart, PreCompact and SessionEnd hooks still run. The shipped summary written at Merge &amp; Close is a single memory, not a transcript, and is still sent.</p>
+  </div>
+  <div class="callout">
     <span class="label">Folder trust</span>
     <p>Claude Code asks "Do you trust this folder?" the first time it runs somewhere new, and fires no hooks until that's answered. For a worktree, Claude keys that decision by the main repository, so the server marks the project's repo as trusted in <code>~/.claude.json</code> when the project is created, and checks again before each launch (other Claude processes can overwrite a fresh entry when they start, so it re-checks after a moment). If the prompt still appears, the session shows <em>needs you</em> with an explanation.</p>
   </div>
@@ -527,7 +534,7 @@ stateDiagram-v2
       <li><b>At install:</b> the installer needs a Meko API key. It reuses <code>MEKO_API_KEY</code> from <code>~/.claude/settings.json</code> if one is there, and asks for one otherwise. It also checks that the <code>meko-agent-skills</code> plugin is installed at a version that honours the env vars above. The install stops if the key doesn't work or the plugin is missing.</li>
       <li><b>At project creation:</b> a dedicated datapack is mandatory. <b>Create project</b> stays disabled until one is chosen or created.</li>
       <li><b>At session start:</b> every session gets the Meko environment. The server refuses to start a session for a project whose dedicated datapack it can't resolve.</li>
-      <li><b>If Meko goes down:</b> running sessions keep going, and the rail shows a "Meko unreachable" banner. The Meko hooks capture from the transcript on disk, so they catch up once the service is back. New projects can't be created until then.</li>
+      <li><b>If Meko goes down:</b> running sessions keep going, and the rail shows a "Meko unreachable" banner. The Meko hooks capture from the transcript on disk, so they catch up once the service is back (when transcript capture is on). New projects can't be created until then.</li>
     </ul>
   </div>
 </section>

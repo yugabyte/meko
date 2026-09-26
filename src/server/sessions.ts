@@ -21,6 +21,8 @@ import { sleep, tmuxName } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
+/** Longest setInterval delay Node honours, in whole seconds (2^31-1 ms). */
+export const MAX_TIMER_SECS = Math.floor((2 ** 31 - 1) / 1000);
 const QUARTER_HOUR = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 /** How long stopping a session waits for its last turns to reach Meko. */
@@ -289,6 +291,10 @@ export class SessionManager {
       MEKO_AGENT_ID: projectAgentId(row.project_id),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
+      // With capture off, the Meko plugin's checkpoint timer (started by its SessionStart hook on a
+      // resumed session) mustn't send transcripts either. It runs setInterval(tick, seconds * 1000),
+      // and Node turns a delay past 2^31-1 ms into 1 ms, so this is the longest safe interval.
+      ...(this.core.capture.enabled ? {} : { MEKO_CHECKPOINT_INTERVAL: String(MAX_TIMER_SECS) }),
     };
   }
 

@@ -16,7 +16,7 @@ const sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
 const transcript = join(dir, `${sessionId}.jsonl`);
-appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID } }) + '\n');
+appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value.
 const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir']);

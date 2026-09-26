@@ -11,7 +11,8 @@ export interface Config {
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
   update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
-  meko: { url: string; apiKey: string; webUrl: string };
+  /** captureTranscripts: send session transcripts to Meko conversations (off while Meko can't take the load). */
+  meko: { url: string; apiKey: string; webUrl: string; captureTranscripts: boolean };
   state: { dbPath: string };
   tmux: { socket: string };
   claude: { command: string };
@@ -22,7 +23,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { url: 'https://mcp.mekodata.ai/mcp', apiKey: '', webUrl: '' },
+  meko: { url: 'https://mcp.mekodata.ai/mcp', apiKey: '', webUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },

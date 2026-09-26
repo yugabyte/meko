@@ -57,8 +57,9 @@ async function serve(): Promise<void> {
   const log = fileLogger(join(paths.logs, 'server.log'));
   let core: Core | null = null;
   const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
-  const mekoCaptureScript = findMekoCaptureScript();
-  if (!mekoCaptureScript) log.warn('the meko-agent-skills plugin was not found; session transcripts will not be captured to Meko');
+  const mekoCaptureScript = cfg.meko.captureTranscripts ? findMekoCaptureScript() : null;
+  if (!cfg.meko.captureTranscripts) log.info('session transcripts are not sent to Meko (meko.capture_transcripts is off)');
+  else if (!mekoCaptureScript) log.warn('the meko-agent-skills plugin was not found; session transcripts will not be captured to Meko');
   core = new Core({ paths, config: cfg, db, version: v, meko, mekoCaptureScript, tmux: new Tmux(cfg.tmux.socket, paths.tmuxConf), log });
 
   let app: Awaited<ReturnType<typeof buildServer>> | null = null;
