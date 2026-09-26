@@ -66,7 +66,6 @@ function GeneralTab() {
         reposRoots: roots.map((r) => r.trim()).filter(Boolean),
         reposDepth: s.reposDepth,
         cloneInto: s.cloneInto.trim(),
-        updateChannel: s.updateChannel,
       });
       setS(next);
       setRoots(next.reposRoots);
@@ -127,18 +126,6 @@ function GeneralTab() {
           />
         </Field>
       </div>
-      <Field label="Update channel">
-        <select
-          id="set-channel"
-          className="input"
-          value={s.updateChannel}
-          onChange={(e) => setS({ ...s, updateChannel: e.target.value as Settings['updateChannel'] })}
-        >
-          <option value="stable">Stable releases</option>
-          <option value="prerelease">Include pre-releases</option>
-          <option value="off">Off (don’t check)</option>
-        </select>
-      </Field>
       <div className="fields">
         <Field label="Listen address">
           <input id="set-bind" className="input mono" value={s.bind} readOnly disabled />
@@ -312,10 +299,23 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
 
 function UpdatesTab({ initial }: { initial: UpdateStatus }) {
   const [u, setU] = useState(initial);
-  const [busy, setBusy] = useState<'check' | 'apply' | null>(null);
+  const [busy, setBusy] = useState<'check' | 'apply' | 'channel' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => setU(initial), [initial]);
+
+  const setChannel = async (channel: Settings['updateChannel']) => {
+    setBusy('channel');
+    setError(null);
+    try {
+      const next = await api.saveSettings({ updateChannel: channel });
+      setU((cur) => ({ ...cur, channel: next.updateChannel }));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const run = async (kind: 'check' | 'apply') => {
     setBusy(kind);
@@ -331,13 +331,24 @@ function UpdatesTab({ initial }: { initial: UpdateStatus }) {
 
   return (
     <div className="stack">
+      <Field label="Update channel" hint="Saved as soon as you pick one.">
+        <select
+          id="set-channel"
+          className="input"
+          value={u.channel}
+          disabled={busy === 'channel'}
+          onChange={(e) => void setChannel(e.target.value as Settings['updateChannel'])}
+        >
+          <option value="stable">Stable releases</option>
+          <option value="prerelease">Include pre-releases</option>
+          <option value="off">Off (don’t check)</option>
+        </select>
+      </Field>
       <dl className="kv">
         <dt>Installed</dt>
         <dd className="mono">v{u.current}</dd>
         <dt>Latest</dt>
         <dd className="mono">{u.latest ? `v${u.latest}` : '—'}</dd>
-        <dt>Channel</dt>
-        <dd>{u.channel}</dd>
         <dt>Last checked</dt>
         <dd>{relativeTime(u.lastCheckedAt)}</dd>
       </dl>
