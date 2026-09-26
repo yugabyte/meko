@@ -181,6 +181,7 @@ function FontSize() {
 /** The phone layout's session menu: what the desktop header and footer show, in one sheet. */
 export function SessionSheet({
   session,
+  stage,
   canDesign,
   pendingComments,
   info,
@@ -191,6 +192,8 @@ export function SessionSheet({
   onClose,
 }: {
   session: Session;
+  /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
+  stage: ReactNode;
   canDesign: boolean;
   pendingComments: number;
   /** Branch, tokens, Meko and review lines from the desktop footer. */
@@ -207,6 +210,7 @@ export function SessionSheet({
   };
   return (
     <Sheet label={`${session.name} actions`} onClose={onClose}>
+      <div className="sheet-stage">{stage}</div>
       <div className="sheet-items">
         {session.status === 'exited' && (
           <SheetItem className="primary" onClick={then(() => void onAct('resume'))}>

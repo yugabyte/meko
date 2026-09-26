@@ -263,6 +263,7 @@ class SessionTerminal {
     // A focused field only picks up a new inputmode when it's focused again.
     if (on) {
       ta.blur();
+      this.term.scrollToBottom();
       this.term.focus();
     } else if (wasFocused) ta.blur();
     this.listeners.forEach((l) => l());
@@ -349,7 +350,14 @@ class SessionTerminal {
     if (cols !== this.lastSize.cols || rows !== this.lastSize.rows) {
       this.lastSize = { cols, rows };
       this.send({ type: 'resize', cols, rows });
+      // The keyboard just opened or closed while typing here: keep the cursor line in view.
+      if (this.typing && document.activeElement === this.term.textarea) this.term.scrollToBottom();
     }
+  }
+
+  /** Shows the newest output, where Claude's input line is. */
+  scrollToBottom() {
+    this.term.scrollToBottom();
   }
 
   focus() {

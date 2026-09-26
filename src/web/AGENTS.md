@@ -20,7 +20,7 @@ with a finger. Before you finish a UI change:
   terminal key bar), and gate it on `useIsMobile()` / `useTouch()`.
 - **Where do new controls go on a phone?** A new header or footer button on the session screen
   also needs a row in the ⋯ sheet (`SessionSheet.tsx`), because the phone layout doesn't render the
-  crumb header and shortens the footer. A new project-level action belongs in the drawer (`Rail.tsx`).
+  crumb header or the stage bar (the sheet shows the stage bar instead) and shortens the footer. A new project-level action belongs in the drawer (`Rail.tsx`).
 - **Touch targets** are at least 36 px tall (40 px for icon buttons). Don't rely on hover,
   right-click, Shift/⌘-click, drag and drop, or keyboard shortcuts alone; give each one a tap
   equivalent. Tooltips (`title`) aren't seen on touch, so don't hide needed information in them.

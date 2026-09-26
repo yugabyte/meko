@@ -100,7 +100,11 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           disabled={disabled}
           enterKeyHint="enter"
           onChange={(e) => setText(e.target.value)}
-          onFocus={() => term.typing && term.setTyping(false)}
+          onFocus={() => {
+            if (term.typing) term.setTyping(false);
+            // Claude's prompt stays in view above the box while the keyboard is up.
+            term.scrollToBottom();
+          }}
           onKeyDown={(e) => {
             // A hardware keyboard can send with Ctrl/⌘+Enter; plain Enter adds a line.
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {

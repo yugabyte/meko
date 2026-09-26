@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BAR_KEYS, FONT_MAX, FONT_MIN, clampFont, keySequence, pasteText, wheelReport } from '../../src/web/keys.js';
+import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
 describe('terminal key bar', () => {
   it('sends the bytes a keyboard would', () => {
@@ -56,5 +57,18 @@ describe('terminal font size', () => {
     expect(clampFont(FONT_MIN - 3)).toBe(FONT_MIN);
     expect(clampFont(FONT_MAX + 3)).toBe(FONT_MAX);
     expect(clampFont(11.4)).toBe(11);
+  });
+});
+
+describe('on-screen keyboard', () => {
+  it('counts a much shorter visible viewport as the keyboard', () => {
+    expect(keyboardOpen(844, 844, 1)).toBe(false);
+    expect(keyboardOpen(844, 800, 1)).toBe(false); // a browser toolbar, not the keyboard
+    expect(keyboardOpen(844, 480, 1)).toBe(true);
+  });
+
+  it('ignores pinch zoom', () => {
+    expect(keyboardOpen(844, 422, 2)).toBe(false);
+    expect(keyboardOpen(844, 240, 2)).toBe(true);
   });
 });

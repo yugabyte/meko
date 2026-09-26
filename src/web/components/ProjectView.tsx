@@ -89,6 +89,8 @@ export function ProjectView({
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
+  // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you.
+  const gateReady = !!session && !session.busy && ((session.stage === 'design' && session.hasDesign) || (session.stage === 'review' && session.canMerge));
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   const branchText = session && <span>branch {session.branch}</span>;
@@ -130,12 +132,18 @@ export function ProjectView({
             </button>
           )}
           {session ? (
-            <button className="icon-btn topbar-more" onClick={() => setSheet(true)} aria-label="Session actions" aria-haspopup="dialog">
+            <button
+              className="icon-btn topbar-more"
+              onClick={() => setSheet(true)}
+              aria-label={gateReady ? 'Session actions, one is ready for you' : 'Session actions'}
+              aria-haspopup="dialog"
+            >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <circle cx="5" cy="12" r="1.8" />
                 <circle cx="12" cy="12" r="1.8" />
                 <circle cx="19" cy="12" r="1.8" />
               </svg>
+              {gateReady && <span className="topbar-dot" aria-hidden="true" />}
             </button>
           ) : (
             <button className="btn small" onClick={goHome}>
@@ -146,36 +154,34 @@ export function ProjectView({
       ) : null}
 
       {/* Desktop: one row with the stages and their gate, then the session's actions. On a phone the
-          top bar and the ⋯ sheet hold those actions, so the row only shows the stages. */}
-      {(session || !mobile) && (
+          stages, their gate and the actions are in the ⋯ sheet, to leave the room to the terminal. */}
+      {!mobile && (
         <StageBar
           session={session}
           project={project}
           onAct={act}
           actions={
-            mobile ? null : (
-              <>
-                {session?.prUrl && (
-                  <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
-                    PR #{session.prNumber}
-                  </a>
-                )}
-                <button className="btn small" onClick={goHome}>
-                  Project home
+            <>
+              {session?.prUrl && (
+                <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
+                  PR #{session.prNumber}
+                </a>
+              )}
+              <button className="btn small" onClick={goHome}>
+                Project home
+              </button>
+              {canDesign && (
+                <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
+                  Design doc
                 </button>
-                {canDesign && (
-                  <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
-                    Design doc
-                  </button>
-                )}
-                {session?.status === 'exited' && (
-                  <button className="btn small primary" onClick={() => act('resume')}>
-                    Resume
-                  </button>
-                )}
-                {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
-              </>
-            )
+              )}
+              {session?.status === 'exited' && (
+                <button className="btn small primary" onClick={() => act('resume')}>
+                  Resume
+                </button>
+              )}
+              {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
+            </>
           }
         />
       )}
@@ -249,6 +255,7 @@ export function ProjectView({
       {session && sheet && (
         <SessionSheet
           session={session}
+          stage={<StageBar session={session} project={project} onAct={act} actions={null} />}
           canDesign={canDesign}
           pendingComments={pending}
           info={

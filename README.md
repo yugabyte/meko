@@ -15,7 +15,8 @@ your devserver, and you use it from a browser:
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
 - **Works from your phone:** a drawer for projects, a key bar (Esc, Tab, Shift+Tab, arrows,
-  Ctrl+C) and a compose box for the terminal, swipe to scroll back, and the stage gates in reach.
+  Ctrl+C) and a compose box for the terminal, swipe to scroll back, and the stages and their gates
+  in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge & Close. Complex designs are

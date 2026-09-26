@@ -2303,7 +2303,19 @@ a.icon-btn {
   flex: none;
 }
 .topbar-more {
+  position: relative;
   color: var(--ink);
+}
+/* A gate (Approve design, Merge & Close) is ready in the ⋯ sheet. */
+.topbar-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 
 /* Bottom sheet */
@@ -2374,6 +2386,27 @@ a.icon-btn {
 }
 .sheet-item-note .del {
   color: var(--bad);
+}
+/* The stage bar, moved into the sheet on phones. */
+.sheet-stage .stages-wrap {
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+/* The stage name keeps its width; the gate goes on the next line when both don't fit. */
+.sheet-stage .stg-now {
+  flex: 1 0 auto;
+}
+.sheet-stage .blockers {
+  padding-top: 2px;
+}
+.sheet-stage .gate {
+  min-height: 40px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.sheet-stage .gate-pill {
+  font-size: 13px;
+  padding: 6px 10px;
 }
 .sheet-end .confirm-inline {
   display: flex;
@@ -2570,10 +2603,19 @@ a.icon-btn {
     display: revert;
   }
 
-  /* Shell: one column, the rail becomes a drawer. --app-h follows the on-screen keyboard. */
+  /* Shell: one column, the rail becomes a drawer. The app covers the visible viewport
+     (--app-top, --app-h from trackAppHeight), so the on-screen keyboard never covers it. */
   .app {
     grid-template-columns: minmax(0, 1fr);
+    position: fixed;
+    top: var(--app-top, 0px);
+    left: 0;
+    right: 0;
     height: var(--app-h, 100dvh);
+  }
+  /* The keyboard covers the home indicator, so nothing needs to clear it. */
+  html.kb-open .foot {
+    padding-bottom: 6px;
   }
   .main {
     padding-top: env(safe-area-inset-top, 0px);
