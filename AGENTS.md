@@ -32,7 +32,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/core.ts` | Wires config, db, tmux, Meko and the services; timers; `state()` snapshot for the UI. |
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
 | `src/server/sessions.ts` | Session lifecycle in tmux: create, launch, hook-driven status, recovery and auto-continue, archive. |
-| `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the AgentK review loop, Merge & Close (merge, then cleanup). |
+| `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the review watchers (by reviewer mode) and CI-fix watcher with their prompt queue, Merge & Close (merge, then cleanup). |
 | `src/server/projects.ts` | Projects, repo scan, datapacks (create, attach, pin), project home and search. |
 | `src/server/prompts.ts` | Instructions sent to Claude at each stage (overridable per repo in `.agent-k/stages/`). |
 | `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script, and the status line relay (reports plan limits, then runs the user's own status line, minus Meko's datapack suffix). |

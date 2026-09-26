@@ -57,9 +57,27 @@ export interface PrComment {
 
 interface CheckRun {
   __typename?: string;
+  name?: string;
   status?: string;
   conclusion?: string;
-  state?: string; // StatusContext
+  detailsUrl?: string;
+  // StatusContext
+  context?: string;
+  state?: string;
+  targetUrl?: string;
+}
+
+export interface FailedCheck {
+  name: string;
+  conclusion: string;
+  url: string;
+}
+
+export interface CiSummary {
+  state: CiState;
+  /** Some checks haven't finished. */
+  pending: boolean;
+  failed: FailedCheck[];
 }
 
 export interface PrStatus {
@@ -84,22 +102,42 @@ export async function prStatus(worktree: string, number: number): Promise<PrStat
   return JSON.parse(out) as PrStatus;
 }
 
-export function ciState(rollup: CheckRun[] | null): CiState {
-  if (!rollup || rollup.length === 0) return 'none';
+const FAILED = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'];
+
+export function ciSummary(rollup: CheckRun[] | null): CiSummary {
+  const failed: FailedCheck[] = [];
   let pending = false;
-  for (const c of rollup) {
+  for (const c of rollup ?? []) {
     const conclusion = (c.conclusion ?? c.state ?? '').toUpperCase();
     const status = (c.status ?? '').toUpperCase();
-    if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(conclusion)) return 'failure';
-    if ((status && status !== 'COMPLETED') || conclusion === 'PENDING' || conclusion === 'EXPECTED' || conclusion === '') pending = true;
+    if (FAILED.includes(conclusion)) {
+      failed.push({ name: c.name || c.context || 'unnamed check', conclusion, url: c.detailsUrl || c.targetUrl || '' });
+    } else if ((status && status !== 'COMPLETED') || conclusion === 'PENDING' || conclusion === 'EXPECTED' || conclusion === '') {
+      pending = true;
+    }
   }
-  return pending ? 'pending' : 'success';
+  const state: CiState = !rollup?.length ? 'none' : failed.length ? 'failure' : pending ? 'pending' : 'success';
+  return { state, pending, failed };
+}
+
+export function ciState(rollup: CheckRun[] | null): CiState {
+  return ciSummary(rollup).state;
 }
 
 export function isLogin(author: Author | null, login: string): boolean {
   if (!author) return false;
   const a = author.login.toLowerCase().replace(/\[bot\]$/, '');
   return a === login.toLowerCase().replace(/\[bot\]$/, '');
+}
+
+/**
+ * Logins of the bots (GitHub Apps) that reviewed a PR. `gh pr view` doesn't say which authors
+ * are bots; the REST API does.
+ */
+export async function botLogins(worktree: string, number: number): Promise<string[]> {
+  const out = await gh(worktree, 'api', '--paginate', `repos/{owner}/{repo}/pulls/${number}/reviews?per_page=100`,
+    '--jq', '.[] | select(.user.type == "Bot") | .user.login');
+  return out.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
 export async function comment(worktree: string, number: number, body: string): Promise<void> {
@@ -130,20 +168,6 @@ export async function resolveMergeMethod(worktree: string, method: MergeMethod):
 /** Merges by URL so gh never switches branches in the worktree. */
 export async function merge(worktree: string, url: string, method: 'squash' | 'merge' | 'rebase'): Promise<void> {
   await gh(worktree, 'pr', 'merge', url, `--${method}`);
-}
-
-/**
- * Guesses whether AgentK reviews this repo: looks for the bot in recent PR
- * conversation comments.
- */
-export async function detectReviewer(repoPath: string, login: string): Promise<'agentk' | 'people'> {
-  try {
-    const out = await gh(repoPath, 'api', 'repos/{owner}/{repo}/issues/comments?per_page=100&sort=created&direction=desc', '--jq', '[.[].user.login]');
-    const logins = JSON.parse(out || '[]') as string[];
-    return logins.some((l) => isLogin({ login: l }, login)) ? 'agentk' : 'people';
-  } catch {
-    return 'people';
-  }
 }
 
 export async function ghAvailable(): Promise<boolean> {

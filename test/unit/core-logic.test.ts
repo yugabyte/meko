@@ -8,11 +8,11 @@ import {
 import { DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig } from '../../src/server/config.js';
 import { openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
-import { ciState, isLogin } from '../../src/server/github.js';
+import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
 import { pinSlug, projectAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import { render } from '../../src/server/prompts.js';
-import { slugify } from '../../src/server/store.js';
+import { parseSettings, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
 import { STAGES, STAGE_LABELS } from '../../src/shared/types.js';
@@ -191,7 +191,7 @@ describe('config and db', () => {
     // Go back to schema 6, the six-stage release, and upgrade again (7 is Merge & Close; later
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
-    if (db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'pending_review'").get()) db.exec('ALTER TABLE sessions DROP COLUMN pending_review');
+    dropSessionColumns(db, 'pending_review', ...V10_COLUMNS);
     db.exec('PRAGMA user_version = 6');
     db.close();
     db = openDb(file);
@@ -200,7 +200,55 @@ describe('config and db', () => {
     expect(stages).toEqual([{ id: 's1', stage: 'merge' }, { id: 's2', stage: 'review' }]);
     db.close();
   });
+
+  it('moves every project to AgentK + People and keeps a queued review prompt', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    const addProject = (id: string, settings: string) =>
+      run(db, `INSERT INTO projects(id, name, repo_path, default_branch, settings_json, created_at) VALUES (?, ?, '/code/api', 'main', ?, 0)`, id, id, settings);
+    addProject('a', JSON.stringify({ reviewer: 'agentk', notify: false }));
+    addProject('b', JSON.stringify({ reviewer: 'people' }));
+    addProject('c', 'not json');
+    const add = (id: string, pending: string | null) =>
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at, pending_review)
+        VALUES (?, 'a', ?, ?, ?, 'b', 'main', '/w', ?, 't', 'running', 'idle', 'review', 0, ?)`, id, id, id, id, id, pending);
+    add('s1', 'review-people');
+    add('s2', 'sent');
+    add('s3', null);
+    // Back to schema 9, before the prompt queue.
+    dropSessionColumns(db, ...V10_COLUMNS);
+    db.exec('PRAGMA user_version = 9');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    const projects = db.prepare('SELECT id, settings_json FROM projects ORDER BY id').all() as { id: string; settings_json: string }[];
+    expect(projects.map((p) => JSON.parse(p.settings_json))).toEqual([
+      { reviewer: 'agentk-people', notify: false }, { reviewer: 'agentk-people' }, { reviewer: 'agentk-people' },
+    ]);
+    const queues = db.prepare('SELECT id, pending_prompts AS q, ci_fixes, agentk_seen FROM sessions ORDER BY id').all() as { id: string; q: string }[];
+    expect(queues.map((r) => ({ ...r, q: JSON.parse(r.q) as unknown }))).toEqual([
+      { id: 's1', q: { 'review-people': { state: 'queued' } }, ci_fixes: 0, agentk_seen: 0 },
+      { id: 's2', q: { review: { state: 'sent' } }, ci_fixes: 0, agentk_seen: 0 },
+      { id: 's3', q: {}, ci_fixes: 0, agentk_seen: 0 },
+    ]);
+    db.close();
+  });
+
+  it('reads an old or unknown reviewer mode as the default', () => {
+    expect(parseSettings(JSON.stringify({ reviewer: 'agentk' })).reviewer).toBe('agentk-people');
+    expect(parseSettings(JSON.stringify({ reviewer: 'all' })).reviewer).toBe('all');
+    expect(parseSettings('{').reviewer).toBe('agentk-people');
+  });
 });
+
+const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
+  for (const c of cols) {
+    if (db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = ?").get(c)) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+  }
+}
 
 describe('stages', () => {
   it('ends with one Merge & Close step', () => {
@@ -240,6 +288,22 @@ describe('github helpers', () => {
     expect(ciState([{ status: 'IN_PROGRESS', conclusion: '' }])).toBe('pending');
     expect(ciState([{ status: 'COMPLETED', conclusion: 'FAILURE' }, { status: 'IN_PROGRESS' }])).toBe('failure');
     expect(ciState([{ status: 'COMPLETED', conclusion: 'SKIPPED' }, { status: 'COMPLETED', conclusion: 'NEUTRAL' }])).toBe('success');
+  });
+
+  it('lists failed checks with their links, and says whether others are still running', () => {
+    expect(ciSummary(null)).toEqual({ state: 'none', pending: false, failed: [] });
+    const run = { __typename: 'CheckRun', name: 'test (macos-15)', status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/demo/actions/runs/1/job/2' };
+    const ctx = { __typename: 'StatusContext', context: 'ci/jenkins', state: 'ERROR', targetUrl: 'https://ci.example/9' };
+    expect(ciSummary([run, ctx, { name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' }])).toEqual({
+      state: 'failure',
+      pending: false,
+      failed: [
+        { name: 'test (macos-15)', conclusion: 'FAILURE', url: 'https://github.com/acme/demo/actions/runs/1/job/2' },
+        { name: 'ci/jenkins', conclusion: 'ERROR', url: 'https://ci.example/9' },
+      ],
+    });
+    expect(ciSummary([run, { name: 'test (ubuntu)', status: 'IN_PROGRESS' }])).toMatchObject({ state: 'failure', pending: true });
+    expect(ciSummary([{ status: 'COMPLETED', conclusion: 'TIMED_OUT' }]).failed).toEqual([{ name: 'unnamed check', conclusion: 'TIMED_OUT', url: '' }]);
   });
 
   it('matches bot logins with or without [bot]', () => {

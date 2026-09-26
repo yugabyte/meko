@@ -1,11 +1,13 @@
 import { UsagePanel } from './UsagePanel';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import type {
-  MekoDatapack,
-  ProjectHome,
-  ProjectSettings,
-  ProjectWithSessions,
-  SearchResult,
+import {
+  REVIEWER_LABELS,
+  type MekoDatapack,
+  type ProjectHome,
+  type ProjectSettings,
+  type ProjectWithSessions,
+  type ReviewerMode,
+  type SearchResult,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
@@ -340,10 +342,12 @@ function ProjectSettingsForm({
             id="ps-reviewer"
             className="input"
             value={s.reviewer}
-            onChange={(e) => set('reviewer', e.target.value as ProjectSettings['reviewer'])}
+            onChange={(e) => set('reviewer', e.target.value as ReviewerMode)}
+            title="Whose reviews Claude addresses. Merge waits for AgentK once it's active on the PR."
           >
-            <option value="agentk">AgentK</option>
-            <option value="people">People only</option>
+            {(Object.keys(REVIEWER_LABELS) as ReviewerMode[]).map((m) => (
+              <option key={m} value={m}>{REVIEWER_LABELS[m]}</option>
+            ))}
           </select>
         </Field>
         <Field label="AgentK login">
@@ -351,7 +355,7 @@ function ProjectSettingsForm({
             id="ps-login"
             className="input mono"
             value={s.reviewerLogin}
-            disabled={s.reviewer !== 'agentk'}
+            disabled={s.reviewer === 'people'}
             onChange={(e) => set('reviewerLogin', e.target.value)}
           />
         </Field>

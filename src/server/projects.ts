@@ -4,11 +4,11 @@ import type {
   ActivityItem, AttachDatapackRequest, CreateProjectRequest, Project, ProjectHome, ReposResponse, SearchResult,
   UpdateProjectRequest,
 } from '../shared/types.js';
+import { REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { cloneRepo, defaultBranch, isMainRepo, listBranches, repoNameFromUrl, scanRepos } from './git.js';
-import { detectReviewer } from './github.js';
 import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
 import { expandHome } from './paths.js';
@@ -107,7 +107,7 @@ export class ProjectService {
     // The first project on a repo is named after it; later ones add their own name.
     const repoSlug = slugify(repoPath.split('/').pop() ?? name);
     const id = this.uniqueId(siblings.length ? slugify(`${repoSlug}-${slugify(name)}`, 60) : repoSlug);
-    const settings = { ...DEFAULT_SETTINGS, reviewer: await detectReviewer(repoPath, DEFAULT_SETTINGS.reviewerLogin) };
+    const settings = { ...DEFAULT_SETTINGS };
     const branch = await defaultBranch(repoPath);
     const pos = (get<{ m: number | null }>(this.db, 'SELECT MAX(position) AS m FROM projects WHERE deleted_at IS NULL')?.m ?? -1) + 1;
     tx(this.db, () => {
@@ -147,6 +147,9 @@ export class ProjectService {
     if (req.settings) {
       const next = { ...toProject(this.db, r).settings, ...req.settings };
       if (!next.branchPrefix.trim()) throw new HttpError(400, 'The branch prefix can\'t be empty.');
+      if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
+        throw new HttpError(400, 'Reviewer must be All reviewers, AgentK + People or People only.');
+      }
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);
     }
     if (req.position !== undefined) this.move(id, req.position);

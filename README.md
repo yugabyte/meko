@@ -25,8 +25,8 @@ from a browser:
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and
-  cleans up the worktree and branches. The server waits for reviews and CI and hands AgentK
-  findings to Claude.
+  cleans up the worktree and branches. The server watches the PR and hands reviews (AgentK's and
+  people's by default, or every reviewer's, or only people's) and CI failures to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included. **Usage** in the left panel adds it up across every project, deleted ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits

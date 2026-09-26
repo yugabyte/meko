@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
+import type { ReviewerMode } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, tmux and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
@@ -10,6 +11,7 @@ const gh = vi.hoisted(() => ({
   status: null as null | PrStatus,
   comments: [] as string[],
   merges: [] as string[],
+  bots: [] as string[],
 }));
 
 vi.mock('../../src/server/github.js', async (orig) => {
@@ -25,7 +27,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
       gh.status = { ...gh.status!, state: 'MERGED' };
     },
     resolveMergeMethod: async () => 'squash' as const,
-    detectReviewer: async () => 'agentk' as const,
+    botLogins: async () => gh.bots,
   };
 });
 
@@ -56,6 +58,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = null;
     gh.comments = [];
     gh.merges = [];
+    gh.bots = [];
     env = await makeEnv();
   });
   afterEach(async () => {
@@ -120,15 +123,16 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
   });
 
-  /** A session in Review with PR #7 open and approved. */
-  async function inReview(name: string) {
+  /** A session in Review with PR #7 open and approved by AgentK (unless AgentK isn't listened to). */
+  async function inReview(name: string, reviewer?: ReviewerMode) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    if (reviewer) env.core.projects.update(p.id, { settings: { reviewer } });
     const s = await env.core.sessions.create(p.id, { name, prompt: 'do it', skipDesign: true });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
     gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
     gh.status = status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
     await env.core.sessions.action(s.id, 'open-pr');
-    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review' && x.reviewState === 'approved', 10000, 'review stage');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review' && (reviewer === 'people' || x.reviewState === 'approved') && x.status === 'idle', 10000, 'review stage');
     return s;
   }
 
@@ -190,7 +194,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       return env.core.sessions.get(s.id).mergeBlockers;
     };
     expect(await blockersFor({})).toEqual([]);
-    expect(await blockersFor({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })).toEqual(['CI is failing.']);
+    // Claude also gets the CI prompt, so it's working on the failure.
+    expect(await blockersFor({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })).toEqual(['Claude is still working.', 'CI is failing.']);
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'CI prompt done');
     expect(await blockersFor({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] })).toEqual(['CI is still running.']);
     expect(await blockersFor({ reviewDecision: 'CHANGES_REQUESTED' })).toEqual(['Changes were requested.']);
     expect(await blockersFor({ mergeable: 'CONFLICTING' })).toEqual(['The branch has merge conflicts.']);
@@ -210,7 +216,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     env.core.sessions.setStatus(s.id, 'idle');
 
     gh.status = { ...approved, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
-    await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({ status: 409, message: 'Not ready to merge: CI is failing.' });
+    await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('CI is failing.') as string });
     expect(gh.merges).toEqual([]);
     expect(env.core.sessions.row(s.id).stage).toBe('review');
   });
@@ -298,12 +304,12 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')] };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     expect(env.core.sessions.get(s.id).reviewState).toBe('addressing');
-    expect(pendingReview(s.id)).toBe('review'); // kept in the database across restarts
+    expect(queued(s.id).review?.state).toBe('queued'); // kept in the database across restarts
     // The other turn ends: the review goes in, and the state waits for that turn.
     await waitFor(() => transcript(s.id), (t) => t.includes('A review from'), 10000, 'review prompt');
     expect(env.core.sessions.get(s.id).reviewState).toBe('addressing');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.reviewState === 'addressed' && x.status === 'idle', 10000, 'addressed');
-    expect(pendingReview(s.id)).toBeNull();
+    expect(queued(s.id)).toEqual({});
     expect(transcript(s.id).match(/A review from/g)).toHaveLength(1);
   });
 
@@ -312,7 +318,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     env.core.sessions.setStatus(s.id, 'exited', 'Claude exited');
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')] };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    expect(pendingReview(s.id)).toBe('review');
+    expect(queued(s.id).review?.state).toBe('queued');
     expect(transcript(s.id)).not.toContain('A review from');
     env.core.sessions.setStatus(s.id, 'idle'); // as after Resume
     await pollAll();
@@ -348,9 +354,157 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   const finding = (id: string) => ({ id, author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**1 inline comment — 0 blocker, 1 major.**', submittedAt: new Date().toISOString() });
   const lastEvent = (id: string, kind: string) =>
     dbGet<{ text: string }>(env.core.db, 'SELECT text FROM session_events WHERE session_id = ? AND kind = ? ORDER BY id DESC LIMIT 1', id, kind)?.text;
-  const pendingReview = (id: string) => dbGet<{ p: string | null }>(env.core.db, 'SELECT pending_review AS p FROM sessions WHERE id = ?', id)?.p;
+  const queued = (id: string) =>
+    JSON.parse(dbGet<{ q: string }>(env.core.db, 'SELECT pending_prompts AS q FROM sessions WHERE id = ?', id)!.q) as Record<string, { state: string; vars?: Record<string, string> }>;
   const transcript = (id: string) => readFileSync(join(env.fakeDir, `${env.core.sessions.row(id).claude_session_id}.jsonl`), 'utf8');
   const pollAll = () => (env.core.lifecycle as unknown as { pollAll(): Promise<void> }).pollAll();
+
+  const review = (id: string, login: string, body: string, state = 'COMMENTED') => ({ id, author: { login }, state, body, submittedAt: new Date().toISOString() });
+  const failing = (over: Record<string, string> = {}) => ({
+    __typename: 'CheckRun', name: 'test (macos-15)', status: 'COMPLETED', conclusion: 'FAILURE',
+    detailsUrl: 'https://github.com/acme/demo/actions/runs/1/job/2', ...over,
+  });
+  const idle = (id: string, what: string) => waitFor(() => env.core.sessions.get(id), (x) => x.status === 'idle', 10000, what);
+  const poll = (id: string) => env.core.lifecycle.pollReview(env.core.sessions.row(id));
+  const count = (text: string, re: RegExp) => text.match(re)?.length ?? 0;
+
+  it('sends reviews from people, but not other bots, to Claude in AgentK + People', async () => {
+    const s = await inReview('People too');
+    gh.bots = ['yb-agentk-dev[bot]', 'copilot[bot]'];
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h1', 'copilot', 'Consider renaming x.'), review('h2', 'me', ''), review('h3', 'alice', 'Please add a test.')] };
+    await poll(s.id);
+    expect(lastEvent(s.id, 'review')).toBe('Review from alice');
+    await waitFor(() => transcript(s.id), (t) => t.includes('Reviewers left feedback'), 10000, 'people prompt');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.reviewState === 'addressed' && x.status === 'idle', 10000, 'addressed');
+    // An empty review (a reply on a thread) and a bot's review send nothing more.
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h4', 'me', ''), review('h5', 'copilot', 'Another nit.')] };
+    await poll(s.id);
+    expect(count(transcript(s.id), /Reviewers left feedback/g)).toBe(1);
+  });
+
+  it('sends other bots\' reviews too in All', async () => {
+    const s = await inReview('Everyone', 'all');
+    gh.bots = ['copilot[bot]'];
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h1', 'copilot', 'Consider renaming x.')] };
+    await poll(s.id);
+    expect(lastEvent(s.id, 'review')).toBe('Review from copilot');
+    await waitFor(() => transcript(s.id), (t) => t.includes('Reviewers left feedback'), 10000, 'people prompt');
+  });
+
+  it('ignores AgentK in People only and never waits for it', async () => {
+    const s = await inReview('No AgentK', 'people');
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')] };
+    await poll(s.id);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ reviewState: 'waiting', mergeBlockers: [] });
+    expect(queued(s.id)).toEqual({});
+    expect(transcript(s.id)).not.toContain('A review from');
+  });
+
+  it('waits for AgentK only once it is active on the PR', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    expect(p.settings.reviewer).toBe('agentk-people');
+    const s = await env.core.sessions.create(p.id, { name: 'Unwatched repo', prompt: 'do it', skipDesign: true });
+    await idle(s.id, 'first turn');
+    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+    gh.status = status();
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review' && x.status === 'idle', 10000, 'review stage');
+    await poll(s.id);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ reviewState: 'waiting', agentkSeen: false, canMerge: true });
+    await env.core.sessions.action(s.id, 'request-review');
+    expect(gh.comments).toEqual(['/agentk review']);
+    await poll(s.id);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ agentkSeen: true, mergeBlockers: ['Waiting for the AgentK review.'] });
+  });
+
+  it('refuses an unknown reviewer mode', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    expect(() => env.core.projects.update(p.id, { settings: { reviewer: 'agentk' as ReviewerMode } })).toThrow(/Reviewer must be/);
+  });
+
+  it('asks Claude to fix a CI failure once the checks finish, once per head', async () => {
+    const s = await inReview('CI fails');
+    gh.status = { ...gh.status!, statusCheckRollup: [failing(), { name: 'test (ubuntu)', status: 'IN_PROGRESS' }] };
+    await poll(s.id);
+    expect(queued(s.id)).toEqual({}); // the other check is still running
+    gh.status = { ...gh.status!, statusCheckRollup: [failing(), { name: 'test (ubuntu)', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
+    await poll(s.id);
+    expect(lastEvent(s.id, 'ci')).toBe('CI failed: test (macos-15)');
+    await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR #7'), 10000, 'CI prompt');
+    expect(transcript(s.id)).toContain('- test (macos-15): failure (https://github.com/acme/demo/actions/runs/1/job/2)');
+    await idle(s.id, 'CI turn');
+    await poll(s.id); // the same head, or a rerun of it, isn't sent again
+    expect(count(transcript(s.id), /CI failed on PR/g)).toBe(1);
+  });
+
+  it('hands a CI failure to the user after three heads in a row, and resets on green', async () => {
+    const s = await inReview('CI keeps failing');
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    gh.status = { ...gh.status!, statusCheckRollup: [failing()] };
+    for (let i = 1; i <= 4; i++) {
+      if (i > 1) commitIn(wt); // Claude pushed a fix; CI failed again on it
+      await poll(s.id);
+      await idle(s.id, `head ${i}`);
+    }
+    expect(count(transcript(s.id), /CI failed on PR/g)).toBe(3);
+    expect(lastEvent(s.id, 'ci')).toBe('CI failed: test (macos-15). Still failing after 3 fix attempts; over to you');
+    gh.status = { ...gh.status!, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] };
+    await poll(s.id);
+    expect(env.core.sessions.row(s.id).ci_fixes).toBe(0);
+  });
+
+  it('holds a CI prompt while the branch has unpushed commits', async () => {
+    const s = await inReview('Fix in progress');
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    const pushed = tip(wt);
+    commitIn(wt);
+    gh.status = { ...gh.status!, headRefOid: pushed, statusCheckRollup: [failing()] };
+    await poll(s.id);
+    expect(queued(s.id)).toEqual({});
+    expect(lastEvent(s.id, 'ci')).toBeUndefined();
+  });
+
+  it('sends a review before a CI failure, and drops the CI prompt when that turn pushes', async () => {
+    const s = await inReview('Both at once');
+    slowTurns();
+    await env.core.sessions.submit(s.id, 'something else');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')], statusCheckRollup: [failing()] };
+    await poll(s.id);
+    expect(queued(s.id)).toMatchObject({ review: { state: 'queued' }, ci: { state: 'queued' } });
+    // The review goes in first; while Claude addresses it, it pushes and CI starts over.
+    await waitFor(() => transcript(s.id), (t) => t.includes('A review from'), 10000, 'review prompt');
+    commitIn(env.core.sessions.row(s.id).worktree_path);
+    gh.status = { ...gh.status!, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.reviewState === 'addressed' && x.status === 'idle', 10000, 'addressed');
+    expect(queued(s.id)).toEqual({});
+    expect(transcript(s.id)).not.toContain('CI failed on PR');
+  });
+
+  it('delivers a CI failure found mid-turn when the turn ends', async () => {
+    const s = await inReview('CI mid-turn');
+    slowTurns();
+    await env.core.sessions.submit(s.id, 'something else');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
+    gh.status = { ...gh.status!, statusCheckRollup: [failing()] };
+    await poll(s.id);
+    expect(queued(s.id).ci).toMatchObject({ state: 'queued', vars: { sha: tip(env.core.sessions.row(s.id).worktree_path) } });
+    await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR #7'), 10000, 'CI prompt');
+  });
+
+  it('holds queued prompts until the turn that got one has ended, unless Claude was relaunched', async () => {
+    const s = await inReview('One at a time');
+    const setQueue = (q: object) => env.core.sessions.update(s.id, { pending_prompts: JSON.stringify(q) });
+    const ci = { state: 'queued', vars: { sha: 'abc1234', checks: '- test: failure' } };
+    // Idle, but the Stop of the review's turn isn't handled yet.
+    setQueue({ review: { state: 'sent' }, ci });
+    await pollAll();
+    expect(transcript(s.id)).not.toContain('CI failed on PR');
+    // After a restart the turn is gone, so the queue moves on.
+    env.core.sessions.setStatus(s.id, 'recovered');
+    await pollAll();
+    await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR #7 (https://github.com/acme/demo/pull/7) at commit abc1234'), 10000, 'CI prompt');
+  });
 
   it('refuses Open PR while Claude is working', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });

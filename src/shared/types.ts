@@ -58,7 +58,18 @@ export type ReviewState =
 
 export type CiState = 'none' | 'pending' | 'success' | 'failure';
 
-export type ReviewerMode = 'agentk' | 'people';
+/**
+ * Whose reviews Claude addresses: `all` (AgentK, people and other bots), `agentk-people`
+ * (AgentK and people) or `people` (people only). Merge waits for AgentK only once it's
+ * active on the PR, and never in `people`.
+ */
+export type ReviewerMode = 'all' | 'agentk-people' | 'people';
+
+export const REVIEWER_LABELS: Record<ReviewerMode, string> = {
+  all: 'All reviewers',
+  'agentk-people': 'AgentK + People',
+  people: 'People only',
+};
 
 export type MergeMethod = 'repo-default' | 'squash' | 'merge' | 'rebase';
 
@@ -180,6 +191,8 @@ export interface Session {
   prUrl: string | null;
   reviewState: ReviewState;
   ciState: CiState;
+  /** AgentK has commented on or reviewed the PR, or someone asked it to (`/agentk review`). */
+  agentkSeen: boolean;
   /** True when the Merge gate may be passed. */
   canMerge: boolean;
   /** Why Merge is disabled, in plain words. Empty when canMerge. */

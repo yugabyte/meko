@@ -310,7 +310,10 @@ CREATE TABLE sessions (
   stage TEXT,                     -- design | code | pr | review | merge (Merge & Close) | done
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_review TEXT,             -- review prompt queued for Claude ('review' | 'review-people'), or 'sent' until that turn ends
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'ci' to
+                                   --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
+  ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
+  agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
 CREATE TABLE designs (         -- one per session: markdown, or an Artifact's page + claude.ai link
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT, updated_at INTEGER);
@@ -381,21 +384,33 @@ stateDiagram-v2
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack, marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"). Small tasks can skip this stage at creation. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a summary taken from the design. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 4 · Review | When a review arrives, follows the `review` prompt: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused), and checks the AgentK review, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends the `review` prompt into the session. If Claude is mid-turn, waiting on you, or exited, the prompt is queued in `state.db` (so it survives restarts) and goes out when Claude is back at its prompt; the findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no AgentK findings are left unaddressed, the required approvals are in, every local commit is pushed to the PR, and Claude is neither working nor waiting on you in the terminal. |
+| 4 · Review | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt, reviews before CI. A queued CI prompt is dropped if the head moves or CI stops failing. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, and Claude is neither working nor waiting on you in the terminal. |
 | 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, removes the worktree, deletes the local and remote branch, runs `git fetch --prune` in your main checkout, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
-  **Request another round**, which posts `/agentk review`. If AgentK declines a PR (for example,
-  because it's too large), the refusal is shown with a **Force review** button. Forcing is always
-  your call.
-- **Repos AgentK doesn't watch.** Each project has a reviewer setting: *AgentK* or *People only*.
-  It's detected from whether the AgentK bot has commented recently on the repo's PRs. With people only, the Review stage waits for CI and
-  the required approvals.
+  **Request another round**, which posts `/agentk review` (**Request AgentK review** before AgentK
+  has been active on the PR). If AgentK declines a PR (for example, because it's too large), the
+  refusal is shown with a **Force review** button. Forcing is always your call.
+- **Reviewer modes.** Each project's reviewer setting says whose reviews Claude addresses:
+
+  | Mode | Claude addresses reviews from | Merge waits for AgentK |
+  |---|---|---|
+  | *All reviewers* | AgentK, people and other bots | Once AgentK is active on the PR |
+  | *AgentK + People* (default) | AgentK and people | Once AgentK is active on the PR |
+  | *People only* | People | Never |
+
+  AgentK is active on a PR once it has commented on it or reviewed it, or someone has commented
+  `/agentk review` on it, so repos AgentK doesn't watch never wait for it. Bots are the reviewers
+  GitHub's REST API lists as `Bot`. It's only asked when a poll finds a new review that isn't
+  AgentK's. Replies on review threads show up as empty reviews and are skipped, and so are
+  Claude's own replies, which post as you. A person's review goes to Claude when it requests
+  changes or comments with a body.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `approved`,
-  `review`, `review-people`, `continue`, `comments`) with `.agent-k/stages/<name>.md`. This lets a team
+  `review`, `review-people`, `ci`, `continue`, `comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
-  from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`).
+  from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
+  and CI failures through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
   enforce a branch-name prefix with rulesets.
 

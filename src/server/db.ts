@@ -192,6 +192,22 @@ const MIGRATIONS: string[] = [
   // 9: a review prompt waiting for Claude ('review' or 'review-people'), or 'sent' until the
   // turn that addresses it ends; kept across restarts.
   `ALTER TABLE sessions ADD COLUMN pending_review TEXT;`,
+  // 10: prompts waiting for Claude, as a JSON map of prompt name to { state: 'queued' | 'sent',
+  // vars } (replaces pending_review, which stays unused); the CI-fix watcher (the head that last
+  // got a CI prompt, and how many heads in a row did); whether AgentK is active on the PR; and
+  // every project on the AgentK + People reviewer mode.
+  `
+  ALTER TABLE sessions ADD COLUMN pending_prompts TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE sessions ADD COLUMN ci_fix_head TEXT;
+  ALTER TABLE sessions ADD COLUMN ci_fixes INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN agentk_seen INTEGER NOT NULL DEFAULT 0;
+  UPDATE sessions SET pending_prompts = json_object(pending_review, json_object('state', 'queued'))
+    WHERE pending_review IN ('review', 'review-people');
+  UPDATE sessions SET pending_prompts = json_object('review', json_object('state', 'sent'))
+    WHERE pending_review = 'sent';
+  UPDATE projects SET settings_json = json_set(CASE WHEN json_valid(settings_json) THEN settings_json ELSE '{}' END,
+    '$.reviewer', 'agentk-people');
+  `,
 ];
 
 export function openDb(path: string): Db {

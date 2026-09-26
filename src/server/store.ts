@@ -5,10 +5,11 @@ import type {
   TokenUsage,
   CiState, DatapackRef, Project, ProjectSettings, ReviewState, Session, SessionStatus, Stage,
 } from '../shared/types.js';
+import { REVIEWER_LABELS } from '../shared/types.js';
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
-  reviewer: 'agentk',
+  reviewer: 'agentk-people',
   reviewerLogin: 'yb-agentk-dev',
   branchPrefix: 'ak/',
   mergeMethod: 'repo-default',
@@ -58,14 +59,25 @@ export interface SessionRow {
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
+  /** Prompts waiting for Claude: JSON map of prompt name to { state, vars }. */
+  pending_prompts: string;
+  /** The PR head that last got a CI-fix prompt (or was handed to the user after the cap). */
+  ci_fix_head: string | null;
+  /** CI-fix prompts for consecutive failing heads since CI was last green. */
+  ci_fixes: number;
+  agentk_seen: number;
 }
 
 export function parseSettings(json: string): ProjectSettings {
+  let s: ProjectSettings;
   try {
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(json) as Partial<ProjectSettings>) };
+    s = { ...DEFAULT_SETTINGS, ...(JSON.parse(json) as Partial<ProjectSettings>) };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+  // A mode from an older version ('agentk') falls back to the default.
+  if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
+  return s;
 }
 
 export function projectDatapacks(db: Db, projectId: string): DatapackRef[] {
@@ -140,6 +152,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     prUrl: r.pr_url,
     reviewState: r.review_state,
     ciState: r.ci_state,
+    agentkSeen: !!r.agentk_seen,
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
     busy: rt.busy,

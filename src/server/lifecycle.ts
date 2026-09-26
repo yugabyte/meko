@@ -8,6 +8,7 @@ import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { HttpError } from './projects.js';
+import type { ReviewerMode } from '../shared/types.js';
 import { dedicatedDatapack, parseSettings, projectRow, sessionRow, sessionRows, type SessionRow } from './store.js';
 
 const POLL_MS = 15000;
@@ -16,11 +17,21 @@ const REVIEW_POLL_MS = 45000;
 const MERGE_GRACE_MS = 10 * 60 * 1000;
 /** Archived sessions still in Merge & Close this recently are cleanups a restart cut short. */
 const CLOSING_RESUME_MS = 24 * 60 * 60 * 1000;
+/** How long a CI failure waits for the rest of the checks before Claude is asked to fix it. */
+const CI_SETTLE_MS = 10 * 60 * 1000;
+/** Heads in a row that get a CI-fix prompt before a failing CI is left to the user. */
+const MAX_CI_FIXES = 3;
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
 
-type ReviewPrompt = 'review' | 'review-people';
+/** Prompts queued for Claude in the Review stage, in the order they go out. */
+const QUEUE_ORDER = ['review', 'review-people', 'ci'] as const;
+type QueuedPrompt = (typeof QUEUE_ORDER)[number];
+/** `sessions.pending_prompts`: kept across restarts; a prompt is `sent` until the turn that got it ends. */
+type Queue = Partial<Record<QueuedPrompt, { state: 'queued' | 'sent'; vars?: Record<string, string> }>>;
+
+const REVIEW_REQUEST = /^\/agentk review\b/;
 
 /**
  * True when the local branch has commits the PR's head lacks: committed but never pushed, or
@@ -57,6 +68,8 @@ export class Lifecycle {
   private merging = new Set<string>();
   /** Per session, the tail of the GitHub work (polls, review requests, merge) queued for it. */
   private chains = new Map<string, Promise<void>>();
+  /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
+  private ciFailSince = new Map<string, { head: string; at: number }>();
 
   constructor(private core: Core) {}
 
@@ -209,13 +222,17 @@ export class Lifecycle {
       await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
     } else if (row.stage === 'review') {
       await this.serial(id, async () => {
-        const pending = this.pendingReview(id);
-        // Only the turn that got the review prompt addresses it; a queued prompt goes out now.
-        if (pending === 'sent') this.setPendingReview(id, null);
-        if ((pending === 'sent' || !pending) && this.sessions.row(id).review_state === 'addressing') {
+        // The turn that got a prompt is over. Only that turn addresses a review: one still queued isn't.
+        const q = this.queue(id);
+        for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
+        this.setQueue(id, q);
+        const reviewQueued = !!(q.review || q['review-people']);
+        if (!reviewQueued && this.sessions.row(id).review_state === 'addressing') {
           this.sessions.update(id, { review_state: 'addressed' });
         }
-        if (pending === 'review' || pending === 'review-people') await this.deliverReview(id);
+        // A queued review goes out now. Anything else waits for a fresh look at the PR, so a CI
+        // prompt never goes out for a head this turn's push replaced.
+        if (reviewQueued) await this.deliverNext(id);
         else await this.doPollReview(id);
       }).catch((e) => this.warn(id, 'PR status failed', e));
     } else if (row.stage === 'merge') {
@@ -240,14 +257,23 @@ export class Lifecycle {
     return next;
   }
 
-  private pendingReview(id: string): ReviewPrompt | 'sent' | null {
-    const r = get<{ pending_review: string | null }>(this.db, 'SELECT pending_review FROM sessions WHERE id = ?', id);
-    const v = r?.pending_review;
-    return v === 'review' || v === 'review-people' || v === 'sent' ? v : null;
+  private queue(id: string): Queue {
+    const r = get<{ q: string }>(this.db, 'SELECT pending_prompts AS q FROM sessions WHERE id = ?', id);
+    try {
+      return JSON.parse(r?.q ?? '{}') as Queue;
+    } catch {
+      return {};
+    }
   }
 
-  private setPendingReview(id: string, v: ReviewPrompt | 'sent' | null): void {
-    run(this.db, 'UPDATE sessions SET pending_review = ? WHERE id = ?', v, id);
+  private setQueue(id: string, q: Queue): void {
+    run(this.db, 'UPDATE sessions SET pending_prompts = ? WHERE id = ?', JSON.stringify(q), id);
+  }
+
+  private enqueue(id: string, name: QueuedPrompt, vars?: Record<string, string>): void {
+    const q = this.queue(id);
+    q[name] = { state: 'queued', ...(vars ? { vars } : {}) };
+    this.setQueue(id, q);
   }
 
   /** gh needs a directory in the repo; the worktree is gone once cleanup removed it. */
@@ -278,8 +304,8 @@ export class Lifecycle {
         } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         }
-        // Review prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.
-        await this.serial(row.id, () => this.deliverReview(row.id)).catch((e) => this.warn(row.id, 'Sending the review prompt', e));
+        // Prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.
+        await this.serial(row.id, () => this.deliverNext(row.id)).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
         await this.core.comments.deliver(row.id).catch((e) => this.warn(row.id, 'Sending review comments', e));
       }
     } finally {
@@ -339,12 +365,16 @@ export class Lifecycle {
       row = this.sessions.row(id);
     }
     const settings = parseSettings(p.settings_json);
-    const ci = github.ciState(st.statusCheckRollup);
+    const mode = settings.reviewer;
+    const ci = github.ciSummary(st.statusCheckRollup);
     let reviewState = row.review_state;
     const seen = new Set(JSON.parse(row.seen_review_ids) as string[]);
+    const isAgentk = (a: { login: string } | null) => github.isLogin(a, settings.reviewerLogin);
+    const agentkSeen = !!row.agentk_seen || st.reviews.some((r) => isAgentk(r.author))
+      || st.comments.some((c) => isAgentk(c.author) || REVIEW_REQUEST.test(c.body.trim()));
 
-    if (settings.reviewer === 'agentk') {
-      const botReviews = st.reviews.filter((r) => github.isLogin(r.author, settings.reviewerLogin));
+    if (mode !== 'people') {
+      const botReviews = st.reviews.filter((r) => isAgentk(r.author));
       const fresh = botReviews.filter((r) => !seen.has(r.id));
       if (fresh.length) {
         fresh.forEach((r) => seen.add(r.id));
@@ -359,48 +389,108 @@ export class Lifecycle {
         } else {
           reviewState = 'addressing';
           this.sessions.notifyUser(row.id, 'AgentK review arrived', firstLine);
-          run(this.db, 'UPDATE sessions SET seen_review_ids = ?, review_state = ? WHERE id = ?', JSON.stringify([...seen]), reviewState, row.id);
-          await this.sendReviewPrompt(row.id, 'review');
+          this.enqueue(row.id, 'review');
         }
       } else if (reviewState === 'waiting' || reviewState === 'in_review' || reviewState === 'refused') {
         // AgentK talks through issue comments before the review: an ack, or a refusal. Only
         // comments after the last review and the last request count (a forced review follows a refusal).
         const latestReviewAt = Math.max(0, ...botReviews.map((r) => Date.parse(r.submittedAt)));
-        const requestedAt = Math.max(0, ...st.comments.filter((c) => /^\/agentk review\b/.test(c.body.trim())).map((c) => Date.parse(c.createdAt)));
+        const requestedAt = Math.max(0, ...st.comments.filter((c) => REVIEW_REQUEST.test(c.body.trim())).map((c) => Date.parse(c.createdAt)));
         const since = Math.max(latestReviewAt, requestedAt);
-        const botComment = [...st.comments].reverse().find((c) => github.isLogin(c.author, settings.reviewerLogin) && Date.parse(c.createdAt) > since);
+        const botComment = [...st.comments].reverse().find((c) => isAgentk(c.author) && Date.parse(c.createdAt) > since);
         if (botComment) {
           if (/no review/i.test(botComment.body)) reviewState = 'refused';
           else if (/started reviewing|reviewing/i.test(botComment.body)) reviewState = 'in_review';
         }
       }
-    } else {
-      const humans = st.reviews.filter((r) => !github.isLogin(r.author, settings.reviewerLogin) && r.author);
-      const fresh = humans.filter((r) => !seen.has(r.id));
-      if (fresh.length) {
-        fresh.forEach((r) => seen.add(r.id));
-        const needsWork = fresh.some((r) => r.state === 'CHANGES_REQUESTED' || (r.state === 'COMMENTED' && r.body.trim()));
-        this.sessions.event(row.id, 'review', `Review from ${fresh.map((r) => r.author?.login).join(', ')}`);
-        if (needsWork) {
+    }
+
+    // People, and in All mode other bots too. AgentK's reviews are never counted here.
+    const others = st.reviews.filter((r) => r.author && !isAgentk(r.author) && !seen.has(r.id));
+    const bots = others.length && mode !== 'all' ? await this.botLogins(before, st.number) : [];
+    if (others.length && bots) {
+      others.forEach((r) => seen.add(r.id));
+      const counted = others.filter((r) => !bots.some((b) => github.isLogin(r.author, b)));
+      // Replies on review threads (Claude's too: it posts as the user) are empty COMMENTED reviews.
+      const worded = counted.filter((r) => r.state !== 'COMMENTED' || r.body.trim());
+      if (worded.length) {
+        const names = [...new Set(worded.map((r) => r.author?.login))].join(', ');
+        this.sessions.event(row.id, 'review', `Review from ${names}`);
+        if (worded.some((r) => r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED')) {
           reviewState = 'addressing';
-          run(this.db, 'UPDATE sessions SET seen_review_ids = ?, review_state = ? WHERE id = ?', JSON.stringify([...seen]), reviewState, row.id);
-          await this.sendReviewPrompt(row.id, 'review-people');
+          this.sessions.notifyUser(row.id, 'Review arrived', `From ${names}.`);
+          this.enqueue(row.id, 'review-people');
         }
       }
-      if (st.reviewDecision === 'APPROVED' && reviewState !== 'addressing') reviewState = 'approved';
-      else if (reviewState === 'none') reviewState = 'waiting';
     }
+    const awaitingAgentk = mode !== 'people' && agentkSeen && (reviewState === 'waiting' || reviewState === 'in_review');
+    if (st.reviewDecision === 'APPROVED' && reviewState !== 'addressing' && !awaitingAgentk) reviewState = 'approved';
+    else if (reviewState === 'none') reviewState = 'waiting';
 
     const current = this.sessions.row(row.id);
     const finalReview = current.review_state === 'addressing' && reviewState !== 'addressing' ? current.review_state : reviewState;
     this.sessions.update(row.id, {
-      ci_state: ci,
+      ci_state: ci.state,
       review_state: finalReview,
       merge_state: st.mergeStateStatus,
       seen_review_ids: JSON.stringify([...seen]),
+      agentk_seen: agentkSeen ? 1 : 0,
     });
-    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, settings.reviewer, unpushed));
+    this.watchCi(this.sessions.row(row.id), st, ci, unpushed);
+    // A failed send stays queued; the next poll or turn end retries it.
+    await this.deliverNext(row.id).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
+    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, mode, unpushed));
     this.core.changed();
+  }
+
+  /** The PR's bot reviewers, or null (retry at the next poll) when GitHub can't say. */
+  private async botLogins(row: SessionRow, pr: number): Promise<string[] | null> {
+    try {
+      return await github.botLogins(this.ghCwd(row), pr);
+    } catch (e) {
+      this.warn(row.id, 'Looking up bot reviewers', e);
+      return null;
+    }
+  }
+
+  /**
+   * Queues a CI-fix prompt when CI fails on the PR's head: once per head, after the checks
+   * finish (or the failure has waited CI_SETTLE_MS), never while the branch has unpushed
+   * commits, and for at most MAX_CI_FIXES heads in a row before it's left to the user.
+   */
+  private watchCi(row: SessionRow, st: github.PrStatus, ci: github.CiSummary, unpushed: boolean): void {
+    const id = row.id;
+    const head = st.headRefOid;
+    const q = this.queue(id);
+    // A queued fix for a head that moved on, or for CI that's no longer failing, is stale.
+    if (q.ci?.state === 'queued' && (ci.state !== 'failure' || q.ci.vars?.sha !== head)) {
+      delete q.ci;
+      this.setQueue(id, q);
+    }
+    if (ci.state === 'success') {
+      this.ciFailSince.delete(id);
+      if (row.ci_fixes) this.sessions.update(id, { ci_fixes: 0 });
+      return;
+    }
+    if (ci.state !== 'failure' || !head || row.ci_fix_head === head || row.stage !== 'review' || st.state !== 'OPEN') return;
+    let since = this.ciFailSince.get(id);
+    if (since?.head !== head) this.ciFailSince.set(id, (since = { head, at: Date.now() }));
+    if ((ci.pending && Date.now() - since.at < CI_SETTLE_MS) || unpushed) return;
+    this.ciFailSince.delete(id);
+    const names = ci.failed.map((c) => c.name).join(', ');
+    if (row.ci_fixes >= MAX_CI_FIXES) {
+      this.sessions.update(id, { ci_fix_head: head });
+      this.sessions.event(id, 'ci', `CI failed: ${names}. Still failing after ${MAX_CI_FIXES} fix attempts; over to you`, { sha: head, checks: ci.failed });
+      this.sessions.notifyUser(id, 'CI still failing', `${names} failed after ${MAX_CI_FIXES} fix attempts. Take a look.`);
+      return;
+    }
+    this.sessions.update(id, { ci_fix_head: head, ci_fixes: row.ci_fixes + 1 });
+    this.sessions.event(id, 'ci', `CI failed: ${names}`, { sha: head, checks: ci.failed });
+    const checks = ci.failed.map((c) => `- ${c.name}: ${c.conclusion.toLowerCase()}${c.url ? ` (${c.url})` : ''}`).join('\n');
+    this.enqueue(id, 'ci', { sha: head, checks });
+    const next = this.queue(id);
+    const afterReview = !!(next.review || next['review-people']);
+    this.sessions.notifyUser(id, 'CI failed', `${names}. ${afterReview ? 'Claude will fix it after the review.' : 'Claude is fixing it.'}`);
   }
 
   /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
@@ -411,31 +501,41 @@ export class Lifecycle {
     return since !== undefined && Date.now() - since > MERGE_GRACE_MS;
   }
 
-  /** Queues a review prompt (kept across restarts) and sends it if Claude is at its prompt. */
-  private async sendReviewPrompt(id: string, name: ReviewPrompt): Promise<void> {
-    this.setPendingReview(id, name);
-    // A failed send stays queued; the next poll or turn end retries it.
-    await this.deliverReview(id).catch((e) => this.warn(id, 'Sending the review prompt', e));
-  }
-
-  /** Types the queued review prompt into Claude when it's between turns in the Review stage. */
-  private async deliverReview(id: string): Promise<void> {
-    const name = this.pendingReview(id);
-    if (name !== 'review' && name !== 'review-people') return;
+  /**
+   * Types the first queued prompt (reviews first, then CI) into Claude when it's between turns
+   * in the Review stage. One at a time: the next waits until the turn that got one has ended.
+   */
+  private async deliverNext(id: string): Promise<void> {
+    const q = this.queue(id);
+    const name = QUEUE_ORDER.find((n) => q[n]?.state === 'queued');
+    if (!name) return;
     const row = this.sessions.row(id);
     if (row.desired !== 'running' || row.stage !== 'review' || (row.status !== 'idle' && row.status !== 'recovered')) return;
     if (this.sessions.runtime(id).busy) return;
+    const sent = QUEUE_ORDER.filter((n) => q[n]?.state === 'sent');
+    if (sent.length) {
+      // The status goes idle a moment before the turn's Stop is handled, and that clears it.
+      if (row.status !== 'recovered') return;
+      // Claude was relaunched after a restart: the turn that got it is over.
+      sent.forEach((n) => delete q[n]);
+    }
+    const entry = q[name]!;
     // Marked first: the turn can end before submit returns, and its Stop must not send it again.
-    this.setPendingReview(id, 'sent');
+    q[name] = { ...entry, state: 'sent' };
+    this.setQueue(id, q);
     try {
-      await this.sessions.submit(id, this.sessions.prompt(row, name));
+      await this.sessions.submit(id, this.sessions.prompt(row, name, entry.vars ?? {}));
     } catch (e) {
-      this.setPendingReview(id, name);
+      const back = this.queue(id);
+      if (back[name]?.state === 'sent') {
+        back[name] = entry;
+        this.setQueue(id, back);
+      }
       throw e;
     }
   }
 
-  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: 'agentk' | 'people', unpushed = false): { canMerge: boolean; blockers: string[] } {
+  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false): { canMerge: boolean; blockers: string[] } {
     const b: string[] = [];
     if (st.state !== 'OPEN') b.push('The PR is not open.');
     if (row.status === 'working' || this.sessions.runtime(row.id).busy) b.push('Claude is still working.');
@@ -444,10 +544,11 @@ export class Lifecycle {
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') b.push('CI is failing.');
     else if (ci === 'pending') b.push('CI is still running.');
-    if (reviewer === 'agentk') {
-      if (row.review_state === 'waiting' || row.review_state === 'in_review') b.push('Waiting for the AgentK review.');
-      if (row.review_state === 'addressing') b.push('Claude is addressing review findings.');
+    // AgentK gates the merge only once it's active on the PR, so repos it doesn't watch never wait for it.
+    if (reviewer !== 'people' && row.agentk_seen && (row.review_state === 'waiting' || row.review_state === 'in_review')) {
+      b.push('Waiting for the AgentK review.');
     }
+    if (row.review_state === 'addressing') b.push('Claude is addressing review findings.');
     if (st.reviewDecision === 'CHANGES_REQUESTED') b.push('Changes were requested.');
     if (st.reviewDecision === 'REVIEW_REQUIRED') b.push('Required approvals are missing.');
     if (st.mergeable === 'CONFLICTING') b.push('The branch has merge conflicts.');
@@ -462,7 +563,7 @@ export class Lifecycle {
     const pr = row.pr_number;
     await this.serial(row.id, async () => {
       await github.comment(row.worktree_path, pr, force ? '/agentk review force' : '/agentk review');
-      this.sessions.update(row.id, { review_state: 'waiting' });
+      this.sessions.update(row.id, { review_state: 'waiting', agentk_seen: 1 });
       this.sessions.event(row.id, 'review', force ? 'Forced an AgentK review' : 'Requested another AgentK review');
       this.lastPoll.delete(row.id);
     });

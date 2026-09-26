@@ -69,6 +69,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
       `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), never a reset or force.
 - [ ] `/agentk review force` is only posted when the user asks.
+- [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
+      three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
+- [ ] Merge waits for AgentK only once AgentK is active on the PR, and never in *People only*.
 
 ## 4. Data and Meko
 

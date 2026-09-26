@@ -7,10 +7,10 @@ import { get, type Db } from './db.js';
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
  * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
  * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}; `comments` also gets {{count}} and
- * {{comments}}.
+ * {{comments}}, and `ci` gets {{sha}} and {{checks}}.
  */
 export type PromptName =
-  | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'continue' | 'continue-review' | 'comments';
+  | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   design: `You are in the Design stage of an AgentK Local task.
@@ -57,6 +57,16 @@ Finish by printing the PR URL.`,
 Don't comment \`/agentk review\` after pushing. Requesting another round is the user's decision.`,
 
   'review-people': `Reviewers left feedback on PR #{{pr}} ({{prUrl}}). Read every review and inline comment (\`gh pr view {{pr}} --comments\` and \`gh api repos/{{repo}}/pulls/{{pr}}/comments --paginate\`), verify each point against the code, fix what's valid, run the repo's checks, push, and reply on each thread with what you did or why you disagree.`,
+
+  ci: `CI failed on PR #{{pr}} ({{prUrl}}) at commit {{sha}}:
+{{checks}}
+
+1. If the PR's head has moved past {{sha}}, check CI on the new head first (\`gh pr checks {{pr}}\`), and stop if it's already passing or still running.
+2. Read the failing jobs' logs: \`gh run view <run-id> --log-failed\` (the run id is in each link).
+3. Find the cause. If it's unrelated to this change (a flaky test, a runner outage), don't change code: say so and rerun the failed jobs once with \`gh run rerun <run-id> --failed\`.
+4. Otherwise fix it, run the repo's checks locally, commit and push. Update any docs the fix makes stale.
+
+Don't comment \`/agentk review\`. Requesting another round is the user's decision.`,
 
   continue: `The host restarted while you were in the middle of a turn, and this session was resumed. Before continuing, check \`git status\`, \`git log -3\` and the last commands you ran, so you don't repeat steps that already finished. Then continue where you left off.`,
 

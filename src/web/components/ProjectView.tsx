@@ -358,14 +358,14 @@ function StageBar({
               disabled={blocked}
             />
           )}
-          {project.settings.reviewer === 'agentk' && session.reviewState !== 'refused' && (
+          {project.settings.reviewer !== 'people' && session.reviewState !== 'refused' && (
             <button
               className="btn small"
               disabled={blocked || midTurn || session.reviewState === 'in_review' || session.reviewState === 'addressing'}
               onClick={() => onAct('request-review')}
               title="Ask AgentK to review the latest push"
             >
-              Request another round
+              {session.agentkSeen ? 'Request another round' : 'Request AgentK review'}
             </button>
           )}
           <button
