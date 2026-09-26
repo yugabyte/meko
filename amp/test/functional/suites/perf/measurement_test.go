@@ -390,3 +390,26 @@ func TestSingleStackPairNeedsABand(t *testing.T) {
 		t.Error("with a measured band a 90% rise past it (and past the gross bar) still fails")
 	}
 }
+
+func TestChainDatapointsGateP50Only(t *testing.T) {
+	reads := map[int][]float64{1: {2, 2, 2, 30}, 20: {3, 3, 3, 3}}
+	gated, info, err := chainDatapoints(reads, chainParams{Depths: []int{1, 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dp := range gated {
+		if strings.Contains(dp.Name, "p99") {
+			t.Errorf("a p99 of ~3 reads must not gate: %s", dp.Name)
+		}
+	}
+	if len(gated) != 2 {
+		t.Errorf("want p50 gated at both depths, got %d", len(gated))
+	}
+	found := false
+	for _, dp := range info {
+		found = found || dp.Name == chainPrefix+"p99_ms@depth1"
+	}
+	if !found {
+		t.Error("p99 must still be reported")
+	}
+}

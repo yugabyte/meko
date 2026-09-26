@@ -438,10 +438,10 @@ func chainDatapoints(reads map[int][]float64, p chainParams) (gated, info []core
 			continue
 		}
 		suffix := fmt.Sprintf("@depth%d", depth)
-		gated = append(gated,
-			core.Datapoint{Name: chainPrefix + "p50_ms" + suffix, Value: median(vals), Unit: "ms", Direction: core.LowerIsBetter},
-			core.Datapoint{Name: chainPrefix + "p99_ms" + suffix, Value: percentile(vals, 99), Unit: "ms", Direction: core.LowerIsBetter},
-		)
+		gated = append(gated, core.Datapoint{Name: chainPrefix + "p50_ms" + suffix, Value: median(vals), Unit: "ms", Direction: core.LowerIsBetter})
+		// p99 of the sample set is ~3 reads, so one slow read sets it: 0.260923.0
+		// read 3.2 ms at depth 1 in one run and 24.4 ms in the next.
+		info = append(info, core.Datapoint{Name: chainPrefix + "p99_ms" + suffix, Value: percentile(vals, 99), Unit: "ms", Direction: core.LowerIsBetter})
 	}
 	ratio, ok := chainRatio(reads, p)
 	if !ok {
