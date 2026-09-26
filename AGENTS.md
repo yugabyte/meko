@@ -35,7 +35,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the AgentK review loop, Merge & Close (merge, then cleanup). |
 | `src/server/projects.ts` | Projects, repo scan, datapacks (create, attach, pin), project home and search. |
 | `src/server/prompts.ts` | Instructions sent to Claude at each stage (overridable per repo in `.agent-k/stages/`). |
-| `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script, and the status line relay (reports plan limits, then runs the user's own status line). |
+| `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script, and the status line relay (reports plan limits, then runs the user's own status line, minus Meko's datapack suffix). |
 | `src/server/limits.ts` | Plan usage limits (5-hour and weekly) from status line reports: parsing, expiry, and the latest reading kept in `kv`. |
 | `src/server/hooks.ts` | Unix-socket receiver for Claude Code hook events. |
 | `src/server/tmux.ts`, `git.ts`, `github.ts` | Thin wrappers over the tmux, git and gh CLIs. |

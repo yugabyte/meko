@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { statusLineScriptPath, userStatusLine, writeHookFiles } from '../../src/server/claude.js';
+import { statusLineScriptPath, userStatusLine, withoutMekoSuffix, writeHookFiles } from '../../src/server/claude.js';
 import { getPaths } from '../../src/server/paths.js';
 import { openDb } from '../../src/server/db.js';
 import { PlanLimitsStore, currentLimits, parseRateLimits } from '../../src/server/limits.js';
@@ -125,8 +125,31 @@ describe("the user's own status line", () => {
     write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: 'user-sl' } });
     expect(userStatusLine(wt, OURS)?.command).toBe('user-sl');
     // A user's own script with a similar name is theirs, not ours.
-    write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: "'/home/x/.claude/meko-statusline.sh'" } });
-    expect(userStatusLine(wt, OURS)?.command).toBe("'/home/x/.claude/meko-statusline.sh'");
+    write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command: "'/home/x/.claude/statusline.sh'" } });
+    expect(userStatusLine(wt, OURS)?.command).toBe("'/home/x/.claude/statusline.sh'");
+  });
+
+  it("drops Meko's datapack suffix but keeps the command it wraps", () => {
+    dir = mkdtempSync(join(tmpdir(), 'akl-sl-'));
+    process.env.CLAUDE_CONFIG_DIR = join(dir, 'config');
+    const meko = join(dir, 'meko-statusline.sh');
+    writeFileSync(meko, '#!/bin/sh\ncat >/dev/null; printf "Meko: pinned"\n');
+    chmodSync(meko, 0o755);
+    const run = (command: string, env: Record<string, string> = {}) => {
+      write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command, padding: 1 } });
+      const sl = userStatusLine(null, OURS)!;
+      expect(sl.padding).toBe(1);
+      return execFileSync('sh', ['-c', sl.command!], { input: '{"model":{}}', env: { PATH: process.env.PATH!, ...env } }).toString();
+    };
+    expect(run(`'${meko}'`)).toBe('');
+    expect(run(`"${meko}" --inner-cmd 'printf "inner:"; cat'`)).toBe('inner:{"model":{}}');
+    expect(run(`bash ${meko}`, { MEKO_INNER_STATUSLINE: 'printf env:; cat' })).toBe('env:{"model":{}}');
+    // Another script that only ends in the same name runs as it is.
+    const mine = join(dir, 'my-meko-statusline.sh');
+    writeFileSync(mine, '#!/bin/sh\nprintf mine\n');
+    chmodSync(mine, 0o755);
+    expect(run(`'${mine}'`)).toBe('mine');
+    expect(withoutMekoSuffix('user-sl --meko-statusline.sh')).toBe('user-sl --meko-statusline.sh');
   });
 });
 

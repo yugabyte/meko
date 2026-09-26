@@ -120,6 +120,25 @@ function readStatusLine(file: string, ours: string): StatusLineSetting | null {
 }
 
 /**
+ * Meko's status line script as the start of a command (optionally run by `sh`/`bash`, the path
+ * optionally quoted). It prints an optional inner command's line, then "Meko: <pinned datapack>".
+ */
+const MEKO_STATUSLINE = /^\s*(?:(?:ba)?sh\s+)?(['"]?)(?:[^'"\s]*\/)?meko-statusline\.sh\1(?=\s|$)/;
+
+/** Runs what Meko's script would run first (`--inner-cmd <cmd>`, or `MEKO_INNER_STATUSLINE`), and nothing else. */
+const MEKO_INNER_ONLY =
+  'ak_meko_inner() { if [ "${1:-}" = --inner-cmd ] && [ -n "${2:-}" ]; then eval "$2"; ' +
+  'elif [ -n "${MEKO_INNER_STATUSLINE:-}" ]; then eval "$MEKO_INNER_STATUSLINE"; fi; }; ak_meko_inner';
+
+/**
+ * Drops Meko's "Meko: <datapack>" status line suffix: sessions always use the project's
+ * datapack, and the session screen already shows it. The command it wraps still runs.
+ */
+export function withoutMekoSuffix(command: string): string {
+  return command.replace(MEKO_STATUSLINE, MEKO_INNER_ONLY);
+}
+
+/**
  * The status line Claude Code would run without ours (`ours`, the relay's path), since ours
  * (passed with --settings) replaces it: local project settings first, then project, then user.
  */
@@ -130,7 +149,7 @@ export function userStatusLine(worktree: string | null, ours: string): StatusLin
   ];
   for (const f of files) {
     const sl = readStatusLine(f, ours);
-    if (sl) return sl;
+    if (sl) return { ...sl, command: withoutMekoSuffix(sl.command!) };
   }
   return null;
 }

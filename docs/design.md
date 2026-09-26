@@ -500,6 +500,9 @@ looks unchanged. That command is found at launch (local project settings, then p
 settings) and passed as `AK_USER_STATUSLINE`; sessions launched before this existed use the
 user-level command saved in `run/user-statusline`; its `padding` and `refreshInterval` are copied.
 All sessions share one account, so reports are merged per window: a window that has reset is
+If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--inner-cmd`, or
+`MEKO_INNER_STATUSLINE`) runs: Meko's "Meko: <datapack>" suffix would repeat what the session
+screen already shows, since sessions always use the project's datapack.
 ignored, a later window replaces an earlier one, the higher use wins within a window, and a report
 missing a window keeps the last one, so an idle session re-running its status line with an old
 reading changes nothing. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,
