@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, FONT_MAX, FONT_MIN, clampFont, decayVelocity, flingVelocity, keySequence, pasteText, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pasteText, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
 describe('terminal key bar', () => {
   it('sends the bytes a keyboard would', () => {
     expect(keySequence('esc')).toBe('\x1b');
-    expect(keySequence('tab')).toBe('\t');
     expect(keySequence('shift-tab')).toBe('\x1b[Z');
     expect(keySequence('ctrl-c')).toBe('\x03');
     expect(keySequence('enter')).toBe('\r');
@@ -22,6 +21,38 @@ describe('terminal key bar', () => {
 
   it('has a sequence for every key on the bar', () => {
     for (const k of BAR_KEYS) expect(keySequence(k.key)).not.toBe('');
+  });
+});
+
+describe('sticky Ctrl', () => {
+  it('sends Ctrl with a letter, in either case, and the usual punctuation', () => {
+    expect(ctrlSequence('a')).toBe('\x01');
+    expect(ctrlSequence('O')).toBe('\x0f');
+    expect(ctrlSequence('r')).toBe('\x12');
+    expect(ctrlSequence('z')).toBe('\x1a');
+    expect(ctrlSequence('[')).toBe('\x1b');
+    expect(ctrlSequence(' ')).toBe('\x00');
+    expect(ctrlSequence('?')).toBe('\x7f');
+  });
+
+  it('has nothing for digits, other symbols or more than one character', () => {
+    expect(ctrlSequence('1')).toBeNull();
+    expect(ctrlSequence('é')).toBeNull();
+    expect(ctrlSequence('ab')).toBeNull();
+    expect(ctrlSequence('')).toBeNull();
+  });
+
+  it('finds the one character typed into the box, wherever the cursor was', () => {
+    expect(insertedChar('', 'o')).toBe('o');
+    expect(insertedChar('fix it', 'fix itr')).toBe('r');
+    expect(insertedChar('fix it', 'fxix it')).toBe('x');
+    expect(insertedChar('fix it', 'fix i')).toBeNull(); // a deletion
+    expect(insertedChar('fix', 'fix the')).toBeNull(); // a paste or a word from the suggestions bar
+    expect(insertedChar('teh', 'thex')).toBeNull(); // autocorrect rewrote it
+  });
+
+  it('is not on the bar as a key that sends bytes', () => {
+    expect(BAR_KEYS.map((k) => k.label)).toEqual(['esc', '⇧tab', '↑', '↓', '←', '→', '^C', '⏎']);
   });
 });
 

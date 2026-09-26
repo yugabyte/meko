@@ -16,8 +16,8 @@ browser:
 - **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
-- **Works from your phone:** a drawer for projects, a key bar (Esc, Tab, Shift+Tab, arrows,
-  Ctrl+C) and a compose box for the terminal, swipe to scroll back, and the stages and their gates
+- **Works from your phone:** a drawer for projects, a key bar (Esc, a sticky Ctrl for
+  Ctrl+letter shortcuts, Shift+Tab, arrows, Ctrl+C) and a compose box for the terminal, swipe to scroll back, and the stages and their gates
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.

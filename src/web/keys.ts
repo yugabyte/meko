@@ -1,11 +1,10 @@
 // What the terminal key bar and compose box send, as terminal input. Pure, so it's unit-tested.
 
-export type BarKey = 'esc' | 'tab' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter';
+export type BarKey = 'esc' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter';
 
-/** The key bar, in order. */
+/** The key bar, in order. The sticky Ctrl key sits after the first one (see TermKeys). */
 export const BAR_KEYS: { key: BarKey; label: string; title: string }[] = [
   { key: 'esc', label: 'esc', title: 'Escape: interrupt Claude or close a menu' },
-  { key: 'tab', label: 'tab', title: 'Tab' },
   { key: 'shift-tab', label: '⇧tab', title: 'Shift+Tab: switch mode' },
   { key: 'up', label: '↑', title: 'Up' },
   { key: 'down', label: '↓', title: 'Down' },
@@ -19,7 +18,6 @@ const ARROWS: Partial<Record<BarKey, string>> = { up: 'A', down: 'B', right: 'C'
 
 const FIXED: Partial<Record<BarKey, string>> = {
   esc: '\x1b',
-  tab: '\t',
   'shift-tab': '\x1b[Z',
   'ctrl-c': '\x03',
   enter: '\r',
@@ -30,6 +28,31 @@ export function keySequence(key: BarKey, applicationCursor = false): string {
   const arrow = ARROWS[key];
   if (arrow) return `${applicationCursor ? '\x1bO' : '\x1b['}${arrow}`;
   return FIXED[key] ?? '';
+}
+
+// Ctrl with a punctuation key, as a terminal sends it.
+const CTRL_PUNCT: Record<string, string> = { ' ': '\x00', '@': '\x00', '[': '\x1b', '\\': '\x1c', ']': '\x1d', '^': '\x1e', '_': '\x1f', '?': '\x7f' };
+
+/**
+ * The byte Ctrl plus a typed character sends: Ctrl+A is 0x01 through Ctrl+Z at 0x1a, either case (a
+ * phone may capitalise the first letter), plus the usual punctuation. Null for anything else.
+ */
+export function ctrlSequence(ch: string): string | null {
+  if (ch.length !== 1) return null;
+  const c = ch.toLowerCase();
+  if (c >= 'a' && c <= 'z') return String.fromCharCode(c.charCodeAt(0) - 96);
+  return CTRL_PUNCT[ch] ?? null;
+}
+
+/**
+ * The character typed into a text box, from its value before and after one edit, or null when the
+ * edit wasn't a single inserted character (a deletion, a paste, an autocorrect rewrite).
+ */
+export function insertedChar(before: string, after: string): string | null {
+  if (after.length !== before.length + 1) return null;
+  let i = 0;
+  while (i < before.length && before[i] === after[i]) i++;
+  return after.slice(0, i) + after.slice(i + 1) === before ? after[i] : null;
 }
 
 const PASTE_START = '\x1b[200~';

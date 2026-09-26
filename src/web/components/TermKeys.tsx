@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
-import { BAR_KEYS } from '../keys';
+import { Fragment, useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { BAR_KEYS, insertedChar } from '../keys';
 import type { SessionTerminal } from '../terminals';
 import { cx } from '../util';
 
@@ -54,19 +54,39 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
   return (
     <div className="term-keys">
       <div className="keybar" role="toolbar" aria-label="Terminal keys">
-        {BAR_KEYS.map((k) => (
-          <button
-            key={k.key}
-            className="key"
-            title={k.title}
-            aria-label={k.title}
-            disabled={disabled}
-            onPointerDown={keepFocus}
-            onMouseDown={keepFocus}
-            onClick={() => term.sendKey(k.key)}
-          >
-            {k.label}
-          </button>
+        {BAR_KEYS.map((k, i) => (
+          <Fragment key={k.key}>
+            <button
+              className="key"
+              title={k.title}
+              aria-label={k.title}
+              disabled={disabled}
+              onPointerDown={keepFocus}
+              onMouseDown={keepFocus}
+              onClick={() => term.sendKey(k.key)}
+            >
+              {k.label}
+            </button>
+            {i === 0 && (
+              <button
+                className={cx('key', term.ctrl && 'on')}
+                aria-pressed={term.ctrl}
+                title="Ctrl: the next letter you type is sent with Ctrl, as in Ctrl+O or Ctrl+R"
+                aria-label="Ctrl for the next letter you type"
+                disabled={disabled}
+                onPointerDown={keepFocus}
+                onMouseDown={keepFocus}
+                onClick={() => {
+                  const on = !term.ctrl;
+                  term.setCtrl(on);
+                  // Bring the keyboard up for the letter, unless the terminal already has it.
+                  if (on && !term.typing) box.current?.focus();
+                }}
+              >
+                ctrl
+              </button>
+            )}
+          </Fragment>
         ))}
         <button
           className={cx('key', term.typing && 'on')}
@@ -102,7 +122,16 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           value={text}
           disabled={disabled}
           enterKeyHint="enter"
-          onChange={(e) => setText(e.target.value)}
+          // An armed Ctrl takes one letter as it is: no autocorrect or capitals rewriting it.
+          autoCorrect={term.ctrl ? 'off' : undefined}
+          autoCapitalize={term.ctrl ? 'none' : undefined}
+          onChange={(e) => {
+            const next = e.target.value;
+            // With Ctrl armed, a typed character goes to Claude as Ctrl+character instead of the box.
+            const ch = term.ctrl ? insertedChar(text, next) : null;
+            if (ch !== null && term.typeCtrl(ch)) return;
+            setText(next);
+          }}
           onFocus={() => {
             if (term.typing) term.setTyping(false);
             // Claude's prompt stays in view above the box while the keyboard is up.

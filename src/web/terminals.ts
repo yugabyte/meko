@@ -10,7 +10,7 @@ import { wsUrl } from './api';
 import { copyText, decodeOsc52 } from './clipboard';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, decayVelocity, flingVelocity, keySequence, pasteText, wheelReport, wheelSteps, FLING_WINDOW_MS,
+  clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pasteText, wheelReport, wheelSteps, FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
 
@@ -95,6 +95,8 @@ class SessionTerminal {
   private webglLoading = false;
   /** On touch screens, whether focusing the terminal opens the on-screen keyboard. */
   typing = false;
+  /** Sticky Ctrl from the key bar: the next character typed is sent with Ctrl. */
+  ctrl = false;
   conn: TermConn = 'connecting';
   message: string | null = null;
   /** A short-lived note after copying ("Copied", or why it failed). */
@@ -142,7 +144,11 @@ class SessionTerminal {
       },
       () => undefined,
     );
-    this.term.onData((data) => this.send({ type: 'input', data }));
+    this.term.onData((data) => {
+      // In typing mode the phone keyboard types here; a sticky Ctrl applies to its next character.
+      if (this.ctrl && this.typeCtrl(data)) return;
+      this.send({ type: 'input', data });
+    });
     this.term.onBinary((data) => this.send({ type: 'input', data }));
     // tmux sends a mouse selection as OSC 52 (set-clipboard on); put it on the browser clipboard.
     this.term.parser.registerOscHandler(52, (data) => {
@@ -262,6 +268,25 @@ class SessionTerminal {
   /** Presses a key from the key bar. */
   sendKey(key: BarKey) {
     this.send({ type: 'input', data: keySequence(key, this.term.modes.applicationCursorKeysMode) });
+  }
+
+  /** Arms or cancels the sticky Ctrl. */
+  setCtrl(on: boolean) {
+    if (this.ctrl === on) return;
+    this.ctrl = on;
+    this.listeners.forEach((l) => l());
+  }
+
+  /**
+   * Sends Ctrl plus `ch` and releases the sticky Ctrl. Returns false (and sends nothing) when `ch`
+   * has no Ctrl form; Ctrl stays armed so the next character can use it.
+   */
+  typeCtrl(ch: string): boolean {
+    const seq = ctrlSequence(ch);
+    if (!seq) return false;
+    this.send({ type: 'input', data: seq });
+    this.setCtrl(false);
+    return true;
   }
 
   /** Types text from the compose box and submits it with Enter. */
