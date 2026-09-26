@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 
-/** The phone layout's app bar: the projects drawer, what you're looking at, and its actions. */
+/**
+ * The phone layout's app bar: the projects drawer, what you're looking at, and its actions.
+ * The session screen leaves out the title and puts the session tabs first in `children`.
+ */
 export function TopBar({
   sub,
   title,
@@ -8,7 +11,7 @@ export function TopBar({
   children,
 }: {
   sub?: ReactNode;
-  title: ReactNode;
+  title?: ReactNode;
   onMenu: () => void;
   children?: ReactNode;
 }) {
@@ -19,10 +22,12 @@ export function TopBar({
           <path d="M4 7h16 M4 12h16 M4 17h16" />
         </svg>
       </button>
-      <span className="topbar-title">
-        {sub && <span className="topbar-sub">{sub}</span>}
-        <b>{title}</b>
-      </span>
+      {title && (
+        <span className="topbar-title">
+          {sub && <span className="topbar-sub">{sub}</span>}
+          <b>{title}</b>
+        </span>
+      )}
       {children}
     </header>
   );

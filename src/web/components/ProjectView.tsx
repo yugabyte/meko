@@ -115,10 +115,39 @@ export function ProjectView({
     </span>
   );
 
+  // On a phone the tabs sit in the app bar, between the drawer button and the session's actions.
+  const tabs = (
+    <div className="tabs" role="tablist" ref={tabsRef}>
+      {sessions.map((s) => (
+        <button
+          key={s.id}
+          role="tab"
+          aria-selected={s.id === session?.id}
+          className={cx('tab', s.id === session?.id && 'sel')}
+          onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
+          title={[
+            s.name,
+            STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
+            STAGE_LABELS[s.stage],
+            `${formatTokens(totalTokens(s.usage))} tokens`,
+          ].join(' · ')}
+        >
+          <StatusDot status={s.status} />
+          <span className="tab-name">{s.name}</span>
+          <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+        </button>
+      ))}
+      <button className="tab new" onClick={onNewSession} title="New session" aria-label="New session">
+        +
+      </button>
+    </div>
+  );
+
   return (
     <div className="project-view">
       {mobile ? (
-        <TopBar onMenu={onMenu} sub={session ? project.name : undefined} title={session?.name ?? project.name}>
+        <TopBar onMenu={onMenu}>
+          {tabs}
           {session?.status === 'exited' && (
             <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
               Resume
@@ -180,30 +209,7 @@ export function ProjectView({
         />
       )}
 
-      <div className="tabs" role="tablist" ref={tabsRef}>
-        {sessions.map((s) => (
-          <button
-            key={s.id}
-            role="tab"
-            aria-selected={s.id === session?.id}
-            className={cx('tab', s.id === session?.id && 'sel')}
-            onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
-            title={[
-              s.name,
-              STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
-              STAGE_LABELS[s.stage],
-              `${formatTokens(totalTokens(s.usage))} tokens`,
-            ].join(' · ')}
-          >
-            <StatusDot status={s.status} />
-            <span className="tab-name">{s.name}</span>
-            <span className="stchip">{STAGE_LABELS[s.stage]}</span>
-          </button>
-        ))}
-        <button className="tab new" onClick={onNewSession} title="New session" aria-label="New session">
-          +
-        </button>
-      </div>
+      {!mobile && tabs}
 
       <div className="workarea">
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with

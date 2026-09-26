@@ -218,7 +218,8 @@ one. The service worker caches nothing and handles no requests.
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
 app bar (the Back gesture closes it, and it holds **Search and commands** in place of `⌘K`). The
-app bar shows the session and project names (the session tab shows its status). The session header,
+app bar also holds the session tabs, between the drawer button and ⋯, so the session name isn't
+repeated above them (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, and
@@ -499,10 +500,10 @@ background, and then runs the user's own status line command with the same input
 looks unchanged. That command is found at launch (local project settings, then project, then user
 settings) and passed as `AK_USER_STATUSLINE`; sessions launched before this existed use the
 user-level command saved in `run/user-statusline`; its `padding` and `refreshInterval` are copied.
-All sessions share one account, so reports are merged per window: a window that has reset is
 If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--inner-cmd`, or
 `MEKO_INNER_STATUSLINE`) runs: Meko's "Meko: <datapack>" suffix would repeat what the session
 screen already shows, since sessions always use the project's datapack.
+All sessions share one account, so reports are merged per window: a window that has reset is
 ignored, a later window replaces an earlier one, the higher use wins within a window, and a report
 missing a window keeps the last one, so an idle session re-running its status line with an old
 reading changes nothing. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,

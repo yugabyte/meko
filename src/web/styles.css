@@ -2407,6 +2407,22 @@ a.icon-btn {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The session screen's bar holds the session tabs, which reach down over its border to meet
+   the terminal. */
+.topbar > .tabs {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  align-items: flex-end;
+  margin: -4px 0 -5px;
+  padding: 4px 0 0;
+  border-bottom: 0;
+  background: none;
+}
+.topbar > .btn,
+.topbar > .icon-btn {
+  flex: none;
+}
 .topbar-more {
   position: relative;
   color: var(--ink);
