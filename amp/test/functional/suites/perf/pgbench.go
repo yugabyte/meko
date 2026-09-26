@@ -305,9 +305,9 @@ func pgbenchMetricSpecs(res BenchResult) []metricSpec {
 		{Name: "pgbench.latency_avg", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg,
 			FromSample: sampleLatencyAvg, FromPoint: pointLatency, Info: true},
 		{Name: "pgbench.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95,
-			FromSample: sampleLatencyP95, Info: true},
+			FromSample: sampleLatencyP95, Info: true, NoDrift: true},
 		{Name: "pgbench.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99,
-			FromSample: sampleLatencyP99, Info: true},
+			FromSample: sampleLatencyP99, Info: true, NoDrift: true},
 	}, fixedRateSpecs("pgbench", "latency_avg", res)...)
 }
 

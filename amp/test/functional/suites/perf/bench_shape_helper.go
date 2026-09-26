@@ -64,7 +64,7 @@ func benchShapeGate(res BenchResult, specs []metricSpec, g benchGates) error {
 	var violations []string
 
 	for _, m := range specs {
-		if d, ok := iterDriftPct(m.Stats, m.Dir); ok {
+		if d, ok := iterDriftPct(m.Stats, m.Dir); ok && !m.NoDrift {
 			if g.MaxIterDriftPct > 0 && d > g.MaxIterDriftPct {
 				violations = append(violations, fmt.Sprintf("%s drifted %.1f%% across iterations (limit %.1f%%: first %.4g → last %.4g %s)",
 					m.Name, d, g.MaxIterDriftPct, first(m.Stats.Values), last(m.Stats.Values), m.Unit))

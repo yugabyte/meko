@@ -413,3 +413,23 @@ func TestChainDatapointsGateP50Only(t *testing.T) {
 		t.Error("p99 must still be reported")
 	}
 }
+
+func TestShapeGateSkipsDriftOnSaturatedTails(t *testing.T) {
+	g := benchGates{MaxIterDriftPct: 50, MaxDecayPct: 35}
+	tail := metricSpec{Name: "pgbench.latency_p99", Dir: core.LowerIsBetter, Stats: aggregate([]float64{20.5, 36.5}), Info: true, NoDrift: true}
+	if err := benchShapeGate(BenchResult{}, []metricSpec{tail}, g); err != nil {
+		t.Errorf("a saturated tail percentile must not trip the drift gate: %v", err)
+	}
+	avg := metricSpec{Name: "pgbench.latency_avg", Dir: core.LowerIsBetter, Stats: aggregate([]float64{10, 20}), Info: true}
+	if err := benchShapeGate(BenchResult{}, []metricSpec{avg}, g); err == nil {
+		t.Error("average latency drift is still judged, reported-only or not")
+	}
+	for _, m := range pgbenchMetricSpecs(BenchResult{}) {
+		if m.Name == "pgbench.latency_avg" && m.NoDrift {
+			t.Error("pgbench.latency_avg keeps its drift gate")
+		}
+		if m.Name == "pgbench.latency_p99" && !m.NoDrift {
+			t.Error("pgbench.latency_p99 skips the drift gate")
+		}
+	}
+}

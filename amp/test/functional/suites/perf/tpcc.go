@@ -232,8 +232,8 @@ func tpccDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 func tpccMetricSpecs(res BenchResult) []metricSpec {
 	return append([]metricSpec{
 		{Name: "tpcc.throughput", Unit: "req/s", Dir: core.HigherIsBetter, Stats: res.TPS, FromSample: sampleTPS},
-		{Name: "tpcc.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95, FromSample: sampleLatencyP95, Info: true},
-		{Name: "tpcc.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99, FromSample: sampleLatencyP99, Info: true},
+		{Name: "tpcc.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95, FromSample: sampleLatencyP95, Info: true, NoDrift: true},
+		{Name: "tpcc.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99, FromSample: sampleLatencyP99, Info: true, NoDrift: true},
 		{Name: "tpcc.latency_median", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg, FromSample: sampleLatencyAvg, Info: true},
 	}, fixedRateSpecs("tpcc", "latency_median", res)...)
 }

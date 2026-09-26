@@ -247,7 +247,7 @@ func sysbenchMetricSpecs(res BenchResult) []metricSpec {
 		{Name: "sysbench.latency_avg", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg,
 			FromSample: sampleLatencyAvg, FromPoint: pointLatency, Info: true},
 		{Name: "sysbench.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95,
-			FromSample: sampleLatencyP95, Info: true},
+			FromSample: sampleLatencyP95, Info: true, NoDrift: true},
 	}, fixedRateSpecs("sysbench", "latency_avg", res)...)
 }
 

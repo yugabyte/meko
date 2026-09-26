@@ -444,6 +444,10 @@ type metricSpec struct {
 	FromSample func(Sample) float64
 	FromPoint  func(SamplePoint) float64
 	Info       bool
+	// NoDrift skips the iteration-drift gate, which compares two single
+	// iterations: a saturated tail percentile moved 78% between two iterations
+	// of one healthy stack (run 60486d4d).
+	NoDrift bool
 }
 
 // splitDatapoints turns the metric specs into the GATED headline datapoints,
