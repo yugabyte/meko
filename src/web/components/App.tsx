@@ -4,6 +4,7 @@ import { api, errorMessage } from '../api';
 import { useEvents, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate, useRoute } from '../router';
+import { notifyLeader } from '../notifyLeader';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import { liveSessions, modKey } from '../util';
@@ -32,6 +33,16 @@ function sortedProjects(state: AppState | null): ProjectWithSessions[] {
   return [...state.projects].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
 }
 
+// Only the AgentK page used last shows notifications, so clicking one lands in the window in use.
+const notifier = notifyLeader(typeof navigator !== 'undefined' ? navigator.locks : undefined);
+if (typeof window !== 'undefined') {
+  window.addEventListener('focus', () => notifier.claim());
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) notifier.claim();
+  });
+  if (document.hasFocus()) notifier.claim();
+}
+
 export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () => void }) {
   const route = useRoute();
   const [theme, cycleTheme] = useTheme();
@@ -42,7 +53,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const focusRef = useRef<{ projectId: string | null; sessionId: string | null }>({ projectId: null, sessionId: null });
 
   const onNotify = useCallback((n: NotifyEvent) => {
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !notifier.leader) return;
     const focused = focusRef.current;
     if (!document.hidden && focused.sessionId === n.sessionId) return;
     const project = stateRef.current?.projects.find((p) => p.id === n.projectId);
